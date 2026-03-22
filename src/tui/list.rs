@@ -285,6 +285,10 @@ impl App {
                 self.open_pr_url();
                 false
             }
+            KeyCode::Char('i') => {
+                self.open_issue_url();
+                false
+            }
             KeyCode::Char('p') => {
                 self.start_transfer_dialog();
                 false
@@ -400,6 +404,22 @@ impl App {
                             if let Some(ref pr) = wt.pr {
                                 if !pr.url.is_empty() {
                                     crate::browser::open_url(&pr.url);
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            KeyCode::Char('i') => {
+                // Open linked GitHub issue in browser for the selected task.
+                let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
+                if let Some(vt) = visible.get(self.cursor) {
+                    if let Some(ref wt_path) = vt.task.worktree {
+                        if let Some(wt) = self.worktrees.iter().find(|w| &w.path == wt_path) {
+                            if let Some(issue_number) = wt.issue_number {
+                                if let Ok((owner, repo)) = crate::github::get_repo() {
+                                    crate::browser::open_url(&issue_url(&owner, &repo, issue_number));
                                 }
                             }
                         }
@@ -915,6 +935,26 @@ impl App {
             ));
         }
 
+        // Issue link hint
+        let has_issue = !self.worktrees.is_empty()
+            && self.cursor < self.worktrees.len()
+            && self.worktrees[self.cursor].issue_number.is_some();
+        spans.push(sep.clone());
+        if has_issue {
+            spans.push(Span::styled(
+                "i",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" issue"));
+        } else {
+            spans.push(Span::styled(
+                "i issue",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
         // Transfer hint
         if self.config.remote.is_some() {
             spans.push(sep.clone());
@@ -1079,6 +1119,18 @@ impl App {
         if let Some(ref pr) = wt.pr {
             if !pr.url.is_empty() {
                 crate::browser::open_url(&pr.url);
+            }
+        }
+    }
+
+    fn open_issue_url(&self) {
+        let wt = match self.selected_worktree() {
+            Some(wt) => wt,
+            None => return,
+        };
+        if let Some(issue_number) = wt.issue_number {
+            if let Ok((owner, repo)) = crate::github::get_repo() {
+                crate::browser::open_url(&issue_url(&owner, &repo, issue_number));
             }
         }
     }
@@ -1401,12 +1453,12 @@ impl App {
             Span::styled(":switch  ", dim_style),
             Span::styled("o", key_style),
             Span::styled(":open PR  ", dim_style),
+            Span::styled("i", key_style),
+            Span::styled(":issue  ", dim_style),
             Span::styled("s", key_style),
             Span::styled(":start  ", dim_style),
             Span::styled("p", key_style),
             Span::styled(":priority  ", dim_style),
-            Span::styled("o", key_style),
-            Span::styled(":open PR  ", dim_style),
             Span::styled("c", key_style),
             Span::styled(":cleanup  ", dim_style),
         ];
@@ -1486,6 +1538,11 @@ fn group_header_row(
     ])
 }
 
+/// Constructs a GitHub issue URL from owner, repo name, and issue number.
+pub(crate) fn issue_url(owner: &str, repo: &str, issue_number: u32) -> String {
+    format!("https://github.com/{owner}/{repo}/issues/{issue_number}")
+}
+
 fn truncate_str(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= max {
@@ -1550,6 +1607,30 @@ mod tests {
     #[test]
     fn compact_header_on_very_short_terminal() {
         assert_eq!(header_height(10), 1);
+    }
+
+    #[test]
+    fn issue_url_formats_correctly() {
+        assert_eq!(
+            issue_url("owner", "repo", 42),
+            "https://github.com/owner/repo/issues/42"
+        );
+    }
+
+    #[test]
+    fn issue_url_uses_owner_and_repo() {
+        assert_eq!(
+            issue_url("acme-corp", "my-project", 1),
+            "https://github.com/acme-corp/my-project/issues/1"
+        );
+    }
+
+    #[test]
+    fn issue_url_large_number() {
+        assert_eq!(
+            issue_url("org", "repo", 99999),
+            "https://github.com/org/repo/issues/99999"
+        );
     }
 
     #[test]
