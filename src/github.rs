@@ -472,32 +472,26 @@ pub fn extract_issue_number(branch: &str) -> Option<u32> {
 
     // Keyword pattern on original and stripped.
     for candidate in &[branch, stripped.as_str()] {
-        if let Some(caps) = issue_keyword_re().captures(candidate) {
-            if let Ok(n) = caps[1].parse::<u32>() {
-                if n >= 1 {
+        if let Some(caps) = issue_keyword_re().captures(candidate)
+            && let Ok(n) = caps[1].parse::<u32>()
+                && n >= 1 {
                     return Some(n);
                 }
-            }
-        }
     }
 
     // Leading number (>= 100) on stripped.
-    if let Some(caps) = leading_number_re().captures(&stripped) {
-        if let Ok(n) = caps[1].parse::<u32>() {
-            if n >= 100 {
+    if let Some(caps) = leading_number_re().captures(&stripped)
+        && let Ok(n) = caps[1].parse::<u32>()
+            && n >= 100 {
                 return Some(n);
             }
-        }
-    }
 
     // Embedded number (>= 100) on stripped.
-    if let Some(caps) = embedded_number_re().captures(&stripped) {
-        if let Ok(n) = caps[1].parse::<u32>() {
-            if n >= 100 {
+    if let Some(caps) = embedded_number_re().captures(&stripped)
+        && let Ok(n) = caps[1].parse::<u32>()
+            && n >= 100 {
                 return Some(n);
             }
-        }
-    }
 
     None
 }

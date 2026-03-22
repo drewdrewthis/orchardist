@@ -45,19 +45,17 @@ pub fn list_tmux_sessions() -> Vec<TmuxSession> {
         .args(["list-panes", "-a", "-F", "#{session_name}\t#{pane_index}\t#{pane_title}"])
         .output();
 
-    if let Ok(o) = pane_out {
-        if o.status.success() {
+    if let Ok(o) = pane_out
+        && o.status.success() {
             let pane_text = String::from_utf8_lossy(&o.stdout);
             for line in pane_text.trim().lines() {
                 let parts: Vec<&str> = line.splitn(3, '\t').collect();
-                if parts.len() == 3 && parts[1] == "0" {
-                    if let Some(session) = sessions.iter_mut().find(|s| s.name == parts[0]) {
+                if parts.len() == 3 && parts[1] == "0"
+                    && let Some(session) = sessions.iter_mut().find(|s| s.name == parts[0]) {
                         session.pane_title = Some(parts[2].to_string());
                     }
-                }
             }
         }
-    }
 
     LOG.info(&format!("listTmuxSessions: {} sessions", sessions.len()));
     sessions
@@ -97,16 +95,14 @@ pub fn find_session_for_worktree<'a>(
         if s.name == dir_name || name_suffix == dir_name {
             return Some(s);
         }
-        if let Some(b) = branch {
-            if s.name == b {
+        if let Some(b) = branch
+            && s.name == b {
                 return Some(s);
             }
-        }
-        if let Some(slug) = &branch_slug {
-            if s.name == slug.as_str() || name_suffix == slug.as_str() {
+        if let Some(slug) = &branch_slug
+            && (s.name == slug.as_str() || name_suffix == slug.as_str()) {
                 return Some(s);
             }
-        }
     }
 
     None

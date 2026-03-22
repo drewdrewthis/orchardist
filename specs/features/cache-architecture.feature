@@ -59,6 +59,19 @@ Feature: Per-source cache architecture
     And the PRs cache file is overwritten atomically
 
   @unit
+  Scenario: Failed API call does not overwrite existing cache with empty data
+    Given a valid issues cache exists at "~/.cache/orchard/webapp_webapp_issues.json"
+    When the GitHub Issues API call fails during a background refresh
+    Then the cache file "~/.cache/orchard/webapp_webapp_issues.json" is preserved unchanged
+    And no empty or partial data is written to disk
+
+  @unit
+  Scenario: Each cache file includes a last_refreshed timestamp
+    When any cache file is written after a successful refresh
+    Then the file's metadata contains a "last_refreshed" field
+    And the value is an ISO8601 timestamp representing when the refresh completed
+
+  @unit
   Scenario: Issues cache entry structure
     When the issues cache for "acme/webapp" is written
     Then each entry has the fields:
@@ -72,14 +85,15 @@ Feature: Per-source cache architecture
   Scenario: PRs cache entry structure
     When the PRs cache for "acme/webapp" is written
     Then each entry has the fields:
-      | field              | type    | description                                      |
-      | number             | integer | GitHub PR number                                 |
-      | branch             | string  | head branch name                                 |
-      | state              | string  | "open", "closed", or "merged"                    |
-      | review_decision    | string  | "approved", "changes_requested", or null         |
-      | checks_state       | string  | "passing", "failing", "pending", or null         |
-      | has_conflicts      | boolean | true if PR has merge conflicts                   |
-      | unresolved_threads | integer | count of unresolved review threads               |
+      | field              | type             | description                                      |
+      | number             | integer          | GitHub PR number                                 |
+      | branch             | string           | head branch name                                 |
+      | linked_issue       | integer or null  | issue number this PR is linked to via GitHub     |
+      | state              | string           | "open", "closed", or "merged"                    |
+      | review_decision    | string           | "approved", "changes_requested", or null         |
+      | checks_state       | string           | "passing", "failing", "pending", or null         |
+      | has_conflicts      | boolean          | true if PR has merge conflicts                   |
+      | unresolved_threads | integer          | count of unresolved review threads               |
 
   @unit
   Scenario: Worktrees cache entry structure
@@ -95,11 +109,12 @@ Feature: Per-source cache architecture
   Scenario: Tmux sessions cache entry structure
     When the tmux sessions cache is written
     Then each entry has the fields:
-      | field        | type   | description                            |
-      | name         | string | tmux session name                      |
-      | path         | string | working directory of the first window  |
-      | pane_titles  | array  | list of pane title strings             |
-      | pane_commands| array  | list of pane command strings           |
+      | field        | type             | description                                        |
+      | name         | string           | tmux session name                                  |
+      | path         | string           | working directory of the first window              |
+      | pane_titles  | array            | list of pane title strings                         |
+      | pane_commands| array            | list of pane command strings                       |
+      | host         | string or null   | null for local; hostname string for remote hosts   |
 
   # ===================================================================
   # Startup flow
@@ -153,91 +168,114 @@ Feature: Per-source cache architecture
     And each row has no associated worktree, PR, or session
 
   @unit
-  Scenario: Worktree joins to an issue by issue number in branch name
-    Given an issues cache with issue #47 titled "Task-centric state system"
-    And a worktrees cache with a worktree at path "/home/user/workspace/webapp-47" on branch "issue-47-task-centric"
-    When the derived view is computed
-    Then the row for issue #47 has the worktree path "/home/user/workspace/webapp-47"
+  Scenario: Closed issues are not fetched or displayed
+    Given the GitHub Issues API returns issue #10 (open) and issue #20 (closed)
+    When the issues cache for "acme/webapp" is written
+    Then only issue #10 is stored in the cache
+    And the derived view contains no row for issue #20
 
   @unit
-  Scenario: Worktree with no matching issue number in branch name is not joined
-    Given a worktrees cache with a worktree on branch "main"
+  Scenario: PR joins to an issue via the GitHub API linked_issue field
+    Given a PRs cache with a PR #55 whose linked_issue is 47 and branch is "feat/task-centric"
     And an issues cache with issue #47
     When the derived view is computed
-    Then the row for issue #47 has no associated worktree
-    And the "main" worktree is not surfaced as a task row
+    Then the row for issue #47 includes PR #55 and its review/checks data
 
   @unit
-  Scenario: PR joins to an issue via the worktree branch name
-    Given issue #47 has an associated worktree on branch "issue-47-task-centric"
-    And a PRs cache with a PR whose head branch is "issue-47-task-centric"
+  Scenario: PR with no linked issue is ignored in the derived view
+    Given a PRs cache with a PR #99 whose linked_issue is null
+    And an issues cache with issues #10 and #11
     When the derived view is computed
-    Then the row for issue #47 includes the PR number and its review/checks data
+    Then no task row references PR #99
+    And the rows for issue #10 and issue #11 have no associated PR
 
   @unit
-  Scenario: Tmux session joins to an issue via worktree path
-    Given issue #47 has an associated worktree at path "/home/user/workspace/webapp-47"
-    And a tmux sessions cache with a session at path "/home/user/workspace/webapp-47"
+  Scenario: One task row per PR when an issue has multiple linked PRs
+    Given an issues cache with issue #47
+    And a PRs cache with PR #55 (linked_issue: 47) and PR #56 (linked_issue: 47)
     When the derived view is computed
-    Then the row for issue #47 includes that tmux session
+    Then the view contains 2 rows for issue #47 — one for PR #55 and one for PR #56
 
   @unit
-  Scenario: Multiple tmux sessions at the same worktree path all join to the issue
-    Given issue #47 has a worktree at path "/home/user/workspace/webapp-47"
-    And tmux sessions "webapp_47_main" and "webapp_47_claude" both have path "/home/user/workspace/webapp-47"
+  Scenario: Worktree joins to a PR via shared branch name
+    Given a PRs cache with PR #55 whose linked_issue is 47 and branch is "feat/task-centric"
+    And a worktrees cache with a worktree at path "/workspace/webapp-47" on branch "feat/task-centric"
     When the derived view is computed
-    Then the row for issue #47 includes both sessions
+    Then the row for issue #47 / PR #55 has the worktree path "/workspace/webapp-47"
 
   @unit
-  Scenario: Display group "needs_you" is derived when PR has unresolved review threads
-    Given issue #47 has a PR with review_decision "changes_requested" and unresolved_threads > 0
+  Scenario: Worktree with a branch that matches no PR branch is not joined
+    Given a worktrees cache with a worktree on branch "main"
+    And no PR in the PRs cache has branch "main"
+    When the derived view is computed
+    Then the "main" worktree is not surfaced as a task row
+
+  @unit
+  Scenario: Tmux session joins to a task row via worktree path
+    Given issue #47 / PR #55 has an associated worktree at path "/workspace/webapp-47"
+    And a tmux sessions cache with a session at path "/workspace/webapp-47"
+    When the derived view is computed
+    Then the row for issue #47 / PR #55 includes that tmux session
+
+  @unit
+  Scenario: Multiple tmux sessions at the same worktree path all join to the task row
+    Given issue #47 / PR #55 has a worktree at path "/workspace/webapp-47"
+    And tmux sessions "webapp_47_main" and "webapp_47_claude" both have path "/workspace/webapp-47"
+    When the derived view is computed
+    Then the row for issue #47 / PR #55 includes both sessions
+
+  @unit
+  Scenario: Display group "needs_attention" is derived when PR has changes requested
+    Given issue #47 has a PR with review_decision "changes_requested"
     When the display group is derived for issue #47
-    Then the display group is "needs_you"
+    Then the display group is "needs_attention"
 
   @unit
-  Scenario: Display group "needs_you" is derived when PR has merge conflicts
+  Scenario: Display group "needs_attention" is derived when PR has merge conflicts
     Given issue #47 has a PR with has_conflicts true
     When the display group is derived for issue #47
-    Then the display group is "needs_you"
+    Then the display group is "needs_attention"
+
+  @unit
+  Scenario: Display group "needs_attention" is derived when PR has failing CI
+    Given issue #47 has a PR with checks_state "failing"
+    When the display group is derived for issue #47
+    Then the display group is "needs_attention"
+
+  @unit
+  Scenario: Display group "needs_attention" is derived when PR has unresolved review threads
+    Given issue #47 has a PR with unresolved_threads > 0
+    When the display group is derived for issue #47
+    Then the display group is "needs_attention"
 
   @unit
   Scenario: Display group "claude_working" is derived when a Claude agent is active in a pane
     Given issue #47 has a session whose pane_commands include "claude"
-    And the PR is not in a needs_you state
+    And the PR is not in a needs_attention state
     When the display group is derived for issue #47
     Then the display group is "claude_working"
 
   @unit
-  Scenario: Display group "claude_done" is derived when session is idle after agent activity
-    Given issue #47 has a session whose pane_commands no longer include "claude"
-    And a previous pane_title contained "Claude Code"
-    And the PR is not in a needs_you state
-    When the display group is derived for issue #47
-    Then the display group is "claude_done"
-
-  @unit
-  Scenario: Display group "in_review" is derived when PR is open and approved with passing checks
+  Scenario: Display group "ready_to_merge" is derived when PR is approved with passing checks and no conflicts
     Given issue #47 has a PR with review_decision "approved" and checks_state "passing"
     And has_conflicts is false and unresolved_threads is 0
     When the display group is derived for issue #47
-    Then the display group is "in_review"
+    Then the display group is "ready_to_merge"
 
   @unit
-  Scenario: Display group "backlog" is derived when issue has no associated worktree or PR
-    Given issue #47 has no worktree in the worktrees cache
-    And no PR in the PRs cache matches any branch for issue #47
+  Scenario: Display group "backlog" is derived when issue has no associated PR
+    Given issue #47 has no PR in the PRs cache with linked_issue 47
     When the display group is derived for issue #47
     Then the display group is "backlog"
 
   @unit
   Scenario: Display groups are ordered for rendering
     Then the display group rendering order is:
-      | order | group          |
-      | 1     | needs_you      |
-      | 2     | claude_working |
-      | 3     | claude_done    |
-      | 4     | in_review      |
-      | 5     | backlog        |
+      | order | group            |
+      | 1     | needs_attention  |
+      | 2     | claude_working   |
+      | 3     | ready_to_merge   |
+      | 4     | backlog          |
 
   @unit
   Scenario: No TaskStatus is stored anywhere
@@ -245,6 +283,25 @@ Feature: Per-source cache architecture
     Then no "status" field is read from any cache file
     And no "status" field is written to any cache file
     And the display group is computed fresh every time the view is derived
+
+  # ===================================================================
+  # Remote tmux sessions
+  # ===================================================================
+
+  @integration
+  Scenario: Remote hosts have their own tmux sessions polled via SSH
+    Given repo "acme/webapp" has a remote at "ubuntu@10.0.0.1"
+    When the tmux sessions refresh runs
+    Then local tmux sessions are polled directly
+    And remote tmux sessions on "ubuntu@10.0.0.1" are polled via SSH independently
+    And both sets of sessions are stored in the tmux sessions cache with the appropriate host field
+
+  @unit
+  Scenario: Remote tmux sessions join to remote worktrees the same way local sessions join to local worktrees
+    Given a remote worktree at path "/home/ubuntu/webapp-workspace/feat-branch" on host "ubuntu@10.0.0.1"
+    And a remote tmux session with host "ubuntu@10.0.0.1" and path "/home/ubuntu/webapp-workspace/feat-branch"
+    When the derived view is computed
+    Then the task row for the associated PR includes the remote tmux session
 
   # ===================================================================
   # Multi-repo
@@ -258,12 +315,12 @@ Feature: Per-source cache architecture
         "repos": [
           {
             "slug": "acme/webapp",
-            "path": "/home/user/workspace/webapp",
+            "path": "/workspace/webapp",
             "remote": { "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/webapp-workspace" }
           },
           {
             "slug": "acme/my-project",
-            "path": "/home/user/workspace/git-orchard-rs"
+            "path": "/workspace/git-orchard-rs"
           }
         ]
       }
@@ -336,4 +393,4 @@ Feature: Per-source cache architecture
   @unit
   Scenario: merge_worktrees_into_tasks is replaced by the join logic
     Then the application does not call any function named "merge_worktrees_into_tasks"
-    And worktrees are joined to issues by branch name at derive time, not stored in a merged structure
+    And worktrees are joined to PRs by branch name at derive time, not stored in a merged structure

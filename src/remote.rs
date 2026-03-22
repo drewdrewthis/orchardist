@@ -140,11 +140,10 @@ fn match_session<'a>(
         if s.name == dir_name {
             return Some(s);
         }
-        if let Some(ref slug) = branch_slug {
-            if &s.name == slug {
+        if let Some(ref slug) = branch_slug
+            && &s.name == slug {
                 return Some(s);
             }
-        }
     }
     None
 }

@@ -31,21 +31,31 @@ Replace `state.json` with a set of per-source cache files. Each external data so
 | GitHub Issues | issue number, title, open/closed state, labels | `~/.cache/orchard/{owner}_{repo}_issues.json` |
 | GitHub PRs | PR number, state, review decision, CI checks, merge conflicts, unresolved threads | `~/.cache/orchard/{owner}_{repo}_prs.json` |
 | Git Worktrees | worktree paths, branch names, bare/conflict status | `~/.cache/orchard/{owner}_{repo}_worktrees.json` |
-| Tmux Sessions | session names, paths, pane titles, running commands | `~/.cache/orchard/tmux_sessions.json` |
+| Tmux Sessions | session names, paths, pane titles, running commands | `~/.cache/orchard/tmux_sessions.json` (local), `~/.cache/orchard/{host}_tmux_sessions.json` (per remote host) |
 | Remote Worktrees | same as Git Worktrees but polled over SSH | `~/.cache/orchard/{owner}_{repo}_remote_worktrees.json` |
 
-The `{owner}_{repo}` prefix scopes local caches per repository, enabling multi-repo operation from a single TUI instance. The tmux sessions cache is global because sessions are not per-repo.
+The `{owner}_{repo}` prefix scopes local caches per repository, enabling multi-repo operation from a single TUI instance. Tmux session caches are split by host: local sessions go in `tmux_sessions.json`; remote sessions are polled via SSH and stored in `{host}_tmux_sessions.json`, one file per configured remote host. Each cache file records a `last_refreshed` ISO-8601 timestamp in its metadata.
 
 ### Derived View (computed, not stored)
 
-Display groups (`needs_you`, `claude_working`, `claude_done`, `in_review`, `backlog`) are computed at render time by joining the five source caches:
+Display groups (`needs_attention`, `claude_working`, `ready_to_merge`, `other`) are computed at render time by joining the source caches. The join is worktree-first: start from what exists, enrich with metadata. Gaps produce empty fields rather than errors.
 
-1. Start with issues — each open issue is a candidate task row.
-2. Join with worktrees — match by issue number in branch name.
-3. Join with PRs — match by branch to PR association.
-4. Join with tmux sessions — match by worktree path.
-5. Derive display group from PR review state, CI state, and session activity.
-6. Derive display text (PR status, Claude indicator, host label) from joined data.
+Join chain:
+
+1. Start from **worktrees** (local + remote) — the things that actually exist. Skip bare worktrees.
+2. For each worktree, match its branch name to a **PR** (via `{owner}_{repo}_prs.json`).
+3. For each PR, extract: CI status, review decision, unresolved threads, conflicts.
+4. For each worktree path, match to **tmux sessions** by working directory (local or `{host}` sessions).
+5. For each matched session, detect **Claude status** from pane titles, commands, and optionally pane content.
+6. Optionally, match branch name to **issue number** by naming convention (e.g., `webapp-2478` → issue #2478).
+7. Derive display group from joined data:
+   - `needs_attention` — Claude done/waiting for input, PR has changes requested, merge conflicts, failing CI, or unresolved threads.
+   - `claude_working` — Claude actively running (leave it alone).
+   - `ready_to_merge` — PR approved, checks passing, no conflicts, no unresolved threads.
+   - `other` — Shepherd session, worktrees without PRs, miscellaneous.
+8. **Worktrees with no PR or session still show** — in the "other" group, not hidden.
+
+Unstarted GitHub issues (no worktree, no PR) are NOT shown in the main view. GitHub is the issue tracker; Orchard shows active workspaces. Closed issues trigger the cleanup view for worktree removal.
 
 No intermediate computed state is written to disk.
 
@@ -55,11 +65,12 @@ No intermediate computed state is written to disk.
 1. Read all cache files (instant — file reads only, no network)
 2. Join & derive → render TUI immediately with last-known data
 3. Background: refresh each source in parallel
-   - gh issue list        → write issues cache
-   - gh pr list           → write PRs cache
+   - gh issue list        → write issues cache (open issues only)
+   - gh pr list           → write PRs cache (with linkedIssues)
    - git worktree list    → write worktrees cache
-   - tmux list-sessions   → write sessions cache
-   - SSH remote poll      → write remote worktrees cache
+   - tmux list-sessions   → write local sessions cache
+   - SSH remote poll      → write remote worktrees cache + {host} sessions cache
+   Each write only occurs on success with actual data; failures leave the previous cache file in place.
 4. On each source update: re-join, re-derive, re-render, write updated cache
 ```
 
@@ -94,9 +105,6 @@ Each repo's sources are refreshed independently. The TUI aggregates tasks from a
 - `TaskStatus` enum (`Backlog`, `Ready`, `InProgress`, `InReview`, `Done`) — replaced by a derived `DisplayGroup` computed from live source data.
 - `issue_sync.rs` — replaced by a GitHub Issues cache source with its own refresh logic.
 - `merge_worktrees_into_tasks` — replaced by the render-time join described above.
-- `s` key binding (start task) — no manual status transitions; state derives automatically.
-- `d` key binding (mark done) — already removed; issues close on GitHub and the cache reflects that.
-- `p` key binding (set priority) — priority comes from GitHub issue order or labels.
 
 ### What Stays
 

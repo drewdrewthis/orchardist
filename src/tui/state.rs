@@ -12,11 +12,7 @@ pub enum ViewState {
     Transfer(TransferState),
     Cleanup(CleanupState),
     NewSession(NewSessionState),
-    SetPriority(SetPriorityState),
-}
-
-pub struct SetPriorityState {
-    pub task_id: String,
+    Help,
 }
 
 pub struct DeleteState {
@@ -65,6 +61,8 @@ pub enum Phase {
 pub enum AppMsg {
     Worktrees(Vec<Worktree>),
     PaneContent(String, String), // (session_name, content)
+    CacheRefreshed,
+    HostReachability(String, bool), // (host, is_reachable)
     DeleteDone,
     DeleteErr(String),
     TransferDone,

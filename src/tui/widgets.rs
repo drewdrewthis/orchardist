@@ -26,14 +26,13 @@ pub fn status_badge(wt: &Worktree, refreshing: bool) -> BadgeDisplay {
         };
     }
     if wt.pr.is_none() {
-        if let Some(state) = wt.issue_state {
-            if state == IssueState::Closed || state == IssueState::Completed {
+        if let Some(state) = wt.issue_state
+            && (state == IssueState::Closed || state == IssueState::Completed) {
                 return BadgeDisplay {
                     text: "\u{2713} closed".to_string(),
                     style: Style::default().fg(Color::Green),
                 };
             }
-        }
         return BadgeDisplay {
             text: "\u{2014}".to_string(),
             style: Style::default().fg(Color::DarkGray),
@@ -55,17 +54,16 @@ pub fn claude_badge(wt: &Worktree) -> BadgeDisplay {
             style: Style::default().fg(Color::DarkGray),
         };
     }
-    if let Some(ref title) = wt.tmux_pane_title {
-        if title.contains("Claude Code") {
+    if let Some(ref title) = wt.tmux_pane_title
+        && title.contains("Claude Code") {
             return BadgeDisplay {
                 text: "\u{26a1} active".to_string(),
-                style: Style::default().fg(Color::Magenta),
+                style: Style::default().fg(Color::Green),
             };
         }
-    }
     BadgeDisplay {
         text: "\u{25cf} idle".to_string(),
-        style: Style::default().fg(Color::DarkGray),
+        style: Style::default().fg(Color::Yellow),
     }
 }
 

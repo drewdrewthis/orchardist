@@ -52,11 +52,10 @@ fn append_event(path: &Path, event_type: &str, fields: &[(&str, Value)]) {
     }
 
     // Rotate before writing if the existing file is over the size limit.
-    if let Ok(meta) = fs::metadata(path) {
-        if meta.len() >= MAX_SIZE_BYTES {
+    if let Ok(meta) = fs::metadata(path)
+        && meta.len() >= MAX_SIZE_BYTES {
             rotate(path);
         }
-    }
 
     let mut file = match OpenOptions::new().create(true).append(true).open(path) {
         Ok(f) => f,

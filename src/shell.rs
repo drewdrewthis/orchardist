@@ -96,8 +96,8 @@ fn remove_old_shell_function_step(home: &Path) -> Result<(), String> {
     eprintln!("Step 2: Checking for old shell function...");
     for rc in &[".zshrc", ".bashrc"] {
         let rc_path = home.join(rc);
-        if let Ok(content) = std::fs::read_to_string(&rc_path) {
-            if content.contains(MARKER_START) {
+        if let Ok(content) = std::fs::read_to_string(&rc_path)
+            && content.contains(MARKER_START) {
                 eprintln!("  Found old orchard shell function in ~/{rc}");
                 if prompt_yn("  Remove it? [Y/n]", true) {
                     remove_old_shell_function(&rc_path)?;
@@ -108,7 +108,6 @@ fn remove_old_shell_function_step(home: &Path) -> Result<(), String> {
                     );
                 }
             }
-        }
     }
     Ok(())
 }
@@ -343,7 +342,7 @@ pub fn prompt_key(question: &str, default: &str) -> String {
 pub fn parse_tmux_version(s: &str) -> Option<(u32, u32)> {
     // Strip leading "next-" or similar alphabetic prefix.
     let s = s.trim();
-    let s = if let Some(pos) = s.rfind(|c: char| c == '-') {
+    let s = if let Some(pos) = s.rfind('-') {
         &s[pos + 1..]
     } else {
         s
@@ -365,12 +364,11 @@ pub fn parse_tmux_version(s: &str) -> Option<(u32, u32)> {
 pub fn inject_config_block(existing: &str, content: &str) -> String {
     let new_block = format!("{MARKER_START}\n{content}\n{MARKER_END}");
 
-    if let Some(start) = existing.find(MARKER_START) {
-        if let Some(end_offset) = existing[start..].find(MARKER_END) {
+    if let Some(start) = existing.find(MARKER_START)
+        && let Some(end_offset) = existing[start..].find(MARKER_END) {
             let end = start + end_offset + MARKER_END.len();
             return format!("{}{}{}", &existing[..start], new_block, &existing[end..]);
         }
-    }
 
     if existing.is_empty() || existing.ends_with('\n') {
         format!("{existing}{new_block}\n")

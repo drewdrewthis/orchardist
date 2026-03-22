@@ -74,13 +74,12 @@ impl Logger {
         let _ = file.write_all(line.as_bytes());
 
         // Rotate if over threshold.
-        if let Ok(meta) = file.metadata() {
-            if meta.len() >= MAX_SIZE_BYTES {
+        if let Ok(meta) = file.metadata()
+            && meta.len() >= MAX_SIZE_BYTES {
                 drop(file);
                 let rotated = self.path.with_extension("log.1");
                 let _ = fs::rename(&self.path, rotated);
             }
-        }
     }
 }
 
