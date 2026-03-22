@@ -27,8 +27,9 @@ fn load_config_from_dir(dir: &str) -> OrchardConfig {
     parse_config(&data, &path.to_string_lossy())
 }
 
-// Unmarshals raw JSON bytes into an OrchardConfig.
-fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
+/// Parses raw JSON bytes into an `OrchardConfig`.
+/// Exposed for integration tests; prefer `load_config` for production use.
+pub fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
     #[derive(serde::Deserialize)]
     struct LegacyEntry {
         host: String,
