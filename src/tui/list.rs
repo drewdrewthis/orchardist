@@ -1512,6 +1512,132 @@ mod tests {
     use crate::state::{Task, TaskSource, TaskStatus};
     use crate::types::{ChecksStatus, PrInfo, ReviewDecision, Worktree};
     use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::mpsc;
+
+    /// Builds a minimal App for unit tests without touching the filesystem or git.
+    fn make_app(worktrees: Vec<Worktree>) -> App {
+        let (tx, rx) = mpsc::channel();
+        App {
+            worktrees,
+            cursor: 0,
+            loading: false,
+            refreshing: false,
+            error: None,
+            warning: None,
+            config: crate::types::OrchardConfig::default(),
+            repo_root: "/tmp/test-repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            pane_content: String::new(),
+            view: ViewState::List,
+            app_state: crate::state::AppState { version: 1, tasks: Vec::new() },
+            backlog_page: 0,
+            tx,
+            rx,
+            switch_target: None,
+            last_refresh: std::time::Instant::now(),
+            spinner_frame: 0,
+        }
+    }
+
+    fn tmux_available() -> bool {
+        std::process::Command::new("tmux")
+            .arg("-V")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn enter_key_on_worktree_with_existing_session_sets_switch_target() {
+        if !tmux_available() {
+            eprintln!("tmux not available — skipping");
+            return;
+        }
+
+        let session_name = "orchard-test-existing-session".to_string();
+        let wt = Worktree {
+            path: "/tmp/test-repo".to_string(),
+            tmux_session: Some(session_name.clone()),
+            ..Default::default()
+        };
+        let mut app = make_app(vec![wt]);
+
+        let result = app.handle_list_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Clean up regardless of outcome.
+        let _ = crate::tmux::kill_tmux_session(&session_name);
+
+        assert!(result, "Enter key should return true (quit loop)");
+        assert_eq!(
+            app.switch_target,
+            Some(session_name),
+            "switch_target must be set to the existing session name"
+        );
+    }
+
+    #[test]
+    fn enter_key_on_worktree_without_session_derives_and_sets_switch_target() {
+        if !tmux_available() {
+            eprintln!("tmux not available — skipping");
+            return;
+        }
+
+        let wt = Worktree {
+            path: "/tmp/test-repo/worktrees/feature-login".to_string(),
+            branch: Some("feature/login".to_string()),
+            tmux_session: None,
+            ..Default::default()
+        };
+        let mut app = make_app(vec![wt]);
+
+        let result = app.handle_list_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Clean up any session that was created.
+        if let Some(ref name) = app.switch_target {
+            let _ = crate::tmux::kill_tmux_session(name);
+        }
+
+        assert!(result, "Enter key should return true (quit loop)");
+        assert!(
+            app.switch_target.is_some(),
+            "switch_target must be set to a derived session name"
+        );
+    }
+
+    #[test]
+    fn q_key_returns_quit_without_switch_target() {
+        let wt = Worktree {
+            path: "/tmp/test-repo".to_string(),
+            ..Default::default()
+        };
+        let mut app = make_app(vec![wt]);
+
+        let result = app.handle_list_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+
+        assert!(result, "Q key should return true (quit loop)");
+        assert!(
+            app.switch_target.is_none(),
+            "switch_target must remain None when quitting with Q"
+        );
+    }
+
+    #[test]
+    fn escape_key_returns_quit_without_switch_target() {
+        let wt = Worktree {
+            path: "/tmp/test-repo".to_string(),
+            ..Default::default()
+        };
+        let mut app = make_app(vec![wt]);
+
+        let result = app.handle_list_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(result, "Escape key should return true (quit loop)");
+        assert!(
+            app.switch_target.is_none(),
+            "switch_target must remain None when quitting with Escape"
+        );
+    }
 
     fn make_task(status: TaskStatus, priority: u32, issue: u32) -> Task {
         Task {

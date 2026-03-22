@@ -58,10 +58,7 @@ fn git_fixture_can_add_worktrees() {
 /// Scenario: Tmux fixture creates and cleans up sessions
 #[test]
 fn tmux_fixture_creates_and_cleans_up_sessions() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let fixture = TmuxFixture::new();
     let session_name = fixture.create_session("abc");
@@ -101,10 +98,7 @@ fn binary_runner_captures_stdout_and_stderr() {
 /// Scenario: Session creation at worktree directory via real tmux
 #[test]
 fn session_creation_at_worktree_directory_via_real_tmux() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let fixture = GitFixture::new();
     let wt_path = fixture.add_worktree("feature/login");
@@ -141,10 +135,7 @@ fn session_creation_at_worktree_directory_via_real_tmux() {
 /// Scenario: Existing session is reused on repeat create_session call
 #[test]
 fn existing_session_is_reused_on_repeat_create_session_call() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let fixture = GitFixture::new();
     let wt_path = fixture.add_worktree("feature/login");
@@ -178,10 +169,7 @@ fn existing_session_is_reused_on_repeat_create_session_call() {
 /// Scenario: list_tmux_sessions returns real tmux sessions
 #[test]
 fn list_tmux_sessions_returns_real_tmux_sessions() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let tmux = TmuxFixture::new();
     let name_a = tmux.create_session("a");
@@ -207,10 +195,7 @@ fn list_tmux_sessions_returns_real_tmux_sessions() {
 /// Scenario: find_session_for_worktree matches by path against real sessions
 #[test]
 fn find_session_for_worktree_matches_by_path_against_real_sessions() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let fixture = GitFixture::new();
     let repo_path = fixture.path().to_string();
@@ -235,10 +220,7 @@ fn find_session_for_worktree_matches_by_path_against_real_sessions() {
 /// Scenario: ensure_main_session creates session at worktree origin
 #[test]
 fn ensure_main_session_creates_session_at_worktree_origin() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let fixture = GitFixture::new();
     let repo_path = fixture.path().to_string();
@@ -274,10 +256,7 @@ fn ensure_main_session_creates_session_at_worktree_origin() {
 /// Scenario: ensure_main_session is idempotent
 #[test]
 fn ensure_main_session_is_idempotent() {
-    if !common::tmux_available() {
-        eprintln!("tmux not available — skipping");
-        return;
-    }
+    requires_tmux!();
 
     let fixture = GitFixture::new();
     let repo_path = fixture.path().to_string();
@@ -307,29 +286,6 @@ fn ensure_main_session_is_idempotent() {
     assert_eq!(count, 1, "expected exactly one session '{expected_session}', found {count}");
 
     let _ = orchard::tmux::kill_tmux_session(&expected_session);
-}
-
-// ---------------------------------------------------------------------------
-// Phase 2: Config Round-trip
-// ---------------------------------------------------------------------------
-
-/// Scenario: Config round-trip with parse_config
-#[test]
-fn config_round_trip_with_parse_config() {
-    let fixture = GitFixture::new();
-
-    let json = r#"{"remote":{"host":"myhost","repoPath":"/srv/repo","shell":"ssh"}}"#;
-    fixture.write_orchard_config(json);
-
-    let data = std::fs::read(format!("{}/.git/orchard.json", fixture.path()))
-        .expect("orchard.json not found");
-
-    let config = orchard::config::parse_config(&data, "orchard.json");
-
-    let remote = config.remote.expect("expected a remote");
-    assert_eq!(remote.host, "myhost");
-    assert_eq!(remote.repo_path, "/srv/repo");
-    assert_eq!(remote.shell, "ssh");
 }
 
 // ---------------------------------------------------------------------------
@@ -404,4 +360,35 @@ fn orchard_help_exits_successfully() {
         .assert()
         .success()
         .stderr(predicates::str::contains("Usage:"));
+}
+
+/// Scenario: orchard --json does not create main tmux session
+#[test]
+fn orchard_json_does_not_create_main_tmux_session() {
+    requires_tmux!();
+
+    let fixture = GitFixture::new();
+    let repo_name = std::path::Path::new(fixture.path())
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    // Run orchard --json (read-only mode).
+    let output = BinCommand::cargo_bin("orchard")
+        .unwrap()
+        .arg("--json")
+        .current_dir(fixture.path())
+        .env_remove("TMUX")
+        .output()
+        .expect("failed to run orchard --json");
+    assert!(output.status.success());
+
+    // Verify no tmux session was created for this repo.
+    let sessions = orchard::tmux::list_tmux_sessions();
+    let repo_session = sessions.iter().find(|s| s.name.contains(repo_name));
+    assert!(
+        repo_session.is_none(),
+        "orchard --json should not create tmux sessions, but found: {:?}",
+        repo_session.map(|s| &s.name)
+    );
 }

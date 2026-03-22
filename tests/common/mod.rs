@@ -164,39 +164,6 @@ impl Drop for TmuxFixture {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Legacy helpers (kept for backward compatibility)
-// ---------------------------------------------------------------------------
-
-/// Creates a temporary git repository with an initial empty commit.
-/// Returns `(TempDir, path_string)`. The `TempDir` must stay alive for the test.
-pub fn create_temp_git_repo() -> (TempDir, String) {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().to_str().unwrap().to_string();
-
-    Command::new("git")
-        .args(["init", &path])
-        .output()
-        .expect("git init failed");
-
-    Command::new("git")
-        .args(["-C", &path, "config", "user.email", "test@example.com"])
-        .output()
-        .expect("git config user.email failed");
-
-    Command::new("git")
-        .args(["-C", &path, "config", "user.name", "Test"])
-        .output()
-        .expect("git config user.name failed");
-
-    Command::new("git")
-        .args(["-C", &path, "commit", "--allow-empty", "-m", "initial"])
-        .output()
-        .expect("git commit failed");
-
-    (dir, path)
-}
-
 /// Returns true when tmux is available on this system.
 pub fn tmux_available() -> bool {
     Command::new("tmux")
