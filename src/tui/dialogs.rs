@@ -4,7 +4,7 @@ use ratatui::widgets::Padding;
 
 use crate::paths;
 use crate::tui::state::{
-    CleanupState, DeleteState, NewSessionState, Phase, SetPriorityState, TransferState, ViewState,
+    CleanupState, DeleteState, NewSessionState, Phase, TransferState, ViewState,
 };
 use crate::tui::widgets::render_popup;
 use crate::tui::App;
@@ -484,61 +484,95 @@ impl App {
 }
 
 // ---------------------------------------------------------------------------
-// Set priority dialog
+// Help overlay dialog
 // ---------------------------------------------------------------------------
 
 impl App {
-    /// Handles key input while in the SetPriority view.
-    ///
-    /// Digit 1-9: apply priority, save state, return to List.
-    /// Escape: cancel, return to List.
-    pub(crate) fn handle_set_priority_key(
-        &mut self,
-        state: &mut SetPriorityState,
-        key: KeyEvent,
-    ) -> bool {
+    pub(crate) fn handle_help_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Esc => {
+            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
                 self.view = ViewState::List;
+                false
             }
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                let priority = (c as u32) - ('0' as u32);
-                let task_id = state.task_id.clone();
-                if let Some(task) = self.app_state.tasks.iter_mut().find(|t| t.id == task_id) {
-                    task.priority = priority;
-                    task.updated_at = chrono::Utc::now();
-                }
-                if let Err(e) = crate::state::save_state(&self.app_state) {
-                    crate::logger::LOG.info(&format!("tui: save_state failed: {e}"));
-                }
-                self.view = ViewState::List;
-            }
-            _ => {}
+            _ => false,
         }
-        false
     }
 
-    /// Renders the set-priority popup overlay.
-    pub(crate) fn render_set_priority(&self, _state: &SetPriorityState, f: &mut Frame) {
+    pub(crate) fn render_help(&self, f: &mut Frame) {
+        self.render_list(f);
+
+        let dim = Style::default().fg(Color::DarkGray);
+        let key_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+
         let lines = vec![
-            Line::from("Priority (1-9, 1 = highest):"),
+            Line::from(vec![Span::styled(
+                "Keyboard Shortcuts",
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
             Line::from(""),
-            Line::styled(
-                "press 1-9 to set  esc cancel",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ),
+            Line::from(vec![
+                Span::styled("enter    ", key_style),
+                Span::styled("Switch to / create tmux session", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("j / k    ", key_style),
+                Span::styled("Navigate up / down", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("1-9      ", key_style),
+                Span::styled("Jump to item", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("o        ", key_style),
+                Span::styled("Open PR in browser", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("r        ", key_style),
+                Span::styled("Refresh all data", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("R        ", key_style),
+                Span::styled("Reconnect unreachable hosts", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("c        ", key_style),
+                Span::styled("Cleanup stale worktrees", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("n        ", key_style),
+                Span::styled("New tmux session", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("d        ", key_style),
+                Span::styled("Delete worktree", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("p        ", key_style),
+                Span::styled("Push / pull worktree", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("q / esc  ", key_style),
+                Span::styled("Quit", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("?        ", key_style),
+                Span::styled("This help", dim),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("Press ? / esc / q to close", dim)),
         ];
 
         render_popup(
             f,
             lines,
-            Color::Yellow,
-            50,
-            6,
-            Some(" Set Priority "),
-            Padding::new(2, 2, 1, 0),
+            Color::Cyan,
+            60,
+            20,
+            Some(" HELP "),
+            Padding::new(2, 2, 1, 1),
         );
     }
 }
+

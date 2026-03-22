@@ -104,11 +104,10 @@ pub fn apply_prs(base: &[Worktree], pr_map: &HashMap<String, PrInfo>) -> Vec<Wor
     base.iter()
         .map(|tree| {
             let mut t = tree.clone();
-            if let Some(branch) = &tree.branch {
-                if !tree.is_bare {
+            if let Some(branch) = &tree.branch
+                && !tree.is_bare {
                     t.pr = pr_map.get(branch).cloned();
                 }
-            }
             t.pr_loading = false;
             t
         })
@@ -129,13 +128,11 @@ pub fn fetch_issue_states(trees: &[Worktree]) -> HashMap<u32, IssueState> {
         if tree.pr.is_some() || tree.is_bare {
             continue;
         }
-        if let Some(branch) = &tree.branch {
-            if let Some(num) = github::extract_issue_number(branch) {
-                if !numbers.contains(&num) {
+        if let Some(branch) = &tree.branch
+            && let Some(num) = github::extract_issue_number(branch)
+                && !numbers.contains(&num) {
                     numbers.push(num);
                 }
-            }
-        }
     }
     if numbers.is_empty() {
         return HashMap::new();
@@ -158,16 +155,14 @@ pub fn apply_issue_states(
             if tree.pr.is_some() || tree.is_bare {
                 return tree.clone();
             }
-            if let Some(branch) = &tree.branch {
-                if let Some(num) = github::extract_issue_number(branch) {
-                    if let Some(&state) = issue_states.get(&num) {
+            if let Some(branch) = &tree.branch
+                && let Some(num) = github::extract_issue_number(branch)
+                    && let Some(&state) = issue_states.get(&num) {
                         let mut t = tree.clone();
                         t.issue_number = Some(num);
                         t.issue_state = Some(state);
                         return t;
                     }
-                }
-            }
             tree.clone()
         })
         .collect()
@@ -196,7 +191,7 @@ pub fn collect_worktree_data() -> anyhow::Result<Vec<Worktree>> {
     let remote_handle = std::thread::spawn(move || {
         remote_cfg
             .as_ref()
-            .map(|r| remote::fetch_remote_worktrees(r))
+            .map(remote::fetch_remote_worktrees)
             .unwrap_or_default()
     });
 
@@ -208,11 +203,10 @@ pub fn collect_worktree_data() -> anyhow::Result<Vec<Worktree>> {
         .iter()
         .map(|t| {
             let mut wt = t.clone();
-            if let Some(branch) = &t.branch {
-                if !t.is_bare {
+            if let Some(branch) = &t.branch
+                && !t.is_bare {
                     wt.pr = pr_map.get(branch).cloned();
                 }
-            }
             wt
         })
         .collect();
@@ -261,7 +255,7 @@ pub fn refresh_worktrees(
     let remote_handle = std::thread::spawn(move || {
         remote_cfg
             .as_ref()
-            .map(|r| remote::fetch_remote_worktrees(r))
+            .map(remote::fetch_remote_worktrees)
             .unwrap_or_default()
     });
     enrich_prs(&mut pr_map);
@@ -272,11 +266,10 @@ pub fn refresh_worktrees(
         .iter()
         .map(|t| {
             let mut wt = t.clone();
-            if let Some(branch) = &t.branch {
-                if !t.is_bare {
+            if let Some(branch) = &t.branch
+                && !t.is_bare {
                     wt.pr = pr_map.get(branch).cloned();
                 }
-            }
             wt
         })
         .collect();

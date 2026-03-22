@@ -31,6 +31,8 @@ fn fetch_github_issues(repo_slug: &str) -> Vec<(u32, String, String)> {
             "list",
             "--repo",
             repo_slug,
+            "--assignee",
+            "@me",
             "--state",
             "all",
             "--limit",

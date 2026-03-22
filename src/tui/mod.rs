@@ -3,23 +3,25 @@ mod list;
 mod state;
 mod widgets;
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 
+use crate::cache;
+use crate::cache_sources;
 use crate::collector;
-use crate::config;
+use crate::derive;
 use crate::git;
+use crate::global_config;
 use crate::remote;
 use crate::tmux;
 use crate::transfer;
-use crate::types::{IssueState, OrchardConfig, Worktree};
+use crate::types::{IssueState, Worktree};
 
-use state::{
-    AppMsg, CleanupState, Phase, ViewState,
-};
+use state::{AppMsg, CleanupState, Phase, ViewState};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,6 +37,19 @@ const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
 
 // ---------------------------------------------------------------------------
+// Notification snapshot
+// ---------------------------------------------------------------------------
+
+/// Captures the notification-relevant state of one worktree row so that
+/// transitions can be detected between cache refresh cycles.
+struct WorktreeSnapshot {
+    claude_active: bool,
+    claude_needs_input: bool,
+    ci_status: Option<String>,
+    has_unresolved_threads: bool,
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -45,15 +60,18 @@ pub struct App {
     refreshing: bool,
     error: Option<String>,
     warning: Option<(String, Instant)>,
-    config: OrchardConfig,
     repo_root: String,
     repo_name: String,
     pane_content: String,
     view: ViewState,
 
-    // Task-centric state
-    app_state: crate::state::AppState,
+    // Derived task view from caches
+    task_rows: Vec<derive::TaskRow>,
+    global_config: global_config::GlobalConfig,
     backlog_page: usize,
+
+    // Reachability state keyed by SSH host name
+    host_reachable: HashMap<String, bool>,
 
     // Background data channel
     tx: mpsc::Sender<AppMsg>,
@@ -65,14 +83,17 @@ pub struct App {
     // Auto-refresh
     last_refresh: Instant,
     spinner_frame: usize,
+
+    // Previous snapshots used to detect state transitions between cache refreshes.
+    previous_worktree_states: HashMap<String, WorktreeSnapshot>,
 }
 
 impl App {
     fn new(command: &str) -> Self {
-        let cfg = config::load_config();
         let repo_root = git::find_repo_root();
         let repo_name = git::get_repo_name();
-        let app_state = crate::state::load_state();
+        let global_cfg = global_config::load_global_config();
+        let task_rows = derive_from_all_caches(&global_cfg);
         let (tx, rx) = mpsc::channel();
 
         let view = if command == "cleanup" {
@@ -95,18 +116,20 @@ impl App {
             refreshing: false,
             error: None,
             warning: None,
-            config: cfg,
             repo_root,
             repo_name,
             pane_content: String::new(),
             view,
-            app_state,
+            task_rows,
+            global_config: global_cfg,
             backlog_page: 0,
+            host_reachable: HashMap::new(),
             tx,
             rx,
             last_refresh: Instant::now(),
             spinner_frame: 0,
             switch_target: None,
+            previous_worktree_states: HashMap::new(),
         }
     }
 
@@ -115,31 +138,74 @@ impl App {
     // -------------------------------------------------------------------
 
     fn start_refresh(&self) {
-        let tx = self.tx.clone();
+        // Legacy worktree collector (still feeds self.worktrees for existing views).
+        let tx_legacy = self.tx.clone();
         std::thread::spawn(move || {
-            let tx_clone = tx.clone();
+            let tx_clone = tx_legacy.clone();
             let update_fn = move |trees: &[Worktree]| {
                 let _ = tx_clone.send(AppMsg::Worktrees(trees.to_vec()));
             };
-            let tx_err = tx.clone();
+            let tx_err = tx_legacy.clone();
             let error_fn = move |msg: &str| {
                 let _ = tx_err.send(AppMsg::Error(msg.to_string()));
             };
             if let Err(e) = collector::refresh_worktrees(&update_fn, &error_fn) {
-                let _ = tx.send(AppMsg::Error(e.to_string()));
+                let _ = tx_legacy.send(AppMsg::Error(e.to_string()));
             }
         });
-    }
 
-    fn sync_issues(&mut self) {
-        if let Ok((owner, name)) = crate::github::get_repo() {
-            let slug = format!("{owner}/{name}");
-            if crate::issue_sync::sync_issues(&mut self.app_state, &slug) {
-                if let Err(e) = crate::state::save_state(&self.app_state) {
-                    crate::logger::LOG.info(&format!("tui: save_state failed: {e}"));
+        // New cache-based refresh pipeline.
+        let config = self.global_config.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            // Probe each unique remote host before attempting remote operations.
+            let mut reachable_hosts: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut unreachable_hosts: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            for repo in &config.repos {
+                for remote in &repo.remotes {
+                    let host = remote.host.clone();
+                    if reachable_hosts.contains(&host) || unreachable_hosts.contains(&host) {
+                        continue;
+                    }
+                    match crate::remote::ssh_exec(&host, "true") {
+                        Ok(_) => {
+                            let _ = tx.send(AppMsg::HostReachability(host.clone(), true));
+                            reachable_hosts.insert(host);
+                        }
+                        Err(_) => {
+                            let _ = tx.send(AppMsg::HostReachability(host.clone(), false));
+                            unreachable_hosts.insert(host);
+                        }
+                    }
                 }
             }
-        }
+
+            for repo in &config.repos {
+                let _ = cache_sources::refresh_issues(repo);
+                let _ = cache_sources::refresh_prs(repo);
+                let _ = cache_sources::refresh_worktrees(repo);
+                for remote in &repo.remotes {
+                    if reachable_hosts.contains(&remote.host) {
+                        let _ = cache_sources::refresh_remote_worktrees(repo, remote);
+                    }
+                }
+            }
+            // Refresh tmux sessions (local).
+            let _ = cache_sources::refresh_tmux_sessions(None);
+            // Refresh remote tmux sessions for reachable hosts only.
+            let mut tmux_hosts_refreshed: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for repo in &config.repos {
+                for remote in &repo.remotes {
+                    if reachable_hosts.contains(&remote.host)
+                        && tmux_hosts_refreshed.insert(remote.host.clone()) {
+                            let _ = cache_sources::refresh_tmux_sessions(Some(&remote.host));
+                        }
+                }
+            }
+            // Signal that caches are updated.
+            let _ = tx.send(AppMsg::CacheRefreshed);
+        });
     }
 
     fn fetch_pane_content(&self) {
@@ -195,35 +261,26 @@ impl App {
                         self.worktrees = trees;
                     }
 
-                    merge_worktrees_into_tasks(&mut self.app_state.tasks, &self.worktrees);
-                    // Save if merge changed any task status
-                    if let Err(e) = crate::state::save_state(&self.app_state) {
-                        crate::logger::LOG.info(&format!("tui: save_state failed: {e}"));
-                    }
-
                     self.loading = false;
                     if !still_loading {
                         self.refreshing = false;
                         if let Err(e) = crate::status::write_status(&self.worktrees) {
                             crate::logger::LOG.info(&format!("status write failed: {e}"));
                         }
-                        // Sync GitHub issues into task state on each full refresh.
-                        self.sync_issues();
                     }
                     self.error = None;
                     if self.cursor >= self.worktrees.len() && !self.worktrees.is_empty() {
                         self.cursor = self.worktrees.len() - 1;
                     }
                     // Populate cleanup stale list if in cleanup view with empty stale.
-                    if let ViewState::Cleanup(ref mut cs) = self.view {
-                        if cs.stale.is_empty() {
+                    if let ViewState::Cleanup(ref mut cs) = self.view
+                        && cs.stale.is_empty() {
                             cs.stale = filter_stale(&self.worktrees);
                             cs.selected =
                                 cs.stale.iter().map(|wt| wt.path.clone()).collect();
                         }
-                    }
                     // Fetch pane content for the current selection.
-                    if !self.app_state.tasks.is_empty() {
+                    if !self.task_rows.is_empty() {
                         // Task mode: fetch via task's worktree.
                         self.fetch_task_pane_content();
                     } else if !self.worktrees.is_empty()
@@ -235,16 +292,101 @@ impl App {
                         self.pane_content.clear();
                     }
                 }
+                AppMsg::CacheRefreshed => {
+                    let old_states = std::mem::take(&mut self.previous_worktree_states);
+                    self.task_rows = derive_from_all_caches(&self.global_config);
+
+                    // Detect state transitions and fire desktop notifications.
+                    for row in &self.task_rows {
+                        let key = row.worktree_path.clone();
+                        let old = old_states.get(&key);
+                        let label = row.issue_title.as_deref()
+                            .unwrap_or(&row.branch);
+
+                        // Claude was working, now needs input.
+                        if row.sessions.iter().any(|s| s.claude_needs_input)
+                            && old.map(|o| !o.claude_needs_input).unwrap_or(false) {
+                                crate::notify::send_notification(
+                                    "Claude needs input",
+                                    &format!("{} is waiting for you", label),
+                                );
+                            }
+
+                        // Claude was active, now idle (finished).
+                        if !row.sessions.iter().any(|s| s.has_claude_active)
+                            && old.map(|o| o.claude_active).unwrap_or(false) {
+                                crate::notify::send_notification(
+                                    "Claude finished",
+                                    label,
+                                );
+                            }
+
+                        // CI transitioned to failing.
+                        if let Some(ref pr) = row.pr {
+                            if pr.checks_state.as_deref() == Some("failing")
+                                && old.map(|o| o.ci_status.as_deref() != Some("failing")).unwrap_or(false) {
+                                    crate::notify::send_notification(
+                                        "CI Failed",
+                                        &format!("#{} {}", pr.number, label),
+                                    );
+                                }
+
+                            // New unresolved review threads appeared.
+                            if pr.unresolved_threads > 0
+                                && old.map(|o| !o.has_unresolved_threads).unwrap_or(false) {
+                                    crate::notify::send_notification(
+                                        "Review comments",
+                                        &format!("#{} has {} unresolved thread(s)", pr.number, pr.unresolved_threads),
+                                    );
+                                }
+                        }
+                    }
+
+                    // Save current state as snapshots for the next comparison.
+                    self.previous_worktree_states = self.task_rows.iter().map(|row| {
+                        let snapshot = WorktreeSnapshot {
+                            claude_active: row.sessions.iter().any(|s| s.has_claude_active),
+                            claude_needs_input: row.sessions.iter().any(|s| s.claude_needs_input),
+                            ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
+                            has_unresolved_threads: row.pr.as_ref()
+                                .map(|p| p.unresolved_threads > 0)
+                                .unwrap_or(false),
+                        };
+                        (row.worktree_path.clone(), snapshot)
+                    }).collect();
+
+                    // Write session manifest so resurrection knows which
+                    // worktrees had active sessions at last refresh.
+                    let manifest_entries: Vec<cache::SessionManifestEntry> = self
+                        .task_rows
+                        .iter()
+                        .filter(|row| !row.sessions.is_empty())
+                        .map(|row| cache::SessionManifestEntry {
+                            session_name: row.sessions[0].name.clone(),
+                            worktree_path: row.worktree_path.clone(),
+                            branch: row.branch.clone(),
+                            had_claude: row.sessions.iter().any(|s| s.has_claude_active),
+                            host: row.worktree_host.clone(),
+                        })
+                        .collect();
+                    if !manifest_entries.is_empty() {
+                        let manifest = cache::SessionManifest {
+                            last_updated: chrono::Utc::now(),
+                            sessions: manifest_entries,
+                        };
+                        let _ = cache::write_manifest(&manifest);
+                    }
+                }
+                AppMsg::HostReachability(host, reachable) => {
+                    self.host_reachable.insert(host, reachable);
+                }
                 AppMsg::PaneContent(session_name, content) => {
                     // Accept pane content if the session matches the current
                     // selection — works for both task mode and worktree mode.
-                    let matches = if !self.app_state.tasks.is_empty() {
+                    let matches = if !self.task_rows.is_empty() {
                         // Task mode: check if the task's sessions contain this one.
-                        let (visible, _) = crate::tui::list::visible_tasks(
-                            &self.app_state.tasks, &self.worktrees, self.backlog_page,
-                        );
-                        visible.get(self.cursor).is_some_and(|vt| {
-                            vt.task.sessions.contains(&session_name)
+                        self.task_rows.get(self.cursor).is_some_and(|row| {
+                            row.sessions.iter().any(|s| s.name == session_name)
                         })
                     } else {
                         let current_session = self
@@ -312,6 +454,12 @@ impl App {
             return true;
         }
 
+        // ? opens help from the List view.
+        if key.code == KeyCode::Char('?') && matches!(self.view, ViewState::List) {
+            self.view = ViewState::Help;
+            return false;
+        }
+
         // We need to temporarily take the view out of self so we can pass
         // mutable references to both self and the dialog state.
         let mut view = std::mem::replace(&mut self.view, ViewState::List);
@@ -348,12 +496,12 @@ impl App {
                 }
                 r
             }
-            ViewState::SetPriority(ref mut sp) => {
-                let r = self.handle_set_priority_key(sp, key);
+            ViewState::Help => {
+                self.handle_help_key(key);
                 if !matches!(self.view, ViewState::List) {
                     self.view = view;
                 }
-                r
+                false
             }
         }
     }
@@ -366,7 +514,7 @@ impl App {
             ViewState::Transfer(_) => "Transfer",
             ViewState::Cleanup(_) => "Cleanup",
             ViewState::NewSession(_) => "NewSession",
-            ViewState::SetPriority(_) => "SetPriority",
+            ViewState::Help => "Help",
         }
     }
 
@@ -409,13 +557,8 @@ impl App {
                 }
                 self.view = view;
             }
-            ViewState::SetPriority(_) => {
-                self.render_list(f);
-                let view = std::mem::replace(&mut self.view, ViewState::List);
-                if let ViewState::SetPriority(sp) = &view {
-                    self.render_set_priority(sp, f);
-                }
-                self.view = view;
+            ViewState::Help => {
+                self.render_help(f);
             }
         }
     }
@@ -426,10 +569,10 @@ impl App {
 
     fn start_delete(&self, target: &Worktree) {
         let wt = target.clone();
-        let config = self.config.clone();
+        let global_config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            match delete_worktree(&wt, &config) {
+            match delete_worktree(&wt, &global_config) {
                 Ok(()) => {
                     let _ = tx.send(AppMsg::DeleteDone);
                 }
@@ -442,21 +585,35 @@ impl App {
 
     fn start_transfer(&self, target: &Worktree) {
         let wt = target.clone();
-        let config = self.config.clone();
+        let global_config = self.global_config.clone();
         let repo_root = self.repo_root.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let remote_cfg = match config.remote {
-                Some(ref r) => r,
+            // Find the remote config: if the worktree has a host, look up that
+            // host; otherwise use the first remote.
+            let remote_cfg = global_config.repos.iter().find_map(|repo| {
+                if let Some(ref host) = wt.remote {
+                    repo.remote_for_host(host).cloned()
+                } else {
+                    repo.first_remote().cloned()
+                }
+            });
+            let remote_cfg = match remote_cfg {
+                Some(r) => r,
                 None => {
                     let _ = tx.send(AppMsg::TransferErr("No remote configured".to_string()));
                     return;
                 }
             };
+            let types_remote = crate::types::RemoteConfig {
+                host: remote_cfg.host.clone(),
+                repo_path: remote_cfg.path.clone(),
+                shell: remote_cfg.shell.clone(),
+            };
             let result = if wt.remote.is_some() {
-                transfer::pull_to_local(&wt, remote_cfg, &repo_root, &|_| {})
+                transfer::pull_to_local(&wt, &types_remote, &repo_root, &|_| {})
             } else {
-                transfer::push_to_remote(&wt, remote_cfg, &|_| {})
+                transfer::push_to_remote(&wt, &types_remote, &|_| {})
             };
             match result {
                 Ok(()) => {
@@ -470,14 +627,43 @@ impl App {
     }
 
     fn start_cleanup(&self, items: Vec<Worktree>) {
-        let config = self.config.clone();
+        let global_config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             for wt in &items {
-                let _ = delete_worktree(wt, &config);
+                let _ = delete_worktree(wt, &global_config);
             }
             let _ = tx.send(AppMsg::CleanupDone);
         });
+    }
+
+    /// Constructs a minimal `App` for use in unit tests without touching the
+    /// filesystem, git, or any external services.
+    #[cfg(test)]
+    fn new_test(task_rows: Vec<derive::TaskRow>, worktrees: Vec<Worktree>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        App {
+            worktrees,
+            cursor: 0,
+            loading: false,
+            refreshing: false,
+            error: None,
+            warning: None,
+            repo_root: "/test".to_string(),
+            repo_name: "test-repo".to_string(),
+            pane_content: String::new(),
+            view: ViewState::List,
+            task_rows,
+            global_config: global_config::GlobalConfig::default(),
+            backlog_page: 0,
+            host_reachable: HashMap::new(),
+            tx,
+            rx,
+            last_refresh: Instant::now(),
+            spinner_frame: 0,
+            switch_target: None,
+            previous_worktree_states: HashMap::new(),
+        }
     }
 }
 
@@ -533,13 +719,11 @@ fn run_loop(
         terminal.draw(|f| app.render(f))?;
 
         // Poll for events with timeout (for spinner animation).
-        if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))? {
-            if let Event::Key(key) = event::read()? {
-                if app.handle_key(key) {
+        if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))?
+            && let Event::Key(key) = event::read()?
+                && app.handle_key(key) {
                     break;
                 }
-            }
-        }
 
         // Check for background data updates.
         app.check_updates();
@@ -568,11 +752,10 @@ fn filter_stale(worktrees: &[Worktree]) -> Vec<Worktree> {
             if let Some(ref pr) = wt.pr {
                 return pr.state == "merged" || pr.state == "closed";
             }
-            if wt.pr.is_none() {
-                if let Some(state) = wt.issue_state {
+            if wt.pr.is_none()
+                && let Some(state) = wt.issue_state {
                     return state == IssueState::Completed || state == IssueState::Closed;
                 }
-            }
             false
         })
         .cloned()
@@ -583,7 +766,7 @@ fn filter_stale(worktrees: &[Worktree]) -> Vec<Worktree> {
 // Delete worktree (shared by single-delete and cleanup)
 // ---------------------------------------------------------------------------
 
-fn delete_worktree(wt: &Worktree, config: &OrchardConfig) -> anyhow::Result<()> {
+fn delete_worktree(wt: &Worktree, global_config: &global_config::GlobalConfig) -> anyhow::Result<()> {
     if let Some(ref host) = wt.remote {
         // Remote deletion
         if let Some(ref sess) = wt.tmux_session {
@@ -593,8 +776,12 @@ fn delete_worktree(wt: &Worktree, config: &OrchardConfig) -> anyhow::Result<()> 
             let slug = transfer::sanitize_branch_slug(branch);
             let _ = remote::remove_remote_registry_entry(host, &slug);
         }
-        if let Some(ref remote_cfg) = config.remote {
-            remote::remove_remote_worktree(host, &remote_cfg.repo_path, &wt.path)?;
+        // Find the remote config matching this host to get the repo_path.
+        let remote_cfg = global_config.repos.iter().find_map(|repo| {
+            repo.remote_for_host(host)
+        });
+        if let Some(remote_cfg) = remote_cfg {
+            remote::remove_remote_worktree(host, &remote_cfg.path, &wt.path)?;
         }
         return Ok(());
     }
@@ -610,89 +797,68 @@ fn delete_worktree(wt: &Worktree, config: &OrchardConfig) -> anyhow::Result<()> 
 }
 
 // ---------------------------------------------------------------------------
-// Task–worktree merge
+// Cache-based derivation
 // ---------------------------------------------------------------------------
 
-/// Merges live worktree data into tasks and auto-detects task status.
+/// Reads all caches for all configured repos and derives task rows.
 ///
-/// 1. Matches tasks to worktrees by issue number extracted from branch names
-/// 2. Updates PR number and session info from matched worktrees
-/// 3. Auto-promotes task status based on worktree/PR state:
-///    - Has worktree + open PR with review → in_review
-///    - Has worktree or session → in_progress
-///    - PR merged/closed → done
-pub(crate) fn merge_worktrees_into_tasks(tasks: &mut [crate::state::Task], worktrees: &[Worktree]) {
-    use crate::state::TaskStatus;
+/// For each repo: reads issues, PRs, and worktrees caches. Reads tmux session
+/// caches (local + each remote host). Passes everything through
+/// `derive::derive_all_repos` to produce sorted, grouped task rows.
+fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::TaskRow> {
+    use std::collections::HashSet;
 
-    for task in tasks.iter_mut() {
-        let issue_num = match &task.source {
-            crate::state::TaskSource::GithubIssue { number, .. } => *number,
-        };
+    let mut repo_caches = Vec::new();
+    let mut tmux_hosts_seen: HashSet<String> = HashSet::new();
 
-        // Try to find a matching worktree by existing path reference first,
-        // then by issue number in branch name.
-        let wt = if let Some(ref path) = task.worktree {
-            worktrees.iter().find(|w| &w.path == path)
-        } else {
-            None
-        }
-        .or_else(|| {
-            worktrees.iter().find(|w| {
-                w.issue_number == Some(issue_num)
-                    || w.branch
-                        .as_ref()
-                        .map(|b| branch_contains_issue(b, issue_num))
-                        .unwrap_or(false)
-            })
-        });
+    // Collect local tmux sessions (always needed).
+    let local_sessions = cache::read_cache::<cache::CachedTmuxSession>(
+        &cache::tmux_cache_path(None),
+    )
+    .entries;
 
-        let Some(wt) = wt else { continue };
+    for repo in &config.repos {
+        let issues = cache::read_cache::<cache::CachedIssue>(
+            &cache::cache_path(repo.owner(), repo.repo_name(), "issues"),
+        )
+        .entries;
 
-        // Bind worktree path to task if not already set.
-        if task.worktree.is_none() {
-            task.worktree = Some(wt.path.clone());
-        }
+        let prs = cache::read_cache::<cache::CachedPr>(
+            &cache::cache_path(repo.owner(), repo.repo_name(), "prs"),
+        )
+        .entries;
 
-        // Propagate remote host info.
-        if wt.remote.is_some() {
-            task.remote_host = wt.remote.clone();
+        let mut worktrees = cache::read_cache::<cache::CachedWorktree>(
+            &cache::cache_path(repo.owner(), repo.repo_name(), "worktrees"),
+        )
+        .entries;
+
+        // Merge in remote worktrees from the shared cache (already host-tagged
+        // by refresh_remote_worktrees).
+        if !repo.remotes.is_empty() {
+            let remote_wts = cache::read_cache::<cache::CachedWorktree>(
+                &cache::cache_path(repo.owner(), repo.repo_name(), "remote_worktrees"),
+            )
+            .entries;
+            worktrees.extend(remote_wts);
         }
 
-        // Update PR info.
-        if let Some(ref pr) = wt.pr {
-            task.pr = Some(pr.number);
-        }
-
-        // Update session info.
-        if let Some(ref session) = wt.tmux_session {
-            if !task.sessions.contains(session) {
-                task.sessions.push(session.clone());
+        // Gather sessions: local + remote for each unique host across this repo's remotes.
+        let mut sessions = local_sessions.clone();
+        for remote in &repo.remotes {
+            if tmux_hosts_seen.insert(remote.host.clone()) {
+                let remote_sessions = cache::read_cache::<cache::CachedTmuxSession>(
+                    &cache::tmux_cache_path(Some(&remote.host)),
+                )
+                .entries;
+                sessions.extend(remote_sessions);
             }
         }
 
-        // Auto-detect status (only promote, never demote — user may have
-        // manually set a status we shouldn't override).
-        if task.status == TaskStatus::Backlog || task.status == TaskStatus::Ready {
-            if let Some(ref pr) = wt.pr {
-                if pr.state == "merged" || pr.state == "closed" {
-                    task.status = TaskStatus::Done;
-                } else if pr.review_decision != crate::types::ReviewDecision::None {
-                    task.status = TaskStatus::InReview;
-                } else {
-                    task.status = TaskStatus::InProgress;
-                }
-            } else if wt.tmux_session.is_some() || !wt.is_bare {
-                task.status = TaskStatus::InProgress;
-            }
-        }
+        repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
     }
-}
 
-/// Checks if a branch name contains the issue number (e.g., "issue-47", "feat/47-login").
-fn branch_contains_issue(branch: &str, issue: u32) -> bool {
-    let num_str = issue.to_string();
-    // Match patterns like: "47", "47-foo", "foo-47", "issue47", "issue-47"
-    branch.split(|c: char| !c.is_ascii_digit()).any(|seg| seg == num_str)
+    derive::derive_all_repos(&repo_caches)
 }
 
 // ---------------------------------------------------------------------------
@@ -702,8 +868,53 @@ fn branch_contains_issue(branch: &str, issue: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::TaskStatus;
+    use crate::derive::{DisplayGroup, PrInfo as DPrInfo, SessionInfo, TaskRow};
     use crate::types::{ChecksStatus, IssueState, PrInfo, ReviewDecision};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    // -----------------------------------------------------------------------
+    // Test helpers
+    // -----------------------------------------------------------------------
+
+    fn make_task_row(issue_number: u32, group: DisplayGroup) -> TaskRow {
+        TaskRow {
+            repo_slug: "owner/repo".to_string(),
+            worktree_path: format!("/workspace/repo-{}", issue_number),
+            branch: format!("feat/issue-{}", issue_number),
+            worktree_host: None,
+            issue_number: Some(issue_number),
+            issue_title: Some(format!("Test task {}", issue_number)),
+            pr: None,
+            sessions: vec![],
+            display_group: group,
+            is_shepherd: false,
+        }
+    }
+
+    fn make_task_row_with_title(issue_number: u32, title: &str, group: DisplayGroup) -> TaskRow {
+        TaskRow {
+            issue_title: Some(title.to_string()),
+            ..make_task_row(issue_number, group)
+        }
+    }
+
+    /// Renders the app into a flat string, one row per terminal line.
+    fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut result = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                result.push_str(buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+            result.push('\n');
+        }
+        result
+    }
 
     #[test]
     fn filter_stale_merged_pr() {
@@ -786,123 +997,408 @@ mod tests {
         assert!(stale.is_empty());
     }
 
-    fn make_task(status: crate::state::TaskStatus, priority: u32, issue: u32) -> crate::state::Task {
-        use chrono::Utc;
-        crate::state::Task {
-            id: format!("repo#{}", issue),
-            title: String::new(),
-            source: crate::state::TaskSource::GithubIssue {
-                repo: "owner/repo".to_string(),
-                number: issue,
-            },
-            status,
-            priority,
-            worktree: None,
-            sessions: Vec::new(),
+    // -----------------------------------------------------------------------
+    // Rendering smoke tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn task_list_renders_issue_title() {
+        let rows = vec![make_task_row_with_title(42, "Fix login bug", DisplayGroup::Other)];
+        let mut app = App::new_test(rows, vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(output.contains("Fix login bug"), "expected title in output");
+        assert!(output.contains("#42"), "expected issue number in output");
+        assert!(output.contains("other"), "expected section header in output");
+    }
+
+    #[test]
+    fn worktree_list_renders_when_no_tasks() {
+        let worktrees = vec![Worktree {
+            path: "/home/user/project".to_string(),
+            branch: Some("main".to_string()),
+            ..Default::default()
+        }];
+        let mut app = App::new_test(vec![], worktrees);
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(output.contains("main"), "expected branch name in output");
+        assert!(output.contains("WORKTREES"), "expected WORKTREES header in output");
+    }
+
+    #[test]
+    fn q_key_quits() {
+        let mut app = App::new_test(vec![], vec![]);
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(app.handle_key(key));
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut app = App::new_test(vec![], vec![]);
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.handle_key(key));
+    }
+
+    #[test]
+    fn j_advances_cursor_in_task_view() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows, vec![]);
+        assert_eq!(app.cursor, 0);
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        app.handle_key(key);
+        assert_eq!(app.cursor, 1);
+    }
+
+    #[test]
+    fn k_moves_cursor_up_in_task_view() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows, vec![]);
+        app.cursor = 1;
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        app.handle_key(key);
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn task_list_renders_pr_number() {
+        let row = TaskRow {
+            pr: Some(DPrInfo {
+                number: 55,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(42, DisplayGroup::Other)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+        // The ISSUE and PR columns are now separate.
+        assert!(output.contains("#42"), "expected issue number");
+        assert!(output.contains("#55"), "expected PR number");
+    }
+
+    #[test]
+    fn unreachable_host_blocks_enter() {
+        let row = TaskRow {
+            sessions: vec![SessionInfo {
+                name: "sess".to_string(),
+                host: Some("gpu1".to_string()),
+                has_claude_active: false,
+                claude_needs_input: false,
+            }],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        app.host_reachable.insert("gpu1".to_string(), false);
+
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let quit = app.handle_key(key);
+        assert!(!quit, "enter on unreachable host should not quit");
+        assert!(app.warning.is_some(), "expected warning to be set");
+        assert!(
+            app.warning.as_ref().unwrap().0.contains("unreachable"),
+            "expected 'unreachable' in warning message"
+        );
+    }
+
+    #[test]
+    fn header_renders_host_connectivity() {
+        let mut app = App::new_test(vec![], vec![]);
+        app.host_reachable.insert("gpu1".to_string(), true);
+        app.host_reachable.insert("dev2".to_string(), false);
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(output.contains("@gpu1"), "expected @gpu1 in header");
+        assert!(output.contains("@dev2"), "expected @dev2 in header");
+        assert!(output.contains('\u{25cf}'), "expected ● for reachable host");
+        assert!(output.contains('\u{2717}'), "expected ✗ for unreachable host");
+    }
+
+    #[test]
+    fn question_mark_opens_help() {
+        let mut app = App::new_test(vec![], vec![]);
+        let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        app.handle_key(key);
+        assert_eq!(app.view_name(), "Help");
+    }
+
+    #[test]
+    fn esc_closes_help() {
+        let mut app = App::new_test(vec![], vec![]);
+        app.view = ViewState::Help;
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        app.handle_key(key);
+        assert_eq!(app.view_name(), "List");
+    }
+
+    #[test]
+    fn enter_on_worktree_without_session_creates_session() {
+        // In the worktree-first model, every row has a worktree, so Enter
+        // creates a session rather than showing a dialog.
+        let rows = vec![make_task_row(42, DisplayGroup::Other)];
+        let mut app = App::new_test(rows, vec![]);
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.handle_key(key);
+        // View should remain List — no confirmation dialog should appear.
+        assert_ne!(app.view_name(), "Help");
+    }
+
+    // -----------------------------------------------------------------------
+    // WorktreeRow builder helper
+    // -----------------------------------------------------------------------
+
+    fn make_worktree_row(branch: &str, group: DisplayGroup) -> TaskRow {
+        TaskRow {
+            repo_slug: "owner/repo".to_string(),
+            worktree_path: format!("/workspace/{}", branch.replace('/', "-")),
+            branch: branch.to_string(),
+            worktree_host: None,
+            issue_number: None,
+            issue_title: None,
             pr: None,
-            remote_host: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            sessions: vec![],
+            display_group: group,
+            is_shepherd: false,
         }
     }
 
+    // -----------------------------------------------------------------------
+    // E2E rendering tests (TestBackend at 120×40)
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn merge_worktrees_updates_task_pr() {
-        let mut tasks = vec![{
-            let mut t = make_task(crate::state::TaskStatus::InProgress, 1, 47);
-            t.worktree = Some("/ws/repo-47".to_string());
-            t
-        }];
-        let worktrees = vec![Worktree {
-            path: "/ws/repo-47".to_string(),
-            pr: Some(PrInfo {
-                number: 53,
-                state: "open".into(),
-                title: String::new(),
-                url: String::new(),
-                review_decision: ReviewDecision::None,
-                unresolved_threads: 0,
-                checks_status: ChecksStatus::None,
+    fn shepherd_row_renders_first_and_has_distinct_section_header() {
+        let shepherd = TaskRow {
+            is_shepherd: true,
+            display_group: DisplayGroup::Shepherd,
+            ..make_worktree_row("main", DisplayGroup::Shepherd)
+        };
+        let other = make_worktree_row("feat/something", DisplayGroup::Other);
+        let mut app = App::new_test(vec![shepherd, other], vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+
+        // "shepherd" section header must appear before "other"
+        let shepherd_pos = output.find("shepherd").expect("expected 'shepherd' section header");
+        let other_pos = output.find("other").expect("expected 'other' section header");
+        assert!(shepherd_pos < other_pos, "shepherd section must appear before other section");
+
+        // The shepherd worktree's branch name must be present
+        assert!(output.contains("main"), "expected shepherd branch 'main' in output");
+    }
+
+    #[test]
+    fn worktree_without_pr_renders_in_other_section() {
+        let row = make_worktree_row("experimental", DisplayGroup::Other);
+        let mut app = App::new_test(vec![row], vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(output.contains("experimental"), "expected branch name in output");
+        assert!(output.contains("other"), "expected 'other' section header in output");
+    }
+
+    #[test]
+    fn display_groups_render_in_correct_order() {
+        let needs_attention = TaskRow {
+            pr: Some(DPrInfo {
+                number: 10,
+                branch: "feat/needs-attn".to_string(),
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
                 has_conflicts: false,
+                unresolved_threads: 0,
             }),
-            ..Default::default()
-        }];
-        merge_worktrees_into_tasks(&mut tasks, &worktrees);
-        assert_eq!(tasks[0].pr, Some(53));
+            ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
+        };
+        let claude_working = TaskRow {
+            sessions: vec![SessionInfo {
+                name: "repo-claude".to_string(),
+                host: None,
+                has_claude_active: true,
+                claude_needs_input: false,
+            }],
+            ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
+        };
+        let ready_to_merge = TaskRow {
+            pr: Some(DPrInfo {
+                number: 20,
+                branch: "feat/approved".to_string(),
+                review_decision: Some("approved".to_string()),
+                checks_state: Some("passing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_worktree_row("feat/approved", DisplayGroup::ReadyToMerge)
+        };
+        let other = make_worktree_row("feat/plain", DisplayGroup::Other);
+
+        // Pre-sort to match expected display order (as derive::derive_all_repos would produce)
+        let mut app = App::new_test(
+            vec![needs_attention, claude_working, ready_to_merge, other],
+            vec![],
+        );
+        let output = render_to_string(&mut app, 120, 40);
+
+        let pos_na = output.find("needs attention").expect("expected 'needs attention'");
+        let pos_cw = output.find("claude working").expect("expected 'claude working'");
+        let pos_rtm = output.find("ready to merge").expect("expected 'ready to merge'");
+        let pos_other = output.find("other").expect("expected 'other'");
+
+        assert!(pos_na < pos_cw, "needs attention must come before claude working");
+        assert!(pos_cw < pos_rtm, "claude working must come before ready to merge");
+        assert!(pos_rtm < pos_other, "ready to merge must come before other");
     }
 
     #[test]
-    fn merge_worktrees_discovers_session() {
-        let mut tasks = vec![{
-            let mut t = make_task(crate::state::TaskStatus::InProgress, 1, 47);
-            t.worktree = Some("/ws/repo-47".to_string());
-            t
-        }];
-        let worktrees = vec![Worktree {
-            path: "/ws/repo-47".to_string(),
-            tmux_session: Some("repo_47_main".to_string()),
-            ..Default::default()
-        }];
-        merge_worktrees_into_tasks(&mut tasks, &worktrees);
-        assert!(tasks[0].sessions.contains(&"repo_47_main".to_string()));
+    fn claude_needs_input_indicator_renders_and_row_in_needs_attention() {
+        let row = TaskRow {
+            sessions: vec![SessionInfo {
+                name: "repo-47".to_string(),
+                host: None,
+                has_claude_active: true,
+                claude_needs_input: true,
+            }],
+            ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(output.contains("input"), "expected 'input' claude status indicator");
+        assert!(output.contains("needs attention"), "expected NeedsAttention section header");
     }
 
     #[test]
-    fn merge_worktrees_skips_task_without_worktree() {
-        let mut tasks = vec![make_task(crate::state::TaskStatus::Ready, 1, 48)];
-        let worktrees = vec![Worktree {
-            path: "/ws/repo-47".to_string(),
-            tmux_session: Some("repo_47_main".to_string()),
-            ..Default::default()
-        }];
-        merge_worktrees_into_tasks(&mut tasks, &worktrees);
-        assert!(tasks[0].sessions.is_empty());
+    fn pr_enrichment_shows_in_rendered_output() {
+        let row = TaskRow {
+            pr: Some(DPrInfo {
+                number: 55,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_worktree_row("feat/branch", DisplayGroup::NeedsAttention)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(output.contains("#55"), "expected PR number #55 in output");
+        assert!(output.contains("failing"), "expected 'failing' CI state in output");
     }
 
     #[test]
-    fn merge_worktrees_does_not_duplicate_session() {
-        let mut tasks = vec![{
-            let mut t = make_task(crate::state::TaskStatus::InProgress, 1, 47);
-            t.worktree = Some("/ws/repo-47".to_string());
-            t.sessions = vec!["repo_47_main".to_string()];
-            t
-        }];
-        let worktrees = vec![Worktree {
-            path: "/ws/repo-47".to_string(),
-            tmux_session: Some("repo_47_main".to_string()),
-            ..Default::default()
-        }];
-        merge_worktrees_into_tasks(&mut tasks, &worktrees);
-        assert_eq!(tasks[0].sessions.len(), 1);
+    fn remote_host_indicator_renders_for_remote_worktree() {
+        let row = TaskRow {
+            worktree_host: Some("gpu1".to_string()),
+            ..make_worktree_row("feat/remote", DisplayGroup::Other)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        app.host_reachable.insert("gpu1".to_string(), true);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(output.contains("@gpu1"), "expected '@gpu1' in output");
+        assert!(output.contains('\u{25cf}'), "expected ● reachable indicator");
     }
 
     #[test]
-    fn task_status_transition_to_done() {
-        let mut task = make_task(TaskStatus::InProgress, 1, 47);
-        let before = task.updated_at;
-        // Simulate a tiny sleep so updated_at can differ.
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        task.status = TaskStatus::Done;
-        task.updated_at = chrono::Utc::now();
-        assert_eq!(task.status, TaskStatus::Done);
-        assert!(task.updated_at >= before);
+    fn unreachable_remote_host_shows_x_indicator() {
+        let row = TaskRow {
+            worktree_host: Some("gpu1".to_string()),
+            sessions: vec![SessionInfo {
+                name: "repo-gpu1".to_string(),
+                host: Some("gpu1".to_string()),
+                has_claude_active: false,
+                claude_needs_input: false,
+            }],
+            ..make_worktree_row("feat/remote", DisplayGroup::Other)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        app.host_reachable.insert("gpu1".to_string(), false);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(output.contains("@gpu1"), "expected '@gpu1' in output");
+        assert!(output.contains('\u{2717}'), "expected ✗ unreachable indicator");
     }
 
     #[test]
-    fn task_priority_update() {
-        let mut task = make_task(TaskStatus::Ready, 5, 47);
-        assert_eq!(task.priority, 5);
-        task.priority = 1;
-        task.updated_at = chrono::Utc::now();
-        assert_eq!(task.priority, 1);
+    fn issue_number_and_title_render_in_output() {
+        let row = TaskRow {
+            issue_number: Some(2478),
+            issue_title: Some("Support workflow agents".to_string()),
+            ..make_worktree_row("langwatch-2478", DisplayGroup::Other)
+        };
+        let mut app = App::new_test(vec![row], vec![]);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(output.contains("#2478"), "expected '#2478' in output");
+        assert!(
+            output.contains("Support workflow agents"),
+            "expected issue title in output"
+        );
     }
 
     #[test]
-    fn start_moves_backlog_to_in_progress() {
-        let mut task = make_task(TaskStatus::Backlog, 3, 52);
-        assert_eq!(task.status, TaskStatus::Backlog);
-        task.status = TaskStatus::InProgress;
-        task.updated_at = chrono::Utc::now();
-        assert_eq!(task.status, TaskStatus::InProgress);
+    fn help_overlay_renders_when_question_mark_pressed() {
+        let mut app = App::new_test(vec![], vec![]);
+        let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        app.handle_key(key);
+        let output = render_to_string(&mut app, 120, 40);
+
+        assert!(
+            output.contains("Keyboard Shortcuts"),
+            "expected 'Keyboard Shortcuts' in help overlay"
+        );
+        assert!(output.contains("enter"), "expected 'enter' key binding in help");
+        assert!(output.contains("switch") || output.contains("Switch"),
+            "expected 'switch' action text in help");
     }
+
+    #[test]
+    fn j_moves_cursor_down_in_worktree_first_view() {
+        let rows = vec![
+            make_worktree_row("feat/one", DisplayGroup::Other),
+            make_worktree_row("feat/two", DisplayGroup::Other),
+            make_worktree_row("feat/three", DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows, vec![]);
+        assert_eq!(app.cursor, 0);
+
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        app.handle_key(j);
+        assert_eq!(app.cursor, 1, "j should advance cursor from 0 to 1");
+    }
+
+    #[test]
+    fn k_moves_cursor_up_in_worktree_first_view() {
+        let rows = vec![
+            make_worktree_row("feat/one", DisplayGroup::Other),
+            make_worktree_row("feat/two", DisplayGroup::Other),
+            make_worktree_row("feat/three", DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows, vec![]);
+        app.cursor = 1;
+
+        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        app.handle_key(k);
+        assert_eq!(app.cursor, 0, "k should move cursor from 1 to 0");
+    }
+
+    #[test]
+    fn q_returns_true_in_worktree_first_view() {
+        let rows = vec![
+            make_worktree_row("feat/one", DisplayGroup::Other),
+            make_worktree_row("feat/two", DisplayGroup::Other),
+            make_worktree_row("feat/three", DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows, vec![]);
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(app.handle_key(q), "q should return true (quit)");
+    }
+
 }

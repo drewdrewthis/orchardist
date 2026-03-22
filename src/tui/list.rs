@@ -5,11 +5,11 @@ use ratatui::widgets::*;
 use std::collections::HashSet;
 use std::time::Instant;
 
+use crate::derive::{DisplayGroup, TaskRow};
 use crate::navigation;
 use crate::paths;
-use crate::state::{Task, TaskStatus};
 use crate::tui::state::{
-    CleanupState, DeleteState, NewSessionState, Phase, SetPriorityState, TransferState, ViewState,
+    CleanupState, DeleteState, NewSessionState, Phase, TransferState, ViewState,
 };
 use crate::tui::widgets::{claude_badge, status_badge};
 use crate::tui::{filter_stale, App, SPINNER_FRAMES, WARNING_DURATION_SECS};
@@ -23,87 +23,42 @@ use crate::types::Worktree;
 
 const BACKLOG_PAGE_SIZE: usize = 10;
 
-/// Display groups for the task view, ordered by priority of attention needed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DisplayGroup {
-    NeedsYou,
-    ClaudeWorking,
-    ClaudeDone,
-    InReview,
-    Backlog,
+/// Describes what action the Enter key should take in the task view.
+/// Used to avoid holding a borrow on `task_rows` while calling `&mut self` methods.
+enum TaskEnterAction {
+    JoinSession {
+        session_name: String,
+        worktree_path: String,
+        branch: Option<String>,
+        host: Option<String>,
+    },
+    CreateSession {
+        worktree_path: String,
+        branch: Option<String>,
+        host: Option<String>,
+    },
 }
 
 impl DisplayGroup {
     fn label(self) -> &'static str {
         match self {
-            Self::NeedsYou => "needs you",
+            Self::Shepherd => "shepherd",
+            Self::NeedsAttention => "needs attention",
             Self::ClaudeWorking => "claude working",
-            Self::ClaudeDone => "claude done",
-            Self::InReview => "in review",
-            Self::Backlog => "backlog",
+            Self::ReadyToMerge => "ready to merge",
+            Self::Other => "other",
         }
     }
 
     fn color(self) -> Color {
         match self {
-            Self::NeedsYou => Color::Red,
+            Self::Shepherd => Color::Magenta,
+            Self::NeedsAttention => Color::Red,
             Self::ClaudeWorking => Color::Green,
-            Self::ClaudeDone => Color::Yellow,
-            Self::InReview => Color::Cyan,
-            Self::Backlog => Color::DarkGray,
+            Self::ReadyToMerge => Color::Cyan,
+            Self::Other => Color::DarkGray,
         }
     }
-
-    fn order(self) -> u8 {
-        match self {
-            Self::NeedsYou => 0,
-            Self::ClaudeWorking => 1,
-            Self::ClaudeDone => 2,
-            Self::InReview => 3,
-            Self::Backlog => 4,
-        }
-    }
-}
-
-/// Derives the display group for a task based on its state and matching worktree.
-fn derive_display_group(task: &Task, worktrees: &[Worktree]) -> DisplayGroup {
-    // Find matching worktree by task.worktree path
-    let wt = task.worktree.as_ref().and_then(|path| {
-        worktrees.iter().find(|w| &w.path == path)
-    });
-
-    if let Some(wt) = wt {
-        // Check PR-based conditions for NeedsYou
-        if let Some(ref pr) = wt.pr {
-            if pr.has_conflicts {
-                return DisplayGroup::NeedsYou;
-            }
-            if pr.checks_status == crate::types::ChecksStatus::Fail {
-                return DisplayGroup::NeedsYou;
-            }
-            if pr.review_decision == crate::types::ReviewDecision::ChangesRequested {
-                return DisplayGroup::NeedsYou;
-            }
-            if pr.unresolved_threads > 0 {
-                return DisplayGroup::NeedsYou;
-            }
-            if pr.review_decision == crate::types::ReviewDecision::Approved {
-                return DisplayGroup::InReview;
-            }
-        }
-
-        // Check tmux session for Claude activity
-        if wt.tmux_session.is_some() {
-            if let Some(ref title) = wt.tmux_pane_title {
-                if title.to_lowercase().contains("claude") {
-                    return DisplayGroup::ClaudeWorking;
-                }
-            }
-            return DisplayGroup::ClaudeDone;
-        }
-    }
-
-    DisplayGroup::Backlog
 }
 
 /// A task entry prepared for rendering in the task-centric view.
@@ -111,43 +66,29 @@ fn derive_display_group(task: &Task, worktrees: &[Worktree]) -> DisplayGroup {
 pub(crate) struct VisibleTask<'a> {
     /// Sequential display number (1-based).
     pub num: usize,
-    pub task: &'a Task,
+    pub row: &'a TaskRow,
     pub group: DisplayGroup,
 }
 
-/// Returns the visible tasks (excluding done), grouped by DisplayGroup and sorted for rendering.
+/// Returns the visible tasks from the pre-sorted task_rows, paginating backlog.
 ///
-/// Order: NEEDS YOU → CLAUDE WORKING → CLAUDE DONE → IN REVIEW → BACKLOG.
-/// Within each group: priority ascending (1 = highest), then issue number ascending.
-/// BACKLOG is paginated: only tasks for the given page are returned.
+/// `task_rows` is already sorted by display group then issue number (from derive module).
+/// This function paginates the backlog section and assigns sequential display numbers.
 pub(crate) fn visible_tasks<'a>(
-    tasks: &'a [Task],
-    worktrees: &[Worktree],
+    task_rows: &'a [TaskRow],
     backlog_page: usize,
 ) -> (Vec<VisibleTask<'a>>, usize) {
-    let mut grouped: Vec<(&Task, DisplayGroup)> = tasks
+    let total_backlog = task_rows.iter().filter(|r| r.display_group == DisplayGroup::Other).count();
+
+    let non_backlog: Vec<&TaskRow> = task_rows
         .iter()
-        .filter(|t| t.status != TaskStatus::Done)
-        .map(|t| {
-            let group = derive_display_group(t, worktrees);
-            (t, group)
-        })
+        .filter(|r| r.display_group != DisplayGroup::Other)
         .collect();
 
-    fn sort_key(item: &(&Task, DisplayGroup)) -> (u8, u32, u32) {
-        let issue = match &item.0.source {
-            crate::state::TaskSource::GithubIssue { number, .. } => *number,
-        };
-        (item.1.order(), item.0.priority, issue)
-    }
-
-    grouped.sort_by_key(sort_key);
-
-    let total_backlog = grouped.iter().filter(|(_, g)| *g == DisplayGroup::Backlog).count();
-
-    // Separate non-backlog and backlog items
-    let non_backlog: Vec<_> = grouped.iter().filter(|(_, g)| *g != DisplayGroup::Backlog).collect();
-    let backlog_all: Vec<_> = grouped.iter().filter(|(_, g)| *g == DisplayGroup::Backlog).collect();
+    let backlog_all: Vec<&TaskRow> = task_rows
+        .iter()
+        .filter(|r| r.display_group == DisplayGroup::Other)
+        .collect();
 
     let backlog_start = backlog_page * BACKLOG_PAGE_SIZE;
     let backlog_page_slice = if backlog_start < backlog_all.len() {
@@ -159,43 +100,28 @@ pub(crate) fn visible_tasks<'a>(
     let mut result = Vec::new();
     let mut num = 1usize;
 
-    for &&(task, group) in &non_backlog {
-        result.push(VisibleTask { num, task, group });
+    for row in &non_backlog {
+        result.push(VisibleTask { num, row, group: row.display_group });
         num += 1;
     }
-    for &&(task, group) in backlog_page_slice {
-        result.push(VisibleTask { num, task, group });
+    for row in backlog_page_slice {
+        result.push(VisibleTask { num, row, group: row.display_group });
         num += 1;
     }
 
     (result, total_backlog)
 }
 
-fn issue_number_from_task(task: &Task) -> u32 {
-    match &task.source {
-        crate::state::TaskSource::GithubIssue { number, .. } => *number,
-    }
-}
-
-/// Returns a single PR status string for the task, based on the matching worktree's PR.
-fn pr_status_text(task: &Task, worktrees: &[Worktree]) -> (String, Style) {
-    let wt = task.worktree.as_ref().and_then(|path| {
-        worktrees.iter().find(|w| &w.path == path)
-    });
-
-    let Some(wt) = wt else {
+/// Returns a single PR status string for the task row.
+fn pr_status_text(row: &TaskRow) -> (String, Style) {
+    let Some(ref pr) = row.pr else {
         return ("no PR".to_string(), Style::default().fg(Color::DarkGray));
     };
 
-    let Some(ref pr) = wt.pr else {
-        return ("no PR".to_string(), Style::default().fg(Color::DarkGray));
-    };
-
-    // Priority order for status display
-    if pr.review_decision == crate::types::ReviewDecision::Approved {
+    if pr.review_decision.as_deref() == Some("approved") {
         return ("\u{2713} approved".to_string(), Style::default().fg(Color::Green));
     }
-    if pr.review_decision == crate::types::ReviewDecision::ChangesRequested {
+    if pr.review_decision.as_deref() == Some("changes_requested") {
         return ("\u{2716} changes req".to_string(), Style::default().fg(Color::Red));
     }
     if pr.has_conflicts {
@@ -207,46 +133,42 @@ fn pr_status_text(task: &Task, worktrees: &[Worktree]) -> (String, Style) {
             Style::default().fg(Color::Yellow),
         );
     }
-    if pr.checks_status == crate::types::ChecksStatus::Fail {
+    if pr.checks_state.as_deref() == Some("failing") {
         return ("\u{2716} failing".to_string(), Style::default().fg(Color::Red));
     }
-    if pr.checks_status == crate::types::ChecksStatus::Pending {
+    if pr.checks_state.as_deref() == Some("pending") {
         return ("\u{25d0} pending CI".to_string(), Style::default().fg(Color::Yellow));
-    }
-    if pr.state == "draft" {
-        return ("draft".to_string(), Style::default().fg(Color::DarkGray));
     }
     // Default for open PR with no special state
     ("\u{25cb} needs review".to_string(), Style::default().fg(Color::DarkGray))
 }
 
-/// Returns a Claude activity indicator for the task.
-fn claude_status_text(task: &Task, worktrees: &[Worktree]) -> (String, Style) {
-    let wt = task.worktree.as_ref().and_then(|path| {
-        worktrees.iter().find(|w| &w.path == path)
-    });
-
-    let Some(wt) = wt else {
-        return ("\u{25cb} none".to_string(), Style::default().fg(Color::DarkGray));
-    };
-
-    if wt.tmux_session.is_none() {
+/// Returns a Claude activity indicator for the task row.
+fn claude_status_text(row: &TaskRow) -> (String, Style) {
+    if row.sessions.is_empty() {
         return ("\u{25cb} none".to_string(), Style::default().fg(Color::DarkGray));
     }
 
-    if let Some(ref title) = wt.tmux_pane_title {
-        if title.to_lowercase().contains("claude") {
-            return ("\u{26a1} active".to_string(), Style::default().fg(Color::Green));
-        }
+    let count = row.sessions.len();
+    let count_suffix = if count > 1 { format!(" {}", count) } else { String::new() };
+
+    // Check for needs-input first (most urgent).
+    if row.sessions.iter().any(|s| s.claude_needs_input) {
+        return (format!("\u{2757} input{}", count_suffix), Style::default().fg(Color::Red));
     }
 
-    ("\u{25cf} idle".to_string(), Style::default().fg(Color::Yellow))
+    if row.sessions.iter().any(|s| s.has_claude_active) {
+        return (format!("\u{26a1} active{}", count_suffix), Style::default().fg(Color::Green));
+    }
+
+    (format!("\u{25cf} idle{}", count_suffix), Style::default().fg(Color::Yellow))
 }
+
 
 impl App {
     pub(crate) fn handle_list_key(&mut self, key: KeyEvent) -> bool {
         // In task mode, navigation uses the visible task count.
-        if !self.app_state.tasks.is_empty() {
+        if !self.task_rows.is_empty() {
             return self.handle_task_list_key(key);
         }
 
@@ -309,6 +231,26 @@ impl App {
                 self.start_refresh();
                 false
             }
+            KeyCode::Char('R') => {
+                let unreachable: Vec<String> = self.host_reachable
+                    .iter()
+                    .filter(|(_, v)| !*v)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                if unreachable.is_empty() {
+                    self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
+                } else {
+                    let tx = self.tx.clone();
+                    std::thread::spawn(move || {
+                        for host in unreachable {
+                            let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
+                            let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
+                        }
+                    });
+                    self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
+                }
+                false
+            }
             KeyCode::Char('q') | KeyCode::Esc => {
                 // Quit without switching sessions.
                 true
@@ -318,7 +260,7 @@ impl App {
     }
 
     fn handle_task_list_key(&mut self, key: KeyEvent) -> bool {
-        let (tasks, total_backlog) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
+        let (tasks, total_backlog) = visible_tasks(&self.task_rows, self.backlog_page);
         let visible_count = tasks.len();
 
         match key.code {
@@ -335,9 +277,8 @@ impl App {
                     self.cursor -= 1;
                     self.fetch_task_pane_content();
                 } else if self.backlog_page > 0 {
-                    // At top of page: scroll backlog page back
                     self.backlog_page -= 1;
-                    let (new_tasks, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
+                    let (new_tasks, _) = visible_tasks(&self.task_rows, self.backlog_page);
                     self.cursor = new_tasks.len().saturating_sub(1);
                     self.fetch_task_pane_content();
                 }
@@ -348,73 +289,119 @@ impl App {
                     self.cursor += 1;
                     self.fetch_task_pane_content();
                 } else if self.cursor == visible_count.saturating_sub(1) {
-                    // At bottom: try advancing backlog page
                     let next_start = (self.backlog_page + 1) * BACKLOG_PAGE_SIZE;
                     if next_start < total_backlog {
                         self.backlog_page += 1;
-                        // Keep cursor at the first backlog item of the new page.
-                        let non_backlog = tasks.iter().filter(|t| t.group != DisplayGroup::Backlog).count();
+                        let non_backlog = tasks.iter().filter(|t| t.group != DisplayGroup::Other).count();
                         self.cursor = non_backlog;
                         self.fetch_task_pane_content();
                     }
                 }
                 false
             }
-            KeyCode::Char('p') => {
-                if let Some(task_id) = self.task_id_at_cursor() {
-                    self.view = ViewState::SetPriority(SetPriorityState { task_id });
-                }
-                false
-            }
-            KeyCode::Char('s') => {
-                self.start_task();
-                false
-            }
             KeyCode::Enter => {
-                // Switch to the task's session. If the task has a worktree,
-                // delegate to the existing switch_to_tmux_session logic by
-                // finding the matching worktree and selecting it.
-                let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
-                if let Some(vt) = visible.get(self.cursor) {
-                    if let Some(ref wt_path) = vt.task.worktree {
-                        // Find the worktree index in self.worktrees.
-                        if let Some(idx) = self.worktrees.iter().position(|w| &w.path == wt_path) {
-                            self.cursor = idx;
-                            return self.switch_to_tmux_session();
+                // Switch to the task's session, or create a worktree + session if none exist.
+                // Extract owned data from the borrow of task_rows before taking &mut self.
+                let action = {
+                    let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+                    visible.get(self.cursor).map(|vt| {
+                        if let Some(session) = vt.row.sessions.first() {
+                            TaskEnterAction::JoinSession {
+                                session_name: session.name.clone(),
+                                worktree_path: vt.row.worktree_path.clone(),
+                                branch: Some(vt.row.branch.clone()),
+                                host: session.host.clone(),
+                            }
+                        } else {
+                            TaskEnterAction::CreateSession {
+                                worktree_path: vt.row.worktree_path.clone(),
+                                branch: Some(vt.row.branch.clone()),
+                                host: vt.row.worktree_host.clone(),
+                            }
                         }
+                    })
+                };
+                match action {
+                    None => false,
+                    Some(TaskEnterAction::JoinSession { session_name, worktree_path, branch, host }) => {
+                        // Guard: refuse to join a session on an unreachable host.
+                        if let Some(ref h) = host
+                            && self.host_reachable.get(h.as_str()) == Some(&false) {
+                                self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                                return false;
+                            }
+                        // Has a session — join or create it (handles both remote and local).
+                        self.join_or_create_session(
+                            &session_name,
+                            &worktree_path,
+                            branch.as_deref(),
+                            host.as_deref(),
+                            None,
+                        )
                     }
-                    // Task has a session but no worktree match — switch directly.
-                    if let Some(session) = vt.task.sessions.first() {
-                        self.switch_target = Some(session.clone());
-                        return true;
+                    Some(TaskEnterAction::CreateSession { worktree_path, branch, host }) => {
+                        // Guard: refuse to create a session on an unreachable host.
+                        if let Some(ref h) = host {
+                            if self.host_reachable.get(h.as_str()) == Some(&false) {
+                                self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                                return false;
+                            }
+                        }
+                        // No session but worktree exists — derive session name and create.
+                        let repo_name = self.repo_name.clone();
+                        let session_name = tmux::derive_session_name(
+                            &repo_name,
+                            branch.as_deref(),
+                            &worktree_path,
+                        );
+                        self.join_or_create_session(
+                            &session_name,
+                            &worktree_path,
+                            branch.as_deref(),
+                            host.as_deref(),
+                            None,
+                        )
                     }
                 }
-                false
             }
             KeyCode::Char('o') => {
                 // Open PR URL in browser for the selected task.
-                let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
-                if let Some(vt) = visible.get(self.cursor) {
-                    if let Some(ref wt_path) = vt.task.worktree {
-                        if let Some(wt) = self.worktrees.iter().find(|w| &w.path == wt_path) {
-                            if let Some(ref pr) = wt.pr {
-                                if !pr.url.is_empty() {
-                                    crate::browser::open_url(&pr.url);
-                                }
-                            }
-                        }
+                let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+                if let Some(vt) = visible.get(self.cursor)
+                    && let Some(ref pr) = vt.row.pr {
+                        // Construct PR URL from repo_slug and PR number.
+                        let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
+                        crate::browser::open_url(&url);
                     }
-                }
                 false
             }
             KeyCode::Char('c') => {
-                // Cleanup: enter cleanup view for done/stale worktrees.
                 self.enter_cleanup_view();
                 false
             }
             KeyCode::Char('r') => {
                 self.refreshing = true;
                 self.start_refresh();
+                false
+            }
+            KeyCode::Char('R') => {
+                let unreachable: Vec<String> = self.host_reachable
+                    .iter()
+                    .filter(|(_, v)| !*v)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                if unreachable.is_empty() {
+                    self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
+                } else {
+                    let tx = self.tx.clone();
+                    std::thread::spawn(move || {
+                        for host in unreachable {
+                            let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
+                            let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
+                        }
+                    });
+                    self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
+                }
                 false
             }
             KeyCode::Char('q') | KeyCode::Esc => true,
@@ -425,76 +412,28 @@ impl App {
     /// Fetches pane content for the task at the current cursor position.
     pub(crate) fn fetch_task_pane_content(&mut self) {
         self.pane_content.clear();
-        let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
+        let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
         if let Some(vt) = visible.get(self.cursor) {
-            if let Some(ref wt_path) = vt.task.worktree {
-                if let Some(wt) = self.worktrees.iter().find(|w| &w.path == wt_path) {
-                    self.fetch_pane_content_for_worktree(wt);
-                }
+            // Find a session to capture pane content from.
+            if let Some(session) = vt.row.sessions.first() {
+                let session_name = session.name.clone();
+                let remote_host = session.host.clone();
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    let content = if let Some(host) = remote_host {
+                        remote::capture_remote_pane_content(&host, &session_name, 100).unwrap_or_default()
+                    } else {
+                        tmux::capture_pane_content(&session_name, 100).unwrap_or_default()
+                    };
+                    let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
+                });
             }
         }
-    }
-
-    /// Returns the id of the task under the cursor, if any.
-    fn task_id_at_cursor(&self) -> Option<String> {
-        let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
-        visible.get(self.cursor).map(|vt| vt.task.id.clone())
-    }
-
-    /// Marks the task under the cursor as Done, saves state, and logs the event.
-    fn mark_task_done(&mut self) {
-        let task_id = match self.task_id_at_cursor() {
-            Some(id) => id,
-            None => return,
-        };
-        let from_status = {
-            let task = self.app_state.tasks.iter().find(|t| t.id == task_id);
-            match task {
-                Some(t) => task_status_str(t.status),
-                None => return,
-            }
-        };
-        if let Some(task) = self.app_state.tasks.iter_mut().find(|t| t.id == task_id) {
-            task.status = crate::state::TaskStatus::Done;
-            task.updated_at = chrono::Utc::now();
-        }
-        if let Err(e) = crate::state::save_state(&self.app_state) {
-            crate::logger::LOG.info(&format!("tui: save_state failed: {e}"));
-        }
-        crate::events::log_task_status_change(&task_id, from_status, "done", "keypress");
-        // Clamp cursor so it doesn't point past the end after removal from view.
-        let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
-        if !visible.is_empty() && self.cursor >= visible.len() {
-            self.cursor = visible.len() - 1;
-        }
-    }
-
-    /// Promotes the task under the cursor to InProgress, saves state, and logs the event.
-    fn start_task(&mut self) {
-        let task_id = match self.task_id_at_cursor() {
-            Some(id) => id,
-            None => return,
-        };
-        let from_status = {
-            let task = self.app_state.tasks.iter().find(|t| t.id == task_id);
-            match task {
-                Some(t) => task_status_str(t.status),
-                None => return,
-            }
-        };
-        if let Some(task) = self.app_state.tasks.iter_mut().find(|t| t.id == task_id) {
-            task.status = crate::state::TaskStatus::InProgress;
-            task.updated_at = chrono::Utc::now();
-        }
-        if let Err(e) = crate::state::save_state(&self.app_state) {
-            crate::logger::LOG.info(&format!("tui: save_state failed: {e}"));
-        }
-        crate::events::log_task_status_change(&task_id, from_status, "in_progress", "keypress");
     }
 
     pub(crate) fn render_list(&self, f: &mut Frame) {
         // Delegate to task-centric view when tasks are available.
-        if !self.app_state.tasks.is_empty() {
+        if !self.task_rows.is_empty() {
             self.render_task_list(f);
             return;
         }
@@ -640,30 +579,92 @@ impl App {
     }
 
     pub(crate) fn render_header(&self, f: &mut Frame, area: Rect) {
+        let green_style = Style::default().fg(Color::Green);
+        let red_style = Style::default().fg(Color::Red);
+
+        // Build host status spans (sorted by host name for stable display).
+        let mut host_spans: Vec<Span> = Vec::new();
+        let mut sorted_hosts: Vec<(&String, &bool)> = self.host_reachable.iter().collect();
+        sorted_hosts.sort_by_key(|(h, _)| h.as_str());
+        for &(host, reachable) in &sorted_hosts {
+            if *reachable {
+                host_spans.push(Span::styled(format!("  @{}", host), green_style));
+                host_spans.push(Span::styled(" \u{25cf}", green_style)); // ●
+            } else {
+                host_spans.push(Span::styled(format!("  @{}", host), red_style));
+                host_spans.push(Span::styled(" \u{2717}", red_style)); // ✗
+                host_spans.push(Span::styled(" (stale)", Style::default().fg(Color::DarkGray)));
+            }
+        }
+
+        // Build timestamp span.
+        let timestamp_span = if self.refreshing {
+            let spinner = SPINNER_FRAMES[self.spinner_frame];
+            Span::styled(
+                format!("  {} refreshing...", spinner),
+                Style::default().fg(Color::Cyan),
+            )
+        } else {
+            let elapsed = self.last_refresh.elapsed().as_secs();
+            let ts_text = if elapsed < 60 {
+                format!("  ({}s ago)", elapsed)
+            } else if elapsed < 3600 {
+                format!("  ({}m ago)", elapsed / 60)
+            } else {
+                format!("  ({}h ago)", elapsed / 3600)
+            };
+            Span::styled(ts_text, Style::default().fg(Color::DarkGray))
+        };
+
         if header_height(f.area().height) == 1 {
-            let line = Line::from(vec![
-                Span::styled(
-                    "🌳 Git Orchard",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    "  r:refresh  ?:help",
+            let mut spans = vec![Span::styled(
+                "\u{1f333} Git Orchard",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )];
+            spans.extend(host_spans);
+            spans.push(timestamp_span);
+            if !self.refreshing {
+                spans.push(Span::styled(
+                    "  r:refresh",
                     Style::default().fg(Color::DarkGray),
-                ),
-            ]);
+                ));
+            }
+            let line = Line::from(spans);
             f.render_widget(Paragraph::new(line), area);
             return;
         }
 
-        let header_text = vec![
-            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
-            Line::from("┌─┐┬┌┬┐╔═╗╦═╗╔═╗╦ ╦╔═╗╦═╗╔╦╗"),
-            Line::from("│ ┬│ │ ║ ║╠╦╝║  ╠═╣╠═╣╠╦╝ ║║"),
-            Line::from("└─┘┴ ┴ ╚═╝╩╚═╚═╝╩ ╩╩ ╩╩╚══╩╝"),
-            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
+        // Full header (height == 7): show host indicators on second line.
+        let mut host_line_spans: Vec<Span> = Vec::new();
+        for &(host, reachable) in &sorted_hosts {
+            if *reachable {
+                host_line_spans.push(Span::styled(format!(" @{} ", host), green_style));
+                host_line_spans.push(Span::styled("\u{25cf}", green_style));
+            } else {
+                host_line_spans.push(Span::styled(format!(" @{} ", host), red_style));
+                host_line_spans.push(Span::styled("\u{2717}", red_style));
+                host_line_spans.push(Span::styled(" (stale)", Style::default().fg(Color::DarkGray)));
+            }
+        }
+
+        let logo_style = Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD);
+        let mut header_text = vec![
+            Line::from("\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}"),
+            Line::from(Span::styled("\u{250c}\u{2500}\u{2510}\u{252c}\u{250c}\u{252c}\u{2510}\u{2554}\u{2550}\u{2557}\u{2566}\u{2550}\u{2557}\u{2554}\u{2550}\u{2557}\u{2566} \u{2566}\u{2554}\u{2550}\u{2557}\u{2566}\u{2550}\u{2557}\u{2554}\u{2566}\u{2557}", logo_style)),
+            Line::from(Span::styled("\u{2502} \u{252c}\u{2502} \u{2502} \u{2551} \u{2551}\u{2560}\u{2566}\u{255d}\u{2551}  \u{2560}\u{2550}\u{2569}\u{2560}\u{2550}\u{2557}\u{2560}\u{2566}\u{255d} \u{2551}\u{2551}", logo_style)),
+            Line::from(Span::styled("\u{2514}\u{2500}\u{2518}\u{2534} \u{2534} \u{255a}\u{2550}\u{255d}\u{2569}\u{255a}\u{2550}\u{255a}\u{2550}\u{255d}\u{2569} \u{2569}\u{2569} \u{2569}\u{2569}\u{255a}\u{2550}\u{2550}\u{2569}\u{255d}", logo_style)),
+            Line::from("\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}"),
         ];
+        if !host_line_spans.is_empty() {
+            header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
+        }
+        if !self.host_reachable.is_empty() || self.refreshing {
+            header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
+        }
         let header = Paragraph::new(header_text)
             .alignment(Alignment::Center)
             .style(
@@ -783,17 +784,30 @@ impl App {
                 };
                 let tmux_cell = Cell::from(tmux_str).style(tmux_style);
 
+                // Determine host reachability for this worktree.
+                let host_unreachable = wt
+                    .remote
+                    .as_ref()
+                    .and_then(|h| self.host_reachable.get(h.as_str()))
+                    .copied()
+                    == Some(false);
+
                 let mut cells =
                     vec![idx_cell, path_cell, branch_cell, status_cell, claude_cell];
                 if has_remote {
-                    let remote_str = wt
-                        .remote
-                        .as_ref()
-                        .map(|h| format!("@{}", h))
-                        .unwrap_or_default();
-                    cells.push(
-                        Cell::from(remote_str).style(Style::default().fg(Color::Magenta)),
-                    );
+                    let remote_cell = if let Some(ref h) = wt.remote {
+                        match self.host_reachable.get(h.as_str()) {
+                            Some(&false) => Cell::from(format!("@{} \u{2717}", h))
+                                .style(Style::default().fg(Color::Red)),
+                            Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
+                                .style(Style::default().fg(Color::Green)),
+                            None => Cell::from(format!("@{}", h))
+                                .style(Style::default().fg(Color::Magenta)),
+                        }
+                    } else {
+                        Cell::from("").style(Style::default().fg(Color::Magenta))
+                    };
+                    cells.push(remote_cell);
                 }
                 cells.push(tmux_cell);
 
@@ -802,8 +816,11 @@ impl App {
                     row.style(
                         Style::default()
                             .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
+                            .add_modifier(Modifier::BOLD)
+                            .add_modifier(if host_unreachable { Modifier::DIM } else { Modifier::empty() }),
                     )
+                } else if host_unreachable {
+                    row.style(Style::default().add_modifier(Modifier::DIM))
                 } else {
                     row
                 }
@@ -866,7 +883,7 @@ impl App {
         let content = display_lines.join("\n");
 
         let preview = Paragraph::new(content)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .block(block);
         f.render_widget(preview, area);
     }
@@ -916,7 +933,7 @@ impl App {
         }
 
         // Transfer hint
-        if self.config.remote.is_some() {
+        if self.global_config.repos.iter().any(|r| !r.remotes.is_empty()) {
             spans.push(sep.clone());
             let is_remote = !self.worktrees.is_empty()
                 && self.cursor < self.worktrees.len()
@@ -984,7 +1001,19 @@ impl App {
             spans.push(Span::raw(" refresh"));
         }
 
-        spans.push(sep);
+        let has_unreachable = self.host_reachable.values().any(|&v| !v);
+        if has_unreachable {
+            spans.push(sep.clone());
+            spans.push(Span::styled(
+                "R",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" reconnect"));
+        }
+
+        spans.push(sep.clone());
         spans.push(Span::styled(
             "q",
             Style::default()
@@ -992,6 +1021,15 @@ impl App {
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw(" back"));
+
+        spans.push(sep);
+        spans.push(Span::styled(
+            "?",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" help"));
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1005,39 +1043,30 @@ impl App {
         self.worktrees.get(self.cursor)
     }
 
-    /// Ensures the tmux session for the selected worktree exists (creating it if needed),
-    /// stores the session name in `switch_target`, and returns `true` so the event loop
-    /// breaks and the TUI exits. The session name is then printed to stdout by `main` for
-    /// the wrapper script to call `tmux switch-client`.
-    fn switch_to_tmux_session(&mut self) -> bool {
-        let wt = match self.selected_worktree() {
-            Some(wt) => wt.clone(),
-            None => return false,
-        };
-        let repo_name = self.repo_name.clone();
-
-        if let Some(ref host) = wt.remote {
-            let session_name = wt
-                .tmux_session
-                .clone()
-                .or_else(|| {
-                    wt.branch.as_ref().map(|b| {
-                        tmux::derive_session_name(&repo_name, Some(b), &wt.path)
-                    })
-                })
-                .unwrap_or_default();
-            if session_name.is_empty() {
-                return false;
-            }
+    /// Joins or creates a tmux session. Returns `true` if the TUI should exit
+    /// (switch_target has been set), `false` if a warning was shown instead.
+    ///
+    /// - If `remote_host` is `Some` → creates a remote proxy session and sets `switch_target`.
+    /// - If local → calls `tmux::create_session` with the given options and sets `switch_target`.
+    /// - On error → sets `self.warning`.
+    fn join_or_create_session(
+        &mut self,
+        session_name: &str,
+        worktree_path: &str,
+        branch: Option<&str>,
+        remote_host: Option<&str>,
+        pr: Option<&crate::types::PrInfo>,
+    ) -> bool {
+        if let Some(host) = remote_host {
+            // Look up the shell preference from the matching remote config.
             let shell = self
-                .config
-                .remote
-                .as_ref()
+                .global_config
+                .repos
+                .iter()
+                .find_map(|repo| repo.remote_for_host(host))
                 .map(|r| r.shell.clone())
                 .unwrap_or_else(|| "ssh".to_string());
-
-            // Create the remote session and local proxy (without switching).
-            match remote::create_remote_proxy_session(host, &session_name, &wt.path, &shell) {
+            match remote::create_remote_proxy_session(host, session_name, worktree_path, &shell) {
                 Ok(local_name) => {
                     self.switch_target = Some(local_name);
                     true
@@ -1048,19 +1077,15 @@ impl App {
                 }
             }
         } else {
-            let session_name = wt.tmux_session.clone().unwrap_or_else(|| {
-                tmux::derive_session_name(&repo_name, wt.branch.as_deref(), &wt.path)
-            });
-            // Create local session if it doesn't exist (without switching).
             let opts = crate::types::SwitchToSessionOptions {
-                session_name: session_name.clone(),
-                worktree_path: wt.path.clone(),
-                branch: wt.branch.clone(),
-                pr: wt.pr.clone(),
+                session_name: session_name.to_string(),
+                worktree_path: worktree_path.to_string(),
+                branch: branch.map(|b| b.to_string()),
+                pr: pr.cloned(),
             };
             match tmux::create_session(&opts) {
                 Ok(()) => {
-                    self.switch_target = Some(session_name);
+                    self.switch_target = Some(session_name.to_string());
                     true
                 }
                 Err(e) => {
@@ -1071,16 +1096,56 @@ impl App {
         }
     }
 
+    /// Ensures the tmux session for the selected worktree exists (creating it if needed),
+    /// stores the session name in `switch_target`, and returns `true` so the event loop
+    /// breaks and the TUI exits.
+    fn switch_to_tmux_session(&mut self) -> bool {
+        let wt = match self.selected_worktree() {
+            Some(wt) => wt.clone(),
+            None => return false,
+        };
+
+        // Guard: refuse to switch to a session on an unreachable host.
+        if let Some(ref host) = wt.remote
+            && self.host_reachable.get(host.as_str()) == Some(&false) {
+                self.warning = Some((format!("@{} is unreachable", host), Instant::now()));
+                return false;
+            }
+
+        let repo_name = self.repo_name.clone();
+
+        let session_name = wt
+            .tmux_session
+            .clone()
+            .or_else(|| {
+                wt.branch.as_ref().map(|b| {
+                    tmux::derive_session_name(&repo_name, Some(b), &wt.path)
+                })
+            })
+            .unwrap_or_default();
+
+        if session_name.is_empty() {
+            return false;
+        }
+
+        self.join_or_create_session(
+            &session_name,
+            &wt.path,
+            wt.branch.as_deref(),
+            wt.remote.as_deref(),
+            wt.pr.as_ref(),
+        )
+    }
+
     fn open_pr_url(&self) {
         let wt = match self.selected_worktree() {
             Some(wt) => wt,
             None => return,
         };
-        if let Some(ref pr) = wt.pr {
-            if !pr.url.is_empty() {
+        if let Some(ref pr) = wt.pr
+            && !pr.url.is_empty() {
                 crate::browser::open_url(&pr.url);
             }
-        }
     }
 
     fn start_delete_dialog(&mut self) {
@@ -1103,9 +1168,10 @@ impl App {
     }
 
     fn start_transfer_dialog(&mut self) {
+        let has_any_remote = self.global_config.repos.iter().any(|r| !r.remotes.is_empty());
         if self.worktrees.is_empty()
             || self.cursor >= self.worktrees.len()
-            || self.config.remote.is_none()
+            || !has_any_remote
         {
             return;
         }
@@ -1148,10 +1214,15 @@ impl App {
         let area = f.area();
         let hdr_height = header_height(area.height);
 
-        let (tasks, total_backlog) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
+        let (tasks, total_backlog) = visible_tasks(&self.task_rows, self.backlog_page);
+
+        // Only show HOST column when at least one task has a remote session or remote worktree.
+        let has_remote = self.task_rows.iter().any(|r| {
+            r.sessions.iter().any(|s| s.host.is_some()) || r.worktree_host.is_some()
+        });
 
         // Build rows for the table, including section header rows.
-        let (rows, row_heights) = self.build_task_table_rows(&tasks, total_backlog);
+        let (rows, row_heights) = self.build_task_table_rows(&tasks, total_backlog, has_remote);
 
         let has_warning = self
             .warning
@@ -1165,10 +1236,7 @@ impl App {
         // Check if selected task has a preview
         let selected_task = tasks.get(self.cursor);
         let has_preview = selected_task.is_some_and(|vt| {
-            !self.pane_content.is_empty()
-                && vt.task.worktree.as_ref().and_then(|path| {
-                    self.worktrees.iter().find(|w| &w.path == path)
-                }).is_some_and(|wt| wt.tmux_session.is_some())
+            !self.pane_content.is_empty() && !vt.row.sessions.is_empty()
         });
 
         let mut constraints = vec![
@@ -1203,28 +1271,34 @@ impl App {
         idx += 1;
         idx += 1; // spacer
 
-        // Column widths
-        let widths = [
+        // Column widths — HOST column included only when remotes exist.
+        let mut widths: Vec<Constraint> = vec![
             Constraint::Length(3),   // #
             Constraint::Length(7),   // ISSUE
+            Constraint::Length(7),   // PR
             Constraint::Min(20),     // TITLE (flexible)
-            Constraint::Length(12),  // HOST
-            Constraint::Length(18),  // STATUS
-            Constraint::Length(10),  // CLAUDE
         ];
+        if has_remote {
+            widths.push(Constraint::Length(12)); // HOST
+        }
+        widths.push(Constraint::Length(18)); // STATUS
+        widths.push(Constraint::Length(10)); // CLAUDE
 
         // Header row
         let header_style = Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::BOLD);
-        let header_cells = vec![
+        let mut header_cells = vec![
             Cell::from(" #"),
             Cell::from("ISSUE"),
+            Cell::from("PR"),
             Cell::from("TITLE"),
-            Cell::from("HOST"),
-            Cell::from("STATUS"),
-            Cell::from("CLAUDE"),
         ];
+        if has_remote {
+            header_cells.push(Cell::from("HOST"));
+        }
+        header_cells.push(Cell::from("STATUS"));
+        header_cells.push(Cell::from("CLAUDE"));
         let header_row = Row::new(header_cells).style(header_style);
 
         let block = Block::default()
@@ -1270,12 +1344,13 @@ impl App {
         &self,
         tasks: &[VisibleTask],
         total_backlog: usize,
+        has_remote: bool,
     ) -> (Vec<Row<'static>>, Vec<u16>) {
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
         let mut last_group: Option<DisplayGroup> = None;
 
-        let backlog_count = tasks.iter().filter(|t| t.group == DisplayGroup::Backlog).count();
+        let backlog_count = tasks.iter().filter(|t| t.group == DisplayGroup::Other).count();
         let backlog_has_more = total_backlog > backlog_count + self.backlog_page * BACKLOG_PAGE_SIZE;
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
@@ -1284,40 +1359,76 @@ impl App {
             // Section header when display group changes
             if last_group != Some(vt.group) {
                 last_group = Some(vt.group);
-                let header_row = group_header_row(vt.group, backlog_count, total_backlog, backlog_has_more);
+                let header_row = group_header_row(vt.group, backlog_count, total_backlog, backlog_has_more, has_remote);
                 rows.push(header_row);
                 row_heights.push(1);
             }
 
-            let issue = issue_number_from_task(vt.task);
-            let (pr_text, pr_style) = pr_status_text(vt.task, &self.worktrees);
-            let (claude_text, claude_style) = claude_status_text(vt.task, &self.worktrees);
+            let (pr_text, pr_style) = pr_status_text(vt.row);
+            let (claude_text, claude_style) = claude_status_text(vt.row);
 
-            let host_text = vt.task.remote_host
-                .as_ref()
-                .map(|h| format!("@{}", h))
-                .unwrap_or_default();
-
-            let title_display = if vt.task.title.is_empty() {
-                vt.task.id.clone()
-            } else {
-                vt.task.title.clone()
+            let title_display = match vt.row.issue_title.as_deref() {
+                Some(title) if !title.is_empty() => title.to_string(),
+                _ => vt.row.branch.clone(),
             };
 
+            // Determine host name for reachability lookup: prefer session host, fall back to worktree host.
+            let task_host: Option<&str> = vt.row.sessions.iter().find_map(|s| s.host.as_deref())
+                .or(vt.row.worktree_host.as_deref());
+            let host_unreachable = task_host
+                .and_then(|h| self.host_reachable.get(h))
+                .copied()
+                == Some(false);
+
             let row_style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                let base = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                if host_unreachable {
+                    base.add_modifier(Modifier::DIM)
+                } else {
+                    base
+                }
+            } else if host_unreachable {
+                Style::default().add_modifier(Modifier::DIM)
             } else {
                 Style::default()
             };
 
-            let cells = vec![
+            let issue_cell = if let Some(num) = vt.row.issue_number {
+                Cell::from(format!("#{}", num))
+            } else {
+                Cell::from("").style(Style::default().fg(Color::DarkGray))
+            };
+            let pr_cell = if let Some(ref pr) = vt.row.pr {
+                Cell::from(format!("#{}", pr.number))
+            } else {
+                Cell::from("").style(Style::default().fg(Color::DarkGray))
+            };
+
+            let mut cells = vec![
                 Cell::from(format!("{:>2}", vt.num)),
-                Cell::from(format!("#{}", issue)),
+                issue_cell,
+                pr_cell,
                 Cell::from(title_display),
-                Cell::from(host_text).style(Style::default().fg(Color::Magenta)),
-                Cell::from(pr_text).style(pr_style),
-                Cell::from(claude_text).style(claude_style),
             ];
+
+            if has_remote {
+                let host_cell = if let Some(h) = task_host {
+                    match self.host_reachable.get(h) {
+                        Some(&false) => Cell::from(format!("@{} \u{2717}", h))
+                            .style(Style::default().fg(Color::Red)),
+                        Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
+                            .style(Style::default().fg(Color::Green)),
+                        None => Cell::from(format!("@{}", h))
+                            .style(Style::default().fg(Color::Magenta)),
+                    }
+                } else {
+                    Cell::from("")
+                };
+                cells.push(host_cell);
+            }
+
+            cells.push(Cell::from(pr_text).style(pr_style));
+            cells.push(Cell::from(claude_text).style(claude_style));
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -1325,17 +1436,21 @@ impl App {
 
         // Edge case: empty visible list but backlog exists
         if last_group.is_none() && total_backlog > 0 {
-            let header_row = group_header_row(DisplayGroup::Backlog, 0, total_backlog, backlog_has_more);
+            let header_row = group_header_row(DisplayGroup::Other, 0, total_backlog, backlog_has_more, has_remote);
             rows.push(header_row);
             row_heights.push(1);
-            rows.push(Row::new(vec![
+            let mut empty_cells = vec![
+                Cell::from(""),
                 Cell::from(""),
                 Cell::from(""),
                 Cell::from("(no tasks on this page)").style(Style::default().fg(Color::DarkGray)),
-                Cell::from(""),
-                Cell::from(""),
-                Cell::from(""),
-            ]));
+            ];
+            if has_remote {
+                empty_cells.push(Cell::from(""));
+            }
+            empty_cells.push(Cell::from(""));
+            empty_cells.push(Cell::from(""));
+            rows.push(Row::new(empty_cells));
             row_heights.push(1);
         }
 
@@ -1349,20 +1464,22 @@ impl App {
         }
         let Some(vt) = selected_task else { return };
 
-        let issue = issue_number_from_task(vt.task);
-        let title_part = if vt.task.title.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", truncate_str(&vt.task.title, 30))
+        let issue_part = match vt.row.issue_number {
+            Some(num) => format!("#{}", num),
+            None => vt.row.branch.clone(),
         };
-        let wt_part = vt.task.worktree.as_ref().map(|p| {
-            let short = paths::tildify(p);
+        let title_part = match vt.row.issue_title.as_deref() {
+            Some(t) if !t.is_empty() => format!(" {}", truncate_str(t, 30)),
+            _ => String::new(),
+        };
+        let wt_part = {
+            let short = paths::tildify(&vt.row.worktree_path);
             format!(" \u{2502} wt: {}", truncate_str(&short, 25))
-        }).unwrap_or_default();
-        let pr_part = vt.task.pr.map(|n| format!(" \u{2502} pr: #{}", n)).unwrap_or_default();
+        };
+        let pr_part = vt.row.pr.as_ref().map(|p| format!(" \u{2502} pr: #{}", p.number)).unwrap_or_default();
 
-        let title = format!("\u{2500}\u{2500} #{}{}{}{} \u{2500}\u{2500}",
-            issue, title_part, wt_part, pr_part);
+        let title = format!("\u{2500}\u{2500} {}{}{}{} \u{2500}\u{2500}",
+            issue_part, title_part, wt_part, pr_part);
 
         let block = Block::default()
             .title(title)
@@ -1386,44 +1503,65 @@ impl App {
         let content = display_lines.join("\n");
 
         let preview = Paragraph::new(content)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .block(block);
         f.render_widget(preview, area);
     }
 
     /// Renders the hint bar for task mode.
     pub(crate) fn render_hints_task(&self, f: &mut Frame, area: Rect) {
+        let sep = Span::styled(" \u{2502} ", Style::default().fg(Color::DarkGray));
         let key_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-        let dim_style = Style::default().fg(Color::DarkGray);
 
         let mut spans: Vec<Span> = vec![
             Span::styled("enter", key_style),
-            Span::styled(":switch  ", dim_style),
-            Span::styled("o", key_style),
-            Span::styled(":open PR  ", dim_style),
-            Span::styled("s", key_style),
-            Span::styled(":start  ", dim_style),
-            Span::styled("p", key_style),
-            Span::styled(":priority  ", dim_style),
-            Span::styled("o", key_style),
-            Span::styled(":open PR  ", dim_style),
-            Span::styled("c", key_style),
-            Span::styled(":cleanup  ", dim_style),
+            Span::raw(" switch"),
+            sep.clone(),
         ];
+
+        // PR link hint — dim when selected task has no PR.
+        let has_pr = !self.task_rows.is_empty() && {
+            let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+            visible.get(self.cursor).is_some_and(|vt| vt.row.pr.is_some())
+        };
+        if has_pr {
+            spans.push(Span::styled("o", key_style));
+            spans.push(Span::raw(" pr"));
+        } else {
+            spans.push(Span::styled("o pr", Style::default().fg(Color::DarkGray)));
+        }
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("c", key_style));
+        spans.push(Span::raw(" cleanup"));
+        spans.push(sep.clone());
 
         if self.refreshing {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             spans.push(Span::styled(
-                format!("{} refreshing...  ", spinner),
+                format!("{} refreshing...", spinner),
                 Style::default().fg(Color::Cyan),
             ));
+            spans.push(sep.clone());
         } else {
             spans.push(Span::styled("r", key_style));
-            spans.push(Span::styled(":refresh  ", dim_style));
+            spans.push(Span::raw(" refresh"));
+            spans.push(sep.clone());
+        }
+
+        let has_unreachable = self.host_reachable.values().any(|&v| !v);
+        if has_unreachable {
+            spans.push(Span::styled("R", key_style));
+            spans.push(Span::raw(" reconnect"));
+            spans.push(sep.clone());
         }
 
         spans.push(Span::styled("q", key_style));
-        spans.push(Span::styled(":quit", dim_style));
+        spans.push(Span::raw(" quit"));
+
+        spans.push(sep.clone());
+        spans.push(Span::styled("?", key_style));
+        spans.push(Span::raw(" help"));
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1434,25 +1572,15 @@ impl App {
 // Task view helpers (free functions)
 // ---------------------------------------------------------------------------
 
-/// Returns the snake_case string representation of a TaskStatus for event logging.
-fn task_status_str(status: TaskStatus) -> &'static str {
-    match status {
-        TaskStatus::Backlog => "backlog",
-        TaskStatus::Ready => "ready",
-        TaskStatus::InProgress => "in_progress",
-        TaskStatus::InReview => "in_review",
-        TaskStatus::Done => "done",
-    }
-}
-
 /// Creates a section header row spanning all columns for a display group.
 fn group_header_row(
     group: DisplayGroup,
     visible_backlog: usize,
     total_backlog: usize,
     has_more: bool,
+    has_remote: bool,
 ) -> Row<'static> {
-    let label = if group == DisplayGroup::Backlog {
+    let label = if group == DisplayGroup::Other {
         let count_info = if visible_backlog < total_backlog {
             format!("{} of {}", visible_backlog, total_backlog)
         } else {
@@ -1476,14 +1604,28 @@ fn group_header_row(
     );
 
     let color = group.color();
-    Row::new(vec![
-        Cell::from(""),
-        Cell::from(""),
-        Cell::from(text).style(Style::default().fg(color)),
-        Cell::from(""),
-        Cell::from(""),
-        Cell::from(""),
-    ])
+    // 6 cells when no HOST column (#, ISSUE, PR, TITLE, STATUS, CLAUDE),
+    // 7 when HOST is present (adds HOST between TITLE and STATUS).
+    if has_remote {
+        Row::new(vec![
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(text).style(Style::default().fg(color)),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+        ])
+    } else {
+        Row::new(vec![
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(text).style(Style::default().fg(color)),
+            Cell::from(""),
+            Cell::from(""),
+        ])
+    }
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
@@ -1492,54 +1634,47 @@ fn truncate_str(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         let truncated: String = chars[..max.saturating_sub(1)].iter().collect();
-        format!("{}…", truncated)
+        format!("{}...", truncated)
     }
 }
 
 /// Returns the height (in terminal rows) to allocate for the header.
 ///
-/// When the terminal is tall enough (>= 30 rows), the full ASCII art logo is
-/// shown in a bordered block (7 rows).  On shorter terminals a single compact
-/// line is used instead so the task list gets as much vertical space as
-/// possible.
+/// When the terminal is tall enough (>= 30 rows), the full header is
+/// shown in a bordered block (7 rows). On shorter terminals a single compact
+/// line is used instead so the task list gets as much vertical space as possible.
 pub(crate) fn header_height(terminal_height: u16) -> u16 {
-    if terminal_height >= 30 { 7 } else { 1 }
+    if terminal_height >= 30 { 9 } else { 1 }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Task, TaskSource, TaskStatus};
-    use crate::types::{ChecksStatus, PrInfo, ReviewDecision, Worktree};
-    use chrono::Utc;
+    use crate::derive::{DisplayGroup, PrInfo, SessionInfo, TaskRow};
 
-    fn make_task(status: TaskStatus, priority: u32, issue: u32) -> Task {
-        Task {
-            id: format!("repo#{}", issue),
-            title: format!("Test task {}", issue),
-            source: TaskSource::GithubIssue {
-                repo: "owner/repo".to_string(),
-                number: issue,
-            },
-            status,
-            priority,
-            worktree: None,
-            sessions: Vec::new(),
+    fn make_task_row(issue_number: u32, group: DisplayGroup) -> TaskRow {
+        TaskRow {
+            repo_slug: "owner/repo".to_string(),
+            worktree_path: format!("/workspace/repo-{}", issue_number),
+            branch: format!("feat/issue-{}", issue_number),
+            worktree_host: None,
+            issue_number: Some(issue_number),
+            issue_title: Some(format!("Test task {}", issue_number)),
             pr: None,
-            remote_host: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            sessions: vec![],
+            display_group: group,
+            is_shepherd: false,
         }
     }
 
     #[test]
     fn full_logo_at_threshold() {
-        assert_eq!(header_height(30), 7);
+        assert_eq!(header_height(30), 9);
     }
 
     #[test]
     fn full_logo_above_threshold() {
-        assert_eq!(header_height(50), 7);
+        assert_eq!(header_height(50), 9);
     }
 
     #[test]
@@ -1553,100 +1688,45 @@ mod tests {
     }
 
     #[test]
-    fn tasks_sorted_by_priority_within_group() {
-        // Both tasks have no worktree → both Backlog
-        let tasks = vec![
-            make_task(TaskStatus::Backlog, 2, 47),
-            make_task(TaskStatus::Backlog, 1, 48),
+    fn visible_tasks_returns_all_non_backlog() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::ClaudeWorking),
+            make_task_row(3, DisplayGroup::Other),
         ];
-        let (visible, _) = visible_tasks(&tasks, &[], 0);
-        assert_eq!(visible[0].num, 1);
-        let first_issue = match &visible[0].task.source {
-            TaskSource::GithubIssue { number, .. } => *number,
-        };
-        assert_eq!(first_issue, 48, "priority 1 task should come first");
-    }
-
-    #[test]
-    fn same_priority_sorted_by_issue_number() {
-        let tasks = vec![
-            make_task(TaskStatus::Backlog, 1, 52),
-            make_task(TaskStatus::Backlog, 1, 48),
-        ];
-        let (visible, _) = visible_tasks(&tasks, &[], 0);
-        let first_issue = match &visible[0].task.source {
-            TaskSource::GithubIssue { number, .. } => *number,
-        };
-        assert_eq!(first_issue, 48, "lower issue number should come first within same priority");
-    }
-
-    #[test]
-    fn done_tasks_excluded_from_visible() {
-        let tasks = vec![
-            make_task(TaskStatus::Done, 1, 10),
-            make_task(TaskStatus::Backlog, 1, 11),
-        ];
-        let (visible, _) = visible_tasks(&tasks, &[], 0);
-        assert_eq!(visible.len(), 1);
-        let issue = match &visible[0].task.source {
-            TaskSource::GithubIssue { number, .. } => *number,
-        };
-        assert_eq!(issue, 11);
+        let (visible, total_backlog) = visible_tasks(&rows, 0);
+        assert_eq!(visible.len(), 3);
+        assert_eq!(total_backlog, 1);
     }
 
     #[test]
     fn backlog_pagination_first_page() {
-        let tasks: Vec<Task> = (1u32..=25)
-            .map(|i| make_task(TaskStatus::Backlog, 1, i))
+        let rows: Vec<TaskRow> = (1u32..=25)
+            .map(|i| make_task_row(i, DisplayGroup::Other))
             .collect();
-        let (visible, total) = visible_tasks(&tasks, &[], 0);
+        let (visible, total) = visible_tasks(&rows, 0);
         assert_eq!(total, 25);
         assert_eq!(visible.len(), BACKLOG_PAGE_SIZE);
     }
 
     #[test]
     fn backlog_pagination_second_page() {
-        let tasks: Vec<Task> = (1u32..=25)
-            .map(|i| make_task(TaskStatus::Backlog, 1, i))
+        let rows: Vec<TaskRow> = (1u32..=25)
+            .map(|i| make_task_row(i, DisplayGroup::Other))
             .collect();
-        let (visible, total) = visible_tasks(&tasks, &[], 1);
+        let (visible, total) = visible_tasks(&rows, 1);
         assert_eq!(total, 25);
         assert_eq!(visible.len(), BACKLOG_PAGE_SIZE);
     }
 
     #[test]
     fn sequential_numbering_across_groups() {
-        // Task with conflicting PR → NeedsYou, task with session → ClaudeDone, task without → Backlog
-        let mut task1 = make_task(TaskStatus::InProgress, 1, 10);
-        task1.worktree = Some("/ws/10".to_string());
-        let mut task2 = make_task(TaskStatus::InProgress, 1, 20);
-        task2.worktree = Some("/ws/20".to_string());
-        let task3 = make_task(TaskStatus::Backlog, 1, 30);
-
-        let worktrees = vec![
-            Worktree {
-                path: "/ws/10".to_string(),
-                pr: Some(PrInfo {
-                    number: 11,
-                    state: "open".into(),
-                    title: String::new(),
-                    url: String::new(),
-                    review_decision: ReviewDecision::None,
-                    unresolved_threads: 0,
-                    checks_status: ChecksStatus::Fail,
-                    has_conflicts: false,
-                }),
-                ..Default::default()
-            },
-            Worktree {
-                path: "/ws/20".to_string(),
-                tmux_session: Some("sess20".to_string()),
-                ..Default::default()
-            },
+        let rows = vec![
+            make_task_row(10, DisplayGroup::NeedsAttention),
+            make_task_row(20, DisplayGroup::ClaudeWorking),
+            make_task_row(30, DisplayGroup::Other),
         ];
-
-        let tasks = vec![task1, task2, task3];
-        let (visible, _) = visible_tasks(&tasks, &worktrees, 0);
+        let (visible, _) = visible_tasks(&rows, 0);
         assert_eq!(visible.len(), 3);
         assert_eq!(visible[0].num, 1);
         assert_eq!(visible[1].num, 2);
@@ -1654,190 +1734,147 @@ mod tests {
     }
 
     #[test]
-    fn display_group_ordering() {
-        // Create tasks that map to different display groups
-        let mut needs_you_task = make_task(TaskStatus::InProgress, 1, 1);
-        needs_you_task.worktree = Some("/ws/1".to_string());
-
-        let mut claude_working_task = make_task(TaskStatus::InProgress, 1, 2);
-        claude_working_task.worktree = Some("/ws/2".to_string());
-
-        let mut claude_done_task = make_task(TaskStatus::InProgress, 1, 3);
-        claude_done_task.worktree = Some("/ws/3".to_string());
-
-        let mut in_review_task = make_task(TaskStatus::InReview, 1, 4);
-        in_review_task.worktree = Some("/ws/4".to_string());
-
-        let backlog_task = make_task(TaskStatus::Backlog, 1, 5);
-
-        let worktrees = vec![
-            Worktree {
-                path: "/ws/1".to_string(),
-                pr: Some(PrInfo {
-                    number: 11, state: "open".into(), title: String::new(), url: String::new(),
-                    review_decision: ReviewDecision::ChangesRequested,
-                    unresolved_threads: 0, checks_status: ChecksStatus::None, has_conflicts: false,
-                }),
-                ..Default::default()
-            },
-            Worktree {
-                path: "/ws/2".to_string(),
-                tmux_session: Some("sess2".to_string()),
-                tmux_pane_title: Some("Claude Code".to_string()),
-                ..Default::default()
-            },
-            Worktree {
-                path: "/ws/3".to_string(),
-                tmux_session: Some("sess3".to_string()),
-                tmux_pane_title: Some("bash".to_string()),
-                ..Default::default()
-            },
-            Worktree {
-                path: "/ws/4".to_string(),
-                pr: Some(PrInfo {
-                    number: 14, state: "open".into(), title: String::new(), url: String::new(),
-                    review_decision: ReviewDecision::Approved,
-                    unresolved_threads: 0, checks_status: ChecksStatus::Pass, has_conflicts: false,
-                }),
-                ..Default::default()
-            },
-        ];
-
-        let tasks = vec![
-            backlog_task, in_review_task, claude_done_task, claude_working_task, needs_you_task,
-        ];
-        let (visible, _) = visible_tasks(&tasks, &worktrees, 0);
-
-        let groups: Vec<DisplayGroup> = visible.iter().map(|v| v.group).collect();
-        assert_eq!(groups, vec![
-            DisplayGroup::NeedsYou,
-            DisplayGroup::ClaudeWorking,
-            DisplayGroup::ClaudeDone,
-            DisplayGroup::InReview,
-            DisplayGroup::Backlog,
-        ]);
-    }
-
-    #[test]
-    fn derive_group_conflict_is_needs_you() {
-        let mut task = make_task(TaskStatus::InProgress, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
-            pr: Some(PrInfo {
-                number: 1, state: "open".into(), title: String::new(), url: String::new(),
-                review_decision: ReviewDecision::None,
-                unresolved_threads: 0, checks_status: ChecksStatus::None, has_conflicts: true,
-            }),
-            ..Default::default()
-        }];
-        assert_eq!(derive_display_group(&task, &worktrees), DisplayGroup::NeedsYou);
-    }
-
-    #[test]
-    fn derive_group_approved_pr_is_in_review() {
-        let mut task = make_task(TaskStatus::InReview, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
-            pr: Some(PrInfo {
-                number: 1, state: "open".into(), title: String::new(), url: String::new(),
-                review_decision: ReviewDecision::Approved,
-                unresolved_threads: 0, checks_status: ChecksStatus::Pass, has_conflicts: false,
-            }),
-            ..Default::default()
-        }];
-        assert_eq!(derive_display_group(&task, &worktrees), DisplayGroup::InReview);
-    }
-
-    #[test]
-    fn derive_group_claude_active_is_claude_working() {
-        let mut task = make_task(TaskStatus::InProgress, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
-            tmux_session: Some("sess".to_string()),
-            tmux_pane_title: Some("Claude Code".to_string()),
-            ..Default::default()
-        }];
-        assert_eq!(derive_display_group(&task, &worktrees), DisplayGroup::ClaudeWorking);
-    }
-
-    #[test]
-    fn derive_group_session_no_claude_is_claude_done() {
-        let mut task = make_task(TaskStatus::InProgress, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
-            tmux_session: Some("sess".to_string()),
-            tmux_pane_title: Some("bash".to_string()),
-            ..Default::default()
-        }];
-        assert_eq!(derive_display_group(&task, &worktrees), DisplayGroup::ClaudeDone);
-    }
-
-    #[test]
-    fn derive_group_no_worktree_is_backlog() {
-        let task = make_task(TaskStatus::Backlog, 1, 1);
-        assert_eq!(derive_display_group(&task, &[]), DisplayGroup::Backlog);
-    }
-
-    #[test]
     fn pr_status_approved_text() {
-        let mut task = make_task(TaskStatus::InReview, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
+        let row = TaskRow {
             pr: Some(PrInfo {
-                number: 1, state: "open".into(), title: String::new(), url: String::new(),
-                review_decision: ReviewDecision::Approved,
-                unresolved_threads: 0, checks_status: ChecksStatus::Pass, has_conflicts: false,
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: Some("approved".to_string()),
+                checks_state: Some("passing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
             }),
-            ..Default::default()
-        }];
-        let (text, _) = pr_status_text(&task, &worktrees);
+            ..make_task_row(1, DisplayGroup::ReadyToMerge)
+        };
+        let (text, _) = pr_status_text(&row);
         assert!(text.contains("approved"), "expected 'approved' in: {}", text);
     }
 
     #[test]
-    fn pr_status_no_worktree() {
-        let task = make_task(TaskStatus::Backlog, 1, 1);
-        let (text, _) = pr_status_text(&task, &[]);
+    fn pr_status_no_pr() {
+        let row = make_task_row(1, DisplayGroup::Other);
+        let (text, _) = pr_status_text(&row);
         assert_eq!(text, "no PR");
     }
 
     #[test]
     fn claude_status_active() {
-        let mut task = make_task(TaskStatus::InProgress, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
-            tmux_session: Some("sess".to_string()),
-            tmux_pane_title: Some("Claude Code".to_string()),
-            ..Default::default()
-        }];
-        let (text, _) = claude_status_text(&task, &worktrees);
+        let row = TaskRow {
+            sessions: vec![SessionInfo {
+                name: "sess".to_string(),
+                host: None,
+                has_claude_active: true,
+                claude_needs_input: false,
+            }],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let (text, _) = claude_status_text(&row);
         assert!(text.contains("active"), "expected 'active' in: {}", text);
     }
 
     #[test]
     fn claude_status_idle() {
-        let mut task = make_task(TaskStatus::InProgress, 1, 1);
-        task.worktree = Some("/ws/1".to_string());
-        let worktrees = vec![Worktree {
-            path: "/ws/1".to_string(),
-            tmux_session: Some("sess".to_string()),
-            tmux_pane_title: Some("bash".to_string()),
-            ..Default::default()
-        }];
-        let (text, _) = claude_status_text(&task, &worktrees);
+        let row = TaskRow {
+            sessions: vec![SessionInfo {
+                name: "sess".to_string(),
+                host: None,
+                has_claude_active: false,
+                claude_needs_input: false,
+            }],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let (text, _) = claude_status_text(&row);
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
     }
 
     #[test]
+    fn claude_status_needs_input() {
+        let row = TaskRow {
+            sessions: vec![SessionInfo {
+                name: "sess".to_string(),
+                host: None,
+                has_claude_active: true,
+                claude_needs_input: true,
+            }],
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = claude_status_text(&row);
+        assert!(text.contains("input"), "expected 'input' in: {}", text);
+    }
+
+        #[test]
     fn claude_status_none_when_no_session() {
-        let task = make_task(TaskStatus::Backlog, 1, 1);
-        let (text, _) = claude_status_text(&task, &[]);
+        let row = make_task_row(1, DisplayGroup::Other);
+        let (text, _) = claude_status_text(&row);
         assert!(text.contains("none"), "expected 'none' in: {}", text);
+    }
+
+    #[test]
+    fn pr_status_changes_requested() {
+        let row = TaskRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: Some("changes_requested".to_string()),
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = pr_status_text(&row);
+        assert!(text.contains("changes req"), "expected 'changes req' in: {}", text);
+    }
+
+    #[test]
+    fn pr_status_conflict() {
+        let row = TaskRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: true,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = pr_status_text(&row);
+        assert!(text.contains("conflict"), "expected 'conflict' in: {}", text);
+    }
+
+    #[test]
+    fn pr_status_unresolved_threads() {
+        let row = TaskRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 3,
+            }),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = pr_status_text(&row);
+        assert!(text.contains("unresolved"), "expected 'unresolved' in: {}", text);
+        assert!(text.contains("3"), "expected count 3 in: {}", text);
+    }
+
+    #[test]
+    fn pr_status_failing_ci() {
+        let row = TaskRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = pr_status_text(&row);
+        assert!(text.contains("failing"), "expected 'failing' in: {}", text);
     }
 }
