@@ -304,6 +304,25 @@ impl App {
                 });
                 false
             }
+            KeyCode::Char('y') => {
+                let text = self
+                    .selected_worktree()
+                    .map(|wt| {
+                        wt.branch
+                            .clone()
+                            .unwrap_or_else(|| wt.path.clone())
+                    })
+                    .unwrap_or_default();
+                match crate::clipboard::copy_to_clipboard(&text) {
+                    Ok(()) => {
+                        self.warning = Some((format!("copied: {}", text), Instant::now()));
+                    }
+                    Err(err) => {
+                        self.warning = Some((format!("clipboard error: {}", err), Instant::now()));
+                    }
+                }
+                false
+            }
             KeyCode::Char('r') => {
                 self.refreshing = true;
                 self.start_refresh();
@@ -410,6 +429,25 @@ impl App {
             KeyCode::Char('c') => {
                 // Cleanup: enter cleanup view for done/stale worktrees.
                 self.enter_cleanup_view();
+                false
+            }
+            KeyCode::Char('y') => {
+                let (visible, _) = visible_tasks(&self.app_state.tasks, &self.worktrees, self.backlog_page);
+                let text = visible.get(self.cursor).and_then(|vt| {
+                    vt.task.worktree.as_ref().and_then(|wt_path| {
+                        self.worktrees.iter().find(|w| &w.path == wt_path).map(|wt| {
+                            wt.branch.clone().unwrap_or_else(|| wt.path.clone())
+                        })
+                    })
+                }).unwrap_or_default();
+                match crate::clipboard::copy_to_clipboard(&text) {
+                    Ok(()) => {
+                        self.warning = Some((format!("copied: {}", text), Instant::now()));
+                    }
+                    Err(err) => {
+                        self.warning = Some((format!("clipboard error: {}", err), Instant::now()));
+                    }
+                }
                 false
             }
             KeyCode::Char('r') => {
@@ -968,6 +1006,15 @@ impl App {
         spans.push(Span::raw(" new"));
 
         spans.push(sep.clone());
+        spans.push(Span::styled(
+            "y",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" copy"));
+
+        spans.push(sep.clone());
         if self.refreshing {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             spans.push(Span::styled(
@@ -1409,6 +1456,8 @@ impl App {
             Span::styled(":open PR  ", dim_style),
             Span::styled("c", key_style),
             Span::styled(":cleanup  ", dim_style),
+            Span::styled("y", key_style),
+            Span::styled(":copy  ", dim_style),
         ];
 
         if self.refreshing {

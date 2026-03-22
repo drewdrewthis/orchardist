@@ -1,4 +1,5 @@
 mod browser;
+mod clipboard;
 mod collector;
 pub mod events;
 mod config;
