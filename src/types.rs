@@ -77,11 +77,13 @@ pub fn resolve_pr_status(pr: &PrInfo) -> PrStatus {
     if pr.unresolved_threads > 0 { return PrStatus::Unresolved; }
     if pr.review_decision == ReviewDecision::ChangesRequested { return PrStatus::ChangesRequested; }
     if pr.checks_status == ChecksStatus::Fail { return PrStatus::Failing; }
-    if pr.review_decision == ReviewDecision::None || pr.review_decision == ReviewDecision::ReviewRequired {
+    if pr.review_decision == ReviewDecision::ReviewRequired {
         return PrStatus::ReviewNeeded;
     }
     if pr.checks_status == ChecksStatus::Pending { return PrStatus::PendingCi; }
-    if pr.review_decision == ReviewDecision::Approved { return PrStatus::Approved; }
+    if pr.review_decision == ReviewDecision::Approved || pr.review_decision == ReviewDecision::None {
+        return PrStatus::Approved;
+    }
     PrStatus::ReviewNeeded
 }
 
@@ -211,6 +213,36 @@ mod tests {
             checks_status: ChecksStatus::Pending, has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::PendingCi);
+    }
+
+    #[test]
+    fn no_review_required_with_passing_ci_is_approved() {
+        let pr = PrInfo {
+            number: 1, state: "open".into(), title: String::new(), url: String::new(),
+            review_decision: ReviewDecision::None, unresolved_threads: 0,
+            checks_status: ChecksStatus::Pass, has_conflicts: false,
+        };
+        assert_eq!(resolve_pr_status(&pr), PrStatus::Approved);
+    }
+
+    #[test]
+    fn no_review_required_with_pending_ci_is_pending() {
+        let pr = PrInfo {
+            number: 1, state: "open".into(), title: String::new(), url: String::new(),
+            review_decision: ReviewDecision::None, unresolved_threads: 0,
+            checks_status: ChecksStatus::Pending, has_conflicts: false,
+        };
+        assert_eq!(resolve_pr_status(&pr), PrStatus::PendingCi);
+    }
+
+    #[test]
+    fn review_required_is_review_needed() {
+        let pr = PrInfo {
+            number: 1, state: "open".into(), title: String::new(), url: String::new(),
+            review_decision: ReviewDecision::ReviewRequired, unresolved_threads: 0,
+            checks_status: ChecksStatus::Pass, has_conflicts: false,
+        };
+        assert_eq!(resolve_pr_status(&pr), PrStatus::ReviewNeeded);
     }
 
     #[test]
