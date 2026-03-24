@@ -529,6 +529,10 @@ impl App {
                 Span::styled("Open PR in browser", dim),
             ]),
             Line::from(vec![
+                Span::styled("i        ", key_style),
+                Span::styled("Open issue in browser", dim),
+            ]),
+            Line::from(vec![
                 Span::styled("r        ", key_style),
                 Span::styled("Refresh all data", dim),
             ]),
