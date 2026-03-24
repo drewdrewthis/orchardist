@@ -207,6 +207,10 @@ impl App {
                 self.open_pr_url();
                 false
             }
+            KeyCode::Char('i') => {
+                self.open_issue_url();
+                false
+            }
             KeyCode::Char('p') => {
                 self.start_transfer_dialog();
                 false
@@ -371,6 +375,16 @@ impl App {
                     && let Some(ref pr) = vt.row.pr {
                         // Construct PR URL from repo_slug and PR number.
                         let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
+                        crate::browser::open_url(&url);
+                    }
+                false
+            }
+            KeyCode::Char('i') => {
+                // Open issue URL in browser for the selected task.
+                let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+                if let Some(vt) = visible.get(self.cursor)
+                    && let Some(num) = vt.row.issue_number {
+                        let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
                         crate::browser::open_url(&url);
                     }
                 false
@@ -1146,6 +1160,27 @@ impl App {
             && !pr.url.is_empty() {
                 crate::browser::open_url(&pr.url);
             }
+    }
+
+    fn open_issue_url(&self) {
+        let wt = match self.selected_worktree() {
+            Some(wt) => wt,
+            None => return,
+        };
+        if let Some(num) = wt.issue_number {
+            // Find repo slug from global config: match by worktree path prefix.
+            let slug = self.global_config.repos.iter().find_map(|repo| {
+                if wt.path.starts_with(&repo.path) {
+                    Some(repo.slug.as_str())
+                } else {
+                    None
+                }
+            });
+            if let Some(slug) = slug {
+                let url = format!("https://github.com/{}/issues/{}", slug, num);
+                crate::browser::open_url(&url);
+            }
+        }
     }
 
     fn start_delete_dialog(&mut self) {
