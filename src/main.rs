@@ -1,27 +1,10 @@
-mod browser;
-pub mod cache;
-pub mod cache_sources;
-pub mod derive;
-mod collector;
-pub mod notify;
-pub mod events;
-mod config;
-mod git;
-mod github;
-pub mod global_config;
-mod logger;
-mod navigation;
-mod paths;
-mod remote;
-mod shell;
-mod status;
-mod tmux;
-mod transfer;
-mod types;
-mod tui;
-
 use std::env;
 use std::io::IsTerminal;
+
+use orchard::collector;
+use orchard::logger;
+use orchard::shell;
+use orchard::tui;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
