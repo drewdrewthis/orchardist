@@ -5,8 +5,10 @@ pub mod shell;
 pub mod ssh;
 pub mod tmux;
 
+#[cfg(test)]
+pub mod fake;
+
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::types::{IssueState, PrInfo, SwitchToSessionOptions, TmuxSession, Worktree};
 
@@ -15,12 +17,11 @@ use crate::types::{IssueState, PrInfo, SwitchToSessionOptions, TmuxSession, Work
 // ---------------------------------------------------------------------------
 
 pub trait GitService: Send + Sync {
-    fn find_repo_root(&self) -> String;
-    fn get_repo_name(&self) -> String;
+    fn find_repo_root(&self) -> anyhow::Result<String>;
+    fn get_repo_name(&self) -> anyhow::Result<String>;
     fn list_worktrees(&self) -> anyhow::Result<Vec<Worktree>>;
     fn worktree_has_conflicts(&self, path: &str) -> bool;
     fn remove_worktree(&self, path: &str, force: bool) -> anyhow::Result<()>;
-    fn parse_porcelain(&self, output: &str) -> Vec<Worktree>;
 }
 
 pub trait GithubService: Send + Sync {
@@ -31,6 +32,11 @@ pub trait GithubService: Send + Sync {
     fn get_issue_states(&self, numbers: &[u32]) -> HashMap<u32, IssueState>;
 }
 
+/// Tmux session management operations.
+///
+/// This trait covers session lifecycle, pane inspection, and styling.
+/// A future refactor may split this into focused sub-traits (SessionManager,
+/// PaneInspector, StyleApplier) once consumers can depend on narrower interfaces.
 pub trait TmuxService: Send + Sync {
     fn list_sessions(&self) -> Vec<TmuxSession>;
     fn new_detached_session(&self, name: &str, start_dir: &str) -> anyhow::Result<()>;
@@ -68,33 +74,4 @@ pub trait ShellCommandService: Send + Sync {
     fn run(&self, program: &str, args: &[&str]) -> anyhow::Result<String>;
     fn run_in(&self, program: &str, args: &[&str], cwd: &str) -> anyhow::Result<String>;
     fn run_status(&self, program: &str, args: &[&str]) -> anyhow::Result<bool>;
-}
-
-// ---------------------------------------------------------------------------
-// Service container
-// ---------------------------------------------------------------------------
-
-/// Container holding all services. Clone-friendly via Arc internals.
-#[derive(Clone)]
-pub struct Services {
-    pub git: Arc<dyn GitService>,
-    pub github: Arc<dyn GithubService>,
-    pub tmux: Arc<dyn TmuxService>,
-    pub ssh: Arc<dyn SshService>,
-    pub notify: Arc<dyn NotifyService>,
-    pub shell: Arc<dyn ShellCommandService>,
-}
-
-impl Services {
-    /// Creates a `Services` container with the default command-based implementations.
-    pub fn new_default() -> Self {
-        Self {
-            git: Arc::new(git::CommandGit),
-            github: Arc::new(github::CommandGithub),
-            tmux: Arc::new(tmux::CommandTmux),
-            ssh: Arc::new(ssh::CommandSsh),
-            notify: Arc::new(notify::CommandNotify),
-            shell: Arc::new(shell::CommandShell),
-        }
-    }
 }

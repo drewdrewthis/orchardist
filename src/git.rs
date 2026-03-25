@@ -6,12 +6,12 @@ use crate::types::Worktree;
 
 /// Returns the absolute path of the git repository root, or an empty string on failure.
 pub fn find_repo_root() -> String {
-    CommandGit.find_repo_root()
+    CommandGit.find_repo_root().unwrap_or_default()
 }
 
 /// Returns the directory name of the git repository root.
 pub fn get_repo_name() -> String {
-    CommandGit.get_repo_name()
+    CommandGit.get_repo_name().unwrap_or_default()
 }
 
 /// Returns all git worktrees for the current repository with conflict status populated.

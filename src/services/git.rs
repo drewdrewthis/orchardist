@@ -10,27 +10,28 @@ use crate::types::Worktree;
 pub struct CommandGit;
 
 impl super::GitService for CommandGit {
-    fn find_repo_root(&self) -> String {
-        Command::new("git")
+    fn find_repo_root(&self) -> Result<String> {
+        let out = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
+            .context("running git rev-parse")?;
+        if !out.status.success() {
+            return Err(anyhow!("not a git repository"));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    fn get_repo_name(&self) -> String {
-        let root = self.find_repo_root();
-        Path::new(&root)
+    fn get_repo_name(&self) -> Result<String> {
+        let root = self.find_repo_root()?;
+        Ok(Path::new(&root)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
-            .to_string()
+            .to_string())
     }
 
     fn list_worktrees(&self) -> Result<Vec<Worktree>> {
-        let root = self.find_repo_root();
+        let root = self.find_repo_root()?;
         let out = Command::new("git")
             .args(["worktree", "list", "--porcelain"])
             .current_dir(&root)
@@ -44,12 +45,12 @@ impl super::GitService for CommandGit {
             ));
         }
 
-        let raw = self.parse_porcelain(&String::from_utf8_lossy(&out.stdout));
+        let raw = Self::parse_porcelain(&String::from_utf8_lossy(&out.stdout));
         let mut trees = Vec::with_capacity(raw.len());
 
         for mut wt in raw {
             if wt.path.contains("/.git/") {
-                wt.path = resolve_main_worktree_path(&wt.path);
+                wt.path = CommandGit::resolve_main_worktree_path(&wt.path);
             }
             if !wt.is_bare {
                 wt.has_conflicts = self.worktree_has_conflicts(&wt.path);
@@ -96,7 +97,7 @@ impl super::GitService for CommandGit {
             .with_context(|| format!("canonicalizing path: {path}"))?;
         let resolved_str = resolved.to_string_lossy();
 
-        if !is_known_worktree(&resolved_str) {
+        if !CommandGit::is_known_worktree(&resolved_str) {
             return Err(anyhow!(
                 "refusing to rm path not listed as a git worktree: {path}"
             ));
@@ -114,9 +115,49 @@ impl super::GitService for CommandGit {
 
         Ok(())
     }
+}
 
-    fn parse_porcelain(&self, output: &str) -> Vec<Worktree> {
+impl CommandGit {
+    /// Parses the output of `git worktree list --porcelain` into a `Vec<Worktree>`.
+    fn parse_porcelain(output: &str) -> Vec<Worktree> {
         parse_porcelain_impl(output)
+    }
+
+    /// Resolves the actual worktree path by consulting `core.worktree` config
+    /// with `GIT_DIR` set. Used for worktrees that live inside a `.git` directory
+    /// (bare-repo worktrees).
+    fn resolve_main_worktree_path(git_dir: &str) -> String {
+        let out = Command::new("git")
+            .args(["config", "--get", "core.worktree"])
+            .env("GIT_DIR", git_dir)
+            .output();
+
+        match out {
+            Ok(o) if o.status.success() => {
+                let rel = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let joined = Path::new(git_dir).join(&rel);
+                joined
+                    .canonicalize()
+                    .unwrap_or_else(|_| normalize_path(&joined))
+                    .to_string_lossy()
+                    .into_owned()
+            }
+            _ => git_dir.to_string(),
+        }
+    }
+
+    /// Reports whether `path` appears in `git worktree list --porcelain`.
+    fn is_known_worktree(path: &str) -> bool {
+        Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                let s = String::from_utf8_lossy(&o.stdout);
+                s.contains(&format!("worktree {path}"))
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -171,26 +212,6 @@ pub(crate) fn parse_porcelain_impl(output: &str) -> Vec<Worktree> {
     worktrees
 }
 
-fn resolve_main_worktree_path(git_dir: &str) -> String {
-    let out = Command::new("git")
-        .args(["config", "--get", "core.worktree"])
-        .env("GIT_DIR", git_dir)
-        .output();
-
-    match out {
-        Ok(o) if o.status.success() => {
-            let rel = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let joined = Path::new(git_dir).join(&rel);
-            joined
-                .canonicalize()
-                .unwrap_or_else(|_| normalize_path(&joined))
-                .to_string_lossy()
-                .into_owned()
-        }
-        _ => git_dir.to_string(),
-    }
-}
-
 /// Normalize a path by resolving `.` and `..` components without hitting the filesystem.
 pub(crate) fn normalize_path(path: &Path) -> std::path::PathBuf {
     use std::path::Component;
@@ -209,15 +230,3 @@ pub(crate) fn normalize_path(path: &Path) -> std::path::PathBuf {
     components.iter().collect()
 }
 
-fn is_known_worktree(path: &str) -> bool {
-    Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            s.contains(&format!("worktree {path}"))
-        })
-        .unwrap_or(false)
-}

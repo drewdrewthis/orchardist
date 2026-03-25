@@ -28,7 +28,7 @@ pub enum ClaudeState {
 }
 
 impl ClaudeState {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "working" => Self::Working,
             "idle" => Self::Idle,
@@ -43,10 +43,18 @@ impl ClaudeState {
 /// Only files matching `/tmp/orchard-claude-*.json` are read.
 /// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
 pub fn read_all_state_files() -> Vec<ClaudeStateFile> {
-    let pattern = "/tmp/orchard-claude-*.json";
+    read_state_files_from("/tmp")
+}
+
+/// Reads orchard hook state files from the given directory.
+///
+/// Only files matching `{dir}/orchard-claude-*.json` are read.
+/// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
+pub fn read_state_files_from(dir: &str) -> Vec<ClaudeStateFile> {
+    let pattern = format!("{dir}/orchard-claude-*.json");
     let mut results = Vec::new();
 
-    for entry in glob::glob(pattern).into_iter().flatten() {
+    for entry in glob::glob(&pattern).into_iter().flatten() {
         if let Ok(path) = entry {
             // Skip .tmp files (in-progress atomic writes)
             if path.to_string_lossy().contains(".tmp.") {
@@ -91,23 +99,23 @@ mod tests {
     }
 
     #[test]
-    fn claude_state_from_str_working() {
-        assert_eq!(ClaudeState::from_str("working"), ClaudeState::Working);
+    fn claude_state_parse_working() {
+        assert_eq!(ClaudeState::parse("working"), ClaudeState::Working);
     }
 
     #[test]
-    fn claude_state_from_str_idle() {
-        assert_eq!(ClaudeState::from_str("idle"), ClaudeState::Idle);
+    fn claude_state_parse_idle() {
+        assert_eq!(ClaudeState::parse("idle"), ClaudeState::Idle);
     }
 
     #[test]
-    fn claude_state_from_str_input() {
-        assert_eq!(ClaudeState::from_str("input"), ClaudeState::Input);
+    fn claude_state_parse_input() {
+        assert_eq!(ClaudeState::parse("input"), ClaudeState::Input);
     }
 
     #[test]
-    fn claude_state_from_str_unknown_is_none() {
-        assert_eq!(ClaudeState::from_str("unknown"), ClaudeState::None);
+    fn claude_state_parse_unknown_is_none() {
+        assert_eq!(ClaudeState::parse("unknown"), ClaudeState::None);
     }
 
     #[test]
@@ -129,15 +137,31 @@ mod tests {
     }
 
     #[test]
-    fn read_all_state_files_skips_malformed() {
-        // Write a malformed file and verify it doesn't panic
+    fn read_state_files_from_reads_valid_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("orchard-claude-test.json");
+        let path = dir.path().join("orchard-claude-test-session.json");
+        let json = serde_json::json!({
+            "state": "working",
+            "session_id": "sess-abc",
+            "tmux_session": "test-session",
+            "cwd": "/workspace",
+            "event": "PreToolUse",
+            "timestamp": "2026-03-25T10:00:00Z"
+        });
+        std::fs::write(&path, json.to_string()).unwrap();
+        let results = read_state_files_from(dir.path().to_str().unwrap());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].state, "working");
+        assert_eq!(results[0].tmux_session, "test-session");
+    }
+
+    #[test]
+    fn read_state_files_from_skips_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("orchard-claude-bad.json");
         std::fs::write(&path, b"not json").unwrap();
-        // We can't easily test the glob pattern directly (it's hardcoded to /tmp),
-        // but we can verify serde handles bad data gracefully
-        let result = serde_json::from_slice::<ClaudeStateFile>(b"not json");
-        assert!(result.is_err());
+        let results = read_state_files_from(dir.path().to_str().unwrap());
+        assert!(results.is_empty());
     }
 
     #[test]

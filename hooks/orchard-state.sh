@@ -3,6 +3,7 @@
 # Registered for: PreToolUse, PostToolUse, Stop, Notification, SessionEnd, SessionStart
 
 set -euo pipefail
+umask 077
 
 # Only run inside tmux
 [ -z "${TMUX:-}" ] && exit 0

@@ -8,13 +8,25 @@ pub fn send_notification(title: &str, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::services::notify::escape_applescript;
 
     #[test]
-    fn notification_message_escapes_quotes() {
-        // Smoke test: verifies escaping logic doesn't panic.
-        // We cannot assert on osascript output in CI, but we can confirm
-        // the function handles embedded double-quotes without panicking.
-        send_notification("Test \"title\"", "Test \"message\"");
+    fn escape_applescript_handles_double_quotes() {
+        assert_eq!(escape_applescript(r#"say "hello""#), r#"say \"hello\""#);
+    }
+
+    #[test]
+    fn escape_applescript_handles_backslashes() {
+        assert_eq!(escape_applescript(r#"path\to\file"#), r#"path\\to\\file"#);
+    }
+
+    #[test]
+    fn escape_applescript_handles_combined() {
+        assert_eq!(escape_applescript(r#"a\"b"#), r#"a\\\"b"#);
+    }
+
+    #[test]
+    fn escape_applescript_passes_plain_text() {
+        assert_eq!(escape_applescript("hello world"), "hello world");
     }
 }

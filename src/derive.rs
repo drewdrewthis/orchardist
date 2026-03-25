@@ -28,6 +28,11 @@ pub struct PrInfo {
 }
 
 /// Lightweight tmux session summary attached to a worktree row.
+///
+/// The `has_claude_active`, `claude_is_working`, and `claude_needs_input` booleans
+/// are derived from terminal scraping as a fallback. When `claude_state` is populated
+/// from hook files, it is authoritative and the booleans are redundant. A future
+/// cleanup will remove the boolean fields once all consumers use `claude_state`.
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub name: String,
@@ -143,18 +148,6 @@ pub fn derive_worktree_rows(
     rows
 }
 
-/// Alias for backward compatibility.
-pub fn derive_task_rows(
-    issues: &[CachedIssue],
-    prs: &[CachedPr],
-    worktrees: &[CachedWorktree],
-    sessions: &[CachedTmuxSession],
-    repo_slug: &str,
-    claude_states: &[crate::claude_state::ClaudeStateFile],
-) -> Vec<WorktreeRow> {
-    derive_worktree_rows(issues, prs, worktrees, sessions, repo_slug, claude_states)
-}
-
 // ---------------------------------------------------------------------------
 // Multi-repo aggregation
 // ---------------------------------------------------------------------------
@@ -221,7 +214,7 @@ fn session_info_from(
     if let Some(state_file) = hook_state {
         let is_stale = is_state_stale(&state_file.timestamp, 300);
         if !is_stale {
-            let claude_state = ClaudeState::from_str(&state_file.state);
+            let claude_state = ClaudeState::parse(&state_file.state);
             return SessionInfo {
                 name: session.name.clone(),
                 host: session.host.clone(),
