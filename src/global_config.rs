@@ -76,6 +76,14 @@ pub struct GlobalConfig {
 // ---------------------------------------------------------------------------
 
 fn global_config_path() -> Option<PathBuf> {
+    // Check XDG-style ~/.config first (cross-platform convention),
+    // then fall back to platform-native config dir (~/Library/Application Support on macOS).
+    let xdg = dirs::home_dir().map(|h| h.join(".config").join("orchard").join("config.json"));
+    if let Some(ref p) = xdg {
+        if p.exists() {
+            return xdg;
+        }
+    }
     dirs::config_dir().map(|d| d.join("orchard").join("config.json"))
 }
 
@@ -94,10 +102,50 @@ fn global_config_path() -> Option<PathBuf> {
 pub fn load_global_config() -> GlobalConfig {
     if let Some(path) = global_config_path()
         && path.exists() {
-            return load_from_path(&path);
+            let mut cfg = load_from_path(&path);
+            // If CWD is a repo not already in the config, append it so
+            // orchard works seamlessly from any repo directory.
+            ensure_cwd_repo(&mut cfg);
+            return cfg;
         }
 
     fallback_single_repo()
+}
+
+/// Checks whether CWD belongs to a configured repo. If not, adds it.
+fn ensure_cwd_repo(cfg: &mut GlobalConfig) {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+
+    // Check if CWD is inside any configured repo path.
+    for repo in &cfg.repos {
+        if cwd.starts_with(&repo.path) {
+            return;
+        }
+    }
+
+    // CWD is not in any configured repo — try to detect it.
+    let (owner, name) = match crate::github::get_repo() {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+
+    let slug = format!("{owner}/{name}");
+    // Guard against duplicate slugs (repo could be checked out at a different path).
+    if cfg.repos.iter().any(|r| r.slug == slug) {
+        return;
+    }
+
+    let remotes = load_orchard_json_remotes(&std::path::PathBuf::from(&cwd));
+
+    LOG.info(&format!("global_config: appending CWD repo {slug} at {cwd}"));
+    cfg.repos.push(RepoConfig {
+        slug,
+        path: cwd,
+        remotes,
+    });
 }
 
 fn load_from_path(path: &PathBuf) -> GlobalConfig {
