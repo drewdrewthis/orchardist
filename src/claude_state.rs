@@ -27,26 +27,28 @@ pub enum ClaudeState {
     None,
 }
 
-impl ClaudeState {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for ClaudeState {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "working" => Self::Working,
             "idle" => Self::Idle,
             "input" => Self::Input,
             _ => Self::None,
-        }
+        })
     }
 }
 
-/// Reads all orchard hook state files from /tmp.
+/// Reads all orchard hook state files from the given directory (defaults to `/tmp`).
 ///
-/// Only files matching `/tmp/orchard-claude-*.json` are read.
+/// Only files matching `orchard-claude-*.json` in `dir` are read.
 /// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
-pub fn read_all_state_files() -> Vec<ClaudeStateFile> {
-    let pattern = "/tmp/orchard-claude-*.json";
+pub fn read_all_state_files_in(dir: &str) -> Vec<ClaudeStateFile> {
+    let pattern = format!("{}/orchard-claude-*.json", dir);
     let mut results = Vec::new();
 
-    for entry in glob::glob(pattern).into_iter().flatten() {
+    for entry in glob::glob(&pattern).into_iter().flatten() {
         if let Ok(path) = entry {
             // Skip .tmp files (in-progress atomic writes)
             if path.to_string_lossy().contains(".tmp.") {
@@ -65,6 +67,11 @@ pub fn read_all_state_files() -> Vec<ClaudeStateFile> {
     }
 
     results
+}
+
+/// Convenience wrapper that reads state files from `/tmp`.
+pub fn read_all_state_files() -> Vec<ClaudeStateFile> {
+    read_all_state_files_in("/tmp")
 }
 
 /// Finds the state for a specific tmux session name.
@@ -91,23 +98,23 @@ mod tests {
     }
 
     #[test]
-    fn claude_state_from_str_working() {
-        assert_eq!(ClaudeState::from_str("working"), ClaudeState::Working);
+    fn claude_state_parse_working() {
+        assert_eq!("working".parse::<ClaudeState>().unwrap(), ClaudeState::Working);
     }
 
     #[test]
-    fn claude_state_from_str_idle() {
-        assert_eq!(ClaudeState::from_str("idle"), ClaudeState::Idle);
+    fn claude_state_parse_idle() {
+        assert_eq!("idle".parse::<ClaudeState>().unwrap(), ClaudeState::Idle);
     }
 
     #[test]
-    fn claude_state_from_str_input() {
-        assert_eq!(ClaudeState::from_str("input"), ClaudeState::Input);
+    fn claude_state_parse_input() {
+        assert_eq!("input".parse::<ClaudeState>().unwrap(), ClaudeState::Input);
     }
 
     #[test]
-    fn claude_state_from_str_unknown_is_none() {
-        assert_eq!(ClaudeState::from_str("unknown"), ClaudeState::None);
+    fn claude_state_parse_unknown_is_none() {
+        assert_eq!("unknown".parse::<ClaudeState>().unwrap(), ClaudeState::None);
     }
 
     #[test]
@@ -129,15 +136,34 @@ mod tests {
     }
 
     #[test]
-    fn read_all_state_files_skips_malformed() {
-        // Write a malformed file and verify it doesn't panic
+    fn read_all_state_files_in_skips_malformed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("orchard-claude-test.json");
         std::fs::write(&path, b"not json").unwrap();
-        // We can't easily test the glob pattern directly (it's hardcoded to /tmp),
-        // but we can verify serde handles bad data gracefully
-        let result = serde_json::from_slice::<ClaudeStateFile>(b"not json");
-        assert!(result.is_err());
+        let results = read_all_state_files_in(dir.path().to_str().unwrap());
+        assert!(results.is_empty(), "malformed files should be skipped");
+    }
+
+    #[test]
+    fn read_all_state_files_in_reads_valid_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = make_state_file("working", "repo_47");
+        let json = serde_json::to_string(&state).unwrap();
+        std::fs::write(dir.path().join("orchard-claude-repo_47.json"), json).unwrap();
+        let results = read_all_state_files_in(dir.path().to_str().unwrap());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].state, "working");
+    }
+
+    #[test]
+    fn read_all_state_files_in_skips_tmp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = make_state_file("working", "repo_47");
+        let json = serde_json::to_string(&state).unwrap();
+        // Write as a .tmp. file (in-progress atomic write)
+        std::fs::write(dir.path().join("orchard-claude-repo_47.json.tmp.12345"), json).unwrap();
+        let results = read_all_state_files_in(dir.path().to_str().unwrap());
+        assert!(results.is_empty(), ".tmp files should be skipped");
     }
 
     #[test]

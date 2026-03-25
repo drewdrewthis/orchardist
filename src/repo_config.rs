@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -29,22 +29,24 @@ impl CiConfig {
     /// - Otherwise: return all checks unchanged.
     pub fn filter_checks(&self, checks: &[(String, String)]) -> Vec<(String, String)> {
         if !self.required.is_empty() {
+            let patterns: Vec<String> = self.required.iter().map(|p| p.to_lowercase()).collect();
             return checks
                 .iter()
                 .filter(|(name, _)| {
                     let lower = name.to_lowercase();
-                    self.required.iter().any(|p| lower.contains(&p.to_lowercase()))
+                    patterns.iter().any(|p| lower.contains(p.as_str()))
                 })
                 .cloned()
                 .collect();
         }
 
         if !self.ignore.is_empty() {
+            let patterns: Vec<String> = self.ignore.iter().map(|p| p.to_lowercase()).collect();
             return checks
                 .iter()
                 .filter(|(name, _)| {
                     let lower = name.to_lowercase();
-                    !self.ignore.iter().any(|p| lower.contains(&p.to_lowercase()))
+                    !patterns.iter().any(|p| lower.contains(p.as_str()))
                 })
                 .cloned()
                 .collect();
@@ -94,7 +96,7 @@ pub fn load_repo_config(repo_path: &str) -> RepoLocalConfig {
 
 // Reads and parses a RepoLocalConfig from the given path.
 // Returns defaults if the file is missing or contains invalid JSON.
-fn load_from_path(path: &PathBuf) -> RepoLocalConfig {
+fn load_from_path(path: &Path) -> RepoLocalConfig {
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(_) => return RepoLocalConfig::default(),

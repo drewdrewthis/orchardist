@@ -1,6 +1,6 @@
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
-use crate::repo_config::RepoLocalConfig;
+use crate::repo_config::{CiConfig, RepoLocalConfig};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -29,6 +29,11 @@ pub struct PrInfo {
 }
 
 /// Lightweight tmux session summary attached to a worktree row.
+///
+/// The boolean fields (`has_claude_active`, `claude_is_working`, `claude_needs_input`)
+/// are transitional — they duplicate information available from `claude_state`.
+/// They exist for backward compatibility with TUI code that predates the enum.
+/// Once all consumers migrate to `claude_state`, the booleans will be removed.
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub name: String,
@@ -46,6 +51,27 @@ pub struct SessionInfo {
     pub cost_usd: Option<f64>,
     /// Model name from hook state enrichment (e.g., "opus", "sonnet").
     pub model: Option<String>,
+}
+
+/// All inputs needed by `derive_worktree_rows` for a single repo.
+pub struct DeriveContext<'a> {
+    pub issues: &'a [CachedIssue],
+    pub prs: &'a [CachedPr],
+    pub worktrees: &'a [CachedWorktree],
+    pub sessions: &'a [CachedTmuxSession],
+    pub repo_slug: &'a str,
+    pub claude_states: &'a [crate::claude_state::ClaudeStateFile],
+    pub ci_config: &'a CiConfig,
+}
+
+/// A single repo's cache data bundled for `derive_all_repos`.
+pub struct RepoCacheEntry {
+    pub slug: String,
+    pub issues: Vec<CachedIssue>,
+    pub prs: Vec<CachedPr>,
+    pub worktrees: Vec<CachedWorktree>,
+    pub sessions: Vec<CachedTmuxSession>,
+    pub repo_config: RepoLocalConfig,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -71,7 +97,7 @@ pub type TaskRow = WorktreeRow;
 // Single-repo derivation
 // ---------------------------------------------------------------------------
 
-/// Derives worktree rows for a single repository from its four source caches.
+/// Derives worktree rows for a single repository from its source caches.
 ///
 /// Join chain (worktree-first):
 /// 1. Start from non-bare worktrees.
@@ -81,37 +107,29 @@ pub type TaskRow = WorktreeRow;
 /// 5. Look up issue title from issues cache if issue number found.
 /// 6. Detect shepherd (first non-bare worktree or session name ending `_main`).
 /// 7. Derive display group from the joined data.
-pub fn derive_worktree_rows(
-    issues: &[CachedIssue],
-    prs: &[CachedPr],
-    worktrees: &[CachedWorktree],
-    sessions: &[CachedTmuxSession],
-    repo_slug: &str,
-    claude_states: &[crate::claude_state::ClaudeStateFile],
-    ci_config: &crate::repo_config::CiConfig,
-) -> Vec<WorktreeRow> {
+pub fn derive_worktree_rows(ctx: &DeriveContext) -> Vec<WorktreeRow> {
     let mut rows = Vec::new();
     let mut is_first_non_bare = true;
 
-    for wt in worktrees.iter().filter(|w| !w.is_bare) {
+    for wt in ctx.worktrees.iter().filter(|w| !w.is_bare) {
         // Don't match PRs to default/mainline branches — a PR with head "main"
         // is not meaningful work associated with the main worktree.
         let pr = if is_default_branch(&wt.branch) {
             None
         } else {
-            prs.iter().find(|p| p.branch == wt.branch)
+            ctx.prs.iter().find(|p| p.branch == wt.branch)
         };
-        let pr_info = pr.map(|p| pr_info_from(p, ci_config));
+        let pr_info = pr.map(|p| pr_info_from(p, ctx.ci_config));
 
-        let session_infos: Vec<SessionInfo> = sessions
+        let session_infos: Vec<SessionInfo> = ctx.sessions
             .iter()
             .filter(|s| s.path == wt.path)
-            .map(|s| session_info_from(s, claude_states))
+            .map(|s| session_info_from(s, ctx.claude_states))
             .collect();
 
         let issue_number = github::extract_issue_number(&wt.branch);
         let issue_title = issue_number.and_then(|num| {
-            issues
+            ctx.issues
                 .iter()
                 .find(|i| i.number == num)
                 .map(|i| i.title.clone())
@@ -127,7 +145,7 @@ pub fn derive_worktree_rows(
         };
 
         rows.push(WorktreeRow {
-            repo_slug: repo_slug.to_string(),
+            repo_slug: ctx.repo_slug.to_string(),
             worktree_path: wt.path.clone(),
             branch: wt.branch.clone(),
             worktree_host: wt.host.clone(),
@@ -145,43 +163,30 @@ pub fn derive_worktree_rows(
     rows
 }
 
-/// Alias for backward compatibility.
-pub fn derive_task_rows(
-    issues: &[CachedIssue],
-    prs: &[CachedPr],
-    worktrees: &[CachedWorktree],
-    sessions: &[CachedTmuxSession],
-    repo_slug: &str,
-    claude_states: &[crate::claude_state::ClaudeStateFile],
-    ci_config: &crate::repo_config::CiConfig,
-) -> Vec<WorktreeRow> {
-    derive_worktree_rows(issues, prs, worktrees, sessions, repo_slug, claude_states, ci_config)
-}
-
 // ---------------------------------------------------------------------------
 // Multi-repo aggregation
 // ---------------------------------------------------------------------------
 
 /// Derives and sorts worktree rows across all configured repositories.
 ///
-/// Each tuple is `(repo_slug, issues, prs, worktrees, sessions, repo_config)`. Rows are
-/// sorted: Shepherd first, then by display group, then by issue number
+/// Rows are sorted: Shepherd first, then by display group, then by issue number
 /// (worktrees without issue numbers sort by branch name).
 pub fn derive_all_repos(
-    repo_caches: &[(
-        String,
-        Vec<CachedIssue>,
-        Vec<CachedPr>,
-        Vec<CachedWorktree>,
-        Vec<CachedTmuxSession>,
-        RepoLocalConfig,
-    )],
+    repo_caches: &[RepoCacheEntry],
     claude_states: &[crate::claude_state::ClaudeStateFile],
 ) -> Vec<WorktreeRow> {
     let mut rows: Vec<WorktreeRow> = repo_caches
         .iter()
-        .flat_map(|(slug, issues, prs, worktrees, sessions, repo_config)| {
-            derive_worktree_rows(issues, prs, worktrees, sessions, slug, claude_states, &repo_config.ci)
+        .flat_map(|entry| {
+            derive_worktree_rows(&DeriveContext {
+                issues: &entry.issues,
+                prs: &entry.prs,
+                worktrees: &entry.worktrees,
+                sessions: &entry.sessions,
+                repo_slug: &entry.slug,
+                claude_states,
+                ci_config: &entry.repo_config.ci,
+            })
         })
         .collect();
 
@@ -229,14 +234,14 @@ fn session_info_from(
     session: &CachedTmuxSession,
     claude_states: &[crate::claude_state::ClaudeStateFile],
 ) -> SessionInfo {
-    use crate::claude_state::{ClaudeState, state_for_session};
+    use crate::claude_state::{state_for_session, ClaudeState};
 
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
     if let Some(state_file) = hook_state {
         let is_stale = is_state_stale(&state_file.timestamp, 300);
         if !is_stale {
-            let claude_state = ClaudeState::from_str(&state_file.state);
+            let claude_state: ClaudeState = state_file.state.parse().unwrap_or(ClaudeState::None);
             return SessionInfo {
                 name: session.name.clone(),
                 host: session.host.clone(),
@@ -394,6 +399,25 @@ mod tests {
     // Builder helpers
     // -----------------------------------------------------------------------
 
+    fn make_ctx<'a>(
+        issues: &'a [CachedIssue],
+        prs: &'a [CachedPr],
+        worktrees: &'a [CachedWorktree],
+        sessions: &'a [CachedTmuxSession],
+        claude_states: &'a [crate::claude_state::ClaudeStateFile],
+        ci_config: &'a CiConfig,
+    ) -> DeriveContext<'a> {
+        DeriveContext {
+            issues,
+            prs,
+            worktrees,
+            sessions,
+            repo_slug: "owner/repo",
+            claude_states,
+            ci_config,
+        }
+    }
+
     fn open_issue(number: u32) -> CachedIssue {
         CachedIssue {
             number,
@@ -472,7 +496,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/something"),
         ];
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].worktree_path, "/workspace/repo");
@@ -487,7 +512,8 @@ mod tests {
             bare_worktree("/workspace/repo.git", "main"),
             worktree("/workspace/repo-feat", "feat/something"),
         ];
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].branch, "feat/something");
@@ -498,7 +524,8 @@ mod tests {
         let worktrees = vec![worktree("/workspace/repo-47", "feat/task-centric")];
         let prs = vec![pr_for_branch(55, "feat/task-centric")];
 
-        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 1);
         let pr = rows[0].pr.as_ref().expect("PR should be present");
@@ -509,7 +536,8 @@ mod tests {
     fn worktree_without_pr_still_shows() {
         let worktrees = vec![worktree("/workspace/repo-feat", "feat/something")];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert!(rows[0].pr.is_none());
@@ -524,7 +552,8 @@ mod tests {
             vec!["bash"],
         )];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &sessions, &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sessions.len(), 1);
@@ -539,7 +568,8 @@ mod tests {
             session("langwatch_47_claude", "/workspace/langwatch-47", vec!["claude"]),
         ];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &sessions, &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sessions.len(), 2);
@@ -553,7 +583,8 @@ mod tests {
         let issues = vec![open_issue(2478)];
         let worktrees = vec![worktree("/workspace/langwatch-2478", "langwatch-2478")];
 
-        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&issues, &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].issue_number, Some(2478));
@@ -564,7 +595,8 @@ mod tests {
     fn issue_title_none_when_issue_not_in_cache() {
         let worktrees = vec![worktree("/workspace/langwatch-2478", "langwatch-2478")];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].issue_number, Some(2478));
@@ -575,7 +607,8 @@ mod tests {
     fn no_issue_number_for_plain_branch() {
         let worktrees = vec![worktree("/workspace/repo", "main")];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 1);
         assert!(rows[0].issue_number.is_none());
@@ -592,7 +625,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/something"),
         ];
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert!(rows[0].is_shepherd);
         assert!(!rows[1].is_shepherd);
@@ -601,7 +635,8 @@ mod tests {
     #[test]
     fn shepherd_gets_shepherd_display_group() {
         let worktrees = vec![worktree("/workspace/repo", "main")];
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows[0].display_group, DisplayGroup::Shepherd);
     }
@@ -618,7 +653,8 @@ mod tests {
             vec!["bash"],
         )];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &sessions, &[], &ci));
 
         assert!(rows[0].is_shepherd); // first non-bare
         assert!(rows[1].is_shepherd); // session name ends with _main
@@ -632,7 +668,8 @@ mod tests {
             worktree("/workspace/repo-feat", "feat/something"),
         ];
 
-        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[], &[], &ci));
 
         assert_eq!(rows.len(), 2);
         assert!(rows[0].is_shepherd);  // first non-bare
@@ -656,7 +693,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktrees[0].clone(),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -671,7 +709,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -686,7 +725,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -701,7 +741,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -718,7 +759,8 @@ mod tests {
             ..session("repo_47", "/workspace/repo-47", vec!["claude"])
         }];
 
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &sessions, &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
     }
@@ -734,7 +776,8 @@ mod tests {
             ..session("repo_47", "/workspace/repo-47", vec!["claude"])
         }];
 
-        let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &all_wts, &sessions, &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
     }
@@ -746,7 +789,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
     }
@@ -757,7 +801,8 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &[], &all_wts, &[], "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &all_wts, &[], &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::Other);
     }
@@ -848,7 +893,8 @@ mod tests {
             ..session("repo_47", "/workspace/repo-47", vec![])
         }];
 
-        let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &all_wts, &sessions, &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -866,7 +912,8 @@ mod tests {
             ..session("repo_47", "/workspace/repo-47", vec![])
         }];
 
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &sessions, &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -883,7 +930,8 @@ mod tests {
         ];
         let sessions = vec![session("repo_47", "/workspace/repo-47", vec!["claude"])];
 
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &sessions, "owner/repo", &[], &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &sessions, &[], &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -894,17 +942,17 @@ mod tests {
 
     #[test]
     fn derive_all_repos_sorts_shepherd_first() {
-        let repo_caches = vec![(
-            "owner/repo-a".to_string(),
-            vec![],
-            vec![approved_passing_pr_for_branch(10, "feat/fix")],
-            vec![
+        let repo_caches = vec![RepoCacheEntry {
+            slug: "owner/repo-a".to_string(),
+            issues: vec![],
+            prs: vec![approved_passing_pr_for_branch(10, "feat/fix")],
+            worktrees: vec![
                 worktree("/workspace/repo-a", "main"),
                 worktree("/workspace/repo-a-fix", "feat/fix"),
             ],
-            vec![],
-            crate::repo_config::RepoLocalConfig::default(),
-        )];
+            sessions: vec![],
+            repo_config: crate::repo_config::RepoLocalConfig::default(),
+        }];
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
@@ -916,29 +964,29 @@ mod tests {
     #[test]
     fn derive_all_repos_sorts_by_group_then_issue_number() {
         let repo_caches = vec![
-            (
-                "owner/repo-a".to_string(),
-                vec![],
-                vec![],
-                vec![
+            RepoCacheEntry {
+                slug: "owner/repo-a".to_string(),
+                issues: vec![],
+                prs: vec![],
+                worktrees: vec![
                     worktree("/workspace/repo-a", "main"),
                     worktree("/workspace/repo-a-5", "feat/issue-500"),
                     worktree("/workspace/repo-a-3", "feat/issue-300"),
                 ],
-                vec![],
-                crate::repo_config::RepoLocalConfig::default(),
-            ),
-            (
-                "owner/repo-b".to_string(),
-                vec![],
-                vec![approved_passing_pr_for_branch(10, "feat/issue-100")],
-                vec![
+                sessions: vec![],
+                repo_config: crate::repo_config::RepoLocalConfig::default(),
+            },
+            RepoCacheEntry {
+                slug: "owner/repo-b".to_string(),
+                issues: vec![],
+                prs: vec![approved_passing_pr_for_branch(10, "feat/issue-100")],
+                worktrees: vec![
                     worktree("/workspace/repo-b", "main"),
                     worktree("/workspace/repo-b-fix", "feat/issue-100"),
                 ],
-                vec![],
-                crate::repo_config::RepoLocalConfig::default(),
-            ),
+                sessions: vec![],
+                repo_config: crate::repo_config::RepoLocalConfig::default(),
+            },
         ];
 
         let rows = derive_all_repos(&repo_caches, &[]);
@@ -961,18 +1009,18 @@ mod tests {
 
     #[test]
     fn worktrees_without_issue_numbers_sort_by_branch() {
-        let repo_caches = vec![(
-            "owner/repo".to_string(),
-            vec![],
-            vec![],
-            vec![
+        let repo_caches = vec![RepoCacheEntry {
+            slug: "owner/repo".to_string(),
+            issues: vec![],
+            prs: vec![],
+            worktrees: vec![
                 worktree("/workspace/repo", "main"),
                 worktree("/workspace/repo-z", "z-feature"),
                 worktree("/workspace/repo-a", "a-feature"),
             ],
-            vec![],
-            crate::repo_config::RepoLocalConfig::default(),
-        )];
+            sessions: vec![],
+            repo_config: crate::repo_config::RepoLocalConfig::default(),
+        }];
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
@@ -1092,7 +1140,8 @@ mod tests {
         let sessions = vec![session("repo_47_claude", "/workspace/repo-47", vec![])];
         let states = vec![fresh_state_file("repo_47_claude", "input")];
 
-        let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &states, &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &all_wts, &sessions, &states, &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
     }
@@ -1106,7 +1155,8 @@ mod tests {
         let sessions = vec![session("repo_47_claude", "/workspace/repo-47", vec![])];
         let states = vec![fresh_state_file("repo_47_claude", "working")];
 
-        let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &states, &Default::default());
+        let ci = CiConfig::default();
+        let rows = derive_worktree_rows(&make_ctx(&[], &[], &all_wts, &sessions, &states, &ci));
 
         assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
     }
@@ -1150,7 +1200,7 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &ci_config);
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci_config));
         // With codecov ignored, only "test" (passing) counts — should NOT be NeedsAttention
         assert_ne!(rows[1].display_group, DisplayGroup::NeedsAttention);
         assert_eq!(rows[1].pr.as_ref().unwrap().checks_state.as_deref(), Some("passing"));
@@ -1174,7 +1224,7 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &ci_config);
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci_config));
         // Only "build" (passing) counts — should be passing
         assert_eq!(rows[1].pr.as_ref().unwrap().checks_state.as_deref(), Some("passing"));
     }
@@ -1193,7 +1243,7 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
-        let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[], &ci_config);
+        let rows = derive_worktree_rows(&make_ctx(&[], &prs, &all_wts, &[], &[], &ci_config));
         // Without CI config, uses aggregate checks_state (failing) not individual
         assert_eq!(rows[1].pr.as_ref().unwrap().checks_state.as_deref(), Some("failing"));
     }

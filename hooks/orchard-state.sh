@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# Restrict state file permissions to owner-only (0600)
+umask 077
+
 # Only run inside tmux
 [ -z "${TMUX:-}" ] && exit 0
 

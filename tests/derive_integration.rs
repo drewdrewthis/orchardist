@@ -9,9 +9,32 @@ use common::{
     make_approved_pr, make_changes_requested_pr, make_claude_session, make_issue, make_pr,
     make_session, make_worktree, TestCacheDir,
 };
-use orchard::cache::{read_cache, CachedPr, CachedWorktree};
-use orchard::derive::{derive_all_repos, derive_worktree_rows, DisplayGroup};
-use orchard::repo_config::RepoLocalConfig;
+use orchard::cache::{read_cache, CachedCheckRun, CachedPr, CachedWorktree};
+use orchard::derive::{derive_all_repos, derive_worktree_rows, DeriveContext, DisplayGroup, RepoCacheEntry};
+use orchard::repo_config::{CiConfig, RepoLocalConfig};
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+fn make_ctx<'a>(
+    issues: &'a [orchard::cache::CachedIssue],
+    prs: &'a [CachedPr],
+    worktrees: &'a [CachedWorktree],
+    sessions: &'a [orchard::cache::CachedTmuxSession],
+) -> DeriveContext<'a> {
+    static DEFAULT_CI: std::sync::OnceLock<CiConfig> = std::sync::OnceLock::new();
+    let ci = DEFAULT_CI.get_or_init(CiConfig::default);
+    DeriveContext {
+        issues,
+        prs,
+        worktrees,
+        sessions,
+        repo_slug: "owner/repo",
+        claude_states: &[],
+        ci_config: ci,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Multi-repo: tasks from all repos appear in the result
@@ -22,28 +45,28 @@ use orchard::repo_config::RepoLocalConfig;
 #[test]
 fn multi_repo_tui_shows_tasks_from_all_repos() {
     let repo_caches = vec![
-        (
-            "owner/repo-a".to_string(),
-            vec![],
-            vec![],
-            vec![
+        RepoCacheEntry {
+            slug: "owner/repo-a".to_string(),
+            issues: vec![],
+            prs: vec![],
+            worktrees: vec![
                 make_worktree("/workspace/repo-a", "main"),
                 make_worktree("/workspace/repo-a-feat", "feat/branch-a"),
             ],
-            vec![],
-            RepoLocalConfig::default(),
-        ),
-        (
-            "owner/repo-b".to_string(),
-            vec![],
-            vec![],
-            vec![
+            sessions: vec![],
+            repo_config: RepoLocalConfig::default(),
+        },
+        RepoCacheEntry {
+            slug: "owner/repo-b".to_string(),
+            issues: vec![],
+            prs: vec![],
+            worktrees: vec![
                 make_worktree("/workspace/repo-b", "main"),
                 make_worktree("/workspace/repo-b-feat", "feat/branch-b"),
             ],
-            vec![],
-            RepoLocalConfig::default(),
-        ),
+            sessions: vec![],
+            repo_config: RepoLocalConfig::default(),
+        },
     ];
 
     let rows = derive_all_repos(&repo_caches, &[]);
@@ -62,7 +85,7 @@ fn multi_repo_tui_shows_tasks_from_all_repos() {
 /// Calling `derive_worktree_rows` with empty worktrees returns an empty vec.
 #[test]
 fn repo_with_no_cache_shows_empty() {
-    let rows = derive_worktree_rows(&[], &[], &[], &[], "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &[], &[], &[]));
     assert!(rows.is_empty());
 }
 
@@ -80,7 +103,7 @@ fn display_group_needs_attention_changes_requested() {
     ];
     let prs = vec![make_changes_requested_pr(55, "feat/branch")];
 
-    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &prs, &worktrees, &[]));
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
@@ -100,7 +123,7 @@ fn display_group_claude_working_when_agent_active() {
     ];
     let sessions = vec![make_claude_session("repo_feat", "/workspace/repo-feat")];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &sessions));
 
     assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
 }
@@ -119,7 +142,7 @@ fn display_group_ready_to_merge() {
     ];
     let prs = vec![make_approved_pr(55, "feat/branch")];
 
-    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &prs, &worktrees, &[]));
 
     assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
 }
@@ -137,7 +160,7 @@ fn display_group_other_for_no_pr() {
         make_worktree("/workspace/repo-feat", "feat/branch"),
     ];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &[]));
 
     assert_eq!(rows[1].display_group, DisplayGroup::Other);
 }
@@ -167,7 +190,7 @@ fn worktree_joins_to_pr_via_branch() {
     let worktrees = vec![make_worktree("/workspace/repo-feat", "feat/x")];
     let prs = vec![make_pr(99, "feat/x")];
 
-    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &prs, &worktrees, &[]));
 
     assert_eq!(rows.len(), 1);
     let pr = rows[0].pr.as_ref().expect("PR should be joined");
@@ -186,7 +209,7 @@ fn tmux_session_joins_via_worktree_path() {
     let worktrees = vec![make_worktree("/workspace/repo-47", "feat/task")];
     let sessions = vec![make_session("repo_47", "/workspace/repo-47", vec!["bash"])];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &sessions));
 
     assert_eq!(rows[0].sessions.len(), 1);
     assert_eq!(rows[0].sessions[0].name, "repo_47");
@@ -206,7 +229,7 @@ fn multiple_tmux_sessions_at_same_path_all_join() {
         make_claude_session("repo_47_claude", "/workspace/repo-47"),
     ];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&[], &[], &worktrees, &sessions));
 
     assert_eq!(rows[0].sessions.len(), 2);
     let names: Vec<&str> = rows[0].sessions.iter().map(|s| s.name.as_str()).collect();
@@ -225,7 +248,7 @@ fn issue_joined_to_worktree_via_branch_naming_convention() {
     let issues = vec![make_issue(42, "Fix the widget")];
     let worktrees = vec![make_worktree("/workspace/repo-42", "issue-42")];
 
-    let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[], &Default::default());
+    let rows = derive_worktree_rows(&make_ctx(&issues, &[], &worktrees, &[]));
 
     assert_eq!(rows[0].issue_number, Some(42));
     assert_eq!(rows[0].issue_title.as_deref(), Some("Fix the widget"));
@@ -258,17 +281,123 @@ fn cache_file_roundtrip_feeds_into_derive_pipeline() {
     let loaded_worktrees = read_cache::<CachedWorktree>(&worktrees_path);
     let loaded_prs = read_cache::<CachedPr>(&prs_path);
 
-    let rows = derive_worktree_rows(
-        &[],
-        &loaded_prs.entries,
-        &loaded_worktrees.entries,
-        &[],
-        "owner/repo",
-        &[],
-        &Default::default(),
-    );
+    let rows = derive_worktree_rows(&make_ctx(&[], &loaded_prs.entries, &loaded_worktrees.entries, &[]));
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].display_group, DisplayGroup::Shepherd);
     assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+}
+
+// ---------------------------------------------------------------------------
+// CI filtering: ignore patterns suppress failing checks
+// ---------------------------------------------------------------------------
+
+/// When `ci.ignore` is configured, a PR whose only failing check matches the
+/// ignore pattern should not be classified as NeedsAttention.
+#[test]
+fn ci_ignore_suppresses_failing_check_from_display_group() {
+    let ci = CiConfig {
+        ignore: vec!["codecov".to_string()],
+        required: vec![],
+    };
+
+    let prs = vec![CachedPr {
+        checks_state: Some("failing".to_string()),
+        check_runs: vec![
+            CachedCheckRun { name: "test".to_string(), state: "passing".to_string() },
+            CachedCheckRun { name: "codecov/patch".to_string(), state: "failing".to_string() },
+        ],
+        ..make_pr(55, "feat/branch")
+    }];
+    let worktrees = vec![
+        make_worktree("/workspace/repo", "main"),
+        make_worktree("/workspace/repo-feat", "feat/branch"),
+    ];
+
+    let rows = derive_worktree_rows(&DeriveContext {
+        issues: &[],
+        prs: &prs,
+        worktrees: &worktrees,
+        sessions: &[],
+        repo_slug: "owner/repo",
+        claude_states: &[],
+        ci_config: &ci,
+    });
+
+    assert_eq!(rows.len(), 2);
+    // With codecov filtered out, remaining checks are all passing — not NeedsAttention
+    assert_ne!(rows[1].display_group, DisplayGroup::NeedsAttention);
+    assert_eq!(rows[1].pr.as_ref().unwrap().checks_state.as_deref(), Some("passing"));
+}
+
+// ---------------------------------------------------------------------------
+// CI filtering: required patterns select only listed checks
+// ---------------------------------------------------------------------------
+
+/// When `ci.required` is configured, only matching checks contribute to
+/// the derived checks_state.
+#[test]
+fn ci_required_selects_only_matching_checks() {
+    let ci = CiConfig {
+        ignore: vec![],
+        required: vec!["build".to_string()],
+    };
+
+    let prs = vec![CachedPr {
+        checks_state: Some("failing".to_string()),
+        check_runs: vec![
+            CachedCheckRun { name: "build".to_string(), state: "passing".to_string() },
+            CachedCheckRun { name: "lint".to_string(), state: "failing".to_string() },
+        ],
+        review_decision: Some("approved".to_string()),
+        ..make_pr(55, "feat/branch")
+    }];
+    let worktrees = vec![
+        make_worktree("/workspace/repo", "main"),
+        make_worktree("/workspace/repo-feat", "feat/branch"),
+    ];
+
+    let rows = derive_worktree_rows(&DeriveContext {
+        issues: &[],
+        prs: &prs,
+        worktrees: &worktrees,
+        sessions: &[],
+        repo_slug: "owner/repo",
+        claude_states: &[],
+        ci_config: &ci,
+    });
+
+    assert_eq!(rows.len(), 2);
+    // Only "build" (passing) counts — lint failure is excluded
+    assert_eq!(rows[1].pr.as_ref().unwrap().checks_state.as_deref(), Some("passing"));
+    // With approved + passing, should be ReadyToMerge
+    assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+}
+
+// ---------------------------------------------------------------------------
+// CI filtering: no config uses aggregate checks_state unchanged
+// ---------------------------------------------------------------------------
+
+/// When no CI config is set (default), the aggregate checks_state from the
+/// GraphQL rollup is used as-is, even if individual check_runs disagree.
+#[test]
+fn no_ci_config_preserves_aggregate_checks_state() {
+    let prs = vec![CachedPr {
+        checks_state: Some("failing".to_string()),
+        check_runs: vec![
+            CachedCheckRun { name: "test".to_string(), state: "passing".to_string() },
+        ],
+        ..make_pr(55, "feat/branch")
+    }];
+    let worktrees = vec![
+        make_worktree("/workspace/repo", "main"),
+        make_worktree("/workspace/repo-feat", "feat/branch"),
+    ];
+
+    let rows = derive_worktree_rows(&make_ctx(&[], &prs, &worktrees, &[]));
+
+    assert_eq!(rows.len(), 2);
+    // Aggregate says "failing" — should be preserved since no ci config
+    assert_eq!(rows[1].pr.as_ref().unwrap().checks_state.as_deref(), Some("failing"));
+    assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
 }

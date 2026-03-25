@@ -930,6 +930,30 @@ mod tests {
         assert!(prs[0].check_runs.is_empty());
     }
 
+    #[test]
+    fn check_run_stale_conclusion_maps_to_pending() {
+        let json = graphql_prs(json!([{
+            "number": 42,
+            "headRefName": "feat/stale",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+                "state": "PENDING",
+                "contexts": {"nodes": [
+                    {"name": "CI / stale-check", "conclusion": "STALE"}
+                ]}
+            }}}]}
+        }]));
+
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs[0].check_runs.len(), 1);
+        assert_eq!(prs[0].check_runs[0].state, "pending");
+    }
+
     // -- parse_worktree_porcelain -------------------------------------------
 
     #[test]

@@ -966,7 +966,14 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
         }
 
         let repo_local_config = crate::repo_config::load_repo_config(&repo.path);
-        repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions, repo_local_config));
+        repo_caches.push(derive::RepoCacheEntry {
+            slug: repo.slug.clone(),
+            issues,
+            prs,
+            worktrees,
+            sessions,
+            repo_config: repo_local_config,
+        });
     }
 
     let claude_states = crate::claude_state::read_all_state_files();

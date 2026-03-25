@@ -148,7 +148,7 @@ fn ensure_cwd_repo(cfg: &mut GlobalConfig) {
     });
 }
 
-fn load_from_path(path: &PathBuf) -> GlobalConfig {
+fn load_from_path(path: &std::path::Path) -> GlobalConfig {
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(e) => {
