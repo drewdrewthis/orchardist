@@ -61,6 +61,17 @@ impl DisplayGroup {
     }
 }
 
+/// Returns the part of a branch name after the final `/`.
+///
+/// When a branch has no slash the full name is returned.
+/// This keeps the TITLE column readable for prefixed branches like "feat/issue-123".
+pub(crate) fn branch_tail(branch: &str) -> &str {
+    match branch.rfind('/') {
+        Some(pos) => &branch[pos + 1..],
+        None => branch,
+    }
+}
+
 /// A task entry prepared for rendering in the task-centric view.
 #[derive(Debug)]
 pub(crate) struct VisibleTask<'a> {
@@ -113,37 +124,44 @@ pub(crate) fn visible_tasks<'a>(
 }
 
 /// Returns a single PR status string for the task row.
+///
+/// When a PR exists its number is prepended: e.g. `#123 ✓ approved`.
 fn pr_status_text(row: &TaskRow) -> (String, Style) {
     let Some(ref pr) = row.pr else {
         return ("no PR".to_string(), Style::default().fg(Color::DarkGray));
     };
 
+    let prefix = format!("#{} ", pr.number);
+
     if pr.review_decision.as_deref() == Some("approved") {
-        return ("\u{2713} approved".to_string(), Style::default().fg(Color::Green));
+        return (format!("{}\u{2713} approved", prefix), Style::default().fg(Color::Green));
     }
     if pr.review_decision.as_deref() == Some("changes_requested") {
-        return ("\u{2716} changes req".to_string(), Style::default().fg(Color::Red));
+        return (format!("{}\u{2716} changes req", prefix), Style::default().fg(Color::Red));
     }
     if pr.has_conflicts {
-        return ("\u{2716} conflict".to_string(), Style::default().fg(Color::Red));
+        return (format!("{}\u{2716} conflict", prefix), Style::default().fg(Color::Red));
     }
     if pr.unresolved_threads > 0 {
         return (
-            format!("\u{25cb} unresolved ({})", pr.unresolved_threads),
+            format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads),
             Style::default().fg(Color::Yellow),
         );
     }
     if pr.checks_state.as_deref() == Some("failing") {
-        return ("\u{2716} failing".to_string(), Style::default().fg(Color::Red));
+        return (format!("{}\u{2716} failing", prefix), Style::default().fg(Color::Red));
     }
     if pr.checks_state.as_deref() == Some("pending") {
-        return ("\u{25d0} pending CI".to_string(), Style::default().fg(Color::Yellow));
+        return (format!("{}\u{25d0} pending CI", prefix), Style::default().fg(Color::Yellow));
     }
     // Default for open PR with no special state
-    ("\u{25cb} needs review".to_string(), Style::default().fg(Color::DarkGray))
+    (format!("{}\u{25cb} needs review", prefix), Style::default().fg(Color::DarkGray))
 }
 
 /// Returns a Claude activity indicator for the task row.
+///
+/// When hook state files are available, shows richer info including context
+/// window percentage. Falls back to boolean flags from terminal scraping.
 fn claude_status_text(row: &TaskRow) -> (String, Style) {
     if row.sessions.is_empty() {
         return ("\u{25cb} none".to_string(), Style::default().fg(Color::DarkGray));
@@ -152,16 +170,37 @@ fn claude_status_text(row: &TaskRow) -> (String, Style) {
     let count = row.sessions.len();
     let count_suffix = if count > 1 { format!(" {}", count) } else { String::new() };
 
-    // Check for needs-input first (most urgent).
+    // Find the most "urgent" structured state across sessions.
+    let has_input = row.sessions.iter().any(|s| s.claude_state == crate::claude_state::ClaudeState::Input);
+    let has_working = row.sessions.iter().any(|s| s.claude_state == crate::claude_state::ClaudeState::Working);
+    let has_idle = row.sessions.iter().any(|s| s.claude_state == crate::claude_state::ClaudeState::Idle);
+
+    // Get context % from any session that has it.
+    let ctx_pct = row.sessions.iter().find_map(|s| s.context_window_pct);
+    let ctx_suffix = ctx_pct.map(|p| format!(" {}%", p as u32)).unwrap_or_default();
+
+    if has_input {
+        return (format!("\u{2757} input{}{}", count_suffix, ctx_suffix), Style::default().fg(Color::Red));
+    }
+    if has_working {
+        return (format!("\u{26a1} active{}{}", count_suffix, ctx_suffix), Style::default().fg(Color::Green));
+    }
+    if has_idle {
+        return (format!("\u{25cf} idle{}{}", count_suffix, ctx_suffix), Style::default().fg(Color::Yellow));
+    }
+
+    // Fallback to boolean checks for sessions without hook data.
     if row.sessions.iter().any(|s| s.claude_needs_input) {
         return (format!("\u{2757} input{}", count_suffix), Style::default().fg(Color::Red));
     }
-
-    if row.sessions.iter().any(|s| s.has_claude_active) {
+    if row.sessions.iter().any(|s| s.claude_is_working) {
         return (format!("\u{26a1} active{}", count_suffix), Style::default().fg(Color::Green));
     }
+    if row.sessions.iter().any(|s| s.has_claude_active) {
+        return (format!("\u{25cf} idle{}", count_suffix), Style::default().fg(Color::Yellow));
+    }
 
-    (format!("\u{25cf} idle{}", count_suffix), Style::default().fg(Color::Yellow))
+    ("\u{25cf} idle".to_string(), Style::default().fg(Color::Yellow))
 }
 
 
@@ -667,11 +706,11 @@ impl App {
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD);
         let mut header_text = vec![
-            Line::from("\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}"),
-            Line::from(Span::styled("\u{250c}\u{2500}\u{2510}\u{252c}\u{250c}\u{252c}\u{2510}\u{2554}\u{2550}\u{2557}\u{2566}\u{2550}\u{2557}\u{2554}\u{2550}\u{2557}\u{2566} \u{2566}\u{2554}\u{2550}\u{2557}\u{2566}\u{2550}\u{2557}\u{2554}\u{2566}\u{2557}", logo_style)),
-            Line::from(Span::styled("\u{2502} \u{252c}\u{2502} \u{2502} \u{2551} \u{2551}\u{2560}\u{2566}\u{255d}\u{2551}  \u{2560}\u{2550}\u{2569}\u{2560}\u{2550}\u{2557}\u{2560}\u{2566}\u{255d} \u{2551}\u{2551}", logo_style)),
-            Line::from(Span::styled("\u{2514}\u{2500}\u{2518}\u{2534} \u{2534} \u{255a}\u{2550}\u{255d}\u{2569}\u{255a}\u{2550}\u{255a}\u{2550}\u{255d}\u{2569} \u{2569}\u{2569} \u{2569}\u{2569}\u{255a}\u{2550}\u{2550}\u{2569}\u{255d}", logo_style)),
-            Line::from("\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}\u{1f332}\u{1f333}\u{1f334}"),
+            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
+            Line::from(Span::styled("┌─┐┬┌┬┐╔═╗╦═╗╔═╗╦ ╦╔═╗╦═╗╔╦╗", logo_style)),
+            Line::from(Span::styled("│ ┬│ │ ║ ║╠╦╝║  ╠═╣╠═╣╠╦╝ ║║", logo_style)),
+            Line::from(Span::styled("└─┘┴ ┴ ╚═╝╩╚═╚═╝╩ ╩╩ ╩╩╚══╩╝", logo_style)),
+            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
         ];
         if !host_line_spans.is_empty() {
             header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
@@ -1256,8 +1295,16 @@ impl App {
             r.sessions.iter().any(|s| s.host.is_some()) || r.worktree_host.is_some()
         });
 
+        // Compute available width for the TITLE column.
+        // Fixed columns: # (3) + spacing(1) + ISSUE (7) + spacing(1) + TITLE (flex) + spacing(1)
+        //                + BRANCH (20) + spacing(1) + STATUS (22) + spacing(1) + CLAUDE (10) + borders (2)
+        // With HOST: + spacing(1) + HOST (12)
+        let fixed = 3 + 1 + 6 + 1 + 1 + 20 + 1 + 22 + 1 + 10 + 2;
+        let host_extra = if has_remote { 1 + 12 } else { 0 };
+        let title_width = (area.width as usize).saturating_sub(fixed + host_extra);
+
         // Build rows for the table, including section header rows.
-        let (rows, row_heights) = self.build_task_table_rows(&tasks, total_backlog, has_remote);
+        let (rows, row_heights) = self.build_task_table_rows(&tasks, total_backlog, has_remote, title_width);
 
         let has_warning = self
             .warning
@@ -1309,14 +1356,14 @@ impl App {
         // Column widths — HOST column included only when remotes exist.
         let mut widths: Vec<Constraint> = vec![
             Constraint::Length(3),   // #
-            Constraint::Length(7),   // ISSUE
-            Constraint::Length(7),   // PR
+            Constraint::Length(6),   // ISSUE
             Constraint::Min(20),     // TITLE (flexible)
+            Constraint::Length(20),  // BRANCH (left-truncated)
         ];
         if has_remote {
             widths.push(Constraint::Length(12)); // HOST
         }
-        widths.push(Constraint::Length(18)); // STATUS
+        widths.push(Constraint::Length(22)); // STATUS
         widths.push(Constraint::Length(10)); // CLAUDE
 
         // Header row
@@ -1326,8 +1373,8 @@ impl App {
         let mut header_cells = vec![
             Cell::from(" #"),
             Cell::from("ISSUE"),
-            Cell::from("PR"),
             Cell::from("TITLE"),
+            Cell::from("BRANCH"),
         ];
         if has_remote {
             header_cells.push(Cell::from("HOST"));
@@ -1380,6 +1427,7 @@ impl App {
         tasks: &[VisibleTask],
         total_backlog: usize,
         has_remote: bool,
+        title_width: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>) {
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
@@ -1402,10 +1450,16 @@ impl App {
             let (pr_text, pr_style) = pr_status_text(vt.row);
             let (claude_text, claude_style) = claude_status_text(vt.row);
 
-            let title_display = match vt.row.issue_title.as_deref() {
-                Some(title) if !title.is_empty() => title.to_string(),
-                _ => vt.row.branch.clone(),
+            let title_raw = if vt.row.is_shepherd {
+                // Shepherd rows show the repo name, not the branch.
+                vt.row.repo_slug.split('/').nth(1).unwrap_or(&vt.row.repo_slug)
+            } else {
+                match vt.row.issue_title.as_deref() {
+                    Some(title) if !title.is_empty() => title,
+                    _ => branch_tail(&vt.row.branch),
+                }
             };
+            let title_display = crate::paths::truncate_left(title_raw, title_width);
 
             // Determine host name for reachability lookup: prefer session host, fall back to worktree host.
             let task_host: Option<&str> = vt.row.sessions.iter().find_map(|s| s.host.as_deref())
@@ -1433,17 +1487,14 @@ impl App {
             } else {
                 Cell::from("").style(Style::default().fg(Color::DarkGray))
             };
-            let pr_cell = if let Some(ref pr) = vt.row.pr {
-                Cell::from(format!("#{}", pr.number))
-            } else {
-                Cell::from("").style(Style::default().fg(Color::DarkGray))
-            };
+            let branch_display = crate::paths::truncate_left(branch_tail(&vt.row.branch), 20);
+            let branch_cell = Cell::from(branch_display).style(Style::default().fg(Color::DarkGray));
 
             let mut cells = vec![
                 Cell::from(format!("{:>2}", vt.num)),
                 issue_cell,
-                pr_cell,
                 Cell::from(title_display),
+                branch_cell,
             ];
 
             if has_remote {
@@ -1477,8 +1528,8 @@ impl App {
             let mut empty_cells = vec![
                 Cell::from(""),
                 Cell::from(""),
-                Cell::from(""),
                 Cell::from("(no tasks on this page)").style(Style::default().fg(Color::DarkGray)),
+                Cell::from(""),
             ];
             if has_remote {
                 empty_cells.push(Cell::from(""));
@@ -1501,15 +1552,15 @@ impl App {
 
         let issue_part = match vt.row.issue_number {
             Some(num) => format!("#{}", num),
-            None => vt.row.branch.clone(),
+            None => branch_tail(&vt.row.branch).to_string(),
         };
         let title_part = match vt.row.issue_title.as_deref() {
-            Some(t) if !t.is_empty() => format!(" {}", truncate_str(t, 30)),
+            Some(t) if !t.is_empty() => format!(" {}", t),
             _ => String::new(),
         };
         let wt_part = {
             let short = paths::tildify(&vt.row.worktree_path);
-            format!(" \u{2502} wt: {}", truncate_str(&short, 25))
+            format!(" \u{2502} wt: {}", short)
         };
         let pr_part = vt.row.pr.as_ref().map(|p| format!(" \u{2502} pr: #{}", p.number)).unwrap_or_default();
 
@@ -1639,14 +1690,15 @@ fn group_header_row(
     );
 
     let color = group.color();
-    // 6 cells when no HOST column (#, ISSUE, PR, TITLE, STATUS, CLAUDE),
-    // 7 when HOST is present (adds HOST between TITLE and STATUS).
+    // 6 cells when no HOST column (#, ISSUE, TITLE, BRANCH, STATUS, CLAUDE),
+    // 7 when HOST is present (adds HOST between BRANCH and STATUS).
+    // The header text goes in the TITLE column (index 2, flexible width).
     if has_remote {
         Row::new(vec![
             Cell::from(""),
             Cell::from(""),
-            Cell::from(""),
             Cell::from(text).style(Style::default().fg(color)),
+            Cell::from(""),
             Cell::from(""),
             Cell::from(""),
             Cell::from(""),
@@ -1655,21 +1707,11 @@ fn group_header_row(
         Row::new(vec![
             Cell::from(""),
             Cell::from(""),
-            Cell::from(""),
             Cell::from(text).style(Style::default().fg(color)),
             Cell::from(""),
             Cell::from(""),
+            Cell::from(""),
         ])
-    }
-}
-
-fn truncate_str(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = chars[..max.saturating_sub(1)].iter().collect();
-        format!("{}...", truncated)
     }
 }
 
@@ -1772,7 +1814,7 @@ mod tests {
     fn pr_status_approved_text() {
         let row = TaskRow {
             pr: Some(PrInfo {
-                number: 1,
+                number: 42,
                 branch: "feat/branch".to_string(),
                 review_decision: Some("approved".to_string()),
                 checks_state: Some("passing".to_string()),
@@ -1782,6 +1824,7 @@ mod tests {
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
         let (text, _) = pr_status_text(&row);
+        assert!(text.starts_with("#42 "), "expected '#42 ' prefix in: {}", text);
         assert!(text.contains("approved"), "expected 'approved' in: {}", text);
     }
 
@@ -1799,7 +1842,12 @@ mod tests {
                 name: "sess".to_string(),
                 host: None,
                 has_claude_active: true,
+                claude_is_working: true,
                 claude_needs_input: false,
+                claude_state: crate::claude_state::ClaudeState::None,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -1814,7 +1862,12 @@ mod tests {
                 name: "sess".to_string(),
                 host: None,
                 has_claude_active: false,
+                claude_is_working: false,
                 claude_needs_input: false,
+                claude_state: crate::claude_state::ClaudeState::None,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -1829,7 +1882,12 @@ mod tests {
                 name: "sess".to_string(),
                 host: None,
                 has_claude_active: true,
+                claude_is_working: false,
                 claude_needs_input: true,
+                claude_state: crate::claude_state::ClaudeState::Input,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -1911,5 +1969,110 @@ mod tests {
         };
         let (text, _) = pr_status_text(&row);
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+    }
+
+    // -----------------------------------------------------------------------
+    // branch_tail
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn branch_tail_returns_segment_after_last_slash() {
+        assert_eq!(branch_tail("feat/issue-123"), "issue-123");
+    }
+
+    #[test]
+    fn branch_tail_returns_whole_string_when_no_slash() {
+        assert_eq!(branch_tail("my-feature"), "my-feature");
+    }
+
+    #[test]
+    fn branch_tail_returns_last_segment_with_multiple_slashes() {
+        assert_eq!(branch_tail("user/feat/issue-456-refactor"), "issue-456-refactor");
+    }
+
+    #[test]
+    fn branch_tail_returns_empty_str_for_trailing_slash() {
+        assert_eq!(branch_tail("feat/"), "");
+    }
+
+    #[test]
+    fn branch_tail_returns_empty_str_for_empty_branch() {
+        assert_eq!(branch_tail(""), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // claude_status_text with hook state
+    // -----------------------------------------------------------------------
+
+    fn session_with_hook_state(state: crate::claude_state::ClaudeState, ctx_pct: Option<f64>) -> SessionInfo {
+        let (has_active, is_working, needs_input) = match state {
+            crate::claude_state::ClaudeState::Working => (true, true, false),
+            crate::claude_state::ClaudeState::Idle => (true, false, false),
+            crate::claude_state::ClaudeState::Input => (true, false, true),
+            crate::claude_state::ClaudeState::None => (false, false, false),
+        };
+        SessionInfo {
+            name: "sess".to_string(),
+            host: None,
+            has_claude_active: has_active,
+            claude_is_working: is_working,
+            claude_needs_input: needs_input,
+            claude_state: state,
+            context_window_pct: ctx_pct,
+            cost_usd: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn claude_status_working_with_context_shows_percentage() {
+        let row = TaskRow {
+            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Working, Some(73.0))],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let (text, _) = claude_status_text(&row);
+        assert!(text.contains("active"), "expected 'active' in: {}", text);
+        assert!(text.contains("73%"), "expected '73%' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_idle_from_hook_state() {
+        let row = TaskRow {
+            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Idle, None)],
+            ..make_task_row(1, DisplayGroup::Other)
+        };
+        let (text, _) = claude_status_text(&row);
+        assert!(text.contains("idle"), "expected 'idle' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_input_from_hook_state() {
+        let row = TaskRow {
+            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Input, None)],
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = claude_status_text(&row);
+        assert!(text.contains("input"), "expected 'input' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_input_with_context_shows_percentage() {
+        let row = TaskRow {
+            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Input, Some(95.0))],
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = claude_status_text(&row);
+        assert!(text.contains("input"), "expected 'input' in: {}", text);
+        assert!(text.contains("95%"), "expected '95%' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_no_context_pct_when_none() {
+        let row = TaskRow {
+            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Working, None)],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let (text, _) = claude_status_text(&row);
+        assert!(!text.contains('%'), "expected no % when context_window_pct is None: {}", text);
     }
 }

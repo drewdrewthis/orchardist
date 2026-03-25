@@ -182,5 +182,9 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
 }
 
 pub fn make_claude_session(name: &str, path: &str) -> CachedTmuxSession {
-    make_session(name, path, vec!["claude"])
+    CachedTmuxSession {
+        // Simulate a Claude Code working indicator so `claude_is_working` is derived.
+        last_output_lines: vec!["✢ Thinking... (1m 5s · ↑ 2.3k tokens)".to_string()],
+        ..make_session(name, path, vec!["claude"])
+    }
 }

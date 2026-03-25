@@ -1,5 +1,6 @@
 mod browser;
 pub mod cache;
+pub mod claude_state;
 pub mod cache_sources;
 pub mod derive;
 pub mod collector;
