@@ -1,0 +1,5 @@
+{
+  "ci": {
+    "ignore": ["codecov/patch", "codecov/project"]
+  }
+}

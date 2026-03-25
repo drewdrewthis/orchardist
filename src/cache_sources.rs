@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::cache::{
-    self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree,
+    self, CachedCheckRun, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree,
 };
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
@@ -108,6 +108,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
             };
 
             let checks_state = derive_checks_state_graphql(v);
+            let check_runs = extract_check_runs(v);
 
             let has_conflicts =
                 v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
@@ -137,6 +138,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 checks_state,
                 has_conflicts,
                 unresolved_threads,
+                check_runs,
             })
         })
         .collect()
@@ -157,6 +159,48 @@ fn derive_checks_state_graphql(pr: &serde_json::Value) -> Option<String> {
         "PENDING" => Some("pending".to_string()),
         _ => None,
     }
+}
+
+/// Extracts individual CI check runs from a PR's statusCheckRollup contexts.
+///
+/// Handles both `CheckRun` nodes (have `name` + `conclusion`) and
+/// `StatusContext` nodes (have `context` + `state`).
+fn extract_check_runs(pr: &serde_json::Value) -> Vec<CachedCheckRun> {
+    let nodes = match pr["commits"]["nodes"]
+        .as_array()
+        .and_then(|a| a.last())
+        .and_then(|n| n["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array())
+    {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+
+    nodes
+        .iter()
+        .filter_map(|node| {
+            if let Some(name) = node["name"].as_str() {
+                // CheckRun node
+                let conclusion = node["conclusion"].as_str().unwrap_or("");
+                let state = match conclusion {
+                    "SUCCESS" | "NEUTRAL" | "SKIPPED" => "passing",
+                    "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" => "failing",
+                    _ => "pending",
+                };
+                Some(CachedCheckRun { name: name.to_string(), state: state.to_string() })
+            } else if let Some(name) = node["context"].as_str() {
+                // StatusContext node
+                let raw_state = node["state"].as_str().unwrap_or("");
+                let state = match raw_state {
+                    "SUCCESS" => "passing",
+                    "FAILURE" | "ERROR" => "failing",
+                    _ => "pending",
+                };
+                Some(CachedCheckRun { name: name.to_string(), state: state.to_string() })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Parses the output of `git worktree list --porcelain` into `Vec<CachedWorktree>`.
@@ -381,6 +425,18 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
             commit {{
               statusCheckRollup {{
                 state
+                contexts(first: 100) {{
+                  nodes {{
+                    ... on CheckRun {{
+                      name
+                      conclusion
+                    }}
+                    ... on StatusContext {{
+                      context
+                      state
+                    }}
+                  }}
+                }}
               }}
             }}
           }}
@@ -719,7 +775,7 @@ mod tests {
             .map(|n| json!({"number": n}))
             .collect();
         let commits = match check_state {
-            Some(s) => json!([{"commit": {"statusCheckRollup": {"state": s}}}]),
+            Some(s) => json!([{"commit": {"statusCheckRollup": {"state": s, "contexts": {"nodes": []}}}}]),
             None => json!([{"commit": {"statusCheckRollup": null}}]),
         };
         json!({
@@ -817,6 +873,61 @@ mod tests {
     #[test]
     fn parse_prs_graphql_invalid_json_returns_empty() {
         assert!(parse_prs_graphql("{bad}").is_empty());
+    }
+
+    #[test]
+    fn parse_prs_graphql_extracts_individual_check_runs() {
+        let json = graphql_prs(json!([{
+            "number": 42,
+            "headRefName": "feat/checks",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+                "state": "FAILURE",
+                "contexts": {"nodes": [
+                    {"name": "CI / build", "conclusion": "SUCCESS"},
+                    {"name": "CI / test", "conclusion": "FAILURE"},
+                    {"name": "CI / lint", "conclusion": "SKIPPED"},
+                    {"context": "ci/circleci", "state": "SUCCESS"},
+                    {"context": "ci/deploy", "state": "PENDING"}
+                ]}
+            }}}]}
+        }]));
+
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs.len(), 1);
+
+        let runs = &prs[0].check_runs;
+        assert_eq!(runs.len(), 5);
+
+        assert_eq!(runs[0].name, "CI / build");
+        assert_eq!(runs[0].state, "passing");
+
+        assert_eq!(runs[1].name, "CI / test");
+        assert_eq!(runs[1].state, "failing");
+
+        assert_eq!(runs[2].name, "CI / lint");
+        assert_eq!(runs[2].state, "passing");
+
+        assert_eq!(runs[3].name, "ci/circleci");
+        assert_eq!(runs[3].state, "passing");
+
+        assert_eq!(runs[4].name, "ci/deploy");
+        assert_eq!(runs[4].state, "pending");
+    }
+
+    #[test]
+    fn parse_prs_graphql_check_runs_empty_when_no_contexts() {
+        let json = graphql_prs(json!([
+            gql_pr_node(10, "feat/no-ci", None, "MERGEABLE", None, vec![], 0)
+        ]));
+
+        let prs = parse_prs_graphql(&json);
+        assert!(prs[0].check_runs.is_empty());
     }
 
     // -- parse_worktree_porcelain -------------------------------------------

@@ -17,6 +17,13 @@ pub struct CachedIssue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CachedCheckRun {
+    pub name: String,
+    /// Normalised state: "passing", "failing", or "pending".
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedPr {
     pub number: u32,
     pub branch: String,
@@ -26,6 +33,8 @@ pub struct CachedPr {
     pub checks_state: Option<String>,
     pub has_conflicts: bool,
     pub unresolved_threads: u32,
+    #[serde(default)]
+    pub check_runs: Vec<CachedCheckRun>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -236,6 +245,7 @@ mod tests {
             checks_state: Some("passing".to_string()),
             has_conflicts: false,
             unresolved_threads: 0,
+            check_runs: vec![],
         }
     }
 

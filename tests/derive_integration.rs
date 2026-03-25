@@ -11,6 +11,7 @@ use common::{
 };
 use orchard::cache::{read_cache, CachedPr, CachedWorktree};
 use orchard::derive::{derive_all_repos, derive_worktree_rows, DisplayGroup};
+use orchard::repo_config::RepoLocalConfig;
 
 // ---------------------------------------------------------------------------
 // Multi-repo: tasks from all repos appear in the result
@@ -30,6 +31,7 @@ fn multi_repo_tui_shows_tasks_from_all_repos() {
                 make_worktree("/workspace/repo-a-feat", "feat/branch-a"),
             ],
             vec![],
+            RepoLocalConfig::default(),
         ),
         (
             "owner/repo-b".to_string(),
@@ -40,6 +42,7 @@ fn multi_repo_tui_shows_tasks_from_all_repos() {
                 make_worktree("/workspace/repo-b-feat", "feat/branch-b"),
             ],
             vec![],
+            RepoLocalConfig::default(),
         ),
     ];
 
@@ -59,7 +62,7 @@ fn multi_repo_tui_shows_tasks_from_all_repos() {
 /// Calling `derive_worktree_rows` with empty worktrees returns an empty vec.
 #[test]
 fn repo_with_no_cache_shows_empty() {
-    let rows = derive_worktree_rows(&[], &[], &[], &[], "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &[], &[], &[], "owner/repo", &[], &Default::default());
     assert!(rows.is_empty());
 }
 
@@ -77,7 +80,7 @@ fn display_group_needs_attention_changes_requested() {
     ];
     let prs = vec![make_changes_requested_pr(55, "feat/branch")];
 
-    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
@@ -97,7 +100,7 @@ fn display_group_claude_working_when_agent_active() {
     ];
     let sessions = vec![make_claude_session("repo_feat", "/workspace/repo-feat")];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
 
     assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
 }
@@ -116,7 +119,7 @@ fn display_group_ready_to_merge() {
     ];
     let prs = vec![make_approved_pr(55, "feat/branch")];
 
-    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
 
     assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
 }
@@ -134,7 +137,7 @@ fn display_group_other_for_no_pr() {
         make_worktree("/workspace/repo-feat", "feat/branch"),
     ];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[], &Default::default());
 
     assert_eq!(rows[1].display_group, DisplayGroup::Other);
 }
@@ -164,7 +167,7 @@ fn worktree_joins_to_pr_via_branch() {
     let worktrees = vec![make_worktree("/workspace/repo-feat", "feat/x")];
     let prs = vec![make_pr(99, "feat/x")];
 
-    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &Default::default());
 
     assert_eq!(rows.len(), 1);
     let pr = rows[0].pr.as_ref().expect("PR should be joined");
@@ -183,7 +186,7 @@ fn tmux_session_joins_via_worktree_path() {
     let worktrees = vec![make_worktree("/workspace/repo-47", "feat/task")];
     let sessions = vec![make_session("repo_47", "/workspace/repo-47", vec!["bash"])];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
 
     assert_eq!(rows[0].sessions.len(), 1);
     assert_eq!(rows[0].sessions[0].name, "repo_47");
@@ -203,7 +206,7 @@ fn multiple_tmux_sessions_at_same_path_all_join() {
         make_claude_session("repo_47_claude", "/workspace/repo-47"),
     ];
 
-    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+    let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[], &Default::default());
 
     assert_eq!(rows[0].sessions.len(), 2);
     let names: Vec<&str> = rows[0].sessions.iter().map(|s| s.name.as_str()).collect();
@@ -222,7 +225,7 @@ fn issue_joined_to_worktree_via_branch_naming_convention() {
     let issues = vec![make_issue(42, "Fix the widget")];
     let worktrees = vec![make_worktree("/workspace/repo-42", "issue-42")];
 
-    let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+    let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[], &Default::default());
 
     assert_eq!(rows[0].issue_number, Some(42));
     assert_eq!(rows[0].issue_title.as_deref(), Some("Fix the widget"));
@@ -262,6 +265,7 @@ fn cache_file_roundtrip_feeds_into_derive_pipeline() {
         &[],
         "owner/repo",
         &[],
+        &Default::default(),
     );
 
     assert_eq!(rows.len(), 2);

@@ -10,6 +10,7 @@ pub mod config;
 pub mod git;
 pub mod github;
 pub mod global_config;
+pub mod repo_config;
 pub mod logger;
 mod navigation;
 pub mod paths;
