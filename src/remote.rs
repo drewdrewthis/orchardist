@@ -20,7 +20,7 @@ pub fn shell_escape(s: &str) -> String {
 }
 
 // SSH flags used for all orchard remote connections.
-const SSH_FLAGS: &[&str] = &[
+pub(crate) const SSH_FLAGS: &[&str] = &[
     "-o",
     "ConnectTimeout=5",
     "-o",

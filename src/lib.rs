@@ -14,6 +14,7 @@ pub mod logger;
 mod navigation;
 pub mod paths;
 pub mod remote;
+pub mod services;
 pub mod shell;
 pub mod status;
 pub mod tmux;

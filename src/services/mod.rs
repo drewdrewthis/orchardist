@@ -1,0 +1,100 @@
+pub mod git;
+pub mod github;
+pub mod notify;
+pub mod shell;
+pub mod ssh;
+pub mod tmux;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::types::{IssueState, PrInfo, SwitchToSessionOptions, TmuxSession, Worktree};
+
+// ---------------------------------------------------------------------------
+// Service traits
+// ---------------------------------------------------------------------------
+
+pub trait GitService: Send + Sync {
+    fn find_repo_root(&self) -> String;
+    fn get_repo_name(&self) -> String;
+    fn list_worktrees(&self) -> anyhow::Result<Vec<Worktree>>;
+    fn worktree_has_conflicts(&self, path: &str) -> bool;
+    fn remove_worktree(&self, path: &str, force: bool) -> anyhow::Result<()>;
+    fn parse_porcelain(&self, output: &str) -> Vec<Worktree>;
+}
+
+pub trait GithubService: Send + Sync {
+    fn get_repo(&self) -> anyhow::Result<(String, String)>;
+    fn is_gh_available(&self) -> bool;
+    fn get_all_prs(&self, branches: &[String]) -> HashMap<String, PrInfo>;
+    fn enrich_pr_details(&self, pr_map: &mut HashMap<String, PrInfo>);
+    fn get_issue_states(&self, numbers: &[u32]) -> HashMap<u32, IssueState>;
+}
+
+pub trait TmuxService: Send + Sync {
+    fn list_sessions(&self) -> Vec<TmuxSession>;
+    fn new_detached_session(&self, name: &str, start_dir: &str) -> anyhow::Result<()>;
+    fn kill_session(&self, name: &str) -> anyhow::Result<()>;
+    fn capture_pane_content(&self, session: &str, lines: u32) -> anyhow::Result<String>;
+    fn create_session(&self, opts: &SwitchToSessionOptions) -> anyhow::Result<()>;
+    fn apply_session_style(
+        &self,
+        name: &str,
+        branch: Option<&str>,
+        pr: Option<&PrInfo>,
+    ) -> anyhow::Result<()>;
+    fn has_session(&self, name: &str) -> bool;
+    fn session_pane_dead(&self, name: &str) -> bool;
+    fn capture_pane_last_line(&self, name: &str) -> String;
+    fn create_proxy_session(
+        &self,
+        local_name: &str,
+        connect_cmd: &str,
+    ) -> anyhow::Result<()>;
+    fn set_remain_on_exit(&self, name: &str) -> anyhow::Result<()>;
+    fn list_panes_for_session(&self, name: &str) -> String;
+}
+
+pub trait SshService: Send + Sync {
+    fn exec(&self, host: &str, command: &str) -> anyhow::Result<String>;
+    fn is_reachable(&self, host: &str) -> bool;
+}
+
+pub trait NotifyService: Send + Sync {
+    fn send_notification(&self, title: &str, message: &str);
+}
+
+pub trait ShellCommandService: Send + Sync {
+    fn run(&self, program: &str, args: &[&str]) -> anyhow::Result<String>;
+    fn run_in(&self, program: &str, args: &[&str], cwd: &str) -> anyhow::Result<String>;
+    fn run_status(&self, program: &str, args: &[&str]) -> anyhow::Result<bool>;
+}
+
+// ---------------------------------------------------------------------------
+// Service container
+// ---------------------------------------------------------------------------
+
+/// Container holding all services. Clone-friendly via Arc internals.
+#[derive(Clone)]
+pub struct Services {
+    pub git: Arc<dyn GitService>,
+    pub github: Arc<dyn GithubService>,
+    pub tmux: Arc<dyn TmuxService>,
+    pub ssh: Arc<dyn SshService>,
+    pub notify: Arc<dyn NotifyService>,
+    pub shell: Arc<dyn ShellCommandService>,
+}
+
+impl Services {
+    /// Creates a `Services` container with the default command-based implementations.
+    pub fn new_default() -> Self {
+        Self {
+            git: Arc::new(git::CommandGit),
+            github: Arc::new(github::CommandGithub),
+            tmux: Arc::new(tmux::CommandTmux),
+            ssh: Arc::new(ssh::CommandSsh),
+            notify: Arc::new(notify::CommandNotify),
+            shell: Arc::new(shell::CommandShell),
+        }
+    }
+}

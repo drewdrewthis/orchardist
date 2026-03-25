@@ -1,15 +1,9 @@
-use std::process::Command;
+use crate::services::notify::CommandNotify;
+use crate::services::NotifyService;
 
 /// Sends a macOS desktop notification via osascript.
 pub fn send_notification(title: &str, message: &str) {
-    let script = format!(
-        r#"display notification "{}" with title "{}""#,
-        message.replace('"', r#"\""#),
-        title.replace('"', r#"\""#),
-    );
-    let _ = Command::new("osascript")
-        .args(["-e", &script])
-        .output();
+    CommandNotify.send_notification(title, message);
 }
 
 #[cfg(test)]

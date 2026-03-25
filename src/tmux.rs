@@ -1,65 +1,55 @@
-use std::process::Command;
+use anyhow::Result;
 
-use anyhow::{Context, Result};
-
-use crate::logger::LOG;
+use crate::services::tmux::CommandTmux;
+use crate::services::TmuxService;
 use crate::types::{PrInfo, SwitchToSessionOptions, TmuxSession};
 use crate::types::resolve_pr_status;
 
+// ---------------------------------------------------------------------------
+// Delegating wrappers (Command-based operations)
+// ---------------------------------------------------------------------------
+
 /// Lists all active tmux sessions. Returns an empty vec when tmux is not running.
 pub fn list_tmux_sessions() -> Vec<TmuxSession> {
-    let out = Command::new("tmux")
-        .args([
-            "list-sessions",
-            "-F",
-            "#{session_name}\t#{session_path}\t#{session_attached}",
-        ])
-        .output();
-
-    let output = match out {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
-    };
-
-    let text = String::from_utf8_lossy(&output);
-    let mut sessions = Vec::new();
-
-    for line in text.trim().lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        sessions.push(TmuxSession {
-            name: parts[0].to_string(),
-            path: parts[1].to_string(),
-            attached: parts[2] == "1",
-            pane_title: None,
-        });
-    }
-
-    // Fetch pane titles for all sessions in one call (pane index 0 only).
-    let pane_out = Command::new("tmux")
-        .args(["list-panes", "-a", "-F", "#{session_name}\t#{pane_index}\t#{pane_title}"])
-        .output();
-
-    if let Ok(o) = pane_out
-        && o.status.success() {
-            let pane_text = String::from_utf8_lossy(&o.stdout);
-            for line in pane_text.trim().lines() {
-                let parts: Vec<&str> = line.splitn(3, '\t').collect();
-                if parts.len() == 3 && parts[1] == "0"
-                    && let Some(session) = sessions.iter_mut().find(|s| s.name == parts[0]) {
-                        session.pane_title = Some(parts[2].to_string());
-                    }
-            }
-        }
-
-    LOG.info(&format!("listTmuxSessions: {} sessions", sessions.len()));
-    sessions
+    CommandTmux.list_sessions()
 }
+
+/// Creates a new detached tmux session with the given name at the given directory.
+pub fn new_detached_session(name: &str, start_dir: &str) -> Result<()> {
+    CommandTmux.new_detached_session(name, start_dir)
+}
+
+/// Kills the tmux session with the given name.
+pub fn kill_tmux_session(name: &str) -> Result<()> {
+    CommandTmux.kill_session(name)
+}
+
+/// Captures the pane content of a tmux session, returning the last `lines` lines.
+pub fn capture_pane_content(session: &str, lines: u32) -> Result<String> {
+    CommandTmux.capture_pane_content(session, lines)
+}
+
+/// Creates the tmux session for the given worktree if it does not already exist.
+/// Applies orchard status bar style. Does NOT switch the client.
+pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
+    CommandTmux.create_session(opts)
+}
+
+pub(crate) const CHEATSHEET: &str =
+    "#[fg=colour8]prefix: ctrl-b | o: orchard | (/): prev/next | %%: split-v | \": split-h | arrows: pane | z: zoom | x: close | d: detach";
+
+/// Applies the orchard status bar style to a tmux session.
+pub fn apply_session_style(
+    name: &str,
+    branch: Option<&str>,
+    pr: Option<&PrInfo>,
+) -> Result<()> {
+    CommandTmux.apply_session_style(name, branch, pr)
+}
+
+// ---------------------------------------------------------------------------
+// Pure functions (no Command calls, kept here)
+// ---------------------------------------------------------------------------
 
 /// Finds the tmux session associated with a worktree.
 /// Matches by session path first, then by session name using several fallback patterns.
@@ -132,47 +122,6 @@ pub fn derive_main_session_name(origin_path: &str, branch: Option<&str>) -> Stri
     format!("{sanitized}_{branch_part}")
 }
 
-/// Creates a new detached tmux session with the given name at the given directory.
-pub fn new_detached_session(name: &str, start_dir: &str) -> Result<()> {
-    let output = Command::new("tmux")
-        .args(["new-session", "-d", "-s", name, "-c", start_dir])
-        .output()
-        .context("tmux new-session")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!(
-            "tmux new-session failed: {}",
-            stderr.trim()
-        ));
-    }
-
-    LOG.info(&format!("newDetachedSession: {} at {}", name, start_dir));
-    Ok(())
-}
-
-/// Kills the tmux session with the given name.
-pub fn kill_tmux_session(name: &str) -> Result<()> {
-    Command::new("tmux")
-        .args(["kill-session", "-t", name])
-        .status()
-        .context("tmux kill-session")?;
-    LOG.info(&format!("killTmuxSession: {}", name));
-    Ok(())
-}
-
-/// Captures the pane content of a tmux session, returning the last `lines` lines.
-pub fn capture_pane_content(session: &str, lines: u32) -> Result<String> {
-    let lines_arg = format!("-{lines}");
-    let out = Command::new("tmux")
-        .args(["capture-pane", "-t", session, "-p", "-J", "-S", &lines_arg])
-        .output()
-        .context("tmux capture-pane")?;
-
-    let text = String::from_utf8_lossy(&out.stdout);
-    Ok(text.trim_end_matches('\n').to_string())
-}
-
 /// Derives the tmux session name in the format "repoName_branch".
 /// Slashes in the branch name are replaced with dashes.
 /// Falls back to the last path segment, then "orchard".
@@ -193,75 +142,6 @@ pub fn derive_session_name(repo_name: &str, branch: Option<&str>, worktree_path:
     };
     format!("{repo_name}_{suffix}")
 }
-
-/// Creates the tmux session for the given worktree if it does not already exist.
-/// Applies orchard status bar style. Does NOT switch the client.
-pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
-    let exists = Command::new("tmux")
-        .args(["has-session", "-t", &opts.session_name])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if !exists {
-        Command::new("tmux")
-            .args([
-                "new-session", "-d",
-                "-s", &opts.session_name,
-                "-c", &opts.worktree_path,
-            ])
-            .status()
-            .with_context(|| format!("creating session {}", opts.session_name))?;
-    }
-
-    LOG.info(&format!(
-        "createSession: {} ({})",
-        opts.session_name,
-        if exists { "existing" } else { "new" }
-    ));
-
-    apply_session_style(
-        &opts.session_name,
-        opts.branch.as_deref(),
-        opts.pr.as_ref(),
-    )?;
-
-    Ok(())
-}
-
-pub(crate) const CHEATSHEET: &str =
-    "#[fg=colour8]prefix: ctrl-b | o: orchard | (/): prev/next | %%: split-v | \": split-h | arrows: pane | z: zoom | x: close | d: detach";
-
-/// Applies the orchard status bar style to a tmux session.
-pub fn apply_session_style(
-    name: &str,
-    branch: Option<&str>,
-    pr: Option<&PrInfo>,
-) -> Result<()> {
-    let status_left = format_status_left(branch, pr);
-    let t = ["-t", name];
-
-    let opts: &[(&str, &str)] = &[
-        ("status", "on"),
-        ("status-style", "bg=colour235,fg=colour248"),
-        ("status-left-length", "60"),
-        ("status-right-length", "150"),
-        ("status-left", &status_left),
-        ("status-right", CHEATSHEET),
-    ];
-
-    for (key, value) in opts {
-        Command::new("tmux")
-            .arg("set-option")
-            .args(t)
-            .args([*key, value])
-            .status()
-            .with_context(|| format!("tmux set-option {key}"))?;
-    }
-
-    Ok(())
-}
-
 
 /// Formats the tmux status-left string for an orchard session.
 pub fn format_status_left(branch: Option<&str>, pr: Option<&PrInfo>) -> String {
