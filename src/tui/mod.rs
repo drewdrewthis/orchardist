@@ -36,6 +36,9 @@ const AUTO_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
 
+/// Number of lines to capture from tmux panes for preview.
+const PANE_CAPTURE_LINES: u32 = 100;
+
 // ---------------------------------------------------------------------------
 // Notification snapshot
 // ---------------------------------------------------------------------------
@@ -237,9 +240,9 @@ impl App {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let content = if let Some(host) = remote_host {
-                remote::capture_remote_pane_content(&host, &session, 100).unwrap_or_default()
+                remote::capture_remote_pane_content(&host, &session, PANE_CAPTURE_LINES).unwrap_or_default()
             } else {
-                tmux::capture_pane_content(&session, 100).unwrap_or_default()
+                tmux::capture_pane_content(&session, PANE_CAPTURE_LINES).unwrap_or_default()
             };
             let _ = tx.send(AppMsg::PaneContent(session.clone(), content));
         });
@@ -980,7 +983,7 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
         repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
     }
 
-    let claude_states = crate::claude_state::read_all_state_files();
+    let claude_states = crate::claude_state::read_all_state_files("/tmp");
     derive::derive_all_repos(&repo_caches, &claude_states)
 }
 

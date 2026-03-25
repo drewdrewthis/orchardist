@@ -2,6 +2,13 @@ use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum age (in seconds) before a Claude hook state file is considered stale.
+const HOOK_STATE_STALENESS_SECS: u64 = 300;
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -219,9 +226,9 @@ fn session_info_from(
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
     if let Some(state_file) = hook_state {
-        let is_stale = is_state_stale(&state_file.timestamp, 300);
+        let is_stale = is_state_stale(&state_file.timestamp, HOOK_STATE_STALENESS_SECS);
         if !is_stale {
-            let claude_state = ClaudeState::from_str(&state_file.state);
+            let claude_state = state_file.state.parse::<ClaudeState>().unwrap();
             return SessionInfo {
                 name: session.name.clone(),
                 host: session.host.clone(),
@@ -1093,17 +1100,17 @@ mod tests {
     #[test]
     fn is_state_stale_returns_true_for_very_old_timestamp() {
         let old = "2020-01-01T00:00:00Z";
-        assert!(is_state_stale(old, 300));
+        assert!(is_state_stale(old, HOOK_STATE_STALENESS_SECS));
     }
 
     #[test]
     fn is_state_stale_returns_false_for_fresh_timestamp() {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        assert!(!is_state_stale(&now, 300));
+        assert!(!is_state_stale(&now, HOOK_STATE_STALENESS_SECS));
     }
 
     #[test]
     fn is_state_stale_returns_true_for_unparseable_timestamp() {
-        assert!(is_state_stale("not-a-timestamp", 300));
+        assert!(is_state_stale("not-a-timestamp", HOOK_STATE_STALENESS_SECS));
     }
 }

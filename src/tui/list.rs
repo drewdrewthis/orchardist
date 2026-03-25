@@ -18,6 +18,16 @@ use crate::tmux;
 use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Number of lines to capture from tmux panes for preview.
+const PANE_CAPTURE_LINES: u32 = 100;
+
+/// Minimum terminal height for the full header/logo display.
+const FULL_HEADER_MIN_HEIGHT: u16 = 30;
+
+// ---------------------------------------------------------------------------
 // Task view helpers
 // ---------------------------------------------------------------------------
 
@@ -290,23 +300,7 @@ impl App {
                 false
             }
             KeyCode::Char('R') => {
-                let unreachable: Vec<String> = self.host_reachable
-                    .iter()
-                    .filter(|(_, v)| !*v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                if unreachable.is_empty() {
-                    self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
-                } else {
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        for host in unreachable {
-                            let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
-                            let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
-                        }
-                    });
-                    self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
-                }
+                self.reconnect_unreachable_hosts();
                 false
             }
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -342,8 +336,7 @@ impl App {
             return false;
         }
 
-        let (tasks, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
-        let visible_count = tasks.len();
+        let visible_count = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text).0.len();
 
         match key.code {
             // Digit jump 1-9: jump to flat index
@@ -370,26 +363,26 @@ impl App {
             }
             KeyCode::Enter => {
                 // Switch to the task's session, or create a worktree + session if none exist.
-                // Extract owned data from the borrow of task_rows before taking &mut self.
-                let action = {
-                    let (visible, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
-                    visible.get(self.cursor).map(|vt| {
-                        if let Some(session) = vt.row.sessions.first() {
-                            TaskEnterAction::JoinSession {
-                                session_name: session.name.clone(),
-                                worktree_path: vt.row.worktree_path.clone(),
-                                branch: Some(vt.row.branch.clone()),
-                                host: session.host.clone(),
-                            }
-                        } else {
-                            TaskEnterAction::CreateSession {
-                                worktree_path: vt.row.worktree_path.clone(),
-                                branch: Some(vt.row.branch.clone()),
-                                host: vt.row.worktree_host.clone(),
-                            }
+                // Compute tasks, extract owned data, then drop before calling &mut self methods.
+                let (tasks, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
+                let action = tasks.get(self.cursor).map(|vt| {
+                    if let Some(session) = vt.row.sessions.first() {
+                        TaskEnterAction::JoinSession {
+                            session_name: session.name.clone(),
+                            worktree_path: vt.row.worktree_path.clone(),
+                            branch: Some(vt.row.branch.clone()),
+                            host: session.host.clone(),
                         }
-                    })
-                };
+                    } else {
+                        TaskEnterAction::CreateSession {
+                            worktree_path: vt.row.worktree_path.clone(),
+                            branch: Some(vt.row.branch.clone()),
+                            host: vt.row.worktree_host.clone(),
+                        }
+                    }
+                });
+                // Drop tasks (and its borrow of task_rows) before calling &mut self methods.
+                drop(tasks);
                 match action {
                     None => false,
                     Some(TaskEnterAction::JoinSession { session_name, worktree_path, branch, host }) => {
@@ -483,23 +476,7 @@ impl App {
                 false
             }
             KeyCode::Char('R') => {
-                let unreachable: Vec<String> = self.host_reachable
-                    .iter()
-                    .filter(|(_, v)| !*v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                if unreachable.is_empty() {
-                    self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
-                } else {
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        for host in unreachable {
-                            let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
-                            let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
-                        }
-                    });
-                    self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
-                }
+                self.reconnect_unreachable_hosts();
                 false
             }
             KeyCode::Char('q') | KeyCode::Esc => true,
@@ -519,13 +496,38 @@ impl App {
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let content = if let Some(host) = remote_host {
-                        remote::capture_remote_pane_content(&host, &session_name, 100).unwrap_or_default()
+                        remote::capture_remote_pane_content(&host, &session_name, PANE_CAPTURE_LINES).unwrap_or_default()
                     } else {
-                        tmux::capture_pane_content(&session_name, 100).unwrap_or_default()
+                        tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES).unwrap_or_default()
                     };
                     let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
                 });
             }
+        }
+    }
+
+    /// Attempts to reconnect all currently unreachable SSH hosts.
+    ///
+    /// If all hosts are reachable, displays an informational warning. Otherwise
+    /// spawns a background thread to probe each unreachable host and send results
+    /// back via the App message channel.
+    fn reconnect_unreachable_hosts(&mut self) {
+        let unreachable: Vec<String> = self.host_reachable
+            .iter()
+            .filter(|(_, v)| !*v)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if unreachable.is_empty() {
+            self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
+        } else {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                for host in unreachable {
+                    let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
+                    let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
+                }
+            });
+            self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
         }
     }
 
@@ -1082,52 +1084,9 @@ impl App {
         ));
         spans.push(Span::raw(" new"));
 
+        let key_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
         spans.push(sep.clone());
-        if self.refreshing {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
-            spans.push(Span::styled(
-                format!("{} refreshing...", spinner),
-                Style::default().fg(Color::Cyan),
-            ));
-        } else {
-            spans.push(Span::styled(
-                "r",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" refresh"));
-        }
-
-        let has_unreachable = self.host_reachable.values().any(|&v| !v);
-        if has_unreachable {
-            spans.push(sep.clone());
-            spans.push(Span::styled(
-                "R",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" reconnect"));
-        }
-
-        spans.push(sep.clone());
-        spans.push(Span::styled(
-            "q",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" back"));
-
-        spans.push(sep);
-        spans.push(Span::styled(
-            "?",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" help"));
+        self.append_common_hints(&mut spans, &sep, key_style, "back");
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1352,8 +1311,24 @@ impl App {
         let host_extra = if has_remote { 1 + 12 } else { 0 };
         let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
 
+        // Column widths — BRANCH column optional, HOST column included only when remotes exist.
+        let mut widths: Vec<Constraint> = vec![
+            Constraint::Length(3),   // #
+            Constraint::Length(6),   // ISSUE
+            Constraint::Min(20),     // TITLE (flexible)
+        ];
+        if show_branch {
+            widths.push(Constraint::Length(20)); // BRANCH (left-truncated)
+        }
+        if has_remote {
+            widths.push(Constraint::Length(12)); // HOST
+        }
+        widths.push(Constraint::Length(22)); // STATUS
+        widths.push(Constraint::Length(10)); // CLAUDE
+
         // Build rows for the table, including section header rows.
-        let (rows, row_heights) = self.build_task_table_rows(&tasks, show_branch, total_backlog, self.backlog_expanded, has_remote, title_width);
+        let num_columns = widths.len();
+        let (rows, row_heights) = self.build_task_table_rows(&tasks, show_branch, total_backlog, self.backlog_expanded, has_remote, title_width, num_columns);
 
         let has_warning = self
             .warning
@@ -1401,21 +1376,6 @@ impl App {
         self.render_header(f, chunks[idx]);
         idx += 1;
         idx += 1; // spacer
-
-        // Column widths — BRANCH column optional, HOST column included only when remotes exist.
-        let mut widths: Vec<Constraint> = vec![
-            Constraint::Length(3),   // #
-            Constraint::Length(6),   // ISSUE
-            Constraint::Min(20),     // TITLE (flexible)
-        ];
-        if show_branch {
-            widths.push(Constraint::Length(20)); // BRANCH (left-truncated)
-        }
-        if has_remote {
-            widths.push(Constraint::Length(12)); // HOST
-        }
-        widths.push(Constraint::Length(22)); // STATUS
-        widths.push(Constraint::Length(10)); // CLAUDE
 
         // Header row
         let header_style = Style::default()
@@ -1483,13 +1443,11 @@ impl App {
         backlog_expanded: bool,
         has_remote: bool,
         title_width: usize,
+        num_columns: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>) {
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
         let mut last_group: Option<DisplayGroup> = None;
-
-        // num_columns: 4 base (# ISSUE TITLE STATUS CLAUDE) + branch + host
-        let num_columns = 4 + usize::from(show_branch) + usize::from(has_remote);
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
             let selected = flat_idx == self.cursor;
@@ -1581,9 +1539,9 @@ impl App {
         // When backlog is collapsed and there are backlog items, add summary row.
         if !backlog_expanded && total_backlog > 0 {
             let summary_text = format!("{} backlog items -- press b to expand", total_backlog);
-            let mut summary_cells: Vec<Cell> = std::iter::once(
-                Cell::from(summary_text).style(Style::default().fg(Color::DarkGray))
-            ).collect();
+            let mut summary_cells = vec![
+                Cell::from(summary_text).style(Style::default().fg(Color::DarkGray)),
+            ];
             // Fill remaining columns with empty cells to match num_columns.
             for _ in 1..num_columns {
                 summary_cells.push(Cell::from(""));
@@ -1644,6 +1602,35 @@ impl App {
             .style(Style::default().fg(Color::Gray))
             .block(block);
         f.render_widget(preview, area);
+    }
+
+    /// Appends the common trailing hint keys: refresh, reconnect, quit, help.
+    fn append_common_hints(&self, spans: &mut Vec<Span<'static>>, sep: &Span<'static>, key_style: Style, quit_label: &'static str) {
+        if self.refreshing {
+            let spinner = SPINNER_FRAMES[self.spinner_frame];
+            spans.push(Span::styled(
+                format!("{} refreshing...", spinner),
+                Style::default().fg(Color::Cyan),
+            ));
+        } else {
+            spans.push(Span::styled("r", key_style));
+            spans.push(Span::raw(" refresh"));
+        }
+
+        let has_unreachable = self.host_reachable.values().any(|&v| !v);
+        if has_unreachable {
+            spans.push(sep.clone());
+            spans.push(Span::styled("R", key_style));
+            spans.push(Span::raw(" reconnect"));
+        }
+
+        spans.push(sep.clone());
+        spans.push(Span::styled("q", key_style));
+        spans.push(Span::raw(format!(" {}", quit_label)));
+
+        spans.push(sep.clone());
+        spans.push(Span::styled("?", key_style));
+        spans.push(Span::raw(" help"));
     }
 
     /// Renders the hint bar for task mode.
@@ -1720,32 +1707,7 @@ impl App {
         spans.push(Span::raw(" cleanup"));
         spans.push(sep.clone());
 
-        if self.refreshing {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
-            spans.push(Span::styled(
-                format!("{} refreshing...", spinner),
-                Style::default().fg(Color::Cyan),
-            ));
-            spans.push(sep.clone());
-        } else {
-            spans.push(Span::styled("r", key_style));
-            spans.push(Span::raw(" refresh"));
-            spans.push(sep.clone());
-        }
-
-        let has_unreachable = self.host_reachable.values().any(|&v| !v);
-        if has_unreachable {
-            spans.push(Span::styled("R", key_style));
-            spans.push(Span::raw(" reconnect"));
-            spans.push(sep.clone());
-        }
-
-        spans.push(Span::styled("q", key_style));
-        spans.push(Span::raw(" quit"));
-
-        spans.push(sep.clone());
-        spans.push(Span::styled("?", key_style));
-        spans.push(Span::raw(" help"));
+        self.append_common_hints(&mut spans, &sep, key_style, "quit");
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1814,7 +1776,7 @@ fn group_header_row(
 /// shown in a bordered block (7 rows). On shorter terminals a single compact
 /// line is used instead so the task list gets as much vertical space as possible.
 pub(crate) fn header_height(terminal_height: u16) -> u16 {
-    if terminal_height >= 30 { 9 } else { 1 }
+    if terminal_height >= FULL_HEADER_MIN_HEIGHT { 9 } else { 1 }
 }
 
 #[cfg(test)]
@@ -1834,6 +1796,20 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_shepherd: false,
+        }
+    }
+
+    fn make_session_info(name: &str) -> SessionInfo {
+        SessionInfo {
+            name: name.to_string(),
+            host: None,
+            has_claude_active: false,
+            claude_is_working: false,
+            claude_needs_input: false,
+            claude_state: crate::claude_state::ClaudeState::None,
+            context_window_pct: None,
+            cost_usd: None,
+            model: None,
         }
     }
 
@@ -1908,17 +1884,7 @@ mod tests {
     fn filter_has_session() {
         let row_no_session = make_task_row(1, DisplayGroup::NeedsAttention);
         let row_with_session = TaskRow {
-            sessions: vec![SessionInfo {
-                name: "sess".to_string(),
-                host: None,
-                has_claude_active: false,
-                claude_is_working: false,
-                claude_needs_input: false,
-                claude_state: crate::claude_state::ClaudeState::None,
-                context_window_pct: None,
-                cost_usd: None,
-                model: None,
-            }],
+            sessions: vec![make_session_info("sess")],
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
         let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
@@ -1958,15 +1924,10 @@ mod tests {
         let row_no_claude = make_task_row(1, DisplayGroup::NeedsAttention);
         let row_with_claude = TaskRow {
             sessions: vec![SessionInfo {
-                name: "sess".to_string(),
-                host: None,
+                claude_state: crate::claude_state::ClaudeState::Working,
                 has_claude_active: true,
                 claude_is_working: true,
-                claude_needs_input: false,
-                claude_state: crate::claude_state::ClaudeState::Working,
-                context_window_pct: None,
-                cost_usd: None,
-                model: None,
+                ..make_session_info("sess")
             }],
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
@@ -2273,5 +2234,87 @@ mod tests {
         };
         let (text, _) = claude_status_text(&row);
         assert!(!text.contains('%'), "expected no % when context_window_pct is None: {}", text);
+    }
+
+    #[test]
+    fn pr_status_pending_ci() {
+        let row = TaskRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: Some("pending".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(1, DisplayGroup::Other)
+        };
+        let (text, _) = pr_status_text(&row);
+        assert!(text.contains("pending"), "expected 'pending' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_multiple_sessions() {
+        let row = TaskRow {
+            sessions: vec![
+                SessionInfo {
+                    name: "sess1".to_string(),
+                    host: None,
+                    has_claude_active: true,
+                    claude_is_working: true,
+                    claude_needs_input: false,
+                    claude_state: crate::claude_state::ClaudeState::Working,
+                    context_window_pct: None,
+                    cost_usd: None,
+                    model: None,
+                },
+                SessionInfo {
+                    name: "sess2".to_string(),
+                    host: None,
+                    has_claude_active: true,
+                    claude_is_working: false,
+                    claude_needs_input: true,
+                    claude_state: crate::claude_state::ClaudeState::Input,
+                    context_window_pct: Some(45.0),
+                    cost_usd: None,
+                    model: None,
+                },
+            ],
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = claude_status_text(&row);
+        // Input takes priority over working; count suffix should show " 2"
+        assert!(text.contains("input"), "expected 'input' in: {}", text);
+        assert!(text.contains("2"), "expected session count '2' in: {}", text);
+    }
+
+    #[test]
+    fn search_is_case_insensitive() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ];
+        // Search with uppercase should match lowercase branch "feat/issue-1"
+        let (visible, _) = visible_tasks(&rows, true, &FilterMode::All, "FEAT/ISSUE");
+        assert_eq!(visible.len(), 1);
+    }
+
+    #[test]
+    fn combined_filter_and_search() {
+        let mut row_with_session = make_task_row(1, DisplayGroup::NeedsAttention);
+        row_with_session.sessions = vec![make_session_info("sess1")];
+        row_with_session.branch = "feat/target-branch".to_string();
+
+        let mut row_with_session_no_match = make_task_row(2, DisplayGroup::NeedsAttention);
+        row_with_session_no_match.sessions = vec![make_session_info("sess2")];
+        row_with_session_no_match.branch = "feat/other-branch".to_string();
+
+        let row_no_session = make_task_row(3, DisplayGroup::NeedsAttention);
+
+        let rows = vec![row_with_session, row_with_session_no_match, row_no_session];
+
+        // HasSession filter + search "target" should only match the first row
+        let (visible, _) = visible_tasks(&rows, true, &FilterMode::HasSession, "target");
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].row.issue_number, Some(1));
     }
 }
