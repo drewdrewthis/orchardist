@@ -35,7 +35,6 @@ const AUTO_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
 
-
 // ---------------------------------------------------------------------------
 // Notification snapshot
 // ---------------------------------------------------------------------------
@@ -1016,6 +1015,17 @@ mod tests {
         app.loading = true;
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("Loading"), "expected Loading text in output");
+    }
+
+    #[test]
+    fn empty_non_loading_state_shows_init_prompt() {
+        let mut app = App::new_test(vec![]);
+        app.loading = false;
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(
+            output.contains("No worktrees found"),
+            "expected empty state message in output"
+        );
     }
 
     #[test]
