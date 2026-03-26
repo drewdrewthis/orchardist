@@ -4,7 +4,6 @@ pub mod cache;
 pub mod claude_state;
 pub mod cache_sources;
 pub mod derive;
-pub mod collector;
 pub mod json_output;
 pub mod notify;
 pub mod events;
