@@ -99,13 +99,21 @@ pub fn fetch_pr_basics(branches: &[String]) -> HashMap<String, PrInfo> {
     })
 }
 
+/// Returns true for default/mainline branches that should never be associated
+/// with a PR. A PR targeting "main" is not work-in-progress on the main worktree.
+fn is_default_branch(branch: &str) -> bool {
+    matches!(branch, "main" | "master" | "develop" | "dev")
+}
+
 /// Applies a PR map to a worktrees slice. Clears `pr_loading` on all entries.
+/// Default branches (main, master, develop, dev) are never matched to a PR.
 pub fn apply_prs(base: &[Worktree], pr_map: &HashMap<String, PrInfo>) -> Vec<Worktree> {
     base.iter()
         .map(|tree| {
             let mut t = tree.clone();
             if let Some(branch) = &tree.branch
-                && !tree.is_bare {
+                && !tree.is_bare
+                && !is_default_branch(branch) {
                     t.pr = pr_map.get(branch).cloned();
                 }
             t.pr_loading = false;
@@ -409,6 +417,20 @@ mod tests {
         let trees = vec![branched_worktree("/home/user/project", "main")];
         let result = apply_prs(&trees, &HashMap::new());
         assert!(result[0].pr.is_none());
+    }
+
+    #[test]
+    fn apply_prs_skips_default_branches_even_when_pr_exists_in_map() {
+        for branch in &["main", "master", "develop", "dev"] {
+            let trees = vec![branched_worktree("/home/user/project", branch)];
+            let mut pr_map = HashMap::new();
+            pr_map.insert(branch.to_string(), make_pr(2379, branch));
+            let result = apply_prs(&trees, &pr_map);
+            assert!(
+                result[0].pr.is_none(),
+                "branch '{branch}' should not be matched to a PR"
+            );
+        }
     }
 
     #[test]

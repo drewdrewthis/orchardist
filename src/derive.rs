@@ -57,6 +57,9 @@ pub struct WorktreeRow {
     pub worktree_host: Option<String>,
     pub issue_number: Option<u32>,
     pub issue_title: Option<String>,
+    /// State of the linked issue ("open", "closed", "completed"), if any.
+    /// Used to detect stale worktrees whose issue has been resolved without a PR.
+    pub issue_state: Option<String>,
     pub pr: Option<PrInfo>,
     pub sessions: Vec<SessionInfo>,
     pub display_group: DisplayGroup,
@@ -108,12 +111,15 @@ pub fn derive_worktree_rows(
             .collect();
 
         let issue_number = github::extract_issue_number(&wt.branch);
-        let issue_title = issue_number.and_then(|num| {
-            issues
-                .iter()
-                .find(|i| i.number == num)
-                .map(|i| i.title.clone())
-        });
+        let linked_issue = issue_number.and_then(|num| issues.iter().find(|i| i.number == num));
+        let issue_title = linked_issue.map(|i| i.title.clone());
+        // Only populate issue_state when there is no PR — mirrors the legacy collector
+        // logic in `apply_issue_states`, where PRs take precedence over issue state.
+        let issue_state = if pr_info.is_none() {
+            linked_issue.map(|i| i.state.clone())
+        } else {
+            None
+        };
 
         let is_shepherd = is_first_non_bare
             || session_infos.iter().any(|s| s.name.ends_with("_main"));
@@ -131,6 +137,7 @@ pub fn derive_worktree_rows(
             worktree_host: wt.host.clone(),
             issue_number,
             issue_title,
+            issue_state,
             pr: pr_info,
             sessions: session_infos,
             display_group,
@@ -1105,5 +1112,113 @@ mod tests {
     #[test]
     fn is_state_stale_returns_true_for_unparseable_timestamp() {
         assert!(is_state_stale("not-a-timestamp", 300));
+    }
+
+    // -----------------------------------------------------------------------
+    // issue_state population tests
+    // -----------------------------------------------------------------------
+
+    fn closed_issue(number: u32) -> CachedIssue {
+        CachedIssue {
+            number,
+            title: format!("Issue #{number}"),
+            state: "closed".to_string(),
+            labels: vec![],
+        }
+    }
+
+    fn completed_issue(number: u32) -> CachedIssue {
+        CachedIssue {
+            number,
+            title: format!("Issue #{number}"),
+            state: "completed".to_string(),
+            labels: vec![],
+        }
+    }
+
+    #[test]
+    fn issue_state_populated_from_cached_issue() {
+        let issues = vec![closed_issue(200)];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-200", "feat/issue-200-my-feature"),
+        ];
+
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[1].issue_state.as_deref(), Some("closed"));
+    }
+
+    #[test]
+    fn issue_state_populated_for_open_issue() {
+        let issues = vec![open_issue(200)];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-200", "feat/issue-200-my-feature"),
+        ];
+
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[1].issue_state.as_deref(), Some("open"));
+    }
+
+    #[test]
+    fn issue_state_none_when_issue_not_in_cache() {
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-200", "feat/issue-200-my-feature"),
+        ];
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
+
+        assert!(rows[1].issue_state.is_none());
+    }
+
+    #[test]
+    fn issue_state_none_when_worktree_has_pr() {
+        // When a PR exists, issue_state should be None (PR takes precedence).
+        let issues = vec![completed_issue(200)];
+        let prs = vec![pr_for_branch(55, "feat/issue-200-my-feature")];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-200", "feat/issue-200-my-feature"),
+        ];
+
+        let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
+
+        assert!(rows[1].pr.is_some(), "PR should be matched");
+        assert!(rows[1].issue_state.is_none(), "issue_state suppressed by PR");
+    }
+
+    // -----------------------------------------------------------------------
+    // Default branch PR exclusion tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn main_branch_not_matched_to_pr() {
+        let prs = vec![pr_for_branch(2379, "main")];
+        let worktrees = vec![worktree("/workspace/repo", "main")];
+
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+
+        assert!(
+            rows[0].pr.is_none(),
+            "main should not be matched to a PR targeting main"
+        );
+    }
+
+    #[test]
+    fn default_branches_never_matched_to_prs() {
+        for branch in &["main", "master", "develop", "dev"] {
+            let prs = vec![pr_for_branch(1, branch)];
+            let worktrees = vec![worktree("/workspace/repo", branch)];
+
+            let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+
+            assert!(
+                rows[0].pr.is_none(),
+                "branch '{branch}' should not be matched to a PR"
+            );
+        }
     }
 }
