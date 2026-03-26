@@ -139,7 +139,7 @@ pub fn derive_worktree_rows(
         } else if crate::priority::is_prioritized(&wt.path) {
             DisplayGroup::Prioritized
         } else {
-            derive_display_group(pr_info.as_ref(), &session_infos)
+            derive_display_group(pr_info.as_ref(), &session_infos, issue_state.as_deref())
         };
 
         rows.push(WorktreeRow {
@@ -340,13 +340,27 @@ fn is_state_stale(timestamp: &str, max_age_secs: u64) -> bool {
 /// NeedsAttention > ClaudeWorking > ReadyToMerge > Other.
 ///
 /// Never returns `Shepherd` — that is set separately based on `is_shepherd`.
-fn derive_display_group(pr: Option<&PrInfo>, sessions: &[SessionInfo]) -> DisplayGroup {
+fn derive_display_group(pr: Option<&PrInfo>, sessions: &[SessionInfo], issue_state: Option<&str>) -> DisplayGroup {
     // Claude waiting for input = needs your attention (highest priority, before PR state).
     if sessions.iter().any(|s| s.claude_needs_input) {
         return DisplayGroup::NeedsAttention;
     }
 
+    // Closed/completed issue with no PR = stale worktree, needs cleanup.
+    if pr.is_none() {
+        if let Some(state) = issue_state {
+            if state == "closed" || state == "completed" {
+                return DisplayGroup::NeedsAttention;
+            }
+        }
+    }
+
     if let Some(pr) = pr {
+        // Merged/closed PR = stale worktree.
+        if pr.state.as_deref() == Some("merged") || pr.state.as_deref() == Some("closed") {
+            return DisplayGroup::NeedsAttention;
+        }
+
         if is_needs_attention(pr) {
             return DisplayGroup::NeedsAttention;
         }

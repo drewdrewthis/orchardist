@@ -158,10 +158,24 @@ pub(crate) fn visible_tasks_filtered<'a>(
 /// When a PR exists its number is prepended: e.g. `#123 ✓ approved`.
 fn pr_status_text(row: &TaskRow) -> (String, Style) {
     let Some(ref pr) = row.pr else {
+        // No PR — check if the linked issue is closed/completed (stale worktree)
+        if let Some(ref state) = row.issue_state {
+            if state == "closed" || state == "completed" {
+                return (format!("\u{2716} issue {}", state), Style::default().fg(Color::Red));
+            }
+        }
         return ("no PR".to_string(), Style::default().fg(Color::DarkGray));
     };
 
     let prefix = format!("#{} ", pr.number);
+
+    // Merged or closed PR = stale worktree
+    if pr.state.as_deref() == Some("merged") {
+        return (format!("{}\u{2713} merged", prefix), Style::default().fg(Color::Magenta));
+    }
+    if pr.state.as_deref() == Some("closed") {
+        return (format!("{}\u{2716} closed", prefix), Style::default().fg(Color::Red));
+    }
 
     if pr.review_decision.as_deref() == Some("approved") {
         return (format!("{}\u{2713} approved", prefix), Style::default().fg(Color::Green));
