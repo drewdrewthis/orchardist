@@ -301,7 +301,7 @@ fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<Strin
 // Public refresh functions
 // ---------------------------------------------------------------------------
 
-/// Fetches open GitHub issues for `config.slug` and writes to the issues cache.
+/// Fetches all GitHub issues for `config.slug` and writes to the issues cache.
 ///
 /// On API failure the error is logged and the existing cache is left intact.
 pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
@@ -314,10 +314,8 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
             "list",
             "--repo",
             &config.slug,
-            "--assignee",
-            "@me",
             "--state",
-            "open",
+            "all",
             "--limit",
             "100",
             "--json",
@@ -683,6 +681,35 @@ mod tests {
     fn parse_issues_json_invalid_json_returns_empty() {
         let issues = parse_issues_json("not json");
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn parse_issues_json_handles_closed_state() {
+        let json = r#"[
+            {"number": 1, "title": "Old issue", "state": "CLOSED", "labels": []},
+            {"number": 2, "title": "Active issue", "state": "OPEN", "labels": [{"name": "bug"}]}
+        ]"#;
+        let issues = parse_issues_json(&json);
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].number, 1);
+        assert_eq!(issues[0].state, "closed");
+        assert_eq!(issues[1].number, 2);
+        assert_eq!(issues[1].state, "open");
+    }
+
+    #[test]
+    fn parse_issues_json_mixed_states_preserves_all() {
+        let json = r#"[
+            {"number": 1, "title": "Closed", "state": "CLOSED", "labels": []},
+            {"number": 13, "title": "Open 1", "state": "OPEN", "labels": []},
+            {"number": 14, "title": "Open 2", "state": "OPEN", "labels": []},
+            {"number": 16, "title": "Open 3", "state": "OPEN", "labels": []},
+            {"number": 18, "title": "Open 4", "state": "OPEN", "labels": []}
+        ]"#;
+        let issues = parse_issues_json(&json);
+        assert_eq!(issues.len(), 5, "all issues should be preserved regardless of state");
+        let numbers: Vec<u32> = issues.iter().map(|i| i.number).collect();
+        assert_eq!(numbers, vec![1, 13, 14, 16, 18]);
     }
 
     // -- parse_prs_graphql ---------------------------------------------------
