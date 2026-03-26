@@ -12,14 +12,13 @@ use ratatui::prelude::*;
 
 use crate::cache;
 use crate::cache_sources;
-use crate::collector;
 use crate::derive;
 use crate::git;
 use crate::global_config;
 use crate::remote;
 use crate::tmux;
 use crate::transfer;
-use crate::types::{IssueState, Worktree};
+use crate::types::Worktree;
 
 use state::{AppMsg, CleanupState, FilterMode, Phase, ViewState};
 
@@ -35,9 +34,6 @@ const SPINNER_FRAMES: &[&str] = &[
 const AUTO_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
-
-/// Number of lines to capture from tmux panes for preview.
-const PANE_CAPTURE_LINES: u32 = 100;
 
 // ---------------------------------------------------------------------------
 // Notification snapshot
@@ -57,7 +53,6 @@ struct WorktreeSnapshot {
 // ---------------------------------------------------------------------------
 
 pub struct App {
-    worktrees: Vec<Worktree>,
     cursor: usize,
     loading: bool,
     refreshing: bool,
@@ -117,7 +112,6 @@ impl App {
         };
 
         App {
-            worktrees: Vec::new(),
             cursor: 0,
             loading: true,
             refreshing: false,
@@ -149,23 +143,7 @@ impl App {
     // -------------------------------------------------------------------
 
     fn start_refresh(&self) {
-        // Legacy worktree collector (still feeds self.worktrees for existing views).
-        let tx_legacy = self.tx.clone();
-        std::thread::spawn(move || {
-            let tx_clone = tx_legacy.clone();
-            let update_fn = move |trees: &[Worktree]| {
-                let _ = tx_clone.send(AppMsg::Worktrees(trees.to_vec()));
-            };
-            let tx_err = tx_legacy.clone();
-            let error_fn = move |msg: &str| {
-                let _ = tx_err.send(AppMsg::Error(msg.to_string()));
-            };
-            if let Err(e) = collector::refresh_worktrees(&update_fn, &error_fn) {
-                let _ = tx_legacy.send(AppMsg::Error(e.to_string()));
-            }
-        });
-
-        // New cache-based refresh pipeline.
+        // Cache-based refresh pipeline.
         let config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
@@ -221,32 +199,6 @@ impl App {
         });
     }
 
-    fn fetch_pane_content(&self) {
-        if self.worktrees.is_empty() || self.cursor >= self.worktrees.len() {
-            return;
-        }
-        let wt = &self.worktrees[self.cursor];
-        self.fetch_pane_content_for_worktree(wt);
-    }
-
-    /// Fetches pane content for a specific worktree (used by both worktree and task views).
-    fn fetch_pane_content_for_worktree(&self, wt: &Worktree) {
-        let session = match &wt.tmux_session {
-            Some(s) => s.clone(),
-            None => return,
-        };
-        let remote_host = wt.remote.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let content = if let Some(host) = remote_host {
-                remote::capture_remote_pane_content(&host, &session, PANE_CAPTURE_LINES).unwrap_or_default()
-            } else {
-                tmux::capture_pane_content(&session, PANE_CAPTURE_LINES).unwrap_or_default()
-            };
-            let _ = tx.send(AppMsg::PaneContent(session.clone(), content));
-        });
-    }
-
     // -------------------------------------------------------------------
     // Drain messages from background threads
     // -------------------------------------------------------------------
@@ -254,60 +206,24 @@ impl App {
     fn check_updates(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                AppMsg::Worktrees(trees) => {
-                    let still_loading = trees.iter().any(|wt| wt.pr_loading);
-
-                    // During refresh, preserve remote worktrees from previous data
-                    // until the pipeline sends an update that includes them.
-                    let has_remotes = trees.iter().any(|wt| wt.remote.is_some());
-                    if !has_remotes && !self.worktrees.is_empty() {
-                        let mut merged = trees;
-                        let existing_remotes: Vec<Worktree> = self
-                            .worktrees
-                            .iter()
-                            .filter(|wt| wt.remote.is_some())
-                            .cloned()
-                            .collect();
-                        merged.extend(existing_remotes);
-                        self.worktrees = merged;
-                    } else {
-                        self.worktrees = trees;
-                    }
-
+                AppMsg::CacheRefreshed => {
+                    let old_states = std::mem::take(&mut self.previous_worktree_states);
+                    self.task_rows = derive_from_all_caches(&self.global_config);
                     self.loading = false;
-                    if !still_loading {
-                        self.refreshing = false;
-                        if let Err(e) = crate::status::write_status(&self.worktrees) {
-                            crate::logger::LOG.info(&format!("status write failed: {e}"));
-                        }
-                    }
+                    self.refreshing = false;
                     self.error = None;
-                    if self.cursor >= self.worktrees.len() && !self.worktrees.is_empty() {
-                        self.cursor = self.worktrees.len() - 1;
+                    if self.cursor >= self.task_rows.len() && !self.task_rows.is_empty() {
+                        self.cursor = self.task_rows.len() - 1;
                     }
                     // Populate cleanup stale list if in cleanup view with empty stale.
                     if let ViewState::Cleanup(ref mut cs) = self.view
                         && cs.stale.is_empty() {
-                            cs.stale = filter_stale(&self.worktrees);
+                            cs.stale = filter_stale(&self.task_rows);
                             cs.selected =
-                                cs.stale.iter().map(|wt| wt.path.clone()).collect();
+                                cs.stale.iter().map(|row| row.worktree_path.clone()).collect();
                         }
-                    // Fetch pane content for the current selection.
-                    if !self.task_rows.is_empty() {
-                        // Task mode: fetch via task's worktree.
-                        self.fetch_task_pane_content();
-                    } else if !self.worktrees.is_empty()
-                        && self.cursor < self.worktrees.len()
-                        && self.worktrees[self.cursor].tmux_session.is_some()
-                    {
-                        self.fetch_pane_content();
-                    } else {
-                        self.pane_content.clear();
-                    }
-                }
-                AppMsg::CacheRefreshed => {
-                    let old_states = std::mem::take(&mut self.previous_worktree_states);
-                    self.task_rows = derive_from_all_caches(&self.global_config);
+                    // Fetch pane content for the current task selection.
+                    self.fetch_task_pane_content();
 
                     // Detect state transitions and fire desktop notifications.
                     for row in &self.task_rows {
@@ -394,20 +310,11 @@ impl App {
                     self.host_reachable.insert(host, reachable);
                 }
                 AppMsg::PaneContent(session_name, content) => {
-                    // Accept pane content if the session matches the current
-                    // selection — works for both task mode and worktree mode.
-                    let matches = if !self.task_rows.is_empty() {
-                        // Task mode: check if the task's sessions contain this one.
-                        self.task_rows.get(self.cursor).is_some_and(|row| {
-                            row.sessions.iter().any(|s| s.name == session_name)
-                        })
-                    } else {
-                        let current_session = self
-                            .worktrees
-                            .get(self.cursor)
-                            .and_then(|wt| wt.tmux_session.as_ref());
-                        current_session == Some(&session_name)
-                    };
+                    // Accept pane content only when the session matches the current
+                    // task row's sessions.
+                    let matches = self.task_rows.get(self.cursor).is_some_and(|row| {
+                        row.sessions.iter().any(|s| s.name == session_name)
+                    });
                     if matches {
                         self.pane_content = content;
                     }
@@ -445,11 +352,6 @@ impl App {
                         cs.phase = Phase::Done;
                     }
                     self.start_refresh();
-                }
-                AppMsg::Error(e) => {
-                    self.error = Some(e);
-                    self.loading = false;
-                    self.refreshing = false;
                 }
             }
         }
@@ -639,12 +541,12 @@ impl App {
         });
     }
 
-    fn start_cleanup(&self, items: Vec<Worktree>) {
+    fn start_cleanup(&self, items: Vec<derive::TaskRow>) {
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            for wt in &items {
-                let _ = delete_worktree(wt, &global_config);
+            for row in &items {
+                let _ = delete_task_row(row, &global_config);
             }
             let _ = tx.send(AppMsg::CleanupDone);
         });
@@ -653,10 +555,9 @@ impl App {
     /// Constructs a minimal `App` for use in unit tests without touching the
     /// filesystem, git, or any external services.
     #[cfg(test)]
-    fn new_test(task_rows: Vec<derive::TaskRow>, worktrees: Vec<Worktree>) -> Self {
+    fn new_test(task_rows: Vec<derive::TaskRow>) -> Self {
         let (tx, rx) = mpsc::channel();
         App {
-            worktrees,
             cursor: 0,
             loading: false,
             refreshing: false,
@@ -759,20 +660,16 @@ fn run_loop(
 // Stale worktree filter
 // ---------------------------------------------------------------------------
 
-fn filter_stale(worktrees: &[Worktree]) -> Vec<Worktree> {
-    worktrees
-        .iter()
-        .filter(|wt| {
-            if wt.is_bare {
-                return false;
+fn filter_stale(rows: &[derive::TaskRow]) -> Vec<derive::TaskRow> {
+    rows.iter()
+        .filter(|row| {
+            if let Some(ref pr) = row.pr {
+                let state = pr.state.as_deref().unwrap_or("");
+                return state == "merged" || state == "closed";
             }
-            if let Some(ref pr) = wt.pr {
-                return pr.state == "merged" || pr.state == "closed";
+            if let Some(ref state) = row.issue_state {
+                return state == "completed" || state == "closed";
             }
-            if wt.pr.is_none()
-                && let Some(state) = wt.issue_state {
-                    return state == IssueState::Completed || state == IssueState::Closed;
-                }
             false
         })
         .cloned()
@@ -809,6 +706,39 @@ fn delete_worktree(wt: &Worktree, global_config: &global_config::GlobalConfig) -
     }
     if git::remove_worktree(&wt.path, false).is_err() {
         git::remove_worktree(&wt.path, true)?;
+    }
+    Ok(())
+}
+
+/// Deletes the worktree represented by a `TaskRow`.
+///
+/// Equivalent to `delete_worktree` but operates on `TaskRow` fields, which is
+/// the only data model available after removing the legacy `Vec<Worktree>`.
+fn delete_task_row(row: &derive::TaskRow, global_config: &global_config::GlobalConfig) -> anyhow::Result<()> {
+    let session_name = row.sessions.first().map(|s| s.name.as_str());
+    if let Some(ref host) = row.worktree_host {
+        // Remote deletion
+        if let Some(sess) = session_name {
+            let _ = remote::kill_remote_tmux_session(host, sess);
+        }
+        let slug = transfer::sanitize_branch_slug(&row.branch);
+        let _ = remote::remove_remote_registry_entry(host, &slug);
+        // Find the remote config matching this host to get the repo_path.
+        let remote_cfg = global_config.repos.iter().find_map(|repo| {
+            repo.remote_for_host(host)
+        });
+        if let Some(remote_cfg) = remote_cfg {
+            remote::remove_remote_worktree(host, &remote_cfg.path, &row.worktree_path)?;
+        }
+        return Ok(());
+    }
+
+    // Local deletion
+    if let Some(sess) = session_name {
+        let _ = tmux::kill_tmux_session(sess);
+    }
+    if git::remove_worktree(&row.worktree_path, false).is_err() {
+        git::remove_worktree(&row.worktree_path, true)?;
     }
     Ok(())
 }
@@ -939,7 +869,6 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo as DPrInfo, SessionInfo, TaskRow};
-    use crate::types::{ChecksStatus, IssueState, PrInfo, ReviewDecision};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -989,82 +918,79 @@ mod tests {
 
     #[test]
     fn filter_stale_merged_pr() {
-        let trees = vec![
-            Worktree {
-                pr: Some(PrInfo {
+        let rows = vec![
+            TaskRow {
+                pr: Some(DPrInfo {
                     number: 1,
-                    state: "merged".into(),
-                    title: String::new(),
-                    url: String::new(),
-                    review_decision: ReviewDecision::None,
-                    unresolved_threads: 0,
-                    checks_status: ChecksStatus::None,
+                    branch: "feat/merged".to_string(),
+                    state: Some("merged".to_string()),
+                    review_decision: None,
+                    checks_state: None,
                     has_conflicts: false,
+                    unresolved_threads: 0,
                 }),
-                ..Default::default()
+                ..make_task_row(1, DisplayGroup::Other)
             },
-            Worktree::default(),
+            make_task_row(2, DisplayGroup::Other),
         ];
-        let stale = filter_stale(&trees);
+        let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
     }
 
     #[test]
     fn filter_stale_closed_issue() {
-        let trees = vec![Worktree {
-            issue_state: Some(IssueState::Closed),
-            ..Default::default()
+        let rows = vec![TaskRow {
+            issue_state: Some("closed".to_string()),
+            ..make_task_row(1, DisplayGroup::Other)
         }];
-        let stale = filter_stale(&trees);
+        let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
     }
 
     #[test]
     fn filter_stale_closed_pr() {
-        let trees = vec![Worktree {
-            pr: Some(PrInfo {
+        let rows = vec![TaskRow {
+            pr: Some(DPrInfo {
                 number: 1,
-                state: "closed".into(),
-                title: String::new(),
-                url: String::new(),
-                review_decision: ReviewDecision::None,
-                unresolved_threads: 0,
-                checks_status: ChecksStatus::None,
+                branch: "feat/closed".to_string(),
+                state: Some("closed".to_string()),
+                review_decision: None,
+                checks_state: None,
                 has_conflicts: false,
+                unresolved_threads: 0,
             }),
-            ..Default::default()
+            ..make_task_row(1, DisplayGroup::Other)
         }];
-        let stale = filter_stale(&trees);
+        let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
     }
 
     #[test]
     fn filter_stale_completed_issue() {
-        let trees = vec![Worktree {
-            issue_state: Some(IssueState::Completed),
-            ..Default::default()
+        let rows = vec![TaskRow {
+            issue_state: Some("completed".to_string()),
+            ..make_task_row(1, DisplayGroup::Other)
         }];
-        let stale = filter_stale(&trees);
+        let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
     }
 
     #[test]
-    fn filter_stale_skips_bare() {
-        let trees = vec![Worktree {
-            is_bare: true,
-            pr: Some(PrInfo {
+    fn filter_stale_open_pr_not_stale() {
+        // An open PR should not be considered stale.
+        let rows = vec![TaskRow {
+            pr: Some(DPrInfo {
                 number: 1,
-                state: "merged".into(),
-                title: String::new(),
-                url: String::new(),
-                review_decision: ReviewDecision::None,
-                unresolved_threads: 0,
-                checks_status: ChecksStatus::None,
+                branch: "feat/open".to_string(),
+                state: Some("open".to_string()),
+                review_decision: None,
+                checks_state: None,
                 has_conflicts: false,
+                unresolved_threads: 0,
             }),
-            ..Default::default()
+            ..make_task_row(1, DisplayGroup::Other)
         }];
-        let stale = filter_stale(&trees);
+        let stale = filter_stale(&rows);
         assert!(stale.is_empty());
     }
 
@@ -1075,7 +1001,7 @@ mod tests {
     #[test]
     fn task_list_renders_issue_title() {
         let rows = vec![make_task_row_with_title(42, "Fix login bug", DisplayGroup::Other)];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("Fix login bug"), "expected title in output");
@@ -1084,28 +1010,34 @@ mod tests {
     }
 
     #[test]
-    fn worktree_list_renders_when_no_tasks() {
-        let worktrees = vec![Worktree {
-            path: "/home/user/project".to_string(),
-            branch: Some("main".to_string()),
-            ..Default::default()
-        }];
-        let mut app = App::new_test(vec![], worktrees);
+    fn loading_state_renders_when_no_tasks() {
+        let mut app = App::new_test(vec![]);
+        app.loading = true;
         let output = render_to_string(&mut app, 120, 40);
-        assert!(output.contains("main"), "expected branch name in output");
-        assert!(output.contains("WORKTREES"), "expected WORKTREES header in output");
+        assert!(output.contains("Loading"), "expected Loading text in output");
+    }
+
+    #[test]
+    fn empty_non_loading_state_shows_init_prompt() {
+        let mut app = App::new_test(vec![]);
+        app.loading = false;
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(
+            output.contains("No worktrees found"),
+            "expected empty state message in output"
+        );
     }
 
     #[test]
     fn q_key_quits() {
-        let mut app = App::new_test(vec![], vec![]);
+        let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         assert!(app.handle_key(key));
     }
 
     #[test]
     fn ctrl_c_quits() {
-        let mut app = App::new_test(vec![], vec![]);
+        let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(app.handle_key(key));
     }
@@ -1116,7 +1048,7 @@ mod tests {
             make_task_row(1, DisplayGroup::NeedsAttention),
             make_task_row(2, DisplayGroup::ClaudeWorking),
         ];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         assert_eq!(app.cursor, 0);
         let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         app.handle_key(key);
@@ -1129,7 +1061,7 @@ mod tests {
             make_task_row(1, DisplayGroup::NeedsAttention),
             make_task_row(2, DisplayGroup::ClaudeWorking),
         ];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         app.cursor = 1;
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
         app.handle_key(key);
@@ -1150,7 +1082,7 @@ mod tests {
             }),
             ..make_task_row(42, DisplayGroup::ReadyToMerge)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
         // The ISSUE and PR columns are now separate.
         assert!(output.contains("#42"), "expected issue number");
@@ -1173,7 +1105,7 @@ mod tests {
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         app.host_reachable.insert("gpu1".to_string(), false);
 
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
@@ -1188,7 +1120,7 @@ mod tests {
 
     #[test]
     fn header_renders_host_connectivity() {
-        let mut app = App::new_test(vec![], vec![]);
+        let mut app = App::new_test(vec![]);
         app.host_reachable.insert("gpu1".to_string(), true);
         app.host_reachable.insert("dev2".to_string(), false);
         let output = render_to_string(&mut app, 120, 40);
@@ -1200,7 +1132,7 @@ mod tests {
 
     #[test]
     fn question_mark_opens_help() {
-        let mut app = App::new_test(vec![], vec![]);
+        let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         app.handle_key(key);
         assert_eq!(app.view_name(), "Help");
@@ -1208,7 +1140,7 @@ mod tests {
 
     #[test]
     fn esc_closes_help() {
-        let mut app = App::new_test(vec![], vec![]);
+        let mut app = App::new_test(vec![]);
         app.view = ViewState::Help;
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         app.handle_key(key);
@@ -1220,7 +1152,7 @@ mod tests {
         // In the worktree-first model, every row has a worktree, so Enter
         // creates a session rather than showing a dialog.
         let rows = vec![make_task_row(42, DisplayGroup::NeedsAttention)];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         app.handle_key(key);
         // View should remain List — no confirmation dialog should appear.
@@ -1259,7 +1191,7 @@ mod tests {
             ..make_worktree_row("main", DisplayGroup::Shepherd)
         };
         let other = make_worktree_row("feat/something", DisplayGroup::Other);
-        let mut app = App::new_test(vec![shepherd, other], vec![]);
+        let mut app = App::new_test(vec![shepherd, other]);
         app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1275,7 +1207,7 @@ mod tests {
     #[test]
     fn worktree_without_pr_renders_in_other_section() {
         let row = make_worktree_row("experimental", DisplayGroup::Other);
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1328,7 +1260,6 @@ mod tests {
         // Pre-sort to match expected display order (as derive::derive_all_repos would produce)
         let mut app = App::new_test(
             vec![needs_attention, claude_working, ready_to_merge, other],
-            vec![],
         );
         app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
@@ -1359,7 +1290,7 @@ mod tests {
             }],
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("input"), "expected 'input' claude status indicator");
@@ -1380,7 +1311,7 @@ mod tests {
             }),
             ..make_worktree_row("feat/branch", DisplayGroup::NeedsAttention)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("#55"), "expected PR number #55 in output");
@@ -1393,7 +1324,7 @@ mod tests {
             worktree_host: Some("gpu1".to_string()),
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         app.backlog_expanded = true;
         app.host_reachable.insert("gpu1".to_string(), true);
         let output = render_to_string(&mut app, 120, 40);
@@ -1419,7 +1350,7 @@ mod tests {
             }],
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         app.backlog_expanded = true;
         app.host_reachable.insert("gpu1".to_string(), false);
         let output = render_to_string(&mut app, 120, 40);
@@ -1435,7 +1366,7 @@ mod tests {
             issue_title: Some("Support workflow agents".to_string()),
             ..make_worktree_row("langwatch-2478", DisplayGroup::Other)
         };
-        let mut app = App::new_test(vec![row], vec![]);
+        let mut app = App::new_test(vec![row]);
         app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1448,7 +1379,7 @@ mod tests {
 
     #[test]
     fn help_overlay_renders_when_question_mark_pressed() {
-        let mut app = App::new_test(vec![], vec![]);
+        let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         app.handle_key(key);
         let output = render_to_string(&mut app, 120, 40);
@@ -1469,7 +1400,7 @@ mod tests {
             make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
             make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
         ];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         assert_eq!(app.cursor, 0);
 
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
@@ -1484,7 +1415,7 @@ mod tests {
             make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
             make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
         ];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         app.cursor = 1;
 
         let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
@@ -1499,7 +1430,7 @@ mod tests {
             make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
             make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
         ];
-        let mut app = App::new_test(rows, vec![]);
+        let mut app = App::new_test(rows);
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         assert!(app.handle_key(q), "q should return true (quit)");
     }

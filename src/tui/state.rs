@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::derive::TaskRow;
 use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ pub struct TransferState {
 }
 
 pub struct CleanupState {
-    pub stale: Vec<Worktree>,
+    pub stale: Vec<TaskRow>,
     pub selected: HashSet<String>,
     pub cursor: usize,
     pub phase: Phase,
@@ -97,7 +98,6 @@ pub enum Phase {
 // ---------------------------------------------------------------------------
 
 pub enum AppMsg {
-    Worktrees(Vec<Worktree>),
     PaneContent(String, String), // (session_name, content)
     CacheRefreshed,
     HostReachability(String, bool), // (host, is_reachable)
@@ -106,5 +106,4 @@ pub enum AppMsg {
     TransferDone,
     TransferErr(String),
     CleanupDone,
-    Error(String),
 }

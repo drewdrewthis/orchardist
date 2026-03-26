@@ -8,14 +8,10 @@ use std::time::Instant;
 use crate::derive::{DisplayGroup, TaskRow};
 use crate::navigation;
 use crate::paths;
-use crate::tui::state::{
-    CleanupState, DeleteState, FilterMode, NewSessionState, Phase, TransferState, ViewState,
-};
-use crate::tui::widgets::{claude_badge, status_badge};
+use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
 use crate::tui::{filter_stale, App, SPINNER_FRAMES, WARNING_DURATION_SECS};
 use crate::remote;
 use crate::tmux;
-use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -231,84 +227,8 @@ fn claude_status_text(row: &TaskRow) -> (String, Style) {
 
 impl App {
     pub(crate) fn handle_list_key(&mut self, key: KeyEvent) -> bool {
-        // In task mode, navigation uses the visible task count.
-        if !self.task_rows.is_empty() {
-            return self.handle_task_list_key(key);
-        }
-
-        match key.code {
-            // Digit jump 1-9
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                if let Some(idx) =
-                    navigation::cursor_index_from_digit(c, self.worktrees.len())
-                {
-                    self.cursor = idx;
-                    self.pane_content.clear();
-                    self.fetch_pane_content();
-                }
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                    self.pane_content.clear();
-                    self.fetch_pane_content();
-                }
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.worktrees.is_empty() && self.cursor < self.worktrees.len() - 1 {
-                    self.cursor += 1;
-                    self.pane_content.clear();
-                    self.fetch_pane_content();
-                }
-                false
-            }
-            KeyCode::Enter | KeyCode::Char('t') => {
-                self.switch_to_tmux_session()
-            }
-            KeyCode::Char('o') => {
-                self.open_pr_url();
-                false
-            }
-            KeyCode::Char('i') => {
-                self.open_issue_url();
-                false
-            }
-            KeyCode::Char('p') => {
-                self.start_transfer_dialog();
-                false
-            }
-            KeyCode::Char('d') => {
-                self.start_delete_dialog();
-                false
-            }
-            KeyCode::Char('c') => {
-                self.enter_cleanup_view();
-                false
-            }
-            KeyCode::Char('n') => {
-                self.view = ViewState::NewSession(NewSessionState {
-                    name: String::new(),
-                    cursor: 0,
-                });
-                false
-            }
-            KeyCode::Char('r') => {
-                self.refreshing = true;
-                self.start_refresh();
-                false
-            }
-            KeyCode::Char('R') => {
-                self.reconnect_unreachable_hosts();
-                false
-            }
-            KeyCode::Char('q') | KeyCode::Esc => {
-                // Quit without switching sessions.
-                true
-            }
-            _ => false,
-        }
+        // Always delegate to the task list handler — task rows are the only data source.
+        self.handle_task_list_key(key)
     }
 
     fn handle_task_list_key(&mut self, key: KeyEvent) -> bool {
@@ -539,16 +459,17 @@ impl App {
         }
 
         let area = f.area();
-        let width = area.width as usize;
         let hdr_height = header_height(area.height);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(hdr_height), Constraint::Length(1), Constraint::Min(3)])
+            .split(area);
+
+        self.render_header(f, chunks[0]);
 
         // Error state
         if let Some(ref err) = self.error {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(hdr_height), Constraint::Length(1), Constraint::Min(3)])
-                .split(area);
-            self.render_header(f, chunks[0]);
             let err_para = Paragraph::new(err.as_str())
                 .style(Style::default().fg(Color::Red))
                 .block(
@@ -562,35 +483,16 @@ impl App {
             return;
         }
 
-        // Loading state
-        if self.loading && self.worktrees.is_empty() {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(hdr_height), Constraint::Length(1), Constraint::Min(3)])
-                .split(area);
-            self.render_header(f, chunks[0]);
+        // Loading or empty state
+        if self.loading {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             let loading_text = format!("{} Loading worktrees...", spinner);
             let para = Paragraph::new(loading_text)
                 .style(Style::default().fg(Color::Cyan))
                 .alignment(Alignment::Center);
             f.render_widget(para, chunks[2]);
-            return;
-        }
-
-        // Empty state
-        if self.worktrees.is_empty() {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(hdr_height),
-                    Constraint::Length(1),
-                    Constraint::Min(3),
-                    Constraint::Length(1),
-                ])
-                .split(area);
-            self.render_header(f, chunks[0]);
-            let empty = Paragraph::new("No worktrees found.")
+        } else {
+            let empty = Paragraph::new("No worktrees found. Run `orchard init` to configure a repo.")
                 .style(Style::default().fg(Color::Yellow))
                 .block(
                     Block::default()
@@ -600,82 +502,7 @@ impl App {
                 )
                 .alignment(Alignment::Center);
             f.render_widget(empty, chunks[2]);
-            self.render_hints(f, chunks[3]);
-            return;
         }
-
-        // Calculate preview height (+2 for borders, +1 for column header row)
-        let list_height = (self.worktrees.len() as u16) + 3;
-        let has_preview = !self.pane_content.is_empty()
-            && self.cursor < self.worktrees.len()
-            && self.worktrees[self.cursor].tmux_session.is_some();
-
-        let has_warning = self
-            .warning
-            .as_ref()
-            .is_some_and(|(_, t)| t.elapsed().as_secs() < WARNING_DURATION_SECS);
-
-        let mut constraints = vec![
-            Constraint::Length(hdr_height), // header
-            Constraint::Length(1),          // spacer
-            Constraint::Length(list_height), // worktree list
-        ];
-
-        if has_preview {
-            constraints.push(Constraint::Length(1)); // spacer
-            constraints.push(Constraint::Min(4));    // preview fills remaining
-        }
-
-        if has_warning {
-            constraints.push(Constraint::Length(1)); // warning
-        }
-
-        constraints.push(Constraint::Length(1)); // hints
-
-        // If no preview, add remainder absorber between list and hints
-        if !has_preview {
-            let hints_idx = constraints.len() - 1;
-            constraints.insert(hints_idx, Constraint::Min(0));
-        }
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(area);
-
-        let mut chunk_idx = 0;
-
-        // Header
-        self.render_header(f, chunks[chunk_idx]);
-        chunk_idx += 1;
-
-        // Spacer
-        chunk_idx += 1;
-
-        // Worktree list
-        self.render_worktree_list(f, chunks[chunk_idx], width);
-        chunk_idx += 1;
-
-        // Preview
-        if has_preview {
-            chunk_idx += 1; // spacer
-            self.render_preview(f, chunks[chunk_idx]);
-            chunk_idx += 1;
-        }
-
-        // Warning
-        if has_warning {
-            if let Some((ref msg, _)) = self.warning {
-                let warn = Paragraph::new(msg.as_str())
-                    .style(Style::default().fg(Color::Yellow))
-                    .alignment(Alignment::Center);
-                f.render_widget(warn, chunks[chunk_idx]);
-            }
-            chunk_idx += 1;
-        }
-
-        // Hints
-        self.render_hints(f, chunks[chunk_idx]);
     }
 
     pub(crate) fn render_header(&self, f: &mut Frame, area: Rect) {
@@ -781,325 +608,6 @@ impl App {
         f.render_widget(header, area);
     }
 
-    pub(crate) fn render_worktree_list(&self, f: &mut Frame, area: Rect, _term_width: usize) {
-        let has_remote = self.worktrees.iter().any(|wt| wt.remote.is_some());
-
-        // Compute actual content widths for dynamic columns
-        let max_path_len = self
-            .worktrees
-            .iter()
-            .map(|wt| paths::tildify(&wt.path).len())
-            .max()
-            .unwrap_or(10);
-        let max_branch_len = self
-            .worktrees
-            .iter()
-            .map(|wt| wt.branch.as_deref().unwrap_or("(detached)").len())
-            .max()
-            .unwrap_or(10);
-        let max_session_len = self
-            .worktrees
-            .iter()
-            .filter_map(|wt| wt.tmux_session.as_ref())
-            .map(|s| s.len() + 2) // +2 for icon prefix
-            .max()
-            .unwrap_or(10);
-
-        // Build column constraints — use content-based sizing with Fill for the two big columns
-        let mut widths = vec![
-            Constraint::Length(4),                                        // cursor+index
-            Constraint::Max(max_path_len as u16 + 1),                    // path: fit content, shrink if needed
-            Constraint::Max(max_branch_len as u16 + 1),                  // branch: fit content, shrink if needed
-            Constraint::Length(12),                                       // status
-            Constraint::Length(8),                                        // claude
-        ];
-        if has_remote {
-            widths.push(Constraint::Length(14));                          // remote
-        }
-        widths.push(Constraint::Max(max_session_len as u16 + 1));        // session: fit content
-
-        // Header
-        let header_style = Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD);
-        let mut header_cells = vec![
-            Cell::from("  #"),
-            Cell::from("PATH"),
-            Cell::from("BRANCH"),
-            Cell::from("STATUS"),
-            Cell::from("CLAUDE"),
-        ];
-        if has_remote {
-            header_cells.push(Cell::from("REMOTE"));
-        }
-        header_cells.push(Cell::from("SESSION"));
-        let header_row = Row::new(header_cells).style(header_style);
-
-        // Data rows
-        let rows: Vec<Row> = self
-            .worktrees
-            .iter()
-            .enumerate()
-            .map(|(i, wt)| {
-                let selected = i == self.cursor;
-                let cursor_char = if selected { ">" } else { " " };
-                let idx_cell = Cell::from(format!("{}{:>2}", cursor_char, i + 1));
-
-                // Path
-                let path_display = paths::tildify(&wt.path);
-                let path_cell = Cell::from(path_display);
-
-                // Branch
-                let branch_str = wt.branch.as_deref().unwrap_or("(detached)").to_string();
-                let branch_cell =
-                    Cell::from(branch_str).style(Style::default().fg(Color::Yellow));
-
-                // Status
-                let badge = status_badge(wt, self.refreshing);
-                let status_cell = Cell::from(badge.text).style(badge.style);
-
-                // Claude
-                let cbadge = claude_badge(wt);
-                let claude_cell = Cell::from(cbadge.text).style(cbadge.style);
-
-                // Session
-                let tmux_str = if let Some(ref sess) = wt.tmux_session {
-                    let icon = if wt.tmux_attached {
-                        "\u{25b6}"
-                    } else {
-                        "\u{25fc}"
-                    };
-                    format!("{} {}", icon, sess)
-                } else {
-                    String::new()
-                };
-                let tmux_style = if wt.tmux_session.is_some() {
-                    if wt.tmux_attached {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default().fg(Color::Blue)
-                    }
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                let tmux_cell = Cell::from(tmux_str).style(tmux_style);
-
-                // Determine host reachability for this worktree.
-                let host_unreachable = wt
-                    .remote
-                    .as_ref()
-                    .and_then(|h| self.host_reachable.get(h.as_str()))
-                    .copied()
-                    == Some(false);
-
-                let mut cells =
-                    vec![idx_cell, path_cell, branch_cell, status_cell, claude_cell];
-                if has_remote {
-                    let remote_cell = if let Some(ref h) = wt.remote {
-                        match self.host_reachable.get(h.as_str()) {
-                            Some(&false) => Cell::from(format!("@{} \u{2717}", h))
-                                .style(Style::default().fg(Color::Red)),
-                            Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
-                                .style(Style::default().fg(Color::Green)),
-                            None => Cell::from(format!("@{}", h))
-                                .style(Style::default().fg(Color::Magenta)),
-                        }
-                    } else {
-                        Cell::from("").style(Style::default().fg(Color::Magenta))
-                    };
-                    cells.push(remote_cell);
-                }
-                cells.push(tmux_cell);
-
-                let row = Row::new(cells);
-                if selected {
-                    row.style(
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                            .add_modifier(if host_unreachable { Modifier::DIM } else { Modifier::empty() }),
-                    )
-                } else if host_unreachable {
-                    row.style(Style::default().add_modifier(Modifier::DIM))
-                } else {
-                    row
-                }
-            })
-            .collect();
-
-        let block = Block::default()
-            .title(" WORKTREES ")
-            .title_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .border_type(BorderType::Rounded);
-
-        let table = Table::new(rows, &widths)
-            .header(header_row)
-            .block(block)
-            .column_spacing(1);
-
-        f.render_widget(table, area);
-    }
-
-    pub(crate) fn render_preview(&self, f: &mut Frame, area: Rect) {
-        if self.pane_content.is_empty()
-            || self.worktrees.is_empty()
-            || self.cursor >= self.worktrees.len()
-        {
-            return;
-        }
-        let wt = &self.worktrees[self.cursor];
-        if wt.tmux_session.is_none() {
-            return;
-        }
-
-        let branch_label = wt.branch.as_deref().unwrap_or("(detached)");
-        let title = format!(" PREVIEW \u{2014} {} ", branch_label);
-
-        let block = Block::default()
-            .title(title)
-            .title_style(
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .border_type(BorderType::Double);
-
-        // Truncate content lines to fit
-        let inner_height = area.height.saturating_sub(2) as usize;
-        let all_lines: Vec<&str> = self.pane_content.lines().collect();
-        let display_lines = if all_lines.len() > inner_height {
-            &all_lines[all_lines.len() - inner_height..]
-        } else {
-            &all_lines
-        };
-        let content = display_lines.join("\n");
-
-        let preview = Paragraph::new(content)
-            .style(Style::default().fg(Color::Gray))
-            .block(block);
-        f.render_widget(preview, area);
-    }
-
-    pub(crate) fn render_hints(&self, f: &mut Frame, area: Rect) {
-        let sep = Span::styled(" \u{2502} ", Style::default().fg(Color::DarkGray));
-
-        let mut spans: Vec<Span> = vec![
-            Span::styled(
-                "1-9",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" jump"),
-            sep.clone(),
-            Span::styled(
-                "enter",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" tmux"),
-        ];
-
-        // PR link hint
-        let has_pr_url = !self.worktrees.is_empty()
-            && self.cursor < self.worktrees.len()
-            && self.worktrees[self.cursor]
-                .pr
-                .as_ref()
-                .is_some_and(|pr| !pr.url.is_empty());
-        spans.push(sep.clone());
-        if has_pr_url {
-            spans.push(Span::styled(
-                "o",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" pr"));
-        } else {
-            spans.push(Span::styled(
-                "o pr",
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-
-        // Transfer hint
-        if self.global_config.repos.iter().any(|r| !r.remotes.is_empty()) {
-            spans.push(sep.clone());
-            let is_remote = !self.worktrees.is_empty()
-                && self.cursor < self.worktrees.len()
-                && self.worktrees[self.cursor].remote.is_some();
-            if is_remote {
-                spans.push(Span::styled(
-                    "p",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                spans.push(Span::raw(" pull"));
-            } else {
-                spans.push(Span::styled(
-                    "p",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                spans.push(Span::raw(" push"));
-            }
-        }
-
-        spans.push(sep.clone());
-        spans.push(Span::styled(
-            "d",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" delete"));
-
-        spans.push(sep.clone());
-        spans.push(Span::styled(
-            "c",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" cleanup"));
-
-        spans.push(sep.clone());
-        spans.push(Span::styled(
-            "n",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" new"));
-
-        let key_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-        spans.push(sep.clone());
-        self.append_common_hints(&mut spans, &sep, key_style, "back");
-
-        let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
-        f.render_widget(hints, area);
-    }
-
-    // -------------------------------------------------------------------
-    // Actions triggered from list view
-    // -------------------------------------------------------------------
-
-    fn selected_worktree(&self) -> Option<&Worktree> {
-        self.worktrees.get(self.cursor)
-    }
-
     /// Joins or creates a tmux session. Returns `true` if the TUI should exit
     /// (switch_target has been set), `false` if a warning was shown instead.
     ///
@@ -1153,124 +661,9 @@ impl App {
         }
     }
 
-    /// Ensures the tmux session for the selected worktree exists (creating it if needed),
-    /// stores the session name in `switch_target`, and returns `true` so the event loop
-    /// breaks and the TUI exits.
-    fn switch_to_tmux_session(&mut self) -> bool {
-        let wt = match self.selected_worktree() {
-            Some(wt) => wt.clone(),
-            None => return false,
-        };
-
-        // Guard: refuse to switch to a session on an unreachable host.
-        if let Some(ref host) = wt.remote
-            && self.host_reachable.get(host.as_str()) == Some(&false) {
-                self.warning = Some((format!("@{} is unreachable", host), Instant::now()));
-                return false;
-            }
-
-        let repo_name = self.repo_name.clone();
-
-        let session_name = wt
-            .tmux_session
-            .clone()
-            .or_else(|| {
-                wt.branch.as_ref().map(|b| {
-                    tmux::derive_session_name(&repo_name, Some(b), &wt.path)
-                })
-            })
-            .unwrap_or_default();
-
-        if session_name.is_empty() {
-            return false;
-        }
-
-        self.join_or_create_session(
-            &session_name,
-            &wt.path,
-            wt.branch.as_deref(),
-            wt.remote.as_deref(),
-            wt.pr.as_ref(),
-        )
-    }
-
-    fn open_pr_url(&self) {
-        let wt = match self.selected_worktree() {
-            Some(wt) => wt,
-            None => return,
-        };
-        if let Some(ref pr) = wt.pr
-            && !pr.url.is_empty() {
-                crate::browser::open_url(&pr.url);
-            }
-    }
-
-    fn open_issue_url(&self) {
-        let wt = match self.selected_worktree() {
-            Some(wt) => wt,
-            None => return,
-        };
-        if let Some(num) = wt.issue_number {
-            // Find repo slug from global config: match by worktree path prefix.
-            let slug = self.global_config.repos.iter().find_map(|repo| {
-                if wt.path.starts_with(&repo.path) {
-                    Some(repo.slug.as_str())
-                } else {
-                    None
-                }
-            });
-            if let Some(slug) = slug {
-                let url = format!("https://github.com/{}/issues/{}", slug, num);
-                crate::browser::open_url(&url);
-            }
-        }
-    }
-
-    fn start_delete_dialog(&mut self) {
-        let wt = match self.selected_worktree().cloned() {
-            Some(wt) => wt,
-            None => return,
-        };
-        if wt.is_bare {
-            self.warning = Some((
-                "Cannot delete the bare worktree.".to_string(),
-                Instant::now(),
-            ));
-            return;
-        }
-        self.view = ViewState::ConfirmDelete(DeleteState {
-            target: wt,
-            phase: Phase::Confirm,
-            error: None,
-        });
-    }
-
-    fn start_transfer_dialog(&mut self) {
-        let has_any_remote = self.global_config.repos.iter().any(|r| !r.remotes.is_empty());
-        if self.worktrees.is_empty()
-            || self.cursor >= self.worktrees.len()
-            || !has_any_remote
-        {
-            return;
-        }
-        let wt = &self.worktrees[self.cursor];
-        if wt.is_bare || wt.branch.is_none() {
-            self.warning = Some((
-                "Cannot transfer: no branch.".to_string(),
-                Instant::now(),
-            ));
-            return;
-        }
-        self.view = ViewState::Transfer(TransferState {
-            target: wt.clone(),
-            phase: Phase::Confirm,
-            error: None,
-        });
-    }
-
     fn enter_cleanup_view(&mut self) {
-        let stale = filter_stale(&self.worktrees);
-        let selected = stale.iter().map(|wt| wt.path.clone()).collect::<HashSet<_>>();
+        let stale = filter_stale(&self.task_rows);
+        let selected = stale.iter().map(|row| row.worktree_path.clone()).collect::<HashSet<_>>();
         self.view = ViewState::Cleanup(CleanupState {
             stale,
             selected,
