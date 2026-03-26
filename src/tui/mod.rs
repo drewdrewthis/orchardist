@@ -1198,6 +1198,7 @@ mod tests {
             pr: Some(DPrInfo {
                 number: 55,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: None,
                 has_conflicts: false,
@@ -1344,6 +1345,7 @@ mod tests {
             pr: Some(DPrInfo {
                 number: 10,
                 branch: "feat/needs-attn".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
@@ -1369,6 +1371,7 @@ mod tests {
             pr: Some(DPrInfo {
                 number: 20,
                 branch: "feat/approved".to_string(),
+                state: None,
                 review_decision: Some("approved".to_string()),
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
@@ -1425,6 +1428,7 @@ mod tests {
             pr: Some(DPrInfo {
                 number: 55,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,

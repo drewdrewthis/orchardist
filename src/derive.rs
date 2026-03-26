@@ -14,7 +14,8 @@ const HOOK_STATE_STALENESS_SECS: u64 = 300;
 
 /// Rendering order for worktree rows. Variants are ordered so that `Ord` gives
 /// the correct sort order (Shepherd first, Other last).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DisplayGroup {
     Shepherd,       // 0th — always first (the repo_main session)
     NeedsAttention, // 1st
@@ -28,6 +29,7 @@ pub enum DisplayGroup {
 pub struct PrInfo {
     pub number: u32,
     pub branch: String,
+    pub state: Option<String>,
     pub review_decision: Option<String>,
     pub checks_state: Option<String>,
     pub has_conflicts: bool,
@@ -217,6 +219,7 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
     PrInfo {
         number: pr.number,
         branch: pr.branch.clone(),
+        state: Some(pr.state.clone()),
         review_decision: pr.review_decision.clone(),
         checks_state: pr.checks_state.clone(),
         has_conflicts: pr.has_conflicts,

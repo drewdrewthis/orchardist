@@ -1905,6 +1905,7 @@ mod tests {
             pr: Some(DPrInfo {
                 number: 10,
                 branch: "feat/pr".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: None,
                 has_conflicts: false,
@@ -1977,6 +1978,7 @@ mod tests {
             pr: Some(PrInfo {
                 number: 42,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: Some("approved".to_string()),
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
@@ -2069,6 +2071,7 @@ mod tests {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: Some("changes_requested".to_string()),
                 checks_state: None,
                 has_conflicts: false,
@@ -2086,6 +2089,7 @@ mod tests {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: None,
                 has_conflicts: true,
@@ -2103,6 +2107,7 @@ mod tests {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: None,
                 has_conflicts: false,
@@ -2121,6 +2126,7 @@ mod tests {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
@@ -2243,6 +2249,7 @@ mod tests {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
+                state: None,
                 review_decision: None,
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
