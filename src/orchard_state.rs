@@ -1,3 +1,9 @@
+//! Unified data model for Orchard state.
+//!
+//! `OrchardState` is the single source of truth consumed by both the TUI and `--json` output.
+//! It contains all repos, worktrees, sessions, and host reachability data.
+//! Built by `build_state()` from multiple per-source caches; see `docs/architecture.md` for the full data flow.
+
 use std::collections::HashMap;
 
 use crate::claude_state::ClaudeState;

@@ -1,3 +1,8 @@
+//! SSH host reachability probes.
+//!
+//! Simple SSH connectivity checks for remote hosts. Used to determine if a host is
+//! reachable before attempting worktree or tmux operations on it.
+
 /// Probes whether a remote host is reachable via SSH.
 ///
 /// Returns `true` if the host responds, `false` if unreachable or if the

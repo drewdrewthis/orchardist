@@ -1,3 +1,9 @@
+//! Pure compositor that joins all per-source caches into a unified `OrchardState`.
+//!
+//! The functional core: no IO, no side effects, just data transformation.
+//! Reads cached data from issues, PRs, worktrees, tmux sessions, and host reachability,
+//! then joins them by repo and worktree. Consumed by both TUI and `--json` output.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;

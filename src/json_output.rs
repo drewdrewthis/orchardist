@@ -1,3 +1,9 @@
+//! Versioned JSON output mapping for the `--json` flag.
+//!
+//! Decouples the public JSON API from internal `OrchardState`, allowing internal refactors
+//! without breaking scripts. All output is camelCase, version-numbered, and backed by tests.
+//! Consumed directly by external tools and scripts that call `orchard --json`.
+
 use std::collections::HashMap;
 
 use serde::Serialize;
@@ -11,6 +17,8 @@ use crate::orchard_state::{IssueInfo, OrchardState, PrState, RepoState, SessionS
 // ---------------------------------------------------------------------------
 
 /// Top-level versioned JSON output for `orchard --json`.
+///
+/// Contains a version number (for forward compatibility) and collections of repos and hosts.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonOutput {
@@ -19,6 +27,9 @@ pub struct JsonOutput {
     pub hosts: HashMap<String, JsonHostState>,
 }
 
+/// A single repository in JSON output.
+///
+/// Contains the repo slug and all worktrees within it.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonRepo {
@@ -26,6 +37,9 @@ pub struct JsonRepo {
     pub worktrees: Vec<JsonWorktree>,
 }
 
+/// A single worktree in JSON output.
+///
+/// Represents a git worktree with its path, branch, host, linked issue/PR, active sessions, and display group.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonWorktree {
@@ -39,6 +53,9 @@ pub struct JsonWorktree {
     pub is_shepherd: bool,
 }
 
+/// Issue information in JSON output.
+///
+/// Subset of GitHub issue data: number, title, and state (open/closed).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonIssue {
@@ -47,6 +64,9 @@ pub struct JsonIssue {
     pub state: String,
 }
 
+/// Pull request information in JSON output.
+///
+/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts, and unresolved review threads.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
@@ -59,6 +79,10 @@ pub struct JsonPr {
     pub unresolved_threads: u32,
 }
 
+/// Claude session information in JSON output.
+///
+/// Represents an active Claude Code session: name, host, state (working/idle/input/none),
+/// and optional context window and cost metrics.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSession {
@@ -70,6 +94,9 @@ pub struct JsonSession {
     pub model: Option<String>,
 }
 
+/// Host reachability information in JSON output.
+///
+/// Simple boolean indicating whether an SSH host is reachable.
 #[derive(Serialize)]
 pub struct JsonHostState {
     pub reachable: bool,
@@ -103,6 +130,7 @@ fn claude_state_str(s: ClaudeState) -> &'static str {
 // ---------------------------------------------------------------------------
 
 impl From<&IssueInfo> for JsonIssue {
+    /// Converts an internal `IssueInfo` to JSON output format.
     fn from(i: &IssueInfo) -> Self {
         Self {
             number: i.number,
@@ -113,6 +141,7 @@ impl From<&IssueInfo> for JsonIssue {
 }
 
 impl From<&PrState> for JsonPr {
+    /// Converts an internal `PrState` to JSON output format.
     fn from(pr: &PrState) -> Self {
         Self {
             number: pr.number,
@@ -127,6 +156,7 @@ impl From<&PrState> for JsonPr {
 }
 
 impl From<&SessionState> for JsonSession {
+    /// Converts an internal `SessionState` to JSON output format, serializing Claude state to a string.
     fn from(s: &SessionState) -> Self {
         Self {
             name: s.name.clone(),
@@ -140,6 +170,7 @@ impl From<&SessionState> for JsonSession {
 }
 
 impl From<&WorktreeState> for JsonWorktree {
+    /// Converts an internal `WorktreeState` to JSON output format, serializing the display group to a string.
     fn from(ws: &WorktreeState) -> Self {
         Self {
             path: ws.path.clone(),
@@ -155,6 +186,7 @@ impl From<&WorktreeState> for JsonWorktree {
 }
 
 impl From<&RepoState> for JsonRepo {
+    /// Converts an internal `RepoState` to JSON output format.
     fn from(r: &RepoState) -> Self {
         Self {
             slug: r.slug.clone(),
@@ -164,6 +196,7 @@ impl From<&RepoState> for JsonRepo {
 }
 
 impl From<&OrchardState> for JsonOutput {
+    /// Converts the unified `OrchardState` to JSON output, setting version to 2.
     fn from(state: &OrchardState) -> Self {
         let hosts = state
             .hosts
