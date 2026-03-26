@@ -44,6 +44,7 @@ const POLL_TIMEOUT_MS: u64 = 100;
 /// transitions can be detected between cache refresh cycles.
 struct WorktreeSnapshot {
     claude_active: bool,
+    claude_working: bool,
     claude_needs_input: bool,
     ci_status: Option<String>,
     has_unresolved_threads: bool,
@@ -203,6 +204,8 @@ impl App {
                         }
                 }
             }
+            // Ensure a main tmux session exists for each configured repo.
+            ensure_main_sessions(&config);
             // Signal that caches are updated.
             let _ = tx.send(AppMsg::CacheRefreshed);
         });
@@ -312,9 +315,9 @@ impl App {
                                 );
                             }
 
-                        // Claude was active, now idle (finished).
-                        if !row.sessions.iter().any(|s| s.has_claude_active)
-                            && old.map(|o| o.claude_active).unwrap_or(false) {
+                        // Claude was working, now idle (finished).
+                        if !row.sessions.iter().any(|s| s.claude_is_working)
+                            && old.map(|o| o.claude_working).unwrap_or(false) {
                                 crate::notify::send_notification(
                                     "Claude finished",
                                     label,
@@ -346,6 +349,7 @@ impl App {
                     self.previous_worktree_states = self.task_rows.iter().map(|row| {
                         let snapshot = WorktreeSnapshot {
                             claude_active: row.sessions.iter().any(|s| s.has_claude_active),
+                            claude_working: row.sessions.iter().any(|s| s.claude_is_working),
                             claude_needs_input: row.sessions.iter().any(|s| s.claude_needs_input),
                             ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
                             has_unresolved_threads: row.pr.as_ref()
@@ -797,6 +801,112 @@ fn delete_worktree(wt: &Worktree, global_config: &global_config::GlobalConfig) -
 }
 
 // ---------------------------------------------------------------------------
+// Main session auto-creation
+// ---------------------------------------------------------------------------
+
+/// A session that needs to be created for a repo.
+#[derive(Debug, PartialEq)]
+pub(crate) struct SessionToCreate {
+    /// Derived tmux session name (e.g. "git-orchard-rs_main").
+    pub name: String,
+    /// Absolute path on disk for the session start directory.
+    pub start_dir: String,
+    /// Slug of the repo this session belongs to (for error messages).
+    pub repo_slug: String,
+}
+
+/// Pure function: given worktrees and existing sessions per repo, returns the
+/// list of sessions that need to be created.
+///
+/// A session is needed when:
+/// - The repo has at least one non-bare worktree (the origin).
+/// - No existing session has the derived name.
+pub(crate) fn compute_sessions_to_create(
+    repos: &[(
+        String,                        // repo slug
+        Vec<cache::CachedWorktree>,    // worktrees cache entries
+        Vec<cache::CachedTmuxSession>, // existing local tmux sessions
+    )],
+) -> Vec<SessionToCreate> {
+    let mut result = Vec::new();
+
+    for (slug, worktrees, sessions) in repos {
+        let origin = match worktrees.iter().find(|wt| !wt.is_bare) {
+            Some(wt) => wt,
+            None => continue,
+        };
+
+        let session_name = tmux::derive_main_session_name(
+            &origin.path,
+            Some(&origin.branch),
+        );
+
+        if sessions.iter().any(|s| s.name == session_name) {
+            continue;
+        }
+
+        result.push(SessionToCreate {
+            name: session_name,
+            start_dir: origin.path.clone(),
+            repo_slug: slug.clone(),
+        });
+    }
+
+    result
+}
+
+/// Ensures a main tmux session exists for each configured repo.
+///
+/// For each repo, reads the worktrees cache to find the origin (first non-bare
+/// entry), then checks the local tmux sessions cache. If no session with the
+/// derived name exists, creates one with `tmux::new_detached_session`.
+///
+/// Idempotent: skips repos whose session already exists.
+/// Errors from individual repos are logged but do not block others.
+///
+/// After creating any sessions, refreshes the local tmux sessions cache so
+/// that `derive_from_all_caches` picks them up.
+pub(crate) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
+    let existing_sessions = cache::read_cache::<cache::CachedTmuxSession>(
+        &cache::tmux_cache_path(None),
+    )
+    .entries;
+
+    let repo_data: Vec<_> = config
+        .repos
+        .iter()
+        .map(|repo| {
+            let worktrees = cache::read_cache::<cache::CachedWorktree>(
+                &cache::cache_path(repo.owner(), repo.repo_name(), "worktrees"),
+            )
+            .entries;
+            (repo.slug.clone(), worktrees, existing_sessions.clone())
+        })
+        .collect();
+
+    let to_create = compute_sessions_to_create(&repo_data);
+    let mut any_created = false;
+
+    for session in &to_create {
+        match tmux::new_detached_session(&session.name, &session.start_dir) {
+            Ok(()) => {
+                any_created = true;
+            }
+            Err(e) => {
+                crate::logger::LOG.warn(&format!(
+                    "ensure_main_sessions: failed to create session '{}' for repo '{}': {}",
+                    session.name, session.repo_slug, e
+                ));
+            }
+        }
+    }
+
+    if any_created {
+        let _ = cache_sources::refresh_tmux_sessions(None);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Cache-based derivation
 // ---------------------------------------------------------------------------
 
@@ -858,7 +968,8 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
         repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
     }
 
-    derive::derive_all_repos(&repo_caches)
+    let claude_states = crate::claude_state::read_all_state_files();
+    derive::derive_all_repos(&repo_caches, &claude_states)
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,7 +1202,12 @@ mod tests {
                 name: "sess".to_string(),
                 host: Some("gpu1".to_string()),
                 has_claude_active: false,
+                claude_is_working: false,
                 claude_needs_input: false,
+                claude_state: crate::claude_state::ClaudeState::None,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -1220,7 +1336,12 @@ mod tests {
                 name: "repo-claude".to_string(),
                 host: None,
                 has_claude_active: true,
+                claude_is_working: true,
                 claude_needs_input: false,
+                claude_state: crate::claude_state::ClaudeState::None,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
         };
@@ -1261,7 +1382,12 @@ mod tests {
                 name: "repo-47".to_string(),
                 host: None,
                 has_claude_active: true,
+                claude_is_working: false,
                 claude_needs_input: true,
+                claude_state: crate::claude_state::ClaudeState::Input,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
         };
@@ -1314,7 +1440,12 @@ mod tests {
                 name: "repo-gpu1".to_string(),
                 host: Some("gpu1".to_string()),
                 has_claude_active: false,
+                claude_is_working: false,
                 claude_needs_input: false,
+                claude_state: crate::claude_state::ClaudeState::None,
+                context_window_pct: None,
+                cost_usd: None,
+                model: None,
             }],
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
@@ -1401,4 +1532,146 @@ mod tests {
         assert!(app.handle_key(q), "q should return true (quit)");
     }
 
+    // -----------------------------------------------------------------------
+    // compute_sessions_to_create
+    // -----------------------------------------------------------------------
+
+    fn make_cached_worktree(path: &str, branch: &str, is_bare: bool) -> cache::CachedWorktree {
+        cache::CachedWorktree {
+            path: path.to_string(),
+            branch: branch.to_string(),
+            is_bare,
+            is_locked: false,
+            host: None,
+        }
+    }
+
+    fn make_cached_session(name: &str) -> cache::CachedTmuxSession {
+        cache::CachedTmuxSession {
+            name: name.to_string(),
+            path: "/some/path".to_string(),
+            pane_titles: vec![],
+            pane_commands: vec![],
+            host: None,
+            last_output_lines: vec![],
+        }
+    }
+
+    #[test]
+    fn returns_session_to_create_when_none_exist() {
+        let repos = vec![(
+            "hopegrace/git-orchard-rs".to_string(),
+            vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+            vec![],
+        )];
+        let result = compute_sessions_to_create(&repos);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "git-orchard-rs_main");
+        assert_eq!(result[0].start_dir, "/workspace/git-orchard-rs");
+    }
+
+    #[test]
+    fn skips_repo_when_session_already_exists() {
+        let repos = vec![(
+            "hopegrace/git-orchard-rs".to_string(),
+            vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+            vec![make_cached_session("git-orchard-rs_main")],
+        )];
+        let result = compute_sessions_to_create(&repos);
+        assert!(result.is_empty(), "expected no sessions to create when session exists");
+    }
+
+    #[test]
+    fn creates_missing_session_even_when_other_repos_have_theirs() {
+        let repos = vec![
+            (
+                "hopegrace/git-orchard-rs".to_string(),
+                vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+                vec![make_cached_session("git-orchard-rs_main")],
+            ),
+            (
+                "langwatch/langwatch".to_string(),
+                vec![make_cached_worktree("/workspace/langwatch", "main", false)],
+                vec![make_cached_session("git-orchard-rs_main")],
+            ),
+        ];
+        let result = compute_sessions_to_create(&repos);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "langwatch_main");
+        assert_eq!(result[0].start_dir, "/workspace/langwatch");
+        assert_eq!(result[0].repo_slug, "langwatch/langwatch");
+    }
+
+    #[test]
+    fn returns_sessions_for_all_repos_when_none_exist() {
+        let repos = vec![
+            (
+                "hopegrace/git-orchard-rs".to_string(),
+                vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+                vec![],
+            ),
+            (
+                "langwatch/langwatch".to_string(),
+                vec![make_cached_worktree("/workspace/langwatch", "main", false)],
+                vec![],
+            ),
+        ];
+        let result = compute_sessions_to_create(&repos);
+        assert_eq!(result.len(), 2);
+        let names: Vec<&str> = result.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"git-orchard-rs_main"), "expected git-orchard-rs_main");
+        assert!(names.contains(&"langwatch_main"), "expected langwatch_main");
+    }
+
+    #[test]
+    fn skips_repo_with_no_non_bare_worktree() {
+        let repos = vec![(
+            "hopegrace/git-orchard-rs".to_string(),
+            vec![make_cached_worktree("/workspace/git-orchard-rs", "main", true)],
+            vec![],
+        )];
+        let result = compute_sessions_to_create(&repos);
+        assert!(result.is_empty(), "expected no sessions when only bare worktrees exist");
+    }
+
+    #[test]
+    fn uses_origin_branch_not_hardcoded_main() {
+        let repos = vec![(
+            "langwatch/langwatch".to_string(),
+            vec![make_cached_worktree("/workspace/langwatch", "develop", false)],
+            vec![],
+        )];
+        let result = compute_sessions_to_create(&repos);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "langwatch_develop");
+    }
+
+    #[test]
+    fn picks_first_non_bare_worktree_as_origin() {
+        let repos = vec![(
+            "hopegrace/git-orchard-rs".to_string(),
+            vec![
+                make_cached_worktree("/workspace/git-orchard-rs", "main", false),
+                make_cached_worktree("/workspace/git-orchard-rs/.worktrees/feat", "feat/x", false),
+            ],
+            vec![],
+        )];
+        let result = compute_sessions_to_create(&repos);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start_dir, "/workspace/git-orchard-rs");
+    }
+
+    #[test]
+    fn session_name_sanitizes_dots_in_path() {
+        let repos = vec![(
+            "org/my.project-v2".to_string(),
+            vec![make_cached_worktree("/workspace/my.project-v2", "main", false)],
+            vec![],
+        )];
+        let result = compute_sessions_to_create(&repos);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "my_project-v2_main");
+    }
+
 }
+
