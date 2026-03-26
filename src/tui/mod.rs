@@ -248,22 +248,25 @@ impl App {
                         let old = old_states.get(&key);
                         let label = row.issue_title.as_deref()
                             .unwrap_or(&row.branch);
+                        let session = row.sessions.first().map(|s| s.name.as_str());
 
                         // Claude was working, now needs input.
                         if row.sessions.iter().any(|s| s.claude_needs_input)
                             && old.map(|o| !o.claude_needs_input).unwrap_or(false) {
-                                crate::notify::send_notification(
+                                crate::notify::send_notification_with_session(
                                     "Claude needs input",
                                     &format!("{} is waiting for you", label),
+                                    session,
                                 );
                             }
 
                         // Claude was working, now idle (finished).
                         if !row.sessions.iter().any(|s| s.claude_is_working)
                             && old.map(|o| o.claude_working).unwrap_or(false) {
-                                crate::notify::send_notification(
+                                crate::notify::send_notification_with_session(
                                     "Claude finished",
                                     label,
+                                    session,
                                 );
                             }
 
@@ -271,18 +274,20 @@ impl App {
                         if let Some(ref pr) = row.pr {
                             if pr.checks_state.as_deref() == Some("failing")
                                 && old.map(|o| o.ci_status.as_deref() != Some("failing")).unwrap_or(false) {
-                                    crate::notify::send_notification(
+                                    crate::notify::send_notification_with_session(
                                         "CI Failed",
                                         &format!("#{} {}", pr.number, label),
+                                        session,
                                     );
                                 }
 
                             // New unresolved review threads appeared.
                             if pr.unresolved_threads > 0
                                 && old.map(|o| !o.has_unresolved_threads).unwrap_or(false) {
-                                    crate::notify::send_notification(
+                                    crate::notify::send_notification_with_session(
                                         "Review comments",
                                         &format!("#{} has {} unresolved thread(s)", pr.number, pr.unresolved_threads),
+                                        session,
                                     );
                                 }
                         }
