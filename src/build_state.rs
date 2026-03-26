@@ -7,30 +7,32 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;
+use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
 use crate::orchard_state::{HostState, OrchardState, RepoState, WorktreeState};
 use crate::sources;
 
-/// Builds an `OrchardState` by reading all caches for the given config.
-///
-/// Does not perform any network or filesystem refresh — reads existing cached
-/// data only. Safe to call from the TUI on every tick.
-pub fn build_state(config: &GlobalConfig) -> OrchardState {
-    build_state_with_hosts(config, &HashMap::new())
-}
+// ---------------------------------------------------------------------------
+// Cache collection helper (private)
+// ---------------------------------------------------------------------------
 
-/// Builds an `OrchardState` by reading all caches, with known host reachability.
+/// Type alias for the per-repo cache tuple passed to `derive::derive_all_repos`.
+type RepoCacheTuple = (
+    String,
+    Vec<cache::CachedIssue>,
+    Vec<cache::CachedPr>,
+    Vec<cache::CachedWorktree>,
+    Vec<cache::CachedTmuxSession>,
+);
+
+/// Reads all per-repo and per-host caches from disk into the tuple format
+/// expected by `derive::derive_all_repos`.
 ///
-/// `hosts` maps host strings (e.g. "user@host") to their reachability state.
-/// Hosts absent from the map are not included in the returned state.
-pub fn build_state_with_hosts(
-    config: &GlobalConfig,
-    hosts: &HashMap<String, HostState>,
-) -> OrchardState {
+/// Pure IO: no network calls, no side effects beyond reading files.
+fn collect_repo_caches(config: &GlobalConfig) -> Vec<RepoCacheTuple> {
     let mut repo_caches = Vec::new();
     let mut tmux_hosts_seen: HashSet<String> = HashSet::new();
 
-    // Collect local tmux sessions (shared across all repos).
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
 
@@ -82,7 +84,42 @@ pub fn build_state_with_hosts(
         repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
     }
 
-    let claude_states = crate::sources::claude::read_state_files();
+    repo_caches
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Builds an `OrchardState` by reading all caches for the given config.
+///
+/// Does not perform any network or filesystem refresh — reads existing cached
+/// data only. Safe to call from the TUI on every tick.
+pub fn build_state(config: &GlobalConfig) -> OrchardState {
+    build_state_with_hosts(config, &HashMap::new())
+}
+
+/// Reads all caches and returns flat sorted `WorktreeRow`s for all repos.
+///
+/// Returns the same data as `build_state` but as the raw derive output, which
+/// the TUI consumes directly as `task_rows`. Avoids the round-trip through
+/// `WorktreeState` conversions.
+pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
+    let repo_caches = collect_repo_caches(config);
+    let claude_states = sources::claude::read_state_files();
+    crate::derive::derive_all_repos(&repo_caches, &claude_states)
+}
+
+/// Builds an `OrchardState` by reading all caches, with known host reachability.
+///
+/// `hosts` maps host strings (e.g. "user@host") to their reachability state.
+/// Hosts absent from the map are not included in the returned state.
+pub fn build_state_with_hosts(
+    config: &GlobalConfig,
+    hosts: &HashMap<String, HostState>,
+) -> OrchardState {
+    let repo_caches = collect_repo_caches(config);
+    let claude_states = sources::claude::read_state_files();
     let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states);
 
     // Group WorktreeRows back by repo_slug into RepoStates.
@@ -184,5 +221,26 @@ mod tests {
         // Repos with empty caches produce no worktrees, so repo_map is empty and
         // filter_map drops them — assert state is well-formed (no panic).
         assert!(state.repos.len() <= 2);
+    }
+
+    #[test]
+    fn build_task_rows_empty_config_returns_empty_vec() {
+        let config = GlobalConfig { repos: vec![] };
+        let rows = build_task_rows(&config);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn build_task_rows_and_build_state_produce_consistent_worktree_count() {
+        use crate::global_config::RepoConfig;
+        let config = GlobalConfig {
+            repos: vec![
+                RepoConfig { slug: "owner/repo".to_string(), path: "/tmp/repo".to_string(), remotes: vec![] },
+            ],
+        };
+        let rows = build_task_rows(&config);
+        let state = build_state(&config);
+        // Both go through the same derive pipeline — worktree counts must agree.
+        assert_eq!(rows.len(), state.all_worktrees().len());
     }
 }
