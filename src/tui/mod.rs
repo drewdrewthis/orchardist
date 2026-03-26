@@ -21,7 +21,7 @@ use crate::tmux;
 use crate::transfer;
 use crate::types::{IssueState, Worktree};
 
-use state::{AppMsg, CleanupState, Phase, ViewState};
+use state::{AppMsg, CleanupState, FilterMode, Phase, ViewState};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,6 +35,9 @@ const SPINNER_FRAMES: &[&str] = &[
 const AUTO_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
+
+/// Number of lines to capture from tmux panes for preview.
+const PANE_CAPTURE_LINES: u32 = 100;
 
 // ---------------------------------------------------------------------------
 // Notification snapshot
@@ -69,7 +72,11 @@ pub struct App {
     // Derived task view from caches
     task_rows: Vec<derive::TaskRow>,
     global_config: global_config::GlobalConfig,
-    backlog_page: usize,
+    backlog_expanded: bool,
+    show_branch_column: bool,
+    filter_mode: FilterMode,
+    search_text: String,
+    search_active: bool,
 
     // Reachability state keyed by SSH host name
     host_reachable: HashMap<String, bool>,
@@ -123,7 +130,11 @@ impl App {
             view,
             task_rows,
             global_config: global_cfg,
-            backlog_page: 0,
+            backlog_expanded: false,
+            show_branch_column: false,
+            filter_mode: FilterMode::All,
+            search_text: String::new(),
+            search_active: false,
             host_reachable: HashMap::new(),
             tx,
             rx,
@@ -229,9 +240,9 @@ impl App {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let content = if let Some(host) = remote_host {
-                remote::capture_remote_pane_content(&host, &session, 100).unwrap_or_default()
+                remote::capture_remote_pane_content(&host, &session, PANE_CAPTURE_LINES).unwrap_or_default()
             } else {
-                tmux::capture_pane_content(&session, 100).unwrap_or_default()
+                tmux::capture_pane_content(&session, PANE_CAPTURE_LINES).unwrap_or_default()
             };
             let _ = tx.send(AppMsg::PaneContent(session.clone(), content));
         });
@@ -659,7 +670,11 @@ impl App {
             view: ViewState::List,
             task_rows,
             global_config: global_config::GlobalConfig::default(),
-            backlog_page: 0,
+            backlog_expanded: false,
+            show_branch_column: false,
+            filter_mode: FilterMode::All,
+            search_text: String::new(),
+            search_active: false,
             host_reachable: HashMap::new(),
             tx,
             rx,
@@ -968,7 +983,7 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
         repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
     }
 
-    let claude_states = crate::claude_state::read_all_state_files();
+    let claude_states = crate::claude_state::read_all_state_files("/tmp");
     derive::derive_all_repos(&repo_caches, &claude_states)
 }
 
@@ -1117,10 +1132,11 @@ mod tests {
     fn task_list_renders_issue_title() {
         let rows = vec![make_task_row_with_title(42, "Fix login bug", DisplayGroup::Other)];
         let mut app = App::new_test(rows, vec![]);
+        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("Fix login bug"), "expected title in output");
         assert!(output.contains("#42"), "expected issue number in output");
-        assert!(output.contains("other"), "expected section header in output");
+        assert!(output.contains("backlog"), "expected section header in output");
     }
 
     #[test]
@@ -1153,8 +1169,8 @@ mod tests {
     #[test]
     fn j_advances_cursor_in_task_view() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::Other),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::ClaudeWorking),
         ];
         let mut app = App::new_test(rows, vec![]);
         assert_eq!(app.cursor, 0);
@@ -1166,8 +1182,8 @@ mod tests {
     #[test]
     fn k_moves_cursor_up_in_task_view() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::Other),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::ClaudeWorking),
         ];
         let mut app = App::new_test(rows, vec![]);
         app.cursor = 1;
@@ -1187,7 +1203,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
             }),
-            ..make_task_row(42, DisplayGroup::Other)
+            ..make_task_row(42, DisplayGroup::ReadyToMerge)
         };
         let mut app = App::new_test(vec![row], vec![]);
         let output = render_to_string(&mut app, 120, 40);
@@ -1258,7 +1274,7 @@ mod tests {
     fn enter_on_worktree_without_session_creates_session() {
         // In the worktree-first model, every row has a worktree, so Enter
         // creates a session rather than showing a dialog.
-        let rows = vec![make_task_row(42, DisplayGroup::Other)];
+        let rows = vec![make_task_row(42, DisplayGroup::NeedsAttention)];
         let mut app = App::new_test(rows, vec![]);
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         app.handle_key(key);
@@ -1299,25 +1315,27 @@ mod tests {
         };
         let other = make_worktree_row("feat/something", DisplayGroup::Other);
         let mut app = App::new_test(vec![shepherd, other], vec![]);
+        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
-        // "shepherd" section header must appear before "other"
+        // "shepherd" section header must appear before "backlog"
         let shepherd_pos = output.find("shepherd").expect("expected 'shepherd' section header");
-        let other_pos = output.find("other").expect("expected 'other' section header");
-        assert!(shepherd_pos < other_pos, "shepherd section must appear before other section");
+        let backlog_pos = output.find("backlog").expect("expected 'backlog' section header");
+        assert!(shepherd_pos < backlog_pos, "shepherd section must appear before backlog section");
 
-        // The shepherd worktree's branch name must be present
-        assert!(output.contains("main"), "expected shepherd branch 'main' in output");
+        // The shepherd row must be visible (shows repo name in TITLE column).
+        assert!(output.contains("repo"), "expected repo name in shepherd row output");
     }
 
     #[test]
     fn worktree_without_pr_renders_in_other_section() {
         let row = make_worktree_row("experimental", DisplayGroup::Other);
         let mut app = App::new_test(vec![row], vec![]);
+        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("experimental"), "expected branch name in output");
-        assert!(output.contains("other"), "expected 'other' section header in output");
+        assert!(output.contains("backlog"), "expected 'backlog' section header in output");
     }
 
     #[test]
@@ -1365,16 +1383,17 @@ mod tests {
             vec![needs_attention, claude_working, ready_to_merge, other],
             vec![],
         );
+        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
         let pos_na = output.find("needs attention").expect("expected 'needs attention'");
         let pos_cw = output.find("claude working").expect("expected 'claude working'");
         let pos_rtm = output.find("ready to merge").expect("expected 'ready to merge'");
-        let pos_other = output.find("other").expect("expected 'other'");
+        let pos_backlog = output.find("backlog").expect("expected 'backlog'");
 
         assert!(pos_na < pos_cw, "needs attention must come before claude working");
         assert!(pos_cw < pos_rtm, "claude working must come before ready to merge");
-        assert!(pos_rtm < pos_other, "ready to merge must come before other");
+        assert!(pos_rtm < pos_backlog, "ready to merge must come before backlog");
     }
 
     #[test]
@@ -1427,6 +1446,7 @@ mod tests {
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row], vec![]);
+        app.backlog_expanded = true;
         app.host_reachable.insert("gpu1".to_string(), true);
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1452,6 +1472,7 @@ mod tests {
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row], vec![]);
+        app.backlog_expanded = true;
         app.host_reachable.insert("gpu1".to_string(), false);
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1467,6 +1488,7 @@ mod tests {
             ..make_worktree_row("webapp-2478", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row], vec![]);
+        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("#2478"), "expected '#2478' in output");
@@ -1495,9 +1517,9 @@ mod tests {
     #[test]
     fn j_moves_cursor_down_in_worktree_first_view() {
         let rows = vec![
-            make_worktree_row("feat/one", DisplayGroup::Other),
-            make_worktree_row("feat/two", DisplayGroup::Other),
-            make_worktree_row("feat/three", DisplayGroup::Other),
+            make_worktree_row("feat/one", DisplayGroup::NeedsAttention),
+            make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
+            make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
         ];
         let mut app = App::new_test(rows, vec![]);
         assert_eq!(app.cursor, 0);
@@ -1510,9 +1532,9 @@ mod tests {
     #[test]
     fn k_moves_cursor_up_in_worktree_first_view() {
         let rows = vec![
-            make_worktree_row("feat/one", DisplayGroup::Other),
-            make_worktree_row("feat/two", DisplayGroup::Other),
-            make_worktree_row("feat/three", DisplayGroup::Other),
+            make_worktree_row("feat/one", DisplayGroup::NeedsAttention),
+            make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
+            make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
         ];
         let mut app = App::new_test(rows, vec![]);
         app.cursor = 1;
@@ -1525,9 +1547,9 @@ mod tests {
     #[test]
     fn q_returns_true_in_worktree_first_view() {
         let rows = vec![
-            make_worktree_row("feat/one", DisplayGroup::Other),
-            make_worktree_row("feat/two", DisplayGroup::Other),
-            make_worktree_row("feat/three", DisplayGroup::Other),
+            make_worktree_row("feat/one", DisplayGroup::NeedsAttention),
+            make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
+            make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
         ];
         let mut app = App::new_test(rows, vec![]);
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);

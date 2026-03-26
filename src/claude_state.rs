@@ -27,26 +27,28 @@ pub enum ClaudeState {
     None,
 }
 
-impl ClaudeState {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for ClaudeState {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "working" => Self::Working,
             "idle" => Self::Idle,
             "input" => Self::Input,
             _ => Self::None,
-        }
+        })
     }
 }
 
-/// Reads all orchard hook state files from /tmp.
+/// Reads all orchard hook state files from the given directory.
 ///
-/// Only files matching `/tmp/orchard-claude-*.json` are read.
+/// Only files matching `{dir}/orchard-claude-*.json` are read.
 /// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
-pub fn read_all_state_files() -> Vec<ClaudeStateFile> {
-    let pattern = "/tmp/orchard-claude-*.json";
+pub fn read_all_state_files(dir: &str) -> Vec<ClaudeStateFile> {
+    let pattern = format!("{}/orchard-claude-*.json", dir);
     let mut results = Vec::new();
 
-    for entry in glob::glob(pattern).into_iter().flatten() {
+    for entry in glob::glob(&pattern).into_iter().flatten() {
         if let Ok(path) = entry {
             // Skip .tmp files (in-progress atomic writes)
             if path.to_string_lossy().contains(".tmp.") {
@@ -92,22 +94,22 @@ mod tests {
 
     #[test]
     fn claude_state_from_str_working() {
-        assert_eq!(ClaudeState::from_str("working"), ClaudeState::Working);
+        assert_eq!("working".parse::<ClaudeState>().unwrap(), ClaudeState::Working);
     }
 
     #[test]
     fn claude_state_from_str_idle() {
-        assert_eq!(ClaudeState::from_str("idle"), ClaudeState::Idle);
+        assert_eq!("idle".parse::<ClaudeState>().unwrap(), ClaudeState::Idle);
     }
 
     #[test]
     fn claude_state_from_str_input() {
-        assert_eq!(ClaudeState::from_str("input"), ClaudeState::Input);
+        assert_eq!("input".parse::<ClaudeState>().unwrap(), ClaudeState::Input);
     }
 
     #[test]
     fn claude_state_from_str_unknown_is_none() {
-        assert_eq!(ClaudeState::from_str("unknown"), ClaudeState::None);
+        assert_eq!("unknown".parse::<ClaudeState>().unwrap(), ClaudeState::None);
     }
 
     #[test]

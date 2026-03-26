@@ -9,7 +9,7 @@ use crate::derive::{DisplayGroup, TaskRow};
 use crate::navigation;
 use crate::paths;
 use crate::tui::state::{
-    CleanupState, DeleteState, NewSessionState, Phase, TransferState, ViewState,
+    CleanupState, DeleteState, FilterMode, NewSessionState, Phase, TransferState, ViewState,
 };
 use crate::tui::widgets::{claude_badge, status_badge};
 use crate::tui::{filter_stale, App, SPINNER_FRAMES, WARNING_DURATION_SECS};
@@ -18,10 +18,18 @@ use crate::tmux;
 use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
-// Task view helpers
+// Constants
 // ---------------------------------------------------------------------------
 
-const BACKLOG_PAGE_SIZE: usize = 10;
+/// Number of lines to capture from tmux panes for preview.
+const PANE_CAPTURE_LINES: u32 = 100;
+
+/// Minimum terminal height for the full header/logo display.
+const FULL_HEADER_MIN_HEIGHT: u16 = 30;
+
+// ---------------------------------------------------------------------------
+// Task view helpers
+// ---------------------------------------------------------------------------
 
 /// Describes what action the Enter key should take in the task view.
 /// Used to avoid holding a borrow on `task_rows` while calling `&mut self` methods.
@@ -81,46 +89,63 @@ pub(crate) struct VisibleTask<'a> {
     pub group: DisplayGroup,
 }
 
-/// Returns the visible tasks from the pre-sorted task_rows, paginating backlog.
+/// Returns the visible tasks from the pre-sorted task_rows.
 ///
-/// `task_rows` is already sorted by display group then issue number (from derive module).
-/// This function paginates the backlog section and assigns sequential display numbers.
+/// When `backlog_expanded` is false, all DisplayGroup::Other rows are excluded.
+/// `filter_mode` and `search_text` further narrow results, but shepherd rows always bypass both.
+/// Returns `(visible_tasks, total_other_count)` where the second value is used to display
+/// the backlog summary row.
 pub(crate) fn visible_tasks<'a>(
     task_rows: &'a [TaskRow],
-    backlog_page: usize,
+    backlog_expanded: bool,
+    filter_mode: &FilterMode,
+    search_text: &str,
 ) -> (Vec<VisibleTask<'a>>, usize) {
-    let total_backlog = task_rows.iter().filter(|r| r.display_group == DisplayGroup::Other).count();
+    let total_other = task_rows.iter().filter(|r| r.display_group == DisplayGroup::Other).count();
 
-    let non_backlog: Vec<&TaskRow> = task_rows
-        .iter()
-        .filter(|r| r.display_group != DisplayGroup::Other)
-        .collect();
-
-    let backlog_all: Vec<&TaskRow> = task_rows
-        .iter()
-        .filter(|r| r.display_group == DisplayGroup::Other)
-        .collect();
-
-    let backlog_start = backlog_page * BACKLOG_PAGE_SIZE;
-    let backlog_page_slice = if backlog_start < backlog_all.len() {
-        &backlog_all[backlog_start..(backlog_start + BACKLOG_PAGE_SIZE).min(backlog_all.len())]
-    } else {
-        &[][..]
-    };
+    let search_lower = search_text.to_lowercase();
 
     let mut result = Vec::new();
     let mut num = 1usize;
 
-    for row in &non_backlog {
-        result.push(VisibleTask { num, row, group: row.display_group });
-        num += 1;
-    }
-    for row in backlog_page_slice {
+    for row in task_rows {
+        let is_other = row.display_group == DisplayGroup::Other;
+
+        // Backlog collapse: exclude Other rows when collapsed.
+        if is_other && !backlog_expanded {
+            continue;
+        }
+
+        // Shepherd rows always pass filter and search.
+        if !row.is_shepherd {
+            // Apply filter_mode.
+            let passes_filter = match filter_mode {
+                FilterMode::All => true,
+                FilterMode::HasSession => !row.sessions.is_empty(),
+                FilterMode::HasClaude => row.sessions.iter().any(|s| {
+                    s.claude_state != crate::claude_state::ClaudeState::None
+                }),
+                FilterMode::HasPR => row.pr.is_some(),
+            };
+            if !passes_filter {
+                continue;
+            }
+
+            // Apply search text.
+            if !search_lower.is_empty() {
+                let matches = row.repo_slug.to_lowercase().contains(&search_lower)
+                    || row.branch.to_lowercase().contains(&search_lower);
+                if !matches {
+                    continue;
+                }
+            }
+        }
+
         result.push(VisibleTask { num, row, group: row.display_group });
         num += 1;
     }
 
-    (result, total_backlog)
+    (result, total_other)
 }
 
 /// Returns a single PR status string for the task row.
@@ -275,23 +300,7 @@ impl App {
                 false
             }
             KeyCode::Char('R') => {
-                let unreachable: Vec<String> = self.host_reachable
-                    .iter()
-                    .filter(|(_, v)| !*v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                if unreachable.is_empty() {
-                    self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
-                } else {
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        for host in unreachable {
-                            let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
-                            let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
-                        }
-                    });
-                    self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
-                }
+                self.reconnect_unreachable_hosts();
                 false
             }
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -303,8 +312,31 @@ impl App {
     }
 
     fn handle_task_list_key(&mut self, key: KeyEvent) -> bool {
-        let (tasks, total_backlog) = visible_tasks(&self.task_rows, self.backlog_page);
-        let visible_count = tasks.len();
+        // Search mode takes over all key input except Esc/Enter.
+        if self.search_active {
+            match key.code {
+                KeyCode::Esc => {
+                    self.search_active = false;
+                    self.search_text.clear();
+                }
+                KeyCode::Enter => {
+                    self.search_active = false;
+                }
+                KeyCode::Backspace => {
+                    self.search_text.pop();
+                }
+                KeyCode::Char(c) => {
+                    self.search_text.push(c);
+                }
+                _ => {}
+            }
+            // Clamp cursor after search text change.
+            let (tasks, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
+            self.cursor = self.cursor.min(tasks.len().saturating_sub(1));
+            return false;
+        }
+
+        let visible_count = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text).0.len();
 
         match key.code {
             // Digit jump 1-9: jump to flat index
@@ -319,11 +351,6 @@ impl App {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                     self.fetch_task_pane_content();
-                } else if self.backlog_page > 0 {
-                    self.backlog_page -= 1;
-                    let (new_tasks, _) = visible_tasks(&self.task_rows, self.backlog_page);
-                    self.cursor = new_tasks.len().saturating_sub(1);
-                    self.fetch_task_pane_content();
                 }
                 false
             }
@@ -331,39 +358,31 @@ impl App {
                 if visible_count > 0 && self.cursor < visible_count - 1 {
                     self.cursor += 1;
                     self.fetch_task_pane_content();
-                } else if self.cursor == visible_count.saturating_sub(1) {
-                    let next_start = (self.backlog_page + 1) * BACKLOG_PAGE_SIZE;
-                    if next_start < total_backlog {
-                        self.backlog_page += 1;
-                        let non_backlog = tasks.iter().filter(|t| t.group != DisplayGroup::Other).count();
-                        self.cursor = non_backlog;
-                        self.fetch_task_pane_content();
-                    }
                 }
                 false
             }
             KeyCode::Enter => {
                 // Switch to the task's session, or create a worktree + session if none exist.
-                // Extract owned data from the borrow of task_rows before taking &mut self.
-                let action = {
-                    let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
-                    visible.get(self.cursor).map(|vt| {
-                        if let Some(session) = vt.row.sessions.first() {
-                            TaskEnterAction::JoinSession {
-                                session_name: session.name.clone(),
-                                worktree_path: vt.row.worktree_path.clone(),
-                                branch: Some(vt.row.branch.clone()),
-                                host: session.host.clone(),
-                            }
-                        } else {
-                            TaskEnterAction::CreateSession {
-                                worktree_path: vt.row.worktree_path.clone(),
-                                branch: Some(vt.row.branch.clone()),
-                                host: vt.row.worktree_host.clone(),
-                            }
+                // Compute tasks, extract owned data, then drop before calling &mut self methods.
+                let (tasks, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
+                let action = tasks.get(self.cursor).map(|vt| {
+                    if let Some(session) = vt.row.sessions.first() {
+                        TaskEnterAction::JoinSession {
+                            session_name: session.name.clone(),
+                            worktree_path: vt.row.worktree_path.clone(),
+                            branch: Some(vt.row.branch.clone()),
+                            host: session.host.clone(),
                         }
-                    })
-                };
+                    } else {
+                        TaskEnterAction::CreateSession {
+                            worktree_path: vt.row.worktree_path.clone(),
+                            branch: Some(vt.row.branch.clone()),
+                            host: vt.row.worktree_host.clone(),
+                        }
+                    }
+                });
+                // Drop tasks (and its borrow of task_rows) before calling &mut self methods.
+                drop(tasks);
                 match action {
                     None => false,
                     Some(TaskEnterAction::JoinSession { session_name, worktree_path, branch, host }) => {
@@ -409,7 +428,7 @@ impl App {
             }
             KeyCode::Char('o') => {
                 // Open PR URL in browser for the selected task.
-                let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+                let (visible, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
                 if let Some(vt) = visible.get(self.cursor)
                     && let Some(ref pr) = vt.row.pr {
                         // Construct PR URL from repo_slug and PR number.
@@ -420,12 +439,31 @@ impl App {
             }
             KeyCode::Char('i') => {
                 // Open issue URL in browser for the selected task.
-                let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+                let (visible, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
                 if let Some(vt) = visible.get(self.cursor)
                     && let Some(num) = vt.row.issue_number {
                         let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
                         crate::browser::open_url(&url);
                     }
+                false
+            }
+            KeyCode::Char('b') => {
+                self.backlog_expanded = !self.backlog_expanded;
+                self.cursor = 0;
+                false
+            }
+            KeyCode::Char('B') => {
+                self.show_branch_column = !self.show_branch_column;
+                false
+            }
+            KeyCode::Char('f') => {
+                self.filter_mode = self.filter_mode.next();
+                self.cursor = 0;
+                false
+            }
+            KeyCode::Char('/') => {
+                self.search_active = true;
+                self.search_text.clear();
                 false
             }
             KeyCode::Char('c') => {
@@ -438,23 +476,7 @@ impl App {
                 false
             }
             KeyCode::Char('R') => {
-                let unreachable: Vec<String> = self.host_reachable
-                    .iter()
-                    .filter(|(_, v)| !*v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                if unreachable.is_empty() {
-                    self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
-                } else {
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        for host in unreachable {
-                            let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
-                            let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
-                        }
-                    });
-                    self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
-                }
+                self.reconnect_unreachable_hosts();
                 false
             }
             KeyCode::Char('q') | KeyCode::Esc => true,
@@ -465,7 +487,7 @@ impl App {
     /// Fetches pane content for the task at the current cursor position.
     pub(crate) fn fetch_task_pane_content(&mut self) {
         self.pane_content.clear();
-        let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+        let (visible, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
         if let Some(vt) = visible.get(self.cursor) {
             // Find a session to capture pane content from.
             if let Some(session) = vt.row.sessions.first() {
@@ -474,13 +496,38 @@ impl App {
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let content = if let Some(host) = remote_host {
-                        remote::capture_remote_pane_content(&host, &session_name, 100).unwrap_or_default()
+                        remote::capture_remote_pane_content(&host, &session_name, PANE_CAPTURE_LINES).unwrap_or_default()
                     } else {
-                        tmux::capture_pane_content(&session_name, 100).unwrap_or_default()
+                        tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES).unwrap_or_default()
                     };
                     let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
                 });
             }
+        }
+    }
+
+    /// Attempts to reconnect all currently unreachable SSH hosts.
+    ///
+    /// If all hosts are reachable, displays an informational warning. Otherwise
+    /// spawns a background thread to probe each unreachable host and send results
+    /// back via the App message channel.
+    fn reconnect_unreachable_hosts(&mut self) {
+        let unreachable: Vec<String> = self.host_reachable
+            .iter()
+            .filter(|(_, v)| !*v)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if unreachable.is_empty() {
+            self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
+        } else {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                for host in unreachable {
+                    let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
+                    let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
+                }
+            });
+            self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
         }
     }
 
@@ -1037,52 +1084,9 @@ impl App {
         ));
         spans.push(Span::raw(" new"));
 
+        let key_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
         spans.push(sep.clone());
-        if self.refreshing {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
-            spans.push(Span::styled(
-                format!("{} refreshing...", spinner),
-                Style::default().fg(Color::Cyan),
-            ));
-        } else {
-            spans.push(Span::styled(
-                "r",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" refresh"));
-        }
-
-        let has_unreachable = self.host_reachable.values().any(|&v| !v);
-        if has_unreachable {
-            spans.push(sep.clone());
-            spans.push(Span::styled(
-                "R",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" reconnect"));
-        }
-
-        spans.push(sep.clone());
-        spans.push(Span::styled(
-            "q",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" back"));
-
-        spans.push(sep);
-        spans.push(Span::styled(
-            "?",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" help"));
+        self.append_common_hints(&mut spans, &sep, key_style, "back");
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1288,23 +1292,43 @@ impl App {
         let area = f.area();
         let hdr_height = header_height(area.height);
 
-        let (tasks, total_backlog) = visible_tasks(&self.task_rows, self.backlog_page);
+        let (tasks, total_backlog) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
         let has_remote = self.task_rows.iter().any(|r| {
             r.sessions.iter().any(|s| s.host.is_some()) || r.worktree_host.is_some()
         });
 
+        let show_branch = self.show_branch_column;
+
         // Compute available width for the TITLE column.
-        // Fixed columns: # (3) + spacing(1) + ISSUE (7) + spacing(1) + TITLE (flex) + spacing(1)
-        //                + BRANCH (20) + spacing(1) + STATUS (22) + spacing(1) + CLAUDE (10) + borders (2)
+        // Fixed columns: # (3) + spacing(1) + ISSUE (6) + spacing(1) + TITLE (flex) + spacing(1)
+        //                + STATUS (22) + spacing(1) + CLAUDE (10) + borders (2)
+        // Optional: + BRANCH (20) + spacing(1)
         // With HOST: + spacing(1) + HOST (12)
-        let fixed = 3 + 1 + 6 + 1 + 1 + 20 + 1 + 22 + 1 + 10 + 2;
+        let fixed = 3 + 1 + 6 + 1 + 1 + 22 + 1 + 10 + 2;
+        let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 1 + 12 } else { 0 };
-        let title_width = (area.width as usize).saturating_sub(fixed + host_extra);
+        let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
+
+        // Column widths — BRANCH column optional, HOST column included only when remotes exist.
+        let mut widths: Vec<Constraint> = vec![
+            Constraint::Length(3),   // #
+            Constraint::Length(6),   // ISSUE
+            Constraint::Min(20),     // TITLE (flexible)
+        ];
+        if show_branch {
+            widths.push(Constraint::Length(20)); // BRANCH (left-truncated)
+        }
+        if has_remote {
+            widths.push(Constraint::Length(12)); // HOST
+        }
+        widths.push(Constraint::Length(22)); // STATUS
+        widths.push(Constraint::Length(10)); // CLAUDE
 
         // Build rows for the table, including section header rows.
-        let (rows, row_heights) = self.build_task_table_rows(&tasks, total_backlog, has_remote, title_width);
+        let num_columns = widths.len();
+        let (rows, row_heights) = self.build_task_table_rows(&tasks, show_branch, total_backlog, self.backlog_expanded, has_remote, title_width, num_columns);
 
         let has_warning = self
             .warning
@@ -1353,19 +1377,6 @@ impl App {
         idx += 1;
         idx += 1; // spacer
 
-        // Column widths — HOST column included only when remotes exist.
-        let mut widths: Vec<Constraint> = vec![
-            Constraint::Length(3),   // #
-            Constraint::Length(6),   // ISSUE
-            Constraint::Min(20),     // TITLE (flexible)
-            Constraint::Length(20),  // BRANCH (left-truncated)
-        ];
-        if has_remote {
-            widths.push(Constraint::Length(12)); // HOST
-        }
-        widths.push(Constraint::Length(22)); // STATUS
-        widths.push(Constraint::Length(10)); // CLAUDE
-
         // Header row
         let header_style = Style::default()
             .fg(Color::DarkGray)
@@ -1374,8 +1385,10 @@ impl App {
             Cell::from(" #"),
             Cell::from("ISSUE"),
             Cell::from("TITLE"),
-            Cell::from("BRANCH"),
         ];
+        if show_branch {
+            header_cells.push(Cell::from("BRANCH"));
+        }
         if has_remote {
             header_cells.push(Cell::from("HOST"));
         }
@@ -1425,16 +1438,16 @@ impl App {
     fn build_task_table_rows(
         &self,
         tasks: &[VisibleTask],
+        show_branch: bool,
         total_backlog: usize,
+        backlog_expanded: bool,
         has_remote: bool,
         title_width: usize,
+        num_columns: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>) {
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
         let mut last_group: Option<DisplayGroup> = None;
-
-        let backlog_count = tasks.iter().filter(|t| t.group == DisplayGroup::Other).count();
-        let backlog_has_more = total_backlog > backlog_count + self.backlog_page * BACKLOG_PAGE_SIZE;
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
             let selected = flat_idx == self.cursor;
@@ -1442,7 +1455,7 @@ impl App {
             // Section header when display group changes
             if last_group != Some(vt.group) {
                 last_group = Some(vt.group);
-                let header_row = group_header_row(vt.group, backlog_count, total_backlog, backlog_has_more, has_remote);
+                let header_row = group_header_row(vt.group, num_columns, total_backlog, backlog_expanded);
                 rows.push(header_row);
                 row_heights.push(1);
             }
@@ -1487,15 +1500,18 @@ impl App {
             } else {
                 Cell::from("").style(Style::default().fg(Color::DarkGray))
             };
-            let branch_display = crate::paths::truncate_left(branch_tail(&vt.row.branch), 20);
-            let branch_cell = Cell::from(branch_display).style(Style::default().fg(Color::DarkGray));
 
             let mut cells = vec![
                 Cell::from(format!("{:>2}", vt.num)),
                 issue_cell,
                 Cell::from(title_display),
-                branch_cell,
             ];
+
+            if show_branch {
+                let branch_display = crate::paths::truncate_left(branch_tail(&vt.row.branch), 20);
+                let branch_cell = Cell::from(branch_display).style(Style::default().fg(Color::DarkGray));
+                cells.push(branch_cell);
+            }
 
             if has_remote {
                 let host_cell = if let Some(h) = task_host {
@@ -1520,23 +1536,17 @@ impl App {
             row_heights.push(1);
         }
 
-        // Edge case: empty visible list but backlog exists
-        if last_group.is_none() && total_backlog > 0 {
-            let header_row = group_header_row(DisplayGroup::Other, 0, total_backlog, backlog_has_more, has_remote);
-            rows.push(header_row);
-            row_heights.push(1);
-            let mut empty_cells = vec![
-                Cell::from(""),
-                Cell::from(""),
-                Cell::from("(no tasks on this page)").style(Style::default().fg(Color::DarkGray)),
-                Cell::from(""),
+        // When backlog is collapsed and there are backlog items, add summary row.
+        if !backlog_expanded && total_backlog > 0 {
+            let summary_text = format!("{} backlog items -- press b to expand", total_backlog);
+            let mut summary_cells = vec![
+                Cell::from(summary_text).style(Style::default().fg(Color::DarkGray)),
             ];
-            if has_remote {
-                empty_cells.push(Cell::from(""));
+            // Fill remaining columns with empty cells to match num_columns.
+            for _ in 1..num_columns {
+                summary_cells.push(Cell::from(""));
             }
-            empty_cells.push(Cell::from(""));
-            empty_cells.push(Cell::from(""));
-            rows.push(Row::new(empty_cells));
+            rows.push(Row::new(summary_cells));
             row_heights.push(1);
         }
 
@@ -1594,10 +1604,50 @@ impl App {
         f.render_widget(preview, area);
     }
 
+    /// Appends the common trailing hint keys: refresh, reconnect, quit, help.
+    fn append_common_hints(&self, spans: &mut Vec<Span<'static>>, sep: &Span<'static>, key_style: Style, quit_label: &'static str) {
+        if self.refreshing {
+            let spinner = SPINNER_FRAMES[self.spinner_frame];
+            spans.push(Span::styled(
+                format!("{} refreshing...", spinner),
+                Style::default().fg(Color::Cyan),
+            ));
+        } else {
+            spans.push(Span::styled("r", key_style));
+            spans.push(Span::raw(" refresh"));
+        }
+
+        let has_unreachable = self.host_reachable.values().any(|&v| !v);
+        if has_unreachable {
+            spans.push(sep.clone());
+            spans.push(Span::styled("R", key_style));
+            spans.push(Span::raw(" reconnect"));
+        }
+
+        spans.push(sep.clone());
+        spans.push(Span::styled("q", key_style));
+        spans.push(Span::raw(format!(" {}", quit_label)));
+
+        spans.push(sep.clone());
+        spans.push(Span::styled("?", key_style));
+        spans.push(Span::raw(" help"));
+    }
+
     /// Renders the hint bar for task mode.
     pub(crate) fn render_hints_task(&self, f: &mut Frame, area: Rect) {
         let sep = Span::styled(" \u{2502} ", Style::default().fg(Color::DarkGray));
         let key_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+
+        // When search is active, show the search input indicator.
+        if self.search_active {
+            let search_display = format!("/ {}_", self.search_text);
+            let hints = Paragraph::new(Line::from(vec![
+                Span::styled(search_display, Style::default().fg(Color::Yellow)),
+                Span::styled("  esc:cancel  enter:apply", Style::default().fg(Color::DarkGray)),
+            ])).alignment(Alignment::Center);
+            f.render_widget(hints, area);
+            return;
+        }
 
         let mut spans: Vec<Span> = vec![
             Span::styled("enter", key_style),
@@ -1607,7 +1657,7 @@ impl App {
 
         // PR link hint — dim when selected task has no PR.
         let has_pr = !self.task_rows.is_empty() && {
-            let (visible, _) = visible_tasks(&self.task_rows, self.backlog_page);
+            let (visible, _) = visible_tasks(&self.task_rows, self.backlog_expanded, &self.filter_mode, &self.search_text);
             visible.get(self.cursor).is_some_and(|vt| vt.row.pr.is_some())
         };
         if has_pr {
@@ -1618,36 +1668,46 @@ impl App {
         }
         spans.push(sep.clone());
 
+        spans.push(Span::styled("b", key_style));
+        spans.push(Span::raw(":backlog"));
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("B", key_style));
+        spans.push(Span::raw(":branch"));
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("f", key_style));
+        spans.push(Span::raw(":filter"));
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("/", key_style));
+        spans.push(Span::raw(":search"));
+
+        // Active filter label.
+        if self.filter_mode != crate::tui::state::FilterMode::All {
+            spans.push(sep.clone());
+            spans.push(Span::styled(
+                format!("[{}]", self.filter_mode),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        // Active search text label.
+        if !self.search_text.is_empty() {
+            spans.push(sep.clone());
+            spans.push(Span::styled(
+                format!("[/{}]", self.search_text),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        spans.push(sep.clone());
+
         spans.push(Span::styled("c", key_style));
         spans.push(Span::raw(" cleanup"));
         spans.push(sep.clone());
 
-        if self.refreshing {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
-            spans.push(Span::styled(
-                format!("{} refreshing...", spinner),
-                Style::default().fg(Color::Cyan),
-            ));
-            spans.push(sep.clone());
-        } else {
-            spans.push(Span::styled("r", key_style));
-            spans.push(Span::raw(" refresh"));
-            spans.push(sep.clone());
-        }
-
-        let has_unreachable = self.host_reachable.values().any(|&v| !v);
-        if has_unreachable {
-            spans.push(Span::styled("R", key_style));
-            spans.push(Span::raw(" reconnect"));
-            spans.push(sep.clone());
-        }
-
-        spans.push(Span::styled("q", key_style));
-        spans.push(Span::raw(" quit"));
-
-        spans.push(sep.clone());
-        spans.push(Span::styled("?", key_style));
-        spans.push(Span::raw(" help"));
+        self.append_common_hints(&mut spans, &sep, key_style, "quit");
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1659,21 +1719,18 @@ impl App {
 // ---------------------------------------------------------------------------
 
 /// Creates a section header row spanning all columns for a display group.
+///
+/// `num_columns` is the total number of columns in the table (must match the data rows).
+/// For the Other group when expanded, the label includes the backlog count.
+/// The Shepherd header uses bold + Cyan styling.
 fn group_header_row(
     group: DisplayGroup,
-    visible_backlog: usize,
+    num_columns: usize,
     total_backlog: usize,
-    has_more: bool,
-    has_remote: bool,
+    backlog_expanded: bool,
 ) -> Row<'static> {
-    let label = if group == DisplayGroup::Other {
-        let count_info = if visible_backlog < total_backlog {
-            format!("{} of {}", visible_backlog, total_backlog)
-        } else {
-            format!("{}", total_backlog)
-        };
-        let hint = if has_more { "  j/k \u{25bc}\u{25b2}" } else { "" };
-        format!("{} ({}){}", group.label(), count_info, hint)
+    let label = if group == DisplayGroup::Other && backlog_expanded {
+        format!("backlog ({})", total_backlog)
     } else {
         group.label().to_string()
     };
@@ -1689,30 +1746,28 @@ fn group_header_row(
         line_char.repeat(40)
     );
 
-    let color = group.color();
-    // 6 cells when no HOST column (#, ISSUE, TITLE, BRANCH, STATUS, CLAUDE),
-    // 7 when HOST is present (adds HOST between BRANCH and STATUS).
-    // The header text goes in the TITLE column (index 2, flexible width).
-    if has_remote {
-        Row::new(vec![
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(text).style(Style::default().fg(color)),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-        ])
+    let (color, bold) = if group == DisplayGroup::Shepherd {
+        (Color::Cyan, true)
     } else {
-        Row::new(vec![
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(text).style(Style::default().fg(color)),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-        ])
+        (group.color(), false)
+    };
+
+    let title_style = if bold {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color)
+    };
+
+    // Header text goes in the TITLE column (index 2). Fill remaining columns with empty cells.
+    let mut cells: Vec<Cell> = vec![
+        Cell::from(""),
+        Cell::from(""),
+        Cell::from(text).style(title_style),
+    ];
+    for _ in 3..num_columns {
+        cells.push(Cell::from(""));
     }
+    Row::new(cells)
 }
 
 /// Returns the height (in terminal rows) to allocate for the header.
@@ -1721,7 +1776,7 @@ fn group_header_row(
 /// shown in a bordered block (7 rows). On shorter terminals a single compact
 /// line is used instead so the task list gets as much vertical space as possible.
 pub(crate) fn header_height(terminal_height: u16) -> u16 {
-    if terminal_height >= 30 { 9 } else { 1 }
+    if terminal_height >= FULL_HEADER_MIN_HEIGHT { 9 } else { 1 }
 }
 
 #[cfg(test)]
@@ -1742,6 +1797,20 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_shepherd: false,
+        }
+    }
+
+    fn make_session_info(name: &str) -> SessionInfo {
+        SessionInfo {
+            name: name.to_string(),
+            host: None,
+            has_claude_active: false,
+            claude_is_working: false,
+            claude_needs_input: false,
+            claude_state: crate::claude_state::ClaudeState::None,
+            context_window_pct: None,
+            cost_usd: None,
+            model: None,
         }
     }
 
@@ -1772,29 +1841,30 @@ mod tests {
             make_task_row(2, DisplayGroup::ClaudeWorking),
             make_task_row(3, DisplayGroup::Other),
         ];
-        let (visible, total_backlog) = visible_tasks(&rows, 0);
-        assert_eq!(visible.len(), 3);
+        // With backlog collapsed (default), Other rows are excluded.
+        let (visible, total_backlog) = visible_tasks(&rows, false, &FilterMode::All, "");
+        assert_eq!(visible.len(), 2);
         assert_eq!(total_backlog, 1);
     }
 
     #[test]
-    fn backlog_pagination_first_page() {
-        let rows: Vec<TaskRow> = (1u32..=25)
+    fn backlog_collapsed_excludes_other() {
+        let rows: Vec<TaskRow> = (1u32..=5)
             .map(|i| make_task_row(i, DisplayGroup::Other))
             .collect();
-        let (visible, total) = visible_tasks(&rows, 0);
-        assert_eq!(total, 25);
-        assert_eq!(visible.len(), BACKLOG_PAGE_SIZE);
+        let (visible, total) = visible_tasks(&rows, false, &FilterMode::All, "");
+        assert_eq!(total, 5);
+        assert_eq!(visible.len(), 0, "collapsed backlog should have no visible rows");
     }
 
     #[test]
-    fn backlog_pagination_second_page() {
-        let rows: Vec<TaskRow> = (1u32..=25)
+    fn backlog_expanded_includes_other() {
+        let rows: Vec<TaskRow> = (1u32..=5)
             .map(|i| make_task_row(i, DisplayGroup::Other))
             .collect();
-        let (visible, total) = visible_tasks(&rows, 1);
-        assert_eq!(total, 25);
-        assert_eq!(visible.len(), BACKLOG_PAGE_SIZE);
+        let (visible, total) = visible_tasks(&rows, true, &FilterMode::All, "");
+        assert_eq!(total, 5);
+        assert_eq!(visible.len(), 5, "expanded backlog should show all Other rows");
     }
 
     #[test]
@@ -1804,11 +1874,101 @@ mod tests {
             make_task_row(20, DisplayGroup::ClaudeWorking),
             make_task_row(30, DisplayGroup::Other),
         ];
-        let (visible, _) = visible_tasks(&rows, 0);
+        let (visible, _) = visible_tasks(&rows, true, &FilterMode::All, "");
         assert_eq!(visible.len(), 3);
         assert_eq!(visible[0].num, 1);
         assert_eq!(visible[1].num, 2);
         assert_eq!(visible[2].num, 3);
+    }
+
+    #[test]
+    fn filter_has_session() {
+        let row_no_session = make_task_row(1, DisplayGroup::NeedsAttention);
+        let row_with_session = TaskRow {
+            sessions: vec![make_session_info("sess")],
+            ..make_task_row(2, DisplayGroup::ClaudeWorking)
+        };
+        let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
+        let rows = vec![shepherd, row_no_session, row_with_session];
+        let (visible, _) = visible_tasks(&rows, false, &FilterMode::HasSession, "");
+        // shepherd always passes + row with session
+        assert_eq!(visible.len(), 2);
+        assert!(visible.iter().any(|v| v.row.is_shepherd));
+        assert!(visible.iter().any(|v| !v.row.sessions.is_empty()));
+    }
+
+    #[test]
+    fn filter_has_pr() {
+        use crate::derive::PrInfo as DPrInfo;
+        let row_no_pr = make_task_row(1, DisplayGroup::NeedsAttention);
+        let row_with_pr = TaskRow {
+            pr: Some(DPrInfo {
+                number: 10,
+                branch: "feat/pr".to_string(),
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(2, DisplayGroup::ReadyToMerge)
+        };
+        let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
+        let rows = vec![shepherd, row_no_pr, row_with_pr];
+        let (visible, _) = visible_tasks(&rows, false, &FilterMode::HasPR, "");
+        assert_eq!(visible.len(), 2);
+        assert!(visible.iter().any(|v| v.row.is_shepherd));
+        assert!(visible.iter().any(|v| v.row.pr.is_some()));
+    }
+
+    #[test]
+    fn filter_has_claude() {
+        let row_no_claude = make_task_row(1, DisplayGroup::NeedsAttention);
+        let row_with_claude = TaskRow {
+            sessions: vec![SessionInfo {
+                claude_state: crate::claude_state::ClaudeState::Working,
+                has_claude_active: true,
+                claude_is_working: true,
+                ..make_session_info("sess")
+            }],
+            ..make_task_row(2, DisplayGroup::ClaudeWorking)
+        };
+        let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
+        let rows = vec![shepherd, row_no_claude, row_with_claude];
+        let (visible, _) = visible_tasks(&rows, false, &FilterMode::HasClaude, "");
+        assert_eq!(visible.len(), 2);
+        assert!(visible.iter().any(|v| v.row.is_shepherd));
+        assert!(visible.iter().any(|v| v.row.sessions.iter().any(|s| s.claude_state != crate::claude_state::ClaudeState::None)));
+    }
+
+    #[test]
+    fn search_filters_by_text() {
+        let row_match = TaskRow {
+            branch: "feat/my-feature".to_string(),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let row_no_match = TaskRow {
+            branch: "feat/other-thing".to_string(),
+            ..make_task_row(2, DisplayGroup::ClaudeWorking)
+        };
+        let rows = vec![row_match, row_no_match];
+        let (visible, _) = visible_tasks(&rows, false, &FilterMode::All, "my-feature");
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].row.branch, "feat/my-feature");
+    }
+
+    #[test]
+    fn shepherd_always_visible() {
+        let shepherd = TaskRow {
+            is_shepherd: true,
+            branch: "main".to_string(),
+            ..make_task_row(1, DisplayGroup::Shepherd)
+        };
+        let other = make_task_row(2, DisplayGroup::NeedsAttention);
+        let rows = vec![shepherd, other];
+        // HasPR filter would exclude both, but shepherd bypasses it.
+        let (visible, _) = visible_tasks(&rows, false, &FilterMode::HasPR, "nomatch");
+        assert_eq!(visible.len(), 1);
+        assert!(visible[0].row.is_shepherd);
     }
 
     #[test]
@@ -2075,5 +2235,87 @@ mod tests {
         };
         let (text, _) = claude_status_text(&row);
         assert!(!text.contains('%'), "expected no % when context_window_pct is None: {}", text);
+    }
+
+    #[test]
+    fn pr_status_pending_ci() {
+        let row = TaskRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                review_decision: None,
+                checks_state: Some("pending".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(1, DisplayGroup::Other)
+        };
+        let (text, _) = pr_status_text(&row);
+        assert!(text.contains("pending"), "expected 'pending' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_multiple_sessions() {
+        let row = TaskRow {
+            sessions: vec![
+                SessionInfo {
+                    name: "sess1".to_string(),
+                    host: None,
+                    has_claude_active: true,
+                    claude_is_working: true,
+                    claude_needs_input: false,
+                    claude_state: crate::claude_state::ClaudeState::Working,
+                    context_window_pct: None,
+                    cost_usd: None,
+                    model: None,
+                },
+                SessionInfo {
+                    name: "sess2".to_string(),
+                    host: None,
+                    has_claude_active: true,
+                    claude_is_working: false,
+                    claude_needs_input: true,
+                    claude_state: crate::claude_state::ClaudeState::Input,
+                    context_window_pct: Some(45.0),
+                    cost_usd: None,
+                    model: None,
+                },
+            ],
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = claude_status_text(&row);
+        // Input takes priority over working; count suffix should show " 2"
+        assert!(text.contains("input"), "expected 'input' in: {}", text);
+        assert!(text.contains("2"), "expected session count '2' in: {}", text);
+    }
+
+    #[test]
+    fn search_is_case_insensitive() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ];
+        // Search with uppercase should match lowercase branch "feat/issue-1"
+        let (visible, _) = visible_tasks(&rows, true, &FilterMode::All, "FEAT/ISSUE");
+        assert_eq!(visible.len(), 1);
+    }
+
+    #[test]
+    fn combined_filter_and_search() {
+        let mut row_with_session = make_task_row(1, DisplayGroup::NeedsAttention);
+        row_with_session.sessions = vec![make_session_info("sess1")];
+        row_with_session.branch = "feat/target-branch".to_string();
+
+        let mut row_with_session_no_match = make_task_row(2, DisplayGroup::NeedsAttention);
+        row_with_session_no_match.sessions = vec![make_session_info("sess2")];
+        row_with_session_no_match.branch = "feat/other-branch".to_string();
+
+        let row_no_session = make_task_row(3, DisplayGroup::NeedsAttention);
+
+        let rows = vec![row_with_session, row_with_session_no_match, row_no_session];
+
+        // HasSession filter + search "target" should only match the first row
+        let (visible, _) = visible_tasks(&rows, true, &FilterMode::HasSession, "target");
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].row.issue_number, Some(1));
     }
 }

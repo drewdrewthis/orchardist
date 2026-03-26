@@ -1,6 +1,44 @@
 use std::collections::HashSet;
+use std::fmt;
 
 use crate::types::Worktree;
+
+// ---------------------------------------------------------------------------
+// Filter mode for the task list
+// ---------------------------------------------------------------------------
+
+/// Determines which rows are shown in the task list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterMode {
+    All,
+    HasSession,
+    HasClaude,
+    HasPR,
+}
+
+impl FilterMode {
+    /// Cycles to the next filter mode in order: All→HasSession→HasClaude→HasPR→All.
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::HasSession,
+            Self::HasSession => Self::HasClaude,
+            Self::HasClaude => Self::HasPR,
+            Self::HasPR => Self::All,
+        }
+    }
+}
+
+impl fmt::Display for FilterMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::All => "All",
+            Self::HasSession => "Has Session",
+            Self::HasClaude => "Has Claude",
+            Self::HasPR => "Has PR",
+        };
+        write!(f, "{}", label)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // View state (sum type carrying dialog state)
