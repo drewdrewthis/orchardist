@@ -369,8 +369,10 @@ impl App {
                         ts.error = Some(e);
                     }
                 }
-                AppMsg::CleanupDone => {
+                AppMsg::CleanupDone { deleted, errors } => {
                     if let ViewState::Cleanup(ref mut cs) = self.view {
+                        cs.deleted = deleted;
+                        cs.errors = errors;
                         cs.phase = Phase::Done;
                     }
                     self.start_refresh();
@@ -567,10 +569,15 @@ impl App {
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            let mut deleted = Vec::new();
+            let mut errors = Vec::new();
             for row in &items {
-                let _ = delete_task_row(row, &global_config);
+                match delete_task_row(row, &global_config) {
+                    Ok(()) => deleted.push(row.worktree_path.clone()),
+                    Err(e) => errors.push(format!("{}: {}", row.branch, e)),
+                }
             }
-            let _ = tx.send(AppMsg::CleanupDone);
+            let _ = tx.send(AppMsg::CleanupDone { deleted, errors });
         });
     }
 

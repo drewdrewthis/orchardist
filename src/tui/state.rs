@@ -105,5 +105,8 @@ pub enum AppMsg {
     DeleteErr(String),
     TransferDone,
     TransferErr(String),
-    CleanupDone,
+    CleanupDone {
+        deleted: Vec<String>,  // paths successfully deleted
+        errors: Vec<String>,   // error messages
+    },
 }

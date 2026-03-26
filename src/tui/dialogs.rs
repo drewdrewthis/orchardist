@@ -291,7 +291,7 @@ impl App {
         match state.phase {
             Phase::Done => {
                 lines.push(Line::styled(
-                    "Cleanup complete",
+                    "\u{2713} Cleanup complete",
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
@@ -299,15 +299,31 @@ impl App {
                 lines.push(Line::from(""));
                 if !state.deleted.is_empty() {
                     lines.push(Line::from(format!(
-                        "Deleted {} worktree(s).",
+                        "Deleted {} worktree(s):",
                         state.deleted.len()
                     )));
-                }
-                for e in &state.errors {
+                    for d in &state.deleted {
+                        let short = paths::truncate_left(&paths::tildify(d), 50);
+                        lines.push(Line::styled(
+                            format!("  \u{2713} {}", short),
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                } else {
                     lines.push(Line::styled(
-                        format!("\u{2716} {}", e),
-                        Style::default().fg(Color::Red),
+                        "No worktrees were deleted.",
+                        Style::default().fg(Color::Yellow),
                     ));
+                }
+                if !state.errors.is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::styled("Errors:", Style::default().fg(Color::Red)));
+                    for e in &state.errors {
+                        lines.push(Line::styled(
+                            format!("  \u{2716} {}", e),
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
                 }
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
@@ -317,7 +333,20 @@ impl App {
             }
             Phase::InProgress => {
                 let spinner = SPINNER_FRAMES[self.spinner_frame];
-                lines.push(Line::from(format!("{} Cleaning up...", spinner)));
+                lines.push(Line::styled(
+                    format!("{} Deleting {} worktree(s)...", spinner, state.selected.len()),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ));
+                lines.push(Line::from(""));
+                for row in &state.stale {
+                    if state.selected.contains(&row.worktree_path) {
+                        let short = paths::truncate_left(&paths::tildify(&row.worktree_path), 50);
+                        lines.push(Line::styled(
+                            format!("  {} {}", spinner, short),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
             }
             _ => {
                 lines.push(Line::styled(
