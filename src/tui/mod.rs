@@ -46,7 +46,6 @@ const PANE_CAPTURE_LINES: u32 = 100;
 /// Captures the notification-relevant state of one worktree row so that
 /// transitions can be detected between cache refresh cycles.
 struct WorktreeSnapshot {
-    claude_active: bool,
     claude_working: bool,
     claude_needs_input: bool,
     ci_status: Option<String>,
@@ -359,7 +358,6 @@ impl App {
                     // Save current state as snapshots for the next comparison.
                     self.previous_worktree_states = self.task_rows.iter().map(|row| {
                         let snapshot = WorktreeSnapshot {
-                            claude_active: row.sessions.iter().any(|s| s.has_claude_active),
                             claude_working: row.sessions.iter().any(|s| s.claude_is_working),
                             claude_needs_input: row.sessions.iter().any(|s| s.claude_needs_input),
                             ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
@@ -927,64 +925,10 @@ pub(crate) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
 
 /// Reads all caches for all configured repos and derives task rows.
 ///
-/// For each repo: reads issues, PRs, and worktrees caches. Reads tmux session
-/// caches (local + each remote host). Passes everything through
-/// `derive::derive_all_repos` to produce sorted, grouped task rows.
+/// Delegates to `build_state::build_task_rows` which owns the single
+/// authoritative cache-reading and derivation logic.
 fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::TaskRow> {
-    use std::collections::HashSet;
-
-    let mut repo_caches = Vec::new();
-    let mut tmux_hosts_seen: HashSet<String> = HashSet::new();
-
-    // Collect local tmux sessions (always needed).
-    let local_sessions = cache::read_cache::<cache::CachedTmuxSession>(
-        &cache::tmux_cache_path(None),
-    )
-    .entries;
-
-    for repo in &config.repos {
-        let issues = cache::read_cache::<cache::CachedIssue>(
-            &cache::cache_path(repo.owner(), repo.repo_name(), "issues"),
-        )
-        .entries;
-
-        let prs = cache::read_cache::<cache::CachedPr>(
-            &cache::cache_path(repo.owner(), repo.repo_name(), "prs"),
-        )
-        .entries;
-
-        let mut worktrees = cache::read_cache::<cache::CachedWorktree>(
-            &cache::cache_path(repo.owner(), repo.repo_name(), "worktrees"),
-        )
-        .entries;
-
-        // Merge in remote worktrees from the shared cache (already host-tagged
-        // by refresh_remote_worktrees).
-        if !repo.remotes.is_empty() {
-            let remote_wts = cache::read_cache::<cache::CachedWorktree>(
-                &cache::cache_path(repo.owner(), repo.repo_name(), "remote_worktrees"),
-            )
-            .entries;
-            worktrees.extend(remote_wts);
-        }
-
-        // Gather sessions: local + remote for each unique host across this repo's remotes.
-        let mut sessions = local_sessions.clone();
-        for remote in &repo.remotes {
-            if tmux_hosts_seen.insert(remote.host.clone()) {
-                let remote_sessions = cache::read_cache::<cache::CachedTmuxSession>(
-                    &cache::tmux_cache_path(Some(&remote.host)),
-                )
-                .entries;
-                sessions.extend(remote_sessions);
-            }
-        }
-
-        repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
-    }
-
-    let claude_states = crate::claude_state::read_all_state_files("/tmp");
-    derive::derive_all_repos(&repo_caches, &claude_states)
+    crate::build_state::build_task_rows(config)
 }
 
 // ---------------------------------------------------------------------------
