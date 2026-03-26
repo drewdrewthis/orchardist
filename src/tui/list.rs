@@ -1737,6 +1737,7 @@ mod tests {
             worktree_host: None,
             issue_number: Some(issue_number),
             issue_title: Some(format!("Test task {}", issue_number)),
+            issue_state: None,
             pr: None,
             sessions: vec![],
             display_group: group,
