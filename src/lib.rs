@@ -15,6 +15,7 @@ pub mod logger;
 mod navigation;
 pub mod orchard_state;
 pub mod paths;
+pub mod priority;
 pub mod remote;
 pub mod shell;
 pub mod sources;

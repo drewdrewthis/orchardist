@@ -109,6 +109,7 @@ pub struct JsonHostState {
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
         DisplayGroup::Shepherd => "shepherd",
+        DisplayGroup::Prioritized => "prioritized",
         DisplayGroup::NeedsAttention => "needs_attention",
         DisplayGroup::ClaudeWorking => "claude_working",
         DisplayGroup::ReadyToMerge => "ready_to_merge",

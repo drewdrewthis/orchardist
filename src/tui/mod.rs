@@ -66,7 +66,8 @@ pub struct App {
     // Derived task view from caches
     task_rows: Vec<derive::TaskRow>,
     global_config: global_config::GlobalConfig,
-    backlog_expanded: bool,
+    /// Index into `global_config.repos`: 0 = all repos, 1+ = specific repo.
+    active_repo_index: usize,
     show_branch_column: bool,
     filter_mode: FilterMode,
     search_text: String,
@@ -123,7 +124,7 @@ impl App {
             view,
             task_rows,
             global_config: global_cfg,
-            backlog_expanded: false,
+            active_repo_index: 0,
             show_branch_column: false,
             filter_mode: FilterMode::All,
             search_text: String::new(),
@@ -136,6 +137,22 @@ impl App {
             switch_target: None,
             previous_worktree_states: HashMap::new(),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Active repo filtering
+    // -------------------------------------------------------------------
+
+    /// Returns the active repo slug when a specific repo is selected (index > 0).
+    ///
+    /// Index 0 means "all repos" (returns `None`). Index N returns
+    /// `global_config.repos[N-1].slug`.
+    pub(crate) fn active_repo_slug(&self) -> Option<&str> {
+        if self.active_repo_index == 0 {
+            return None;
+        }
+        let idx = self.active_repo_index.saturating_sub(1);
+        self.global_config.repos.get(idx).map(|r| r.slug.as_str())
     }
 
     // -------------------------------------------------------------------
@@ -569,7 +586,7 @@ impl App {
             view: ViewState::List,
             task_rows,
             global_config: global_config::GlobalConfig::default(),
-            backlog_expanded: false,
+            active_repo_index: 0,
             show_branch_column: false,
             filter_mode: FilterMode::All,
             search_text: String::new(),
@@ -1002,11 +1019,10 @@ mod tests {
     fn task_list_renders_issue_title() {
         let rows = vec![make_task_row_with_title(42, "Fix login bug", DisplayGroup::Other)];
         let mut app = App::new_test(rows);
-        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("Fix login bug"), "expected title in output");
         assert!(output.contains("#42"), "expected issue number in output");
-        assert!(output.contains("backlog"), "expected section header in output");
+        assert!(output.contains("other"), "expected section header in output");
     }
 
     #[test]
@@ -1192,13 +1208,12 @@ mod tests {
         };
         let other = make_worktree_row("feat/something", DisplayGroup::Other);
         let mut app = App::new_test(vec![shepherd, other]);
-        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
-        // "shepherd" section header must appear before "backlog"
+        // "shepherd" section header must appear before "other"
         let shepherd_pos = output.find("shepherd").expect("expected 'shepherd' section header");
-        let backlog_pos = output.find("backlog").expect("expected 'backlog' section header");
-        assert!(shepherd_pos < backlog_pos, "shepherd section must appear before backlog section");
+        let other_pos = output.find("other").expect("expected 'other' section header");
+        assert!(shepherd_pos < other_pos, "shepherd section must appear before other section");
 
         // The shepherd row must be visible (shows repo name in TITLE column).
         assert!(output.contains("repo"), "expected repo name in shepherd row output");
@@ -1208,11 +1223,10 @@ mod tests {
     fn worktree_without_pr_renders_in_other_section() {
         let row = make_worktree_row("experimental", DisplayGroup::Other);
         let mut app = App::new_test(vec![row]);
-        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("experimental"), "expected branch name in output");
-        assert!(output.contains("backlog"), "expected 'backlog' section header in output");
+        assert!(output.contains("other"), "expected 'other' section header in output");
     }
 
     #[test]
@@ -1261,17 +1275,16 @@ mod tests {
         let mut app = App::new_test(
             vec![needs_attention, claude_working, ready_to_merge, other],
         );
-        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
         let pos_na = output.find("needs attention").expect("expected 'needs attention'");
         let pos_cw = output.find("claude working").expect("expected 'claude working'");
         let pos_rtm = output.find("ready to merge").expect("expected 'ready to merge'");
-        let pos_backlog = output.find("backlog").expect("expected 'backlog'");
+        let pos_other = output.find("other").expect("expected 'other'");
 
         assert!(pos_na < pos_cw, "needs attention must come before claude working");
         assert!(pos_cw < pos_rtm, "claude working must come before ready to merge");
-        assert!(pos_rtm < pos_backlog, "ready to merge must come before backlog");
+        assert!(pos_rtm < pos_other, "ready to merge must come before other");
     }
 
     #[test]
@@ -1325,7 +1338,6 @@ mod tests {
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row]);
-        app.backlog_expanded = true;
         app.host_reachable.insert("gpu1".to_string(), true);
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1351,7 +1363,6 @@ mod tests {
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row]);
-        app.backlog_expanded = true;
         app.host_reachable.insert("gpu1".to_string(), false);
         let output = render_to_string(&mut app, 120, 40);
 
@@ -1367,7 +1378,6 @@ mod tests {
             ..make_worktree_row("langwatch-2478", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row]);
-        app.backlog_expanded = true;
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("#2478"), "expected '#2478' in output");
