@@ -113,7 +113,12 @@ On startup: `build_state` from existing cache files (instant), then kick off bot
 
 ### `orchard --json`
 
-A versioned `JsonOutput` struct maps from `OrchardState`. This decouples the internal model from the public API.
+**Always fetches fresh data.** Unlike the TUI which uses cached data for instant
+startup, `--json` runs a full fetch from all sources before producing output.
+Scripts that pipe `orchard --json | jq` expect real-time data, not stale cache.
+
+A versioned `JsonOutput` struct maps from `OrchardState`. This decouples the
+internal model from the public API.
 
 ```rust
 #[derive(Serialize)]
@@ -124,7 +129,18 @@ struct JsonOutput {
 }
 ```
 
-Internal refactors to `OrchardState` don't break scripts. The mapping layer is thin and explicit.
+Internal refactors to `OrchardState` don't break scripts. The mapping layer is
+thin and explicit.
+
+### Documentation requirements
+
+Every module file starts with `//!` module-level docs explaining what it does,
+what it depends on, and how it fits into the data flow. Every public function
+and type has `///` doc comments. Examples in doc comments are compiled and tested
+by `cargo test`.
+
+This is not optional. See `docs/architecture.md` for the full documentation
+expectations.
 
 ### No display state file
 
