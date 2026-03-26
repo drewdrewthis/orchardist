@@ -18,10 +18,11 @@ const HOOK_STATE_STALENESS_SECS: u64 = 300;
 #[serde(rename_all = "snake_case")]
 pub enum DisplayGroup {
     Shepherd,       // 0th — always first (the repo_main session)
-    NeedsAttention, // 1st
-    ClaudeWorking,  // 2nd
-    ReadyToMerge,   // 3rd
-    Other,          // 4th (worktrees without PRs, misc)
+    Prioritized,    // 1st — user-flagged as priority
+    NeedsAttention, // 2nd
+    ClaudeWorking,  // 3rd
+    ReadyToMerge,   // 4th
+    Other,          // 5th (worktrees without PRs, misc)
 }
 
 /// Lightweight PR summary attached to a worktree row.
@@ -135,6 +136,8 @@ pub fn derive_worktree_rows(
 
         let display_group = if is_shepherd {
             DisplayGroup::Shepherd
+        } else if crate::priority::is_prioritized(&wt.path) {
+            DisplayGroup::Prioritized
         } else {
             derive_display_group(pr_info.as_ref(), &session_infos)
         };
