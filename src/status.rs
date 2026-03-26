@@ -1,5 +1,5 @@
 /// Writes tmux-formatted status text to `~/.local/state/git-orchard/status.txt`
-/// after each collector refresh, so the tmux status bar can display orchard state.
+/// after each data refresh, so the tmux status bar can display orchard state.
 use crate::types::{ChecksStatus, Worktree};
 
 /// Counts active worktrees, claude sessions, and failing CI from the worktree list,

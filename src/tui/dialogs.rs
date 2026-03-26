@@ -255,7 +255,7 @@ impl App {
             }
             KeyCode::Char(' ') => {
                 if !state.stale.is_empty() && state.cursor < state.stale.len() {
-                    let path = state.stale[state.cursor].path.clone();
+                    let path = state.stale[state.cursor].worktree_path.clone();
                     if state.selected.contains(&path) {
                         state.selected.remove(&path);
                     } else {
@@ -267,7 +267,7 @@ impl App {
                 let selected: Vec<_> = state
                     .stale
                     .iter()
-                    .filter(|wt| state.selected.contains(&wt.path))
+                    .filter(|row| state.selected.contains(&row.worktree_path))
                     .cloned()
                     .collect();
                 if selected.is_empty() {
@@ -341,34 +341,33 @@ impl App {
                         Style::default().fg(Color::DarkGray),
                     ));
                 } else {
-                    for (i, wt) in state.stale.iter().enumerate() {
+                    for (i, row) in state.stale.iter().enumerate() {
                         let cursor_char = if i == state.cursor {
                             "\u{25b8} "
                         } else {
                             "  "
                         };
 
-                        let check = if state.selected.contains(&wt.path) {
+                        let check = if state.selected.contains(&row.worktree_path) {
                             "[\u{2713}]"
                         } else {
                             "[ ]"
                         };
 
-                        let path_str = paths::truncate_left(&paths::tildify(&wt.path), 40);
-                        let branch_str = wt.branch.as_deref().unwrap_or("");
+                        let path_str = paths::truncate_left(&paths::tildify(&row.worktree_path), 40);
 
                         let mut parts = format!(
                             "{}{}  {}  {}",
-                            cursor_char, check, path_str, branch_str
+                            cursor_char, check, path_str, row.branch
                         );
 
-                        if let Some(ref pr) = wt.pr {
+                        if let Some(ref pr) = row.pr {
                             parts.push_str(&format!("  PR #{}", pr.number));
-                        } else if let Some(num) = wt.issue_number {
+                        } else if let Some(num) = row.issue_number {
                             parts.push_str(&format!("  issue #{}", num));
                         }
 
-                        if let Some(ref host) = wt.remote {
+                        if let Some(ref host) = row.worktree_host {
                             parts.push_str(&format!("  @{}", host));
                         }
 
