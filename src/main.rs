@@ -1,7 +1,9 @@
 use std::env;
 use std::io::IsTerminal;
 
-use orchard::collector;
+use orchard::build_state;
+use orchard::global_config;
+use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::shell;
 use orchard::tui;
@@ -64,19 +66,14 @@ fn handle_upgrade() {
 }
 
 fn handle_json() {
-    match collector::collect_worktree_data() {
-        Ok(data) => {
-            let json = serde_json::to_string_pretty(&data).unwrap_or_else(|e| {
-                eprintln!("Error serializing JSON: {e}");
-                std::process::exit(1);
-            });
-            println!("{json}");
-        }
-        Err(e) => {
-            eprintln!("Error collecting data: {e}");
-            std::process::exit(1);
-        }
-    }
+    let config = global_config::load_global_config();
+    let state = build_state::refresh_and_build(&config);
+    let output = JsonOutput::from(&state);
+    let json = serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
+        eprintln!("Error serializing JSON: {e}");
+        std::process::exit(1);
+    });
+    println!("{json}");
 }
 
 /// Runs the TUI. If inside tmux and run directly (not via popup wrapper),
