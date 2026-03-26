@@ -178,3 +178,130 @@ impl From<&OrchardState> for JsonOutput {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claude_state::ClaudeState;
+    use crate::derive::DisplayGroup;
+    use crate::orchard_state::{RepoState, SessionState, WorktreeState};
+
+    fn empty_state() -> OrchardState {
+        OrchardState::new()
+    }
+
+    fn make_worktree(display_group: DisplayGroup) -> WorktreeState {
+        WorktreeState {
+            path: "/repos/main".to_string(),
+            branch: "main".to_string(),
+            is_bare: false,
+            host: None,
+            issue: None,
+            pr: None,
+            sessions: vec![],
+            display_group,
+            is_shepherd: false,
+        }
+    }
+
+    #[test]
+    fn from_orchard_state_produces_version_2() {
+        let output = JsonOutput::from(&empty_state());
+        assert_eq!(output.version, 2);
+    }
+
+    #[test]
+    fn from_orchard_state_empty_repos_and_hosts() {
+        let output = JsonOutput::from(&empty_state());
+        assert!(output.repos.is_empty());
+        assert!(output.hosts.is_empty());
+    }
+
+    #[test]
+    fn display_group_shepherd_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Shepherd);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.display_group, "shepherd");
+    }
+
+    #[test]
+    fn display_group_needs_attention_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::NeedsAttention);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.display_group, "needs_attention");
+    }
+
+    #[test]
+    fn display_group_claude_working_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::ClaudeWorking);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.display_group, "claude_working");
+    }
+
+    #[test]
+    fn display_group_ready_to_merge_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::ReadyToMerge);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.display_group, "ready_to_merge");
+    }
+
+    #[test]
+    fn display_group_other_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Other);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.display_group, "other");
+    }
+
+    #[test]
+    fn json_output_has_camelcase_version_field() {
+        let output = JsonOutput::from(&empty_state());
+        let value = serde_json::to_value(&output).unwrap();
+        assert!(value.get("version").is_some(), "expected 'version' key");
+    }
+
+    #[test]
+    fn json_repo_has_camelcase_slug_field() {
+        let state = OrchardState {
+            repos: vec![RepoState { slug: "owner/repo".to_string(), worktrees: vec![] }],
+            hosts: HashMap::new(),
+        };
+        let output = JsonOutput::from(&state);
+        let value = serde_json::to_value(&output).unwrap();
+        let repo = &value["repos"][0];
+        assert!(repo.get("slug").is_some(), "expected 'slug' key in repo");
+        assert!(repo.get("worktrees").is_some(), "expected 'worktrees' key in repo");
+    }
+
+    #[test]
+    fn json_worktree_has_camelcase_is_shepherd_field() {
+        let state = OrchardState {
+            repos: vec![RepoState {
+                slug: "owner/repo".to_string(),
+                worktrees: vec![make_worktree(DisplayGroup::Shepherd)],
+            }],
+            hosts: HashMap::new(),
+        };
+        let output = JsonOutput::from(&state);
+        let value = serde_json::to_value(&output).unwrap();
+        let wt = &value["repos"][0]["worktrees"][0];
+        assert!(wt.get("isShepherd").is_some(), "expected camelCase 'isShepherd' key");
+        assert!(wt.get("displayGroup").is_some(), "expected camelCase 'displayGroup' key");
+    }
+
+    #[test]
+    fn json_session_claude_state_serializes_as_string() {
+        let session = SessionState {
+            name: "repo-claude".to_string(),
+            host: None,
+            has_claude_active: true,
+            claude_is_working: true,
+            claude_needs_input: false,
+            claude_state: ClaudeState::Working,
+            context_window_pct: None,
+            cost_usd: None,
+            model: None,
+        };
+        let js = JsonSession::from(&session);
+        assert_eq!(js.claude_state, "working");
+    }
+}
