@@ -329,10 +329,15 @@ impl App {
                 match action {
                     None => false,
                     Some(TaskEnterAction::JoinSession { session_name, worktree_path, branch, host }) => {
-                        // Guard: refuse to join a session on an unreachable host.
+                        // Guard: refuse to join a session on a host not confirmed reachable.
                         if let Some(ref h) = host
-                            && self.host_reachable.get(h.as_str()) == Some(&false) {
-                                self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                            && self.host_reachable.get(h.as_str()) != Some(&true) {
+                                let msg = if self.host_reachable.contains_key(h.as_str()) {
+                                    format!("@{} is unreachable", h)
+                                } else {
+                                    format!("@{} — checking connectivity…", h)
+                                };
+                                self.warning = Some((msg, Instant::now()));
                                 return false;
                             }
                         // Has a session — join or create it (handles both remote and local).
@@ -345,10 +350,15 @@ impl App {
                         )
                     }
                     Some(TaskEnterAction::CreateSession { worktree_path, branch, host }) => {
-                        // Guard: refuse to create a session on an unreachable host.
+                        // Guard: refuse to create a session on a host not confirmed reachable.
                         if let Some(ref h) = host {
-                            if self.host_reachable.get(h.as_str()) == Some(&false) {
-                                self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                            if self.host_reachable.get(h.as_str()) != Some(&true) {
+                                let msg = if self.host_reachable.contains_key(h.as_str()) {
+                                    format!("@{} is unreachable", h)
+                                } else {
+                                    format!("@{} — checking connectivity…", h)
+                                };
+                                self.warning = Some((msg, Instant::now()));
                                 return false;
                             }
                         }
@@ -912,10 +922,11 @@ impl App {
             // Determine host name for reachability lookup: prefer session host, fall back to worktree host.
             let task_host: Option<&str> = vt.row.sessions.iter().find_map(|s| s.host.as_deref())
                 .or(vt.row.worktree_host.as_deref());
-            let host_unreachable = task_host
-                .and_then(|h| self.host_reachable.get(h))
-                .copied()
-                == Some(false);
+            let host_unreachable = task_host.is_some()
+                && task_host
+                    .and_then(|h| self.host_reachable.get(h))
+                    .copied()
+                    != Some(true);
 
             let row_style = if selected {
                 let base = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
