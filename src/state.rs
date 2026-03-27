@@ -67,7 +67,7 @@ pub enum TaskStatus {
 /// Returns the state directory path (~/.local/state/git-orchard/).
 pub fn state_dir() -> PathBuf {
     dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .unwrap_or_else(std::env::temp_dir)
         .join(".local/state/git-orchard")
 }
 

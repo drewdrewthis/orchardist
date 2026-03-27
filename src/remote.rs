@@ -19,23 +19,30 @@ pub fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-// SSH flags used for all orchard remote connections.
-const SSH_FLAGS: &[&str] = &[
-    "-o",
-    "ConnectTimeout=5",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ControlMaster=auto",
-    "-o",
-    "ControlPath=/tmp/orchard-ssh-%r@%h:%p",
-    "-o",
-    "ControlPersist=600",
-];
+/// Returns the SSH flags used for all orchard remote connections.
+///
+/// The ControlPath is placed under the system temp directory (`$TMPDIR` / `std::env::temp_dir`)
+/// rather than a hardcoded `/tmp`.
+fn ssh_flags() -> Vec<String> {
+    let control_path = std::env::temp_dir().join("orchard-ssh-%r@%h:%p");
+    vec![
+        "-o".to_string(),
+        "ConnectTimeout=5".to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={}", control_path.display()),
+        "-o".to_string(),
+        "ControlPersist=600".to_string(),
+    ]
+}
 
 /// Runs a shell command on a remote host over SSH and returns stdout.
 pub fn ssh_exec(host: &str, command: &str) -> anyhow::Result<String> {
-    let mut args: Vec<&str> = SSH_FLAGS.to_vec();
+    let flags = ssh_flags();
+    let mut args: Vec<&str> = flags.iter().map(|s| s.as_str()).collect();
     args.push(host);
     args.push(command);
 

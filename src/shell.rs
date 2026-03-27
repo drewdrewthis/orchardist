@@ -4,7 +4,7 @@ use std::path::Path;
 /// Returns the orchard popup wrapper script content.
 pub fn get_wrapper_script() -> &'static str {
     r#"#!/bin/sh
-errfile=$(mktemp /tmp/orchard-err.XXXXXX)
+errfile=$(mktemp "${TMPDIR:-/tmp}/orchard-err.XXXXXX")
 session=$(orchard 2>"$errfile")
 rc=$?
 if [ $rc -ne 0 ]; then
