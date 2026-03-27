@@ -68,8 +68,8 @@ The config declares repos to manage:
 // ~/.config/orchard/config.json
 {
   "repos": [
-    { "slug": "langwatch/langwatch", "path": "/Users/USER/workspace/langwatch", "remote": { "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/langwatch-workspace" } },
-    { "slug": "drewdrewthis/git-orchard-rs", "path": "/Users/USER/workspace/git-orchard-rs" }
+    { "slug": "langwatch/langwatch", "path": "/home/user/workspace/langwatch", "remote": { "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/langwatch-workspace" } },
+    { "slug": "drewdrewthis/git-orchard-rs", "path": "/home/user/workspace/git-orchard-rs" }
   ]
 }
 ```

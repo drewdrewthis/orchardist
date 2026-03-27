@@ -126,7 +126,7 @@ mod tests {
             },
             status: TaskStatus::InProgress,
             priority: 1,
-            worktree: Some("/Users/hope/workspace/git-orchard-rs-47".to_string()),
+            worktree: Some("/home/user/workspace/git-orchard-rs-47".to_string()),
             sessions: vec!["git-orchard-rs_47_main".to_string()],
             pr: Some(53),
             remote_host: None,

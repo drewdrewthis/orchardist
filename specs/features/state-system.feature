@@ -17,8 +17,8 @@ Feature: Persistent state and event system
       """json
       {
         "repos": [
-          { "path": "/Users/hope/workspace/git-orchard-rs" },
-          { "path": "/Users/hope/workspace/api-server", "remote": { "host": "devbox", "repoPath": "/srv/api-server" } }
+          { "path": "/home/user/workspace/git-orchard-rs" },
+          { "path": "/home/user/workspace/api-server", "remote": { "host": "devbox", "repoPath": "/srv/api-server" } }
         ]
       }
       """
@@ -29,26 +29,26 @@ Feature: Persistent state and event system
 
   @unit
   Scenario: Per-repo .git/orchard.json is still read for remote config
-    Given a repo at "/Users/hope/workspace/myrepo" with ".git/orchard.json":
+    Given a repo at "/home/user/workspace/myrepo" with ".git/orchard.json":
       """json
       { "remote": { "host": "devbox", "repoPath": "/srv/myrepo" } }
       """
-    And the global config has repo "/Users/hope/workspace/myrepo" with no remote
+    And the global config has repo "/home/user/workspace/myrepo" with no remote
     When config is loaded for "myrepo"
     Then the remote config from ".git/orchard.json" is used
 
   @unit
   Scenario: Global config remote overrides per-repo config
-    Given a global config with repo "/Users/hope/workspace/myrepo" and remote host "newbox"
+    Given a global config with repo "/home/user/workspace/myrepo" and remote host "newbox"
     And a ".git/orchard.json" with remote host "oldbox"
     When config is loaded for "myrepo"
     Then the remote host is "newbox"
 
   @unit
   Scenario: Running orchard in an unconfigured repo auto-adds it
-    Given the global config has no entry for "/Users/hope/workspace/newrepo"
-    When orchard is run from "/Users/hope/workspace/newrepo"
-    Then "/Users/hope/workspace/newrepo" is added to the global config repos list
+    Given the global config has no entry for "/home/user/workspace/newrepo"
+    When orchard is run from "/home/user/workspace/newrepo"
+    Then "/home/user/workspace/newrepo" is added to the global config repos list
 
   # ===================================================================
   # State file — structure and persistence
@@ -73,7 +73,7 @@ Feature: Persistent state and event system
             "source": { "type": "github_issue", "repo": "hopegrace/git-orchard-rs", "number": 47 },
             "status": "in_progress",
             "priority": 1,
-            "worktree": "/Users/hope/workspace/git-orchard-rs-47",
+            "worktree": "/home/user/workspace/git-orchard-rs-47",
             "sessions": ["git-orchard-rs_47_main"],
             "pr": 53,
             "created_at": "2026-03-18T10:00:00Z",
@@ -180,7 +180,7 @@ Feature: Persistent state and event system
   @e2e
   Scenario: Enter on a task with a worktree but no session
     Given a task "git-orchard-rs#47" with status "in_progress"
-    And it has worktree "/Users/hope/workspace/git-orchard-rs-47"
+    And it has worktree "/home/user/workspace/git-orchard-rs-47"
     And it has no sessions
     When I press Enter on the task
     Then a tmux session is created in the existing worktree
@@ -203,8 +203,8 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: Session discovery binds orphaned sessions to tasks
-    Given a tmux session "git-orchard-rs_47_main" exists at path "/Users/hope/workspace/git-orchard-rs-47"
-    And task "git-orchard-rs#47" has worktree "/Users/hope/workspace/git-orchard-rs-47"
+    Given a tmux session "git-orchard-rs_47_main" exists at path "/home/user/workspace/git-orchard-rs-47"
+    And task "git-orchard-rs#47" has worktree "/home/user/workspace/git-orchard-rs-47"
     And the task's sessions array is empty
     When the collector runs session discovery
     Then "git-orchard-rs_47_main" is added to the task's sessions array

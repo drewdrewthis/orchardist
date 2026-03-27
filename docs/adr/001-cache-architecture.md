@@ -85,12 +85,12 @@ A global config at `~/.config/orchard/config.json` declares all managed repos:
   "repos": [
     {
       "slug": "owner/repo-a",
-      "path": "/Users/USER/workspace/repo-a",
+      "path": "/home/user/workspace/repo-a",
       "remote": { "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/repo-a-workspace" }
     },
     {
       "slug": "owner/repo-b",
-      "path": "/Users/USER/workspace/repo-b"
+      "path": "/home/user/workspace/repo-b"
     }
   ]
 }
