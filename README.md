@@ -10,18 +10,7 @@ Built with [Rust](https://www.rust-lang.org/) + [Ratatui](https://ratatui.rs/).
 
 Orchard gives you a single dashboard showing everything happening across your repos: which worktrees have PRs, what state they're in, which Claude sessions are working/idle/waiting for input, and what needs your attention.
 
-```
-┌ TASKS — acme/webapp ─────────────────────────────────────────────┐
-│  # ISSUE  TITLE                        BRANCH           STATUS    CLAUDE │
-│ ──── shepherd ─────────────────────────────────────────────────────────── │
-│  1        webapp                    main             no PR     ● idle │
-│ ──── needs attention ─────────────────────────────────────────────────── │
-│  2 #2507  Add ability to rename code   …rename-code     #2552 ✖ failing │
-│  3 #2600  Structured logging           …clickhouse      #2606 ✖ failing │
-│ ──── other ───────────────────────────────────────────────────────────── │
-│  4 #2669  Clean up dead config         …agent-bloat     #2671 ○ review  │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+![Orchard TUI](assets/screenshot.png)
 
 ## Features
 
