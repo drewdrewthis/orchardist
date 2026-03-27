@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 /// State written by the orchard-state.sh hook script.
@@ -45,8 +47,8 @@ impl std::str::FromStr for ClaudeState {
 ///
 /// Only files matching `{dir}/orchard-claude-*.json` are read.
 /// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
-pub fn read_all_state_files(dir: &str) -> Vec<ClaudeStateFile> {
-    let pattern = format!("{}/orchard-claude-*.json", dir);
+pub fn read_all_state_files(dir: &Path) -> Vec<ClaudeStateFile> {
+    let pattern = format!("{}/orchard-claude-*.json", dir.display());
     let mut results = Vec::new();
 
     for entry in glob::glob(&pattern).into_iter().flatten() {

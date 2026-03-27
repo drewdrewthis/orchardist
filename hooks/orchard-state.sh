@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Orchard state hook — writes Claude session state to /tmp for orchard to read.
+# Orchard state hook — writes Claude session state to $TMPDIR for orchard to read.
 # Registered for: PreToolUse, PostToolUse, Stop, Notification, SessionEnd, SessionStart
 
 set -euo pipefail
@@ -17,7 +17,7 @@ cwd=$(echo "$input" | jq -r '.cwd // empty')
 tmux_session=$(tmux display-message -p '#S' 2>/dev/null || true)
 [ -z "$tmux_session" ] && exit 0
 
-state_file="/tmp/orchard-claude-${tmux_session}.json"
+state_file="${TMPDIR:-/tmp}/orchard-claude-${tmux_session}.json"
 
 case "$event" in
   PreToolUse|PostToolUse)
