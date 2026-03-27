@@ -149,7 +149,7 @@ fn repo_config_slug_splits_correctly() {
     };
 
     assert_eq!(repo.owner(), "acme");
-    assert_eq!(repo.repo_name(), "git-orchard-rs");
+    assert_eq!(repo.repo_name(), "my-project");
 }
 
 // ---------------------------------------------------------------------------

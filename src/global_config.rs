@@ -413,7 +413,7 @@ mod tests {
             remotes: vec![],
         };
 
-        assert_eq!(repo.owner(), "webapp");
+        assert_eq!(repo.owner(), "acme");
         assert_eq!(repo.repo_name(), "webapp");
     }
 
@@ -580,7 +580,7 @@ mod tests {
         };
 
         assert_eq!(repo.owner(), "acme");
-        assert_eq!(repo.repo_name(), "git-orchard-rs");
+        assert_eq!(repo.repo_name(), "my-project");
     }
 
     #[test]
