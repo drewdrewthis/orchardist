@@ -823,4 +823,51 @@ mod tests {
         assert_eq!(cfg.repos[0].remotes.len(), 1);
         assert_eq!(cfg.repos[0].remotes[0].host, "new@host");
     }
+
+    #[test]
+    fn duplicate_standalone_session_names_returns_default_config() {
+        let json = r#"{
+            "repos": [],
+            "tmux_sessions": [
+                { "name": "shepherd", "command": "echo 1", "cwd": "/tmp" },
+                { "name": "shepherd", "command": "echo 2", "cwd": "/tmp" }
+            ]
+        }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+        // Duplicate names cause fallback to default (empty tmux_sessions).
+        assert!(cfg.tmux_sessions.is_empty());
+    }
+
+    #[test]
+    fn tmux_sessions_default_to_empty_when_omitted() {
+        let json = r#"{ "repos": [] }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+        assert!(cfg.tmux_sessions.is_empty());
+    }
+
+    #[test]
+    fn tmux_sessions_load_correctly() {
+        let json = r#"{
+            "repos": [],
+            "tmux_sessions": [
+                {
+                    "name": "shepherd",
+                    "command": "claude --agent shepherd",
+                    "cwd": "~/.config/orchard",
+                    "start_on_launch": true
+                }
+            ]
+        }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+        assert_eq!(cfg.tmux_sessions.len(), 1);
+        assert_eq!(cfg.tmux_sessions[0].name, "shepherd");
+        assert_eq!(cfg.tmux_sessions[0].command, "claude --agent shepherd");
+        assert!(cfg.tmux_sessions[0].start_on_launch);
+    }
 }

@@ -33,12 +33,12 @@ type RepoCacheTuple = (
 /// expected by `derive::derive_all_repos`.
 ///
 /// Pure IO: no network calls, no side effects beyond reading files.
-fn collect_repo_caches(config: &GlobalConfig) -> Vec<RepoCacheTuple> {
+fn collect_repo_caches(
+    config: &GlobalConfig,
+    local_sessions: &[cache::CachedTmuxSession],
+) -> Vec<RepoCacheTuple> {
     let mut repo_caches = Vec::new();
     let mut tmux_hosts_seen: HashSet<String> = HashSet::new();
-
-    let local_sessions =
-        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
 
     for repo in &config.repos {
         let issues = cache::read_cache::<cache::CachedIssue>(&cache::cache_path(
@@ -74,7 +74,7 @@ fn collect_repo_caches(config: &GlobalConfig) -> Vec<RepoCacheTuple> {
         }
 
         // Gather sessions: local + one entry per unique remote host.
-        let mut sessions = local_sessions.clone();
+        let mut sessions = local_sessions.to_vec();
         for remote in &repo.remotes {
             if tmux_hosts_seen.insert(remote.host.clone()) {
                 let remote_sessions = cache::read_cache::<cache::CachedTmuxSession>(
@@ -159,7 +159,9 @@ pub fn build_state(config: &GlobalConfig) -> OrchardState {
 /// the TUI consumes directly as `task_rows`. Avoids the round-trip through
 /// `WorktreeState` conversions.
 pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
-    let repo_caches = collect_repo_caches(config);
+    let local_sessions =
+        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
+    let repo_caches = collect_repo_caches(config, &local_sessions);
     let claude_states = sources::claude::read_state_files();
     crate::derive::derive_all_repos(&repo_caches, &claude_states)
 }
@@ -172,7 +174,9 @@ pub fn build_state_with_hosts(
     config: &GlobalConfig,
     hosts: &HashMap<String, HostState>,
 ) -> OrchardState {
-    let repo_caches = collect_repo_caches(config);
+    let local_sessions =
+        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
+    let repo_caches = collect_repo_caches(config, &local_sessions);
     let claude_states = sources::claude::read_state_files();
     let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states);
 
@@ -197,9 +201,7 @@ pub fn build_state_with_hosts(
         })
         .collect();
 
-    // Build standalone sessions from config.
-    let local_sessions =
-        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
+    // Build standalone sessions from config (reuses local_sessions already read).
     let standalone_sessions = build_standalone_sessions(config, &local_sessions, &claude_states);
 
     OrchardState {
@@ -314,5 +316,117 @@ mod tests {
         let state = build_state(&config);
         // Both go through the same derive pipeline — worktree counts must agree.
         assert_eq!(rows.len(), state.all_worktrees().len());
+    }
+
+    // -----------------------------------------------------------------------
+    // Standalone session tests
+    // -----------------------------------------------------------------------
+
+    fn make_standalone_config(name: &str) -> crate::session::StandaloneConfig {
+        crate::session::StandaloneConfig {
+            name: name.to_string(),
+            command: "echo hello".to_string(),
+            cwd: "/tmp".to_string(),
+            start_on_launch: false,
+        }
+    }
+
+    fn make_cached_session(name: &str) -> cache::CachedTmuxSession {
+        cache::CachedTmuxSession {
+            name: name.to_string(),
+            path: "/tmp".to_string(),
+            pane_titles: vec![],
+            pane_commands: vec![],
+            host: None,
+            last_output_lines: vec![],
+        }
+    }
+
+    #[test]
+    fn standalone_session_running_when_live_tmux_exists() {
+        let config = GlobalConfig {
+            tmux_sessions: vec![make_standalone_config("shepherd")],
+            ..GlobalConfig::default()
+        };
+        let live = vec![make_cached_session("shepherd")];
+        let rows = build_standalone_sessions(&config, &live, &[]);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(
+            rows[0].session.tmux.status,
+            SessionStatus::Running { .. }
+        ));
+    }
+
+    #[test]
+    fn standalone_session_dead_when_no_live_tmux() {
+        let config = GlobalConfig {
+            tmux_sessions: vec![make_standalone_config("shepherd")],
+            ..GlobalConfig::default()
+        };
+        let rows = build_standalone_sessions(&config, &[], &[]);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(
+            rows[0].session.tmux.status,
+            SessionStatus::Dead
+        ));
+    }
+
+    #[test]
+    fn standalone_session_no_claude_when_no_state_files() {
+        let config = GlobalConfig {
+            tmux_sessions: vec![make_standalone_config("shepherd")],
+            ..GlobalConfig::default()
+        };
+        let rows = build_standalone_sessions(&config, &[], &[]);
+        assert!(rows[0].session.claude.is_none());
+    }
+
+    #[test]
+    fn standalone_session_claude_enriched_from_state_file() {
+        let config = GlobalConfig {
+            tmux_sessions: vec![make_standalone_config("shepherd")],
+            ..GlobalConfig::default()
+        };
+        let claude_states = vec![crate::claude_state::ClaudeStateFile {
+            state: "working".to_string(),
+            session_id: "test".to_string(),
+            tmux_session: "shepherd".to_string(),
+            cwd: "/tmp".to_string(),
+            event: "Stop".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            context_window_pct: Some(42.0),
+            cost_usd: Some(1.23),
+            model: Some("opus".to_string()),
+        }];
+        let rows = build_standalone_sessions(&config, &[], &claude_states);
+        let claude = rows[0].session.claude.as_ref().unwrap();
+        assert_eq!(claude.status, ClaudeState::Working);
+        assert_eq!(claude.cost_usd, Some(1.23));
+        assert_eq!(claude.context_window_pct, Some(42.0));
+        assert_eq!(claude.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn standalone_session_preserves_config_order() {
+        let config = GlobalConfig {
+            tmux_sessions: vec![
+                make_standalone_config("shepherd"),
+                make_standalone_config("monitor"),
+                make_standalone_config("logs"),
+            ],
+            ..GlobalConfig::default()
+        };
+        let rows = build_standalone_sessions(&config, &[], &[]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].config.name, "shepherd");
+        assert_eq!(rows[1].config.name, "monitor");
+        assert_eq!(rows[2].config.name, "logs");
+    }
+
+    #[test]
+    fn standalone_session_empty_config_returns_empty() {
+        let config = GlobalConfig::default();
+        let rows = build_standalone_sessions(&config, &[], &[]);
+        assert!(rows.is_empty());
     }
 }

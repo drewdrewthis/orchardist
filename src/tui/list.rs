@@ -366,6 +366,16 @@ fn standalone_claude_status(session: &crate::session::EnrichedSession) -> (Strin
 }
 
 impl App {
+    /// Shows a warning and returns true if the cursor is on a standalone session.
+    fn guard_requires_worktree(&mut self, standalone_count: usize) -> bool {
+        if cursor_is_standalone(self.cursor, standalone_count) {
+            self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn handle_list_key(&mut self, key: KeyEvent) -> bool {
         // Always delegate to the task list handler — task rows are the only data source.
         self.handle_task_list_key(key)
@@ -569,8 +579,7 @@ impl App {
                 }
             }
             KeyCode::Char('o') => {
-                if cursor_is_standalone(self.cursor, standalone_count) {
-                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                if self.guard_requires_worktree(standalone_count) {
                     return false;
                 }
                 // Open PR URL in browser for the selected task.
@@ -591,8 +600,7 @@ impl App {
                 false
             }
             KeyCode::Char('i') => {
-                if cursor_is_standalone(self.cursor, standalone_count) {
-                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                if self.guard_requires_worktree(standalone_count) {
                     return false;
                 }
                 // Open issue URL in browser for the selected task.
@@ -616,8 +624,7 @@ impl App {
                 false
             }
             KeyCode::Char('d') => {
-                if cursor_is_standalone(self.cursor, standalone_count) {
-                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                if self.guard_requires_worktree(standalone_count) {
                     return false;
                 }
                 let worktree_cursor = self.cursor - standalone_count;
@@ -638,8 +645,7 @@ impl App {
                 false
             }
             KeyCode::Char('p') => {
-                if cursor_is_standalone(self.cursor, standalone_count) {
-                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                if self.guard_requires_worktree(standalone_count) {
                     return false;
                 }
                 let worktree_cursor = self.cursor - standalone_count;
@@ -711,18 +717,20 @@ impl App {
 
         // Handle standalone sessions first.
         let standalone_count = self.standalone_sessions.len();
+        if cursor_is_standalone(self.cursor, standalone_count)
+            && let Some(ss) = self.standalone_sessions.get(self.cursor)
+            && matches!(ss.session.tmux.status, crate::session::SessionStatus::Running { .. })
+        {
+            let session_name = ss.session.tmux.name.clone();
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let content = tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
+                    .unwrap_or_default();
+                let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
+            });
+            return;
+        }
         if cursor_is_standalone(self.cursor, standalone_count) {
-            if let Some(ss) = self.standalone_sessions.get(self.cursor) {
-                if matches!(ss.session.tmux.status, crate::session::SessionStatus::Running { .. }) {
-                    let session_name = ss.session.tmux.name.clone();
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        let content = tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
-                            .unwrap_or_default();
-                        let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
-                    });
-                }
-            }
             return;
         }
 

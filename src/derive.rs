@@ -272,7 +272,7 @@ fn enrich_session(
     if let Some(state_file) = hook_state {
         let is_stale = is_state_stale(&state_file.timestamp, HOOK_STATE_STALENESS_SECS);
         if !is_stale {
-            let claude_state = state_file.state.parse::<ClaudeState>().unwrap();
+            let claude_state = state_file.state.parse::<ClaudeState>().unwrap_or(ClaudeState::None);
             let claude = if claude_state != ClaudeState::None {
                 Some(ClaudeSessionInfo {
                     status: claude_state,
