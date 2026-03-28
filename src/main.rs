@@ -17,6 +17,10 @@ fn main() {
     for arg in &args[1..] {
         match arg.as_str() {
             "--json" => json_flag = true,
+            "--version" | "-V" => {
+                println!("orchard {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -138,7 +142,8 @@ fn print_usage() {
   orchard upgrade      Upgrade to the latest version
 
 Options:
-  --json    Output worktree data as JSON and exit
+  --version, -V  Print version and exit
+  --json         Output worktree data as JSON and exit
 
 Navigation:
   1-9     Jump to worktree by number
