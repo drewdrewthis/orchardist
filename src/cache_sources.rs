@@ -507,8 +507,7 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         (raw_output.as_str(), "")
     };
 
-    let remote_claude_states =
-        crate::claude_state::parse_remote_state_output(claude_state_raw);
+    let remote_claude_states = crate::claude_state::parse_remote_state_output(claude_state_raw);
 
     let mut sessions = parse_tmux_output(
         sessions_output,
@@ -1097,17 +1096,18 @@ mod tests {
     }
 
     #[test]
-    fn remote_ssh_command_does_not_contain_local_temp_dir() {
-        // The local temp directory path must not appear in the SSH command string.
-        let local_tmp = std::env::temp_dir();
-        let local_tmp_str = local_tmp.to_string_lossy();
+    fn remote_ssh_command_uses_shell_variable_not_literal_path() {
+        // The command must use '${TMPDIR:-/tmp}' (a shell variable for the remote
+        // to expand) rather than a hardcoded local path like `/var/folders/...`.
+        // On Linux CI, std::env::temp_dir() == "/tmp" which legitimately appears
+        // in the fallback, so we check for the shell variable pattern instead.
         let cmd = format!(
             "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
             CLAUDE_STATE_SENTINEL
         );
         assert!(
-            !cmd.contains(local_tmp_str.as_ref()),
-            "local temp dir should not appear in SSH command"
+            cmd.contains("'${TMPDIR:-/tmp}'"),
+            "command should use shell variable expansion, got: {cmd}"
         );
     }
 

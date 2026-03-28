@@ -92,10 +92,13 @@ fn collect_repo_caches(
 
                 // Extract fresh Claude states from the remote session cache entries.
                 for session in &remote_sessions {
-                    if let Some(state) = &session.claude_state_raw {
-                        if !crate::derive::is_state_stale(state.timestamp.as_str(), REMOTE_HOOK_STATE_STALENESS_SECS) {
-                            remote_claude_states.push(state.clone());
-                        }
+                    if let Some(state) = &session.claude_state_raw
+                        && !crate::derive::is_state_stale(
+                            state.timestamp.as_str(),
+                            REMOTE_HOOK_STATE_STALENESS_SECS,
+                        )
+                    {
+                        remote_claude_states.push(state.clone());
                     }
                 }
 
@@ -442,7 +445,11 @@ mod tests {
     // Remote Claude state: staleness filtering
     // -----------------------------------------------------------------------
 
-    fn make_state_file(state: &str, session: &str, timestamp: &str) -> crate::claude_state::ClaudeStateFile {
+    fn make_state_file(
+        state: &str,
+        session: &str,
+        timestamp: &str,
+    ) -> crate::claude_state::ClaudeStateFile {
         crate::claude_state::ClaudeStateFile {
             state: state.to_string(),
             session_id: "test-session".to_string(),
@@ -481,7 +488,10 @@ mod tests {
             .iter()
             .filter_map(|s| s.claude_state_raw.as_ref())
             .filter(|cs| {
-                !crate::derive::is_state_stale(cs.timestamp.as_str(), REMOTE_HOOK_STATE_STALENESS_SECS)
+                !crate::derive::is_state_stale(
+                    cs.timestamp.as_str(),
+                    REMOTE_HOOK_STATE_STALENESS_SECS,
+                )
             })
             .cloned()
             .collect()
@@ -490,7 +500,11 @@ mod tests {
     #[test]
     fn fresh_remote_claude_state_is_included() {
         let fresh_ts = chrono::Utc::now().to_rfc3339();
-        let sessions = vec![make_remote_session_with_claude("repo_47_claude", "working", &fresh_ts)];
+        let sessions = vec![make_remote_session_with_claude(
+            "repo_47_claude",
+            "working",
+            &fresh_ts,
+        )];
         let states = extract_fresh_remote_states(&sessions);
         assert_eq!(states.len(), 1);
         assert_eq!(states[0].tmux_session, "repo_47_claude");
@@ -501,9 +515,16 @@ mod tests {
     fn stale_remote_claude_state_is_discarded() {
         // 60 seconds ago — well over the 30s threshold.
         let stale_ts = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
-        let sessions = vec![make_remote_session_with_claude("repo_47_claude", "working", &stale_ts)];
+        let sessions = vec![make_remote_session_with_claude(
+            "repo_47_claude",
+            "working",
+            &stale_ts,
+        )];
         let states = extract_fresh_remote_states(&sessions);
-        assert!(states.is_empty(), "stale remote Claude state should be discarded");
+        assert!(
+            states.is_empty(),
+            "stale remote Claude state should be discarded"
+        );
     }
 
     #[test]
@@ -511,9 +532,16 @@ mod tests {
         // Exactly 30 seconds ago — at threshold, should be treated as stale
         // (is_state_stale uses `>`, so age == threshold is stale).
         let at_threshold_ts = (chrono::Utc::now() - chrono::Duration::seconds(31)).to_rfc3339();
-        let sessions = vec![make_remote_session_with_claude("repo_47_claude", "working", &at_threshold_ts)];
+        let sessions = vec![make_remote_session_with_claude(
+            "repo_47_claude",
+            "working",
+            &at_threshold_ts,
+        )];
         let states = extract_fresh_remote_states(&sessions);
-        assert!(states.is_empty(), "state at threshold (31s) should be stale");
+        assert!(
+            states.is_empty(),
+            "state at threshold (31s) should be stale"
+        );
     }
 
     #[test]
