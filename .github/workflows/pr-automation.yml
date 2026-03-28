@@ -11,8 +11,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: tkt-actions/add-issue-links@v1.9.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
   label:
     runs-on: ubuntu-latest
