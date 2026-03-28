@@ -262,6 +262,7 @@ pub fn parse_tmux_output(
             pane_commands,
             host: host.map(|h| h.to_string()),
             last_output_lines,
+            claude_state_raw: None, // populated after parsing remote Claude state
         });
     }
 
@@ -454,22 +455,40 @@ pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Sentinel string that separates tmux session list output from Claude state JSON
+/// in the batched SSH command used for remote hosts.
+pub const CLAUDE_STATE_SENTINEL: &str = "---CLAUDE_STATE---";
+
 /// Fetches tmux sessions (local or remote) and writes to the tmux sessions cache.
 ///
 /// Pass `None` for local sessions, or `Some("user@host")` for remote sessions.
+///
+/// For remote hosts, a single batched SSH command fetches both the tmux session
+/// list and any Claude hook state files (from `$TMPDIR/orchard-claude-*.json`),
+/// separated by a `---CLAUDE_STATE---` sentinel line. The parsed Claude states
+/// are stored in `CachedTmuxSession::claude_state_raw` for each matching session.
+///
 /// On failure the error is logged and the existing cache is left intact.
 pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let cache_path = cache::tmux_cache_path(host);
 
+    // For remote hosts, batch the tmux list-sessions and Claude state cat into
+    // a single SSH call to minimise round-trips.
     let sessions_out = match host {
         None => run_local(
             "tmux",
             &["list-sessions", "-F", "#{session_name}:#{session_path}"],
         ),
-        Some(h) => remote::ssh_exec(h, "tmux list-sessions -F '#{session_name}:#{session_path}'"),
+        Some(h) => {
+            let cmd = format!(
+                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                CLAUDE_STATE_SENTINEL
+            );
+            remote::ssh_exec(h, &cmd)
+        }
     };
 
-    let sessions_output = match sessions_out {
+    let raw_output = match sessions_out {
         Err(e) => {
             LOG.warn(&format!(
                 "cache_sources: refresh_tmux_sessions(host={:?}): {e}",
@@ -480,8 +499,19 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         Ok(s) => s,
     };
 
-    let sessions = parse_tmux_output(
-        &sessions_output,
+    // For remote output, split on the sentinel to separate tmux output from
+    // Claude state JSON. For local output, there is no sentinel.
+    let (sessions_output, claude_state_raw) = if host.is_some() {
+        split_batched_output(&raw_output)
+    } else {
+        (raw_output.as_str(), "")
+    };
+
+    let remote_claude_states =
+        crate::claude_state::parse_remote_state_output(claude_state_raw);
+
+    let mut sessions = parse_tmux_output(
+        sessions_output,
         host,
         |session_name| {
             let pane_fmt = "#{pane_title}:#{pane_current_command}";
@@ -517,6 +547,14 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         },
     );
 
+    // Attach fetched Claude state files to their matching sessions.
+    for session in &mut sessions {
+        session.claude_state_raw = remote_claude_states
+            .iter()
+            .find(|cs| cs.tmux_session == session.name)
+            .cloned();
+    }
+
     cache::write_cache_if_nonempty(&cache_path, &sessions)?;
     LOG.info(&format!(
         "cache_sources: refresh_tmux_sessions(host={:?}): wrote {} entries",
@@ -525,6 +563,25 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     ));
 
     Ok(())
+}
+
+/// Splits batched SSH output on the `CLAUDE_STATE_SENTINEL` line.
+///
+/// Returns `(tmux_output, claude_json)`. If the sentinel is not present, returns
+/// the full output as tmux output and an empty string for the Claude JSON part.
+fn split_batched_output(raw: &str) -> (&str, &str) {
+    let sentinel_line = CLAUDE_STATE_SENTINEL;
+    // Find the sentinel as a whole line (preceded by newline or start, followed
+    // by newline or end).
+    if let Some(pos) = raw.find(sentinel_line) {
+        let before = &raw[..pos];
+        let after_start = pos + sentinel_line.len();
+        // Skip the newline that follows the sentinel, if present.
+        let after = raw[after_start..].trim_start_matches('\n');
+        (before, after)
+    } else {
+        (raw, "")
+    }
 }
 
 /// Fetches git worktrees from a single remote host and writes to the remote worktrees cache.
@@ -1012,5 +1069,91 @@ mod tests {
             |_| vec!["line1".to_string(), "line2".to_string()],
         );
         assert_eq!(result[0].last_output_lines, vec!["line1", "line2"]);
+    }
+
+    // -- SSH command construction and sentinel splitting ----------------------
+
+    #[test]
+    fn remote_ssh_command_includes_sentinel() {
+        // The batched command must contain the sentinel string.
+        let cmd = format!(
+            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            CLAUDE_STATE_SENTINEL
+        );
+        assert!(cmd.contains(CLAUDE_STATE_SENTINEL));
+    }
+
+    #[test]
+    fn remote_ssh_command_uses_single_quoted_tmpdir() {
+        // The TMPDIR variable must be single-quoted so it expands on the remote shell.
+        let cmd = format!(
+            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            CLAUDE_STATE_SENTINEL
+        );
+        assert!(
+            cmd.contains("'${TMPDIR:-/tmp}'"),
+            "expected single-quoted TMPDIR expansion, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn remote_ssh_command_does_not_contain_local_temp_dir() {
+        // The local temp directory path must not appear in the SSH command string.
+        let local_tmp = std::env::temp_dir();
+        let local_tmp_str = local_tmp.to_string_lossy();
+        let cmd = format!(
+            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            CLAUDE_STATE_SENTINEL
+        );
+        assert!(
+            !cmd.contains(local_tmp_str.as_ref()),
+            "local temp dir should not appear in SSH command"
+        );
+    }
+
+    #[test]
+    fn remote_ssh_command_ends_with_semicolon_true() {
+        // The "; true" suffix ensures cat failure (no files) doesn't fail the overall command.
+        let cmd = format!(
+            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            CLAUDE_STATE_SENTINEL
+        );
+        assert!(cmd.ends_with("; true"), "command must end with '; true'");
+    }
+
+    #[test]
+    fn split_batched_output_separates_tmux_and_claude_parts() {
+        let tmux_part = "session-a:/path/a\nsession-b:/path/b\n";
+        let claude_part = r#"{"state":"working","session_id":"s1","tmux_session":"session-a","cwd":"/workspace","event":"Stop","timestamp":"2026-03-28T10:00:00Z"}"#;
+        let raw = format!("{tmux_part}{CLAUDE_STATE_SENTINEL}\n{claude_part}");
+
+        let (tmux, claude) = split_batched_output(&raw);
+        assert_eq!(tmux, tmux_part);
+        assert_eq!(claude, claude_part);
+    }
+
+    #[test]
+    fn split_batched_output_empty_claude_part_when_no_files() {
+        let tmux_part = "session-a:/path/a\n";
+        let raw = format!("{tmux_part}{CLAUDE_STATE_SENTINEL}\n");
+
+        let (tmux, claude) = split_batched_output(&raw);
+        assert_eq!(tmux, tmux_part);
+        assert!(claude.is_empty());
+    }
+
+    #[test]
+    fn split_batched_output_no_sentinel_returns_all_as_tmux() {
+        let raw = "session-a:/path/a\nsession-b:/path/b\n";
+        let (tmux, claude) = split_batched_output(raw);
+        assert_eq!(tmux, raw);
+        assert!(claude.is_empty());
+    }
+
+    #[test]
+    fn parse_tmux_output_attaches_no_claude_state_for_local_sessions() {
+        let sessions_str = "my-session:/path\n";
+        let result = parse_tmux_output(sessions_str, None, |_| "".to_string(), |_| vec![]);
+        assert!(result[0].claude_state_raw.is_none());
     }
 }

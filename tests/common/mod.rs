@@ -176,6 +176,7 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
         host: None,
         last_output_lines: vec![],
+        claude_state_raw: None,
     }
 }
 

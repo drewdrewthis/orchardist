@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;
+use crate::claude_state::ClaudeStateFile;
 use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
 use crate::orchard_state::{HostState, OrchardState, RepoState, WorktreeState};
@@ -14,6 +15,12 @@ use crate::session::{
     ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, StandaloneSessionRow, TmuxSessionInfo,
 };
 use crate::sources;
+
+/// Maximum age in seconds before a remote Claude hook state is considered stale.
+///
+/// Remote state files are much closer to real-time (fetched via SSH on every
+/// cache refresh) so we use a tighter window than the local 300s default.
+const REMOTE_HOOK_STATE_STALENESS_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
 // Cache collection helper (private)
@@ -32,12 +39,14 @@ type RepoCacheTuple = (
 /// expected by `derive::derive_all_repos`.
 ///
 /// Pure IO: no network calls, no side effects beyond reading files.
+/// Also returns all remote Claude state files extracted from the session caches.
 fn collect_repo_caches(
     config: &GlobalConfig,
     local_sessions: &[cache::CachedTmuxSession],
-) -> Vec<RepoCacheTuple> {
+) -> (Vec<RepoCacheTuple>, Vec<ClaudeStateFile>) {
     let mut repo_caches = Vec::new();
     let mut tmux_hosts_seen: HashSet<String> = HashSet::new();
+    let mut remote_claude_states: Vec<ClaudeStateFile> = Vec::new();
 
     for repo in &config.repos {
         let issues = cache::read_cache::<cache::CachedIssue>(&cache::cache_path(
@@ -80,6 +89,16 @@ fn collect_repo_caches(
                     &cache::tmux_cache_path(Some(&remote.host)),
                 )
                 .entries;
+
+                // Extract fresh Claude states from the remote session cache entries.
+                for session in &remote_sessions {
+                    if let Some(state) = &session.claude_state_raw {
+                        if !crate::derive::is_state_stale(state.timestamp.as_str(), REMOTE_HOOK_STATE_STALENESS_SECS) {
+                            remote_claude_states.push(state.clone());
+                        }
+                    }
+                }
+
                 sessions.extend(remote_sessions);
             }
         }
@@ -87,7 +106,7 @@ fn collect_repo_caches(
         repo_caches.push((repo.slug.clone(), issues, prs, worktrees, sessions));
     }
 
-    repo_caches
+    (repo_caches, remote_claude_states)
 }
 
 /// Builds `StandaloneSessionRow`s from config, matching against live tmux sessions
@@ -149,8 +168,9 @@ pub fn build_state(config: &GlobalConfig) -> OrchardState {
 pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
-    let repo_caches = collect_repo_caches(config, &local_sessions);
-    let claude_states = sources::claude::read_state_files();
+    let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
+    let mut claude_states = sources::claude::read_state_files();
+    claude_states.extend(remote_claude_states);
     crate::derive::derive_all_repos(&repo_caches, &claude_states)
 }
 
@@ -164,8 +184,9 @@ pub fn build_state_with_hosts(
 ) -> OrchardState {
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
-    let repo_caches = collect_repo_caches(config, &local_sessions);
-    let claude_states = sources::claude::read_state_files();
+    let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
+    let mut claude_states = sources::claude::read_state_files();
+    claude_states.extend(remote_claude_states);
     let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states);
 
     // Group WorktreeRows back by repo_slug into RepoStates.
@@ -328,6 +349,7 @@ mod tests {
             pane_commands: vec![],
             host: None,
             last_output_lines: vec![],
+            claude_state_raw: None,
         }
     }
 
@@ -414,5 +436,104 @@ mod tests {
         let config = GlobalConfig::default();
         let rows = build_standalone_sessions(&config, &[], &[]);
         assert!(rows.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Remote Claude state: staleness filtering
+    // -----------------------------------------------------------------------
+
+    fn make_state_file(state: &str, session: &str, timestamp: &str) -> crate::claude_state::ClaudeStateFile {
+        crate::claude_state::ClaudeStateFile {
+            state: state.to_string(),
+            session_id: "test-session".to_string(),
+            tmux_session: session.to_string(),
+            cwd: "/workspace".to_string(),
+            event: "Stop".to_string(),
+            timestamp: timestamp.to_string(),
+            context_window_pct: None,
+            cost_usd: None,
+            model: None,
+        }
+    }
+
+    fn make_remote_session_with_claude(
+        name: &str,
+        state: &str,
+        timestamp: &str,
+    ) -> cache::CachedTmuxSession {
+        cache::CachedTmuxSession {
+            name: name.to_string(),
+            path: "/workspace".to_string(),
+            pane_titles: vec![],
+            pane_commands: vec![],
+            host: Some("ubuntu@10.0.0.1".to_string()),
+            last_output_lines: vec![],
+            claude_state_raw: Some(make_state_file(state, name, timestamp)),
+        }
+    }
+
+    /// Extracts fresh remote Claude states from a slice of sessions, using the
+    /// same staleness logic as `collect_repo_caches`.
+    fn extract_fresh_remote_states(
+        sessions: &[cache::CachedTmuxSession],
+    ) -> Vec<crate::claude_state::ClaudeStateFile> {
+        sessions
+            .iter()
+            .filter_map(|s| s.claude_state_raw.as_ref())
+            .filter(|cs| {
+                !crate::derive::is_state_stale(cs.timestamp.as_str(), REMOTE_HOOK_STATE_STALENESS_SECS)
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn fresh_remote_claude_state_is_included() {
+        let fresh_ts = chrono::Utc::now().to_rfc3339();
+        let sessions = vec![make_remote_session_with_claude("repo_47_claude", "working", &fresh_ts)];
+        let states = extract_fresh_remote_states(&sessions);
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].tmux_session, "repo_47_claude");
+        assert_eq!(states[0].state, "working");
+    }
+
+    #[test]
+    fn stale_remote_claude_state_is_discarded() {
+        // 60 seconds ago — well over the 30s threshold.
+        let stale_ts = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
+        let sessions = vec![make_remote_session_with_claude("repo_47_claude", "working", &stale_ts)];
+        let states = extract_fresh_remote_states(&sessions);
+        assert!(states.is_empty(), "stale remote Claude state should be discarded");
+    }
+
+    #[test]
+    fn remote_state_exactly_at_threshold_is_stale() {
+        // Exactly 30 seconds ago — at threshold, should be treated as stale
+        // (is_state_stale uses `>`, so age == threshold is stale).
+        let at_threshold_ts = (chrono::Utc::now() - chrono::Duration::seconds(31)).to_rfc3339();
+        let sessions = vec![make_remote_session_with_claude("repo_47_claude", "working", &at_threshold_ts)];
+        let states = extract_fresh_remote_states(&sessions);
+        assert!(states.is_empty(), "state at threshold (31s) should be stale");
+    }
+
+    #[test]
+    fn session_without_claude_state_raw_produces_no_states() {
+        let session = cache::CachedTmuxSession {
+            name: "repo_48_main".to_string(),
+            path: "/workspace".to_string(),
+            pane_titles: vec![],
+            pane_commands: vec![],
+            host: Some("ubuntu@10.0.0.1".to_string()),
+            last_output_lines: vec![],
+            claude_state_raw: None,
+        };
+        let states = extract_fresh_remote_states(&[session]);
+        assert!(states.is_empty());
+    }
+
+    #[test]
+    fn remote_hook_state_staleness_threshold_is_30_seconds() {
+        // This test documents the constant value.
+        assert_eq!(REMOTE_HOOK_STATE_STALENESS_SECS, 30);
     }
 }
