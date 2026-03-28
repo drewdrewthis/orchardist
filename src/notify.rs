@@ -49,10 +49,7 @@ pub fn send_notification_with_session(title: &str, message: &str, session_name: 
                 format!("tmux switch-client -t {}", remote::shell_escape(session)),
             ]);
         } else {
-            args.extend([
-                "-activate".to_string(),
-                "dev.warp.Warp-Stable".to_string(),
-            ]);
+            args.extend(["-activate".to_string(), "dev.warp.Warp-Stable".to_string()]);
         }
 
         let _ = Command::new("terminal-notifier").args(&args).output();
@@ -63,9 +60,7 @@ pub fn send_notification_with_session(title: &str, message: &str, session_name: 
             message.replace('"', r#"\""#),
             title.replace('"', r#"\""#),
         );
-        let _ = Command::new("osascript")
-            .args(["-e", &script])
-            .output();
+        let _ = Command::new("osascript").args(["-e", &script]).output();
     }
 }
 

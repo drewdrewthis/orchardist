@@ -3,12 +3,12 @@ use ratatui::prelude::*;
 use ratatui::widgets::Padding;
 
 use crate::paths;
+use crate::tui::App;
+use crate::tui::SPINNER_FRAMES;
 use crate::tui::state::{
     CleanupState, DeleteState, NewSessionState, Phase, TransferState, ViewState,
 };
 use crate::tui::widgets::render_popup;
-use crate::tui::App;
-use crate::tui::SPINNER_FRAMES;
 use crate::types::SwitchToSessionOptions;
 
 use std::time::Instant;
@@ -117,11 +117,7 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_transfer_key(
-        &mut self,
-        state: &mut TransferState,
-        key: KeyEvent,
-    ) -> bool {
+    pub(crate) fn handle_transfer_key(&mut self, state: &mut TransferState, key: KeyEvent) -> bool {
         match state.phase {
             Phase::Confirm => match key.code {
                 KeyCode::Char('y') => {
@@ -223,11 +219,7 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_cleanup_key(
-        &mut self,
-        state: &mut CleanupState,
-        key: KeyEvent,
-    ) -> bool {
+    pub(crate) fn handle_cleanup_key(&mut self, state: &mut CleanupState, key: KeyEvent) -> bool {
         if state.phase == Phase::Done {
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -334,8 +326,14 @@ impl App {
             Phase::InProgress => {
                 let spinner = SPINNER_FRAMES[self.spinner_frame];
                 lines.push(Line::styled(
-                    format!("{} Deleting {} worktree(s)...", spinner, state.selected.len()),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    format!(
+                        "{} Deleting {} worktree(s)...",
+                        spinner,
+                        state.selected.len()
+                    ),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 lines.push(Line::from(""));
                 for row in &state.stale {
@@ -371,11 +369,7 @@ impl App {
                     ));
                 } else {
                     for (i, row) in state.stale.iter().enumerate() {
-                        let cursor_char = if i == state.cursor {
-                            "\u{25b8} "
-                        } else {
-                            "  "
-                        };
+                        let cursor_char = if i == state.cursor { "\u{25b8} " } else { "  " };
 
                         let check = if state.selected.contains(&row.worktree_path) {
                             "[\u{2713}]"
@@ -383,12 +377,11 @@ impl App {
                             "[ ]"
                         };
 
-                        let path_str = paths::truncate_left(&paths::tildify(&row.worktree_path), 40);
+                        let path_str =
+                            paths::truncate_left(&paths::tildify(&row.worktree_path), 40);
 
-                        let mut parts = format!(
-                            "{}{}  {}  {}",
-                            cursor_char, check, path_str, row.branch
-                        );
+                        let mut parts =
+                            format!("{}{}  {}  {}", cursor_char, check, path_str, row.branch);
 
                         if let Some(ref pr) = row.pr {
                             parts.push_str(&format!("  PR #{}", pr.number));
@@ -458,10 +451,7 @@ impl App {
                         }
                         Err(e) => {
                             self.view = ViewState::List;
-                            self.warning = Some((
-                                format!("session error: {e}"),
-                                Instant::now(),
-                            ));
+                            self.warning = Some((format!("session error: {e}"), Instant::now()));
                         }
                     }
                 }
@@ -607,4 +597,3 @@ impl App {
         );
     }
 }
-

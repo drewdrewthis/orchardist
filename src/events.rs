@@ -53,9 +53,10 @@ fn append_event(path: &Path, event_type: &str, fields: &[(&str, Value)]) {
 
     // Rotate before writing if the existing file is over the size limit.
     if let Ok(meta) = fs::metadata(path)
-        && meta.len() >= MAX_SIZE_BYTES {
-            rotate(path);
-        }
+        && meta.len() >= MAX_SIZE_BYTES
+    {
+        rotate(path);
+    }
 
     let mut file = match OpenOptions::new().create(true).append(true).open(path) {
         Ok(f) => f,
@@ -265,8 +266,7 @@ mod tests {
         };
 
         let serialized = serde_json::to_string(&event).unwrap();
-        let parsed: serde_json::Map<String, Value> =
-            serde_json::from_str(&serialized).unwrap();
+        let parsed: serde_json::Map<String, Value> = serde_json::from_str(&serialized).unwrap();
 
         let ts_str = parsed["ts"].as_str().expect("ts must be a string");
         // ISO 8601 UTC: must be parseable by chrono as DateTime<Utc>.
@@ -280,9 +280,24 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
 
-        append_event(&path, "task.created", &[("task", Value::String("a#1".to_string()))]);
-        append_event(&path, "task.archived", &[("task", Value::String("a#2".to_string()))]);
-        append_event(&path, "error", &[("message", Value::String("oops".to_string())), ("context", Value::String("test".to_string()))]);
+        append_event(
+            &path,
+            "task.created",
+            &[("task", Value::String("a#1".to_string()))],
+        );
+        append_event(
+            &path,
+            "task.archived",
+            &[("task", Value::String("a#2".to_string()))],
+        );
+        append_event(
+            &path,
+            "error",
+            &[
+                ("message", Value::String("oops".to_string())),
+                ("context", Value::String("test".to_string())),
+            ],
+        );
 
         let lines = read_lines(&path);
         assert_eq!(lines.len(), 3, "expected 3 lines");
@@ -302,11 +317,18 @@ mod tests {
         let oversized: Vec<u8> = vec![b'x'; (50 * 1024 * 1024) + 1];
         fs::write(&path, &oversized).unwrap();
 
-        append_event(&path, "task.created", &[("task", Value::String("a#1".to_string()))]);
+        append_event(
+            &path,
+            "task.created",
+            &[("task", Value::String("a#1".to_string()))],
+        );
 
         // Original should have been rotated.
         let rotated = rotated_path(&path, 1);
-        assert!(rotated.exists(), "events.jsonl.1 should exist after rotation");
+        assert!(
+            rotated.exists(),
+            "events.jsonl.1 should exist after rotation"
+        );
 
         // New events.jsonl should be small (just the one new event).
         let new_size = fs::metadata(&path).unwrap().len();
@@ -331,7 +353,11 @@ mod tests {
         let oversized: Vec<u8> = vec![b'x'; (50 * 1024 * 1024) + 1];
         fs::write(&path, &oversized).unwrap();
 
-        append_event(&path, "task.created", &[("task", Value::String("a#1".to_string()))]);
+        append_event(
+            &path,
+            "task.created",
+            &[("task", Value::String("a#1".to_string()))],
+        );
 
         // No fourth rotated file should be created.
         assert!(
@@ -361,15 +387,68 @@ mod tests {
 
         // Call each convenience function via append_event to route to our temp path.
         let cases: &[(&str, &[(&str, Value)])] = &[
-            ("task.created", &[("task", Value::String("r#1".into())), ("source", Value::String("github_issue".into()))]),
-            ("task.status_change", &[("task", Value::String("r#1".into())), ("from", Value::String("ready".into())), ("to", Value::String("in_progress".into())), ("reason", Value::String("enter".into()))]),
+            (
+                "task.created",
+                &[
+                    ("task", Value::String("r#1".into())),
+                    ("source", Value::String("github_issue".into())),
+                ],
+            ),
+            (
+                "task.status_change",
+                &[
+                    ("task", Value::String("r#1".into())),
+                    ("from", Value::String("ready".into())),
+                    ("to", Value::String("in_progress".into())),
+                    ("reason", Value::String("enter".into())),
+                ],
+            ),
             ("task.archived", &[("task", Value::String("r#1".into()))]),
-            ("session.created", &[("task", Value::String("r#1".into())), ("session", Value::String("r_1_main".into()))]),
-            ("session.switch", &[("task", Value::String("r#1".into())), ("session", Value::String("r_1_main".into())), ("trigger", Value::String("keypress".into()))]),
-            ("session.dead", &[("task", Value::String("r#1".into())), ("session", Value::String("r_1_main".into()))]),
-            ("session.orphaned", &[("session", Value::String("mystery".into())), ("path", Value::String("/tmp/x".into()))]),
-            ("refresh.complete", &[("duration_ms", Value::Number(100u64.into())), ("tasks", Value::Number(1usize.into())), ("sessions", Value::Number(2usize.into())), ("worktrees", Value::Number(3usize.into()))]),
-            ("error", &[("message", Value::String("oops".into())), ("context", Value::String("test".into()))]),
+            (
+                "session.created",
+                &[
+                    ("task", Value::String("r#1".into())),
+                    ("session", Value::String("r_1_main".into())),
+                ],
+            ),
+            (
+                "session.switch",
+                &[
+                    ("task", Value::String("r#1".into())),
+                    ("session", Value::String("r_1_main".into())),
+                    ("trigger", Value::String("keypress".into())),
+                ],
+            ),
+            (
+                "session.dead",
+                &[
+                    ("task", Value::String("r#1".into())),
+                    ("session", Value::String("r_1_main".into())),
+                ],
+            ),
+            (
+                "session.orphaned",
+                &[
+                    ("session", Value::String("mystery".into())),
+                    ("path", Value::String("/tmp/x".into())),
+                ],
+            ),
+            (
+                "refresh.complete",
+                &[
+                    ("duration_ms", Value::Number(100u64.into())),
+                    ("tasks", Value::Number(1usize.into())),
+                    ("sessions", Value::Number(2usize.into())),
+                    ("worktrees", Value::Number(3usize.into())),
+                ],
+            ),
+            (
+                "error",
+                &[
+                    ("message", Value::String("oops".into())),
+                    ("context", Value::String("test".into())),
+                ],
+            ),
         ];
 
         for (event_type, fields) in cases {

@@ -27,8 +27,8 @@ use state::{AppMsg, CleanupState, FilterMode, Phase, ViewState};
 // ---------------------------------------------------------------------------
 
 const SPINNER_FRAMES: &[&str] = &[
-    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
-    "\u{2827}", "\u{2807}", "\u{280f}",
+    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
+    "\u{2807}", "\u{280f}",
 ];
 
 const AUTO_REFRESH_SECS: u64 = 60;
@@ -165,8 +165,10 @@ impl App {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             // Probe each unique remote host before attempting remote operations.
-            let mut reachable_hosts: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut unreachable_hosts: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut reachable_hosts: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut unreachable_hosts: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
 
             for repo in &config.repos {
                 for remote in &repo.remotes {
@@ -200,13 +202,15 @@ impl App {
             // Refresh tmux sessions (local).
             let _ = cache_sources::refresh_tmux_sessions(None);
             // Refresh remote tmux sessions for reachable hosts only.
-            let mut tmux_hosts_refreshed: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut tmux_hosts_refreshed: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for repo in &config.repos {
                 for remote in &repo.remotes {
                     if reachable_hosts.contains(&remote.host)
-                        && tmux_hosts_refreshed.insert(remote.host.clone()) {
-                            let _ = cache_sources::refresh_tmux_sessions(Some(&remote.host));
-                        }
+                        && tmux_hosts_refreshed.insert(remote.host.clone())
+                    {
+                        let _ = cache_sources::refresh_tmux_sessions(Some(&remote.host));
+                    }
                 }
             }
             // Ensure a main tmux session exists for each configured repo.
@@ -234,11 +238,15 @@ impl App {
                     }
                     // Populate cleanup stale list if in cleanup view with empty stale.
                     if let ViewState::Cleanup(ref mut cs) = self.view
-                        && cs.stale.is_empty() {
-                            cs.stale = filter_stale(&self.task_rows);
-                            cs.selected =
-                                cs.stale.iter().map(|row| row.worktree_path.clone()).collect();
-                        }
+                        && cs.stale.is_empty()
+                    {
+                        cs.stale = filter_stale(&self.task_rows);
+                        cs.selected = cs
+                            .stale
+                            .iter()
+                            .map(|row| row.worktree_path.clone())
+                            .collect();
+                    }
                     // Fetch pane content for the current task selection.
                     self.fetch_task_pane_content();
 
@@ -246,65 +254,82 @@ impl App {
                     for row in &self.task_rows {
                         let key = row.worktree_path.clone();
                         let old = old_states.get(&key);
-                        let label = row.issue_title.as_deref()
-                            .unwrap_or(&row.branch);
+                        let label = row.issue_title.as_deref().unwrap_or(&row.branch);
                         let session = row.sessions.first().map(|s| s.name.as_str());
 
                         // Claude was working, now needs input.
                         if row.sessions.iter().any(|s| s.claude_needs_input)
-                            && old.map(|o| !o.claude_needs_input).unwrap_or(false) {
-                                crate::notify::send_notification_with_session(
-                                    "Claude needs input",
-                                    &format!("{} is waiting for you", label),
-                                    session,
-                                );
-                            }
+                            && old.map(|o| !o.claude_needs_input).unwrap_or(false)
+                        {
+                            crate::notify::send_notification_with_session(
+                                "Claude needs input",
+                                &format!("{} is waiting for you", label),
+                                session,
+                            );
+                        }
 
                         // Claude was working, now idle (finished).
                         if !row.sessions.iter().any(|s| s.claude_is_working)
-                            && old.map(|o| o.claude_working).unwrap_or(false) {
-                                crate::notify::send_notification_with_session(
-                                    "Claude finished",
-                                    label,
-                                    session,
-                                );
-                            }
+                            && old.map(|o| o.claude_working).unwrap_or(false)
+                        {
+                            crate::notify::send_notification_with_session(
+                                "Claude finished",
+                                label,
+                                session,
+                            );
+                        }
 
                         // CI transitioned to failing.
                         if let Some(ref pr) = row.pr {
                             if pr.checks_state.as_deref() == Some("failing")
-                                && old.map(|o| o.ci_status.as_deref() != Some("failing")).unwrap_or(false) {
-                                    crate::notify::send_notification_with_session(
-                                        "CI Failed",
-                                        &format!("#{} {}", pr.number, label),
-                                        session,
-                                    );
-                                }
+                                && old
+                                    .map(|o| o.ci_status.as_deref() != Some("failing"))
+                                    .unwrap_or(false)
+                            {
+                                crate::notify::send_notification_with_session(
+                                    "CI Failed",
+                                    &format!("#{} {}", pr.number, label),
+                                    session,
+                                );
+                            }
 
                             // New unresolved review threads appeared.
                             if pr.unresolved_threads > 0
-                                && old.map(|o| !o.has_unresolved_threads).unwrap_or(false) {
-                                    crate::notify::send_notification_with_session(
-                                        "Review comments",
-                                        &format!("#{} has {} unresolved thread(s)", pr.number, pr.unresolved_threads),
-                                        session,
-                                    );
-                                }
+                                && old.map(|o| !o.has_unresolved_threads).unwrap_or(false)
+                            {
+                                crate::notify::send_notification_with_session(
+                                    "Review comments",
+                                    &format!(
+                                        "#{} has {} unresolved thread(s)",
+                                        pr.number, pr.unresolved_threads
+                                    ),
+                                    session,
+                                );
+                            }
                         }
                     }
 
                     // Save current state as snapshots for the next comparison.
-                    self.previous_worktree_states = self.task_rows.iter().map(|row| {
-                        let snapshot = WorktreeSnapshot {
-                            claude_working: row.sessions.iter().any(|s| s.claude_is_working),
-                            claude_needs_input: row.sessions.iter().any(|s| s.claude_needs_input),
-                            ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
-                            has_unresolved_threads: row.pr.as_ref()
-                                .map(|p| p.unresolved_threads > 0)
-                                .unwrap_or(false),
-                        };
-                        (row.worktree_path.clone(), snapshot)
-                    }).collect();
+                    self.previous_worktree_states = self
+                        .task_rows
+                        .iter()
+                        .map(|row| {
+                            let snapshot = WorktreeSnapshot {
+                                claude_working: row.sessions.iter().any(|s| s.claude_is_working),
+                                claude_needs_input: row
+                                    .sessions
+                                    .iter()
+                                    .any(|s| s.claude_needs_input),
+                                ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
+                                has_unresolved_threads: row
+                                    .pr
+                                    .as_ref()
+                                    .map(|p| p.unresolved_threads > 0)
+                                    .unwrap_or(false),
+                            };
+                            (row.worktree_path.clone(), snapshot)
+                        })
+                        .collect();
 
                     // Write session manifest so resurrection knows which
                     // worktrees had active sessions at last refresh.
@@ -334,9 +359,10 @@ impl App {
                 AppMsg::PaneContent(session_name, content) => {
                     // Accept pane content only when the session matches the current
                     // task row's sessions.
-                    let matches = self.task_rows.get(self.cursor).is_some_and(|row| {
-                        row.sessions.iter().any(|s| s.name == session_name)
-                    });
+                    let matches = self
+                        .task_rows
+                        .get(self.cursor)
+                        .is_some_and(|row| row.sessions.iter().any(|s| s.name == session_name));
                     if matches {
                         self.pane_content = content;
                     }
@@ -345,8 +371,7 @@ impl App {
                     if let ViewState::ConfirmDelete(ref mut ds) = self.view {
                         ds.phase = Phase::Done;
                     }
-                    self.warning =
-                        Some(("Worktree deleted.".to_string(), Instant::now()));
+                    self.warning = Some(("Worktree deleted.".to_string(), Instant::now()));
                     self.start_refresh();
                 }
                 AppMsg::DeleteErr(e) => {
@@ -359,8 +384,7 @@ impl App {
                     if let ViewState::Transfer(ref mut ts) = self.view {
                         ts.phase = Phase::Done;
                     }
-                    self.warning =
-                        Some(("Transfer complete.".to_string(), Instant::now()));
+                    self.warning = Some(("Transfer complete.".to_string(), Instant::now()));
                     self.start_refresh();
                 }
                 AppMsg::TransferErr(e) => {
@@ -386,7 +410,11 @@ impl App {
     // -------------------------------------------------------------------
 
     fn handle_key(&mut self, key: KeyEvent) -> bool {
-        crate::logger::LOG.info(&format!("tui: key event: {:?} view={:?}", key.code, self.view_name()));
+        crate::logger::LOG.info(&format!(
+            "tui: key event: {:?} view={:?}",
+            key.code,
+            self.view_name()
+        ));
 
         // Ctrl+C: quit (same as q — no switch target).
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -510,14 +538,12 @@ impl App {
         let wt = target.clone();
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            match delete_worktree(&wt, &global_config) {
-                Ok(()) => {
-                    let _ = tx.send(AppMsg::DeleteDone);
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
-                }
+        std::thread::spawn(move || match delete_worktree(&wt, &global_config) {
+            Ok(()) => {
+                let _ = tx.send(AppMsg::DeleteDone);
+            }
+            Err(e) => {
+                let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
             }
         });
     }
@@ -668,9 +694,10 @@ fn run_loop(
         // Poll for events with timeout (for spinner animation).
         if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))?
             && let Event::Key(key) = event::read()?
-                && app.handle_key(key) {
-                    break;
-                }
+            && app.handle_key(key)
+        {
+            break;
+        }
 
         // Check for background data updates.
         app.check_updates();
@@ -709,7 +736,10 @@ fn filter_stale(rows: &[derive::TaskRow]) -> Vec<derive::TaskRow> {
 // Delete worktree (shared by single-delete and cleanup)
 // ---------------------------------------------------------------------------
 
-fn delete_worktree(wt: &Worktree, global_config: &global_config::GlobalConfig) -> anyhow::Result<()> {
+fn delete_worktree(
+    wt: &Worktree,
+    global_config: &global_config::GlobalConfig,
+) -> anyhow::Result<()> {
     if let Some(ref host) = wt.remote {
         // Remote deletion
         if let Some(ref sess) = wt.tmux_session {
@@ -720,9 +750,10 @@ fn delete_worktree(wt: &Worktree, global_config: &global_config::GlobalConfig) -
             let _ = remote::remove_remote_registry_entry(host, &slug);
         }
         // Find the remote config matching this host to get the repo_path.
-        let remote_cfg = global_config.repos.iter().find_map(|repo| {
-            repo.remote_for_host(host)
-        });
+        let remote_cfg = global_config
+            .repos
+            .iter()
+            .find_map(|repo| repo.remote_for_host(host));
         if let Some(remote_cfg) = remote_cfg {
             remote::remove_remote_worktree(host, &remote_cfg.path, &wt.path)?;
         }
@@ -743,7 +774,10 @@ fn delete_worktree(wt: &Worktree, global_config: &global_config::GlobalConfig) -
 ///
 /// Equivalent to `delete_worktree` but operates on `TaskRow` fields, which is
 /// the only data model available after removing the legacy `Vec<Worktree>`.
-fn delete_task_row(row: &derive::TaskRow, global_config: &global_config::GlobalConfig) -> anyhow::Result<()> {
+fn delete_task_row(
+    row: &derive::TaskRow,
+    global_config: &global_config::GlobalConfig,
+) -> anyhow::Result<()> {
     let session_name = row.sessions.first().map(|s| s.name.as_str());
     if let Some(ref host) = row.worktree_host {
         // Remote deletion
@@ -753,9 +787,10 @@ fn delete_task_row(row: &derive::TaskRow, global_config: &global_config::GlobalC
         let slug = transfer::sanitize_branch_slug(&row.branch);
         let _ = remote::remove_remote_registry_entry(host, &slug);
         // Find the remote config matching this host to get the repo_path.
-        let remote_cfg = global_config.repos.iter().find_map(|repo| {
-            repo.remote_for_host(host)
-        });
+        let remote_cfg = global_config
+            .repos
+            .iter()
+            .find_map(|repo| repo.remote_for_host(host));
         if let Some(remote_cfg) = remote_cfg {
             remote::remove_remote_worktree(host, &remote_cfg.path, &row.worktree_path)?;
         }
@@ -808,10 +843,7 @@ pub(crate) fn compute_sessions_to_create(
             None => continue,
         };
 
-        let session_name = tmux::derive_main_session_name(
-            &origin.path,
-            Some(&origin.branch),
-        );
+        let session_name = tmux::derive_main_session_name(&origin.path, Some(&origin.branch));
 
         if sessions.iter().any(|s| s.name == session_name) {
             continue;
@@ -839,18 +871,18 @@ pub(crate) fn compute_sessions_to_create(
 /// After creating any sessions, refreshes the local tmux sessions cache so
 /// that `derive_from_all_caches` picks them up.
 pub(crate) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
-    let existing_sessions = cache::read_cache::<cache::CachedTmuxSession>(
-        &cache::tmux_cache_path(None),
-    )
-    .entries;
+    let existing_sessions =
+        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
 
     let repo_data: Vec<_> = config
         .repos
         .iter()
         .map(|repo| {
-            let worktrees = cache::read_cache::<cache::CachedWorktree>(
-                &cache::cache_path(repo.owner(), repo.repo_name(), "worktrees"),
-            )
+            let worktrees = cache::read_cache::<cache::CachedWorktree>(&cache::cache_path(
+                repo.owner(),
+                repo.repo_name(),
+                "worktrees",
+            ))
             .entries;
             (repo.slug.clone(), worktrees, existing_sessions.clone())
         })
@@ -899,8 +931,8 @@ mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo as DPrInfo, SessionInfo, TaskRow};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -1029,12 +1061,19 @@ mod tests {
 
     #[test]
     fn task_list_renders_issue_title() {
-        let rows = vec![make_task_row_with_title(42, "Fix login bug", DisplayGroup::Other)];
+        let rows = vec![make_task_row_with_title(
+            42,
+            "Fix login bug",
+            DisplayGroup::Other,
+        )];
         let mut app = App::new_test(rows);
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("Fix login bug"), "expected title in output");
         assert!(output.contains("#42"), "expected issue number in output");
-        assert!(output.contains("other"), "expected section header in output");
+        assert!(
+            output.contains("other"),
+            "expected section header in output"
+        );
     }
 
     #[test]
@@ -1042,7 +1081,10 @@ mod tests {
         let mut app = App::new_test(vec![]);
         app.loading = true;
         let output = render_to_string(&mut app, 120, 40);
-        assert!(output.contains("Loading"), "expected Loading text in output");
+        assert!(
+            output.contains("Loading"),
+            "expected Loading text in output"
+        );
     }
 
     #[test]
@@ -1155,7 +1197,10 @@ mod tests {
         assert!(output.contains("@gpu1"), "expected @gpu1 in header");
         assert!(output.contains("@dev2"), "expected @dev2 in header");
         assert!(output.contains('\u{25cf}'), "expected ● for reachable host");
-        assert!(output.contains('\u{2717}'), "expected ✗ for unreachable host");
+        assert!(
+            output.contains('\u{2717}'),
+            "expected ✗ for unreachable host"
+        );
     }
 
     #[test]
@@ -1223,12 +1268,22 @@ mod tests {
         let output = render_to_string(&mut app, 120, 40);
 
         // "shepherd" section header must appear before "other"
-        let shepherd_pos = output.find("shepherd").expect("expected 'shepherd' section header");
-        let other_pos = output.find("other").expect("expected 'other' section header");
-        assert!(shepherd_pos < other_pos, "shepherd section must appear before other section");
+        let shepherd_pos = output
+            .find("shepherd")
+            .expect("expected 'shepherd' section header");
+        let other_pos = output
+            .find("other")
+            .expect("expected 'other' section header");
+        assert!(
+            shepherd_pos < other_pos,
+            "shepherd section must appear before other section"
+        );
 
         // The shepherd row must be visible (shows repo name in TITLE column).
-        assert!(output.contains("repo"), "expected repo name in shepherd row output");
+        assert!(
+            output.contains("repo"),
+            "expected repo name in shepherd row output"
+        );
     }
 
     #[test]
@@ -1237,8 +1292,14 @@ mod tests {
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
-        assert!(output.contains("experimental"), "expected branch name in output");
-        assert!(output.contains("other"), "expected 'other' section header in output");
+        assert!(
+            output.contains("experimental"),
+            "expected branch name in output"
+        );
+        assert!(
+            output.contains("other"),
+            "expected 'other' section header in output"
+        );
     }
 
     #[test]
@@ -1284,18 +1345,28 @@ mod tests {
         let other = make_worktree_row("feat/plain", DisplayGroup::Other);
 
         // Pre-sort to match expected display order (as derive::derive_all_repos would produce)
-        let mut app = App::new_test(
-            vec![needs_attention, claude_working, ready_to_merge, other],
-        );
+        let mut app = App::new_test(vec![needs_attention, claude_working, ready_to_merge, other]);
         let output = render_to_string(&mut app, 120, 40);
 
-        let pos_na = output.find("needs attention").expect("expected 'needs attention'");
-        let pos_cw = output.find("claude working").expect("expected 'claude working'");
-        let pos_rtm = output.find("ready to merge").expect("expected 'ready to merge'");
+        let pos_na = output
+            .find("needs attention")
+            .expect("expected 'needs attention'");
+        let pos_cw = output
+            .find("claude working")
+            .expect("expected 'claude working'");
+        let pos_rtm = output
+            .find("ready to merge")
+            .expect("expected 'ready to merge'");
         let pos_other = output.find("other").expect("expected 'other'");
 
-        assert!(pos_na < pos_cw, "needs attention must come before claude working");
-        assert!(pos_cw < pos_rtm, "claude working must come before ready to merge");
+        assert!(
+            pos_na < pos_cw,
+            "needs attention must come before claude working"
+        );
+        assert!(
+            pos_cw < pos_rtm,
+            "claude working must come before ready to merge"
+        );
         assert!(pos_rtm < pos_other, "ready to merge must come before other");
     }
 
@@ -1318,8 +1389,14 @@ mod tests {
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
-        assert!(output.contains("input"), "expected 'input' claude status indicator");
-        assert!(output.contains("needs attention"), "expected NeedsAttention section header");
+        assert!(
+            output.contains("input"),
+            "expected 'input' claude status indicator"
+        );
+        assert!(
+            output.contains("needs attention"),
+            "expected NeedsAttention section header"
+        );
     }
 
     #[test]
@@ -1340,7 +1417,10 @@ mod tests {
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("#55"), "expected PR number #55 in output");
-        assert!(output.contains("failing"), "expected 'failing' CI state in output");
+        assert!(
+            output.contains("failing"),
+            "expected 'failing' CI state in output"
+        );
     }
 
     #[test]
@@ -1354,7 +1434,10 @@ mod tests {
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("@gpu1"), "expected '@gpu1' in output");
-        assert!(output.contains('\u{25cf}'), "expected ● reachable indicator");
+        assert!(
+            output.contains('\u{25cf}'),
+            "expected ● reachable indicator"
+        );
     }
 
     #[test]
@@ -1379,7 +1462,10 @@ mod tests {
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("@gpu1"), "expected '@gpu1' in output");
-        assert!(output.contains('\u{2717}'), "expected ✗ unreachable indicator");
+        assert!(
+            output.contains('\u{2717}'),
+            "expected ✗ unreachable indicator"
+        );
     }
 
     #[test]
@@ -1410,9 +1496,14 @@ mod tests {
             output.contains("Keyboard Shortcuts"),
             "expected 'Keyboard Shortcuts' in help overlay"
         );
-        assert!(output.contains("enter"), "expected 'enter' key binding in help");
-        assert!(output.contains("switch") || output.contains("Switch"),
-            "expected 'switch' action text in help");
+        assert!(
+            output.contains("enter"),
+            "expected 'enter' key binding in help"
+        );
+        assert!(
+            output.contains("switch") || output.contains("Switch"),
+            "expected 'switch' action text in help"
+        );
     }
 
     #[test]
@@ -1486,7 +1577,11 @@ mod tests {
     fn returns_session_to_create_when_none_exist() {
         let repos = vec![(
             "acme/my-project".to_string(),
-            vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+            vec![make_cached_worktree(
+                "/workspace/git-orchard-rs",
+                "main",
+                false,
+            )],
             vec![],
         )];
         let result = compute_sessions_to_create(&repos);
@@ -1499,11 +1594,18 @@ mod tests {
     fn skips_repo_when_session_already_exists() {
         let repos = vec![(
             "acme/my-project".to_string(),
-            vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+            vec![make_cached_worktree(
+                "/workspace/git-orchard-rs",
+                "main",
+                false,
+            )],
             vec![make_cached_session("git-orchard-rs_main")],
         )];
         let result = compute_sessions_to_create(&repos);
-        assert!(result.is_empty(), "expected no sessions to create when session exists");
+        assert!(
+            result.is_empty(),
+            "expected no sessions to create when session exists"
+        );
     }
 
     #[test]
@@ -1511,7 +1613,11 @@ mod tests {
         let repos = vec![
             (
                 "acme/my-project".to_string(),
-                vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+                vec![make_cached_worktree(
+                    "/workspace/git-orchard-rs",
+                    "main",
+                    false,
+                )],
                 vec![make_cached_session("git-orchard-rs_main")],
             ),
             (
@@ -1532,7 +1638,11 @@ mod tests {
         let repos = vec![
             (
                 "acme/my-project".to_string(),
-                vec![make_cached_worktree("/workspace/git-orchard-rs", "main", false)],
+                vec![make_cached_worktree(
+                    "/workspace/git-orchard-rs",
+                    "main",
+                    false,
+                )],
                 vec![],
             ),
             (
@@ -1544,7 +1654,10 @@ mod tests {
         let result = compute_sessions_to_create(&repos);
         assert_eq!(result.len(), 2);
         let names: Vec<&str> = result.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"git-orchard-rs_main"), "expected git-orchard-rs_main");
+        assert!(
+            names.contains(&"git-orchard-rs_main"),
+            "expected git-orchard-rs_main"
+        );
         assert!(names.contains(&"webapp_main"), "expected webapp_main");
     }
 
@@ -1552,11 +1665,18 @@ mod tests {
     fn skips_repo_with_no_non_bare_worktree() {
         let repos = vec![(
             "acme/my-project".to_string(),
-            vec![make_cached_worktree("/workspace/git-orchard-rs", "main", true)],
+            vec![make_cached_worktree(
+                "/workspace/git-orchard-rs",
+                "main",
+                true,
+            )],
             vec![],
         )];
         let result = compute_sessions_to_create(&repos);
-        assert!(result.is_empty(), "expected no sessions when only bare worktrees exist");
+        assert!(
+            result.is_empty(),
+            "expected no sessions when only bare worktrees exist"
+        );
     }
 
     #[test]
@@ -1590,13 +1710,15 @@ mod tests {
     fn session_name_sanitizes_dots_in_path() {
         let repos = vec![(
             "org/my.project-v2".to_string(),
-            vec![make_cached_worktree("/workspace/my.project-v2", "main", false)],
+            vec![make_cached_worktree(
+                "/workspace/my.project-v2",
+                "main",
+                false,
+            )],
             vec![],
         )];
         let result = compute_sessions_to_create(&repos);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "my_project-v2_main");
     }
-
 }
-

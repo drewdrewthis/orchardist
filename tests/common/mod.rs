@@ -7,8 +7,8 @@
 /// - `TestRepo` — a temp dir containing an initialised git repository.
 /// - Fixture builder functions for all cache entry types.
 use orchard::cache::{
-    cache_path, tmux_cache_path, write_cache, CachedIssue, CachedPr, CachedTmuxSession,
-    CachedWorktree,
+    CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree, cache_path, tmux_cache_path,
+    write_cache,
 };
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -57,9 +57,7 @@ impl TestCacheDir {
     /// Writes tmux sessions cache (local, no host).
     pub fn write_tmux_sessions(&self, entries: &[CachedTmuxSession]) {
         let global = tmux_cache_path(None);
-        let filename = global
-            .file_name()
-            .expect("tmux cache path has filename");
+        let filename = global.file_name().expect("tmux cache path has filename");
         let path = self.dir.path().join(filename);
         write_cache(&path, entries).expect("write tmux sessions cache");
     }

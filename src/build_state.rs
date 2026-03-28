@@ -213,8 +213,16 @@ mod tests {
         // Two repos with no cached data — they should appear in config order
         let config = GlobalConfig {
             repos: vec![
-                RepoConfig { slug: "owner/repo-a".to_string(), path: "/tmp/repo-a".to_string(), remotes: vec![] },
-                RepoConfig { slug: "owner/repo-b".to_string(), path: "/tmp/repo-b".to_string(), remotes: vec![] },
+                RepoConfig {
+                    slug: "owner/repo-a".to_string(),
+                    path: "/tmp/repo-a".to_string(),
+                    remotes: vec![],
+                },
+                RepoConfig {
+                    slug: "owner/repo-b".to_string(),
+                    path: "/tmp/repo-b".to_string(),
+                    remotes: vec![],
+                },
             ],
         };
         let state = build_state_with_hosts(&config, &HashMap::new());
@@ -234,9 +242,11 @@ mod tests {
     fn build_task_rows_and_build_state_produce_consistent_worktree_count() {
         use crate::global_config::RepoConfig;
         let config = GlobalConfig {
-            repos: vec![
-                RepoConfig { slug: "owner/repo".to_string(), path: "/tmp/repo".to_string(), remotes: vec![] },
-            ],
+            repos: vec![RepoConfig {
+                slug: "owner/repo".to_string(),
+                path: "/tmp/repo".to_string(),
+                remotes: vec![],
+            }],
         };
         let rows = build_task_rows(&config);
         let state = build_state(&config);

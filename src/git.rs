@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use crate::logger::LOG;
 use crate::types::Worktree;
@@ -130,15 +130,23 @@ pub fn remove_worktree(path: &str, force: bool) -> Result<()> {
         args.push("--force");
     }
 
-    if Command::new("git").args(&args).status().map(|s| s.success()).unwrap_or(false) {
+    if Command::new("git")
+        .args(&args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
         LOG.info(&format!("removeWorktree: removed {}", path));
         return Ok(());
     }
 
     // Fallback: worktree may be in a broken state.
-    LOG.warn(&format!("removeWorktree: git remove failed for {}, falling back to rm + prune", path));
-    let resolved = std::fs::canonicalize(path)
-        .with_context(|| format!("canonicalizing path: {path}"))?;
+    LOG.warn(&format!(
+        "removeWorktree: git remove failed for {}, falling back to rm + prune",
+        path
+    ));
+    let resolved =
+        std::fs::canonicalize(path).with_context(|| format!("canonicalizing path: {path}"))?;
     let resolved_str = resolved.to_string_lossy();
 
     if !is_known_worktree(&resolved_str) {
@@ -172,7 +180,8 @@ fn resolve_main_worktree_path(git_dir: &str) -> String {
             let rel = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let joined = Path::new(git_dir).join(&rel);
             // Try filesystem canonicalize first, fall back to logical normalization.
-            joined.canonicalize()
+            joined
+                .canonicalize()
                 .unwrap_or_else(|_| normalize_path(&joined))
                 .to_string_lossy()
                 .into_owned()

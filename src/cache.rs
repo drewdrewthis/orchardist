@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 // ---------------------------------------------------------------------------
 // Entry types
@@ -120,7 +120,9 @@ pub fn read_cache<T: DeserializeOwned>(path: &Path) -> CacheFile<T> {
 /// Writes `entries` to `path` atomically (via a `.tmp` sibling file) and sets
 /// `last_refreshed` to the current UTC time.
 pub fn write_cache<T: Serialize>(path: &Path, entries: &[T]) -> anyhow::Result<()> {
-    let dir = path.parent().context("cache path has no parent directory")?;
+    let dir = path
+        .parent()
+        .context("cache path has no parent directory")?;
     std::fs::create_dir_all(dir).context("create cache directory")?;
 
     // Use a local wrapper that borrows entries to avoid requiring T: Clone.
@@ -197,7 +199,9 @@ pub fn read_manifest() -> SessionManifest {
 /// Writes the session manifest to disk atomically (via a `.tmp` sibling file).
 pub fn write_manifest(manifest: &SessionManifest) -> anyhow::Result<()> {
     let path = manifest_path();
-    let dir = path.parent().context("manifest path has no parent directory")?;
+    let dir = path
+        .parent()
+        .context("manifest path has no parent directory")?;
     std::fs::create_dir_all(dir).context("create cache directory")?;
     let data = serde_json::to_string_pretty(manifest).context("serialize manifest")?;
     let tmp = path.with_extension("json.tmp");
@@ -413,7 +417,10 @@ mod tests {
         write_cache_if_nonempty::<CachedIssue>(&path, &[]).unwrap();
         let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
 
-        assert_eq!(mtime_before, mtime_after, "file should not have been touched");
+        assert_eq!(
+            mtime_before, mtime_after,
+            "file should not have been touched"
+        );
 
         // Verify contents unchanged.
         let cache: CacheFile<CachedIssue> = read_cache(&path);

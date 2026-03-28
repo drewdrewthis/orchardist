@@ -93,8 +93,12 @@ fn handle_tui(command: &str) {
         if wrapper.exists() {
             let _ = std::process::Command::new("tmux")
                 .args([
-                    "display-popup", "-E",
-                    "-w", "90%", "-h", "80%",
+                    "display-popup",
+                    "-E",
+                    "-w",
+                    "90%",
+                    "-h",
+                    "80%",
                     &wrapper.to_string_lossy(),
                 ])
                 .status();

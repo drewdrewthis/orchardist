@@ -51,18 +51,44 @@ pub enum PrStatus {
 impl PrStatus {
     pub fn display(self) -> StatusDisplay {
         match self {
-            Self::Conflict => StatusDisplay { icon: "✖", label: "conflict" },
-            Self::Failing => StatusDisplay { icon: "✖", label: "failing" },
-            Self::Unresolved => StatusDisplay { icon: "◯", label: "unresolved" },
-            Self::ChangesRequested => StatusDisplay { icon: "✖", label: "changes" },
-            Self::ReviewNeeded => StatusDisplay { icon: "◯", label: "review" },
-            Self::PendingCi => StatusDisplay { icon: "◯", label: "pending" },
-            Self::Approved => StatusDisplay { icon: "✓", label: "ready" },
-            Self::Merged => StatusDisplay { icon: "●", label: "merged" },
-            Self::Closed => StatusDisplay { icon: "●", label: "closed" },
+            Self::Conflict => StatusDisplay {
+                icon: "✖",
+                label: "conflict",
+            },
+            Self::Failing => StatusDisplay {
+                icon: "✖",
+                label: "failing",
+            },
+            Self::Unresolved => StatusDisplay {
+                icon: "◯",
+                label: "unresolved",
+            },
+            Self::ChangesRequested => StatusDisplay {
+                icon: "✖",
+                label: "changes",
+            },
+            Self::ReviewNeeded => StatusDisplay {
+                icon: "◯",
+                label: "review",
+            },
+            Self::PendingCi => StatusDisplay {
+                icon: "◯",
+                label: "pending",
+            },
+            Self::Approved => StatusDisplay {
+                icon: "✓",
+                label: "ready",
+            },
+            Self::Merged => StatusDisplay {
+                icon: "●",
+                label: "merged",
+            },
+            Self::Closed => StatusDisplay {
+                icon: "●",
+                label: "closed",
+            },
         }
     }
-
 }
 
 pub struct StatusDisplay {
@@ -71,17 +97,32 @@ pub struct StatusDisplay {
 }
 
 pub fn resolve_pr_status(pr: &PrInfo) -> PrStatus {
-    if pr.state == "merged" { return PrStatus::Merged; }
-    if pr.state == "closed" { return PrStatus::Closed; }
-    if pr.has_conflicts { return PrStatus::Conflict; }
-    if pr.unresolved_threads > 0 { return PrStatus::Unresolved; }
-    if pr.review_decision == ReviewDecision::ChangesRequested { return PrStatus::ChangesRequested; }
-    if pr.checks_status == ChecksStatus::Fail { return PrStatus::Failing; }
+    if pr.state == "merged" {
+        return PrStatus::Merged;
+    }
+    if pr.state == "closed" {
+        return PrStatus::Closed;
+    }
+    if pr.has_conflicts {
+        return PrStatus::Conflict;
+    }
+    if pr.unresolved_threads > 0 {
+        return PrStatus::Unresolved;
+    }
+    if pr.review_decision == ReviewDecision::ChangesRequested {
+        return PrStatus::ChangesRequested;
+    }
+    if pr.checks_status == ChecksStatus::Fail {
+        return PrStatus::Failing;
+    }
     if pr.review_decision == ReviewDecision::ReviewRequired {
         return PrStatus::ReviewNeeded;
     }
-    if pr.checks_status == ChecksStatus::Pending { return PrStatus::PendingCi; }
-    if pr.review_decision == ReviewDecision::Approved || pr.review_decision == ReviewDecision::None {
+    if pr.checks_status == ChecksStatus::Pending {
+        return PrStatus::PendingCi;
+    }
+    if pr.review_decision == ReviewDecision::Approved || pr.review_decision == ReviewDecision::None
+    {
         return PrStatus::Approved;
     }
     PrStatus::ReviewNeeded
@@ -158,9 +199,14 @@ mod tests {
     #[test]
     fn conflict_beats_failing_when_open() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::None, unresolved_threads: 0,
-            checks_status: ChecksStatus::Fail, has_conflicts: true,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::None,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Fail,
+            has_conflicts: true,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Conflict);
     }
@@ -168,9 +214,14 @@ mod tests {
     #[test]
     fn merged_beats_conflicts_and_failing_ci() {
         let pr = PrInfo {
-            number: 1, state: "merged".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::None, unresolved_threads: 0,
-            checks_status: ChecksStatus::Fail, has_conflicts: true,
+            number: 1,
+            state: "merged".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::None,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Fail,
+            has_conflicts: true,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Merged);
     }
@@ -178,9 +229,14 @@ mod tests {
     #[test]
     fn failing_ci() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::None, unresolved_threads: 0,
-            checks_status: ChecksStatus::Fail, has_conflicts: false,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::None,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Fail,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Failing);
     }
@@ -188,9 +244,14 @@ mod tests {
     #[test]
     fn approved() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::Approved, unresolved_threads: 0,
-            checks_status: ChecksStatus::Pass, has_conflicts: false,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::Approved,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Pass,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Approved);
     }
@@ -198,9 +259,14 @@ mod tests {
     #[test]
     fn merged() {
         let pr = PrInfo {
-            number: 1, state: "merged".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::Approved, unresolved_threads: 0,
-            checks_status: ChecksStatus::Pass, has_conflicts: false,
+            number: 1,
+            state: "merged".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::Approved,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Pass,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Merged);
     }
@@ -208,9 +274,14 @@ mod tests {
     #[test]
     fn pending_ci() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::Approved, unresolved_threads: 0,
-            checks_status: ChecksStatus::Pending, has_conflicts: false,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::Approved,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Pending,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::PendingCi);
     }
@@ -218,9 +289,14 @@ mod tests {
     #[test]
     fn no_review_required_with_passing_ci_is_approved() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::None, unresolved_threads: 0,
-            checks_status: ChecksStatus::Pass, has_conflicts: false,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::None,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Pass,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Approved);
     }
@@ -228,9 +304,14 @@ mod tests {
     #[test]
     fn no_review_required_with_pending_ci_is_pending() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::None, unresolved_threads: 0,
-            checks_status: ChecksStatus::Pending, has_conflicts: false,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::None,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Pending,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::PendingCi);
     }
@@ -238,9 +319,14 @@ mod tests {
     #[test]
     fn review_required_is_review_needed() {
         let pr = PrInfo {
-            number: 1, state: "open".into(), title: String::new(), url: String::new(),
-            review_decision: ReviewDecision::ReviewRequired, unresolved_threads: 0,
-            checks_status: ChecksStatus::Pass, has_conflicts: false,
+            number: 1,
+            state: "open".into(),
+            title: String::new(),
+            url: String::new(),
+            review_decision: ReviewDecision::ReviewRequired,
+            unresolved_threads: 0,
+            checks_status: ChecksStatus::Pass,
+            has_conflicts: false,
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::ReviewNeeded);
     }
@@ -248,9 +334,15 @@ mod tests {
     #[test]
     fn display_entries_exist() {
         let statuses = [
-            PrStatus::Conflict, PrStatus::Failing, PrStatus::Unresolved,
-            PrStatus::ChangesRequested, PrStatus::ReviewNeeded, PrStatus::PendingCi,
-            PrStatus::Approved, PrStatus::Merged, PrStatus::Closed,
+            PrStatus::Conflict,
+            PrStatus::Failing,
+            PrStatus::Unresolved,
+            PrStatus::ChangesRequested,
+            PrStatus::ReviewNeeded,
+            PrStatus::PendingCi,
+            PrStatus::Approved,
+            PrStatus::Merged,
+            PrStatus::Closed,
         ];
         for s in statuses {
             let d = s.display();

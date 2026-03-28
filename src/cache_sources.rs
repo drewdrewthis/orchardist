@@ -3,9 +3,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::cache::{
-    self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree,
-};
+use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
 use crate::remote;
@@ -60,7 +58,12 @@ pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
                         .collect()
                 })
                 .unwrap_or_default();
-            Some(CachedIssue { number, title, state, labels })
+            Some(CachedIssue {
+                number,
+                title,
+                state,
+                labels,
+            })
         })
         .collect()
 }
@@ -74,7 +77,9 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
     let root: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(e) => {
-            LOG.warn(&format!("cache_sources: failed to parse PRs GraphQL JSON: {e}"));
+            LOG.warn(&format!(
+                "cache_sources: failed to parse PRs GraphQL JSON: {e}"
+            ));
             return Vec::new();
         }
     };
@@ -109,8 +114,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
 
             let checks_state = derive_checks_state_graphql(v);
 
-            let has_conflicts =
-                v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
+            let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
 
             let unresolved_threads = v["reviewThreads"]["nodes"]
                 .as_array()
@@ -146,9 +150,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
 ///
 /// Path: `commits.nodes[0].commit.statusCheckRollup.state`
 fn derive_checks_state_graphql(pr: &serde_json::Value) -> Option<String> {
-    let state = pr["commits"]["nodes"]
-        .as_array()?
-        .last()?["commit"]["statusCheckRollup"]["state"]
+    let state = pr["commits"]["nodes"].as_array()?.last()?["commit"]["statusCheckRollup"]["state"]
         .as_str()?;
 
     match state {
@@ -193,20 +195,25 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
 
         // Git submodules report the main worktree as .git/modules/<name>.
         // Resolve to the actual working directory so session path matching works.
-        if path.contains(".git/modules/") {
-            if let Ok(out) = std::process::Command::new("git")
+        if path.contains(".git/modules/")
+            && let Ok(out) = std::process::Command::new("git")
                 .args(["rev-parse", "--show-toplevel"])
                 .current_dir(&path)
                 .output()
-            {
-                let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !resolved.is_empty() {
-                    path = resolved;
-                }
+        {
+            let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !resolved.is_empty() {
+                path = resolved;
             }
         }
 
-        worktrees.push(CachedWorktree { path, branch, is_bare, is_locked, host: None });
+        worktrees.push(CachedWorktree {
+            path,
+            branch,
+            is_bare,
+            is_locked,
+            host: None,
+        });
     }
 
     worktrees
@@ -395,10 +402,7 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
 
     match out {
         Err(e) => {
-            LOG.warn(&format!(
-                "cache_sources: refresh_prs({}): {e}",
-                config.slug
-            ));
+            LOG.warn(&format!("cache_sources: refresh_prs({}): {e}", config.slug));
             return Ok(());
         }
         Ok(json) => {
@@ -421,11 +425,7 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
 pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
 
-    let out = run_local_in(
-        "git",
-        &["worktree", "list", "--porcelain"],
-        &config.path,
-    );
+    let out = run_local_in("git", &["worktree", "list", "--porcelain"], &config.path);
 
     match out {
         Err(e) => {
@@ -461,10 +461,7 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
             "tmux",
             &["list-sessions", "-F", "#{session_name}:#{session_path}"],
         ),
-        Some(h) => remote::ssh_exec(
-            h,
-            "tmux list-sessions -F '#{session_name}:#{session_path}'",
-        ),
+        Some(h) => remote::ssh_exec(h, "tmux list-sessions -F '#{session_name}:#{session_path}'"),
     };
 
     let sessions_output = match sessions_out {
@@ -484,11 +481,8 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         |session_name| {
             let pane_fmt = "#{pane_title}:#{pane_current_command}";
             match host {
-                None => run_local(
-                    "tmux",
-                    &["list-panes", "-t", session_name, "-F", pane_fmt],
-                )
-                .unwrap_or_default(),
+                None => run_local("tmux", &["list-panes", "-t", session_name, "-F", pane_fmt])
+                    .unwrap_or_default(),
                 Some(h) => {
                     let cmd = format!(
                         "tmux list-panes -t {} -F '{}'",
@@ -535,8 +529,7 @@ pub fn refresh_remote_worktrees(
     config: &RepoConfig,
     remote_cfg: &crate::global_config::RemoteConfig,
 ) -> anyhow::Result<()> {
-    let cache_path =
-        cache::cache_path(config.owner(), config.repo_name(), "remote_worktrees");
+    let cache_path = cache::cache_path(config.owner(), config.repo_name(), "remote_worktrees");
 
     let cmd = format!(
         "git -C {} worktree list --porcelain",
@@ -570,7 +563,9 @@ pub fn refresh_remote_worktrees(
             cache::write_cache_if_nonempty(&cache_path, &worktrees)?;
             LOG.info(&format!(
                 "cache_sources: refresh_remote_worktrees({}, {}): wrote {} entries",
-                config.slug, remote_cfg.host, worktrees.len(),
+                config.slug,
+                remote_cfg.host,
+                worktrees.len(),
             ));
         }
     }
@@ -622,7 +617,10 @@ mod tests {
 
     #[test]
     fn extract_no_match_returns_none() {
-        assert_eq!(extract_linked_issue_from_body("This PR does some stuff"), None);
+        assert_eq!(
+            extract_linked_issue_from_body("This PR does some stuff"),
+            None
+        );
     }
 
     #[test]
@@ -689,7 +687,7 @@ mod tests {
             {"number": 1, "title": "Old issue", "state": "CLOSED", "labels": []},
             {"number": 2, "title": "Active issue", "state": "OPEN", "labels": [{"name": "bug"}]}
         ]"#;
-        let issues = parse_issues_json(&json);
+        let issues = parse_issues_json(json);
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].number, 1);
         assert_eq!(issues[0].state, "closed");
@@ -706,8 +704,12 @@ mod tests {
             {"number": 16, "title": "Open 3", "state": "OPEN", "labels": []},
             {"number": 18, "title": "Open 4", "state": "OPEN", "labels": []}
         ]"#;
-        let issues = parse_issues_json(&json);
-        assert_eq!(issues.len(), 5, "all issues should be preserved regardless of state");
+        let issues = parse_issues_json(json);
+        assert_eq!(
+            issues.len(),
+            5,
+            "all issues should be preserved regardless of state"
+        );
         let numbers: Vec<u32> = issues.iter().map(|i| i.number).collect();
         assert_eq!(numbers, vec![1, 13, 14, 16, 18]);
     }
@@ -763,9 +765,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_produces_correct_entries() {
-        let json = graphql_prs(json!([
-            gql_pr_node(55, "feat/task-centric", Some("APPROVED"), "MERGEABLE", Some("SUCCESS"), vec![47], 0)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            55,
+            "feat/task-centric",
+            Some("APPROVED"),
+            "MERGEABLE",
+            Some("SUCCESS"),
+            vec![47],
+            0
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs.len(), 1);
@@ -783,9 +791,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_changes_requested() {
-        let json = graphql_prs(json!([
-            gql_pr_node(10, "fix/something", Some("CHANGES_REQUESTED"), "MERGEABLE", None, vec![], 0)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            10,
+            "fix/something",
+            Some("CHANGES_REQUESTED"),
+            "MERGEABLE",
+            None,
+            vec![],
+            0
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs[0].review_decision.as_deref(), Some("changes_requested"));
@@ -793,9 +807,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_has_conflicts_when_conflicting() {
-        let json = graphql_prs(json!([
-            gql_pr_node(10, "fix/conflict", None, "CONFLICTING", None, vec![], 0)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            10,
+            "fix/conflict",
+            None,
+            "CONFLICTING",
+            None,
+            vec![],
+            0
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert!(prs[0].has_conflicts);
@@ -803,9 +823,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_counts_unresolved_threads() {
-        let json = graphql_prs(json!([
-            gql_pr_node(10, "fix/threads", None, "MERGEABLE", None, vec![], 3)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            10,
+            "fix/threads",
+            None,
+            "MERGEABLE",
+            None,
+            vec![],
+            3
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs[0].unresolved_threads, 3);
@@ -813,9 +839,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_no_linked_issue_when_empty() {
-        let json = graphql_prs(json!([
-            gql_pr_node(99, "chore/no-issue", None, "MERGEABLE", None, vec![], 0)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            99,
+            "chore/no-issue",
+            None,
+            "MERGEABLE",
+            None,
+            vec![],
+            0
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs[0].linked_issue, None);
@@ -823,9 +855,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_checks_state_failing() {
-        let json = graphql_prs(json!([
-            gql_pr_node(10, "feat/ci-fail", None, "MERGEABLE", Some("FAILURE"), vec![], 0)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            10,
+            "feat/ci-fail",
+            None,
+            "MERGEABLE",
+            Some("FAILURE"),
+            vec![],
+            0
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs[0].checks_state.as_deref(), Some("failing"));
@@ -833,9 +871,15 @@ mod tests {
 
     #[test]
     fn parse_prs_graphql_checks_state_pending() {
-        let json = graphql_prs(json!([
-            gql_pr_node(10, "feat/ci-pending", None, "MERGEABLE", Some("PENDING"), vec![], 0)
-        ]));
+        let json = graphql_prs(json!([gql_pr_node(
+            10,
+            "feat/ci-pending",
+            None,
+            "MERGEABLE",
+            Some("PENDING"),
+            vec![],
+            0
+        )]));
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs[0].checks_state.as_deref(), Some("pending"));
@@ -861,8 +905,7 @@ mod tests {
 
     #[test]
     fn parse_worktree_porcelain_strips_refs_heads() {
-        let input =
-            "worktree /home/user/repo-feat\nHEAD abc\nbranch refs/heads/feat/my-work\n";
+        let input = "worktree /home/user/repo-feat\nHEAD abc\nbranch refs/heads/feat/my-work\n";
         let wts = parse_worktree_porcelain(input);
         assert_eq!(wts[0].branch, "feat/my-work");
     }
@@ -876,7 +919,8 @@ mod tests {
 
     #[test]
     fn parse_worktree_porcelain_locked_worktree() {
-        let input = "worktree /home/user/repo-locked\nHEAD abc\nbranch refs/heads/main\nlocked reason\n";
+        let input =
+            "worktree /home/user/repo-locked\nHEAD abc\nbranch refs/heads/main\nlocked reason\n";
         let wts = parse_worktree_porcelain(input);
         assert!(wts[0].is_locked);
     }

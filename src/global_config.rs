@@ -79,10 +79,10 @@ fn global_config_path() -> Option<PathBuf> {
     // Check XDG-style ~/.config first (cross-platform convention),
     // then fall back to platform-native config dir (~/Library/Application Support on macOS).
     let xdg = dirs::home_dir().map(|h| h.join(".config").join("orchard").join("config.json"));
-    if let Some(ref p) = xdg {
-        if p.exists() {
-            return xdg;
-        }
+    if let Some(ref p) = xdg
+        && p.exists()
+    {
+        return xdg;
     }
     dirs::config_dir().map(|d| d.join("orchard").join("config.json"))
 }
@@ -101,13 +101,14 @@ fn global_config_path() -> Option<PathBuf> {
 /// 3. Empty `GlobalConfig` if neither succeeds.
 pub fn load_global_config() -> GlobalConfig {
     if let Some(path) = global_config_path()
-        && path.exists() {
-            let mut cfg = load_from_path(&path);
-            // If CWD is a repo not already in the config, append it so
-            // orchard works seamlessly from any repo directory.
-            ensure_cwd_repo(&mut cfg);
-            return cfg;
-        }
+        && path.exists()
+    {
+        let mut cfg = load_from_path(&path);
+        // If CWD is a repo not already in the config, append it so
+        // orchard works seamlessly from any repo directory.
+        ensure_cwd_repo(&mut cfg);
+        return cfg;
+    }
 
     fallback_single_repo()
 }
@@ -140,7 +141,9 @@ fn ensure_cwd_repo(cfg: &mut GlobalConfig) {
 
     let remotes = load_orchard_json_remotes(&std::path::PathBuf::from(&cwd));
 
-    LOG.info(&format!("global_config: appending CWD repo {slug} at {cwd}"));
+    LOG.info(&format!(
+        "global_config: appending CWD repo {slug} at {cwd}"
+    ));
     cfg.repos.push(RepoConfig {
         slug,
         path: cwd,
@@ -221,15 +224,15 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
 
             // If `remote` (singular) is present and there are no `remotes`,
             // promote it as the sole entry.
-            if remotes.is_empty() {
-                if let Some(r) = raw_repo.remote {
-                    remotes.push(RemoteConfig {
-                        name: r.name,
-                        host: r.host,
-                        path: r.path.or(r.repo_path).unwrap_or_default(),
-                        shell: r.shell,
-                    });
-                }
+            if remotes.is_empty()
+                && let Some(r) = raw_repo.remote
+            {
+                remotes.push(RemoteConfig {
+                    name: r.name,
+                    host: r.host,
+                    path: r.path.or(r.repo_path).unwrap_or_default(),
+                    shell: r.shell,
+                });
             }
 
             RepoConfig {
@@ -254,7 +257,9 @@ fn fallback_single_repo() -> GlobalConfig {
     let (owner, name) = match crate::github::get_repo() {
         Ok(pair) => pair,
         Err(e) => {
-            LOG.info(&format!("global_config: could not detect repo from CWD: {e}"));
+            LOG.info(&format!(
+                "global_config: could not detect repo from CWD: {e}"
+            ));
             return GlobalConfig::default();
         }
     };
@@ -335,33 +340,31 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
     // Process the `remotes` array first (preferred format).
     if let Some(entries) = raw.remotes {
         for r in entries {
-            if let Some(host) = r.host.filter(|s| !s.is_empty()) {
-                if let Some(path) = r.path.or(r.repo_path).filter(|s| !s.is_empty()) {
-                    results.push(RemoteConfig {
-                        name: r.name.unwrap_or_else(|| "default".to_string()),
-                        host,
-                        path,
-                        shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
-                    });
-                }
+            if let Some(host) = r.host.filter(|s| !s.is_empty())
+                && let Some(path) = r.path.or(r.repo_path).filter(|s| !s.is_empty())
+            {
+                results.push(RemoteConfig {
+                    name: r.name.unwrap_or_else(|| "default".to_string()),
+                    host,
+                    path,
+                    shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
+                });
             }
         }
     }
 
     // Fall back to singular `remote` only when `remotes` produced nothing.
-    if results.is_empty() {
-        if let Some(r) = raw.remote {
-            if let Some(host) = r.host.filter(|s| !s.is_empty()) {
-                if let Some(path) = r.path.or(r.repo_path).filter(|s| !s.is_empty()) {
-                    results.push(RemoteConfig {
-                        name: r.name.unwrap_or_else(|| "default".to_string()),
-                        host,
-                        path,
-                        shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
-                    });
-                }
-            }
-        }
+    if results.is_empty()
+        && let Some(r) = raw.remote
+        && let Some(host) = r.host.filter(|s| !s.is_empty())
+        && let Some(path) = r.path.or(r.repo_path).filter(|s| !s.is_empty())
+    {
+        results.push(RemoteConfig {
+            name: r.name.unwrap_or_else(|| "default".to_string()),
+            host,
+            path,
+            shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
+        });
     }
 
     results
@@ -492,7 +495,10 @@ mod tests {
         let cfg = load_from_path(&path);
 
         assert_eq!(cfg.repos[0].remotes.len(), 1);
-        assert_eq!(cfg.repos[0].remotes[0].path, "~/webapp-workspace/webapp-bare");
+        assert_eq!(
+            cfg.repos[0].remotes[0].path,
+            "~/webapp-workspace/webapp-bare"
+        );
     }
 
     #[test]

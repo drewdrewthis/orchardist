@@ -1,6 +1,17 @@
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
 
+/// Tuple type for per-repo cache data passed to [`derive_all_repos`].
+///
+/// Fields: `(repo_slug, issues, prs, worktrees, sessions)`.
+type RepoCacheEntry = (
+    String,
+    Vec<CachedIssue>,
+    Vec<CachedPr>,
+    Vec<CachedWorktree>,
+    Vec<CachedTmuxSession>,
+);
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -131,8 +142,8 @@ pub fn derive_worktree_rows(
             None
         };
 
-        let is_shepherd = is_first_non_bare
-            || session_infos.iter().any(|s| s.name.ends_with("_main"));
+        let is_shepherd =
+            is_first_non_bare || session_infos.iter().any(|s| s.name.ends_with("_main"));
 
         let display_group = if is_shepherd {
             DisplayGroup::Shepherd
@@ -184,13 +195,7 @@ pub fn derive_task_rows(
 /// sorted: Shepherd first, then by display group, then by issue number
 /// (worktrees without issue numbers sort by branch name).
 pub fn derive_all_repos(
-    repo_caches: &[(
-        String,
-        Vec<CachedIssue>,
-        Vec<CachedPr>,
-        Vec<CachedWorktree>,
-        Vec<CachedTmuxSession>,
-    )],
+    repo_caches: &[RepoCacheEntry],
     claude_states: &[crate::claude_state::ClaudeStateFile],
 ) -> Vec<WorktreeRow> {
     let mut rows: Vec<WorktreeRow> = repo_caches
@@ -201,14 +206,14 @@ pub fn derive_all_repos(
         .collect();
 
     rows.sort_by(|a, b| {
-        a.display_group.cmp(&b.display_group).then_with(|| {
-            match (a.issue_number, b.issue_number) {
+        a.display_group
+            .cmp(&b.display_group)
+            .then_with(|| match (a.issue_number, b.issue_number) {
                 (Some(a_num), Some(b_num)) => a_num.cmp(&b_num),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => a.branch.cmp(&b.branch),
-            }
-        })
+            })
     });
 
     rows
@@ -285,8 +290,8 @@ fn session_info_from_scraping(session: &CachedTmuxSession) -> SessionInfo {
     // Claude Code shows a spinner + activity text while working, e.g.:
     //   "✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)"
     // The spinner character animates, so match on the token/time suffix instead.
-    let claude_is_working = has_claude_active
-        && last_content.iter().any(|line| line.contains("tokens)"));
+    let claude_is_working =
+        has_claude_active && last_content.iter().any(|line| line.contains("tokens)"));
 
     let claude_needs_input = has_claude_active && !claude_is_working && {
         last_content.iter().any(|line| {
@@ -340,19 +345,22 @@ fn is_state_stale(timestamp: &str, max_age_secs: u64) -> bool {
 /// NeedsAttention > ClaudeWorking > ReadyToMerge > Other.
 ///
 /// Never returns `Shepherd` — that is set separately based on `is_shepherd`.
-fn derive_display_group(pr: Option<&PrInfo>, sessions: &[SessionInfo], issue_state: Option<&str>) -> DisplayGroup {
+fn derive_display_group(
+    pr: Option<&PrInfo>,
+    sessions: &[SessionInfo],
+    issue_state: Option<&str>,
+) -> DisplayGroup {
     // Claude waiting for input = needs your attention (highest priority, before PR state).
     if sessions.iter().any(|s| s.claude_needs_input) {
         return DisplayGroup::NeedsAttention;
     }
 
     // Closed/completed issue with no PR = stale worktree, needs cleanup.
-    if pr.is_none() {
-        if let Some(state) = issue_state {
-            if state == "closed" || state == "completed" {
-                return DisplayGroup::NeedsAttention;
-            }
-        }
+    if pr.is_none()
+        && let Some(state) = issue_state
+        && (state == "closed" || state == "completed")
+    {
+        return DisplayGroup::NeedsAttention;
     }
 
     if let Some(pr) = pr {
@@ -535,11 +543,7 @@ mod tests {
     #[test]
     fn tmux_session_joins_via_worktree_path() {
         let worktrees = vec![worktree("/workspace/webapp-47", "feat/task-centric")];
-        let sessions = vec![session(
-            "webapp_47",
-            "/workspace/webapp-47",
-            vec!["bash"],
-        )];
+        let sessions = vec![session("webapp_47", "/workspace/webapp-47", vec!["bash"])];
 
         let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
@@ -629,11 +633,7 @@ mod tests {
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/something"),
         ];
-        let sessions = vec![session(
-            "webapp_main",
-            "/workspace/repo-feat",
-            vec!["bash"],
-        )];
+        let sessions = vec![session("webapp_main", "/workspace/repo-feat", vec!["bash"])];
 
         let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
@@ -652,7 +652,7 @@ mod tests {
         let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
 
         assert_eq!(rows.len(), 2);
-        assert!(rows[0].is_shepherd);  // first non-bare
+        assert!(rows[0].is_shepherd); // first non-bare
         assert!(!rows[1].is_shepherd);
     }
 
@@ -666,13 +666,10 @@ mod tests {
             review_decision: Some("changes_requested".to_string()),
             ..pr_for_branch(55, "feat/branch")
         }];
-        let worktrees = vec![worktree("/workspace/repo-feat", "feat/branch")];
+        let worktrees = [worktree("/workspace/repo-feat", "feat/branch")];
 
         // Use second worktree to avoid shepherd
-        let all_wts = vec![
-            worktree("/workspace/repo", "main"),
-            worktrees[0].clone(),
-        ];
+        let all_wts = vec![worktree("/workspace/repo", "main"), worktrees[0].clone()];
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[]);
 
         assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
@@ -958,16 +955,25 @@ mod tests {
         let rows = derive_all_repos(&repo_caches, &[]);
 
         // Shepherds first (sorted by issue number / branch)
-        let shepherd_rows: Vec<&WorktreeRow> = rows.iter().filter(|r| r.display_group == DisplayGroup::Shepherd).collect();
+        let shepherd_rows: Vec<&WorktreeRow> = rows
+            .iter()
+            .filter(|r| r.display_group == DisplayGroup::Shepherd)
+            .collect();
         assert_eq!(shepherd_rows.len(), 2);
 
         // ReadyToMerge before Other
-        let non_shepherd: Vec<&WorktreeRow> = rows.iter().filter(|r| r.display_group != DisplayGroup::Shepherd).collect();
+        let non_shepherd: Vec<&WorktreeRow> = rows
+            .iter()
+            .filter(|r| r.display_group != DisplayGroup::Shepherd)
+            .collect();
         assert_eq!(non_shepherd[0].display_group, DisplayGroup::ReadyToMerge);
         assert_eq!(non_shepherd[0].issue_number, Some(100));
 
         // Other rows sorted by issue number
-        let other_rows: Vec<&WorktreeRow> = rows.iter().filter(|r| r.display_group == DisplayGroup::Other).collect();
+        let other_rows: Vec<&WorktreeRow> = rows
+            .iter()
+            .filter(|r| r.display_group == DisplayGroup::Other)
+            .collect();
         assert_eq!(other_rows.len(), 2);
         assert_eq!(other_rows[0].issue_number, Some(300));
         assert_eq!(other_rows[1].issue_number, Some(500));
@@ -989,7 +995,10 @@ mod tests {
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
-        let other_rows: Vec<&WorktreeRow> = rows.iter().filter(|r| r.display_group == DisplayGroup::Other).collect();
+        let other_rows: Vec<&WorktreeRow> = rows
+            .iter()
+            .filter(|r| r.display_group == DisplayGroup::Other)
+            .collect();
         assert_eq!(other_rows.len(), 2);
         assert_eq!(other_rows[0].branch, "a-feature");
         assert_eq!(other_rows[1].branch, "z-feature");
@@ -1082,7 +1091,10 @@ mod tests {
         let states = vec![stale_state_file("repo_47", "idle")];
         let info = session_info_from(&s, &states);
         // Should use scraping result (working), not stale hook (idle)
-        assert!(info.claude_is_working, "expected scraping fallback to detect working");
+        assert!(
+            info.claude_is_working,
+            "expected scraping fallback to detect working"
+        );
     }
 
     #[test]
@@ -1214,7 +1226,10 @@ mod tests {
         let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
 
         assert!(rows[1].pr.is_some(), "PR should be matched");
-        assert!(rows[1].issue_state.is_none(), "issue_state suppressed by PR");
+        assert!(
+            rows[1].issue_state.is_none(),
+            "issue_state suppressed by PR"
+        );
     }
 
     // -----------------------------------------------------------------------

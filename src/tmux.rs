@@ -3,8 +3,8 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::logger::LOG;
-use crate::types::{PrInfo, SwitchToSessionOptions, TmuxSession};
 use crate::types::resolve_pr_status;
+use crate::types::{PrInfo, SwitchToSessionOptions, TmuxSession};
 
 /// Lists all active tmux sessions. Returns an empty vec when tmux is not running.
 pub fn list_tmux_sessions() -> Vec<TmuxSession> {
@@ -42,20 +42,28 @@ pub fn list_tmux_sessions() -> Vec<TmuxSession> {
 
     // Fetch pane titles for all sessions in one call (pane index 0 only).
     let pane_out = Command::new("tmux")
-        .args(["list-panes", "-a", "-F", "#{session_name}\t#{pane_index}\t#{pane_title}"])
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{pane_index}\t#{pane_title}",
+        ])
         .output();
 
     if let Ok(o) = pane_out
-        && o.status.success() {
-            let pane_text = String::from_utf8_lossy(&o.stdout);
-            for line in pane_text.trim().lines() {
-                let parts: Vec<&str> = line.splitn(3, '\t').collect();
-                if parts.len() == 3 && parts[1] == "0"
-                    && let Some(session) = sessions.iter_mut().find(|s| s.name == parts[0]) {
-                        session.pane_title = Some(parts[2].to_string());
-                    }
+        && o.status.success()
+    {
+        let pane_text = String::from_utf8_lossy(&o.stdout);
+        for line in pane_text.trim().lines() {
+            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+            if parts.len() == 3
+                && parts[1] == "0"
+                && let Some(session) = sessions.iter_mut().find(|s| s.name == parts[0])
+            {
+                session.pane_title = Some(parts[2].to_string());
             }
         }
+    }
 
     LOG.info(&format!("listTmuxSessions: {} sessions", sessions.len()));
     sessions
@@ -96,13 +104,15 @@ pub fn find_session_for_worktree<'a>(
             return Some(s);
         }
         if let Some(b) = branch
-            && s.name == b {
-                return Some(s);
-            }
+            && s.name == b
+        {
+            return Some(s);
+        }
         if let Some(slug) = &branch_slug
-            && (s.name == slug.as_str() || name_suffix == slug.as_str()) {
-                return Some(s);
-            }
+            && (s.name == slug.as_str() || name_suffix == slug.as_str())
+        {
+            return Some(s);
+        }
     }
 
     None
@@ -128,7 +138,9 @@ pub fn derive_main_session_name(origin_path: &str, branch: Option<&str>) -> Stri
         .and_then(|n| n.to_str())
         .unwrap_or("orchard");
     let sanitized = sanitize_repo_name(repo_name);
-    let branch_part = branch.map(sanitize_branch).unwrap_or_else(|| "HEAD".to_string());
+    let branch_part = branch
+        .map(sanitize_branch)
+        .unwrap_or_else(|| "HEAD".to_string());
     format!("{sanitized}_{branch_part}")
 }
 
@@ -206,9 +218,12 @@ pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
     if !exists {
         Command::new("tmux")
             .args([
-                "new-session", "-d",
-                "-s", &opts.session_name,
-                "-c", &opts.worktree_path,
+                "new-session",
+                "-d",
+                "-s",
+                &opts.session_name,
+                "-c",
+                &opts.worktree_path,
             ])
             .status()
             .with_context(|| format!("creating session {}", opts.session_name))?;
@@ -220,24 +235,15 @@ pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
         if exists { "existing" } else { "new" }
     ));
 
-    apply_session_style(
-        &opts.session_name,
-        opts.branch.as_deref(),
-        opts.pr.as_ref(),
-    )?;
+    apply_session_style(&opts.session_name, opts.branch.as_deref(), opts.pr.as_ref())?;
 
     Ok(())
 }
 
-pub(crate) const CHEATSHEET: &str =
-    "#[fg=colour8]prefix: ctrl-b | o: orchard | (/): prev/next | %%: split-v | \": split-h | arrows: pane | z: zoom | x: close | d: detach";
+pub(crate) const CHEATSHEET: &str = "#[fg=colour8]prefix: ctrl-b | o: orchard | (/): prev/next | %%: split-v | \": split-h | arrows: pane | z: zoom | x: close | d: detach";
 
 /// Applies the orchard status bar style to a tmux session.
-pub fn apply_session_style(
-    name: &str,
-    branch: Option<&str>,
-    pr: Option<&PrInfo>,
-) -> Result<()> {
+pub fn apply_session_style(name: &str, branch: Option<&str>, pr: Option<&PrInfo>) -> Result<()> {
     let status_left = format_status_left(branch, pr);
     let t = ["-t", name];
 
@@ -262,7 +268,6 @@ pub fn apply_session_style(
     Ok(())
 }
 
-
 /// Formats the tmux status-left string for an orchard session.
 pub fn format_status_left(branch: Option<&str>, pr: Option<&PrInfo>) -> String {
     let branch_label = branch.unwrap_or("detached");
@@ -273,7 +278,10 @@ pub fn format_status_left(branch: Option<&str>, pr: Option<&PrInfo>) -> String {
     if let Some(pr) = pr {
         let status = resolve_pr_status(pr);
         let display = status.display();
-        parts.push(format!("PR#{} {} {}", pr.number, display.icon, display.label));
+        parts.push(format!(
+            "PR#{} {} {}",
+            pr.number, display.icon, display.label
+        ));
     }
 
     parts.join(" ")
@@ -286,9 +294,24 @@ mod tests {
 
     fn make_sessions() -> Vec<TmuxSession> {
         vec![
-            TmuxSession { name: "other_main".into(), path: "/other/path".into(), attached: false, pane_title: None },
-            TmuxSession { name: "myrepo_feature-x".into(), path: "/home/user/myrepo-feature-x".into(), attached: false, pane_title: None },
-            TmuxSession { name: "orchard".into(), path: "/home/user/orchard".into(), attached: true, pane_title: None },
+            TmuxSession {
+                name: "other_main".into(),
+                path: "/other/path".into(),
+                attached: false,
+                pane_title: None,
+            },
+            TmuxSession {
+                name: "myrepo_feature-x".into(),
+                path: "/home/user/myrepo-feature-x".into(),
+                attached: false,
+                pane_title: None,
+            },
+            TmuxSession {
+                name: "orchard".into(),
+                path: "/home/user/orchard".into(),
+                attached: true,
+                pane_title: None,
+            },
         ]
     }
 
@@ -327,7 +350,10 @@ mod tests {
 
     #[test]
     fn derive_session_name_with_branch() {
-        assert_eq!(derive_session_name("myrepo", Some("main"), "/any"), "myrepo_main");
+        assert_eq!(
+            derive_session_name("myrepo", Some("main"), "/any"),
+            "myrepo_main"
+        );
     }
 
     #[test]

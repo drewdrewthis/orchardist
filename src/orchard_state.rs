@@ -163,7 +163,10 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
         let issue = row.issue_number.map(|num| IssueInfo {
             number: num,
             title: row.issue_title.clone().unwrap_or_default(),
-            state: row.issue_state.clone().unwrap_or_else(|| "open".to_string()),
+            state: row
+                .issue_state
+                .clone()
+                .unwrap_or_else(|| "open".to_string()),
         });
 
         Self {
@@ -185,7 +188,13 @@ mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
 
-    fn make_row(repo_slug: &str, branch: &str, issue_number: Option<u32>, issue_state: Option<&str>, display_group: DisplayGroup) -> WorktreeRow {
+    fn make_row(
+        repo_slug: &str,
+        branch: &str,
+        issue_number: Option<u32>,
+        issue_state: Option<&str>,
+        display_group: DisplayGroup,
+    ) -> WorktreeRow {
         WorktreeRow {
             repo_slug: repo_slug.to_string(),
             worktree_path: format!("/repos/{}/{}", repo_slug, branch),
@@ -202,20 +211,48 @@ mod tests {
     }
 
     fn make_state_with_rows(rows: Vec<WorktreeRow>) -> OrchardState {
-        let mut repo_map: std::collections::HashMap<String, Vec<WorktreeState>> = std::collections::HashMap::new();
+        let mut repo_map: std::collections::HashMap<String, Vec<WorktreeState>> =
+            std::collections::HashMap::new();
         for row in &rows {
-            repo_map.entry(row.repo_slug.clone()).or_default().push(WorktreeState::from(row));
+            repo_map
+                .entry(row.repo_slug.clone())
+                .or_default()
+                .push(WorktreeState::from(row));
         }
-        let repos = repo_map.into_iter().map(|(slug, worktrees)| RepoState { slug, worktrees }).collect();
-        OrchardState { repos, hosts: std::collections::HashMap::new() }
+        let repos = repo_map
+            .into_iter()
+            .map(|(slug, worktrees)| RepoState { slug, worktrees })
+            .collect();
+        OrchardState {
+            repos,
+            hosts: std::collections::HashMap::new(),
+        }
     }
 
     #[test]
     fn all_worktrees_returns_sorted_by_display_group_then_issue_number() {
         let rows = vec![
-            make_row("owner/repo", "feat/issue-5", Some(5), None, DisplayGroup::Other),
-            make_row("owner/repo", "feat/issue-2", Some(2), None, DisplayGroup::NeedsAttention),
-            make_row("owner/repo", "feat/issue-1", Some(1), None, DisplayGroup::NeedsAttention),
+            make_row(
+                "owner/repo",
+                "feat/issue-5",
+                Some(5),
+                None,
+                DisplayGroup::Other,
+            ),
+            make_row(
+                "owner/repo",
+                "feat/issue-2",
+                Some(2),
+                None,
+                DisplayGroup::NeedsAttention,
+            ),
+            make_row(
+                "owner/repo",
+                "feat/issue-1",
+                Some(1),
+                None,
+                DisplayGroup::NeedsAttention,
+            ),
         ];
         let state = make_state_with_rows(rows);
         let all = state.all_worktrees();
@@ -241,21 +278,39 @@ mod tests {
 
     #[test]
     fn from_worktree_row_maps_issue_state_open() {
-        let row = make_row("owner/repo", "feat/issue-10", Some(10), Some("open"), DisplayGroup::Other);
+        let row = make_row(
+            "owner/repo",
+            "feat/issue-10",
+            Some(10),
+            Some("open"),
+            DisplayGroup::Other,
+        );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "open");
     }
 
     #[test]
     fn from_worktree_row_maps_issue_state_closed() {
-        let row = make_row("owner/repo", "feat/issue-10", Some(10), Some("closed"), DisplayGroup::Other);
+        let row = make_row(
+            "owner/repo",
+            "feat/issue-10",
+            Some(10),
+            Some("closed"),
+            DisplayGroup::Other,
+        );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "closed");
     }
 
     #[test]
     fn from_worktree_row_defaults_issue_state_to_open_when_none() {
-        let row = make_row("owner/repo", "feat/issue-10", Some(10), None, DisplayGroup::Other);
+        let row = make_row(
+            "owner/repo",
+            "feat/issue-10",
+            Some(10),
+            None,
+            DisplayGroup::Other,
+        );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "open");
     }

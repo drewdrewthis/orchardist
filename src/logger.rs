@@ -48,9 +48,10 @@ impl Logger {
     pub fn time_end(&self, label: &str) {
         let elapsed = {
             match self.timers.lock() {
-                Ok(mut timers) => {
-                    timers.remove(label).map(|start| start.elapsed()).unwrap_or(Duration::ZERO)
-                }
+                Ok(mut timers) => timers
+                    .remove(label)
+                    .map(|start| start.elapsed())
+                    .unwrap_or(Duration::ZERO),
                 Err(_) => Duration::ZERO,
             }
         };
@@ -75,11 +76,12 @@ impl Logger {
 
         // Rotate if over threshold.
         if let Ok(meta) = file.metadata()
-            && meta.len() >= MAX_SIZE_BYTES {
-                drop(file);
-                let rotated = self.path.with_extension("log.1");
-                let _ = fs::rename(&self.path, rotated);
-            }
+            && meta.len() >= MAX_SIZE_BYTES
+        {
+            drop(file);
+            let rotated = self.path.with_extension("log.1");
+            let _ = fs::rename(&self.path, rotated);
+        }
     }
 }
 
