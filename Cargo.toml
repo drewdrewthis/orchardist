@@ -5,6 +5,9 @@ edition = "2024"
 description = "Interactive TUI for managing git worktrees, PR status, and tmux sessions"
 license = "MIT"
 repository = "https://github.com/drewdrewthis/git-orchard-rs"
+homepage = "https://github.com/drewdrewthis/git-orchard-rs"
+keywords = ["git", "worktree", "tui", "tmux", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.29"

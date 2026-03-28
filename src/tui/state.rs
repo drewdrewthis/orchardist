@@ -85,6 +85,7 @@ pub struct NewSessionState {
 // Phase enum
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum Phase {

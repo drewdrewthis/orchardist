@@ -1,10 +1,10 @@
 # ADR-001: Per-Source Cache Architecture
 
 ## Status
-Proposed
+Accepted
 
 ## Date
-2026-03-20
+2026-03-28
 
 ## Context
 
