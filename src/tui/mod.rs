@@ -280,8 +280,11 @@ impl App {
                         let session = row.sessions.first().map(|s| s.tmux.name.as_str());
 
                         // Claude was working, now needs input.
-                        if row.sessions.iter().any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input))
-                            && old.map(|o| !o.claude_needs_input).unwrap_or(false)
+                        if row.sessions.iter().any(|s| {
+                            s.claude.as_ref().is_some_and(|c| {
+                                c.status == crate::claude_state::ClaudeState::Input
+                            })
+                        }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
                         {
                             crate::notify::send_notification_with_session(
                                 "Claude needs input",
@@ -292,8 +295,11 @@ impl App {
                         }
 
                         // Claude was working, now idle (finished).
-                        if !row.sessions.iter().any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working))
-                            && old.map(|o| o.claude_working).unwrap_or(false)
+                        if !row.sessions.iter().any(|s| {
+                            s.claude.as_ref().is_some_and(|c| {
+                                c.status == crate::claude_state::ClaudeState::Working
+                            })
+                        }) && old.map(|o| o.claude_working).unwrap_or(false)
                         {
                             crate::notify::send_notification_with_session(
                                 "Claude finished",
@@ -341,11 +347,16 @@ impl App {
                         .iter()
                         .map(|row| {
                             let snapshot = WorktreeSnapshot {
-                                claude_working: row.sessions.iter().any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)),
-                                claude_needs_input: row
-                                    .sessions
-                                    .iter()
-                                    .any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)),
+                                claude_working: row.sessions.iter().any(|s| {
+                                    s.claude.as_ref().is_some_and(|c| {
+                                        c.status == crate::claude_state::ClaudeState::Working
+                                    })
+                                }),
+                                claude_needs_input: row.sessions.iter().any(|s| {
+                                    s.claude.as_ref().is_some_and(|c| {
+                                        c.status == crate::claude_state::ClaudeState::Input
+                                    })
+                                }),
                                 ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
                                 has_unresolved_threads: row
                                     .pr
@@ -391,9 +402,9 @@ impl App {
                             .is_some_and(|ss| ss.session.tmux.name == session_name)
                     } else {
                         let wt_cursor = self.cursor - standalone_count;
-                        self.task_rows
-                            .get(wt_cursor)
-                            .is_some_and(|row| row.sessions.iter().any(|s| s.tmux.name == session_name))
+                        self.task_rows.get(wt_cursor).is_some_and(|row| {
+                            row.sessions.iter().any(|s| s.tmux.name == session_name)
+                        })
                     };
                     if matches {
                         self.pane_content = content;
@@ -960,12 +971,12 @@ fn ensure_standalone_sessions(config: &global_config::GlobalConfig) -> anyhow::R
         }
         tmux::new_session_with_command(&session_cfg.name, &session_cfg.cwd, &session_cfg.command)
             .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to start standalone session '{}': {}",
-                    session_cfg.name,
-                    e
-                )
-            })?;
+            anyhow::anyhow!(
+                "Failed to start standalone session '{}': {}",
+                session_cfg.name,
+                e
+            )
+        })?;
     }
     Ok(())
 }
@@ -990,7 +1001,9 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::W
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo as DPrInfo, WorktreeRow};
-    use crate::session::{EnrichedSession, TmuxSessionInfo, ClaudeSessionInfo, Host, SessionStatus};
+    use crate::session::{
+        ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo,
+    };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -1015,7 +1028,11 @@ mod tests {
         }
     }
 
-    fn make_task_row_with_title(issue_number: u32, title: &str, group: DisplayGroup) -> WorktreeRow {
+    fn make_task_row_with_title(
+        issue_number: u32,
+        title: &str,
+        group: DisplayGroup,
+    ) -> WorktreeRow {
         WorktreeRow {
             issue_title: Some(title.to_string()),
             ..make_task_row(issue_number, group)

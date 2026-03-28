@@ -354,10 +354,7 @@ mod tests {
         };
         let rows = build_standalone_sessions(&config, &[], &[]);
         assert_eq!(rows.len(), 1);
-        assert!(matches!(
-            rows[0].session.tmux.status,
-            SessionStatus::Dead
-        ));
+        assert!(matches!(rows[0].session.tmux.status, SessionStatus::Dead));
     }
 
     #[test]

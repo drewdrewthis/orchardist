@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
-use crate::session::{Host, EnrichedSession, StandaloneSessionRow};
+use crate::session::{EnrichedSession, Host, StandaloneSessionRow};
 
 // ---------------------------------------------------------------------------
 // Top-level state

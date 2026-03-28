@@ -206,7 +206,11 @@ fn multiple_tmux_sessions_at_same_path_all_join() {
     let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
     assert_eq!(rows[0].sessions.len(), 2);
-    let names: Vec<&str> = rows[0].sessions.iter().map(|s| s.tmux.name.as_str()).collect();
+    let names: Vec<&str> = rows[0]
+        .sessions
+        .iter()
+        .map(|s| s.tmux.name.as_str())
+        .collect();
     assert!(names.contains(&"repo_47_main"));
     assert!(names.contains(&"repo_47_claude"));
 }

@@ -159,10 +159,7 @@ pub(crate) fn visible_tasks_filtered<'a>(
             let passes_filter = match filter_mode {
                 FilterMode::All => true,
                 FilterMode::HasSession => !row.sessions.is_empty(),
-                FilterMode::HasClaude => row
-                    .sessions
-                    .iter()
-                    .any(|s| s.claude.is_some()),
+                FilterMode::HasClaude => row.sessions.iter().any(|s| s.claude.is_some()),
                 FilterMode::HasPR => row.pr.is_some(),
             };
             if !passes_filter {
@@ -287,22 +284,21 @@ fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
 
     // Find the most "urgent" structured state across sessions.
     use crate::claude_state::ClaudeState;
-    let has_input = row
-        .sessions
-        .iter()
-        .any(|s| s.claude.as_ref().is_some_and(|c| c.status == ClaudeState::Input));
-    let has_working = row
-        .sessions
-        .iter()
-        .any(|s| s.claude.as_ref().is_some_and(|c| c.status == ClaudeState::Working));
-    let has_idle = row
-        .sessions
-        .iter()
-        .any(|s| s.claude.as_ref().is_some_and(|c| c.status == ClaudeState::Idle));
-    let has_any_claude = row.sessions.iter().any(|s| s.claude.is_some());
-
+    let has_input = row.sessions.iter().any(|s| {
+        s.claude
+            .as_ref()
+            .is_some_and(|c| c.status == ClaudeState::Input)
+    });
+    let has_working = row.sessions.iter().any(|s| {
+        s.claude
+            .as_ref()
+            .is_some_and(|c| c.status == ClaudeState::Working)
+    });
     // Get context % from any session that has it.
-    let ctx_pct = row.sessions.iter().find_map(|s| s.claude.as_ref().and_then(|c| c.context_window_pct));
+    let ctx_pct = row
+        .sessions
+        .iter()
+        .find_map(|s| s.claude.as_ref().and_then(|c| c.context_window_pct));
 
     let state = if has_input {
         ClaudeState::Input
@@ -361,7 +357,10 @@ impl App {
     /// Shows a warning and returns true if the cursor is on a standalone session.
     fn guard_requires_worktree(&mut self, standalone_count: usize) -> bool {
         if cursor_is_standalone(self.cursor, standalone_count) {
-            self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+            self.warning = Some((
+                "This action requires a worktree".to_string(),
+                Instant::now(),
+            ));
             true
         } else {
             false
@@ -549,11 +548,7 @@ impl App {
                             self.switch_target = Some(session_name);
                             true
                         } else {
-                            match tmux::new_session_with_command(
-                                &session_name,
-                                &cwd,
-                                &command,
-                            ) {
+                            match tmux::new_session_with_command(&session_name, &cwd, &command) {
                                 Ok(()) => {
                                     self.switch_target = Some(session_name);
                                     true
@@ -711,14 +706,20 @@ impl App {
         let standalone_count = self.standalone_sessions.len();
         if cursor_is_standalone(self.cursor, standalone_count)
             && let Some(ss) = self.standalone_sessions.get(self.cursor)
-            && matches!(ss.session.tmux.status, crate::session::SessionStatus::Running { .. })
+            && matches!(
+                ss.session.tmux.status,
+                crate::session::SessionStatus::Running { .. }
+            )
         {
             let session_name = ss.session.tmux.name.clone();
             let tx = self.tx.clone();
             std::thread::spawn(move || {
                 let content = tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
                     .unwrap_or_default();
-                let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
+                let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
+                    session_name,
+                    content,
+                ));
             });
             return;
         }
@@ -1041,10 +1042,12 @@ impl App {
         );
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
-        let has_remote = self
-            .task_rows
-            .iter()
-            .any(|r| r.sessions.iter().any(|s| matches!(s.tmux.host, crate::session::Host::Remote(_))) || r.worktree_host.is_some());
+        let has_remote = self.task_rows.iter().any(|r| {
+            r.sessions
+                .iter()
+                .any(|s| matches!(s.tmux.host, crate::session::Host::Remote(_)))
+                || r.worktree_host.is_some()
+        });
 
         let show_branch = self.show_branch_column;
 
@@ -1076,8 +1079,13 @@ impl App {
         // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
         let standalone_count = self.standalone_sessions.len();
-        let (rows, row_heights) =
-            self.build_task_table_rows_with_standalone(&tasks, show_branch, has_remote, title_width, num_columns);
+        let (rows, row_heights) = self.build_task_table_rows_with_standalone(
+            &tasks,
+            show_branch,
+            has_remote,
+            title_width,
+            num_columns,
+        );
 
         let has_warning = self
             .warning
@@ -1213,9 +1221,7 @@ impl App {
                 crate::session::SessionStatus::Dead => "not running",
             };
             let status_style = match &ss.session.tmux.status {
-                crate::session::SessionStatus::Running { .. } => {
-                    Style::default().fg(Color::Green)
-                }
+                crate::session::SessionStatus::Running { .. } => Style::default().fg(Color::Green),
                 crate::session::SessionStatus::Dead => Style::default().fg(Color::DarkGray),
             };
 
@@ -1628,7 +1634,9 @@ pub(crate) fn header_height(terminal_height: u16) -> u16 {
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
-    use crate::session::{EnrichedSession, TmuxSessionInfo, ClaudeSessionInfo, Host, SessionStatus};
+    use crate::session::{
+        ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo,
+    };
 
     fn make_task_row(issue_number: u32, group: DisplayGroup) -> WorktreeRow {
         WorktreeRow {
@@ -1785,9 +1793,11 @@ mod tests {
         let visible = visible_tasks(&rows, &FilterMode::HasClaude, "");
         assert_eq!(visible.len(), 2);
         assert!(visible.iter().any(|v| v.row.is_main_worktree));
-        assert!(visible.iter().any(|v| {
-            v.row.sessions.iter().any(|s| s.claude.is_some())
-        }));
+        assert!(
+            visible
+                .iter()
+                .any(|v| { v.row.sessions.iter().any(|s| s.claude.is_some()) })
+        );
     }
 
     #[test]

@@ -608,7 +608,11 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sessions.len(), 2);
-        let names: Vec<&str> = rows[0].sessions.iter().map(|s| s.tmux.name.as_str()).collect();
+        let names: Vec<&str> = rows[0]
+            .sessions
+            .iter()
+            .map(|s| s.tmux.name.as_str())
+            .collect();
         assert!(names.contains(&"webapp_47_main"));
         assert!(names.contains(&"webapp_47_claude"));
     }
@@ -837,7 +841,11 @@ mod tests {
         };
         let info = enrich_session_from_scraping_for_test(&s);
         // Idle Claude: has claude info with Idle status, not Input
-        assert!(info.claude.as_ref().is_none_or(|c| c.status != crate::claude_state::ClaudeState::Input));
+        assert!(
+            info.claude
+                .as_ref()
+                .is_none_or(|c| c.status != crate::claude_state::ClaudeState::Input)
+        );
     }
 
     #[test]
@@ -848,7 +856,10 @@ mod tests {
             ..session("s", "/path", vec![])
         };
         let info = enrich_session_from_scraping_for_test(&s);
-        assert_eq!(info.claude.as_ref().unwrap().status, crate::claude_state::ClaudeState::Input);
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Input
+        );
     }
 
     #[test]
@@ -859,7 +870,10 @@ mod tests {
             ..session("s", "/path", vec![])
         };
         let info = enrich_session_from_scraping_for_test(&s);
-        assert_eq!(info.claude.as_ref().unwrap().status, crate::claude_state::ClaudeState::Input);
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Input
+        );
     }
 
     #[test]
@@ -882,7 +896,10 @@ mod tests {
         };
         let info = enrich_session_from_scraping_for_test(&s);
         // Claude is active but idle (not input or working), so status is Idle
-        assert_eq!(info.claude.as_ref().unwrap().status, crate::claude_state::ClaudeState::Idle);
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Idle
+        );
     }
 
     #[test]

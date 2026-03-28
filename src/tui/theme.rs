@@ -117,7 +117,7 @@ impl Default for Theme {
 /// domain model.
 pub fn display_group_color(group: DisplayGroup, theme: &Theme) -> Color {
     match group {
-        DisplayGroup::Shepherd => theme.shepherd,
+        DisplayGroup::RepoMain => theme.shepherd,
         DisplayGroup::Prioritized => theme.prioritized,
         DisplayGroup::NeedsAttention => theme.error,
         DisplayGroup::ClaudeWorking => theme.claude_active,
@@ -248,7 +248,7 @@ mod tests {
     fn display_group_shepherd_returns_theme_shepherd() {
         let theme = Theme::default();
         assert_eq!(
-            display_group_color(DisplayGroup::Shepherd, &theme),
+            display_group_color(DisplayGroup::RepoMain, &theme),
             theme.shepherd
         );
     }
