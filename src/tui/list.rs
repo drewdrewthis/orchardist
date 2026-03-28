@@ -93,7 +93,7 @@ pub(crate) struct VisibleTask<'a> {
 /// `filter_mode` and `search_text` narrow results; shepherd rows always bypass both.
 /// When `repo_slug_filter` is `Some(slug)`, only rows from that repo are shown
 /// (shepherds are also filtered so each repo only shows its own shepherd).
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn visible_tasks<'a>(
     task_rows: &'a [TaskRow],
     filter_mode: &FilterMode,
