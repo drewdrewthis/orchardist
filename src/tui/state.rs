@@ -67,6 +67,8 @@ pub enum ViewState {
     Cleanup(CleanupState),
     /// A text-entry dialog for creating a new tmux session.
     NewSession(NewSessionState),
+    /// A text-entry dialog for creating a new git worktree.
+    NewWorktree(NewWorktreeState),
     /// The keybinding help overlay.
     Help,
 }
@@ -115,6 +117,12 @@ pub struct NewSessionState {
     pub cursor: usize,
 }
 
+/// State carried while the new-worktree branch-entry dialog is open.
+pub struct NewWorktreeState {
+    /// The branch name being typed by the user.
+    pub branch: String,
+}
+
 // ---------------------------------------------------------------------------
 // Phase enum
 // ---------------------------------------------------------------------------
@@ -160,5 +168,20 @@ pub enum AppMsg {
         deleted: Vec<String>,
         /// Error messages for paths that could not be deleted.
         errors: Vec<String>,
+    },
+    /// The create-worktree operation finished successfully; carries the new session name.
+    CreateWorktreeDone {
+        /// Name of the tmux session created for the new worktree.
+        session_name: String,
+    },
+    /// The create-worktree operation failed with the given error message.
+    CreateWorktreeErr(String),
+    /// The create-worktree operation succeeded but with a non-fatal warning
+    /// (e.g., setup script failed). Carries the session name and warning text.
+    CreateWorktreeWarn {
+        /// Name of the tmux session created for the new worktree.
+        session_name: String,
+        /// Warning message to display (e.g., setup script error details).
+        warning: String,
     },
 }

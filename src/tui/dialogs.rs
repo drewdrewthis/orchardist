@@ -1,7 +1,7 @@
 //! TUI confirmation and progress dialogs.
 //!
-//! Renders the delete, cleanup, new-session, transfer, and help dialogs
-//! as modal overlays over the main worktree list. Key handling has moved
+//! Renders the delete, cleanup, new-session, new-worktree, transfer, and help
+//! dialogs as modal overlays over the main worktree list. Key handling has moved
 //! to the TEA pattern (`handle_event` / `update`) in `mod.rs`.
 use ratatui::prelude::*;
 use ratatui::widgets::Padding;
@@ -9,7 +9,9 @@ use ratatui::widgets::Padding;
 use crate::paths;
 use crate::tui::App;
 use crate::tui::SPINNER_FRAMES;
-use crate::tui::state::{CleanupState, DeleteState, NewSessionState, Phase, TransferState};
+use crate::tui::state::{
+    CleanupState, DeleteState, NewSessionState, NewWorktreeState, Phase, TransferState,
+};
 use crate::tui::widgets::render_popup;
 
 // ---------------------------------------------------------------------------
@@ -361,6 +363,44 @@ impl App {
 }
 
 // ---------------------------------------------------------------------------
+// New worktree dialog
+// ---------------------------------------------------------------------------
+
+impl App {
+    /// Renders the new-worktree branch-entry dialog as a modal overlay.
+    pub(crate) fn render_new_worktree(&self, state: &NewWorktreeState, f: &mut Frame) {
+        let theme = &self.theme;
+        let input_with_cursor = format!("{}\u{2588}", state.branch);
+
+        let lines = vec![
+            Line::from("Branch name:"),
+            Line::from(Span::styled(
+                input_with_cursor,
+                Style::default().fg(theme.accent),
+            )),
+            Line::from(""),
+            Line::styled(
+                "enter confirm  esc cancel",
+                Style::default()
+                    .fg(theme.dimmed)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ];
+
+        render_popup(
+            f,
+            lines,
+            theme.accent,
+            theme.background,
+            60,
+            7,
+            Some(" New Worktree "),
+            Padding::new(2, 2, 0, 0),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Help overlay dialog
 // ---------------------------------------------------------------------------
 
@@ -417,6 +457,10 @@ impl App {
                 Span::styled("New tmux session", dim),
             ]),
             Line::from(vec![
+                Span::styled("w        ", key_style),
+                Span::styled("New worktree", dim),
+            ]),
+            Line::from(vec![
                 Span::styled("d        ", key_style),
                 Span::styled("Delete worktree", dim),
             ]),
@@ -445,6 +489,40 @@ impl App {
             20,
             Some(" HELP "),
             Padding::new(2, 2, 1, 1),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::*;
+
+    #[test]
+    fn help_overlay_renders_w_keybinding() {
+        let app = App::new_test(vec![]);
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_help(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            text.push('\n');
+        }
+
+        assert!(
+            text.contains("w") && text.contains("New worktree"),
+            "help overlay must include 'w' keybinding mapped to 'New worktree', got:\n{text}"
         );
     }
 }
