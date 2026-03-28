@@ -10,6 +10,8 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::claude_state::ClaudeStateFile;
+
 // ---------------------------------------------------------------------------
 // Entry types
 // ---------------------------------------------------------------------------
@@ -80,6 +82,12 @@ pub struct CachedTmuxSession {
     #[serde(default)]
     /// Recent output lines from the session's active pane.
     pub last_output_lines: Vec<String>,
+    #[serde(default)]
+    /// Claude hook state file fetched from the remote host alongside this session.
+    ///
+    /// Only populated for remote sessions. `None` means no state file was found
+    /// on the remote host for this session at the time of the last SSH refresh.
+    pub claude_state_raw: Option<ClaudeStateFile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +312,7 @@ mod tests {
             pane_commands: vec!["vim".to_string()],
             host: None,
             last_output_lines: vec![],
+            claude_state_raw: None,
         }
     }
 

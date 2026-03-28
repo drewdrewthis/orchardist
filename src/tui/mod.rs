@@ -2155,6 +2155,7 @@ mod tests {
             pane_commands: vec![],
             host: None,
             last_output_lines: vec![],
+            claude_state_raw: None,
         }
     }
 

@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// State written by the orchard-state.sh hook script.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClaudeStateFile {
     /// Raw state string from the hook script: `"working"`, `"idle"`, or `"input"`.
     pub state: String,
@@ -89,6 +89,71 @@ pub fn state_for_session<'a>(
     tmux_session: &str,
 ) -> Option<&'a ClaudeStateFile> {
     states.iter().find(|s| s.tmux_session == tmux_session)
+}
+
+/// Parses concatenated Claude state JSON from batched SSH output.
+///
+/// The input is the portion of SSH output after the `---CLAUDE_STATE---` sentinel —
+/// typically the result of `cat ${TMPDIR:-/tmp}/orchard-claude-*.json`. Multiple
+/// JSON objects may be concatenated without newlines (e.g. `{}{}`), so this uses
+/// `serde_json::StreamDeserializer` rather than line-splitting.
+///
+/// Malformed JSON fragments are silently skipped: when parsing fails, the function
+/// scans forward to the next `{` character and retries from there. If multiple
+/// entries share the same `tmux_session`, the one with the most recent `timestamp`
+/// is kept.
+pub fn parse_remote_state_output(raw: &str) -> Vec<ClaudeStateFile> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    // Deduplicate by tmux_session, keeping the most recent timestamp.
+    let mut by_session: std::collections::HashMap<String, ClaudeStateFile> =
+        std::collections::HashMap::new();
+
+    // We may need to skip past malformed fragments. We work with byte slices and
+    // advance past the current failed position by seeking to the next '{'.
+    let bytes = trimmed.as_bytes();
+    let mut pos = 0usize;
+
+    while pos < bytes.len() {
+        // Skip whitespace and non-JSON characters until we find a '{'.
+        let Some(start) = bytes[pos..].iter().position(|&b| b == b'{') else {
+            break;
+        };
+        pos += start;
+
+        let slice = &trimmed[pos..];
+        let mut stream = serde_json::Deserializer::from_str(slice).into_iter::<ClaudeStateFile>();
+
+        match stream.next() {
+            Some(Ok(entry)) => {
+                // Advance position by the number of bytes consumed.
+                pos += stream.byte_offset();
+
+                use std::collections::hash_map::Entry;
+                match by_session.entry(entry.tmux_session.clone()) {
+                    Entry::Vacant(slot) => {
+                        slot.insert(entry);
+                    }
+                    Entry::Occupied(mut slot) => {
+                        // Keep the entry with the more recent timestamp (lexicographic
+                        // comparison is correct for ISO 8601 timestamps).
+                        if entry.timestamp > slot.get().timestamp {
+                            *slot.get_mut() = entry;
+                        }
+                    }
+                }
+            }
+            Some(Err(_)) | None => {
+                // Skip past this '{' to avoid an infinite loop.
+                pos += 1;
+            }
+        }
+    }
+
+    by_session.into_values().collect()
 }
 
 #[cfg(test)]
@@ -180,6 +245,104 @@ mod tests {
         assert_eq!(sf.context_window_pct, Some(73.0));
         assert_eq!(sf.cost_usd, Some(0.42));
         assert_eq!(sf.model.as_deref(), Some("opus"));
+    }
+
+    // -- parse_remote_state_output -------------------------------------------
+
+    fn now_iso() -> String {
+        chrono::Utc::now().to_rfc3339()
+    }
+
+    fn make_json(state: &str, session: &str, ts: &str) -> String {
+        format!(
+            r#"{{"state":"{state}","session_id":"s1","tmux_session":"{session}","cwd":"/workspace","event":"Stop","timestamp":"{ts}"}}"#
+        )
+    }
+
+    #[test]
+    fn parse_remote_state_output_parses_two_fresh_entries() {
+        let ts = now_iso();
+        let raw = format!(
+            "{}\n{}",
+            make_json("working", "repo_47_claude", &ts),
+            make_json("idle", "repo_48_main", &ts)
+        );
+        let result = parse_remote_state_output(&raw);
+        assert_eq!(result.len(), 2);
+        let working = result.iter().find(|s| s.tmux_session == "repo_47_claude");
+        assert!(working.is_some());
+        assert_eq!(working.unwrap().state, "working");
+        let idle = result.iter().find(|s| s.tmux_session == "repo_48_main");
+        assert!(idle.is_some());
+        assert_eq!(idle.unwrap().state, "idle");
+    }
+
+    #[test]
+    fn parse_remote_state_output_handles_concatenated_without_newlines() {
+        let ts = now_iso();
+        let raw = format!(
+            "{}{}",
+            make_json("working", "repo_47_claude", &ts),
+            make_json("idle", "repo_48_main", &ts)
+        );
+        let result = parse_remote_state_output(&raw);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_remote_state_output_skips_malformed_entries() {
+        let ts = now_iso();
+        let raw = format!(
+            "{}\nnot valid json\n{}",
+            make_json("working", "repo_47_claude", &ts),
+            make_json("idle", "repo_48_main", &ts)
+        );
+        let result = parse_remote_state_output(&raw);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_remote_state_output_empty_input_returns_empty() {
+        let result = parse_remote_state_output("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_remote_state_output_whitespace_only_returns_empty() {
+        let result = parse_remote_state_output("   \n  ");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_remote_state_output_deduplicates_keeping_newest_timestamp() {
+        let older_ts = "2026-03-28T10:00:00Z";
+        let newer_ts = "2026-03-28T10:00:30Z";
+        // Older entry first, newer entry second — should keep newer.
+        let raw = format!(
+            "{}\n{}",
+            make_json("idle", "repo_47_claude", older_ts),
+            make_json("working", "repo_47_claude", newer_ts)
+        );
+        let result = parse_remote_state_output(&raw);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].tmux_session, "repo_47_claude");
+        assert_eq!(result[0].state, "working");
+        assert_eq!(result[0].timestamp, newer_ts);
+    }
+
+    #[test]
+    fn parse_remote_state_output_deduplicates_keeping_newest_when_older_comes_last() {
+        let older_ts = "2026-03-28T10:00:00Z";
+        let newer_ts = "2026-03-28T10:00:30Z";
+        // Newer entry first, older entry second — should still keep newer.
+        let raw = format!(
+            "{}\n{}",
+            make_json("working", "repo_47_claude", newer_ts),
+            make_json("idle", "repo_47_claude", older_ts)
+        );
+        let result = parse_remote_state_output(&raw);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].state, "working");
     }
 
     #[test]

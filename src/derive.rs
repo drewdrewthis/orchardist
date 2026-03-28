@@ -343,7 +343,7 @@ pub fn is_state_stale_default(timestamp: &str) -> bool {
 }
 
 /// Returns true if the ISO 8601 timestamp is older than `max_age_secs` seconds.
-fn is_state_stale(timestamp: &str, max_age_secs: u64) -> bool {
+pub fn is_state_stale(timestamp: &str, max_age_secs: u64) -> bool {
     use chrono::Utc;
     match chrono::DateTime::parse_from_rfc3339(timestamp)
         .or_else(|_| chrono::DateTime::parse_from_str(timestamp, "%Y-%m-%dT%H:%M:%SZ"))
@@ -528,6 +528,7 @@ mod tests {
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
             host: None,
             last_output_lines: vec![],
+            claude_state_raw: None,
         }
     }
 
