@@ -2878,7 +2878,11 @@ mod tests {
                     model: Some("opus".to_string()),
                 }),
             }],
-            ..make_task_row_with_title(47, "Shepherd persistent session", DisplayGroup::ClaudeWorking)
+            ..make_task_row_with_title(
+                47,
+                "Shepherd persistent session",
+                DisplayGroup::ClaudeWorking,
+            )
         };
         let ready = WorktreeRow {
             pr: Some(DPrInfo {
