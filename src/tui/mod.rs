@@ -1,3 +1,8 @@
+//! Ratatui-based terminal user interface.
+//!
+//! Drives the interactive worktree list, handles keyboard events, manages
+//! background cache refreshes via a worker thread, and delegates rendering
+//! to the `list`, `dialogs`, and `widgets` sub-modules.
 mod dialogs;
 mod list;
 mod state;
@@ -52,6 +57,7 @@ struct WorktreeSnapshot {
 // App
 // ---------------------------------------------------------------------------
 
+/// Root TUI application state. Owns all display data, background channels, and dialog state.
 pub struct App {
     cursor: usize,
     loading: bool,

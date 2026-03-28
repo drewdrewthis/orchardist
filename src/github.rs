@@ -1,3 +1,8 @@
+//! GitHub API client built on the `gh` CLI.
+//!
+//! Fetches PR lists, enriches them via batched GraphQL queries, extracts
+//! issue numbers from branch names, and resolves issue states. All network
+//! I/O goes through `gh` subprocesses rather than a direct HTTP client.
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};

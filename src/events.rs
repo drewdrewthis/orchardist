@@ -1,3 +1,8 @@
+//! Append-only structured event log.
+//!
+//! Writes task and session lifecycle events as JSON lines to
+//! `~/.local/state/git-orchard/events.jsonl`. Rotates at 50 MB, keeping
+//! at most three archived files. Used for auditing and retrospective analysis.
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
@@ -12,8 +17,11 @@ const MAX_ROTATED_FILES: u32 = 3;
 /// A structured event written as a single JSON line to events.jsonl.
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
+    /// UTC timestamp of when the event was recorded.
     pub ts: DateTime<Utc>,
+    /// Event type identifier (e.g. `"task.created"`, `"session.switch"`).
     pub event: String,
+    /// Arbitrary key-value payload specific to the event type.
     #[serde(flatten)]
     pub fields: HashMap<String, Value>,
 }

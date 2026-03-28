@@ -1,3 +1,9 @@
+//! File-based diagnostic logger and timing utilities.
+//!
+//! Provides the global `LOG` singleton (writing to
+//! `~/.local/state/git-orchard/debug.log`, rotating at 10 MB), a `TimingGuard`
+//! RAII helper, and the `timed!` macro used throughout the codebase to
+//! measure and log the duration of key operations.
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -102,6 +108,7 @@ pub struct TimingGuard<'a> {
 }
 
 impl<'a> TimingGuard<'a> {
+    /// Starts timing `label` via `LOG.time` and returns the guard.
     pub fn new(label: &'a str) -> Self {
         Self { label }
     }

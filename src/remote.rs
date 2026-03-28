@@ -1,3 +1,9 @@
+//! SSH-based remote worktree and tmux session access.
+//!
+//! Provides helpers to run commands on a remote host over SSH with multiplexed
+//! connections, list remote git worktrees and tmux sessions, and create or
+//! attach to sessions on the remote machine. Consumed by `cache_sources` and
+//! the TUI transfer flow.
 use std::path::Path;
 use std::process::Command;
 

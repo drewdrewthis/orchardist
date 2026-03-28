@@ -1,3 +1,8 @@
+//! Per-repository configuration loader for Orchard.
+//!
+//! Reads `orchard.json` from the `.git` directory of the current repo,
+//! supporting both the current single-remote format and a legacy multi-remote
+//! array format. Used by the imperative shell at startup to discover remote hosts.
 use std::path::PathBuf;
 use std::process::Command;
 

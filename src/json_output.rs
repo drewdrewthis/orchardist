@@ -24,8 +24,11 @@ use crate::orchard_state::{
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonOutput {
+    /// Schema version number for forward compatibility.
     pub version: u32,
+    /// All repositories in the output.
     pub repos: Vec<JsonRepo>,
+    /// Reachability state keyed by SSH host name.
     pub hosts: HashMap<String, JsonHostState>,
 }
 
@@ -35,7 +38,9 @@ pub struct JsonOutput {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonRepo {
+    /// Repository slug in `owner/repo` format.
     pub slug: String,
+    /// All worktrees belonging to this repository.
     pub worktrees: Vec<JsonWorktree>,
 }
 
@@ -45,13 +50,21 @@ pub struct JsonRepo {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonWorktree {
+    /// Absolute path to the worktree on disk.
     pub path: String,
+    /// Git branch checked out in this worktree.
     pub branch: String,
+    /// Remote SSH host this worktree lives on, or `null` for local.
     pub host: Option<String>,
+    /// Linked GitHub issue, if any.
     pub issue: Option<JsonIssue>,
+    /// Linked pull request, if any.
     pub pr: Option<JsonPr>,
+    /// Active Claude sessions associated with this worktree.
     pub sessions: Vec<JsonSession>,
+    /// Display group as a snake_case string (e.g., "needs_attention").
     pub display_group: String,
+    /// True when this is the repo's main/shepherd worktree.
     pub is_shepherd: bool,
 }
 
@@ -61,8 +74,11 @@ pub struct JsonWorktree {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonIssue {
+    /// GitHub issue number.
     pub number: u32,
+    /// Issue title.
     pub title: String,
+    /// Issue state: "open", "closed", or "completed".
     pub state: String,
 }
 
@@ -72,12 +88,19 @@ pub struct JsonIssue {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
+    /// GitHub PR number.
     pub number: u32,
+    /// Head branch name for this PR.
     pub branch: String,
+    /// PR state: "OPEN", "CLOSED", or "MERGED".
     pub state: Option<String>,
+    /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
+    /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
     pub checks_state: Option<String>,
+    /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
+    /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
 }
 
@@ -88,11 +111,17 @@ pub struct JsonPr {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSession {
+    /// tmux session name.
     pub name: String,
+    /// Remote SSH host this session runs on, or `null` for local.
     pub host: Option<String>,
+    /// Claude state as a string: "working", "idle", "input", or "none".
     pub claude_state: String,
+    /// Context window usage percentage, if available.
     pub context_window_pct: Option<f64>,
+    /// Cumulative session cost in USD, if available.
     pub cost_usd: Option<f64>,
+    /// Model name (e.g., "opus", "sonnet"), if available.
     pub model: Option<String>,
 }
 
@@ -101,6 +130,7 @@ pub struct JsonSession {
 /// Simple boolean indicating whether an SSH host is reachable.
 #[derive(Serialize)]
 pub struct JsonHostState {
+    /// True when the SSH host responded to the last reachability check.
     pub reachable: bool,
 }
 

@@ -1,3 +1,9 @@
+//! Persistent task state for Orchard.
+//!
+//! Defines `AppState` and its contained `Task`, `TaskSource`, and `TaskStatus`
+//! types, together with JSON serialisation, a versioned on-disk format, and
+//! atomic read/write helpers. This is the single source of truth for task
+//! lifecycle data between invocations.
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -8,9 +14,12 @@ use serde::{Deserialize, Serialize};
 // Types
 // ---------------------------------------------------------------------------
 
+/// Persistent application state serialized to `~/.local/state/git-orchard/state.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppState {
+    /// Schema version; currently always `1`.
     pub version: u32,
+    /// All tracked tasks.
     pub tasks: Vec<Task>,
 }
 
@@ -23,40 +32,65 @@ impl Default for AppState {
     }
 }
 
+/// A unit of work tracked by Orchard, derived from a GitHub issue.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {
+    /// Stable unique identifier for this task (e.g. `"acme/webapp#47"`).
     pub id: String,
     #[serde(default)]
+    /// Human-readable title, synced from the issue title.
     pub title: String,
+    /// Where this task originated (currently always a GitHub issue).
     pub source: TaskSource,
+    /// Current workflow status of the task.
     pub status: TaskStatus,
+    /// Relative priority; lower numbers are higher priority.
     pub priority: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Absolute path of the worktree associated with this task, if any.
     pub worktree: Option<String>,
     #[serde(default)]
+    /// Names of tmux sessions associated with this task.
     pub sessions: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// GitHub PR number linked to this task, if a PR has been opened.
     pub pr: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Remote host for this task's worktree, if it is on a remote machine.
     pub remote_host: Option<String>,
+    /// UTC timestamp when this task was first created.
     pub created_at: DateTime<Utc>,
+    /// UTC timestamp of the most recent update to this task.
     pub updated_at: DateTime<Utc>,
 }
 
+/// The origin system that produced a task.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum TaskSource {
     #[serde(rename = "github_issue")]
-    GithubIssue { repo: String, number: u32 },
+    /// Task was created from a GitHub issue.
+    GithubIssue {
+        /// Repository slug in `owner/name` format.
+        repo: String,
+        /// GitHub issue number.
+        number: u32,
+    },
 }
 
+/// Workflow stage of a task, modelled as a simple kanban column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    /// Task is queued but not yet ready to start.
     Backlog,
+    /// Task is ready to be picked up.
     Ready,
+    /// Work is actively in progress on this task.
     InProgress,
+    /// A PR has been opened and is awaiting review.
     InReview,
+    /// The task is complete and the PR has been merged (or work is discarded).
     Done,
 }
 

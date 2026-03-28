@@ -1,3 +1,8 @@
+//! Keyboard navigation helpers for the TUI list view.
+//!
+//! Provides the `cursor_index_from_digit` function that maps digit keypresses
+//! (`1`–`9`) to 0-based list indices, used by the TUI to jump directly to a
+//! worktree row by number.
 /// Maps a digit character `'1'`–`'9'` to a 0-based list index.
 /// Returns `None` if the character is not in `'1'`–`'9'` or if the resulting
 /// index is out of bounds for a list of `item_count` items.
