@@ -16,8 +16,9 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::prelude::*;
+use std::cell::Cell;
 
 use crate::cache;
 use crate::cache_sources;
@@ -48,6 +49,12 @@ const SPINNER_FRAMES: &[&str] = &[
 const AUTO_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
+
+/// Maximum milliseconds between two clicks on the same row for double-click detection.
+const DOUBLE_CLICK_MS: u128 = 400;
+
+/// Attribution URL displayed in the hints bar footer.
+const ATTRIBUTION_URL: &str = "https://github.com/drewdrewthis/orchard-rs";
 
 // ---------------------------------------------------------------------------
 // Notification snapshot
@@ -108,6 +115,14 @@ pub struct App {
 
     // Previous snapshots used to detect state transitions between cache refreshes.
     previous_worktree_states: HashMap<String, WorktreeSnapshot>,
+
+    // Mouse support
+    /// Last rendered table body rect (excludes border + header row). Updated by render.
+    table_area: Cell<Rect>,
+    /// Last rendered attribution URL rect. Updated by render.
+    url_area: Cell<Rect>,
+    /// Row index and timestamp of last mouse click, for double-click detection.
+    last_click: Option<(usize, Instant)>,
 }
 
 impl App {
@@ -159,6 +174,9 @@ impl App {
             spinner_frame: 0,
             switch_target: None,
             previous_worktree_states: HashMap::new(),
+            table_area: Cell::new(Rect::default()),
+            url_area: Cell::new(Rect::default()),
+            last_click: None,
         }
     }
 
@@ -627,6 +645,122 @@ impl App {
     }
 
     // -------------------------------------------------------------------
+    // TEA: handle_mouse_event — mouse-to-message mapping
+    // -------------------------------------------------------------------
+
+    /// Maps a mouse event to a [`Message`], if applicable.
+    ///
+    /// Only processes events when in List view with search inactive.
+    /// Scroll events map to CursorUp/CursorDown; clicks select rows or
+    /// open the attribution URL; double-clicks activate the selected row.
+    fn handle_mouse_event(
+        &mut self,
+        event: crossterm::event::MouseEvent,
+    ) -> Option<Message> {
+        // Mouse events only handled in List view with search inactive.
+        if !matches!(self.view, ViewState::List) || self.search_active {
+            return None;
+        }
+
+        let table = self.table_area.get();
+        let url = self.url_area.get();
+
+        let in_table = event.column >= table.x
+            && event.column < table.x + table.width
+            && event.row >= table.y
+            && event.row < table.y + table.height;
+
+        match event.kind {
+            MouseEventKind::ScrollDown if in_table => Some(Message::CursorDown),
+            MouseEventKind::ScrollUp if in_table => Some(Message::CursorUp),
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Check URL area first.
+                let in_url = url.width > 0
+                    && event.column >= url.x
+                    && event.column < url.x + url.width
+                    && event.row >= url.y
+                    && event.row < url.y + url.height;
+                if in_url {
+                    return Some(Message::OpenAttribution);
+                }
+
+                if !in_table {
+                    return None;
+                }
+
+                // Compute which visual row was clicked within the table body.
+                let visual_row = (event.row - table.y) as usize;
+
+                // Map visual row to cursor index, accounting for group headers.
+                let cursor_index =
+                    self.visual_row_to_cursor(visual_row);
+
+                let cursor_index = match cursor_index {
+                    Some(idx) => idx,
+                    None => return None, // clicked on group header or out of range
+                };
+
+                // Double-click detection.
+                if let Some((prev_row, prev_time)) = self.last_click {
+                    if prev_row == cursor_index
+                        && prev_time.elapsed().as_millis() < DOUBLE_CLICK_MS
+                    {
+                        self.last_click = None;
+                        return Some(Message::ActivateRow(cursor_index));
+                    }
+                }
+
+                self.last_click = Some((cursor_index, Instant::now()));
+                Some(Message::CursorTo(cursor_index))
+            }
+            _ => None,
+        }
+    }
+
+    /// Maps a visual row offset within the table body to a cursor index.
+    ///
+    /// Returns `None` if the row maps to a group header or is out of range.
+    /// Visual rows include standalone sessions first, then group headers
+    /// interleaved with worktree task rows.
+    fn visual_row_to_cursor(&self, visual_row: usize) -> Option<usize> {
+        let standalone_count = self.standalone_sessions.len();
+
+        // Standalone session rows come first (no group headers before them).
+        if visual_row < standalone_count {
+            return Some(visual_row);
+        }
+
+        // For worktree rows, account for group header rows.
+        let tasks = list::visible_tasks_filtered(
+            &self.task_rows,
+            &self.filter_mode,
+            &self.search_text,
+            self.active_repo_slug(),
+        );
+
+        let mut table_row = standalone_count; // current visual row index
+        let mut last_group: Option<crate::derive::DisplayGroup> = None;
+
+        for (task_idx, vt) in tasks.iter().enumerate() {
+            // Group header inserted when display group changes.
+            if last_group != Some(vt.group) {
+                if table_row == visual_row {
+                    return None; // clicked on a group header
+                }
+                last_group = Some(vt.group);
+                table_row += 1;
+            }
+
+            if table_row == visual_row {
+                return Some(task_idx + standalone_count);
+            }
+            table_row += 1;
+        }
+
+        None // clicked below all rows
+    }
+
+    // -------------------------------------------------------------------
     // TEA: update — all state mutation
     // -------------------------------------------------------------------
 
@@ -700,6 +834,18 @@ impl App {
                     quit,
                     next_msg: None,
                 }
+            }
+            Message::ActivateRow(idx) => {
+                self.cursor = idx;
+                self.fetch_task_pane_content();
+                UpdateResult {
+                    quit: false,
+                    next_msg: Some(Message::Enter),
+                }
+            }
+            Message::OpenAttribution => {
+                crate::browser::open_url(ATTRIBUTION_URL);
+                ok()
             }
             Message::OpenPR => {
                 let standalone_count = self.standalone_sessions.len();
@@ -1328,6 +1474,9 @@ impl App {
             spinner_frame: 0,
             switch_target: None,
             previous_worktree_states: HashMap::new(),
+            table_area: Cell::new(Rect::default()),
+            url_area: Cell::new(Rect::default()),
+            last_click: None,
         }
     }
 }
@@ -1353,7 +1502,11 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
 
     crossterm::terminal::enable_raw_mode()?;
     let mut tty_write = tty.try_clone()?;
-    crossterm::execute!(tty_write, crossterm::terminal::EnterAlternateScreen)?;
+    crossterm::execute!(
+        tty_write,
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    )?;
     let backend = ratatui::backend::CrosstermBackend::new(tty_write);
     let mut terminal = ratatui::Terminal::new(backend)?;
     terminal.clear()?;
@@ -1372,6 +1525,7 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
+        crossterm::event::DisableMouseCapture,
         crossterm::terminal::LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
@@ -1390,16 +1544,21 @@ fn run_loop(
         terminal.draw(|f| app.render(f))?;
 
         // Poll for events with timeout (for spinner animation).
-        if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))?
-            && let Event::Key(key) = event::read()?
-            && let Some(msg) = app.handle_event(key)
-        {
-            let mut result = app.update(msg);
-            while let Some(next) = result.next_msg.take() {
-                result = app.update(next);
-            }
-            if result.quit {
-                break;
+        if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))? {
+            let event = event::read()?;
+            let msg = match event {
+                Event::Key(key) => app.handle_event(key),
+                Event::Mouse(mouse) => app.handle_mouse_event(mouse),
+                _ => None,
+            };
+            if let Some(msg) = msg {
+                let mut result = app.update(msg);
+                while let Some(next) = result.next_msg.take() {
+                    result = app.update(next);
+                }
+                if result.quit {
+                    break;
+                }
             }
         }
 
@@ -2741,5 +2900,338 @@ mod tests {
         let result = compute_sessions_to_create(&repos);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "my_project-v2_main");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mouse event tests
+    // -----------------------------------------------------------------------
+
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    /// Creates a MouseEvent with the given kind at the specified position.
+    fn make_mouse_event(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// Creates an App with table_area pre-set for mouse hit testing.
+    fn app_with_table_area(task_rows: Vec<WorktreeRow>) -> App {
+        let app = App::new_test(task_rows);
+        // Simulate a rendered table body starting at y=5, height=10, full width.
+        app.table_area.set(Rect {
+            x: 0,
+            y: 5,
+            width: 80,
+            height: 10,
+        });
+        app
+    }
+
+    #[test]
+    fn mouse_scroll_down_in_table_returns_cursor_down() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 7);
+        assert_eq!(app.handle_mouse_event(event), Some(Message::CursorDown));
+    }
+
+    #[test]
+    fn mouse_scroll_up_in_table_returns_cursor_up() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        let event = make_mouse_event(MouseEventKind::ScrollUp, 10, 7);
+        assert_eq!(app.handle_mouse_event(event), Some(Message::CursorUp));
+    }
+
+    #[test]
+    fn mouse_scroll_outside_table_returns_none() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        // y=2 is above the table body (starts at y=5).
+        let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 2);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_click_selects_row() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::NeedsAttention),
+            make_task_row(3, DisplayGroup::NeedsAttention),
+        ]);
+        // All in same group, so group header at visual row 0, data rows at 1, 2, 3.
+        // Click on visual row 2 (y=5+2=7) -> task index 1 -> cursor 1.
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
+        assert_eq!(app.handle_mouse_event(event), Some(Message::CursorTo(1)));
+    }
+
+    #[test]
+    fn mouse_click_on_group_header_returns_none() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        // Group header is at visual row 0 (y=5).
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 5);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_click_below_last_row_returns_none() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        // One group header + one data row = 2 visual rows. Click at visual row 5 is out of range.
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 10);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_click_outside_table_x_returns_none() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        // x=90 is outside the table (width=80).
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 90, 7);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_double_click_returns_activate_row() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::NeedsAttention),
+        ]);
+        // First click: visual row 1 (y=6) -> cursor 0.
+        let event1 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        assert_eq!(app.handle_mouse_event(event1), Some(Message::CursorTo(0)));
+        assert!(app.last_click.is_some());
+
+        // Second click on same row within DOUBLE_CLICK_MS -> ActivateRow.
+        let event2 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        assert_eq!(app.handle_mouse_event(event2), Some(Message::ActivateRow(0)));
+        assert!(app.last_click.is_none());
+    }
+
+    #[test]
+    fn mouse_clicks_on_different_rows_not_double_click() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::NeedsAttention),
+            make_task_row(3, DisplayGroup::NeedsAttention),
+        ]);
+        // Click on row 0 (visual row 1, y=6).
+        let event1 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        assert_eq!(app.handle_mouse_event(event1), Some(Message::CursorTo(0)));
+
+        // Click on row 2 (visual row 3, y=8) -> CursorTo, not Enter.
+        let event2 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 8);
+        assert_eq!(app.handle_mouse_event(event2), Some(Message::CursorTo(2)));
+    }
+
+    #[test]
+    fn mouse_events_ignored_during_search() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        app.search_active = true;
+        let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 7);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_events_ignored_in_help_view() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        app.view = ViewState::Help;
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_events_ignored_in_confirm_delete_view() {
+        let mut app = app_with_table_area(vec![]);
+        app.view = ViewState::ConfirmDelete(state::DeleteState {
+            target: crate::types::Worktree {
+                path: "/test/wt".to_string(),
+                branch: Some("feat/test".to_string()),
+                head: String::new(),
+                is_bare: false,
+                has_conflicts: false,
+                pr: None,
+                pr_loading: false,
+                tmux_session: None,
+                tmux_attached: false,
+                tmux_pane_title: None,
+                remote: None,
+                issue_number: None,
+                issue_state: None,
+            },
+            phase: Phase::Confirm,
+            error: None,
+        });
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn last_click_none_on_new_app() {
+        let app = App::new_test(vec![]);
+        assert!(app.last_click.is_none());
+    }
+
+    #[test]
+    fn last_click_stored_after_single_click() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        app.handle_mouse_event(event);
+        assert!(app.last_click.is_some());
+        let (row, _) = app.last_click.unwrap();
+        assert_eq!(row, 0);
+    }
+
+    #[test]
+    fn last_click_reset_after_double_click() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        app.handle_mouse_event(event);
+        assert!(app.last_click.is_some());
+
+        let event2 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        app.handle_mouse_event(event2);
+        assert!(app.last_click.is_none());
+    }
+
+    #[test]
+    fn table_area_default_before_render() {
+        let app = App::new_test(vec![]);
+        let area = app.table_area.get();
+        assert_eq!(area, Rect::default());
+    }
+
+    #[test]
+    fn url_area_default_before_render() {
+        let app = App::new_test(vec![]);
+        let area = app.url_area.get();
+        assert_eq!(area, Rect::default());
+    }
+
+    #[test]
+    fn visual_row_to_cursor_standalone_sessions() {
+        let mut app = App::new_test(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        // Add a standalone session.
+        app.standalone_sessions.push(crate::session::StandaloneSessionRow {
+            config: crate::session::StandaloneConfig {
+                name: "test-session".to_string(),
+                command: "bash".to_string(),
+                cwd: "/tmp".to_string(),
+                start_on_launch: false,
+            },
+            session: EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "test-session".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Dead,
+                },
+                claude: None,
+            },
+        });
+
+        // Visual row 0 = standalone session -> cursor 0.
+        assert_eq!(app.visual_row_to_cursor(0), Some(0));
+        // Visual row 1 = group header for NeedsAttention -> None.
+        assert_eq!(app.visual_row_to_cursor(1), None);
+        // Visual row 2 = first task row -> cursor 1 (standalone_count=1 + task_idx=0).
+        assert_eq!(app.visual_row_to_cursor(2), Some(1));
+    }
+
+    #[test]
+    fn visual_row_to_cursor_multiple_groups() {
+        let app = App::new_test(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::NeedsAttention),
+            make_task_row(3, DisplayGroup::Other),
+        ]);
+        // No standalone sessions. Layout:
+        // Row 0: NeedsAttention group header -> None
+        // Row 1: task 0 -> cursor 0
+        // Row 2: task 1 -> cursor 1
+        // Row 3: Other group header -> None
+        // Row 4: task 2 -> cursor 2
+        assert_eq!(app.visual_row_to_cursor(0), None);
+        assert_eq!(app.visual_row_to_cursor(1), Some(0));
+        assert_eq!(app.visual_row_to_cursor(2), Some(1));
+        assert_eq!(app.visual_row_to_cursor(3), None);
+        assert_eq!(app.visual_row_to_cursor(4), Some(2));
+        assert_eq!(app.visual_row_to_cursor(5), None); // out of range
+    }
+
+    #[test]
+    fn mouse_click_url_area_returns_open_attribution() {
+        let mut app = app_with_table_area(vec![]);
+        // Set up a URL area.
+        app.url_area.set(Rect {
+            x: 50,
+            y: 30,
+            width: 40,
+            height: 1,
+        });
+        // Click within URL area returns OpenAttribution (side effect deferred to update).
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 55, 30);
+        assert_eq!(app.handle_mouse_event(event), Some(Message::OpenAttribution));
+    }
+
+    #[test]
+    fn mouse_click_outside_url_area_in_footer_returns_none() {
+        let mut app = app_with_table_area(vec![]);
+        app.url_area.set(Rect {
+            x: 50,
+            y: 30,
+            width: 40,
+            height: 1,
+        });
+        // Click on footer row but outside URL x-bounds.
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 30);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn mouse_double_click_expired_returns_cursor_to() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::NeedsAttention),
+        ]);
+        // First click on row 0.
+        let event1 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        assert_eq!(app.handle_mouse_event(event1), Some(Message::CursorTo(0)));
+
+        // Simulate expired double-click window by back-dating last_click.
+        app.last_click = Some((0, Instant::now() - Duration::from_millis(500)));
+
+        // Second click on same row after timeout -> CursorTo, not ActivateRow.
+        let event2 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
+        assert_eq!(app.handle_mouse_event(event2), Some(Message::CursorTo(0)));
+    }
+
+    #[test]
+    fn mouse_right_click_on_table_returns_none() {
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+        ]);
+        let event = make_mouse_event(MouseEventKind::Down(MouseButton::Right), 10, 6);
+        assert_eq!(app.handle_mouse_event(event), None);
     }
 }

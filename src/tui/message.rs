@@ -94,6 +94,10 @@ pub enum Message {
     ConfirmNewWorktree,
     /// Dismiss a Done/Error phase dialog (any-key screens).
     DismissDialog,
+    /// Activate a row by index (double-click: set cursor, then chain Enter).
+    ActivateRow(usize),
+    /// Open the attribution URL in the browser.
+    OpenAttribution,
 
     // -- Heal actions --
     /// Open the heal diagnosis view.

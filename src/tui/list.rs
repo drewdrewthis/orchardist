@@ -15,7 +15,7 @@ use crate::remote;
 use crate::tmux;
 use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color};
-use crate::tui::{App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
+use crate::tui::{App, ATTRIBUTION_URL, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,6 +26,11 @@ const PANE_CAPTURE_LINES: u32 = 100;
 
 /// Minimum terminal height for the full header/logo display.
 const FULL_HEADER_MIN_HEIGHT: u16 = 30;
+
+/// Rows consumed by the table border (top) and column header row.
+const TABLE_BODY_Y_OFFSET: u16 = 2;
+/// Total rows consumed by table chrome (top border + header + bottom border).
+const TABLE_CHROME_HEIGHT: u16 = 3;
 
 // ---------------------------------------------------------------------------
 // Task view helpers
@@ -975,7 +980,17 @@ impl App {
             .block(block)
             .column_spacing(1);
 
-        f.render_widget(table, chunks[idx]);
+        let table_chunk = chunks[idx];
+        f.render_widget(table, table_chunk);
+
+        // Store the table body rect (excluding chrome) for mouse hit testing.
+        let body_rect = Rect {
+            x: table_chunk.x,
+            y: table_chunk.y + TABLE_BODY_Y_OFFSET,
+            width: table_chunk.width,
+            height: table_chunk.height.saturating_sub(TABLE_CHROME_HEIGHT),
+        };
+        self.table_area.set(body_rect);
         idx += 1;
 
         // Preview
@@ -1369,6 +1384,32 @@ impl App {
         spans.push(sep.clone());
 
         self.append_common_hints(&mut spans, &sep, key_style, "quit");
+
+        // Attribution URL at the end of the hints bar.
+        spans.push(sep);
+        let url_span_start = spans.iter().map(|s| s.width()).sum::<usize>();
+        spans.push(Span::styled(
+            ATTRIBUTION_URL,
+            Style::default()
+                .fg(theme.dimmed)
+                .add_modifier(Modifier::UNDERLINED),
+        ));
+        let url_len = ATTRIBUTION_URL.len();
+        let total_width: usize = spans.iter().map(|s| s.width()).sum();
+
+        // Compute the pixel position of the URL within the centered line.
+        let left_pad = if (area.width as usize) > total_width {
+            ((area.width as usize) - total_width) / 2
+        } else {
+            0
+        };
+        let url_x = area.x + (left_pad + url_span_start) as u16;
+        self.url_area.set(Rect {
+            x: url_x,
+            y: area.y,
+            width: url_len as u16,
+            height: 1,
+        });
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
