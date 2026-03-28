@@ -343,7 +343,10 @@ fn format_claude_state(
 }
 
 /// Returns Claude status text for a standalone session's single EnrichedSession.
-fn standalone_claude_status(session: &crate::session::EnrichedSession, theme: &Theme) -> (String, Style) {
+fn standalone_claude_status(
+    session: &crate::session::EnrichedSession,
+    theme: &Theme,
+) -> (String, Style) {
     let Some(ref claude) = session.claude else {
         return (
             "\u{25cb} none".to_string(),
