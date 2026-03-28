@@ -392,10 +392,10 @@ pub fn prompt_key(question: &str, default: &str) -> String {
 /// "Other" catch-all that prompts for a custom bundle ID.
 pub const TERMINAL_OPTIONS: &[(&str, &str)] = &[
     ("Terminal.app (default)", "com.apple.Terminal"),
-    ("iTerm2",                 "com.googlecode.iterm2"),
-    ("Warp",                   "dev.warp.Warp-Stable"),
-    ("Alacritty",              "org.alacritty"),
-    ("Ghostty",                "com.mitchellh.ghostty"),
+    ("iTerm2", "com.googlecode.iterm2"),
+    ("Warp", "dev.warp.Warp-Stable"),
+    ("Alacritty", "org.alacritty"),
+    ("Ghostty", "com.mitchellh.ghostty"),
 ];
 
 /// Parses a numbered menu selection (1-based) into the corresponding bundle ID.
@@ -436,7 +436,10 @@ pub fn prompt_terminal_app() -> String {
     for (i, (label, _bundle)) in TERMINAL_OPTIONS.iter().enumerate() {
         eprintln!("    {}. {}", i + 1, label);
     }
-    eprintln!("    {}. Other (enter bundle ID)", TERMINAL_OPTIONS.len() + 1);
+    eprintln!(
+        "    {}. Other (enter bundle ID)",
+        TERMINAL_OPTIONS.len() + 1
+    );
     eprintln!();
 
     let other_choice = TERMINAL_OPTIONS.len() + 1;
@@ -466,9 +469,7 @@ pub fn prompt_terminal_app() -> String {
             return prompt_custom_bundle_id();
         }
 
-        eprintln!(
-            "  {YELLOW}Please enter a number between 1 and {other_choice}{RESET}"
-        );
+        eprintln!("  {YELLOW}Please enter a number between 1 and {other_choice}{RESET}");
     }
 }
 
