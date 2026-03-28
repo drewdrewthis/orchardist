@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn build_state_with_hosts_empty_config_returns_empty_state() {
-        let config = GlobalConfig { repos: vec![] };
+        let config = GlobalConfig::default();
         let state = build_state_with_hosts(&config, &HashMap::new());
         assert!(state.repos.is_empty());
         assert!(state.hosts.is_empty());
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn build_state_with_hosts_empty_config_has_no_worktrees() {
-        let config = GlobalConfig { repos: vec![] };
+        let config = GlobalConfig::default();
         let state = build_state_with_hosts(&config, &HashMap::new());
         assert_eq!(state.all_worktrees().len(), 0);
     }
@@ -224,6 +224,7 @@ mod tests {
                     remotes: vec![],
                 },
             ],
+            ..GlobalConfig::default()
         };
         let state = build_state_with_hosts(&config, &HashMap::new());
         // Repos with empty caches produce no worktrees, so repo_map is empty and
@@ -233,7 +234,7 @@ mod tests {
 
     #[test]
     fn build_task_rows_empty_config_returns_empty_vec() {
-        let config = GlobalConfig { repos: vec![] };
+        let config = GlobalConfig::default();
         let rows = build_task_rows(&config);
         assert!(rows.is_empty());
     }
@@ -247,6 +248,7 @@ mod tests {
                 path: "/tmp/repo".to_string(),
                 remotes: vec![],
             }],
+            ..GlobalConfig::default()
         };
         let rows = build_task_rows(&config);
         let state = build_state(&config);

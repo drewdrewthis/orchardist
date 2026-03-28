@@ -1,5 +1,22 @@
+//! Shell environment setup for the `orchard init` wizard.
+//!
+//! Guides users through installing the tmux popup wrapper script, configuring
+//! keybindings, selecting their preferred terminal app for notifications, and
+//! optionally installing Claude Code hooks. Writes the resulting choices back
+//! to `~/.config/orchard/config.json` via [`crate::global_config::save_global_config`].
+
 use std::io::Write;
 use std::path::Path;
+
+// ---------------------------------------------------------------------------
+// ANSI colour helpers (used only for stderr wizard output)
+// ---------------------------------------------------------------------------
+
+const BOLD: &str = "\x1b[1m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+const CYAN: &str = "\x1b[36m";
+const RESET: &str = "\x1b[0m";
 
 /// Returns the orchard popup wrapper script content.
 pub fn get_wrapper_script() -> &'static str {
@@ -27,6 +44,9 @@ pub fn get_tmux_binding(key: &str) -> String {
 const MARKER_START: &str = "# >>> orchard >>>";
 const MARKER_END: &str = "# <<< orchard <<<";
 
+/// Total number of wizard steps — update when adding or removing steps.
+const TOTAL_STEPS: usize = 8;
+
 /// Runs the interactive `orchard init` wizard.
 ///
 /// Walks the user through:
@@ -36,6 +56,10 @@ const MARKER_END: &str = "# <<< orchard <<<";
 ///  4. Configuring the tmux keybinding
 ///  5. Optionally adding a status bar segment
 ///  6. Reloading tmux config
+///  7. Installing Claude Code hooks
+///  8. Selecting the terminal app for notifications (macOS only)
+///
+/// Persists the chosen terminal app to `~/.config/orchard/config.json`.
 pub fn run_init_wizard() -> Result<(), String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
 
@@ -56,17 +80,34 @@ pub fn run_init_wizard() -> Result<(), String> {
 
     // Step 7: Install Claude Code hooks.
     if let Err(e) = install_claude_hooks(&home) {
-        eprintln!("  Warning: could not install Claude hooks: {e}");
+        eprintln!("  {YELLOW}Warning: could not install Claude hooks: {e}{RESET}");
     }
 
+    // Step 8: Select terminal app for notifications (macOS only).
+    let terminal_app = select_terminal_app_step();
+
+    // Persist choices to global config.
+    let mut cfg = crate::global_config::load_global_config();
+    cfg.terminal_app = terminal_app.clone();
+    if let Err(e) = crate::global_config::save_global_config(&cfg) {
+        eprintln!("  {YELLOW}Warning: could not save config: {e}{RESET}");
+    }
+
+    // Summary.
     eprintln!();
-    eprintln!("Setup complete. Press prefix + {key} to open orchard.");
+    eprintln!("{BOLD}{GREEN}Setup complete!{RESET}");
+    eprintln!("  Tmux key binding : prefix + {BOLD}{key}{RESET}");
+    if cfg!(target_os = "macos") {
+        eprintln!("  Terminal app     : {BOLD}{terminal_app}{RESET}");
+    }
+    eprintln!();
+    eprintln!("Press prefix + {key} to open orchard.");
     Ok(())
 }
 
 /// Step 1: Check tmux version. Returns the version string (e.g. "3.4") on success.
 fn check_tmux_version_step() -> Result<String, String> {
-    eprintln!("Step 1: Checking tmux version...");
+    eprintln!("{BOLD}{CYAN}[1/{TOTAL_STEPS}] Checking tmux version{RESET}");
     let out = std::process::Command::new("tmux")
         .args(["-V"])
         .output()
@@ -97,7 +138,7 @@ fn check_tmux_version_step() -> Result<String, String> {
 
 /// Step 2: Check RC files for old shell function markers and optionally remove them.
 fn remove_old_shell_function_step(home: &Path) -> Result<(), String> {
-    eprintln!("Step 2: Checking for old shell function...");
+    eprintln!("{BOLD}{CYAN}[2/{TOTAL_STEPS}] Checking for old shell function{RESET}");
     for rc in &[".zshrc", ".bashrc"] {
         let rc_path = home.join(rc);
         if let Ok(content) = std::fs::read_to_string(&rc_path)
@@ -147,7 +188,7 @@ fn remove_marker_block(content: &str) -> String {
 
 /// Step 3: Install the wrapper script to ~/.local/bin/orchard-popup.
 fn install_wrapper(home: &Path) -> Result<(), String> {
-    eprintln!("Step 3: Creating wrapper script...");
+    eprintln!("{BOLD}{CYAN}[3/{TOTAL_STEPS}] Creating wrapper script{RESET}");
     let bin_dir = home.join(".local/bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("creating ~/.local/bin: {e}"))?;
 
@@ -184,7 +225,7 @@ fn install_wrapper(home: &Path) -> Result<(), String> {
 /// Steps 4 & 5: Prompt for key, inject tmux binding (and optionally status bar) into tmux.conf.
 /// Returns the key chosen by the user.
 fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<String, String> {
-    eprintln!("Step 4: Configuring tmux keybinding...");
+    eprintln!("{BOLD}{CYAN}[4/{TOTAL_STEPS}] Configuring tmux keybinding{RESET}");
     let tmux_conf = detect_tmux_conf(home);
 
     let existing = std::fs::read_to_string(&tmux_conf).unwrap_or_default();
@@ -199,7 +240,7 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
     let key = prompt_key("  Bind popup to which key? [o]", "o");
 
     // Step 5: Optionally add status bar segment.
-    eprintln!("Step 5: Status bar...");
+    eprintln!("{BOLD}{CYAN}[5/{TOTAL_STEPS}] Status bar{RESET}");
     let add_status = prompt_yn("  Add orchard status to tmux status bar? [Y/n]", true);
 
     let state_dir = home.join(".local/state/orchard");
@@ -238,7 +279,7 @@ fn detect_tmux_conf(home: &Path) -> std::path::PathBuf {
 
 /// Step 6: Reload tmux config if inside a tmux session.
 fn reload_tmux_config_step(home: &Path) {
-    eprintln!("Step 6: Cleaning up and reloading...");
+    eprintln!("{BOLD}{CYAN}[6/{TOTAL_STEPS}] Cleaning up and reloading{RESET}");
     let tmux_conf = detect_tmux_conf(home);
 
     if std::env::var("TMUX").is_ok() {
@@ -341,6 +382,115 @@ pub fn prompt_key(question: &str, default: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Terminal app selection (Step 8, macOS only)
+// ---------------------------------------------------------------------------
+
+/// Known terminal options presented in the wizard menu.
+///
+/// Each entry is `(display_label, bundle_id)`. The last entry is the
+/// "Other" catch-all that prompts for a custom bundle ID.
+pub const TERMINAL_OPTIONS: &[(&str, &str)] = &[
+    ("Terminal.app (default)", "com.apple.Terminal"),
+    ("iTerm2",                 "com.googlecode.iterm2"),
+    ("Warp",                   "dev.warp.Warp-Stable"),
+    ("Alacritty",              "org.alacritty"),
+    ("Ghostty",                "com.mitchellh.ghostty"),
+];
+
+/// Parses a numbered menu selection (1-based) into the corresponding bundle ID.
+///
+/// Returns `None` for selections that are out of range or not a valid number.
+/// Selection `TERMINAL_OPTIONS.len() + 1` maps to the "Other" option and also
+/// returns `None` (the caller must prompt for a custom bundle ID).
+pub fn parse_terminal_selection(input: &str) -> Option<String> {
+    let n: usize = input.trim().parse().ok()?;
+    if n == 0 || n > TERMINAL_OPTIONS.len() + 1 {
+        return None;
+    }
+    if n == TERMINAL_OPTIONS.len() + 1 {
+        // "Other" — caller handles custom input
+        return None;
+    }
+    Some(TERMINAL_OPTIONS[n - 1].1.to_string())
+}
+
+/// Step 8: Prompt the user to select their preferred terminal app.
+///
+/// On non-macOS platforms this step is skipped and the default is returned.
+fn select_terminal_app_step() -> String {
+    if !cfg!(target_os = "macos") {
+        return "com.apple.Terminal".to_string();
+    }
+
+    eprintln!("{BOLD}{CYAN}[8/{TOTAL_STEPS}] Terminal app for notifications{RESET}");
+    prompt_terminal_app()
+}
+
+/// Presents a numbered terminal menu and returns the chosen bundle ID.
+///
+/// Only called on macOS. Empty input defaults to `"com.apple.Terminal"`.
+pub fn prompt_terminal_app() -> String {
+    eprintln!("  Which terminal should open when you click a notification?");
+    eprintln!();
+    for (i, (label, _bundle)) in TERMINAL_OPTIONS.iter().enumerate() {
+        eprintln!("    {}. {}", i + 1, label);
+    }
+    eprintln!("    {}. Other (enter bundle ID)", TERMINAL_OPTIONS.len() + 1);
+    eprintln!();
+
+    loop {
+        eprint!("  Choice [1]: ");
+        std::io::stderr().flush().ok();
+
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return "com.apple.Terminal".to_string();
+        }
+
+        let trimmed = line.trim();
+
+        // Empty → default
+        if trimmed.is_empty() {
+            return "com.apple.Terminal".to_string();
+        }
+
+        let other_choice = TERMINAL_OPTIONS.len() + 1;
+
+        if let Ok(n) = trimmed.parse::<usize>() {
+            if n >= 1 && n <= TERMINAL_OPTIONS.len() {
+                return TERMINAL_OPTIONS[n - 1].1.to_string();
+            } else if n == other_choice {
+                return prompt_custom_bundle_id();
+            }
+        }
+
+        eprintln!(
+            "  {YELLOW}Please enter a number between 1 and {other_choice}{RESET}"
+        );
+    }
+}
+
+/// Prompts for a custom macOS bundle ID when the user selects "Other".
+fn prompt_custom_bundle_id() -> String {
+    loop {
+        eprint!("  Enter bundle ID (e.g. net.kovidgoyal.kitty): ");
+        std::io::stderr().flush().ok();
+
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return "com.apple.Terminal".to_string();
+        }
+
+        let trimmed = line.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+
+        eprintln!("  {YELLOW}Bundle ID cannot be empty{RESET}");
+    }
+}
+
 /// Parses a tmux version string like "3.2", "3.2a", "next-3.5" into (major, minor).
 /// Returns `None` for unparseable strings.
 pub fn parse_tmux_version(s: &str) -> Option<(u32, u32)> {
@@ -401,7 +551,7 @@ const HOOK_SCRIPT_CONTENT: &str = include_str!("../hooks/orchard-state.sh");
 ///
 /// Idempotent: re-running will update the script and avoid duplicate hook entries.
 pub fn install_claude_hooks(home: &Path) -> Result<(), String> {
-    eprintln!("Step 7: Installing Claude Code hooks...");
+    eprintln!("{BOLD}{CYAN}[7/{TOTAL_STEPS}] Installing Claude Code hooks{RESET}");
 
     let hooks_dir = home.join(".claude/hooks");
     std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("creating ~/.claude/hooks: {e}"))?;
@@ -736,5 +886,89 @@ mod tests {
                 "expected hook for event: {event}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Terminal selection parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_terminal_selection_picks_first_option() {
+        assert_eq!(
+            parse_terminal_selection("1"),
+            Some("com.apple.Terminal".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_terminal_selection_picks_iterm2() {
+        assert_eq!(
+            parse_terminal_selection("2"),
+            Some("com.googlecode.iterm2".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_terminal_selection_picks_warp() {
+        assert_eq!(
+            parse_terminal_selection("3"),
+            Some("dev.warp.Warp-Stable".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_terminal_selection_picks_alacritty() {
+        assert_eq!(
+            parse_terminal_selection("4"),
+            Some("org.alacritty".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_terminal_selection_picks_ghostty() {
+        assert_eq!(
+            parse_terminal_selection("5"),
+            Some("com.mitchellh.ghostty".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_terminal_selection_other_returns_none() {
+        // "Other" selection — caller must prompt for custom ID.
+        let other_idx = (TERMINAL_OPTIONS.len() + 1).to_string();
+        assert_eq!(parse_terminal_selection(&other_idx), None);
+    }
+
+    #[test]
+    fn parse_terminal_selection_empty_returns_none() {
+        assert_eq!(parse_terminal_selection(""), None);
+    }
+
+    #[test]
+    fn parse_terminal_selection_out_of_range_returns_none() {
+        assert_eq!(parse_terminal_selection("99"), None);
+    }
+
+    #[test]
+    fn parse_terminal_selection_zero_returns_none() {
+        assert_eq!(parse_terminal_selection("0"), None);
+    }
+
+    #[test]
+    fn parse_terminal_selection_non_numeric_returns_none() {
+        assert_eq!(parse_terminal_selection("abc"), None);
+    }
+
+    #[test]
+    fn parse_terminal_selection_trims_whitespace() {
+        assert_eq!(
+            parse_terminal_selection("  1  "),
+            Some("com.apple.Terminal".to_string())
+        );
+    }
+
+    #[test]
+    fn terminal_options_has_five_known_entries() {
+        assert_eq!(TERMINAL_OPTIONS.len(), 5);
     }
 }
