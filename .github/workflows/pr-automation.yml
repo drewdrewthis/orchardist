@@ -1,0 +1,32 @@
+name: PR Automation
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  link-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: tkt-actions/add-issue-links@v1.9.1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  assign-author:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: toshimaru/auto-author-assign@v3.0.1

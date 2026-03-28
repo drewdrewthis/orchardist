@@ -1,0 +1,20 @@
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/**/*.rs'
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**/*'
+          - '*.md'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**/*'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'tests/**/*'
