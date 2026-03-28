@@ -147,7 +147,7 @@ fn display_group_other_for_no_pr() {
 /// Shepherd < NeedsAttention < ClaudeWorking < ReadyToMerge < Other.
 #[test]
 fn display_groups_ordered_for_rendering() {
-    assert!(DisplayGroup::Shepherd < DisplayGroup::NeedsAttention);
+    assert!(DisplayGroup::RepoMain < DisplayGroup::NeedsAttention);
     assert!(DisplayGroup::NeedsAttention < DisplayGroup::ClaudeWorking);
     assert!(DisplayGroup::ClaudeWorking < DisplayGroup::ReadyToMerge);
     assert!(DisplayGroup::ReadyToMerge < DisplayGroup::Other);
@@ -186,7 +186,7 @@ fn tmux_session_joins_via_worktree_path() {
     let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
     assert_eq!(rows[0].sessions.len(), 1);
-    assert_eq!(rows[0].sessions[0].name, "repo_47");
+    assert_eq!(rows[0].sessions[0].tmux.name, "repo_47");
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +206,11 @@ fn multiple_tmux_sessions_at_same_path_all_join() {
     let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
     assert_eq!(rows[0].sessions.len(), 2);
-    let names: Vec<&str> = rows[0].sessions.iter().map(|s| s.name.as_str()).collect();
+    let names: Vec<&str> = rows[0]
+        .sessions
+        .iter()
+        .map(|s| s.tmux.name.as_str())
+        .collect();
     assert!(names.contains(&"repo_47_main"));
     assert!(names.contains(&"repo_47_claude"));
 }
@@ -265,6 +269,6 @@ fn cache_file_roundtrip_feeds_into_derive_pipeline() {
     );
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].display_group, DisplayGroup::Shepherd);
+    assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
     assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
 }

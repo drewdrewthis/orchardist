@@ -8,16 +8,19 @@ use std::collections::HashMap;
 
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
+use crate::session::{EnrichedSession, Host, StandaloneSessionRow};
 
 // ---------------------------------------------------------------------------
 // Top-level state
 // ---------------------------------------------------------------------------
 
-/// The unified state model for Orchard. Contains all repos and host reachability.
+/// The unified state model for Orchard. Contains all repos, standalone sessions, and host reachability.
 #[derive(Debug, Clone)]
 pub struct OrchardState {
     /// All repositories known to Orchard.
     pub repos: Vec<RepoState>,
+    /// Standalone tmux sessions not tied to any worktree.
+    pub standalone_sessions: Vec<StandaloneSessionRow>,
     /// Reachability state keyed by SSH host name.
     pub hosts: HashMap<String, HostState>,
 }
@@ -27,6 +30,7 @@ impl OrchardState {
     pub fn new() -> Self {
         Self {
             repos: Vec::new(),
+            standalone_sessions: Vec::new(),
             hosts: HashMap::new(),
         }
     }
@@ -93,8 +97,8 @@ pub struct WorktreeState {
     pub sessions: Vec<SessionState>,
     /// Display group controlling sort order and TUI section.
     pub display_group: DisplayGroup,
-    /// True when this is the repo's main/shepherd worktree.
-    pub is_shepherd: bool,
+    /// True when this is the repo's main worktree.
+    pub is_main_worktree: bool,
 }
 
 /// Lightweight issue summary attached to a worktree.
@@ -128,25 +132,31 @@ pub struct PrState {
 }
 
 /// Lightweight tmux session summary attached to a worktree.
+///
+/// Mirrors the `EnrichedSession` domain type from `session.rs`.
+/// The `claude` field is `None` when no Claude process is detected.
 #[derive(Debug, Clone)]
 pub struct SessionState {
     /// tmux session name.
     pub name: String,
     /// Remote SSH host this session runs on, or `None` for local.
     pub host: Option<String>,
-    /// True when a Claude process is running in this session.
-    pub has_claude_active: bool,
-    /// True when Claude is actively working (spinner/activity indicator visible).
-    pub claude_is_working: bool,
-    /// True when Claude appears to be waiting for user input.
-    pub claude_needs_input: bool,
-    /// Structured Claude state from hook files (replaces booleans when available).
-    pub claude_state: ClaudeState,
-    /// Context window usage percentage from hook state enrichment.
-    pub context_window_pct: Option<f64>,
-    /// Cumulative session cost in USD from hook state enrichment.
+    /// Claude enrichment data, if a Claude process is active.
+    pub claude: Option<ClaudeEnrichment>,
+}
+
+/// Claude enrichment data within a `SessionState`.
+///
+/// Mirrors `ClaudeSessionInfo` from `session.rs` for the state layer.
+#[derive(Debug, Clone)]
+pub struct ClaudeEnrichment {
+    /// Structured Claude state (working, idle, input, none).
+    pub status: ClaudeState,
+    /// Cumulative session cost in USD, if available.
     pub cost_usd: Option<f64>,
-    /// Model name from hook state enrichment (e.g., "opus", "sonnet").
+    /// Context window usage percentage (0-100), if available.
+    pub context_window_pct: Option<f64>,
+    /// Model name (e.g., "opus", "sonnet"), if available.
     pub model: Option<String>,
 }
 
@@ -175,18 +185,22 @@ impl From<&crate::derive::PrInfo> for PrState {
     }
 }
 
-impl From<&crate::derive::SessionInfo> for SessionState {
-    fn from(s: &crate::derive::SessionInfo) -> Self {
+impl From<&EnrichedSession> for SessionState {
+    fn from(s: &EnrichedSession) -> Self {
+        let host = match &s.tmux.host {
+            Host::Local => None,
+            Host::Remote(h) => Some(h.clone()),
+        };
+        let claude = s.claude.as_ref().map(|c| ClaudeEnrichment {
+            status: c.status,
+            cost_usd: c.cost_usd,
+            context_window_pct: c.context_window_pct,
+            model: c.model.clone(),
+        });
         Self {
-            name: s.name.clone(),
-            host: s.host.clone(),
-            has_claude_active: s.has_claude_active,
-            claude_is_working: s.claude_is_working,
-            claude_needs_input: s.claude_needs_input,
-            claude_state: s.claude_state,
-            context_window_pct: s.context_window_pct,
-            cost_usd: s.cost_usd,
-            model: s.model.clone(),
+            name: s.tmux.name.clone(),
+            host,
+            claude,
         }
     }
 }
@@ -211,7 +225,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             pr: row.pr.as_ref().map(Into::into),
             sessions: row.sessions.iter().map(Into::into).collect(),
             display_group: row.display_group,
-            is_shepherd: row.is_shepherd,
+            is_main_worktree: row.is_main_worktree,
         }
     }
 }
@@ -239,7 +253,7 @@ mod tests {
             pr: None,
             sessions: vec![],
             display_group,
-            is_shepherd: false,
+            is_main_worktree: false,
         }
     }
 
@@ -258,6 +272,7 @@ mod tests {
             .collect();
         OrchardState {
             repos,
+            standalone_sessions: Vec::new(),
             hosts: std::collections::HashMap::new(),
         }
     }
@@ -302,8 +317,8 @@ mod tests {
     #[test]
     fn all_worktrees_from_multiple_repos_are_included() {
         let rows = vec![
-            make_row("owner/repo-a", "main", None, None, DisplayGroup::Shepherd),
-            make_row("owner/repo-b", "main", None, None, DisplayGroup::Shepherd),
+            make_row("owner/repo-a", "main", None, None, DisplayGroup::RepoMain),
+            make_row("owner/repo-b", "main", None, None, DisplayGroup::RepoMain),
         ];
         let state = make_state_with_rows(rows);
         assert_eq!(state.all_worktrees().len(), 2);

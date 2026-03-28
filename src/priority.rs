@@ -1,5 +1,5 @@
 //! Worktree priority flags. A simple on/off toggle that moves prioritized
-//! worktrees above non-prioritized ones in the display, below shepherds.
+//! worktrees above non-prioritized ones in the display, below repo main worktrees.
 //!
 //! Storage: `~/.cache/orchard/priorities.json` — a JSON file listing the
 //! absolute paths of all prioritized worktrees. Reads and writes are

@@ -1,10 +1,11 @@
 //! Pure functional core: derives display-ready rows from cached data.
 //!
 //! `derive_all_repos` joins cached issues, PRs, worktrees, and tmux sessions
-//! into `TaskRow` values with computed `DisplayGroup` sort keys. No I/O occurs
+//! into `WorktreeRow` values with computed `DisplayGroup` sort keys. No I/O occurs
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
+use crate::session::{ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo};
 
 /// Tuple type for per-repo cache data passed to [`derive_all_repos`].
 ///
@@ -29,12 +30,12 @@ const HOOK_STATE_STALENESS_SECS: u64 = 300;
 // ---------------------------------------------------------------------------
 
 /// Rendering order for worktree rows. Variants are ordered so that `Ord` gives
-/// the correct sort order (Shepherd first, Other last).
+/// the correct sort order (RepoMain first, Other last).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayGroup {
-    /// Always first — the repo's main/shepherd session.
-    Shepherd,
+    /// Always first — the repo's main worktree.
+    RepoMain,
     /// User-flagged as priority work.
     Prioritized,
     /// Requires human action (blocked, conflicts, review requested).
@@ -66,29 +67,6 @@ pub struct PrInfo {
     pub unresolved_threads: u32,
 }
 
-/// Lightweight tmux session summary attached to a worktree row.
-#[derive(Debug, Clone)]
-pub struct SessionInfo {
-    /// tmux session name.
-    pub name: String,
-    /// Remote SSH host this session runs on, or `None` for local.
-    pub host: Option<String>,
-    /// True when a Claude process is running in this session.
-    pub has_claude_active: bool,
-    /// True when Claude is actively working (spinner/activity indicator visible).
-    pub claude_is_working: bool,
-    /// True when Claude appears to be waiting for user input.
-    pub claude_needs_input: bool,
-    /// Structured Claude state from hook files (replaces booleans when available).
-    pub claude_state: crate::claude_state::ClaudeState,
-    /// Context window usage percentage from hook state enrichment.
-    pub context_window_pct: Option<f64>,
-    /// Cumulative session cost in USD from hook state enrichment.
-    pub cost_usd: Option<f64>,
-    /// Model name from hook state enrichment (e.g., "opus", "sonnet").
-    pub model: Option<String>,
-}
-
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
 /// enriched with PR/issue metadata and tmux session info.
 #[derive(Debug, Clone)]
@@ -111,15 +89,12 @@ pub struct WorktreeRow {
     /// Linked pull request, if one exists for this branch.
     pub pr: Option<PrInfo>,
     /// Active tmux sessions associated with this worktree path.
-    pub sessions: Vec<SessionInfo>,
+    pub sessions: Vec<EnrichedSession>,
     /// Display group controlling sort order and TUI section.
     pub display_group: DisplayGroup,
-    /// True when this is the repo's main/shepherd worktree.
-    pub is_shepherd: bool,
+    /// True when this is the repo's main worktree.
+    pub is_main_worktree: bool,
 }
-
-/// Alias to minimize cascading changes in TUI code.
-pub type TaskRow = WorktreeRow;
 
 // ---------------------------------------------------------------------------
 // Single-repo derivation
@@ -133,7 +108,7 @@ pub type TaskRow = WorktreeRow;
 /// 3. For each worktree path, match → tmux sessions (by path equality).
 /// 4. Extract issue number from branch name by naming convention.
 /// 5. Look up issue title from issues cache if issue number found.
-/// 6. Detect shepherd (first non-bare worktree or session name ending `_main`).
+/// 6. Detect main worktree (first non-bare worktree or session name ending `_main`).
 /// 7. Derive display group from the joined data.
 pub fn derive_worktree_rows(
     issues: &[CachedIssue],
@@ -156,10 +131,10 @@ pub fn derive_worktree_rows(
         };
         let pr_info = pr.map(pr_info_from);
 
-        let session_infos: Vec<SessionInfo> = sessions
+        let session_infos: Vec<EnrichedSession> = sessions
             .iter()
             .filter(|s| s.path == wt.path)
-            .map(|s| session_info_from(s, claude_states))
+            .map(|s| enrich_session(s, claude_states))
             .collect();
 
         let issue_number = github::extract_issue_number(&wt.branch);
@@ -173,11 +148,11 @@ pub fn derive_worktree_rows(
             None
         };
 
-        let is_shepherd =
-            is_first_non_bare || session_infos.iter().any(|s| s.name.ends_with("_main"));
+        let is_main_worktree =
+            is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));
 
-        let display_group = if is_shepherd {
-            DisplayGroup::Shepherd
+        let display_group = if is_main_worktree {
+            DisplayGroup::RepoMain
         } else if crate::priority::is_prioritized(&wt.path) {
             DisplayGroup::Prioritized
         } else {
@@ -195,7 +170,7 @@ pub fn derive_worktree_rows(
             pr: pr_info,
             sessions: session_infos,
             display_group,
-            is_shepherd,
+            is_main_worktree,
         });
 
         is_first_non_bare = false;
@@ -223,7 +198,7 @@ pub fn derive_task_rows(
 /// Derives and sorts worktree rows across all configured repositories.
 ///
 /// Each tuple is `(repo_slug, issues, prs, worktrees, sessions)`. Rows are
-/// sorted: Shepherd first, then by display group, then by issue number
+/// sorted: RepoMain first, then by display group, then by issue number
 /// (worktrees without issue numbers sort by branch name).
 pub fn derive_all_repos(
     repo_caches: &[RepoCacheEntry],
@@ -266,38 +241,41 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
     }
 }
 
-fn session_info_from(
+fn enrich_session(
     session: &CachedTmuxSession,
     claude_states: &[crate::claude_state::ClaudeStateFile],
-) -> SessionInfo {
-    use crate::claude_state::{ClaudeState, state_for_session};
+) -> EnrichedSession {
+    use crate::claude_state::state_for_session;
+
+    let host = match &session.host {
+        Some(h) => Host::Remote(h.clone()),
+        None => Host::Local,
+    };
+    let tmux = TmuxSessionInfo {
+        host,
+        name: session.name.clone(),
+        status: SessionStatus::Running { attached: false },
+    };
 
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
     if let Some(state_file) = hook_state {
         let is_stale = is_state_stale(&state_file.timestamp, HOOK_STATE_STALENESS_SECS);
         if !is_stale {
-            let claude_state = state_file.state.parse::<ClaudeState>().unwrap();
-            return SessionInfo {
-                name: session.name.clone(),
-                host: session.host.clone(),
-                has_claude_active: claude_state != ClaudeState::None,
-                claude_is_working: claude_state == ClaudeState::Working,
-                claude_needs_input: claude_state == ClaudeState::Input,
-                claude_state,
-                context_window_pct: state_file.context_window_pct,
-                cost_usd: state_file.cost_usd,
-                model: state_file.model.clone(),
-            };
+            let claude = ClaudeSessionInfo::from_state_file(state_file);
+            return EnrichedSession { tmux, claude };
         }
     }
 
     // Fallback: terminal scraping.
-    session_info_from_scraping(session)
+    enrich_session_from_scraping(session, tmux)
 }
 
 /// Derives session info by scraping terminal output (fallback when no hook state).
-fn session_info_from_scraping(session: &CachedTmuxSession) -> SessionInfo {
+fn enrich_session_from_scraping(
+    session: &CachedTmuxSession,
+    tmux: TmuxSessionInfo,
+) -> EnrichedSession {
     use crate::claude_state::ClaudeState;
 
     let has_claude_active = session
@@ -345,17 +323,23 @@ fn session_info_from_scraping(session: &CachedTmuxSession) -> SessionInfo {
         ClaudeState::None
     };
 
-    SessionInfo {
-        name: session.name.clone(),
-        host: session.host.clone(),
-        has_claude_active,
-        claude_is_working,
-        claude_needs_input,
-        claude_state,
-        context_window_pct: None,
-        cost_usd: None,
-        model: None,
-    }
+    let claude = if claude_state != ClaudeState::None {
+        Some(ClaudeSessionInfo {
+            status: claude_state,
+            cost_usd: None,
+            context_window_pct: None,
+            model: None,
+        })
+    } else {
+        None
+    };
+
+    EnrichedSession { tmux, claude }
+}
+
+/// Returns true if a Claude state file timestamp is older than the default threshold.
+pub fn is_state_stale_default(timestamp: &str) -> bool {
+    is_state_stale(timestamp, HOOK_STATE_STALENESS_SECS)
 }
 
 /// Returns true if the ISO 8601 timestamp is older than `max_age_secs` seconds.
@@ -375,14 +359,20 @@ fn is_state_stale(timestamp: &str, max_age_secs: u64) -> bool {
 /// Derives the display group for a worktree row. Priority order:
 /// NeedsAttention > ClaudeWorking > ReadyToMerge > Other.
 ///
-/// Never returns `Shepherd` — that is set separately based on `is_shepherd`.
+/// Never returns `RepoMain` — that is set separately based on `is_main_worktree`.
 fn derive_display_group(
     pr: Option<&PrInfo>,
-    sessions: &[SessionInfo],
+    sessions: &[EnrichedSession],
     issue_state: Option<&str>,
 ) -> DisplayGroup {
+    use crate::claude_state::ClaudeState;
+
     // Claude waiting for input = needs your attention (highest priority, before PR state).
-    if sessions.iter().any(|s| s.claude_needs_input) {
+    if sessions.iter().any(|s| {
+        s.claude
+            .as_ref()
+            .is_some_and(|c| c.status == ClaudeState::Input)
+    }) {
         return DisplayGroup::NeedsAttention;
     }
 
@@ -404,7 +394,11 @@ fn derive_display_group(
             return DisplayGroup::NeedsAttention;
         }
 
-        if sessions.iter().any(|s| s.claude_is_working) {
+        if sessions.iter().any(|s| {
+            s.claude
+                .as_ref()
+                .is_some_and(|c| c.status == ClaudeState::Working)
+        }) {
             return DisplayGroup::ClaudeWorking;
         }
 
@@ -413,7 +407,11 @@ fn derive_display_group(
         }
     } else {
         // No PR — check if Claude is actively working in sessions.
-        if sessions.iter().any(|s| s.claude_is_working) {
+        if sessions.iter().any(|s| {
+            s.claude
+                .as_ref()
+                .is_some_and(|c| c.status == ClaudeState::Working)
+        }) {
             return DisplayGroup::ClaudeWorking;
         }
     }
@@ -451,6 +449,21 @@ mod tests {
     // -----------------------------------------------------------------------
     // Builder helpers
     // -----------------------------------------------------------------------
+
+    /// Test wrapper: builds a `TmuxSessionInfo` from a `CachedTmuxSession` and
+    /// calls the real `enrich_session_from_scraping`.
+    fn enrich_session_from_scraping_for_test(session: &CachedTmuxSession) -> EnrichedSession {
+        let host = match &session.host {
+            Some(h) => Host::Remote(h.clone()),
+            None => Host::Local,
+        };
+        let tmux = TmuxSessionInfo {
+            host,
+            name: session.name.clone(),
+            status: SessionStatus::Running { attached: false },
+        };
+        enrich_session_from_scraping(session, tmux)
+    }
 
     fn open_issue(number: u32) -> CachedIssue {
         CachedIssue {
@@ -580,7 +593,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sessions.len(), 1);
-        assert_eq!(rows[0].sessions[0].name, "webapp_47");
+        assert_eq!(rows[0].sessions[0].tmux.name, "webapp_47");
     }
 
     #[test]
@@ -595,7 +608,11 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sessions.len(), 2);
-        let names: Vec<&str> = rows[0].sessions.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = rows[0]
+            .sessions
+            .iter()
+            .map(|s| s.tmux.name.as_str())
+            .collect();
         assert!(names.contains(&"webapp_47_main"));
         assert!(names.contains(&"webapp_47_claude"));
     }
@@ -635,31 +652,31 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Shepherd detection tests
+    // Main worktree detection tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn first_non_bare_worktree_is_shepherd() {
+    fn first_non_bare_worktree_is_main_worktree() {
         let worktrees = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/something"),
         ];
         let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
 
-        assert!(rows[0].is_shepherd);
-        assert!(!rows[1].is_shepherd);
+        assert!(rows[0].is_main_worktree);
+        assert!(!rows[1].is_main_worktree);
     }
 
     #[test]
-    fn shepherd_gets_shepherd_display_group() {
+    fn main_worktree_gets_repo_main_display_group() {
         let worktrees = vec![worktree("/workspace/repo", "main")];
         let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[0].display_group, DisplayGroup::Shepherd);
+        assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
     }
 
     #[test]
-    fn session_ending_with_main_is_shepherd() {
+    fn session_ending_with_main_is_main_worktree() {
         let worktrees = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/something"),
@@ -668,8 +685,8 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
-        assert!(rows[0].is_shepherd); // first non-bare
-        assert!(rows[1].is_shepherd); // session name ends with _main
+        assert!(rows[0].is_main_worktree); // first non-bare
+        assert!(rows[1].is_main_worktree); // session name ends with _main
     }
 
     #[test]
@@ -683,8 +700,8 @@ mod tests {
         let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
 
         assert_eq!(rows.len(), 2);
-        assert!(rows[0].is_shepherd); // first non-bare
-        assert!(!rows[1].is_shepherd);
+        assert!(rows[0].is_main_worktree); // first non-bare
+        assert!(!rows[1].is_main_worktree);
     }
 
     // -----------------------------------------------------------------------
@@ -809,7 +826,7 @@ mod tests {
 
     #[test]
     fn display_group_ordering() {
-        assert!(DisplayGroup::Shepherd < DisplayGroup::NeedsAttention);
+        assert!(DisplayGroup::RepoMain < DisplayGroup::NeedsAttention);
         assert!(DisplayGroup::NeedsAttention < DisplayGroup::ClaudeWorking);
         assert!(DisplayGroup::ClaudeWorking < DisplayGroup::ReadyToMerge);
         assert!(DisplayGroup::ReadyToMerge < DisplayGroup::Other);
@@ -822,8 +839,13 @@ mod tests {
             pane_commands: vec!["claude".to_string()],
             ..session("s", "/path", vec![])
         };
-        let info = session_info_from_scraping(&s);
-        assert!(!info.claude_needs_input);
+        let info = enrich_session_from_scraping_for_test(&s);
+        // Idle Claude: has claude info with Idle status, not Input
+        assert!(
+            info.claude
+                .as_ref()
+                .is_none_or(|c| c.status != crate::claude_state::ClaudeState::Input)
+        );
     }
 
     #[test]
@@ -833,8 +855,11 @@ mod tests {
             pane_commands: vec!["claude".to_string()],
             ..session("s", "/path", vec![])
         };
-        let info = session_info_from_scraping(&s);
-        assert!(info.claude_needs_input);
+        let info = enrich_session_from_scraping_for_test(&s);
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Input
+        );
     }
 
     #[test]
@@ -844,8 +869,11 @@ mod tests {
             pane_commands: vec!["claude".to_string()],
             ..session("s", "/path", vec![])
         };
-        let info = session_info_from_scraping(&s);
-        assert!(info.claude_needs_input);
+        let info = enrich_session_from_scraping_for_test(&s);
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Input
+        );
     }
 
     #[test]
@@ -855,8 +883,8 @@ mod tests {
             pane_commands: vec!["bash".to_string()],
             ..session("s", "/path", vec![])
         };
-        let info = session_info_from_scraping(&s);
-        assert!(!info.claude_needs_input);
+        let info = enrich_session_from_scraping_for_test(&s);
+        assert!(info.claude.is_none());
     }
 
     #[test]
@@ -866,8 +894,12 @@ mod tests {
             pane_commands: vec!["claude".to_string()],
             ..session("s", "/path", vec![])
         };
-        let info = session_info_from_scraping(&s);
-        assert!(!info.claude_needs_input);
+        let info = enrich_session_from_scraping_for_test(&s);
+        // Claude is active but idle (not input or working), so status is Idle
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Idle
+        );
     }
 
     #[test]
@@ -877,8 +909,8 @@ mod tests {
             pane_commands: vec!["node".to_string()],
             ..session("s", "/path", vec![])
         };
-        let info = session_info_from_scraping(&s);
-        assert!(info.has_claude_active);
+        let info = enrich_session_from_scraping_for_test(&s);
+        assert!(info.claude.is_some());
     }
 
     #[test]
@@ -952,8 +984,8 @@ mod tests {
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
-        assert_eq!(rows[0].display_group, DisplayGroup::Shepherd);
-        assert!(rows[0].is_shepherd);
+        assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
+        assert!(rows[0].is_main_worktree);
         assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
     }
 
@@ -985,17 +1017,17 @@ mod tests {
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
-        // Shepherds first (sorted by issue number / branch)
+        // RepoMain first (sorted by issue number / branch)
         let shepherd_rows: Vec<&WorktreeRow> = rows
             .iter()
-            .filter(|r| r.display_group == DisplayGroup::Shepherd)
+            .filter(|r| r.display_group == DisplayGroup::RepoMain)
             .collect();
         assert_eq!(shepherd_rows.len(), 2);
 
         // ReadyToMerge before Other
         let non_shepherd: Vec<&WorktreeRow> = rows
             .iter()
-            .filter(|r| r.display_group != DisplayGroup::Shepherd)
+            .filter(|r| r.display_group != DisplayGroup::RepoMain)
             .collect();
         assert_eq!(non_shepherd[0].display_group, DisplayGroup::ReadyToMerge);
         assert_eq!(non_shepherd[0].issue_number, Some(100));
@@ -1070,33 +1102,30 @@ mod tests {
     }
 
     #[test]
-    fn hook_state_working_maps_to_claude_is_working() {
+    fn hook_state_working_maps_to_claude_working() {
         let s = session("repo_47", "/path", vec![]);
         let states = vec![fresh_state_file("repo_47", "working")];
-        let info = session_info_from(&s, &states);
-        assert_eq!(info.claude_state, crate::claude_state::ClaudeState::Working);
-        assert!(info.claude_is_working);
-        assert!(!info.claude_needs_input);
+        let info = enrich_session(&s, &states);
+        let claude = info.claude.as_ref().unwrap();
+        assert_eq!(claude.status, crate::claude_state::ClaudeState::Working);
     }
 
     #[test]
-    fn hook_state_idle_maps_to_has_claude_active() {
+    fn hook_state_idle_maps_to_claude_idle() {
         let s = session("repo_47", "/path", vec![]);
         let states = vec![fresh_state_file("repo_47", "idle")];
-        let info = session_info_from(&s, &states);
-        assert_eq!(info.claude_state, crate::claude_state::ClaudeState::Idle);
-        assert!(info.has_claude_active);
-        assert!(!info.claude_is_working);
-        assert!(!info.claude_needs_input);
+        let info = enrich_session(&s, &states);
+        let claude = info.claude.as_ref().unwrap();
+        assert_eq!(claude.status, crate::claude_state::ClaudeState::Idle);
     }
 
     #[test]
-    fn hook_state_input_maps_to_claude_needs_input() {
+    fn hook_state_input_maps_to_claude_input() {
         let s = session("repo_47", "/path", vec![]);
         let states = vec![fresh_state_file("repo_47", "input")];
-        let info = session_info_from(&s, &states);
-        assert_eq!(info.claude_state, crate::claude_state::ClaudeState::Input);
-        assert!(info.claude_needs_input);
+        let info = enrich_session(&s, &states);
+        let claude = info.claude.as_ref().unwrap();
+        assert_eq!(claude.status, crate::claude_state::ClaudeState::Input);
     }
 
     #[test]
@@ -1106,10 +1135,11 @@ mod tests {
         state.context_window_pct = Some(73.0);
         state.cost_usd = Some(0.42);
         state.model = Some("opus".to_string());
-        let info = session_info_from(&s, &[state]);
-        assert_eq!(info.context_window_pct, Some(73.0));
-        assert_eq!(info.cost_usd, Some(0.42));
-        assert_eq!(info.model.as_deref(), Some("opus"));
+        let info = enrich_session(&s, &[state]);
+        let claude = info.claude.as_ref().unwrap();
+        assert_eq!(claude.context_window_pct, Some(73.0));
+        assert_eq!(claude.cost_usd, Some(0.42));
+        assert_eq!(claude.model.as_deref(), Some("opus"));
     }
 
     #[test]
@@ -1120,10 +1150,11 @@ mod tests {
             ..session("repo_47", "/path", vec!["claude"])
         };
         let states = vec![stale_state_file("repo_47", "idle")];
-        let info = session_info_from(&s, &states);
+        let info = enrich_session(&s, &states);
         // Should use scraping result (working), not stale hook (idle)
-        assert!(
-            info.claude_is_working,
+        assert_eq!(
+            info.claude.as_ref().unwrap().status,
+            crate::claude_state::ClaudeState::Working,
             "expected scraping fallback to detect working"
         );
     }
@@ -1134,9 +1165,10 @@ mod tests {
             last_output_lines: vec!["Do you want to proceed? (y/n)".to_string()],
             ..session("s", "/path", vec!["claude"])
         };
-        let info = session_info_from(&s, &[]);
-        assert!(info.claude_needs_input);
-        assert_eq!(info.context_window_pct, None);
+        let info = enrich_session(&s, &[]);
+        let claude = info.claude.as_ref().unwrap();
+        assert_eq!(claude.status, crate::claude_state::ClaudeState::Input);
+        assert_eq!(claude.context_window_pct, None);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use crate::derive::TaskRow;
+use crate::derive::WorktreeRow;
 use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ pub struct TransferState {
 /// State carried while the stale-worktree cleanup dialog is open.
 pub struct CleanupState {
     /// The list of stale task rows eligible for deletion.
-    pub stale: Vec<TaskRow>,
+    pub stale: Vec<WorktreeRow>,
     /// Set of worktree paths the user has toggled for deletion.
     pub selected: HashSet<String>,
     /// Index of the currently highlighted row in the cleanup list.

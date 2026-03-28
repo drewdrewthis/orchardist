@@ -151,8 +151,9 @@ pub fn derive_main_session_name(origin_path: &str, branch: Option<&str>) -> Stri
 
 /// Creates a new detached tmux session with the given name at the given directory.
 pub fn new_detached_session(name: &str, start_dir: &str) -> Result<()> {
+    let expanded_dir = shellexpand::tilde(start_dir);
     let output = Command::new("tmux")
-        .args(["new-session", "-d", "-s", name, "-c", start_dir])
+        .args(["new-session", "-d", "-s", name, "-c", expanded_dir.as_ref()])
         .output()
         .context("tmux new-session")?;
 
@@ -166,6 +167,50 @@ pub fn new_detached_session(name: &str, start_dir: &str) -> Result<()> {
 
     LOG.info(&format!("newDetachedSession: {} at {}", name, start_dir));
     Ok(())
+}
+
+/// Creates a detached tmux session that runs a specific command.
+///
+/// Unlike `new_detached_session` (which opens a shell), this creates a session
+/// whose initial window runs the given command. Used for standalone sessions.
+pub fn new_session_with_command(name: &str, start_dir: &str, command: &str) -> Result<()> {
+    let expanded_dir = shellexpand::tilde(start_dir);
+    let output = Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            expanded_dir.as_ref(),
+            command,
+        ])
+        .output()
+        .context("tmux new-session with command")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!(
+            "tmux new-session failed for '{}': {}",
+            name,
+            stderr.trim()
+        ));
+    }
+
+    LOG.info(&format!(
+        "newSessionWithCommand: {} at {} running '{}'",
+        name, start_dir, command
+    ));
+    Ok(())
+}
+
+/// Checks if a tmux session with the given name exists.
+pub fn session_exists(name: &str) -> bool {
+    Command::new("tmux")
+        .args(["has-session", "-t", name])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Kills the tmux session with the given name.

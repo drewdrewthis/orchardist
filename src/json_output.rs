@@ -13,6 +13,7 @@ use crate::derive::DisplayGroup;
 use crate::orchard_state::{
     IssueInfo, OrchardState, PrState, RepoState, SessionState, WorktreeState,
 };
+use crate::session::StandaloneSessionRow;
 
 // ---------------------------------------------------------------------------
 // JSON output types (versioned, camelCase)
@@ -26,6 +27,8 @@ use crate::orchard_state::{
 pub struct JsonOutput {
     /// Schema version number for forward compatibility.
     pub version: u32,
+    /// Standalone tmux sessions not tied to any worktree.
+    pub tmux_sessions: Vec<JsonSession>,
     /// All repositories in the output.
     pub repos: Vec<JsonRepo>,
     /// Reachability state keyed by SSH host name.
@@ -64,8 +67,8 @@ pub struct JsonWorktree {
     pub sessions: Vec<JsonSession>,
     /// Display group as a snake_case string (e.g., "needs_attention").
     pub display_group: String,
-    /// True when this is the repo's main/shepherd worktree.
-    pub is_shepherd: bool,
+    /// True when this is the repo's main worktree.
+    pub is_main_worktree: bool,
 }
 
 /// Issue information in JSON output.
@@ -104,23 +107,32 @@ pub struct JsonPr {
     pub unresolved_threads: u32,
 }
 
-/// Claude session information in JSON output.
+/// Session information in JSON output using the EnrichedSession shape.
 ///
-/// Represents an active Claude Code session: name, host, state (working/idle/input/none),
-/// and optional context window and cost metrics.
+/// Contains tmux session identity (name, host, status) and optional Claude enrichment.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSession {
     /// tmux session name.
     pub name: String,
-    /// Remote SSH host this session runs on, or `null` for local.
-    pub host: Option<String>,
+    /// Host as a string: "local" or the SSH target.
+    pub host: String,
+    /// Session status: "running" or "dead".
+    pub status: String,
+    /// Claude enrichment data, or `null` when no Claude process is active.
+    pub claude: Option<JsonClaudeInfo>,
+}
+
+/// Claude enrichment data in JSON output.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonClaudeInfo {
     /// Claude state as a string: "working", "idle", "input", or "none".
-    pub claude_state: String,
-    /// Context window usage percentage, if available.
-    pub context_window_pct: Option<f64>,
+    pub status: String,
     /// Cumulative session cost in USD, if available.
     pub cost_usd: Option<f64>,
+    /// Context window usage percentage, if available.
+    pub context_window_pct: Option<f64>,
     /// Model name (e.g., "opus", "sonnet"), if available.
     pub model: Option<String>,
 }
@@ -140,7 +152,7 @@ pub struct JsonHostState {
 
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
-        DisplayGroup::Shepherd => "shepherd",
+        DisplayGroup::RepoMain => "repo_main",
         DisplayGroup::Prioritized => "prioritized",
         DisplayGroup::NeedsAttention => "needs_attention",
         DisplayGroup::ClaudeWorking => "claude_working",
@@ -189,15 +201,23 @@ impl From<&PrState> for JsonPr {
 }
 
 impl From<&SessionState> for JsonSession {
-    /// Converts an internal `SessionState` to JSON output format, serializing Claude state to a string.
+    /// Converts an internal `SessionState` to JSON v3 format with nested `claude` field.
     fn from(s: &SessionState) -> Self {
+        let host = match &s.host {
+            Some(h) => h.clone(),
+            None => "local".to_string(),
+        };
+        let claude = s.claude.as_ref().map(|c| JsonClaudeInfo {
+            status: claude_state_str(c.status).to_string(),
+            cost_usd: c.cost_usd,
+            context_window_pct: c.context_window_pct,
+            model: c.model.clone(),
+        });
         Self {
             name: s.name.clone(),
-            host: s.host.clone(),
-            claude_state: claude_state_str(s.claude_state).to_string(),
-            context_window_pct: s.context_window_pct,
-            cost_usd: s.cost_usd,
-            model: s.model.clone(),
+            host,
+            status: "running".to_string(),
+            claude,
         }
     }
 }
@@ -213,7 +233,7 @@ impl From<&WorktreeState> for JsonWorktree {
             pr: ws.pr.as_ref().map(Into::into),
             sessions: ws.sessions.iter().map(Into::into).collect(),
             display_group: display_group_str(ws.display_group).to_string(),
-            is_shepherd: ws.is_shepherd,
+            is_main_worktree: ws.is_main_worktree,
         }
     }
 }
@@ -228,8 +248,33 @@ impl From<&RepoState> for JsonRepo {
     }
 }
 
+impl From<&StandaloneSessionRow> for JsonSession {
+    fn from(row: &StandaloneSessionRow) -> Self {
+        let host = match &row.session.tmux.host {
+            crate::session::Host::Local => "local".to_string(),
+            crate::session::Host::Remote(h) => h.clone(),
+        };
+        let status = match &row.session.tmux.status {
+            crate::session::SessionStatus::Running { .. } => "running",
+            crate::session::SessionStatus::Dead => "dead",
+        };
+        let claude = row.session.claude.as_ref().map(|c| JsonClaudeInfo {
+            status: claude_state_str(c.status).to_string(),
+            cost_usd: c.cost_usd,
+            context_window_pct: c.context_window_pct,
+            model: c.model.clone(),
+        });
+        Self {
+            name: row.session.tmux.name.clone(),
+            host,
+            status: status.to_string(),
+            claude,
+        }
+    }
+}
+
 impl From<&OrchardState> for JsonOutput {
-    /// Converts the unified `OrchardState` to JSON output, setting version to 2.
+    /// Converts the unified `OrchardState` to JSON output, setting version to 3.
     fn from(state: &OrchardState) -> Self {
         let hosts = state
             .hosts
@@ -245,7 +290,8 @@ impl From<&OrchardState> for JsonOutput {
             .collect();
 
         Self {
-            version: 2,
+            version: 3,
+            tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
         }
@@ -255,9 +301,8 @@ impl From<&OrchardState> for JsonOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claude_state::ClaudeState;
     use crate::derive::DisplayGroup;
-    use crate::orchard_state::{RepoState, SessionState, WorktreeState};
+    use crate::orchard_state::{ClaudeEnrichment, RepoState, SessionState, WorktreeState};
 
     fn empty_state() -> OrchardState {
         OrchardState::new()
@@ -273,14 +318,14 @@ mod tests {
             pr: None,
             sessions: vec![],
             display_group,
-            is_shepherd: false,
+            is_main_worktree: false,
         }
     }
 
     #[test]
-    fn from_orchard_state_produces_version_2() {
+    fn from_orchard_state_produces_version_3() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 2);
+        assert_eq!(output.version, 3);
     }
 
     #[test]
@@ -291,10 +336,10 @@ mod tests {
     }
 
     #[test]
-    fn display_group_shepherd_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::Shepherd);
+    fn display_group_repo_main_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::RepoMain);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "shepherd");
+        assert_eq!(jw.display_group, "repo_main");
     }
 
     #[test]
@@ -339,6 +384,7 @@ mod tests {
                 slug: "owner/repo".to_string(),
                 worktrees: vec![],
             }],
+            standalone_sessions: vec![],
             hosts: HashMap::new(),
         };
         let output = JsonOutput::from(&state);
@@ -352,20 +398,21 @@ mod tests {
     }
 
     #[test]
-    fn json_worktree_has_camelcase_is_shepherd_field() {
+    fn json_worktree_has_camelcase_is_main_worktree_field() {
         let state = OrchardState {
             repos: vec![RepoState {
                 slug: "owner/repo".to_string(),
-                worktrees: vec![make_worktree(DisplayGroup::Shepherd)],
+                worktrees: vec![make_worktree(DisplayGroup::RepoMain)],
             }],
+            standalone_sessions: vec![],
             hosts: HashMap::new(),
         };
         let output = JsonOutput::from(&state);
         let value = serde_json::to_value(&output).unwrap();
         let wt = &value["repos"][0]["worktrees"][0];
         assert!(
-            wt.get("isShepherd").is_some(),
-            "expected camelCase 'isShepherd' key"
+            wt.get("isMainWorktree").is_some(),
+            "expected camelCase 'isMainWorktree' key"
         );
         assert!(
             wt.get("displayGroup").is_some(),
@@ -374,19 +421,32 @@ mod tests {
     }
 
     #[test]
-    fn json_session_claude_state_serializes_as_string() {
+    fn json_session_claude_status_serializes_as_string() {
         let session = SessionState {
             name: "repo-claude".to_string(),
             host: None,
-            has_claude_active: true,
-            claude_is_working: true,
-            claude_needs_input: false,
-            claude_state: ClaudeState::Working,
-            context_window_pct: None,
-            cost_usd: None,
-            model: None,
+            claude: Some(ClaudeEnrichment {
+                status: crate::claude_state::ClaudeState::Working,
+                cost_usd: None,
+                context_window_pct: None,
+                model: None,
+            }),
         };
         let js = JsonSession::from(&session);
-        assert_eq!(js.claude_state, "working");
+        assert_eq!(js.host, "local");
+        assert_eq!(js.status, "running");
+        let claude = js.claude.unwrap();
+        assert_eq!(claude.status, "working");
+    }
+
+    #[test]
+    fn json_session_claude_null_when_no_claude() {
+        let session = SessionState {
+            name: "repo-main".to_string(),
+            host: None,
+            claude: None,
+        };
+        let js = JsonSession::from(&session);
+        assert!(js.claude.is_none());
     }
 }
