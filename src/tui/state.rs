@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::derive::WorktreeRow;
+use crate::heal::{FixResult, HealFinding, HealReport};
 use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,8 @@ pub enum ViewState {
     NewWorktree(NewWorktreeState),
     /// The keybinding help overlay.
     Help,
+    /// The heal results view.
+    Heal(HealState),
 }
 
 /// State carried while the delete-worktree confirmation dialog is open.
@@ -121,6 +124,24 @@ pub struct NewSessionState {
 pub struct NewWorktreeState {
     /// The branch name being typed by the user.
     pub branch: String,
+}
+
+/// State carried while the heal results view is displayed.
+pub struct HealState {
+    /// The full report from the last heal diagnosis.
+    ///
+    /// Retained for potential export or re-display logic; the `findings` field
+    /// contains a clone of `report.findings` for cursor-indexed rendering.
+    #[allow(dead_code)]
+    pub report: HealReport,
+    /// All findings as a flat list for cursor navigation.
+    pub findings: Vec<HealFinding>,
+    /// Index of the currently highlighted finding.
+    pub cursor: usize,
+    /// Whether a fix pass is currently running.
+    pub fixing: bool,
+    /// Results from the last `--fix` pass, if one has run.
+    pub fix_results: Option<Vec<FixResult>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,4 +205,8 @@ pub enum AppMsg {
         /// Warning message to display (e.g., setup script error details).
         warning: String,
     },
+    /// The heal diagnosis finished; carries the computed report.
+    HealDone(HealReport),
+    /// The heal fix pass finished; carries the per-action results.
+    HealFixDone(Vec<FixResult>),
 }

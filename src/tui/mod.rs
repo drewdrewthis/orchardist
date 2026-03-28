@@ -32,7 +32,7 @@ use crate::transfer;
 use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
-use state::{AppMsg, CleanupState, FilterMode, Phase, ViewState};
+use state::{AppMsg, CleanupState, FilterMode, HealState, Phase, ViewState};
 use std::path::Path;
 use std::process::Command;
 
@@ -460,6 +460,22 @@ impl App {
                     }
                     self.start_refresh();
                 }
+                AppMsg::HealDone(report) => {
+                    let findings = report.findings.clone();
+                    self.view = ViewState::Heal(HealState {
+                        report,
+                        findings,
+                        cursor: 0,
+                        fixing: false,
+                        fix_results: None,
+                    });
+                }
+                AppMsg::HealFixDone(fix_results) => {
+                    if let ViewState::Heal(ref mut hs) = self.view {
+                        hs.fixing = false;
+                        hs.fix_results = Some(fix_results);
+                    }
+                }
             }
         }
     }
@@ -523,6 +539,7 @@ impl App {
                     KeyCode::Char('f') => Some(Message::CycleFilter),
                     KeyCode::Char('/') => Some(Message::StartSearch),
                     KeyCode::Char('c') => Some(Message::Cleanup),
+                    KeyCode::Char('h') => Some(Message::Heal),
                     KeyCode::Left => Some(Message::PrevRepo),
                     KeyCode::Right => Some(Message::NextRepo),
                     KeyCode::Char('r') => Some(Message::Refresh),
@@ -594,6 +611,18 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Message::Cancel),
                 _ => None,
             },
+            ViewState::Heal(hs) => {
+                if hs.fixing {
+                    return None;
+                }
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => Some(Message::HealUp),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Message::HealDown),
+                    KeyCode::Char('f') => Some(Message::HealFix),
+                    KeyCode::Char('q') | KeyCode::Esc => Some(Message::HealBack),
+                    _ => None,
+                }
+            }
         }
     }
 
@@ -962,6 +991,37 @@ impl App {
                 }
                 ok()
             }
+            Message::Heal => {
+                self.enter_heal_view();
+                ok()
+            }
+            Message::HealUp => {
+                if let ViewState::Heal(hs) = &mut self.view {
+                    hs.cursor = hs.cursor.saturating_sub(1);
+                }
+                ok()
+            }
+            Message::HealDown => {
+                if let ViewState::Heal(hs) = &mut self.view
+                    && !hs.findings.is_empty()
+                    && hs.cursor < hs.findings.len() - 1
+                {
+                    hs.cursor += 1;
+                }
+                ok()
+            }
+            Message::HealFix => {
+                if let ViewState::Heal(hs) = &mut self.view {
+                    let findings = hs.findings.clone();
+                    hs.fixing = true;
+                    self.start_heal_fix(findings);
+                }
+                ok()
+            }
+            Message::HealBack => {
+                self.view = ViewState::List;
+                ok()
+            }
         }
     }
 
@@ -986,6 +1046,7 @@ impl App {
             ViewState::NewSession(_) => "NewSession",
             ViewState::NewWorktree(_) => "NewWorktree",
             ViewState::Help => "Help",
+            ViewState::Heal(_) => "Heal",
         }
     }
 
@@ -1012,6 +1073,7 @@ impl App {
                 self.render_new_worktree(nw, f);
             }
             ViewState::Help => self.render_help(f),
+            ViewState::Heal(hs) => self.render_heal(hs, f),
         }
     }
 
@@ -1199,6 +1261,39 @@ impl App {
                     let _ = tx.send(AppMsg::CreateWorktreeDone { session_name });
                 }
             }
+        });
+    }
+
+    /// Starts a background heal diagnosis run and transitions to a loading state.
+    pub(crate) fn start_heal(&self) {
+        let tx = self.tx.clone();
+        let config = self.global_config.clone();
+        std::thread::spawn(move || {
+            let sessions = crate::tmux::list_tmux_sessions();
+            let claude_states = crate::heal::gather_claude_states();
+            let cache_files = crate::heal::gather_cache_files();
+            let known_slugs: Vec<String> = config.repos.iter().map(|r| r.slug.clone()).collect();
+
+            // Build HealWorktree list from the cache.
+            let worktrees = build_heal_worktrees(&config);
+
+            let report = crate::heal::diagnose(
+                &sessions,
+                &worktrees,
+                &claude_states,
+                &cache_files,
+                &known_slugs,
+            );
+            let _ = tx.send(AppMsg::HealDone(report));
+        });
+    }
+
+    /// Applies fixes from the current heal state in a background thread.
+    pub(crate) fn start_heal_fix(&self, findings: Vec<crate::heal::HealFinding>) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let results = crate::heal::apply_fixes(&findings);
+            let _ = tx.send(AppMsg::HealFixDone(results));
         });
     }
 
@@ -1552,6 +1647,58 @@ fn ensure_standalone_sessions(config: &global_config::GlobalConfig) -> anyhow::R
 /// authoritative cache-reading and derivation logic.
 fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::WorktreeRow> {
     crate::build_state::build_task_rows(config)
+}
+
+// ---------------------------------------------------------------------------
+// Heal worktree builder
+// ---------------------------------------------------------------------------
+
+/// Builds `HealWorktree` entries from all configured repo caches.
+///
+/// Reads the worktrees and PRs cache for each repo to produce the lightweight
+/// `HealWorktree` structs needed by `heal::diagnose`.
+fn build_heal_worktrees(config: &global_config::GlobalConfig) -> Vec<crate::heal::HealWorktree> {
+    let mut result = Vec::new();
+    for repo in &config.repos {
+        let worktrees = cache::read_cache::<cache::CachedWorktree>(&cache::cache_path(
+            repo.owner(),
+            repo.repo_name(),
+            "worktrees",
+        ))
+        .entries;
+        let prs = cache::read_cache::<cache::CachedPr>(&cache::cache_path(
+            repo.owner(),
+            repo.repo_name(),
+            "prs",
+        ))
+        .entries;
+        let issues = cache::read_cache::<cache::CachedIssue>(&cache::cache_path(
+            repo.owner(),
+            repo.repo_name(),
+            "issues",
+        ))
+        .entries;
+
+        for wt in worktrees.iter().filter(|w| !w.is_bare) {
+            let pr = prs.iter().find(|p| p.branch == wt.branch);
+            let issue_number = crate::github::extract_issue_number(&wt.branch);
+            let issue_state = issue_number
+                .and_then(|n| issues.iter().find(|i| i.number == n))
+                .map(|i| i.state.clone());
+
+            let expected_session_name = tmux::derive_main_session_name(&wt.path, Some(&wt.branch));
+
+            result.push(crate::heal::HealWorktree {
+                path: wt.path.clone(),
+                branch: wt.branch.clone(),
+                expected_session_name: Some(expected_session_name),
+                pr_state: pr.map(|p| p.state.clone()),
+                pr_number: pr.map(|p| p.number),
+                issue_state,
+            });
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------

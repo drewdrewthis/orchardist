@@ -12,6 +12,7 @@ use crossterm::{
 };
 use orchard::build_state;
 use orchard::global_config;
+use orchard::heal;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::setup_remote;
@@ -24,11 +25,13 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut json_flag = false;
+    let mut fix_flag = false;
     let mut command = String::new();
 
     for arg in &args[1..] {
         match arg.as_str() {
             "--json" => json_flag = true,
+            "--fix" => fix_flag = true,
             "--version" | "-V" => {
                 println!("orchard {}", env!("CARGO_PKG_VERSION"));
                 return;
@@ -55,6 +58,7 @@ fn main() {
         "init" => handle_init(),
         "upgrade" => handle_upgrade(),
         "setup-remote" => handle_setup_remote(&args),
+        "heal" => handle_heal(fix_flag, json_flag),
         _ => {
             if json_flag {
                 handle_json();
@@ -99,6 +103,85 @@ fn handle_upgrade() {
     eprintln!(
         "Download the latest from: https://github.com/drewdrewthis/orchard-rs/releases/latest"
     );
+}
+
+/// Runs the heal command in CLI mode (non-TUI).
+///
+/// Gathers live state, diagnoses the environment, and prints a report.
+/// When `fix` is true, applies all actionable fixes. When `json` is true,
+/// outputs machine-readable JSON instead of the formatted report.
+fn handle_heal(fix: bool, json: bool) {
+    let config = global_config::load_global_config();
+    let sessions = orchard::tmux::list_tmux_sessions();
+    let claude_states = heal::gather_claude_states();
+    let cache_files = heal::gather_cache_files();
+    let known_slugs: Vec<String> = config.repos.iter().map(|r| r.slug.clone()).collect();
+
+    // Build HealWorktree entries from all configured repo caches.
+    let worktrees = build_heal_worktrees_for_cli(&config);
+
+    let report = heal::diagnose(
+        &sessions,
+        &worktrees,
+        &claude_states,
+        &cache_files,
+        &known_slugs,
+    );
+
+    if json {
+        let output = serde_json::to_string_pretty(&report).unwrap_or_else(|e| {
+            eprintln!("Error serializing JSON: {e}");
+            std::process::exit(1);
+        });
+        println!("{output}");
+        return;
+    }
+
+    let fix_results = if fix {
+        Some(heal::apply_fixes(&report.findings))
+    } else {
+        None
+    };
+
+    println!("{}", heal::format_report(&report, fix_results.as_deref()));
+}
+
+/// Builds `HealWorktree` entries for the CLI path (no TUI app state available).
+fn build_heal_worktrees_for_cli(config: &global_config::GlobalConfig) -> Vec<heal::HealWorktree> {
+    let mut result = Vec::new();
+    for repo in &config.repos {
+        let worktrees = orchard::cache::read_cache::<orchard::cache::CachedWorktree>(
+            &orchard::cache::cache_path(repo.owner(), repo.repo_name(), "worktrees"),
+        )
+        .entries;
+        let prs = orchard::cache::read_cache::<orchard::cache::CachedPr>(
+            &orchard::cache::cache_path(repo.owner(), repo.repo_name(), "prs"),
+        )
+        .entries;
+        let issues = orchard::cache::read_cache::<orchard::cache::CachedIssue>(
+            &orchard::cache::cache_path(repo.owner(), repo.repo_name(), "issues"),
+        )
+        .entries;
+
+        for wt in worktrees.iter().filter(|w| !w.is_bare) {
+            let pr = prs.iter().find(|p| p.branch == wt.branch);
+            let issue_number = orchard::github::extract_issue_number(&wt.branch);
+            let issue_state = issue_number
+                .and_then(|n| issues.iter().find(|i| i.number == n))
+                .map(|i| i.state.clone());
+            let expected_session_name =
+                orchard::tmux::derive_main_session_name(&wt.path, Some(&wt.branch));
+            result.push(heal::HealWorktree {
+                path: wt.path.clone(),
+                branch: wt.branch.clone(),
+                expected_session_name: Some(expected_session_name),
+                pr_state: pr.map(|p| p.state.clone()),
+                pr_number: pr.map(|p| p.number),
+                issue_state,
+            });
+        }
+    }
+    result
 }
 
 fn handle_json() {
@@ -188,6 +271,9 @@ fn print_usage() {
   orchard init                   Interactive setup wizard for popup mode
   orchard setup-remote <host>    Provision a remote host for orchard
   orchard upgrade                Upgrade to the latest version
+  orchard heal                   Audit and repair drifted state (dry run)
+  orchard heal --fix             Apply all safe automatic repairs
+  orchard heal --json            Output health check results as JSON
 
 Options:
   --version, -V  Print version and exit
@@ -199,6 +285,7 @@ Navigation:
   Enter/t tmux into worktree (creates session if needed, then exits)
   d       Delete selected worktree
   c       Cleanup merged worktrees
+  h       Run heal check
   r       Refresh list
   q/Esc   Close popup (no switch)"#
     );
