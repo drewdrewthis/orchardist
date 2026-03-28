@@ -8,17 +8,19 @@ use std::collections::HashMap;
 
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
-use crate::session::{Host, EnrichedSession};
+use crate::session::{Host, EnrichedSession, StandaloneSessionRow};
 
 // ---------------------------------------------------------------------------
 // Top-level state
 // ---------------------------------------------------------------------------
 
-/// The unified state model for Orchard. Contains all repos and host reachability.
+/// The unified state model for Orchard. Contains all repos, standalone sessions, and host reachability.
 #[derive(Debug, Clone)]
 pub struct OrchardState {
     /// All repositories known to Orchard.
     pub repos: Vec<RepoState>,
+    /// Standalone tmux sessions not tied to any worktree.
+    pub standalone_sessions: Vec<StandaloneSessionRow>,
     /// Reachability state keyed by SSH host name.
     pub hosts: HashMap<String, HostState>,
 }
@@ -28,6 +30,7 @@ impl OrchardState {
     pub fn new() -> Self {
         Self {
             repos: Vec::new(),
+            standalone_sessions: Vec::new(),
             hosts: HashMap::new(),
         }
     }
@@ -269,6 +272,7 @@ mod tests {
             .collect();
         OrchardState {
             repos,
+            standalone_sessions: Vec::new(),
             hosts: std::collections::HashMap::new(),
         }
     }

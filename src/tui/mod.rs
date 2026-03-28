@@ -24,6 +24,7 @@ use crate::derive;
 use crate::git;
 use crate::global_config;
 use crate::remote;
+use crate::session::StandaloneSessionRow;
 use crate::tmux;
 use crate::transfer;
 use crate::types::Worktree;
@@ -76,6 +77,8 @@ pub struct App {
 
     // Derived task view from caches
     task_rows: Vec<derive::TaskRow>,
+    /// Standalone tmux sessions from global config, enriched with live state.
+    standalone_sessions: Vec<StandaloneSessionRow>,
     global_config: global_config::GlobalConfig,
     /// Index into `global_config.repos`: 0 = all repos, 1+ = specific repo.
     active_repo_index: usize,
@@ -108,6 +111,8 @@ impl App {
         let repo_name = git::get_repo_name();
         let global_cfg = global_config::load_global_config();
         let task_rows = derive_from_all_caches(&global_cfg);
+        let state = crate::build_state::build_state(&global_cfg);
+        let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
 
         let view = if command == "cleanup" {
@@ -135,6 +140,7 @@ impl App {
             view,
             theme: Theme::default(),
             task_rows,
+            standalone_sessions,
             global_config: global_cfg,
             active_repo_index: 0,
             show_branch_column: false,
@@ -242,11 +248,14 @@ impl App {
                 AppMsg::CacheRefreshed => {
                     let old_states = std::mem::take(&mut self.previous_worktree_states);
                     self.task_rows = derive_from_all_caches(&self.global_config);
+                    let state = crate::build_state::build_state(&self.global_config);
+                    self.standalone_sessions = state.standalone_sessions;
                     self.loading = false;
                     self.refreshing = false;
                     self.error = None;
-                    if self.cursor >= self.task_rows.len() && !self.task_rows.is_empty() {
-                        self.cursor = self.task_rows.len() - 1;
+                    let total = self.standalone_sessions.len() + self.task_rows.len();
+                    if total > 0 && self.cursor >= total {
+                        self.cursor = total - 1;
                     }
                     // Populate cleanup stale list if in cleanup view with empty stale.
                     if let ViewState::Cleanup(ref mut cs) = self.view
@@ -374,12 +383,18 @@ impl App {
                     self.host_reachable.insert(host, reachable);
                 }
                 AppMsg::PaneContent(session_name, content) => {
-                    // Accept pane content only when the session matches the current
-                    // task row's sessions.
-                    let matches = self
-                        .task_rows
-                        .get(self.cursor)
-                        .is_some_and(|row| row.sessions.iter().any(|s| s.tmux.name == session_name));
+                    // Accept pane content when session matches the current row (standalone or worktree).
+                    let standalone_count = self.standalone_sessions.len();
+                    let matches = if self.cursor < standalone_count {
+                        self.standalone_sessions
+                            .get(self.cursor)
+                            .is_some_and(|ss| ss.session.tmux.name == session_name)
+                    } else {
+                        let wt_cursor = self.cursor - standalone_count;
+                        self.task_rows
+                            .get(wt_cursor)
+                            .is_some_and(|row| row.sessions.iter().any(|s| s.tmux.name == session_name))
+                    };
                     if matches {
                         self.pane_content = content;
                     }
@@ -641,6 +656,7 @@ impl App {
             view: ViewState::List,
             theme: Theme::default(),
             task_rows,
+            standalone_sessions: Vec::new(),
             global_config: global_config::GlobalConfig::default(),
             active_repo_index: 0,
             show_branch_column: false,
@@ -685,6 +701,9 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     terminal.clear()?;
 
     let mut app = App::new(command);
+
+    // Start standalone sessions with start_on_launch = true.
+    ensure_standalone_sessions(&app.global_config)?;
 
     // Initial data fetch in background
     app.start_refresh();
@@ -926,6 +945,29 @@ pub(crate) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
     if any_created {
         let _ = cache_sources::refresh_tmux_sessions(None);
     }
+}
+
+/// Creates standalone tmux sessions with `start_on_launch: true` if they don't already exist.
+///
+/// Returns an error if any session command fails immediately — broken config is a hard failure.
+fn ensure_standalone_sessions(config: &global_config::GlobalConfig) -> anyhow::Result<()> {
+    for session_cfg in &config.tmux_sessions {
+        if !session_cfg.start_on_launch {
+            continue;
+        }
+        if tmux::session_exists(&session_cfg.name) {
+            continue;
+        }
+        tmux::new_session_with_command(&session_cfg.name, &session_cfg.cwd, &session_cfg.command)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start standalone session '{}': {}",
+                    session_cfg.name,
+                    e
+                )
+            })?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

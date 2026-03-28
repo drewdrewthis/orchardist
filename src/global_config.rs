@@ -5,11 +5,13 @@
 //! Machine-local preferences live here rather than per-repo config because they
 //! describe the *user's environment*, not the repository.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::logger::LOG;
+use crate::session::StandaloneConfig;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,6 +90,12 @@ pub struct GlobalConfig {
     /// - `"com.mitchellh.ghostty"` — Ghostty
     #[serde(default = "default_terminal_app")]
     pub terminal_app: String,
+    /// Standalone tmux sessions not tied to any worktree (e.g. a shepherd session).
+    ///
+    /// Each entry defines a named tmux session with a command and working directory.
+    /// Sessions with `start_on_launch: true` are auto-created when orchard starts.
+    #[serde(default)]
+    pub tmux_sessions: Vec<StandaloneConfig>,
 }
 
 impl Default for GlobalConfig {
@@ -95,6 +103,7 @@ impl Default for GlobalConfig {
         GlobalConfig {
             repos: Vec::new(),
             terminal_app: default_terminal_app(),
+            tmux_sessions: Vec::new(),
         }
     }
 }
@@ -258,6 +267,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         repos: Vec<RawRepo>,
         #[serde(default = "default_terminal_app")]
         terminal_app: String,
+        #[serde(default)]
+        tmux_sessions: Vec<StandaloneConfig>,
     }
 
     let raw: RawGlobalConfig = match serde_json::from_slice(&data) {
@@ -308,13 +319,29 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         })
         .collect();
 
+    // Validate: reject duplicate standalone session names.
+    let tmux_sessions = raw.tmux_sessions;
+    let mut seen_names: HashSet<String> = HashSet::new();
+    for session in &tmux_sessions {
+        if !seen_names.insert(session.name.clone()) {
+            LOG.warn(&format!(
+                "global_config: duplicate standalone session name '{}' in {}",
+                session.name,
+                path.display()
+            ));
+            return GlobalConfig::default();
+        }
+    }
+
     let cfg = GlobalConfig {
         repos,
         terminal_app: raw.terminal_app,
+        tmux_sessions,
     };
     LOG.info(&format!(
-        "global_config: loaded {} repo(s) from {}",
+        "global_config: loaded {} repo(s), {} standalone session(s) from {}",
         cfg.repos.len(),
+        cfg.tmux_sessions.len(),
         path.display()
     ));
     cfg
@@ -356,6 +383,7 @@ fn fallback_single_repo() -> GlobalConfig {
     GlobalConfig {
         repos: vec![repo],
         terminal_app: default_terminal_app(),
+        tmux_sessions: Vec::new(),
     }
 }
 
@@ -693,6 +721,7 @@ mod tests {
         let cfg = GlobalConfig {
             repos: vec![],
             terminal_app: "dev.warp.Warp-Stable".to_string(),
+            tmux_sessions: vec![],
         };
         let json = serde_json::to_string(&cfg).unwrap();
 
@@ -727,6 +756,7 @@ mod tests {
         let cfg = GlobalConfig {
             repos: vec![],
             terminal_app: "org.alacritty".to_string(),
+            tmux_sessions: vec![],
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let mut f = std::fs::File::create(&path).unwrap();

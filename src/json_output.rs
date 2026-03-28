@@ -13,6 +13,7 @@ use crate::derive::DisplayGroup;
 use crate::orchard_state::{
     IssueInfo, OrchardState, PrState, RepoState, SessionState, WorktreeState,
 };
+use crate::session::StandaloneSessionRow;
 
 // ---------------------------------------------------------------------------
 // JSON output types (versioned, camelCase)
@@ -26,6 +27,8 @@ use crate::orchard_state::{
 pub struct JsonOutput {
     /// Schema version number for forward compatibility.
     pub version: u32,
+    /// Standalone tmux sessions not tied to any worktree.
+    pub tmux_sessions: Vec<JsonSession>,
     /// All repositories in the output.
     pub repos: Vec<JsonRepo>,
     /// Reachability state keyed by SSH host name.
@@ -245,6 +248,31 @@ impl From<&RepoState> for JsonRepo {
     }
 }
 
+impl From<&StandaloneSessionRow> for JsonSession {
+    fn from(row: &StandaloneSessionRow) -> Self {
+        let host = match &row.session.tmux.host {
+            crate::session::Host::Local => "local".to_string(),
+            crate::session::Host::Remote(h) => h.clone(),
+        };
+        let status = match &row.session.tmux.status {
+            crate::session::SessionStatus::Running { .. } => "running",
+            crate::session::SessionStatus::Dead => "dead",
+        };
+        let claude = row.session.claude.as_ref().map(|c| JsonClaudeInfo {
+            status: claude_state_str(c.status).to_string(),
+            cost_usd: c.cost_usd,
+            context_window_pct: c.context_window_pct,
+            model: c.model.clone(),
+        });
+        Self {
+            name: row.session.tmux.name.clone(),
+            host,
+            status: status.to_string(),
+            claude,
+        }
+    }
+}
+
 impl From<&OrchardState> for JsonOutput {
     /// Converts the unified `OrchardState` to JSON output, setting version to 3.
     fn from(state: &OrchardState) -> Self {
@@ -263,6 +291,7 @@ impl From<&OrchardState> for JsonOutput {
 
         Self {
             version: 3,
+            tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
         }
@@ -355,6 +384,7 @@ mod tests {
                 slug: "owner/repo".to_string(),
                 worktrees: vec![],
             }],
+            standalone_sessions: vec![],
             hosts: HashMap::new(),
         };
         let output = JsonOutput::from(&state);
@@ -374,6 +404,7 @@ mod tests {
                 slug: "owner/repo".to_string(),
                 worktrees: vec![make_worktree(DisplayGroup::RepoMain)],
             }],
+            standalone_sessions: vec![],
             hosts: HashMap::new(),
         };
         let output = JsonOutput::from(&state);

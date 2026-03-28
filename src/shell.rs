@@ -45,7 +45,7 @@ const MARKER_START: &str = "# >>> orchard >>>";
 const MARKER_END: &str = "# <<< orchard <<<";
 
 /// Total number of wizard steps — update when adding or removing steps.
-const TOTAL_STEPS: usize = 8;
+const TOTAL_STEPS: usize = 9;
 
 /// Runs the interactive `orchard init` wizard.
 ///
@@ -86,9 +86,15 @@ pub fn run_init_wizard() -> Result<(), String> {
     // Step 8: Select terminal app for notifications (macOS only).
     let terminal_app = select_terminal_app_step();
 
+    // Step 9: Offer shepherd session setup.
+    let shepherd_config = suggest_shepherd_session_step();
+
     // Persist choices to global config.
     let mut cfg = crate::global_config::load_global_config();
     cfg.terminal_app = terminal_app.clone();
+    if let Some(shepherd) = shepherd_config {
+        cfg.tmux_sessions.push(shepherd);
+    }
     if let Err(e) = crate::global_config::save_global_config(&cfg) {
         eprintln!("  {YELLOW}Warning: could not save config: {e}{RESET}");
     }
@@ -425,6 +431,27 @@ fn select_terminal_app_step() -> String {
 
     eprintln!("{BOLD}{CYAN}[8/{TOTAL_STEPS}] Terminal app for notifications{RESET}");
     prompt_terminal_app()
+}
+
+/// Step 9: Offer to configure a shepherd tmux session.
+///
+/// Returns `Some(StandaloneConfig)` if the user accepts, `None` if declined.
+fn suggest_shepherd_session_step() -> Option<crate::session::StandaloneConfig> {
+    eprintln!("{BOLD}{CYAN}[9/{TOTAL_STEPS}] Shepherd session (optional){RESET}");
+    eprintln!("  A shepherd is a persistent tmux session for cross-repo orchestration.");
+    eprintln!("  It can run a Claude agent that monitors all your repos via Telegram/Discord.");
+    eprintln!();
+    if prompt_yn("  Configure a shepherd session? [y/N]", false) {
+        Some(crate::session::StandaloneConfig {
+            name: "shepherd".to_string(),
+            command: "claude --agent shepherd".to_string(),
+            cwd: "~/.config/orchard".to_string(),
+            start_on_launch: true,
+        })
+    } else {
+        eprintln!("  Skipped. You can add one later in ~/.config/orchard/config.json");
+        None
+    }
 }
 
 /// Presents a numbered terminal menu and returns the chosen bundle ID.

@@ -49,6 +49,19 @@ enum TaskEnterAction {
         branch: Option<String>,
         host: Option<String>,
     },
+    /// Attach to or restart a standalone session.
+    JoinStandalone {
+        session_name: String,
+        command: String,
+        cwd: String,
+    },
+}
+
+/// Returns whether the cursor is currently on a standalone session row.
+///
+/// Standalone sessions occupy indices 0..standalone_count before worktree rows.
+fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bool {
+    cursor < standalone_count
 }
 
 impl DisplayGroup {
@@ -319,6 +332,39 @@ fn claude_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
     )
 }
 
+/// Returns Claude status text for a standalone session's single EnrichedSession.
+fn standalone_claude_status(session: &crate::session::EnrichedSession) -> (String, Style) {
+    let Some(ref claude) = session.claude else {
+        return (
+            "\u{25cb} none".to_string(),
+            Style::default().fg(Color::DarkGray),
+        );
+    };
+    use crate::claude_state::ClaudeState;
+    let ctx_suffix = claude
+        .context_window_pct
+        .map(|p| format!(" {}%", p as u32))
+        .unwrap_or_default();
+    match claude.status {
+        ClaudeState::Input => (
+            format!("\u{2757} input{}", ctx_suffix),
+            Style::default().fg(Color::Red),
+        ),
+        ClaudeState::Working => (
+            format!("\u{26a1} active{}", ctx_suffix),
+            Style::default().fg(Color::Green),
+        ),
+        ClaudeState::Idle => (
+            format!("\u{25cf} idle{}", ctx_suffix),
+            Style::default().fg(Color::Yellow),
+        ),
+        ClaudeState::None => (
+            "\u{25cb} none".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    }
+}
+
 impl App {
     pub(crate) fn handle_list_key(&mut self, key: KeyEvent) -> bool {
         // Always delegate to the task list handler — task rows are the only data source.
@@ -355,13 +401,15 @@ impl App {
             return false;
         }
 
-        let visible_count = visible_tasks_filtered(
+        let standalone_count = self.standalone_sessions.len();
+        let worktree_visible_count = visible_tasks_filtered(
             &self.task_rows,
             &self.filter_mode,
             &self.search_text,
             self.active_repo_slug(),
         )
         .len();
+        let visible_count = standalone_count + worktree_visible_count;
 
         match key.code {
             // Digit jump 1-9: jump to flat index
@@ -388,35 +436,46 @@ impl App {
             }
             KeyCode::Enter => {
                 // Switch to the task's session, or create a worktree + session if none exist.
-                // Compute tasks, extract owned data, then drop before calling &mut self methods.
-                let tasks = visible_tasks_filtered(
-                    &self.task_rows,
-                    &self.filter_mode,
-                    &self.search_text,
-                    self.active_repo_slug(),
-                );
-                let action = tasks.get(self.cursor).map(|vt| {
-                    if let Some(session) = vt.row.sessions.first() {
-                        let host = match &session.tmux.host {
-                            crate::session::Host::Local => None,
-                            crate::session::Host::Remote(h) => Some(h.clone()),
-                        };
-                        TaskEnterAction::JoinSession {
-                            session_name: session.tmux.name.clone(),
-                            worktree_path: vt.row.worktree_path.clone(),
-                            branch: Some(vt.row.branch.clone()),
-                            host,
+                // Handle standalone sessions first (they occupy indices 0..standalone_count).
+                let action = if cursor_is_standalone(self.cursor, standalone_count) {
+                    self.standalone_sessions.get(self.cursor).map(|ss| {
+                        TaskEnterAction::JoinStandalone {
+                            session_name: ss.session.tmux.name.clone(),
+                            command: ss.config.command.clone(),
+                            cwd: ss.config.cwd.clone(),
                         }
-                    } else {
-                        TaskEnterAction::CreateSession {
-                            worktree_path: vt.row.worktree_path.clone(),
-                            branch: Some(vt.row.branch.clone()),
-                            host: vt.row.worktree_host.clone(),
+                    })
+                } else {
+                    let worktree_cursor = self.cursor - standalone_count;
+                    let tasks = visible_tasks_filtered(
+                        &self.task_rows,
+                        &self.filter_mode,
+                        &self.search_text,
+                        self.active_repo_slug(),
+                    );
+                    let action = tasks.get(worktree_cursor).map(|vt| {
+                        if let Some(session) = vt.row.sessions.first() {
+                            let host = match &session.tmux.host {
+                                crate::session::Host::Local => None,
+                                crate::session::Host::Remote(h) => Some(h.clone()),
+                            };
+                            TaskEnterAction::JoinSession {
+                                session_name: session.tmux.name.clone(),
+                                worktree_path: vt.row.worktree_path.clone(),
+                                branch: Some(vt.row.branch.clone()),
+                                host,
+                            }
+                        } else {
+                            TaskEnterAction::CreateSession {
+                                worktree_path: vt.row.worktree_path.clone(),
+                                branch: Some(vt.row.branch.clone()),
+                                host: vt.row.worktree_host.clone(),
+                            }
                         }
-                    }
-                });
-                // Drop tasks (and its borrow of task_rows) before calling &mut self methods.
-                drop(tasks);
+                    });
+                    drop(tasks);
+                    action
+                };
                 match action {
                     None => false,
                     Some(TaskEnterAction::JoinSession {
@@ -478,17 +537,51 @@ impl App {
                             None,
                         )
                     }
+                    Some(TaskEnterAction::JoinStandalone {
+                        session_name,
+                        command,
+                        cwd,
+                    }) => {
+                        // Standalone: if running, attach; if dead, restart with command.
+                        if tmux::session_exists(&session_name) {
+                            self.switch_target = Some(session_name);
+                            true
+                        } else {
+                            match tmux::new_session_with_command(
+                                &session_name,
+                                &cwd,
+                                &command,
+                            ) {
+                                Ok(()) => {
+                                    self.switch_target = Some(session_name);
+                                    true
+                                }
+                                Err(e) => {
+                                    self.warning = Some((
+                                        format!("Failed to start '{}': {}", session_name, e),
+                                        Instant::now(),
+                                    ));
+                                    false
+                                }
+                            }
+                        }
+                    }
                 }
             }
             KeyCode::Char('o') => {
+                if cursor_is_standalone(self.cursor, standalone_count) {
+                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                    return false;
+                }
                 // Open PR URL in browser for the selected task.
+                let worktree_cursor = self.cursor - standalone_count;
                 let visible = visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
-                if let Some(vt) = visible.get(self.cursor)
+                if let Some(vt) = visible.get(worktree_cursor)
                     && let Some(ref pr) = vt.row.pr
                 {
                     // Construct PR URL from repo_slug and PR number.
@@ -498,14 +591,19 @@ impl App {
                 false
             }
             KeyCode::Char('i') => {
+                if cursor_is_standalone(self.cursor, standalone_count) {
+                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                    return false;
+                }
                 // Open issue URL in browser for the selected task.
+                let worktree_cursor = self.cursor - standalone_count;
                 let visible = visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
-                if let Some(vt) = visible.get(self.cursor)
+                if let Some(vt) = visible.get(worktree_cursor)
                     && let Some(num) = vt.row.issue_number
                 {
                     let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
@@ -518,13 +616,18 @@ impl App {
                 false
             }
             KeyCode::Char('d') => {
+                if cursor_is_standalone(self.cursor, standalone_count) {
+                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                    return false;
+                }
+                let worktree_cursor = self.cursor - standalone_count;
                 let visible = visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
-                if let Some(vt) = visible.get(self.cursor) {
+                if let Some(vt) = visible.get(worktree_cursor) {
                     let wt = worktree_from_task_row(vt.row);
                     self.view = ViewState::ConfirmDelete(DeleteState {
                         target: wt,
@@ -535,13 +638,18 @@ impl App {
                 false
             }
             KeyCode::Char('p') => {
+                if cursor_is_standalone(self.cursor, standalone_count) {
+                    self.warning = Some(("This action requires a worktree".to_string(), Instant::now()));
+                    return false;
+                }
+                let worktree_cursor = self.cursor - standalone_count;
                 let visible = visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
-                if let Some(vt) = visible.get(self.cursor) {
+                if let Some(vt) = visible.get(worktree_cursor) {
                     let wt = worktree_from_task_row(vt.row);
                     self.view = ViewState::Transfer(TransferState {
                         target: wt,
@@ -600,13 +708,32 @@ impl App {
     /// Fetches pane content for the task at the current cursor position.
     pub(crate) fn fetch_task_pane_content(&mut self) {
         self.pane_content.clear();
+
+        // Handle standalone sessions first.
+        let standalone_count = self.standalone_sessions.len();
+        if cursor_is_standalone(self.cursor, standalone_count) {
+            if let Some(ss) = self.standalone_sessions.get(self.cursor) {
+                if matches!(ss.session.tmux.status, crate::session::SessionStatus::Running { .. }) {
+                    let session_name = ss.session.tmux.name.clone();
+                    let tx = self.tx.clone();
+                    std::thread::spawn(move || {
+                        let content = tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
+                            .unwrap_or_default();
+                        let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
+                    });
+                }
+            }
+            return;
+        }
+
+        let worktree_cursor = self.cursor - standalone_count;
         let visible = visible_tasks_filtered(
             &self.task_rows,
             &self.filter_mode,
             &self.search_text,
             self.active_repo_slug(),
         );
-        if let Some(vt) = visible.get(self.cursor) {
+        if let Some(vt) = visible.get(worktree_cursor) {
             // Find a session to capture pane content from.
             if let Some(session) = vt.row.sessions.first() {
                 let session_name = session.tmux.name.clone();
@@ -946,10 +1073,11 @@ impl App {
         widths.push(Constraint::Length(22)); // STATUS
         widths.push(Constraint::Length(10)); // CLAUDE
 
-        // Build rows for the table, including section header rows.
+        // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
+        let standalone_count = self.standalone_sessions.len();
         let (rows, row_heights) =
-            self.build_task_table_rows(&tasks, show_branch, has_remote, title_width, num_columns);
+            self.build_task_table_rows_with_standalone(&tasks, show_branch, has_remote, title_width, num_columns);
 
         let has_warning = self
             .warning
@@ -960,8 +1088,9 @@ impl App {
         let body_height: u16 = row_heights.iter().sum::<u16>();
         let table_height = body_height.saturating_add(3); // +2 borders +1 header row
 
-        // Check if selected task has a preview
-        let selected_task = tasks.get(self.cursor);
+        // Check if selected task has a preview (only worktree rows have previews)
+        let worktree_cursor = self.cursor.checked_sub(standalone_count);
+        let selected_task = worktree_cursor.and_then(|wc| tasks.get(wc));
         let has_preview = selected_task
             .is_some_and(|vt| !self.pane_content.is_empty() && !vt.row.sessions.is_empty());
 
@@ -1061,7 +1190,8 @@ impl App {
         self.render_hints_task(f, chunks[idx]);
     }
 
-    fn build_task_table_rows(
+    /// Builds table rows: standalone sessions first, then worktree task rows with group headers.
+    fn build_task_table_rows_with_standalone(
         &self,
         tasks: &[VisibleTask],
         show_branch: bool,
@@ -1072,10 +1202,55 @@ impl App {
         let theme = &self.theme;
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
+        let standalone_count = self.standalone_sessions.len();
+
+        // Render standalone session rows first.
+        for (idx, ss) in self.standalone_sessions.iter().enumerate() {
+            let selected = idx == self.cursor;
+            let (claude_text, claude_style) = standalone_claude_status(&ss.session);
+            let status_text = match &ss.session.tmux.status {
+                crate::session::SessionStatus::Running { .. } => "running",
+                crate::session::SessionStatus::Dead => "not running",
+            };
+            let status_style = match &ss.session.tmux.status {
+                crate::session::SessionStatus::Running { .. } => {
+                    Style::default().fg(Color::Green)
+                }
+                crate::session::SessionStatus::Dead => Style::default().fg(Color::DarkGray),
+            };
+
+            let row_style = if selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let mut cells = vec![
+                Cell::from(format!("{:>2}", idx + 1)),
+                Cell::from("").style(Style::default().fg(Color::DarkGray)), // no issue
+                Cell::from(ss.config.name.clone()),
+            ];
+
+            if show_branch {
+                cells.push(Cell::from("")); // no branch
+            }
+            if has_remote {
+                cells.push(Cell::from("")); // always local
+            }
+            cells.push(Cell::from(status_text.to_string()).style(status_style));
+            cells.push(Cell::from(claude_text).style(claude_style));
+
+            rows.push(Row::new(cells).style(row_style));
+            row_heights.push(1);
+        }
+
+        // Render worktree task rows.
         let mut last_group: Option<DisplayGroup> = None;
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
-            let selected = flat_idx == self.cursor;
+            let selected = (flat_idx + standalone_count) == self.cursor;
 
             // Section header when display group changes
             if last_group != Some(vt.group) {
@@ -1294,14 +1469,19 @@ impl App {
             return;
         }
 
+        let is_standalone = cursor_is_standalone(self.cursor, self.standalone_sessions.len());
+        let dim = Style::default().fg(theme.dimmed);
+
         let mut spans: Vec<Span> = vec![
             Span::styled("enter", key_style),
             Span::raw(" switch"),
             sep.clone(),
         ];
 
-        // PR link hint — dim when selected task has no PR.
-        let has_pr = !self.task_rows.is_empty() && {
+        // PR link hint — dim when standalone or selected task has no PR.
+        let has_pr = !is_standalone && !self.task_rows.is_empty() && {
+            let standalone_count = self.standalone_sessions.len();
+            let worktree_cursor = self.cursor.saturating_sub(standalone_count);
             let visible = visible_tasks_filtered(
                 &self.task_rows,
                 &self.filter_mode,
@@ -1309,19 +1489,24 @@ impl App {
                 self.active_repo_slug(),
             );
             visible
-                .get(self.cursor)
+                .get(worktree_cursor)
                 .is_some_and(|vt| vt.row.pr.is_some())
         };
         if has_pr {
             spans.push(Span::styled("o", key_style));
             spans.push(Span::raw(" pr"));
         } else {
-            spans.push(Span::styled("o pr", Style::default().fg(theme.dimmed)));
+            spans.push(Span::styled("o pr", dim));
         }
         spans.push(sep.clone());
 
-        spans.push(Span::styled("p", key_style));
-        spans.push(Span::raw(":priority"));
+        // Dim 'p' (priority/transfer) for standalone sessions.
+        if is_standalone {
+            spans.push(Span::styled("p:priority", dim));
+        } else {
+            spans.push(Span::styled("p", key_style));
+            spans.push(Span::raw(":priority"));
+        }
         spans.push(sep.clone());
 
         spans.push(Span::styled("B", key_style));

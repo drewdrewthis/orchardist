@@ -7,9 +7,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;
+use crate::claude_state::ClaudeState;
 use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
 use crate::orchard_state::{HostState, OrchardState, RepoState, WorktreeState};
+use crate::session::{
+    ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, StandaloneSessionRow, TmuxSessionInfo,
+};
 use crate::sources;
 
 // ---------------------------------------------------------------------------
@@ -87,6 +91,56 @@ fn collect_repo_caches(config: &GlobalConfig) -> Vec<RepoCacheTuple> {
     repo_caches
 }
 
+/// Builds `StandaloneSessionRow`s from config, matching against live tmux sessions
+/// and Claude state files.
+fn build_standalone_sessions(
+    config: &GlobalConfig,
+    local_sessions: &[cache::CachedTmuxSession],
+    claude_states: &[crate::claude_state::ClaudeStateFile],
+) -> Vec<StandaloneSessionRow> {
+    config
+        .tmux_sessions
+        .iter()
+        .map(|cfg| {
+            let live = local_sessions.iter().find(|s| s.name == cfg.name);
+            let status = if live.is_some() {
+                SessionStatus::Running { attached: false }
+            } else {
+                SessionStatus::Dead
+            };
+
+            let claude = claude_states
+                .iter()
+                .find(|cs| cs.tmux_session == cfg.name)
+                .and_then(|cs| {
+                    let state: ClaudeState = cs.state.parse().unwrap_or(ClaudeState::None);
+                    if state == ClaudeState::None {
+                        None
+                    } else {
+                        Some(ClaudeSessionInfo {
+                            status: state,
+                            cost_usd: cs.cost_usd,
+                            context_window_pct: cs.context_window_pct,
+                            model: cs.model.clone(),
+                        })
+                    }
+                });
+
+            StandaloneSessionRow {
+                session: EnrichedSession {
+                    tmux: TmuxSessionInfo {
+                        host: Host::Local,
+                        name: cfg.name.clone(),
+                        status,
+                    },
+                    claude,
+                },
+                config: cfg.clone(),
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -143,8 +197,14 @@ pub fn build_state_with_hosts(
         })
         .collect();
 
+    // Build standalone sessions from config.
+    let local_sessions =
+        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
+    let standalone_sessions = build_standalone_sessions(config, &local_sessions, &claude_states);
+
     OrchardState {
         repos,
+        standalone_sessions,
         hosts: hosts.clone(),
     }
 }
