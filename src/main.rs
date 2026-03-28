@@ -6,6 +6,10 @@
 use std::env;
 use std::io::IsTerminal;
 
+use crossterm::{
+    cursor,
+    terminal::{self, LeaveAlternateScreen},
+};
 use orchard::build_state;
 use orchard::global_config;
 use orchard::json_output::JsonOutput;
@@ -14,6 +18,8 @@ use orchard::shell;
 use orchard::tui;
 
 fn main() {
+    install_panic_hooks();
+
     let args: Vec<String> = env::args().collect();
 
     let mut json_flag = false;
@@ -137,6 +143,21 @@ fn handle_tui(command: &str) {
             std::process::exit(1);
         }
     }
+}
+
+/// Installs panic and error hooks that restore the terminal before printing
+/// crash output, preventing terminal corruption when the TUI exits abnormally.
+///
+/// Must be called at the very start of `main()`, before any terminal setup.
+fn install_panic_hooks() {
+    let (panic_hook, eyre_hook) = color_eyre::config::HookBuilder::default().into_hooks();
+    eyre_hook.install().expect("failed to install eyre hook");
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stderr(), LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stderr(), cursor::Show);
+        eprintln!("{}", panic_hook.panic_report(info));
+    }));
 }
 
 fn print_usage() {
