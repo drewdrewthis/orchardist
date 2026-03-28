@@ -1,3 +1,8 @@
+//! Tmux status-bar writer.
+//!
+//! After each data refresh, formats a summary string (active worktree count,
+//! Claude session count, failing CI count) and writes it to
+//! `~/.local/state/git-orchard/status.txt` for use in the tmux status bar.
 /// Writes tmux-formatted status text to `~/.local/state/git-orchard/status.txt`
 /// after each data refresh, so the tmux status bar can display orchard state.
 use crate::types::{ChecksStatus, Worktree};

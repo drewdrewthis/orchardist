@@ -1,3 +1,8 @@
+//! Binary entry point for the `orchard` CLI.
+//!
+//! Parses CLI flags (`--json`, `--version`, `--help`), handles the `init` and
+//! `upgrade` sub-commands, and dispatches to either the JSON output path or the
+//! Ratatui TUI (re-launching itself inside a tmux popup when appropriate).
 use std::env;
 use std::io::IsTerminal;
 

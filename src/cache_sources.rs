@@ -1,3 +1,8 @@
+//! Imperative shell for populating Orchard's on-disk cache.
+//!
+//! Fetches issues, PRs, worktrees, and tmux sessions from their respective
+//! sources (GitHub CLI, git, SSH remotes) and writes the results to the
+//! cache files consumed by `sources::*` and `derive`.
 use std::process::Command;
 use std::sync::OnceLock;
 

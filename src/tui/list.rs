@@ -1,3 +1,8 @@
+//! Worktree list view: rendering and keyboard handling.
+//!
+//! Draws the main task/worktree table, the detail pane, and the header;
+//! handles keypresses (navigate, select, open browser, start session, etc.);
+//! and formats row labels. This is the primary interactive surface of the TUI.
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::*;

@@ -16,7 +16,9 @@ use crate::derive::DisplayGroup;
 /// The unified state model for Orchard. Contains all repos and host reachability.
 #[derive(Debug, Clone)]
 pub struct OrchardState {
+    /// All repositories known to Orchard.
     pub repos: Vec<RepoState>,
+    /// Reachability state keyed by SSH host name.
     pub hosts: HashMap<String, HostState>,
 }
 
@@ -66,61 +68,92 @@ impl Default for OrchardState {
 /// State for a single repository.
 #[derive(Debug, Clone)]
 pub struct RepoState {
+    /// Repository slug in `owner/repo` format.
     pub slug: String,
+    /// All worktrees belonging to this repository.
     pub worktrees: Vec<WorktreeState>,
 }
 
 /// State for a single worktree, enriched with issue/PR/session metadata.
 #[derive(Debug, Clone)]
 pub struct WorktreeState {
+    /// Absolute path to the worktree on disk.
     pub path: String,
+    /// Git branch checked out in this worktree.
     pub branch: String,
+    /// True when this is a bare worktree (no working tree).
     pub is_bare: bool,
+    /// Remote SSH host this worktree lives on, or `None` for local.
     pub host: Option<String>,
+    /// Linked GitHub issue, if any.
     pub issue: Option<IssueInfo>,
+    /// Linked pull request, if any.
     pub pr: Option<PrState>,
+    /// Active tmux sessions associated with this worktree.
     pub sessions: Vec<SessionState>,
+    /// Display group controlling sort order and TUI section.
     pub display_group: DisplayGroup,
+    /// True when this is the repo's main/shepherd worktree.
     pub is_shepherd: bool,
 }
 
 /// Lightweight issue summary attached to a worktree.
 #[derive(Debug, Clone)]
 pub struct IssueInfo {
+    /// GitHub issue number.
     pub number: u32,
+    /// Issue title.
     pub title: String,
+    /// Issue state: "open", "closed", or "completed".
     pub state: String,
 }
 
 /// Lightweight PR summary attached to a worktree.
 #[derive(Debug, Clone)]
 pub struct PrState {
+    /// GitHub PR number.
     pub number: u32,
+    /// Head branch name for this PR.
     pub branch: String,
+    /// PR state: "OPEN", "CLOSED", or "MERGED".
     pub state: Option<String>,
+    /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
+    /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
     pub checks_state: Option<String>,
+    /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
+    /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
 #[derive(Debug, Clone)]
 pub struct SessionState {
+    /// tmux session name.
     pub name: String,
+    /// Remote SSH host this session runs on, or `None` for local.
     pub host: Option<String>,
+    /// True when a Claude process is running in this session.
     pub has_claude_active: bool,
+    /// True when Claude is actively working (spinner/activity indicator visible).
     pub claude_is_working: bool,
+    /// True when Claude appears to be waiting for user input.
     pub claude_needs_input: bool,
+    /// Structured Claude state from hook files (replaces booleans when available).
     pub claude_state: ClaudeState,
+    /// Context window usage percentage from hook state enrichment.
     pub context_window_pct: Option<f64>,
+    /// Cumulative session cost in USD from hook state enrichment.
     pub cost_usd: Option<f64>,
+    /// Model name from hook state enrichment (e.g., "opus", "sonnet").
     pub model: Option<String>,
 }
 
 /// Reachability state for a remote host.
 #[derive(Debug, Clone)]
 pub struct HostState {
+    /// True when the SSH host responded to the last reachability check.
     pub reachable: bool,
 }
 

@@ -1,3 +1,8 @@
+//! Reusable Ratatui widget primitives.
+//!
+//! Currently exposes `render_popup`, a helper that centres a bordered,
+//! padded popup block over the terminal area. Used by both the list view
+//! and the dialog module to render modal overlays.
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 
@@ -5,6 +10,10 @@ use ratatui::widgets::*;
 // Popup rendering helper
 // ---------------------------------------------------------------------------
 
+/// Renders a centered rounded-border popup over the current frame.
+///
+/// `percent_x` controls popup width as a percentage of the terminal width.
+/// `height` is the absolute row count; it is clamped to the terminal height.
 pub fn render_popup(
     f: &mut Frame,
     lines: Vec<Line>,

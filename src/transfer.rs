@@ -1,3 +1,9 @@
+//! Worktree transfer between local and remote machines.
+//!
+//! Provides the `push_to_remote` and `pull_from_remote` operations that
+//! commit a WIP stash, create or update a remote worktree over SSH, and
+//! create a matching tmux session on the remote host. Used by the TUI
+//! transfer dialog.
 use std::path::Path;
 use std::process::Command;
 

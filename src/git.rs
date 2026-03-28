@@ -1,3 +1,8 @@
+//! Git worktree introspection and manipulation.
+//!
+//! Wraps `git worktree list --porcelain`, conflict detection, and worktree
+//! removal. This is part of the imperative shell — all functions spawn
+//! subprocess calls to `git`.
 use std::path::Path;
 use std::process::Command;
 

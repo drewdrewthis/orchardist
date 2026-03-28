@@ -1,3 +1,8 @@
+//! Tmux session management for Orchard.
+//!
+//! Lists active sessions, resolves pane titles, creates new sessions for
+//! worktrees, switches the current client to a session, and orchestrates the
+//! full "switch to worktree" flow including PR-aware notification banners.
 use std::process::Command;
 
 use anyhow::{Context, Result};

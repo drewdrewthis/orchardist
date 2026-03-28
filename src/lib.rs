@@ -1,3 +1,10 @@
+//! Root library crate for Orchard.
+//!
+//! Re-exports all public modules that make up the functional core and imperative
+//! shell of the application. Consumers should import from the top-level module
+//! rather than reaching into sub-modules directly.
+#![warn(missing_docs)]
+
 mod browser;
 pub mod build_state;
 pub mod cache;

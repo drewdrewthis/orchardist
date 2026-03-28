@@ -1,3 +1,8 @@
+//! Tmux session discovery and task reconciliation.
+//!
+//! Reconciles live tmux sessions with the persisted `AppState` task list:
+//! binds sessions to tasks by worktree path, identifies orphaned sessions
+//! (no matching task), and flags dead sessions (in state but not in tmux).
 use crate::events;
 use crate::state::AppState;
 use crate::types::TmuxSession;
@@ -11,8 +16,11 @@ use std::process::Command;
 /// Rich detail for a single tmux pane.
 #[derive(Debug, Clone)]
 pub struct PaneDetail {
+    /// tmux pane identifier (e.g. `"%0"`).
     pub pane_id: String,
+    /// Name of the foreground command running in the pane.
     pub command: String,
+    /// Current terminal title set by the running process.
     pub title: String,
     /// `true` when the pane title contains "claude" (case-insensitive).
     pub is_agent: bool,
@@ -21,7 +29,9 @@ pub struct PaneDetail {
 /// Rich detail for a tmux session, including all its panes.
 #[derive(Debug, Clone)]
 pub struct SessionDetail {
+    /// tmux session name.
     pub name: String,
+    /// All panes belonging to this session.
     pub panes: Vec<PaneDetail>,
 }
 

@@ -1,3 +1,9 @@
+//! Cache types and read/write helpers for Orchard's on-disk cache.
+//!
+//! Provides strongly-typed entry structs (`CachedIssue`, `CachedPr`, etc.),
+//! atomic JSON file I/O, path conventions under `~/.cache/orchard/`, and
+//! the session manifest that persists worktree-to-session bindings across
+//! cache refreshes.
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -8,44 +14,71 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 // Entry types
 // ---------------------------------------------------------------------------
 
+/// A GitHub issue entry as stored in the issues cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedIssue {
+    /// GitHub issue number.
     pub number: u32,
+    /// Issue title.
     pub title: String,
+    /// Issue state string (e.g. `"open"`, `"closed"`).
     pub state: String,
+    /// Labels applied to the issue.
     pub labels: Vec<String>,
 }
 
+/// A GitHub pull request entry as stored in the PRs cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedPr {
+    /// GitHub PR number.
     pub number: u32,
+    /// The branch name the PR was opened from.
     pub branch: String,
+    /// The issue number this PR is linked to, if any.
     pub linked_issue: Option<u32>,
+    /// PR state string (e.g. `"open"`, `"merged"`, `"closed"`).
     pub state: String,
+    /// Aggregated review decision string from GitHub (e.g. `"APPROVED"`).
     pub review_decision: Option<String>,
+    /// Aggregated CI checks state string (e.g. `"pass"`, `"fail"`, `"pending"`).
     pub checks_state: Option<String>,
+    /// Whether the PR has merge conflicts with its base branch.
     pub has_conflicts: bool,
+    /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
 }
 
+/// A git worktree entry as stored in the worktrees cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedWorktree {
+    /// Absolute filesystem path to the worktree root.
     pub path: String,
+    /// The branch checked out in this worktree.
     pub branch: String,
+    /// Whether this is the bare worktree (the `.git` root).
     pub is_bare: bool,
+    /// Whether the worktree is locked (cannot be pruned by git).
     pub is_locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Remote host identifier if this worktree lives on a remote machine.
     pub host: Option<String>,
 }
 
+/// A tmux session entry as stored in the tmux sessions cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedTmuxSession {
+    /// The tmux session name.
     pub name: String,
+    /// Working directory of the session's first window.
     pub path: String,
+    /// Titles of all panes in the session.
     pub pane_titles: Vec<String>,
+    /// Commands running in each pane of the session.
     pub pane_commands: Vec<String>,
+    /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
     #[serde(default)]
+    /// Recent output lines from the session's active pane.
     pub last_output_lines: Vec<String>,
 }
 
@@ -53,9 +86,12 @@ pub struct CachedTmuxSession {
 // Cache file wrapper
 // ---------------------------------------------------------------------------
 
+/// Wrapper that pairs a list of cache entries with the timestamp of the last refresh.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheFile<T> {
+    /// UTC timestamp of when this cache was last written.
     pub last_refreshed: DateTime<Utc>,
+    /// The cached entries.
     pub entries: Vec<T>,
 }
 
@@ -162,17 +198,24 @@ pub fn write_cache_if_nonempty<T: Serialize>(path: &Path, entries: &[T]) -> anyh
 /// tmux session at the time of the last cache refresh.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionManifestEntry {
+    /// Name of the tmux session.
     pub session_name: String,
+    /// Absolute path to the worktree the session is rooted in.
     pub worktree_path: String,
+    /// Branch checked out in the worktree at the time of the snapshot.
     pub branch: String,
+    /// Whether a Claude agent session was active in this worktree's tmux session.
     pub had_claude: bool,
+    /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
 }
 
 /// The full session manifest written to `~/.cache/orchard/session_manifest.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionManifest {
+    /// UTC timestamp of the last manifest write.
     pub last_updated: DateTime<Utc>,
+    /// All recorded session entries.
     pub sessions: Vec<SessionManifestEntry>,
 }
 

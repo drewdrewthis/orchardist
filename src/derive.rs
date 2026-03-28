@@ -1,3 +1,8 @@
+//! Pure functional core: derives display-ready rows from cached data.
+//!
+//! `derive_all_repos` joins cached issues, PRs, worktrees, and tmux sessions
+//! into `TaskRow` values with computed `DisplayGroup` sort keys. No I/O occurs
+//! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
 
@@ -28,31 +33,47 @@ const HOOK_STATE_STALENESS_SECS: u64 = 300;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayGroup {
-    Shepherd,       // 0th — always first (the repo_main session)
-    Prioritized,    // 1st — user-flagged as priority
-    NeedsAttention, // 2nd
-    ClaudeWorking,  // 3rd
-    ReadyToMerge,   // 4th
-    Other,          // 5th (worktrees without PRs, misc)
+    /// Always first — the repo's main/shepherd session.
+    Shepherd,
+    /// User-flagged as priority work.
+    Prioritized,
+    /// Requires human action (blocked, conflicts, review requested).
+    NeedsAttention,
+    /// A Claude session is actively working in this worktree.
+    ClaudeWorking,
+    /// PR is approved and checks pass — ready to merge.
+    ReadyToMerge,
+    /// Worktrees without PRs or other misc work.
+    Other,
 }
 
 /// Lightweight PR summary attached to a worktree row.
 #[derive(Debug, Clone)]
 pub struct PrInfo {
+    /// GitHub PR number.
     pub number: u32,
+    /// Head branch name for this PR.
     pub branch: String,
+    /// PR state: "OPEN", "CLOSED", or "MERGED".
     pub state: Option<String>,
+    /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
+    /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
     pub checks_state: Option<String>,
+    /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
+    /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
 }
 
 /// Lightweight tmux session summary attached to a worktree row.
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
+    /// tmux session name.
     pub name: String,
+    /// Remote SSH host this session runs on, or `None` for local.
     pub host: Option<String>,
+    /// True when a Claude process is running in this session.
     pub has_claude_active: bool,
     /// True when Claude is actively working (spinner/activity indicator visible).
     pub claude_is_working: bool,
@@ -72,18 +93,28 @@ pub struct SessionInfo {
 /// enriched with PR/issue metadata and tmux session info.
 #[derive(Debug, Clone)]
 pub struct WorktreeRow {
+    /// Repository slug in `owner/repo` format.
     pub repo_slug: String,
+    /// Absolute path to the worktree on disk.
     pub worktree_path: String,
+    /// Git branch checked out in this worktree.
     pub branch: String,
+    /// Remote SSH host this worktree lives on, or `None` for local.
     pub worktree_host: Option<String>,
+    /// GitHub issue number extracted from the branch name, if any.
     pub issue_number: Option<u32>,
+    /// Title of the linked GitHub issue, if resolved.
     pub issue_title: Option<String>,
     /// State of the linked issue ("open", "closed", "completed"), if any.
     /// Used to detect stale worktrees whose issue has been resolved without a PR.
     pub issue_state: Option<String>,
+    /// Linked pull request, if one exists for this branch.
     pub pr: Option<PrInfo>,
+    /// Active tmux sessions associated with this worktree path.
     pub sessions: Vec<SessionInfo>,
+    /// Display group controlling sort order and TUI section.
     pub display_group: DisplayGroup,
+    /// True when this is the repo's main/shepherd worktree.
     pub is_shepherd: bool,
 }
 

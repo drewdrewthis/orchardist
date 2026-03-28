@@ -1,3 +1,8 @@
+//! Path display utilities for the TUI.
+//!
+//! `tildify` shortens absolute paths by replacing the home directory prefix
+//! with `~`; `truncate_left` caps display width by eliding from the left with
+//! a `…` character.
 /// Replaces the user's home directory prefix in `path` with `~`.
 /// Returns the path unchanged if it does not start with `$HOME`.
 pub fn tildify(path: &str) -> String {

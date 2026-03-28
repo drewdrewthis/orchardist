@@ -1,3 +1,9 @@
+//! GitHub issue-to-task synchronisation.
+//!
+//! Queries `gh issue list` for issues assigned to the current user, then
+//! creates new `Task` entries for open issues and marks tasks done when their
+//! linked issue is closed. Part of the imperative shell; pure logic is in
+//! the inner `sync_issues_with_data` helper to enable unit testing.
 use std::process::Command;
 
 use chrono::Utc;

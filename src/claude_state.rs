@@ -1,3 +1,8 @@
+//! Claude hook-state types and reader.
+//!
+//! Defines `ClaudeStateFile` (the JSON written by the orchard-state.sh hook)
+//! and `ClaudeState` (the parsed working/idle/input enum). Provides helpers to
+//! read all state files from a directory and look up state by tmux session name.
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -5,17 +10,25 @@ use serde::{Deserialize, Serialize};
 /// State written by the orchard-state.sh hook script.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeStateFile {
-    pub state: String, // "working", "idle", "input"
+    /// Raw state string from the hook script: `"working"`, `"idle"`, or `"input"`.
+    pub state: String,
+    /// Unique Claude session identifier.
     pub session_id: String,
+    /// Name of the tmux session this Claude process is running inside.
     pub tmux_session: String,
+    /// Working directory of the Claude process.
     pub cwd: String,
+    /// Hook event that triggered the state write (e.g. `"Stop"`, `"PreToolUse"`).
     pub event: String,
-    pub timestamp: String, // ISO 8601
-    // Optional enrichment from statusline
+    /// ISO 8601 timestamp of the last state write.
+    pub timestamp: String,
+    /// Context window utilization percentage (0–100), if available from the statusline.
     #[serde(default)]
     pub context_window_pct: Option<f64>,
+    /// Cumulative cost in USD for this session, if available from the statusline.
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    /// Model identifier in use (e.g. `"opus"`, `"sonnet"`), if available from the statusline.
     #[serde(default)]
     pub model: Option<String>,
 }
@@ -24,9 +37,13 @@ pub struct ClaudeStateFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeState {
+    /// Claude is actively executing a tool or generating a response.
     Working,
+    /// Claude has finished its turn and is waiting for the next prompt.
     Idle,
+    /// Claude is paused and waiting for user input.
     Input,
+    /// No Claude state file was found, or the state string was unrecognised.
     None,
 }
 

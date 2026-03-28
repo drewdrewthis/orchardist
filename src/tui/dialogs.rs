@@ -1,3 +1,8 @@
+//! TUI confirmation and progress dialogs.
+//!
+//! Implements keyboard handlers and Ratatui rendering for the delete,
+//! cleanup, new-session, and transfer dialogs shown as modal overlays
+//! over the main worktree list.
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Padding;
