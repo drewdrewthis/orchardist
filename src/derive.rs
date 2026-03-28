@@ -1,7 +1,7 @@
 //! Pure functional core: derives display-ready rows from cached data.
 //!
 //! `derive_all_repos` joins cached issues, PRs, worktrees, and tmux sessions
-//! into `TaskRow` values with computed `DisplayGroup` sort keys. No I/O occurs
+//! into `WorktreeRow` values with computed `DisplayGroup` sort keys. No I/O occurs
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
@@ -67,13 +67,6 @@ pub struct PrInfo {
     pub unresolved_threads: u32,
 }
 
-/// Backward-compatible alias for `EnrichedSession`.
-///
-/// All session data is now composed from `TmuxSessionInfo` + optional
-/// `ClaudeSessionInfo` via `EnrichedSession`. This alias avoids a
-/// cascading rename in consumers that still import `SessionInfo`.
-pub type SessionInfo = EnrichedSession;
-
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
 /// enriched with PR/issue metadata and tmux session info.
 #[derive(Debug, Clone)]
@@ -102,9 +95,6 @@ pub struct WorktreeRow {
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
 }
-
-/// Alias to minimize cascading changes in TUI code.
-pub type TaskRow = WorktreeRow;
 
 // ---------------------------------------------------------------------------
 // Single-repo derivation
@@ -255,7 +245,7 @@ fn enrich_session(
     session: &CachedTmuxSession,
     claude_states: &[crate::claude_state::ClaudeStateFile],
 ) -> EnrichedSession {
-    use crate::claude_state::{ClaudeState, state_for_session};
+    use crate::claude_state::state_for_session;
 
     let host = match &session.host {
         Some(h) => Host::Remote(h.clone()),
@@ -272,17 +262,7 @@ fn enrich_session(
     if let Some(state_file) = hook_state {
         let is_stale = is_state_stale(&state_file.timestamp, HOOK_STATE_STALENESS_SECS);
         if !is_stale {
-            let claude_state = state_file.state.parse::<ClaudeState>().unwrap_or(ClaudeState::None);
-            let claude = if claude_state != ClaudeState::None {
-                Some(ClaudeSessionInfo {
-                    status: claude_state,
-                    cost_usd: state_file.cost_usd,
-                    context_window_pct: state_file.context_window_pct,
-                    model: state_file.model.clone(),
-                })
-            } else {
-                None
-            };
+            let claude = ClaudeSessionInfo::from_state_file(state_file);
             return EnrichedSession { tmux, claude };
         }
     }
@@ -355,6 +335,11 @@ fn enrich_session_from_scraping(
     };
 
     EnrichedSession { tmux, claude }
+}
+
+/// Returns true if a Claude state file timestamp is older than the default threshold.
+pub fn is_state_stale_default(timestamp: &str) -> bool {
+    is_state_stale(timestamp, HOOK_STATE_STALENESS_SECS)
 }
 
 /// Returns true if the ISO 8601 timestamp is older than `max_age_secs` seconds.

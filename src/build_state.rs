@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;
-use crate::claude_state::ClaudeState;
 use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
 use crate::orchard_state::{HostState, OrchardState, RepoState, WorktreeState};
@@ -112,19 +111,8 @@ fn build_standalone_sessions(
             let claude = claude_states
                 .iter()
                 .find(|cs| cs.tmux_session == cfg.name)
-                .and_then(|cs| {
-                    let state: ClaudeState = cs.state.parse().unwrap_or(ClaudeState::None);
-                    if state == ClaudeState::None {
-                        None
-                    } else {
-                        Some(ClaudeSessionInfo {
-                            status: state,
-                            cost_usd: cs.cost_usd,
-                            context_window_pct: cs.context_window_pct,
-                            model: cs.model.clone(),
-                        })
-                    }
-                });
+                .filter(|cs| !crate::derive::is_state_stale_default(&cs.timestamp))
+                .and_then(ClaudeSessionInfo::from_state_file);
 
             StandaloneSessionRow {
                 session: EnrichedSession {
@@ -252,6 +240,7 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude_state::ClaudeState;
     use crate::global_config::GlobalConfig;
 
     #[test]
@@ -393,7 +382,7 @@ mod tests {
             tmux_session: "shepherd".to_string(),
             cwd: "/tmp".to_string(),
             event: "Stop".to_string(),
-            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
             context_window_pct: Some(42.0),
             cost_usd: Some(1.23),
             model: Some("opus".to_string()),

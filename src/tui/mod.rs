@@ -76,7 +76,7 @@ pub struct App {
     theme: Theme,
 
     // Derived task view from caches
-    task_rows: Vec<derive::TaskRow>,
+    task_rows: Vec<derive::WorktreeRow>,
     /// Standalone tmux sessions from global config, enriched with live state.
     standalone_sessions: Vec<StandaloneSessionRow>,
     global_config: global_config::GlobalConfig,
@@ -623,7 +623,7 @@ impl App {
         });
     }
 
-    fn start_cleanup(&self, items: Vec<derive::TaskRow>) {
+    fn start_cleanup(&self, items: Vec<derive::WorktreeRow>) {
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
@@ -642,7 +642,7 @@ impl App {
     /// Constructs a minimal `App` for use in unit tests without touching the
     /// filesystem, git, or any external services.
     #[cfg(test)]
-    fn new_test(task_rows: Vec<derive::TaskRow>) -> Self {
+    fn new_test(task_rows: Vec<derive::WorktreeRow>) -> Self {
         let (tx, rx) = mpsc::channel();
         App {
             cursor: 0,
@@ -753,7 +753,7 @@ fn run_loop(
 // Stale worktree filter
 // ---------------------------------------------------------------------------
 
-fn filter_stale(rows: &[derive::TaskRow]) -> Vec<derive::TaskRow> {
+fn filter_stale(rows: &[derive::WorktreeRow]) -> Vec<derive::WorktreeRow> {
     rows.iter()
         .filter(|row| {
             if let Some(ref pr) = row.pr {
@@ -807,12 +807,12 @@ fn delete_worktree(
     Ok(())
 }
 
-/// Deletes the worktree represented by a `TaskRow`.
+/// Deletes the worktree represented by a `WorktreeRow`.
 ///
-/// Equivalent to `delete_worktree` but operates on `TaskRow` fields, which is
+/// Equivalent to `delete_worktree` but operates on `WorktreeRow` fields, which is
 /// the only data model available after removing the legacy `Vec<Worktree>`.
 fn delete_task_row(
-    row: &derive::TaskRow,
+    row: &derive::WorktreeRow,
     global_config: &global_config::GlobalConfig,
 ) -> anyhow::Result<()> {
     let session_name = row.sessions.first().map(|s| s.tmux.name.as_str());
@@ -978,7 +978,7 @@ fn ensure_standalone_sessions(config: &global_config::GlobalConfig) -> anyhow::R
 ///
 /// Delegates to `build_state::build_task_rows` which owns the single
 /// authoritative cache-reading and derivation logic.
-fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::TaskRow> {
+fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::WorktreeRow> {
     crate::build_state::build_task_rows(config)
 }
 
@@ -989,7 +989,7 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derive::{DisplayGroup, PrInfo as DPrInfo, TaskRow};
+    use crate::derive::{DisplayGroup, PrInfo as DPrInfo, WorktreeRow};
     use crate::session::{EnrichedSession, TmuxSessionInfo, ClaudeSessionInfo, Host, SessionStatus};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
@@ -999,8 +999,8 @@ mod tests {
     // Test helpers
     // -----------------------------------------------------------------------
 
-    fn make_task_row(issue_number: u32, group: DisplayGroup) -> TaskRow {
-        TaskRow {
+    fn make_task_row(issue_number: u32, group: DisplayGroup) -> WorktreeRow {
+        WorktreeRow {
             repo_slug: "owner/repo".to_string(),
             worktree_path: format!("/workspace/repo-{}", issue_number),
             branch: format!("feat/issue-{}", issue_number),
@@ -1015,8 +1015,8 @@ mod tests {
         }
     }
 
-    fn make_task_row_with_title(issue_number: u32, title: &str, group: DisplayGroup) -> TaskRow {
-        TaskRow {
+    fn make_task_row_with_title(issue_number: u32, title: &str, group: DisplayGroup) -> WorktreeRow {
+        WorktreeRow {
             issue_title: Some(title.to_string()),
             ..make_task_row(issue_number, group)
         }
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn filter_stale_merged_pr() {
         let rows = vec![
-            TaskRow {
+            WorktreeRow {
                 pr: Some(DPrInfo {
                     number: 1,
                     branch: "feat/merged".to_string(),
@@ -1061,7 +1061,7 @@ mod tests {
 
     #[test]
     fn filter_stale_closed_issue() {
-        let rows = vec![TaskRow {
+        let rows = vec![WorktreeRow {
             issue_state: Some("closed".to_string()),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[test]
     fn filter_stale_closed_pr() {
-        let rows = vec![TaskRow {
+        let rows = vec![WorktreeRow {
             pr: Some(DPrInfo {
                 number: 1,
                 branch: "feat/closed".to_string(),
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn filter_stale_completed_issue() {
-        let rows = vec![TaskRow {
+        let rows = vec![WorktreeRow {
             issue_state: Some("completed".to_string()),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -1100,7 +1100,7 @@ mod tests {
     #[test]
     fn filter_stale_open_pr_not_stale() {
         // An open PR should not be considered stale.
-        let rows = vec![TaskRow {
+        let rows = vec![WorktreeRow {
             pr: Some(DPrInfo {
                 number: 1,
                 branch: "feat/open".to_string(),
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn task_list_renders_pr_number() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(DPrInfo {
                 number: 55,
                 branch: "feat/branch".to_string(),
@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn unreachable_host_blocks_enter() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Remote("gpu1".to_string()),
@@ -1294,8 +1294,8 @@ mod tests {
     // WorktreeRow builder helper
     // -----------------------------------------------------------------------
 
-    fn make_worktree_row(branch: &str, group: DisplayGroup) -> TaskRow {
-        TaskRow {
+    fn make_worktree_row(branch: &str, group: DisplayGroup) -> WorktreeRow {
+        WorktreeRow {
             repo_slug: "owner/repo".to_string(),
             worktree_path: format!("/workspace/{}", branch.replace('/', "-")),
             branch: branch.to_string(),
@@ -1316,7 +1316,7 @@ mod tests {
 
     #[test]
     fn shepherd_row_renders_first_and_has_distinct_section_header() {
-        let main_wt = TaskRow {
+        let main_wt = WorktreeRow {
             is_main_worktree: true,
             display_group: DisplayGroup::RepoMain,
             ..make_worktree_row("main", DisplayGroup::RepoMain)
@@ -1362,7 +1362,7 @@ mod tests {
 
     #[test]
     fn display_groups_render_in_correct_order() {
-        let needs_attention = TaskRow {
+        let needs_attention = WorktreeRow {
             pr: Some(DPrInfo {
                 number: 10,
                 branch: "feat/needs-attn".to_string(),
@@ -1374,7 +1374,7 @@ mod tests {
             }),
             ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
         };
-        let claude_working = TaskRow {
+        let claude_working = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Local,
@@ -1390,7 +1390,7 @@ mod tests {
             }],
             ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
         };
-        let ready_to_merge = TaskRow {
+        let ready_to_merge = WorktreeRow {
             pr: Some(DPrInfo {
                 number: 20,
                 branch: "feat/approved".to_string(),
@@ -1432,7 +1432,7 @@ mod tests {
 
     #[test]
     fn claude_needs_input_indicator_renders_and_row_in_needs_attention() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Local,
@@ -1463,7 +1463,7 @@ mod tests {
 
     #[test]
     fn pr_enrichment_shows_in_rendered_output() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(DPrInfo {
                 number: 55,
                 branch: "feat/branch".to_string(),
@@ -1487,7 +1487,7 @@ mod tests {
 
     #[test]
     fn remote_host_indicator_renders_for_remote_worktree() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             worktree_host: Some("gpu1".to_string()),
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
@@ -1504,7 +1504,7 @@ mod tests {
 
     #[test]
     fn unreachable_remote_host_shows_x_indicator() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             worktree_host: Some("gpu1".to_string()),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -1529,7 +1529,7 @@ mod tests {
 
     #[test]
     fn issue_number_and_title_render_in_output() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             issue_number: Some(2478),
             issue_title: Some("Support workflow agents".to_string()),
             ..make_worktree_row("webapp-2478", DisplayGroup::Other)

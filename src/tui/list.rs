@@ -10,7 +10,7 @@ use ratatui::widgets::*;
 use std::collections::HashSet;
 use std::time::Instant;
 
-use crate::derive::{DisplayGroup, TaskRow};
+use crate::derive::{DisplayGroup, WorktreeRow};
 use crate::navigation;
 use crate::paths;
 use crate::remote;
@@ -88,10 +88,10 @@ pub(crate) fn branch_tail(branch: &str) -> &str {
     }
 }
 
-/// Converts a `TaskRow` reference into a `Worktree` for use in dialog state.
+/// Converts a `WorktreeRow` reference into a `Worktree` for use in dialog state.
 ///
-/// Fields not tracked in `TaskRow` are set to safe defaults.
-fn worktree_from_task_row(row: &crate::derive::TaskRow) -> crate::types::Worktree {
+/// Fields not tracked in `WorktreeRow` are set to safe defaults.
+fn worktree_from_task_row(row: &crate::derive::WorktreeRow) -> crate::types::Worktree {
     crate::types::Worktree {
         path: row.worktree_path.clone(),
         branch: Some(row.branch.clone()),
@@ -114,7 +114,7 @@ fn worktree_from_task_row(row: &crate::derive::TaskRow) -> crate::types::Worktre
 pub(crate) struct VisibleTask<'a> {
     /// Sequential display number (1-based).
     pub num: usize,
-    pub row: &'a TaskRow,
+    pub row: &'a WorktreeRow,
     pub group: DisplayGroup,
 }
 
@@ -126,7 +126,7 @@ pub(crate) struct VisibleTask<'a> {
 /// (main worktree rows are also filtered so each repo only shows its own).
 #[cfg(test)]
 pub(crate) fn visible_tasks<'a>(
-    task_rows: &'a [TaskRow],
+    task_rows: &'a [WorktreeRow],
     filter_mode: &FilterMode,
     search_text: &str,
 ) -> Vec<VisibleTask<'a>> {
@@ -135,7 +135,7 @@ pub(crate) fn visible_tasks<'a>(
 
 /// Like `visible_tasks` but with an optional repo slug filter.
 pub(crate) fn visible_tasks_filtered<'a>(
-    task_rows: &'a [TaskRow],
+    task_rows: &'a [WorktreeRow],
     filter_mode: &FilterMode,
     search_text: &str,
     repo_slug_filter: Option<&str>,
@@ -193,7 +193,7 @@ pub(crate) fn visible_tasks_filtered<'a>(
 /// Returns a single PR status string for the task row.
 ///
 /// When a PR exists its number is prepended: e.g. `#123 ✓ approved`.
-fn pr_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
+fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
     let Some(ref pr) = row.pr else {
         // No PR — check if the linked issue is closed/completed (stale worktree)
         if let Some(ref state) = row.issue_state
@@ -270,7 +270,7 @@ fn pr_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
 ///
 /// When hook state files are available, shows richer info including context
 /// window percentage. Falls back to boolean flags from terminal scraping.
-fn claude_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
+fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
     if row.sessions.is_empty() {
         return (
             "\u{25cb} none".to_string(),
@@ -303,66 +303,58 @@ fn claude_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
 
     // Get context % from any session that has it.
     let ctx_pct = row.sessions.iter().find_map(|s| s.claude.as_ref().and_then(|c| c.context_window_pct));
+
+    let state = if has_input {
+        ClaudeState::Input
+    } else if has_working {
+        ClaudeState::Working
+    } else {
+        ClaudeState::Idle
+    };
+
+    format_claude_state(state, ctx_pct, &count_suffix, theme)
+}
+
+/// Formats a single Claude state + context % into display text and style.
+fn format_claude_state(
+    state: crate::claude_state::ClaudeState,
+    ctx_pct: Option<f64>,
+    suffix: &str,
+    theme: &Theme,
+) -> (String, Style) {
+    use crate::claude_state::ClaudeState;
     let ctx_suffix = ctx_pct
         .map(|p| format!(" {}%", p as u32))
         .unwrap_or_default();
-
-    if has_input {
-        return (
-            format!("\u{2757} input{}{}", count_suffix, ctx_suffix),
-            Style::default().fg(theme.claude_needs_input),
-        );
-    }
-    if has_working {
-        return (
-            format!("\u{26a1} active{}{}", count_suffix, ctx_suffix),
-            Style::default().fg(theme.claude_active),
-        );
-    }
-    if has_idle || has_any_claude {
-        return (
-            format!("\u{25cf} idle{}{}", count_suffix, ctx_suffix),
-            Style::default().fg(theme.warning),
-        );
-    }
-
-    (
-        "\u{25cf} idle".to_string(),
-        Style::default().fg(theme.warning),
-    )
-}
-
-/// Returns Claude status text for a standalone session's single EnrichedSession.
-fn standalone_claude_status(session: &crate::session::EnrichedSession) -> (String, Style) {
-    let Some(ref claude) = session.claude else {
-        return (
-            "\u{25cb} none".to_string(),
-            Style::default().fg(Color::DarkGray),
-        );
-    };
-    use crate::claude_state::ClaudeState;
-    let ctx_suffix = claude
-        .context_window_pct
-        .map(|p| format!(" {}%", p as u32))
-        .unwrap_or_default();
-    match claude.status {
+    match state {
         ClaudeState::Input => (
-            format!("\u{2757} input{}", ctx_suffix),
-            Style::default().fg(Color::Red),
+            format!("\u{2757} input{}{}", suffix, ctx_suffix),
+            Style::default().fg(theme.claude_needs_input),
         ),
         ClaudeState::Working => (
-            format!("\u{26a1} active{}", ctx_suffix),
-            Style::default().fg(Color::Green),
+            format!("\u{26a1} active{}{}", suffix, ctx_suffix),
+            Style::default().fg(theme.claude_active),
         ),
         ClaudeState::Idle => (
-            format!("\u{25cf} idle{}", ctx_suffix),
-            Style::default().fg(Color::Yellow),
+            format!("\u{25cf} idle{}{}", suffix, ctx_suffix),
+            Style::default().fg(theme.warning),
         ),
         ClaudeState::None => (
             "\u{25cb} none".to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.claude_idle),
         ),
     }
+}
+
+/// Returns Claude status text for a standalone session's single EnrichedSession.
+fn standalone_claude_status(session: &crate::session::EnrichedSession, theme: &Theme) -> (String, Style) {
+    let Some(ref claude) = session.claude else {
+        return (
+            "\u{25cb} none".to_string(),
+            Style::default().fg(theme.claude_idle),
+        );
+    };
+    format_claude_state(claude.status, claude.context_window_pct, "", theme)
 }
 
 impl App {
@@ -1215,7 +1207,7 @@ impl App {
         // Render standalone session rows first.
         for (idx, ss) in self.standalone_sessions.iter().enumerate() {
             let selected = idx == self.cursor;
-            let (claude_text, claude_style) = standalone_claude_status(&ss.session);
+            let (claude_text, claude_style) = standalone_claude_status(&ss.session, theme);
             let status_text = match &ss.session.tmux.status {
                 crate::session::SessionStatus::Running { .. } => "running",
                 crate::session::SessionStatus::Dead => "not running",
@@ -1635,11 +1627,11 @@ pub(crate) fn header_height(terminal_height: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derive::{DisplayGroup, PrInfo, TaskRow};
+    use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
     use crate::session::{EnrichedSession, TmuxSessionInfo, ClaudeSessionInfo, Host, SessionStatus};
 
-    fn make_task_row(issue_number: u32, group: DisplayGroup) -> TaskRow {
-        TaskRow {
+    fn make_task_row(issue_number: u32, group: DisplayGroup) -> WorktreeRow {
+        WorktreeRow {
             repo_slug: "owner/repo".to_string(),
             worktree_path: format!("/workspace/repo-{}", issue_number),
             branch: format!("feat/issue-{}", issue_number),
@@ -1699,7 +1691,7 @@ mod tests {
 
     #[test]
     fn other_group_always_shown() {
-        let rows: Vec<TaskRow> = (1u32..=5)
+        let rows: Vec<WorktreeRow> = (1u32..=5)
             .map(|i| make_task_row(i, DisplayGroup::Other))
             .collect();
         let visible = visible_tasks(&rows, &FilterMode::All, "");
@@ -1723,11 +1715,11 @@ mod tests {
     #[test]
     fn filter_has_session() {
         let row_no_session = make_task_row(1, DisplayGroup::NeedsAttention);
-        let row_with_session = TaskRow {
+        let row_with_session = WorktreeRow {
             sessions: vec![make_session("sess")],
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
-        let shepherd = TaskRow {
+        let shepherd = WorktreeRow {
             is_main_worktree: true,
             ..make_task_row(3, DisplayGroup::RepoMain)
         };
@@ -1743,7 +1735,7 @@ mod tests {
     fn filter_has_pr() {
         use crate::derive::PrInfo as DPrInfo;
         let row_no_pr = make_task_row(1, DisplayGroup::NeedsAttention);
-        let row_with_pr = TaskRow {
+        let row_with_pr = WorktreeRow {
             pr: Some(DPrInfo {
                 number: 10,
                 branch: "feat/pr".to_string(),
@@ -1755,7 +1747,7 @@ mod tests {
             }),
             ..make_task_row(2, DisplayGroup::ReadyToMerge)
         };
-        let shepherd = TaskRow {
+        let shepherd = WorktreeRow {
             is_main_worktree: true,
             ..make_task_row(3, DisplayGroup::RepoMain)
         };
@@ -1769,7 +1761,7 @@ mod tests {
     #[test]
     fn filter_has_claude() {
         let row_no_claude = make_task_row(1, DisplayGroup::NeedsAttention);
-        let row_with_claude = TaskRow {
+        let row_with_claude = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Local,
@@ -1785,7 +1777,7 @@ mod tests {
             }],
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
-        let shepherd = TaskRow {
+        let shepherd = WorktreeRow {
             is_main_worktree: true,
             ..make_task_row(3, DisplayGroup::RepoMain)
         };
@@ -1800,11 +1792,11 @@ mod tests {
 
     #[test]
     fn search_filters_by_text() {
-        let row_match = TaskRow {
+        let row_match = WorktreeRow {
             branch: "feat/my-feature".to_string(),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let row_no_match = TaskRow {
+        let row_no_match = WorktreeRow {
             branch: "feat/other-thing".to_string(),
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
@@ -1816,7 +1808,7 @@ mod tests {
 
     #[test]
     fn shepherd_always_visible() {
-        let shepherd = TaskRow {
+        let shepherd = WorktreeRow {
             is_main_worktree: true,
             branch: "main".to_string(),
             ..make_task_row(1, DisplayGroup::RepoMain)
@@ -1831,7 +1823,7 @@ mod tests {
 
     #[test]
     fn pr_status_approved_text() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 42,
                 branch: "feat/branch".to_string(),
@@ -1865,7 +1857,7 @@ mod tests {
 
     #[test]
     fn claude_status_active() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Local,
@@ -1887,7 +1879,7 @@ mod tests {
 
     #[test]
     fn claude_status_idle() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![make_session("sess")],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -1897,7 +1889,7 @@ mod tests {
 
     #[test]
     fn claude_status_needs_input() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Local,
@@ -1926,7 +1918,7 @@ mod tests {
 
     #[test]
     fn pr_status_changes_requested() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
@@ -1948,7 +1940,7 @@ mod tests {
 
     #[test]
     fn pr_status_conflict() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
@@ -1970,7 +1962,7 @@ mod tests {
 
     #[test]
     fn pr_status_unresolved_threads() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
@@ -1993,7 +1985,7 @@ mod tests {
 
     #[test]
     fn pr_status_failing_ci() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
@@ -2071,7 +2063,7 @@ mod tests {
 
     #[test]
     fn claude_status_working_with_context_shows_percentage() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Working,
                 Some(73.0),
@@ -2085,7 +2077,7 @@ mod tests {
 
     #[test]
     fn claude_status_idle_from_hook_state() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Idle,
                 None,
@@ -2098,7 +2090,7 @@ mod tests {
 
     #[test]
     fn claude_status_input_from_hook_state() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Input,
                 None,
@@ -2111,7 +2103,7 @@ mod tests {
 
     #[test]
     fn claude_status_input_with_context_shows_percentage() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Input,
                 Some(95.0),
@@ -2125,7 +2117,7 @@ mod tests {
 
     #[test]
     fn claude_status_no_context_pct_when_none() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Working,
                 None,
@@ -2142,7 +2134,7 @@ mod tests {
 
     #[test]
     fn pr_status_pending_ci() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
                 branch: "feat/branch".to_string(),
@@ -2160,7 +2152,7 @@ mod tests {
 
     #[test]
     fn claude_status_multiple_sessions() {
-        let row = TaskRow {
+        let row = WorktreeRow {
             sessions: vec![
                 EnrichedSession {
                     tmux: TmuxSessionInfo {

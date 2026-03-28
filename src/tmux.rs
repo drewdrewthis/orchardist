@@ -151,8 +151,9 @@ pub fn derive_main_session_name(origin_path: &str, branch: Option<&str>) -> Stri
 
 /// Creates a new detached tmux session with the given name at the given directory.
 pub fn new_detached_session(name: &str, start_dir: &str) -> Result<()> {
+    let expanded_dir = shellexpand::tilde(start_dir);
     let output = Command::new("tmux")
-        .args(["new-session", "-d", "-s", name, "-c", start_dir])
+        .args(["new-session", "-d", "-s", name, "-c", expanded_dir.as_ref()])
         .output()
         .context("tmux new-session")?;
 

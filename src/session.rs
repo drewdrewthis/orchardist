@@ -94,6 +94,23 @@ pub struct EnrichedSession {
     pub claude: Option<ClaudeSessionInfo>,
 }
 
+impl ClaudeSessionInfo {
+    /// Constructs `ClaudeSessionInfo` from a hook state file, returning `None`
+    /// when the parsed state is `ClaudeState::None` (no active Claude process).
+    pub fn from_state_file(sf: &crate::claude_state::ClaudeStateFile) -> Option<Self> {
+        let state: ClaudeState = sf.state.parse().unwrap_or(ClaudeState::None);
+        if state == ClaudeState::None {
+            return None;
+        }
+        Some(ClaudeSessionInfo {
+            status: state,
+            cost_usd: sf.cost_usd,
+            context_window_pct: sf.context_window_pct,
+            model: sf.model.clone(),
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Standalone session types (for Part 2)
 // ---------------------------------------------------------------------------
