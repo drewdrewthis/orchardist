@@ -297,7 +297,10 @@ impl App {
                             })
                         }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
                         {
-                            notify("Claude needs input", &format!("{} is waiting for you", label));
+                            notify(
+                                "Claude needs input",
+                                &format!("{} is waiting for you", label),
+                            );
                         }
 
                         // Claude was working, now idle (finished).
