@@ -1,33 +1,51 @@
 //! Per-repository configuration loader for Orchard.
 //!
-//! Reads `orchard.json` from the `.git` directory of the current repo,
-//! supporting both the current single-remote format and a legacy multi-remote
+//! Reads two config layers and merges them, with the local layer taking precedence:
+//! - `.orchard.json` in the repo root (committable, team-shared)
+//! - `.git/orchard.json` in the git directory (local, machine-specific overrides)
+//!
+//! Supports the current `{ "remote": {...} }` format and a legacy multi-remote
 //! array format. Used by the imperative shell at startup to discover remote hosts.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::logger::LOG;
 use crate::types::{OrchardConfig, RemoteConfig};
 
-/// Loads `orchard.json` from the `.git` directory of the current repository.
-/// Supports the new `{ "remote": {...} }` format and the legacy `{ "remotes": [{...}] }` format.
+/// Loads the merged Orchard config for the current repository.
+///
+/// Reads `.orchard.json` (committable) and `.git/orchard.json` (local).
+/// Fields present in the local layer override the committable layer.
 /// Returns an empty `OrchardConfig` on any error.
 pub fn load_config() -> OrchardConfig {
     match git_absolute_dir() {
-        Ok(dir) => load_config_from_dir(&dir),
+        Ok(git_dir) => {
+            let repo_root = PathBuf::from(&git_dir)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let committable =
+                load_config_from_file(&PathBuf::from(&repo_root).join(".orchard.json"));
+            let local = load_config_from_file(&PathBuf::from(&git_dir).join("orchard.json"));
+            merge_configs(committable, local)
+        }
         Err(_) => OrchardConfig::default(),
     }
 }
 
-// Reads orchard.json from `dir`.
-fn load_config_from_dir(dir: &str) -> OrchardConfig {
-    let path = PathBuf::from(dir).join("orchard.json");
-    let data = match std::fs::read(&path) {
+/// Merges two `OrchardConfig` layers. Fields in `local` take precedence over `base`.
+fn merge_configs(base: OrchardConfig, local: OrchardConfig) -> OrchardConfig {
+    OrchardConfig {
+        remote: local.remote.or(base.remote),
+        setup_script: local.setup_script.or(base.setup_script),
+    }
+}
+
+// Reads and parses an OrchardConfig from a file path. Returns default on any error.
+fn load_config_from_file(path: &Path) -> OrchardConfig {
+    let data = match std::fs::read(path) {
         Ok(d) => d,
-        Err(_) => {
-            LOG.info("config: no orchard.json found");
-            return OrchardConfig::default();
-        }
+        Err(_) => return OrchardConfig::default(),
     };
     parse_config(&data, &path.to_string_lossy())
 }
@@ -48,6 +66,7 @@ fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
         remote: Option<RemoteConfig>,
         #[serde(default)]
         remotes: Vec<LegacyEntry>,
+        setup_script: Option<String>,
     }
 
     let raw: RawConfig = match serde_json::from_slice(data) {
@@ -66,6 +85,7 @@ fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
         ));
         return OrchardConfig {
             remote: Some(remote),
+            setup_script: raw.setup_script,
         };
     }
 
@@ -89,10 +109,14 @@ fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
                 repo_path: entry.repo_path,
                 shell,
             }),
+            setup_script: raw.setup_script,
         };
     }
 
-    OrchardConfig::default()
+    OrchardConfig {
+        remote: None,
+        setup_script: raw.setup_script,
+    }
 }
 
 // Runs `git rev-parse --absolute-git-dir` and returns the path.
@@ -173,5 +197,71 @@ mod tests {
         let f = write_temp("not json");
         let cfg = load_from_file(f.path().to_str().unwrap());
         assert!(cfg.remote.is_none());
+    }
+
+    #[test]
+    fn setup_script_is_parsed_from_json() {
+        let f = write_temp(r#"{"setup_script":"./scripts/setup-worktree.sh"}"#);
+        let cfg = load_from_file(f.path().to_str().unwrap());
+        assert_eq!(
+            cfg.setup_script,
+            Some("./scripts/setup-worktree.sh".to_string())
+        );
+    }
+
+    #[test]
+    fn setup_script_defaults_to_none_when_omitted() {
+        let f = write_temp("{}");
+        let cfg = load_from_file(f.path().to_str().unwrap());
+        assert!(cfg.setup_script.is_none());
+    }
+
+    #[test]
+    fn merge_configs_local_setup_script_wins() {
+        let base = OrchardConfig {
+            remote: None,
+            setup_script: Some("./team-setup.sh".to_string()),
+        };
+        let local = OrchardConfig {
+            remote: None,
+            setup_script: Some("./my-setup.sh".to_string()),
+        };
+        let merged = merge_configs(base, local);
+        assert_eq!(merged.setup_script, Some("./my-setup.sh".to_string()));
+    }
+
+    #[test]
+    fn merge_configs_base_setup_script_used_when_local_absent() {
+        let base = OrchardConfig {
+            remote: None,
+            setup_script: Some("./team-setup.sh".to_string()),
+        };
+        let local = OrchardConfig::default();
+        let merged = merge_configs(base, local);
+        assert_eq!(merged.setup_script, Some("./team-setup.sh".to_string()));
+    }
+
+    #[test]
+    fn setup_script_round_trips_through_serde() {
+        let cfg = OrchardConfig {
+            remote: None,
+            setup_script: Some("./scripts/setup.sh".to_string()),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: OrchardConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized.setup_script,
+            Some("./scripts/setup.sh".to_string())
+        );
+    }
+
+    #[test]
+    fn setup_script_omitted_from_json_when_none() {
+        let cfg = OrchardConfig {
+            remote: None,
+            setup_script: None,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("setup_script"));
     }
 }

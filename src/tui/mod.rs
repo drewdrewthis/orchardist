@@ -33,6 +33,8 @@ use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
 use state::{AppMsg, CleanupState, FilterMode, Phase, ViewState};
+use std::path::Path;
+use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -447,6 +449,23 @@ impl App {
                     }
                     self.start_refresh();
                 }
+                AppMsg::CreateWorktreeDone { session_name } => {
+                    self.switch_target = Some(session_name);
+                    self.start_refresh();
+                }
+                AppMsg::CreateWorktreeErr(e) => {
+                    self.warning = Some((e, Instant::now()));
+                }
+                AppMsg::CreateWorktreeWarn {
+                    session_name,
+                    warning,
+                } => {
+                    self.warning = Some((warning, Instant::now()));
+                    if !session_name.is_empty() {
+                        self.switch_target = Some(session_name);
+                    }
+                    self.start_refresh();
+                }
             }
         }
     }
@@ -506,6 +525,7 @@ impl App {
                     KeyCode::Char('d') => Some(Message::Delete),
                     KeyCode::Char('p') => Some(Message::Transfer),
                     KeyCode::Char('n') => Some(Message::NewSession),
+                    KeyCode::Char('w') => Some(Message::NewWorktree),
                     KeyCode::Char('f') => Some(Message::CycleFilter),
                     KeyCode::Char('/') => Some(Message::StartSearch),
                     KeyCode::Char('c') => Some(Message::Cleanup),
@@ -561,6 +581,17 @@ impl App {
                 KeyCode::Backspace => Some(Message::DeleteChar),
                 KeyCode::Char(c) if c.is_alphanumeric() || c == '-' || c == '_' => {
                     Some(Message::InputChar(c))
+                }
+                _ => None,
+            },
+            ViewState::NewWorktree(_) => match key.code {
+                KeyCode::Esc => Some(Message::Cancel),
+                KeyCode::Enter => Some(Message::ConfirmNewWorktree),
+                KeyCode::Backspace => Some(Message::DeleteWorktreeChar),
+                KeyCode::Char(c)
+                    if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.' =>
+                {
+                    Some(Message::InputWorktreeChar(c))
                 }
                 _ => None,
             },
@@ -903,6 +934,40 @@ impl App {
                 }
                 ok()
             }
+            Message::NewWorktree => {
+                self.view = ViewState::NewWorktree(state::NewWorktreeState {
+                    branch: String::new(),
+                });
+                ok()
+            }
+            Message::InputWorktreeChar(c) => {
+                if let ViewState::NewWorktree(nw) = &mut self.view {
+                    nw.branch.push(c);
+                }
+                ok()
+            }
+            Message::DeleteWorktreeChar => {
+                if let ViewState::NewWorktree(nw) = &mut self.view {
+                    nw.branch.pop();
+                }
+                ok()
+            }
+            Message::ConfirmNewWorktree => {
+                let branch = if let ViewState::NewWorktree(nw) = &self.view {
+                    if !nw.branch.is_empty() {
+                        Some(nw.branch.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(branch) = branch {
+                    self.view = ViewState::List;
+                    self.start_create_worktree(&branch);
+                }
+                ok()
+            }
         }
     }
 
@@ -925,6 +990,7 @@ impl App {
             ViewState::Transfer(_) => "Transfer",
             ViewState::Cleanup(_) => "Cleanup",
             ViewState::NewSession(_) => "NewSession",
+            ViewState::NewWorktree(_) => "NewWorktree",
             ViewState::Help => "Help",
         }
     }
@@ -946,6 +1012,10 @@ impl App {
             ViewState::NewSession(ns) => {
                 self.render_list(f);
                 self.render_new_session(ns, f);
+            }
+            ViewState::NewWorktree(nw) => {
+                self.render_list(f);
+                self.render_new_worktree(nw, f);
             }
             ViewState::Help => self.render_help(f),
         }
@@ -1025,6 +1095,116 @@ impl App {
                 }
             }
             let _ = tx.send(AppMsg::CleanupDone { deleted, errors });
+        });
+    }
+
+    /// Spawns a background thread to create a new git worktree and tmux session.
+    ///
+    /// On success, sends `AppMsg::CreateWorktreeDone` (or `CreateWorktreeWarn` if
+    /// the setup script fails). On failure, sends `AppMsg::CreateWorktreeErr`.
+    fn start_create_worktree(&self, branch: &str) {
+        let branch = branch.to_string();
+        let repo_root = self.repo_root.clone();
+        let repo_name = self.repo_name.clone();
+        let tx = self.tx.clone();
+        // Load setup_script from repo config at call time.
+        let setup_script = crate::config::load_config().setup_script;
+
+        std::thread::spawn(move || {
+            let worktree_path = transfer::derive_local_worktree_path(&repo_root, &branch);
+
+            // Try creating a new branch; fall back to checking out an existing one.
+            let new_branch_result = Command::new("git")
+                .args(["worktree", "add", "-b", &branch, &worktree_path])
+                .current_dir(&repo_root)
+                .output();
+
+            let add_ok = matches!(new_branch_result, Ok(out) if out.status.success());
+
+            if !add_ok {
+                // Branch may already exist — try checking it out directly.
+                let out = Command::new("git")
+                    .args(["worktree", "add", &worktree_path, &branch])
+                    .current_dir(&repo_root)
+                    .output();
+                match out {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        let _ = tx.send(AppMsg::CreateWorktreeErr(stderr.trim().to_string()));
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppMsg::CreateWorktreeErr(format!("{e}")));
+                        return;
+                    }
+                }
+            }
+
+            // Run setup script if configured.
+            let mut warning: Option<String> = None;
+            if let Some(script) = setup_script {
+                let script_path = Path::new(&repo_root).join(&script);
+                if !script_path.exists() {
+                    warning = Some(format!("setup script not found: {script}"));
+                } else {
+                    match Command::new(&script_path)
+                        .current_dir(&worktree_path)
+                        .output()
+                    {
+                        Ok(out) if !out.status.success() => {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let code = out.status.code().unwrap_or(-1);
+                            warning = Some(format!(
+                                "setup script failed (exit {code}): {}",
+                                stderr.trim()
+                            ));
+                        }
+                        Err(e) => {
+                            warning = Some(format!("setup script error: {e}"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Check if we're inside tmux before attempting session creation.
+            if std::env::var("TMUX").is_err() {
+                let hint = "run inside tmux for session switching".to_string();
+                let _ = tx.send(AppMsg::CreateWorktreeWarn {
+                    session_name: String::new(),
+                    warning: hint,
+                });
+                return;
+            }
+
+            // Derive session name and create tmux session.
+            let session_name = tmux::derive_session_name(&repo_name, Some(&branch), &worktree_path);
+            let opts = crate::types::SwitchToSessionOptions {
+                session_name: session_name.clone(),
+                worktree_path,
+                branch: Some(branch),
+                pr: None,
+            };
+
+            if let Err(e) = tmux::create_session(&opts) {
+                let _ = tx.send(AppMsg::CreateWorktreeErr(format!(
+                    "tmux session error: {e}"
+                )));
+                return;
+            }
+
+            match warning {
+                Some(w) => {
+                    let _ = tx.send(AppMsg::CreateWorktreeWarn {
+                        session_name,
+                        warning: w,
+                    });
+                }
+                None => {
+                    let _ = tx.send(AppMsg::CreateWorktreeDone { session_name });
+                }
+            }
         });
     }
 
@@ -1518,6 +1698,120 @@ mod tests {
         }];
         let stale = filter_stale(&rows);
         assert!(stale.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // New-worktree dialog (TEA) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn w_key_opens_new_worktree_dialog() {
+        let mut app = App::new_test(vec![]);
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::NewWorktree));
+        app.update(msg.unwrap());
+        assert!(matches!(app.view, ViewState::NewWorktree(_)));
+    }
+
+    #[test]
+    fn worktree_branch_accepts_valid_chars() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::NewWorktree(state::NewWorktreeState {
+            branch: String::new(),
+        });
+        for c in "feature/my-branch_1.x".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            if let Some(msg) = app.handle_event(key) {
+                app.update(msg);
+            }
+        }
+        if let ViewState::NewWorktree(nw) = &app.view {
+            assert_eq!(nw.branch, "feature/my-branch_1.x");
+        } else {
+            panic!("expected NewWorktree view");
+        }
+    }
+
+    #[test]
+    fn worktree_branch_rejects_spaces() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::NewWorktree(state::NewWorktreeState {
+            branch: String::new(),
+        });
+        for c in "feature branch".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            if let Some(msg) = app.handle_event(key) {
+                app.update(msg);
+            }
+        }
+        if let ViewState::NewWorktree(nw) = &app.view {
+            assert_eq!(nw.branch, "featurebranch");
+        } else {
+            panic!("expected NewWorktree view");
+        }
+    }
+
+    #[test]
+    fn worktree_branch_rejects_special_chars() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::NewWorktree(state::NewWorktreeState {
+            branch: String::new(),
+        });
+        for c in "feat!branch@".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            if let Some(msg) = app.handle_event(key) {
+                app.update(msg);
+            }
+        }
+        if let ViewState::NewWorktree(nw) = &app.view {
+            assert_eq!(nw.branch, "featbranch");
+        } else {
+            panic!("expected NewWorktree view");
+        }
+    }
+
+    #[test]
+    fn worktree_backspace_removes_last_char() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::NewWorktree(state::NewWorktreeState {
+            branch: "feature/xy".to_string(),
+        });
+        let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        let msg = app.handle_event(key).unwrap();
+        app.update(msg);
+        if let ViewState::NewWorktree(nw) = &app.view {
+            assert_eq!(nw.branch, "feature/x");
+        } else {
+            panic!("expected NewWorktree view");
+        }
+    }
+
+    #[test]
+    fn worktree_escape_returns_to_list() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::NewWorktree(state::NewWorktreeState {
+            branch: "feature/x".to_string(),
+        });
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let msg = app.handle_event(key).unwrap();
+        app.update(msg);
+        assert!(matches!(app.view, ViewState::List));
+    }
+
+    #[test]
+    fn worktree_enter_on_empty_does_nothing() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::NewWorktree(state::NewWorktreeState {
+            branch: String::new(),
+        });
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let msg = app.handle_event(key).unwrap();
+        app.update(msg);
+        // Should still be in NewWorktree since branch was empty
+        // (ConfirmNewWorktree with empty branch is a no-op)
+        // Actually the update transitions to List only when branch is non-empty
+        assert!(matches!(app.view, ViewState::NewWorktree(_)));
     }
 
     // -----------------------------------------------------------------------

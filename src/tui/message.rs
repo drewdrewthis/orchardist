@@ -84,6 +84,14 @@ pub enum Message {
     DeleteChar,
     /// Confirm creation of the new session.
     ConfirmNewSession,
+    /// Open the new-worktree branch-entry dialog.
+    NewWorktree,
+    /// Append a character to the new-worktree branch input.
+    InputWorktreeChar(char),
+    /// Delete the last character from the new-worktree branch input.
+    DeleteWorktreeChar,
+    /// Confirm creation of the new worktree.
+    ConfirmNewWorktree,
     /// Dismiss a Done/Error phase dialog (any-key screens).
     DismissDialog,
 }

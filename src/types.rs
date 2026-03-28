@@ -253,6 +253,10 @@ fn default_shell() -> String {
 pub struct OrchardConfig {
     /// Optional remote machine configuration for SSH-backed worktrees.
     pub remote: Option<RemoteConfig>,
+    /// Optional path to a setup script executed after creating a new worktree.
+    /// Resolved relative to the repo root; executed with cwd set to the new worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_script: Option<String>,
 }
 
 /// Parameters for switching the terminal to an existing or new tmux session.
