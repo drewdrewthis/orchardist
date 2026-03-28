@@ -251,6 +251,7 @@ impl App {
                     self.fetch_task_pane_content();
 
                     // Detect state transitions and fire desktop notifications.
+                    let terminal_app = self.global_config.terminal_app.as_str();
                     for row in &self.task_rows {
                         let key = row.worktree_path.clone();
                         let old = old_states.get(&key);
@@ -265,6 +266,7 @@ impl App {
                                 "Claude needs input",
                                 &format!("{} is waiting for you", label),
                                 session,
+                                terminal_app,
                             );
                         }
 
@@ -276,6 +278,7 @@ impl App {
                                 "Claude finished",
                                 label,
                                 session,
+                                terminal_app,
                             );
                         }
 
@@ -290,6 +293,7 @@ impl App {
                                     "CI Failed",
                                     &format!("#{} {}", pr.number, label),
                                     session,
+                                    terminal_app,
                                 );
                             }
 
@@ -304,6 +308,7 @@ impl App {
                                         pr.number, pr.unresolved_threads
                                     ),
                                     session,
+                                    terminal_app,
                                 );
                             }
                         }

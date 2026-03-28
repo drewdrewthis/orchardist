@@ -1,3 +1,10 @@
+//! Global Orchard configuration loaded from `~/.config/orchard/config.json`.
+//!
+//! Holds the repo registry (slug + path + optional remotes) and user-local
+//! preferences such as the preferred terminal app bundle ID for notifications.
+//! Machine-local preferences live here rather than per-repo config because they
+//! describe the *user's environment*, not the repository.
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -66,14 +73,46 @@ impl RepoConfig {
 }
 
 /// Top-level global configuration for Orchard.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalConfig {
+    /// Registered repositories.
+    #[serde(default)]
     pub repos: Vec<RepoConfig>,
+    /// macOS bundle ID of the terminal app to activate when a notification is clicked.
+    ///
+    /// Defaults to `"com.apple.Terminal"`. Common values:
+    /// - `"com.apple.Terminal"` — Terminal.app
+    /// - `"com.googlecode.iterm2"` — iTerm2
+    /// - `"dev.warp.Warp-Stable"` — Warp
+    /// - `"org.alacritty"` — Alacritty
+    /// - `"com.mitchellh.ghostty"` — Ghostty
+    #[serde(default = "default_terminal_app")]
+    pub terminal_app: String,
+}
+
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        GlobalConfig {
+            repos: Vec::new(),
+            terminal_app: default_terminal_app(),
+        }
+    }
+}
+
+fn default_terminal_app() -> String {
+    "com.apple.Terminal".to_string()
 }
 
 // ---------------------------------------------------------------------------
 // Config location
 // ---------------------------------------------------------------------------
+
+/// Returns the canonical path for writing the global config.
+///
+/// Always writes to `~/.config/orchard/config.json` (XDG location).
+fn global_config_write_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".config").join("orchard").join("config.json"))
+}
 
 fn global_config_path() -> Option<PathBuf> {
     // Check XDG-style ~/.config first (cross-platform convention),
@@ -111,6 +150,30 @@ pub fn load_global_config() -> GlobalConfig {
     }
 
     fallback_single_repo()
+}
+
+/// Persists the given `GlobalConfig` to `~/.config/orchard/config.json`.
+///
+/// Creates the parent directory if it does not exist. Writes atomically via a
+/// temporary file to avoid partial writes.
+pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
+    let path = global_config_write_path()
+        .ok_or_else(|| "Could not determine home directory".to_string())?;
+
+    let dir = path
+        .parent()
+        .ok_or_else(|| "config path has no parent directory".to_string())?;
+
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| format!("serializing config: {e}"))?;
+
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("renaming to {}: {e}", path.display()))?;
+
+    LOG.info(&format!("global_config: saved to {}", path.display()));
+    Ok(())
 }
 
 /// Checks whether CWD belongs to a configured repo. If not, adds it.
@@ -193,6 +256,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
     struct RawGlobalConfig {
         #[serde(default)]
         repos: Vec<RawRepo>,
+        #[serde(default = "default_terminal_app")]
+        terminal_app: String,
     }
 
     let raw: RawGlobalConfig = match serde_json::from_slice(&data) {
@@ -243,7 +308,10 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         })
         .collect();
 
-    let cfg = GlobalConfig { repos };
+    let cfg = GlobalConfig {
+        repos,
+        terminal_app: raw.terminal_app,
+    };
     LOG.info(&format!(
         "global_config: loaded {} repo(s) from {}",
         cfg.repos.len(),
@@ -285,7 +353,10 @@ fn fallback_single_repo() -> GlobalConfig {
         repo.slug
     ));
 
-    GlobalConfig { repos: vec![repo] }
+    GlobalConfig {
+        repos: vec![repo],
+        terminal_app: default_terminal_app(),
+    }
 }
 
 /// Reads `.git/orchard.json` from `repo_root` and extracts all `RemoteConfig`
@@ -596,6 +667,74 @@ mod tests {
         let cfg = load_from_path(&path);
 
         assert_eq!(cfg.repos.len(), 0);
+    }
+
+    #[test]
+    fn terminal_app_field_loads_via_load_from_path() {
+        let dir = tempdir().unwrap();
+        let json = r#"{ "terminal_app": "com.googlecode.iterm2", "repos": [] }"#;
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+
+        assert_eq!(cfg.terminal_app, "com.googlecode.iterm2");
+    }
+
+    #[test]
+    fn terminal_app_defaults_to_terminal_app_when_absent() {
+        let dir = tempdir().unwrap();
+        let path = write_config(dir.path(), r#"{ "repos": [] }"#);
+        let cfg = load_from_path(&path);
+
+        assert_eq!(cfg.terminal_app, "com.apple.Terminal");
+    }
+
+    #[test]
+    fn terminal_app_serializes_in_global_config() {
+        let cfg = GlobalConfig {
+            repos: vec![],
+            terminal_app: "dev.warp.Warp-Stable".to_string(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+
+        assert!(json.contains(r#""terminal_app":"dev.warp.Warp-Stable""#));
+    }
+
+    #[test]
+    fn existing_config_without_terminal_app_loads_with_default() {
+        let dir = tempdir().unwrap();
+        let json = r#"{
+            "repos": [
+                { "slug": "owner/repo", "path": "/workspace/repo" }
+            ]
+        }"#;
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+
+        assert_eq!(cfg.repos.len(), 1, "repos should still parse");
+        assert_eq!(
+            cfg.terminal_app, "com.apple.Terminal",
+            "terminal_app should default"
+        );
+    }
+
+    #[test]
+    fn save_global_config_round_trips() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        // We can't use save_global_config directly because it writes to the
+        // real home dir; test the serialization/deserialization round trip instead.
+        let cfg = GlobalConfig {
+            repos: vec![],
+            terminal_app: "org.alacritty".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(json.as_bytes()).unwrap();
+        drop(f);
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.terminal_app, "org.alacritty");
     }
 
     #[test]
