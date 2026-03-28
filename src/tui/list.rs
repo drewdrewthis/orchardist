@@ -373,13 +373,13 @@ impl App {
         let standalone_count = self.standalone_sessions.len();
 
         let action = if cursor_is_standalone(self.cursor, standalone_count) {
-            self.standalone_sessions.get(self.cursor).map(|ss| {
-                TaskEnterAction::JoinStandalone {
+            self.standalone_sessions
+                .get(self.cursor)
+                .map(|ss| TaskEnterAction::JoinStandalone {
                     session_name: ss.session.tmux.name.clone(),
                     command: ss.config.command.clone(),
                     cwd: ss.config.cwd.clone(),
-                }
-            })
+                })
         } else {
             let worktree_cursor = self.cursor - standalone_count;
             let tasks = visible_tasks_filtered(
@@ -457,11 +457,8 @@ impl App {
                     return false;
                 }
                 let repo_name = self.repo_name.clone();
-                let session_name = tmux::derive_session_name(
-                    &repo_name,
-                    branch.as_deref(),
-                    &worktree_path,
-                );
+                let session_name =
+                    tmux::derive_session_name(&repo_name, branch.as_deref(), &worktree_path);
                 self.join_or_create_session(
                     &session_name,
                     &worktree_path,

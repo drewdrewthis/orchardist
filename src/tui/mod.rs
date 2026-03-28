@@ -495,8 +495,7 @@ impl App {
 
                 match key.code {
                     KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                        navigation::cursor_index_from_digit(c, visible_count)
-                            .map(Message::CursorTo)
+                        navigation::cursor_index_from_digit(c, visible_count).map(Message::CursorTo)
                     }
                     KeyCode::Up | KeyCode::Char('k') => Some(Message::CursorUp),
                     KeyCode::Down | KeyCode::Char('j') => Some(Message::CursorDown),
@@ -663,8 +662,7 @@ impl App {
                 if let Some(vt) = visible.get(worktree_cursor)
                     && let Some(ref pr) = vt.row.pr
                 {
-                    let url =
-                        format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
+                    let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
                     crate::browser::open_url(&url);
                 }
                 ok()
@@ -684,8 +682,7 @@ impl App {
                 if let Some(vt) = visible.get(worktree_cursor)
                     && let Some(num) = vt.row.issue_number
                 {
-                    let url =
-                        format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
+                    let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
                     crate::browser::open_url(&url);
                 }
                 ok()
@@ -827,14 +824,15 @@ impl App {
                 ok()
             }
             Message::ToggleSelection => {
-                if let ViewState::Cleanup(cs) = &mut self.view {
-                    if !cs.stale.is_empty() && cs.cursor < cs.stale.len() {
-                        let path = cs.stale[cs.cursor].worktree_path.clone();
-                        if cs.selected.contains(&path) {
-                            cs.selected.remove(&path);
-                        } else {
-                            cs.selected.insert(path);
-                        }
+                if let ViewState::Cleanup(cs) = &mut self.view
+                    && !cs.stale.is_empty()
+                    && cs.cursor < cs.stale.len()
+                {
+                    let path = cs.stale[cs.cursor].worktree_path.clone();
+                    if cs.selected.contains(&path) {
+                        cs.selected.remove(&path);
+                    } else {
+                        cs.selected.insert(path);
                     }
                 }
                 ok()
@@ -848,8 +846,7 @@ impl App {
                         .cloned()
                         .collect();
                     if selected.is_empty() {
-                        self.warning =
-                            Some(("No items selected.".to_string(), Instant::now()));
+                        self.warning = Some(("No items selected.".to_string(), Instant::now()));
                     } else {
                         cs.phase = Phase::InProgress;
                         self.start_cleanup(selected);
@@ -900,8 +897,7 @@ impl App {
                         }
                         Err(e) => {
                             self.view = ViewState::List;
-                            self.warning =
-                                Some((format!("session error: {e}"), Instant::now()));
+                            self.warning = Some((format!("session error: {e}"), Instant::now()));
                         }
                     }
                 }
@@ -1127,15 +1123,14 @@ fn run_loop(
         // Poll for events with timeout (for spinner animation).
         if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))?
             && let Event::Key(key) = event::read()?
+            && let Some(msg) = app.handle_event(key)
         {
-            if let Some(msg) = app.handle_event(key) {
-                let mut result = app.update(msg);
-                while let Some(next) = result.next_msg.take() {
-                    result = app.update(next);
-                }
-                if result.quit {
-                    break;
-                }
+            let mut result = app.update(msg);
+            while let Some(next) = result.next_msg.take() {
+                result = app.update(next);
+            }
+            if result.quit {
+                break;
             }
         }
 
