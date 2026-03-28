@@ -14,6 +14,7 @@ use orchard::build_state;
 use orchard::global_config;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
+use orchard::setup_remote;
 use orchard::shell;
 use orchard::tui;
 
@@ -53,6 +54,7 @@ fn main() {
     match command.as_str() {
         "init" => handle_init(),
         "upgrade" => handle_upgrade(),
+        "setup-remote" => handle_setup_remote(&args),
         _ => {
             if json_flag {
                 handle_json();
@@ -68,6 +70,25 @@ fn handle_init() {
         Ok(()) => {}
         Err(e) => {
             eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn handle_setup_remote(args: &[String]) {
+    // args[0] = binary, args[1] = "setup-remote", args[2] = host.
+    let host = args.get(2).map(|s| s.as_str()).unwrap_or("");
+
+    if host.is_empty() {
+        eprintln!("Usage: orchard setup-remote <host>");
+        eprintln!("  <host> may be a remote name from config or a direct SSH target (user@host)");
+        std::process::exit(1);
+    }
+
+    match setup_remote::run(host) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }
@@ -163,9 +184,10 @@ fn install_panic_hooks() {
 fn print_usage() {
     eprintln!(
         r#"Usage:
-  orchard              Interactive worktree manager (popup mode)
-  orchard init         Interactive setup wizard for popup mode
-  orchard upgrade      Upgrade to the latest version
+  orchard                        Interactive worktree manager (popup mode)
+  orchard init                   Interactive setup wizard for popup mode
+  orchard setup-remote <host>    Provision a remote host for orchard
+  orchard upgrade                Upgrade to the latest version
 
 Options:
   --version, -V  Print version and exit

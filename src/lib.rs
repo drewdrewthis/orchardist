@@ -25,6 +25,7 @@ pub mod paths;
 pub mod priority;
 pub mod remote;
 pub mod session;
+pub mod setup_remote;
 pub mod shell;
 pub mod sources;
 pub mod status;
