@@ -41,11 +41,6 @@ use std::process::Command;
 // Constants
 // ---------------------------------------------------------------------------
 
-const SPINNER_FRAMES: &[&str] = &[
-    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
-    "\u{2807}", "\u{280f}",
-];
-
 const AUTO_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
@@ -111,7 +106,8 @@ pub struct App {
 
     // Auto-refresh
     last_refresh: Instant,
-    spinner_frame: usize,
+    /// Throbber animation state — advanced each frame via `calc_next()`.
+    throbber_state: throbber_widgets_tui::ThrobberState,
 
     // Previous snapshots used to detect state transitions between cache refreshes.
     previous_worktree_states: HashMap<String, WorktreeSnapshot>,
@@ -123,6 +119,12 @@ pub struct App {
     url_area: Cell<Rect>,
     /// Row index and timestamp of last mouse click, for double-click detection.
     last_click: Option<(usize, Instant)>,
+
+    /// Scroll state for the preview pane (tui-scrollview).
+    ///
+    /// Uses `Cell` for interior mutability so `render_task_preview` (which takes
+    /// `&self`) can update the state via `StatefulWidget::render`.
+    preview_scroll_state: std::cell::Cell<tui_scrollview::ScrollViewState>,
 }
 
 impl App {
@@ -171,12 +173,13 @@ impl App {
             tx,
             rx,
             last_refresh: Instant::now(),
-            spinner_frame: 0,
+            throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
             last_click: None,
+            preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
         }
     }
 
@@ -425,6 +428,11 @@ impl App {
                     };
                     if matches {
                         self.pane_content = content;
+                        // Reset scroll to bottom so most recent output is visible.
+                        // We set a max-offset; the ScrollView render will clamp it.
+                        let mut state = tui_scrollview::ScrollViewState::default();
+                        state.scroll_to_bottom();
+                        self.preview_scroll_state.set(state);
                     }
                 }
                 AppMsg::DeleteDone => {
@@ -563,6 +571,8 @@ impl App {
                     KeyCode::Char('r') => Some(Message::Refresh),
                     KeyCode::Char('R') => Some(Message::ReconnectHosts),
                     KeyCode::Char('?') => Some(Message::ToggleHelp),
+                    KeyCode::PageUp => Some(Message::PreviewPageUp),
+                    KeyCode::PageDown => Some(Message::PreviewPageDown),
                     KeyCode::Char('q') | KeyCode::Esc => Some(Message::Quit),
                     _ => None,
                 }
@@ -818,6 +828,18 @@ impl App {
             Message::CursorTo(idx) => {
                 self.cursor = idx;
                 self.fetch_task_pane_content();
+                ok()
+            }
+            Message::PreviewPageUp => {
+                let mut state = self.preview_scroll_state.get();
+                state.scroll_page_up();
+                self.preview_scroll_state.set(state);
+                ok()
+            }
+            Message::PreviewPageDown => {
+                let mut state = self.preview_scroll_state.get();
+                state.scroll_page_down();
+                self.preview_scroll_state.set(state);
                 ok()
             }
             Message::Enter => {
@@ -1196,6 +1218,7 @@ impl App {
     ///
     /// This is a read-only operation: it borrows `&self` and dispatches
     /// to the appropriate render method based on the current [`ViewState`].
+    /// The preview scroll state uses `Cell` for interior mutability.
     fn render(&self, f: &mut Frame) {
         match &self.view {
             ViewState::List => self.render_list(f),
@@ -1463,12 +1486,13 @@ impl App {
             tx,
             rx,
             last_refresh: Instant::now(),
-            spinner_frame: 0,
+            throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
             last_click: None,
+            preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
         }
     }
 }
@@ -1530,8 +1554,8 @@ fn run_loop(
     app: &mut App,
 ) -> anyhow::Result<Option<String>> {
     loop {
-        // Advance spinner before drawing so animation progresses each frame.
-        app.spinner_frame = (app.spinner_frame + 1) % SPINNER_FRAMES.len();
+        // Advance throbber animation before drawing so spinner progresses each frame.
+        app.throbber_state.calc_next();
 
         terminal.draw(|f| app.render(f))?;
 
@@ -3386,5 +3410,96 @@ mod tests {
         let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Right), 10, 6);
         assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    // Rich content widget tests (ScrollView preview, BigText header)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn handle_event_page_up_returns_preview_scroll() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let key = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::PreviewPageUp));
+    }
+
+    #[test]
+    fn handle_event_page_down_returns_preview_scroll() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let key = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::PreviewPageDown));
+    }
+
+    #[test]
+    fn preview_page_down_advances_scroll_state() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let initial = app.preview_scroll_state.get();
+        app.update(Message::PreviewPageDown);
+        let after = app.preview_scroll_state.get();
+        // After scrolling down, the y offset should have advanced.
+        assert!(
+            after.offset().y >= initial.offset().y,
+            "scroll_page_down should advance y offset"
+        );
+    }
+
+    #[test]
+    fn preview_page_up_decrements_scroll_state() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        // First scroll down, then back up.
+        app.update(Message::PreviewPageDown);
+        app.update(Message::PreviewPageDown);
+        let before = app.preview_scroll_state.get();
+        app.update(Message::PreviewPageUp);
+        let after = app.preview_scroll_state.get();
+        assert!(
+            after.offset().y <= before.offset().y,
+            "scroll_page_up should decrease y offset"
+        );
+    }
+
+    #[test]
+    fn bigtext_renders_repo_name_in_tall_terminal() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        app.repo_name = "orchard".to_string();
+        // Use a tall terminal (40 rows) with enough width for BigText.
+        // "orchard" = 7 chars * 8 cols = 56 cols needed.
+        let output = render_to_string(&mut app, 120, 40);
+        // The BigText rendering uses block characters (half-height pixels).
+        // Verify the repo name does NOT appear as plain text "orchard" in the header
+        // (it should be rendered as pixel blocks instead).
+        // The ASCII art "GIT ORCHARD" should NOT be present since BigText takes over.
+        assert!(
+            !output.contains("╔═╗╦═╗╔═╗"),
+            "ASCII art logo should not appear when BigText is used"
+        );
+    }
+
+    #[test]
+    fn ascii_art_renders_when_repo_name_too_wide() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        // A very long repo name that won't fit in BigText.
+        app.repo_name = "a-very-long-repository-name-that-exceeds-width".to_string();
+        // Use a narrow terminal: 46 chars * 8 = 368 cols needed > 80 available.
+        let output = render_to_string(&mut app, 80, 40);
+        // Should fall back to ASCII art header.
+        assert!(
+            output.contains("╔═╗╦═╗╔═╗"),
+            "ASCII art logo should appear when repo name is too wide for BigText"
+        );
+    }
+
+    #[test]
+    fn compact_header_on_short_terminal() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        app.repo_name = "orchard".to_string();
+        // Short terminal: 20 rows, well below FULL_HEADER_MIN_HEIGHT.
+        let output = render_to_string(&mut app, 120, 20);
+        // Compact header shows "Git Orchard" as plain text.
+        assert!(
+            output.contains("Git Orchard"),
+            "compact header should show 'Git Orchard' text"
+        );
     }
 }
