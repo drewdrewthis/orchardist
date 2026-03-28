@@ -6,7 +6,10 @@
 use std::env;
 use std::io::IsTerminal;
 
-use crossterm::{cursor, terminal::{self, LeaveAlternateScreen}};
+use crossterm::{
+    cursor,
+    terminal::{self, LeaveAlternateScreen},
+};
 use orchard::build_state;
 use orchard::global_config;
 use orchard::json_output::JsonOutput;
