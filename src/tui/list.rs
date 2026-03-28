@@ -1,9 +1,8 @@
-//! Worktree list view: rendering and keyboard handling.
+//! Worktree list view: rendering and Enter-key action handling.
 //!
 //! Draws the main task/worktree table, the detail pane, and the header;
-//! handles keypresses (navigate, select, open browser, start session, etc.);
-//! and formats row labels. This is the primary interactive surface of the TUI.
-use crossterm::event::{KeyCode, KeyEvent};
+//! formats row labels; and handles the Enter-key session join/create logic.
+//! Key-to-message mapping lives in `mod.rs` (`handle_event`).
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 
@@ -11,13 +10,10 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::derive::{DisplayGroup, WorktreeRow};
-use crate::navigation;
 use crate::paths;
 use crate::remote;
 use crate::tmux;
-use crate::tui::state::{
-    CleanupState, DeleteState, FilterMode, NewSessionState, Phase, TransferState, ViewState,
-};
+use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color};
 use crate::tui::{App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
 
@@ -60,7 +56,7 @@ enum TaskEnterAction {
 /// Returns whether the cursor is currently on a standalone session row.
 ///
 /// Standalone sessions occupy indices 0..standalone_count before worktree rows.
-fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bool {
+pub(crate) fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bool {
     cursor < standalone_count
 }
 
@@ -91,7 +87,7 @@ pub(crate) fn branch_tail(branch: &str) -> &str {
 /// Converts a `WorktreeRow` reference into a `Worktree` for use in dialog state.
 ///
 /// Fields not tracked in `WorktreeRow` are set to safe defaults.
-fn worktree_from_task_row(row: &crate::derive::WorktreeRow) -> crate::types::Worktree {
+pub(crate) fn worktree_from_task_row(row: &crate::derive::WorktreeRow) -> crate::types::Worktree {
     crate::types::Worktree {
         path: row.worktree_path.clone(),
         branch: Some(row.branch.clone()),
@@ -358,7 +354,7 @@ fn standalone_claude_status(
 
 impl App {
     /// Shows a warning and returns true if the cursor is on a standalone session.
-    fn guard_requires_worktree(&mut self, standalone_count: usize) -> bool {
+    pub(crate) fn guard_requires_worktree(&mut self, standalone_count: usize) -> bool {
         if cursor_is_standalone(self.cursor, standalone_count) {
             self.warning = Some((
                 "This action requires a worktree".to_string(),
@@ -370,334 +366,134 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_list_key(&mut self, key: KeyEvent) -> bool {
-        // Always delegate to the task list handler — task rows are the only data source.
-        self.handle_task_list_key(key)
-    }
+    /// Handles the Enter key action: join or create a tmux session.
+    ///
+    /// Returns `true` when the TUI should exit (to switch to a session).
+    pub(crate) fn handle_enter_action(&mut self) -> bool {
+        let standalone_count = self.standalone_sessions.len();
 
-    fn handle_task_list_key(&mut self, key: KeyEvent) -> bool {
-        // Search mode takes over all key input except Esc/Enter.
-        if self.search_active {
-            match key.code {
-                KeyCode::Esc => {
-                    self.search_active = false;
-                    self.search_text.clear();
+        let action = if cursor_is_standalone(self.cursor, standalone_count) {
+            self.standalone_sessions.get(self.cursor).map(|ss| {
+                TaskEnterAction::JoinStandalone {
+                    session_name: ss.session.tmux.name.clone(),
+                    command: ss.config.command.clone(),
+                    cwd: ss.config.cwd.clone(),
                 }
-                KeyCode::Enter => {
-                    self.search_active = false;
-                }
-                KeyCode::Backspace => {
-                    self.search_text.pop();
-                }
-                KeyCode::Char(c) => {
-                    self.search_text.push(c);
-                }
-                _ => {}
-            }
-            // Clamp cursor after search text change.
+            })
+        } else {
+            let worktree_cursor = self.cursor - standalone_count;
             let tasks = visible_tasks_filtered(
                 &self.task_rows,
                 &self.filter_mode,
                 &self.search_text,
                 self.active_repo_slug(),
             );
-            self.cursor = self.cursor.min(tasks.len().saturating_sub(1));
-            return false;
-        }
-
-        let standalone_count = self.standalone_sessions.len();
-        let worktree_visible_count = visible_tasks_filtered(
-            &self.task_rows,
-            &self.filter_mode,
-            &self.search_text,
-            self.active_repo_slug(),
-        )
-        .len();
-        let visible_count = standalone_count + worktree_visible_count;
-
-        match key.code {
-            // Digit jump 1-9: jump to flat index
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                if let Some(idx) = navigation::cursor_index_from_digit(c, visible_count) {
-                    self.cursor = idx;
-                    self.fetch_task_pane_content();
-                }
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                    self.fetch_task_pane_content();
-                }
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if visible_count > 0 && self.cursor < visible_count - 1 {
-                    self.cursor += 1;
-                    self.fetch_task_pane_content();
-                }
-                false
-            }
-            KeyCode::Enter => {
-                // Switch to the task's session, or create a worktree + session if none exist.
-                // Handle standalone sessions first (they occupy indices 0..standalone_count).
-                let action = if cursor_is_standalone(self.cursor, standalone_count) {
-                    self.standalone_sessions.get(self.cursor).map(|ss| {
-                        TaskEnterAction::JoinStandalone {
-                            session_name: ss.session.tmux.name.clone(),
-                            command: ss.config.command.clone(),
-                            cwd: ss.config.cwd.clone(),
-                        }
-                    })
+            let action = tasks.get(worktree_cursor).map(|vt| {
+                if let Some(session) = vt.row.sessions.first() {
+                    let host = match &session.tmux.host {
+                        crate::session::Host::Local => None,
+                        crate::session::Host::Remote(h) => Some(h.clone()),
+                    };
+                    TaskEnterAction::JoinSession {
+                        session_name: session.tmux.name.clone(),
+                        worktree_path: vt.row.worktree_path.clone(),
+                        branch: Some(vt.row.branch.clone()),
+                        host,
+                    }
                 } else {
-                    let worktree_cursor = self.cursor - standalone_count;
-                    let tasks = visible_tasks_filtered(
-                        &self.task_rows,
-                        &self.filter_mode,
-                        &self.search_text,
-                        self.active_repo_slug(),
-                    );
-                    let action = tasks.get(worktree_cursor).map(|vt| {
-                        if let Some(session) = vt.row.sessions.first() {
-                            let host = match &session.tmux.host {
-                                crate::session::Host::Local => None,
-                                crate::session::Host::Remote(h) => Some(h.clone()),
-                            };
-                            TaskEnterAction::JoinSession {
-                                session_name: session.tmux.name.clone(),
-                                worktree_path: vt.row.worktree_path.clone(),
-                                branch: Some(vt.row.branch.clone()),
-                                host,
-                            }
-                        } else {
-                            TaskEnterAction::CreateSession {
-                                worktree_path: vt.row.worktree_path.clone(),
-                                branch: Some(vt.row.branch.clone()),
-                                host: vt.row.worktree_host.clone(),
-                            }
-                        }
-                    });
-                    drop(tasks);
-                    action
-                };
-                match action {
-                    None => false,
-                    Some(TaskEnterAction::JoinSession {
-                        session_name,
-                        worktree_path,
-                        branch,
-                        host,
-                    }) => {
-                        // Guard: refuse to join a session on a host not confirmed reachable.
-                        if let Some(ref h) = host
-                            && self.host_reachable.get(h.as_str()) != Some(&true)
-                        {
-                            let msg = if self.host_reachable.contains_key(h.as_str()) {
-                                format!("@{} is unreachable", h)
-                            } else {
-                                format!("@{} — checking connectivity…", h)
-                            };
-                            self.warning = Some((msg, Instant::now()));
-                            return false;
-                        }
-                        // Has a session — join or create it (handles both remote and local).
-                        self.join_or_create_session(
-                            &session_name,
-                            &worktree_path,
-                            branch.as_deref(),
-                            host.as_deref(),
-                            None,
-                        )
+                    TaskEnterAction::CreateSession {
+                        worktree_path: vt.row.worktree_path.clone(),
+                        branch: Some(vt.row.branch.clone()),
+                        host: vt.row.worktree_host.clone(),
                     }
-                    Some(TaskEnterAction::CreateSession {
-                        worktree_path,
-                        branch,
-                        host,
-                    }) => {
-                        // Guard: refuse to create a session on a host not confirmed reachable.
-                        if let Some(ref h) = host
-                            && self.host_reachable.get(h.as_str()) != Some(&true)
-                        {
-                            let msg = if self.host_reachable.contains_key(h.as_str()) {
-                                format!("@{} is unreachable", h)
-                            } else {
-                                format!("@{} — checking connectivity…", h)
-                            };
-                            self.warning = Some((msg, Instant::now()));
-                            return false;
-                        }
-                        // No session but worktree exists — derive session name and create.
-                        let repo_name = self.repo_name.clone();
-                        let session_name = tmux::derive_session_name(
-                            &repo_name,
-                            branch.as_deref(),
-                            &worktree_path,
-                        );
-                        self.join_or_create_session(
-                            &session_name,
-                            &worktree_path,
-                            branch.as_deref(),
-                            host.as_deref(),
-                            None,
-                        )
-                    }
-                    Some(TaskEnterAction::JoinStandalone {
-                        session_name,
-                        command,
-                        cwd,
-                    }) => {
-                        // Standalone: if running, attach; if dead, restart with command.
-                        if tmux::session_exists(&session_name) {
+                }
+            });
+            drop(tasks);
+            action
+        };
+        match action {
+            None => false,
+            Some(TaskEnterAction::JoinSession {
+                session_name,
+                worktree_path,
+                branch,
+                host,
+            }) => {
+                // Guard: refuse to join a session on a host not confirmed reachable.
+                if let Some(ref h) = host
+                    && self.host_reachable.get(h.as_str()) != Some(&true)
+                {
+                    let msg = if self.host_reachable.contains_key(h.as_str()) {
+                        format!("@{} is unreachable", h)
+                    } else {
+                        format!("@{} -- checking connectivity...", h)
+                    };
+                    self.warning = Some((msg, Instant::now()));
+                    return false;
+                }
+                self.join_or_create_session(
+                    &session_name,
+                    &worktree_path,
+                    branch.as_deref(),
+                    host.as_deref(),
+                    None,
+                )
+            }
+            Some(TaskEnterAction::CreateSession {
+                worktree_path,
+                branch,
+                host,
+            }) => {
+                // Guard: refuse to create a session on a host not confirmed reachable.
+                if let Some(ref h) = host
+                    && self.host_reachable.get(h.as_str()) != Some(&true)
+                {
+                    let msg = if self.host_reachable.contains_key(h.as_str()) {
+                        format!("@{} is unreachable", h)
+                    } else {
+                        format!("@{} -- checking connectivity...", h)
+                    };
+                    self.warning = Some((msg, Instant::now()));
+                    return false;
+                }
+                let repo_name = self.repo_name.clone();
+                let session_name = tmux::derive_session_name(
+                    &repo_name,
+                    branch.as_deref(),
+                    &worktree_path,
+                );
+                self.join_or_create_session(
+                    &session_name,
+                    &worktree_path,
+                    branch.as_deref(),
+                    host.as_deref(),
+                    None,
+                )
+            }
+            Some(TaskEnterAction::JoinStandalone {
+                session_name,
+                command,
+                cwd,
+            }) => {
+                if tmux::session_exists(&session_name) {
+                    self.switch_target = Some(session_name);
+                    true
+                } else {
+                    match tmux::new_session_with_command(&session_name, &cwd, &command) {
+                        Ok(()) => {
                             self.switch_target = Some(session_name);
                             true
-                        } else {
-                            match tmux::new_session_with_command(&session_name, &cwd, &command) {
-                                Ok(()) => {
-                                    self.switch_target = Some(session_name);
-                                    true
-                                }
-                                Err(e) => {
-                                    self.warning = Some((
-                                        format!("Failed to start '{}': {}", session_name, e),
-                                        Instant::now(),
-                                    ));
-                                    false
-                                }
-                            }
+                        }
+                        Err(e) => {
+                            self.warning = Some((
+                                format!("Failed to start '{}': {}", session_name, e),
+                                Instant::now(),
+                            ));
+                            false
                         }
                     }
                 }
             }
-            KeyCode::Char('o') => {
-                if self.guard_requires_worktree(standalone_count) {
-                    return false;
-                }
-                // Open PR URL in browser for the selected task.
-                let worktree_cursor = self.cursor - standalone_count;
-                let visible = visible_tasks_filtered(
-                    &self.task_rows,
-                    &self.filter_mode,
-                    &self.search_text,
-                    self.active_repo_slug(),
-                );
-                if let Some(vt) = visible.get(worktree_cursor)
-                    && let Some(ref pr) = vt.row.pr
-                {
-                    // Construct PR URL from repo_slug and PR number.
-                    let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
-                    crate::browser::open_url(&url);
-                }
-                false
-            }
-            KeyCode::Char('i') => {
-                if self.guard_requires_worktree(standalone_count) {
-                    return false;
-                }
-                // Open issue URL in browser for the selected task.
-                let worktree_cursor = self.cursor - standalone_count;
-                let visible = visible_tasks_filtered(
-                    &self.task_rows,
-                    &self.filter_mode,
-                    &self.search_text,
-                    self.active_repo_slug(),
-                );
-                if let Some(vt) = visible.get(worktree_cursor)
-                    && let Some(num) = vt.row.issue_number
-                {
-                    let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
-                    crate::browser::open_url(&url);
-                }
-                false
-            }
-            KeyCode::Char('B') => {
-                self.show_branch_column = !self.show_branch_column;
-                false
-            }
-            KeyCode::Char('d') => {
-                if self.guard_requires_worktree(standalone_count) {
-                    return false;
-                }
-                let worktree_cursor = self.cursor - standalone_count;
-                let visible = visible_tasks_filtered(
-                    &self.task_rows,
-                    &self.filter_mode,
-                    &self.search_text,
-                    self.active_repo_slug(),
-                );
-                if let Some(vt) = visible.get(worktree_cursor) {
-                    let wt = worktree_from_task_row(vt.row);
-                    self.view = ViewState::ConfirmDelete(DeleteState {
-                        target: wt,
-                        phase: Phase::Confirm,
-                        error: None,
-                    });
-                }
-                false
-            }
-            KeyCode::Char('p') => {
-                if self.guard_requires_worktree(standalone_count) {
-                    return false;
-                }
-                let worktree_cursor = self.cursor - standalone_count;
-                let visible = visible_tasks_filtered(
-                    &self.task_rows,
-                    &self.filter_mode,
-                    &self.search_text,
-                    self.active_repo_slug(),
-                );
-                if let Some(vt) = visible.get(worktree_cursor) {
-                    let wt = worktree_from_task_row(vt.row);
-                    self.view = ViewState::Transfer(TransferState {
-                        target: wt,
-                        phase: Phase::Confirm,
-                        error: None,
-                    });
-                }
-                false
-            }
-            KeyCode::Char('n') => {
-                self.view = ViewState::NewSession(NewSessionState {
-                    name: String::new(),
-                    cursor: 0,
-                });
-                false
-            }
-            KeyCode::Char('f') => {
-                self.filter_mode = self.filter_mode.next();
-                self.cursor = 0;
-                false
-            }
-            KeyCode::Char('/') => {
-                self.search_active = true;
-                self.search_text.clear();
-                false
-            }
-            KeyCode::Char('c') => {
-                self.enter_cleanup_view();
-                false
-            }
-            KeyCode::Left => {
-                self.active_repo_index = self.active_repo_index.saturating_sub(1);
-                self.cursor = 0;
-                false
-            }
-            KeyCode::Right => {
-                let repo_count = self.global_config.repos.len();
-                self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
-                self.cursor = 0;
-                false
-            }
-            KeyCode::Char('r') => {
-                self.refreshing = true;
-                self.start_refresh();
-                false
-            }
-            KeyCode::Char('R') => {
-                self.reconnect_unreachable_hosts();
-                false
-            }
-            KeyCode::Char('q') | KeyCode::Esc => true,
-            _ => false,
         }
     }
 
@@ -772,7 +568,7 @@ impl App {
     /// If all hosts are reachable, displays an informational warning. Otherwise
     /// spawns a background thread to probe each unreachable host and send results
     /// back via the App message channel.
-    fn reconnect_unreachable_hosts(&mut self) {
+    pub(crate) fn reconnect_unreachable_hosts(&mut self) {
         let unreachable: Vec<String> = self
             .host_reachable
             .iter()
@@ -1010,7 +806,7 @@ impl App {
         }
     }
 
-    fn enter_cleanup_view(&mut self) {
+    pub(crate) fn enter_cleanup_view(&mut self) {
         let stale = filter_stale(&self.task_rows);
         let selected = stale
             .iter()
