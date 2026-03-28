@@ -749,10 +749,7 @@ impl App {
             } else {
                 host_spans.push(Span::styled(format!("  @{}", host), red_style));
                 host_spans.push(Span::styled(" \u{2717}", red_style)); // ✗
-                host_spans.push(Span::styled(
-                    " (stale)",
-                    Style::default().fg(theme.dimmed),
-                ));
+                host_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
             }
         }
 
@@ -804,10 +801,7 @@ impl App {
             } else {
                 host_line_spans.push(Span::styled(format!(" @{} ", host), red_style));
                 host_line_spans.push(Span::styled("\u{2717}", red_style));
-                host_line_spans.push(Span::styled(
-                    " (stale)",
-                    Style::default().fg(theme.dimmed),
-                ));
+                host_line_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
             }
         }
 
@@ -1171,9 +1165,8 @@ impl App {
                             .style(Style::default().fg(theme.error)),
                         Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
                             .style(Style::default().fg(theme.success)),
-                        None => {
-                            Cell::from(format!("@{}", h)).style(Style::default().fg(theme.host_unknown))
-                        }
+                        None => Cell::from(format!("@{}", h))
+                            .style(Style::default().fg(theme.host_unknown)),
                     }
                 } else {
                     Cell::from("")

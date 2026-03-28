@@ -237,6 +237,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)]
     fn theme_is_clone() {
         let t = Theme::default();
         let t2 = t.clone();
@@ -246,7 +247,10 @@ mod tests {
     #[test]
     fn display_group_shepherd_returns_theme_shepherd() {
         let theme = Theme::default();
-        assert_eq!(display_group_color(DisplayGroup::Shepherd, &theme), theme.shepherd);
+        assert_eq!(
+            display_group_color(DisplayGroup::Shepherd, &theme),
+            theme.shepherd
+        );
     }
 
     #[test]
@@ -288,6 +292,9 @@ mod tests {
     #[test]
     fn display_group_other_returns_theme_dimmed() {
         let theme = Theme::default();
-        assert_eq!(display_group_color(DisplayGroup::Other, &theme), theme.dimmed);
+        assert_eq!(
+            display_group_color(DisplayGroup::Other, &theme),
+            theme.dimmed
+        );
     }
 }
