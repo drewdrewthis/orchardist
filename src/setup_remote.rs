@@ -173,7 +173,9 @@ fn remote_to_info(remote: &RemoteConfig) -> RemoteInfo {
 // ---------------------------------------------------------------------------
 
 fn check_connectivity(host: &str) -> StepResult {
-    ssh_exec(host, "true").map(|_| ()).map_err(|e| e.to_string())
+    ssh_exec(host, "true")
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn check_dependency(host: &str, dep: &str) -> StepResult {
@@ -213,11 +215,8 @@ fn install_hook_script(host: &str) -> StepResult {
 
 fn register_remote_hooks(host: &str) -> StepResult {
     // Read existing settings.json (or empty object if missing).
-    let existing = ssh_exec(
-        host,
-        "cat ~/.claude/settings.json 2>/dev/null || echo '{}'",
-    )
-    .map_err(|e| e.to_string())?;
+    let existing = ssh_exec(host, "cat ~/.claude/settings.json 2>/dev/null || echo '{}'")
+        .map_err(|e| e.to_string())?;
 
     let merged = merge_hook_settings(existing.trim(), HOOK_COMMAND)?;
 
@@ -244,9 +243,12 @@ fn register_remote_hooks(host: &str) -> StepResult {
 /// # Errors
 ///
 /// Returns an error if the JSON is invalid or the hooks structure is malformed.
-pub(crate) fn merge_hook_settings(existing_json: &str, hook_command: &str) -> Result<String, String> {
-    let mut settings: serde_json::Value = serde_json::from_str(existing_json)
-        .map_err(|e| format!("invalid settings.json: {e}"))?;
+pub(crate) fn merge_hook_settings(
+    existing_json: &str,
+    hook_command: &str,
+) -> Result<String, String> {
+    let mut settings: serde_json::Value =
+        serde_json::from_str(existing_json).map_err(|e| format!("invalid settings.json: {e}"))?;
 
     let hooks_obj = settings
         .as_object_mut()
@@ -308,11 +310,19 @@ fn print_summary(results: &[(&str, StepResult)]) {
 
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as usize;
-        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        let b1 = if chunk.len() > 1 {
+            chunk[1] as usize
+        } else {
+            0
+        };
+        let b2 = if chunk.len() > 2 {
+            chunk[2] as usize
+        } else {
+            0
+        };
         out.push(CHARS[b0 >> 2] as char);
         out.push(CHARS[((b0 & 0x3) << 4) | (b1 >> 4)] as char);
         if chunk.len() > 1 {
@@ -463,9 +473,7 @@ mod tests {
     // Simple decoder for testing the encoder — not used in production code.
     fn base64_decode_simple(s: &str) -> Vec<u8> {
         let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let val = |c: u8| -> usize {
-            chars.iter().position(|&x| x == c).unwrap_or(0)
-        };
+        let val = |c: u8| -> usize { chars.iter().position(|&x| x == c).unwrap_or(0) };
         let bytes: Vec<u8> = s.bytes().filter(|&b| b != b'=').collect();
         let mut out = Vec::new();
         for chunk in bytes.chunks(4) {
