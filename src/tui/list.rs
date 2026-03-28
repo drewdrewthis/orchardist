@@ -818,6 +818,14 @@ impl App {
             errors: Vec::new(),
         });
     }
+
+    /// Starts a background heal diagnosis and transitions to a loading state.
+    ///
+    /// The `HealDone` message will arrive asynchronously and trigger the
+    /// transition to `ViewState::Heal`.
+    pub(crate) fn enter_heal_view(&mut self) {
+        self.start_heal();
+    }
 }
 
 // ---------------------------------------------------------------------------
