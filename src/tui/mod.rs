@@ -6,7 +6,10 @@
 mod dialogs;
 mod list;
 mod state;
+pub mod theme;
 mod widgets;
+
+pub use theme::Theme;
 
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -68,6 +71,8 @@ pub struct App {
     repo_name: String,
     pane_content: String,
     view: ViewState,
+    /// Centralized color theme for all TUI rendering.
+    theme: Theme,
 
     // Derived task view from caches
     task_rows: Vec<derive::TaskRow>,
@@ -128,6 +133,7 @@ impl App {
             repo_name,
             pane_content: String::new(),
             view,
+            theme: Theme::default(),
             task_rows,
             global_config: global_cfg,
             active_repo_index: 0,
@@ -633,6 +639,7 @@ impl App {
             repo_name: "test-repo".to_string(),
             pane_content: String::new(),
             view: ViewState::List,
+            theme: Theme::default(),
             task_rows,
             global_config: global_config::GlobalConfig::default(),
             active_repo_index: 0,

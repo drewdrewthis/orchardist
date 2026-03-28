@@ -14,10 +14,13 @@ use ratatui::widgets::*;
 ///
 /// `percent_x` controls popup width as a percentage of the terminal width.
 /// `height` is the absolute row count; it is clamped to the terminal height.
+/// `bg_color` fills the popup background (typically `theme.background`).
+#[allow(clippy::too_many_arguments)]
 pub fn render_popup(
     f: &mut Frame,
     lines: Vec<Line>,
     border_color: Color,
+    bg_color: Color,
     percent_x: u16,
     height: u16,
     title: Option<&str>,
@@ -25,19 +28,19 @@ pub fn render_popup(
 ) {
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color).bg(Color::Black))
+        .border_style(Style::default().fg(border_color).bg(bg_color))
         .border_type(BorderType::Rounded)
         .padding(padding);
     if let Some(t) = title {
         block = block.title(t).title_style(
             Style::default()
                 .fg(border_color)
-                .bg(Color::Black)
+                .bg(bg_color)
                 .add_modifier(Modifier::BOLD),
         );
     }
     let content = Paragraph::new(lines)
-        .style(Style::default().bg(Color::Black))
+        .style(Style::default().bg(bg_color))
         .block(block);
     let popup = centered_rect(percent_x, height, f.area());
     f.render_widget(Clear, popup);

@@ -18,6 +18,7 @@ use crate::tmux;
 use crate::tui::state::{
     CleanupState, DeleteState, FilterMode, NewSessionState, Phase, TransferState, ViewState,
 };
+use crate::tui::theme::{Theme, display_group_color};
 use crate::tui::{App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
@@ -59,17 +60,6 @@ impl DisplayGroup {
             Self::ClaudeWorking => "claude working",
             Self::ReadyToMerge => "ready to merge",
             Self::Other => "other",
-        }
-    }
-
-    fn color(self) -> Color {
-        match self {
-            Self::Shepherd => Color::Magenta,
-            Self::Prioritized => Color::White,
-            Self::NeedsAttention => Color::Red,
-            Self::ClaudeWorking => Color::Green,
-            Self::ReadyToMerge => Color::Cyan,
-            Self::Other => Color::DarkGray,
         }
     }
 }
@@ -190,7 +180,7 @@ pub(crate) fn visible_tasks_filtered<'a>(
 /// Returns a single PR status string for the task row.
 ///
 /// When a PR exists its number is prepended: e.g. `#123 ✓ approved`.
-fn pr_status_text(row: &TaskRow) -> (String, Style) {
+fn pr_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
     let Some(ref pr) = row.pr else {
         // No PR — check if the linked issue is closed/completed (stale worktree)
         if let Some(ref state) = row.issue_state
@@ -198,10 +188,10 @@ fn pr_status_text(row: &TaskRow) -> (String, Style) {
         {
             return (
                 format!("\u{2716} issue {}", state),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             );
         }
-        return ("no PR".to_string(), Style::default().fg(Color::DarkGray));
+        return ("no PR".to_string(), Style::default().fg(theme.dimmed));
     };
 
     let prefix = format!("#{} ", pr.number);
@@ -210,56 +200,56 @@ fn pr_status_text(row: &TaskRow) -> (String, Style) {
     if pr.state.as_deref() == Some("merged") {
         return (
             format!("{}\u{2713} merged", prefix),
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(theme.pr_merged),
         );
     }
     if pr.state.as_deref() == Some("closed") {
         return (
             format!("{}\u{2716} closed", prefix),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         );
     }
 
     if pr.review_decision.as_deref() == Some("approved") {
         return (
             format!("{}\u{2713} approved", prefix),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         );
     }
     if pr.review_decision.as_deref() == Some("changes_requested") {
         return (
             format!("{}\u{2716} changes req", prefix),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         );
     }
     if pr.has_conflicts {
         return (
             format!("{}\u{2716} conflict", prefix),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.merge_conflict),
         );
     }
     if pr.unresolved_threads > 0 {
         return (
             format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         );
     }
     if pr.checks_state.as_deref() == Some("failing") {
         return (
             format!("{}\u{2716} failing", prefix),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         );
     }
     if pr.checks_state.as_deref() == Some("pending") {
         return (
             format!("{}\u{25d0} pending CI", prefix),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         );
     }
     // Default for open PR with no special state
     (
         format!("{}\u{25cb} needs review", prefix),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.dimmed),
     )
 }
 
@@ -267,11 +257,11 @@ fn pr_status_text(row: &TaskRow) -> (String, Style) {
 ///
 /// When hook state files are available, shows richer info including context
 /// window percentage. Falls back to boolean flags from terminal scraping.
-fn claude_status_text(row: &TaskRow) -> (String, Style) {
+fn claude_status_text(row: &TaskRow, theme: &Theme) -> (String, Style) {
     if row.sessions.is_empty() {
         return (
             "\u{25cb} none".to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.claude_idle),
         );
     }
 
@@ -305,19 +295,19 @@ fn claude_status_text(row: &TaskRow) -> (String, Style) {
     if has_input {
         return (
             format!("\u{2757} input{}{}", count_suffix, ctx_suffix),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.claude_needs_input),
         );
     }
     if has_working {
         return (
             format!("\u{26a1} active{}{}", count_suffix, ctx_suffix),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.claude_active),
         );
     }
     if has_idle {
         return (
             format!("\u{25cf} idle{}{}", count_suffix, ctx_suffix),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         );
     }
 
@@ -325,25 +315,25 @@ fn claude_status_text(row: &TaskRow) -> (String, Style) {
     if row.sessions.iter().any(|s| s.claude_needs_input) {
         return (
             format!("\u{2757} input{}", count_suffix),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.claude_needs_input),
         );
     }
     if row.sessions.iter().any(|s| s.claude_is_working) {
         return (
             format!("\u{26a1} active{}", count_suffix),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.claude_active),
         );
     }
     if row.sessions.iter().any(|s| s.has_claude_active) {
         return (
             format!("\u{25cf} idle{}", count_suffix),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         );
     }
 
     (
         "\u{25cf} idle".to_string(),
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(theme.warning),
     )
 }
 
@@ -690,6 +680,7 @@ impl App {
             return;
         }
 
+        let theme = &self.theme;
         let area = f.area();
         let hdr_height = header_height(area.height);
 
@@ -707,11 +698,11 @@ impl App {
         // Error state
         if let Some(ref err) = self.error {
             let err_para = Paragraph::new(err.as_str())
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Red))
+                        .border_style(Style::default().fg(theme.error))
                         .border_type(BorderType::Rounded),
                 )
                 .wrap(Wrap { trim: true });
@@ -724,17 +715,17 @@ impl App {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             let loading_text = format!("{} Loading worktrees...", spinner);
             let para = Paragraph::new(loading_text)
-                .style(Style::default().fg(Color::Cyan))
+                .style(Style::default().fg(theme.accent))
                 .alignment(Alignment::Center);
             f.render_widget(para, chunks[2]);
         } else {
             let empty =
                 Paragraph::new("No worktrees found. Run `orchard init` to configure a repo.")
-                    .style(Style::default().fg(Color::Yellow))
+                    .style(Style::default().fg(theme.warning))
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .border_style(Style::default().fg(Color::Yellow))
+                            .border_style(Style::default().fg(theme.warning))
                             .border_type(BorderType::Rounded),
                     )
                     .alignment(Alignment::Center);
@@ -743,8 +734,9 @@ impl App {
     }
 
     pub(crate) fn render_header(&self, f: &mut Frame, area: Rect) {
-        let green_style = Style::default().fg(Color::Green);
-        let red_style = Style::default().fg(Color::Red);
+        let theme = &self.theme;
+        let green_style = Style::default().fg(theme.success);
+        let red_style = Style::default().fg(theme.error);
 
         // Build host status spans (sorted by host name for stable display).
         let mut host_spans: Vec<Span> = Vec::new();
@@ -757,10 +749,7 @@ impl App {
             } else {
                 host_spans.push(Span::styled(format!("  @{}", host), red_style));
                 host_spans.push(Span::styled(" \u{2717}", red_style)); // ✗
-                host_spans.push(Span::styled(
-                    " (stale)",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                host_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
             }
         }
 
@@ -769,7 +758,7 @@ impl App {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             Span::styled(
                 format!("  {} refreshing...", spinner),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             )
         } else {
             let elapsed = self.last_refresh.elapsed().as_secs();
@@ -780,14 +769,14 @@ impl App {
             } else {
                 format!("  ({}h ago)", elapsed / 3600)
             };
-            Span::styled(ts_text, Style::default().fg(Color::DarkGray))
+            Span::styled(ts_text, Style::default().fg(theme.dimmed))
         };
 
         if header_height(f.area().height) == 1 {
             let mut spans = vec![Span::styled(
                 "\u{1f333} Git Orchard",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
             )];
             spans.extend(host_spans);
@@ -795,7 +784,7 @@ impl App {
             if !self.refreshing {
                 spans.push(Span::styled(
                     "  r:refresh",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
             }
             let line = Line::from(spans);
@@ -812,15 +801,12 @@ impl App {
             } else {
                 host_line_spans.push(Span::styled(format!(" @{} ", host), red_style));
                 host_line_spans.push(Span::styled("\u{2717}", red_style));
-                host_line_spans.push(Span::styled(
-                    " (stale)",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                host_line_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
             }
         }
 
         let logo_style = Style::default()
-            .fg(Color::Green)
+            .fg(theme.success)
             .add_modifier(Modifier::BOLD);
         let mut header_text = vec![
             Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
@@ -839,13 +825,13 @@ impl App {
             .alignment(Alignment::Center)
             .style(
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
             )
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Green))
+                    .border_style(Style::default().fg(theme.success))
                     .border_type(BorderType::Rounded),
             );
         f.render_widget(header, area);
@@ -1022,9 +1008,11 @@ impl App {
         idx += 1;
         idx += 1; // spacer
 
+        let theme = &self.theme;
+
         // Header row
         let header_style = Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.dimmed)
             .add_modifier(Modifier::BOLD);
         let mut header_cells = vec![Cell::from(" #"), Cell::from("ISSUE"), Cell::from("TITLE")];
         if show_branch {
@@ -1045,11 +1033,11 @@ impl App {
             .title(table_title)
             .title_style(
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.accent))
             .border_type(BorderType::Rounded);
 
         let table = Table::new(rows, &widths)
@@ -1070,7 +1058,7 @@ impl App {
         if has_warning {
             if let Some((ref msg, _)) = self.warning {
                 let warn = Paragraph::new(msg.as_str())
-                    .style(Style::default().fg(Color::Yellow))
+                    .style(Style::default().fg(theme.warning))
                     .alignment(Alignment::Center);
                 f.render_widget(warn, chunks[idx]);
             }
@@ -1092,6 +1080,7 @@ impl App {
         title_width: usize,
         num_columns: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>) {
+        let theme = &self.theme;
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
         let mut last_group: Option<DisplayGroup> = None;
@@ -1102,13 +1091,13 @@ impl App {
             // Section header when display group changes
             if last_group != Some(vt.group) {
                 last_group = Some(vt.group);
-                let header_row = group_header_row(vt.group, num_columns);
+                let header_row = group_header_row(vt.group, num_columns, theme);
                 rows.push(header_row);
                 row_heights.push(1);
             }
 
-            let (pr_text, pr_style) = pr_status_text(vt.row);
-            let (claude_text, claude_style) = claude_status_text(vt.row);
+            let (pr_text, pr_style) = pr_status_text(vt.row, theme);
+            let (claude_text, claude_style) = claude_status_text(vt.row, theme);
 
             let title_raw = if vt.row.is_shepherd {
                 // Shepherd rows show the repo name, not the branch.
@@ -1137,7 +1126,7 @@ impl App {
 
             let row_style = if selected {
                 let base = Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD);
                 if host_unreachable {
                     base.add_modifier(Modifier::DIM)
@@ -1153,7 +1142,7 @@ impl App {
             let issue_cell = if let Some(num) = vt.row.issue_number {
                 Cell::from(format!("#{}", num))
             } else {
-                Cell::from("").style(Style::default().fg(Color::DarkGray))
+                Cell::from("").style(Style::default().fg(theme.dimmed))
             };
 
             let mut cells = vec![
@@ -1165,7 +1154,7 @@ impl App {
             if show_branch {
                 let branch_display = crate::paths::truncate_left(branch_tail(&vt.row.branch), 20);
                 let branch_cell =
-                    Cell::from(branch_display).style(Style::default().fg(Color::DarkGray));
+                    Cell::from(branch_display).style(Style::default().fg(theme.dimmed));
                 cells.push(branch_cell);
             }
 
@@ -1173,12 +1162,11 @@ impl App {
                 let host_cell = if let Some(h) = task_host {
                     match self.host_reachable.get(h) {
                         Some(&false) => Cell::from(format!("@{} \u{2717}", h))
-                            .style(Style::default().fg(Color::Red)),
+                            .style(Style::default().fg(theme.error)),
                         Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
-                            .style(Style::default().fg(Color::Green)),
-                        None => {
-                            Cell::from(format!("@{}", h)).style(Style::default().fg(Color::Magenta))
-                        }
+                            .style(Style::default().fg(theme.success)),
+                        None => Cell::from(format!("@{}", h))
+                            .style(Style::default().fg(theme.host_unknown)),
                     }
                 } else {
                     Cell::from("")
@@ -1227,15 +1215,16 @@ impl App {
             issue_part, title_part, wt_part, pr_part
         );
 
+        let theme = &self.theme;
         let block = Block::default()
             .title(title)
             .title_style(
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.border)
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(theme.border))
             .border_type(BorderType::Double);
 
         // Truncate content lines to fit
@@ -1249,7 +1238,7 @@ impl App {
         let content = display_lines.join("\n");
 
         let preview = Paragraph::new(content)
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme.preview_content))
             .block(block);
         f.render_widget(preview, area);
     }
@@ -1262,11 +1251,12 @@ impl App {
         key_style: Style,
         quit_label: &'static str,
     ) {
+        let theme = &self.theme;
         if self.refreshing {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             spans.push(Span::styled(
                 format!("{} refreshing...", spinner),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             ));
         } else {
             spans.push(Span::styled("r", key_style));
@@ -1291,19 +1281,20 @@ impl App {
 
     /// Renders the hint bar for task mode.
     pub(crate) fn render_hints_task(&self, f: &mut Frame, area: Rect) {
-        let sep = Span::styled(" \u{2502} ", Style::default().fg(Color::DarkGray));
+        let theme = &self.theme;
+        let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.dimmed));
         let key_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
 
         // When search is active, show the search input indicator.
         if self.search_active {
             let search_display = format!("/ {}_", self.search_text);
             let hints = Paragraph::new(Line::from(vec![
-                Span::styled(search_display, Style::default().fg(Color::Yellow)),
+                Span::styled(search_display, Style::default().fg(theme.search_highlight)),
                 Span::styled(
                     "  esc:cancel  enter:apply",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ),
             ]))
             .alignment(Alignment::Center);
@@ -1333,7 +1324,7 @@ impl App {
             spans.push(Span::styled("o", key_style));
             spans.push(Span::raw(" pr"));
         } else {
-            spans.push(Span::styled("o pr", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("o pr", Style::default().fg(theme.dimmed)));
         }
         spans.push(sep.clone());
 
@@ -1362,7 +1353,7 @@ impl App {
             spans.push(sep.clone());
             spans.push(Span::styled(
                 format!("[\u{25c4} {} \u{25ba}]", label),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             ));
         }
 
@@ -1371,7 +1362,7 @@ impl App {
             spans.push(sep.clone());
             spans.push(Span::styled(
                 format!("[{}]", self.filter_mode),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.search_highlight),
             ));
         }
 
@@ -1380,7 +1371,7 @@ impl App {
             spans.push(sep.clone());
             spans.push(Span::styled(
                 format!("[/{}]", self.search_text),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.search_highlight),
             ));
         }
 
@@ -1404,8 +1395,8 @@ impl App {
 /// Creates a section header row spanning all columns for a display group.
 ///
 /// `num_columns` is the total number of columns in the table (must match the data rows).
-/// The Shepherd header uses bold + Cyan styling.
-fn group_header_row(group: DisplayGroup, num_columns: usize) -> Row<'static> {
+/// The Shepherd header uses bold + accent styling.
+fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> Row<'static> {
     let label = group.label().to_string();
 
     // ──── label ────
@@ -1420,9 +1411,9 @@ fn group_header_row(group: DisplayGroup, num_columns: usize) -> Row<'static> {
     );
 
     let (color, bold) = if group == DisplayGroup::Shepherd {
-        (Color::Cyan, true)
+        (theme.accent, true)
     } else {
-        (group.color(), false)
+        (display_group_color(group, theme), false)
     };
 
     let title_style = if bold {
@@ -1665,7 +1656,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
             text.starts_with("#42 "),
             "expected '#42 ' prefix in: {}",
@@ -1681,7 +1672,7 @@ mod tests {
     #[test]
     fn pr_status_no_pr() {
         let row = make_task_row(1, DisplayGroup::Other);
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert_eq!(text, "no PR");
     }
 
@@ -1701,7 +1692,7 @@ mod tests {
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
     }
 
@@ -1721,7 +1712,7 @@ mod tests {
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
     }
 
@@ -1741,14 +1732,14 @@ mod tests {
             }],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
     }
 
     #[test]
     fn claude_status_none_when_no_session() {
         let row = make_task_row(1, DisplayGroup::Other);
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("none"), "expected 'none' in: {}", text);
     }
 
@@ -1766,7 +1757,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
             text.contains("changes req"),
             "expected 'changes req' in: {}",
@@ -1788,7 +1779,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
             text.contains("conflict"),
             "expected 'conflict' in: {}",
@@ -1810,7 +1801,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
             text.contains("unresolved"),
             "expected 'unresolved' in: {}",
@@ -1833,7 +1824,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
     }
 
@@ -1905,7 +1896,7 @@ mod tests {
             )],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
         assert!(text.contains("73%"), "expected '73%' in: {}", text);
     }
@@ -1919,7 +1910,7 @@ mod tests {
             )],
             ..make_task_row(1, DisplayGroup::Other)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
     }
 
@@ -1932,7 +1923,7 @@ mod tests {
             )],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
     }
 
@@ -1945,7 +1936,7 @@ mod tests {
             )],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
         assert!(text.contains("95%"), "expected '95%' in: {}", text);
     }
@@ -1959,7 +1950,7 @@ mod tests {
             )],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(
             !text.contains('%'),
             "expected no % when context_window_pct is None: {}",
@@ -1981,7 +1972,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::Other)
         };
-        let (text, _) = pr_status_text(&row);
+        let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("pending"), "expected 'pending' in: {}", text);
     }
 
@@ -2014,7 +2005,7 @@ mod tests {
             ],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = claude_status_text(&row);
+        let (text, _) = claude_status_text(&row, &Theme::default());
         // Input takes priority over working; count suffix should show " 2"
         assert!(text.contains("input"), "expected 'input' in: {}", text);
         assert!(

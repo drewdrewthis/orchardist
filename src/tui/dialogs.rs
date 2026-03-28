@@ -46,6 +46,7 @@ impl App {
     }
 
     pub(crate) fn render_delete(&self, state: &DeleteState, f: &mut Frame) {
+        let theme = &self.theme;
         let wt = &state.target;
         let branch_label = wt.branch.as_deref().unwrap_or("(detached)");
         let path_str = paths::tildify(&wt.path);
@@ -82,24 +83,24 @@ impl App {
             Phase::Done => {
                 lines.push(Line::styled(
                     "\u{2713} Worktree deleted.",
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.success),
                 ));
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     "Press any key to go back.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
             }
             Phase::Error => {
                 let err_msg = state.error.as_deref().unwrap_or("unknown error");
                 lines.push(Line::styled(
                     format!("\u{2716} Error: {}", err_msg),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.error),
                 ));
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     "Press any key to go back.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
             }
             Phase::Idle => {}
@@ -108,7 +109,8 @@ impl App {
         render_popup(
             f,
             lines,
-            Color::Yellow,
+            theme.warning,
+            theme.background,
             70,
             12,
             None,
@@ -145,6 +147,7 @@ impl App {
     }
 
     pub(crate) fn render_transfer(&self, state: &TransferState, f: &mut Frame) {
+        let theme = &self.theme;
         let wt = &state.target;
         let branch_label = wt.branch.as_deref().unwrap_or("(detached)");
         let path_str = paths::tildify(&wt.path);
@@ -166,7 +169,7 @@ impl App {
                 if wt.tmux_attached {
                     lines.push(Line::styled(
                         "Session is currently attached \u{2014} it will be killed.",
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme.warning),
                     ));
                 }
                 lines.push(Line::from(""));
@@ -184,24 +187,24 @@ impl App {
             Phase::Done => {
                 lines.push(Line::styled(
                     "\u{2713} Transfer complete.",
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.success),
                 ));
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     "Press any key to continue.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
             }
             Phase::Error => {
                 let err_msg = state.error.as_deref().unwrap_or("unknown error");
                 lines.push(Line::styled(
                     format!("\u{2716} Error: {}", err_msg),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.error),
                 ));
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     "Press any key to continue.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
             }
             Phase::Idle => {}
@@ -210,7 +213,8 @@ impl App {
         render_popup(
             f,
             lines,
-            Color::Yellow,
+            theme.warning,
+            theme.background,
             70,
             12,
             None,
@@ -283,6 +287,7 @@ impl App {
     }
 
     pub(crate) fn render_cleanup(&self, state: &CleanupState, f: &mut Frame) {
+        let theme = &self.theme;
         let mut lines: Vec<Line> = Vec::new();
 
         match state.phase {
@@ -290,7 +295,7 @@ impl App {
                 lines.push(Line::styled(
                     "\u{2713} Cleanup complete",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme.success)
                         .add_modifier(Modifier::BOLD),
                 ));
                 lines.push(Line::from(""));
@@ -303,29 +308,29 @@ impl App {
                         let short = paths::truncate_left(&paths::tildify(d), 50);
                         lines.push(Line::styled(
                             format!("  \u{2713} {}", short),
-                            Style::default().fg(Color::Green),
+                            Style::default().fg(theme.success),
                         ));
                     }
                 } else {
                     lines.push(Line::styled(
                         "No worktrees were deleted.",
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme.warning),
                     ));
                 }
                 if !state.errors.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(Line::styled("Errors:", Style::default().fg(Color::Red)));
+                    lines.push(Line::styled("Errors:", Style::default().fg(theme.error)));
                     for e in &state.errors {
                         lines.push(Line::styled(
                             format!("  \u{2716} {}", e),
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(theme.error),
                         ));
                     }
                 }
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     "Press q to go back.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
             }
             Phase::InProgress => {
@@ -337,7 +342,7 @@ impl App {
                         state.selected.len()
                     ),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 ));
                 lines.push(Line::from(""));
@@ -346,7 +351,7 @@ impl App {
                         let short = paths::truncate_left(&paths::tildify(&row.worktree_path), 50);
                         lines.push(Line::styled(
                             format!("  {} {}", spinner, short),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme.dimmed),
                         ));
                     }
                 }
@@ -358,19 +363,19 @@ impl App {
                 ));
                 lines.push(Line::styled(
                     "space toggle  enter confirm  q cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.dimmed),
                 ));
                 lines.push(Line::from(""));
 
                 if state.stale.is_empty() {
                     lines.push(Line::styled(
                         "No stale worktrees found.",
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(theme.success),
                     ));
                     lines.push(Line::from(""));
                     lines.push(Line::styled(
                         "Press q to go back.",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.dimmed),
                     ));
                 } else {
                     for (i, row) in state.stale.iter().enumerate() {
@@ -402,7 +407,7 @@ impl App {
                             lines.push(Line::styled(
                                 parts,
                                 Style::default()
-                                    .fg(Color::Cyan)
+                                    .fg(theme.accent)
                                     .add_modifier(Modifier::BOLD),
                             ));
                         } else {
@@ -416,7 +421,8 @@ impl App {
         render_popup(
             f,
             lines,
-            Color::Cyan,
+            theme.accent,
+            theme.background,
             90,
             24,
             None,
@@ -477,19 +483,20 @@ impl App {
     }
 
     pub(crate) fn render_new_session(&self, state: &NewSessionState, f: &mut Frame) {
+        let theme = &self.theme;
         let input_with_cursor = format!("{}\u{2588}", state.name);
 
         let lines = vec![
             Line::from("Session name:"),
             Line::from(Span::styled(
                 input_with_cursor,
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             )),
             Line::from(""),
             Line::styled(
                 "enter confirm  esc cancel",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.dimmed)
                     .add_modifier(Modifier::DIM),
             ),
         ];
@@ -497,7 +504,8 @@ impl App {
         render_popup(
             f,
             lines,
-            Color::Cyan,
+            theme.accent,
+            theme.background,
             60,
             7,
             Some(" New Session "),
@@ -524,9 +532,10 @@ impl App {
     pub(crate) fn render_help(&self, f: &mut Frame) {
         self.render_list(f);
 
-        let dim = Style::default().fg(Color::DarkGray);
+        let theme = &self.theme;
+        let dim = Style::default().fg(theme.dimmed);
         let key_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
 
         let lines = vec![
@@ -594,7 +603,8 @@ impl App {
         render_popup(
             f,
             lines,
-            Color::Cyan,
+            theme.accent,
+            theme.background,
             60,
             20,
             Some(" HELP "),
