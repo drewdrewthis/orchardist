@@ -10,7 +10,9 @@ use crate::navigation;
 use crate::paths;
 use crate::remote;
 use crate::tmux;
-use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
+use crate::tui::state::{
+    CleanupState, DeleteState, FilterMode, NewSessionState, Phase, TransferState, ViewState,
+};
 use crate::tui::{App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
@@ -75,6 +77,27 @@ pub(crate) fn branch_tail(branch: &str) -> &str {
     match branch.rfind('/') {
         Some(pos) => &branch[pos + 1..],
         None => branch,
+    }
+}
+
+/// Converts a `TaskRow` reference into a `Worktree` for use in dialog state.
+///
+/// Fields not tracked in `TaskRow` are set to safe defaults.
+fn worktree_from_task_row(row: &crate::derive::TaskRow) -> crate::types::Worktree {
+    crate::types::Worktree {
+        path: row.worktree_path.clone(),
+        branch: Some(row.branch.clone()),
+        head: String::new(),
+        is_bare: false,
+        has_conflicts: false,
+        pr: None,
+        pr_loading: false,
+        tmux_session: row.sessions.first().map(|s| s.name.clone()),
+        tmux_attached: false,
+        tmux_pane_title: None,
+        remote: row.worktree_host.clone(),
+        issue_number: row.issue_number,
+        issue_state: None,
     }
 }
 
@@ -513,8 +536,7 @@ impl App {
                 self.show_branch_column = !self.show_branch_column;
                 false
             }
-            KeyCode::Char('p') => {
-                // Toggle priority flag for the selected worktree.
+            KeyCode::Char('d') => {
                 let visible = visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_mode,
@@ -522,11 +544,37 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(self.cursor) {
-                    let path = vt.row.worktree_path.clone();
-                    drop(visible);
-                    crate::priority::toggle_priority(&path);
-                    self.task_rows = crate::build_state::build_task_rows(&self.global_config);
+                    let wt = worktree_from_task_row(vt.row);
+                    self.view = ViewState::ConfirmDelete(DeleteState {
+                        target: wt,
+                        phase: Phase::Confirm,
+                        error: None,
+                    });
                 }
+                false
+            }
+            KeyCode::Char('p') => {
+                let visible = visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
+                if let Some(vt) = visible.get(self.cursor) {
+                    let wt = worktree_from_task_row(vt.row);
+                    self.view = ViewState::Transfer(TransferState {
+                        target: wt,
+                        phase: Phase::Confirm,
+                        error: None,
+                    });
+                }
+                false
+            }
+            KeyCode::Char('n') => {
+                self.view = ViewState::NewSession(NewSessionState {
+                    name: String::new(),
+                    cursor: 0,
+                });
                 false
             }
             KeyCode::Char('f') => {

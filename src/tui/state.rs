@@ -47,14 +47,9 @@ impl fmt::Display for FilterMode {
 
 pub enum ViewState {
     List,
-    // Variants below are matched in dialog/list modules but not yet constructed
-    // (construction will land when the corresponding keyboard actions are wired up).
-    #[allow(dead_code)]
     ConfirmDelete(DeleteState),
-    #[allow(dead_code)]
     Transfer(TransferState),
     Cleanup(CleanupState),
-    #[allow(dead_code)]
     NewSession(NewSessionState),
     Help,
 }
@@ -90,10 +85,8 @@ pub struct NewSessionState {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Phase {
     Idle,
-    #[allow(dead_code)]
     Confirm,
     InProgress,
     Done,
