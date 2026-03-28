@@ -5,8 +5,8 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write      # push version bump commits and tags
+  pull-requests: write # open/update release PRs
 
 jobs:
   release-please:
