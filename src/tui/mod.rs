@@ -281,6 +281,14 @@ impl App {
                         let old = old_states.get(&key);
                         let label = row.issue_title.as_deref().unwrap_or(&row.branch);
                         let session = row.sessions.first().map(|s| s.tmux.name.as_str());
+                        let notify = |title: &str, message: &str| {
+                            crate::notify::send_notification_with_session(
+                                title,
+                                message,
+                                session,
+                                terminal_app,
+                            );
+                        };
 
                         // Claude was working, now needs input.
                         if row.sessions.iter().any(|s| {
@@ -289,12 +297,7 @@ impl App {
                             })
                         }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
                         {
-                            crate::notify::send_notification_with_session(
-                                "Claude needs input",
-                                &format!("{} is waiting for you", label),
-                                session,
-                                terminal_app,
-                            );
+                            notify("Claude needs input", &format!("{} is waiting for you", label));
                         }
 
                         // Claude was working, now idle (finished).
@@ -304,12 +307,7 @@ impl App {
                             })
                         }) && old.map(|o| o.claude_working).unwrap_or(false)
                         {
-                            crate::notify::send_notification_with_session(
-                                "Claude finished",
-                                label,
-                                session,
-                                terminal_app,
-                            );
+                            notify("Claude finished", label);
                         }
 
                         // CI transitioned to failing.
@@ -319,26 +317,19 @@ impl App {
                                     .map(|o| o.ci_status.as_deref() != Some("failing"))
                                     .unwrap_or(false)
                             {
-                                crate::notify::send_notification_with_session(
-                                    "CI Failed",
-                                    &format!("#{} {}", pr.number, label),
-                                    session,
-                                    terminal_app,
-                                );
+                                notify("CI Failed", &format!("#{} {}", pr.number, label));
                             }
 
                             // New unresolved review threads appeared.
                             if pr.unresolved_threads > 0
                                 && old.map(|o| !o.has_unresolved_threads).unwrap_or(false)
                             {
-                                crate::notify::send_notification_with_session(
+                                notify(
                                     "Review comments",
                                     &format!(
                                         "#{} has {} unresolved thread(s)",
                                         pr.number, pr.unresolved_threads
                                     ),
-                                    session,
-                                    terminal_app,
                                 );
                             }
                         }
