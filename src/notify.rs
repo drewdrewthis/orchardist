@@ -189,6 +189,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_send_notification_with_session_ignores_session_name() {
-        send_notification_with_session("Title", "Message", Some("my-session"), "com.apple.Terminal");
+        send_notification_with_session(
+            "Title",
+            "Message",
+            Some("my-session"),
+            "com.apple.Terminal",
+        );
     }
 }

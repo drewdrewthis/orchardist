@@ -439,6 +439,8 @@ pub fn prompt_terminal_app() -> String {
     eprintln!("    {}. Other (enter bundle ID)", TERMINAL_OPTIONS.len() + 1);
     eprintln!();
 
+    let other_choice = TERMINAL_OPTIONS.len() + 1;
+
     loop {
         eprint!("  Choice [1]: ");
         std::io::stderr().flush().ok();
@@ -455,14 +457,13 @@ pub fn prompt_terminal_app() -> String {
             return "com.apple.Terminal".to_string();
         }
 
-        let other_choice = TERMINAL_OPTIONS.len() + 1;
+        if let Some(bundle_id) = parse_terminal_selection(trimmed) {
+            return bundle_id;
+        }
 
-        if let Ok(n) = trimmed.parse::<usize>() {
-            if n >= 1 && n <= TERMINAL_OPTIONS.len() {
-                return TERMINAL_OPTIONS[n - 1].1.to_string();
-            } else if n == other_choice {
-                return prompt_custom_bundle_id();
-            }
+        // "Other" option — parse_terminal_selection returns None for this too
+        if trimmed.parse::<usize>() == Ok(other_choice) {
+            return prompt_custom_bundle_id();
         }
 
         eprintln!(
