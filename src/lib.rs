@@ -24,6 +24,7 @@ pub mod orchard_state;
 pub mod paths;
 pub mod priority;
 pub mod remote;
+pub mod session;
 pub mod shell;
 pub mod sources;
 pub mod status;

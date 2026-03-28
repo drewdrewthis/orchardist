@@ -268,10 +268,10 @@ impl App {
                         let key = row.worktree_path.clone();
                         let old = old_states.get(&key);
                         let label = row.issue_title.as_deref().unwrap_or(&row.branch);
-                        let session = row.sessions.first().map(|s| s.name.as_str());
+                        let session = row.sessions.first().map(|s| s.tmux.name.as_str());
 
                         // Claude was working, now needs input.
-                        if row.sessions.iter().any(|s| s.claude_needs_input)
+                        if row.sessions.iter().any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input))
                             && old.map(|o| !o.claude_needs_input).unwrap_or(false)
                         {
                             crate::notify::send_notification_with_session(
@@ -283,7 +283,7 @@ impl App {
                         }
 
                         // Claude was working, now idle (finished).
-                        if !row.sessions.iter().any(|s| s.claude_is_working)
+                        if !row.sessions.iter().any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working))
                             && old.map(|o| o.claude_working).unwrap_or(false)
                         {
                             crate::notify::send_notification_with_session(
@@ -332,11 +332,11 @@ impl App {
                         .iter()
                         .map(|row| {
                             let snapshot = WorktreeSnapshot {
-                                claude_working: row.sessions.iter().any(|s| s.claude_is_working),
+                                claude_working: row.sessions.iter().any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)),
                                 claude_needs_input: row
                                     .sessions
                                     .iter()
-                                    .any(|s| s.claude_needs_input),
+                                    .any(|s| s.claude.as_ref().is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)),
                                 ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
                                 has_unresolved_threads: row
                                     .pr
@@ -355,10 +355,10 @@ impl App {
                         .iter()
                         .filter(|row| !row.sessions.is_empty())
                         .map(|row| cache::SessionManifestEntry {
-                            session_name: row.sessions[0].name.clone(),
+                            session_name: row.sessions[0].tmux.name.clone(),
                             worktree_path: row.worktree_path.clone(),
                             branch: row.branch.clone(),
-                            had_claude: row.sessions.iter().any(|s| s.has_claude_active),
+                            had_claude: row.sessions.iter().any(|s| s.claude.is_some()),
                             host: row.worktree_host.clone(),
                         })
                         .collect();
@@ -379,7 +379,7 @@ impl App {
                     let matches = self
                         .task_rows
                         .get(self.cursor)
-                        .is_some_and(|row| row.sessions.iter().any(|s| s.name == session_name));
+                        .is_some_and(|row| row.sessions.iter().any(|s| s.tmux.name == session_name));
                     if matches {
                         self.pane_content = content;
                     }
@@ -796,7 +796,7 @@ fn delete_task_row(
     row: &derive::TaskRow,
     global_config: &global_config::GlobalConfig,
 ) -> anyhow::Result<()> {
-    let session_name = row.sessions.first().map(|s| s.name.as_str());
+    let session_name = row.sessions.first().map(|s| s.tmux.name.as_str());
     if let Some(ref host) = row.worktree_host {
         // Remote deletion
         if let Some(sess) = session_name {
@@ -947,7 +947,8 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::T
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derive::{DisplayGroup, PrInfo as DPrInfo, SessionInfo, TaskRow};
+    use crate::derive::{DisplayGroup, PrInfo as DPrInfo, TaskRow};
+    use crate::session::{EnrichedSession, TmuxSessionInfo, ClaudeSessionInfo, Host, SessionStatus};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -968,7 +969,7 @@ mod tests {
             pr: None,
             sessions: vec![],
             display_group: group,
-            is_shepherd: false,
+            is_main_worktree: false,
         }
     }
 
@@ -1180,16 +1181,13 @@ mod tests {
     #[test]
     fn unreachable_host_blocks_enter() {
         let row = TaskRow {
-            sessions: vec![SessionInfo {
-                name: "sess".to_string(),
-                host: Some("gpu1".to_string()),
-                has_claude_active: false,
-                claude_is_working: false,
-                claude_needs_input: false,
-                claude_state: crate::claude_state::ClaudeState::None,
-                context_window_pct: None,
-                cost_usd: None,
-                model: None,
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Remote("gpu1".to_string()),
+                    name: "sess".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -1266,7 +1264,7 @@ mod tests {
             pr: None,
             sessions: vec![],
             display_group: group,
-            is_shepherd: false,
+            is_main_worktree: false,
         }
     }
 
@@ -1276,31 +1274,31 @@ mod tests {
 
     #[test]
     fn shepherd_row_renders_first_and_has_distinct_section_header() {
-        let shepherd = TaskRow {
-            is_shepherd: true,
-            display_group: DisplayGroup::Shepherd,
-            ..make_worktree_row("main", DisplayGroup::Shepherd)
+        let main_wt = TaskRow {
+            is_main_worktree: true,
+            display_group: DisplayGroup::RepoMain,
+            ..make_worktree_row("main", DisplayGroup::RepoMain)
         };
         let other = make_worktree_row("feat/something", DisplayGroup::Other);
-        let mut app = App::new_test(vec![shepherd, other]);
+        let mut app = App::new_test(vec![main_wt, other]);
         let output = render_to_string(&mut app, 120, 40);
 
-        // "shepherd" section header must appear before "other"
-        let shepherd_pos = output
-            .find("shepherd")
-            .expect("expected 'shepherd' section header");
+        // "repo main" section header must appear before "other"
+        let repo_main_pos = output
+            .find("repo main")
+            .expect("expected 'repo main' section header");
         let other_pos = output
             .find("other")
             .expect("expected 'other' section header");
         assert!(
-            shepherd_pos < other_pos,
-            "shepherd section must appear before other section"
+            repo_main_pos < other_pos,
+            "repo main section must appear before other section"
         );
 
-        // The shepherd row must be visible (shows repo name in TITLE column).
+        // The main worktree row must be visible (shows repo name in TITLE column).
         assert!(
             output.contains("repo"),
-            "expected repo name in shepherd row output"
+            "expected repo name in main worktree row output"
         );
     }
 
@@ -1335,16 +1333,18 @@ mod tests {
             ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
         };
         let claude_working = TaskRow {
-            sessions: vec![SessionInfo {
-                name: "repo-claude".to_string(),
-                host: None,
-                has_claude_active: true,
-                claude_is_working: true,
-                claude_needs_input: false,
-                claude_state: crate::claude_state::ClaudeState::None,
-                context_window_pct: None,
-                cost_usd: None,
-                model: None,
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: "repo-claude".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: Some(ClaudeSessionInfo {
+                    status: crate::claude_state::ClaudeState::Working,
+                    cost_usd: None,
+                    context_window_pct: None,
+                    model: None,
+                }),
             }],
             ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
         };
@@ -1391,16 +1391,18 @@ mod tests {
     #[test]
     fn claude_needs_input_indicator_renders_and_row_in_needs_attention() {
         let row = TaskRow {
-            sessions: vec![SessionInfo {
-                name: "repo-47".to_string(),
-                host: None,
-                has_claude_active: true,
-                claude_is_working: false,
-                claude_needs_input: true,
-                claude_state: crate::claude_state::ClaudeState::Input,
-                context_window_pct: None,
-                cost_usd: None,
-                model: None,
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: "repo-47".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: Some(ClaudeSessionInfo {
+                    status: crate::claude_state::ClaudeState::Input,
+                    cost_usd: None,
+                    context_window_pct: None,
+                    model: None,
+                }),
             }],
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
         };
@@ -1462,16 +1464,13 @@ mod tests {
     fn unreachable_remote_host_shows_x_indicator() {
         let row = TaskRow {
             worktree_host: Some("gpu1".to_string()),
-            sessions: vec![SessionInfo {
-                name: "repo-gpu1".to_string(),
-                host: Some("gpu1".to_string()),
-                has_claude_active: false,
-                claude_is_working: false,
-                claude_needs_input: false,
-                claude_state: crate::claude_state::ClaudeState::None,
-                context_window_pct: None,
-                cost_usd: None,
-                model: None,
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Remote("gpu1".to_string()),
+                    name: "repo-gpu1".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
             }],
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
