@@ -1763,6 +1763,88 @@ mod tests {
         result
     }
 
+    /// Renders the app into an ANSI-escaped string preserving colors and styles.
+    fn render_to_ansi(app: &mut App, width: u16, height: u16) -> String {
+        use ratatui::style::{Color, Modifier};
+
+        fn color_to_ansi_fg(c: Color) -> Option<&'static str> {
+            match c {
+                Color::Black => Some("\x1b[30m"),
+                Color::Red => Some("\x1b[31m"),
+                Color::Green => Some("\x1b[32m"),
+                Color::Yellow => Some("\x1b[33m"),
+                Color::Blue => Some("\x1b[34m"),
+                Color::Magenta => Some("\x1b[35m"),
+                Color::Cyan => Some("\x1b[36m"),
+                Color::Gray => Some("\x1b[37m"),
+                Color::DarkGray => Some("\x1b[90m"),
+                Color::LightRed => Some("\x1b[91m"),
+                Color::LightGreen => Some("\x1b[92m"),
+                Color::LightYellow => Some("\x1b[93m"),
+                Color::LightBlue => Some("\x1b[94m"),
+                Color::LightMagenta => Some("\x1b[95m"),
+                Color::LightCyan => Some("\x1b[96m"),
+                Color::White => Some("\x1b[97m"),
+                Color::Reset => None,
+                _ => None,
+            }
+        }
+
+        fn color_to_ansi_bg(c: Color) -> Option<&'static str> {
+            match c {
+                Color::Black => Some("\x1b[40m"),
+                Color::Red => Some("\x1b[41m"),
+                Color::Green => Some("\x1b[42m"),
+                Color::Yellow => Some("\x1b[43m"),
+                Color::Blue => Some("\x1b[44m"),
+                Color::Magenta => Some("\x1b[45m"),
+                Color::Cyan => Some("\x1b[46m"),
+                Color::Gray => Some("\x1b[47m"),
+                Color::DarkGray => Some("\x1b[100m"),
+                Color::White => Some("\x1b[107m"),
+                Color::Reset => None,
+                _ => None,
+            }
+        }
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut result = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                if let Some(cell) = buf.cell((x, y)) {
+                    let mut has_style = false;
+                    if cell.modifier.contains(Modifier::BOLD) {
+                        result.push_str("\x1b[1m");
+                        has_style = true;
+                    }
+                    if cell.modifier.contains(Modifier::DIM) {
+                        result.push_str("\x1b[2m");
+                        has_style = true;
+                    }
+                    if let Some(code) = color_to_ansi_fg(cell.fg) {
+                        result.push_str(code);
+                        has_style = true;
+                    }
+                    if let Some(code) = color_to_ansi_bg(cell.bg) {
+                        result.push_str(code);
+                        has_style = true;
+                    }
+                    result.push_str(cell.symbol());
+                    if has_style {
+                        result.push_str("\x1b[0m");
+                    }
+                } else {
+                    result.push(' ');
+                }
+            }
+            result.push('\n');
+        }
+        result
+    }
+
     #[test]
     fn filter_stale_merged_pr() {
         let rows = vec![
@@ -2725,6 +2807,98 @@ mod tests {
         let result = compute_sessions_to_create(&repos);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].start_dir, "/workspace/git-orchard-rs");
+    }
+
+    #[test]
+    #[ignore] // Run manually: cargo test tui_screenshot -- --ignored
+    fn tui_screenshot() {
+        let shepherd = WorktreeRow {
+            is_main_worktree: true,
+            display_group: DisplayGroup::RepoMain,
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: "orchard_main".to_string(),
+                    status: SessionStatus::Running { attached: true },
+                },
+                claude: Some(ClaudeSessionInfo {
+                    status: crate::claude_state::ClaudeState::Working,
+                    cost_usd: Some(12.50),
+                    context_window_pct: Some(23.0),
+                    model: Some("opus".to_string()),
+                }),
+            }],
+            ..make_worktree_row("main", DisplayGroup::RepoMain)
+        };
+        let needs_attn = WorktreeRow {
+            pr: Some(DPrInfo {
+                number: 70,
+                branch: "feat/tea-pattern".to_string(),
+                state: Some("open".to_string()),
+                review_decision: Some("changes_requested".to_string()),
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 2,
+            }),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: "orchard_issue53".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: Some(ClaudeSessionInfo {
+                    status: crate::claude_state::ClaudeState::Input,
+                    cost_usd: Some(8.30),
+                    context_window_pct: Some(67.0),
+                    model: Some("sonnet".to_string()),
+                }),
+            }],
+            ..make_task_row_with_title(53, "TEA pattern refactor", DisplayGroup::NeedsAttention)
+        };
+        let working = WorktreeRow {
+            pr: Some(DPrInfo {
+                number: 68,
+                branch: "feat/shepherd".to_string(),
+                state: Some("open".to_string()),
+                review_decision: None,
+                checks_state: Some("pending".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: "orchard_issue47".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: Some(ClaudeSessionInfo {
+                    status: crate::claude_state::ClaudeState::Working,
+                    cost_usd: Some(37.88),
+                    context_window_pct: Some(19.0),
+                    model: Some("opus".to_string()),
+                }),
+            }],
+            ..make_task_row_with_title(47, "Shepherd persistent session", DisplayGroup::ClaudeWorking)
+        };
+        let ready = WorktreeRow {
+            pr: Some(DPrInfo {
+                number: 67,
+                branch: "feat/theme-struct".to_string(),
+                state: Some("open".to_string()),
+                review_decision: Some("approved".to_string()),
+                checks_state: Some("passing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row_with_title(54, "Add Theme struct", DisplayGroup::ReadyToMerge)
+        };
+        let other = make_task_row_with_title(16, "Orchard heal command", DisplayGroup::Other);
+
+        let mut app = App::new_test(vec![shepherd, needs_attn, working, ready, other]);
+        let ansi = render_to_ansi(&mut app, 120, 30);
+        let path = std::env::temp_dir().join("orchard-tui-screenshot.ansi");
+        std::fs::write(&path, &ansi).expect("failed to write screenshot");
+        eprintln!("Screenshot written to: {}", path.display());
     }
 
     #[test]
