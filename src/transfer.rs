@@ -91,11 +91,7 @@ fn has_wip_commit(dir: &str) -> bool {
     Command::new("git")
         .args(["-C", dir, "log", "-1", "--format=%s"])
         .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .eq(WIP_MESSAGE)
-        })
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().eq(WIP_MESSAGE))
         .unwrap_or(false)
 }
 
@@ -142,12 +138,18 @@ pub fn push_to_remote(
     on_step: &dyn Fn(&str),
 ) -> anyhow::Result<()> {
     if wt.has_conflicts {
-        return Err(anyhow!("worktree at {:?} has unresolved conflicts", wt.path));
+        return Err(anyhow!(
+            "worktree at {:?} has unresolved conflicts",
+            wt.path
+        ));
     }
 
     let branch = branch_name(wt)?;
 
-    LOG.info(&format!("pushToRemote: transferring {} to {}", branch, remote.host));
+    LOG.info(&format!(
+        "pushToRemote: transferring {} to {}",
+        branch, remote.host
+    ));
 
     on_step("Committing changes...");
     commit_wip(&wt.path).map_err(|e| anyhow!("commit WIP: {}", e))?;
@@ -161,10 +163,10 @@ pub fn push_to_remote(
 
     let fetch_cmd = format!(
         "cd {} && git fetch origin {}",
-        remote::shell_escape(&remote.repo_path), remote::shell_escape(&branch)
+        remote::shell_escape(&remote.repo_path),
+        remote::shell_escape(&branch)
     );
-    remote::ssh_exec(&remote.host, &fetch_cmd)
-        .map_err(|e| anyhow!("remote git fetch: {}", e))?;
+    remote::ssh_exec(&remote.host, &fetch_cmd).map_err(|e| anyhow!("remote git fetch: {}", e))?;
 
     let add_cmd = format!(
         "cd {} && git worktree add {} {}",
@@ -175,7 +177,8 @@ pub fn push_to_remote(
     if remote::ssh_exec(&remote.host, &add_cmd).is_err() {
         let pull_cmd = format!(
             "cd {} && git pull origin {}",
-            remote::shell_escape(&remote_path), remote::shell_escape(&branch)
+            remote::shell_escape(&remote_path),
+            remote::shell_escape(&branch)
         );
         remote::ssh_exec(&remote.host, &pull_cmd)
             .map_err(|e| anyhow!("remote worktree add and pull both failed: {}", e))?;
@@ -228,23 +231,26 @@ pub fn pull_to_local(
 ) -> anyhow::Result<()> {
     let branch = branch_name(wt)?;
 
-    LOG.info(&format!("pullToLocal: transferring {} from {}", branch, remote.host));
+    LOG.info(&format!(
+        "pullToLocal: transferring {} from {}",
+        branch, remote.host
+    ));
 
     on_step("Committing changes...");
     let commit_cmd = format!(
         "cd {} && git add -u && (git diff --cached --quiet || git commit -m {})",
-        remote::shell_escape(&wt.path), remote::shell_escape(WIP_MESSAGE)
+        remote::shell_escape(&wt.path),
+        remote::shell_escape(WIP_MESSAGE)
     );
-    remote::ssh_exec(&remote.host, &commit_cmd)
-        .map_err(|e| anyhow!("remote commit WIP: {}", e))?;
+    remote::ssh_exec(&remote.host, &commit_cmd).map_err(|e| anyhow!("remote commit WIP: {}", e))?;
 
     on_step("Pushing branch...");
     let push_cmd = format!(
         "cd {} && git push origin {}",
-        remote::shell_escape(&wt.path), remote::shell_escape(&branch)
+        remote::shell_escape(&wt.path),
+        remote::shell_escape(&branch)
     );
-    remote::ssh_exec(&remote.host, &push_cmd)
-        .map_err(|e| anyhow!("remote git push: {}", e))?;
+    remote::ssh_exec(&remote.host, &push_cmd).map_err(|e| anyhow!("remote git push: {}", e))?;
 
     on_step("Creating local worktree...");
     let local_path = derive_local_worktree_path(repo_root, &branch);
@@ -379,10 +385,7 @@ mod tests {
 
     #[test]
     fn issue_number_from_keyword_branch() {
-        assert_eq!(
-            crate::github::extract_issue_number("issue/42"),
-            Some(42)
-        );
+        assert_eq!(crate::github::extract_issue_number("issue/42"), Some(42));
     }
 
     #[test]
@@ -406,7 +409,10 @@ mod tests {
         copy_env_files(src.path().to_str().unwrap(), dst.path().to_str().unwrap());
 
         assert!(dst.path().join(".env").exists(), ".env should be copied");
-        assert!(dst.path().join(".env.local").exists(), ".env.local should be copied");
+        assert!(
+            dst.path().join(".env.local").exists(),
+            ".env.local should be copied"
+        );
     }
 
     #[test]
@@ -420,7 +426,10 @@ mod tests {
         copy_env_files(src.path().to_str().unwrap(), dst.path().to_str().unwrap());
 
         let content = std::fs::read_to_string(dst.path().join(".env")).unwrap();
-        assert_eq!(content, "ORIGINAL=1", "existing dst .env must not be overwritten");
+        assert_eq!(
+            content, "ORIGINAL=1",
+            "existing dst .env must not be overwritten"
+        );
     }
 
     #[test]
@@ -432,7 +441,10 @@ mod tests {
 
         copy_env_files(src.path().to_str().unwrap(), dst.path().to_str().unwrap());
 
-        assert!(!dst.path().join(".env_dir").exists(), ".env_dir directory must not be copied");
+        assert!(
+            !dst.path().join(".env_dir").exists(),
+            ".env_dir directory must not be copied"
+        );
     }
 
     #[test]

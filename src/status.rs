@@ -39,7 +39,10 @@ pub fn format_status(worktrees: &[Worktree]) -> String {
 }
 
 fn count_active(worktrees: &[Worktree]) -> usize {
-    worktrees.iter().filter(|wt| wt.tmux_session.is_some()).count()
+    worktrees
+        .iter()
+        .filter(|wt| wt.tmux_session.is_some())
+        .count()
 }
 
 fn count_claude(worktrees: &[Worktree]) -> usize {
@@ -80,7 +83,8 @@ fn write_status_file(text: &str) -> anyhow::Result<()> {
 }
 
 fn state_dir() -> anyhow::Result<std::path::PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
     Ok(home.join(".local/state/git-orchard"))
 }
 
@@ -155,10 +159,7 @@ mod tests {
             make_worktree_with_session("sess2"),
         ];
         let status = format_status(&worktrees);
-        assert_eq!(
-            status,
-            "#[fg=green]🌳 ORCHARD#[fg=default]: 2 active"
-        );
+        assert_eq!(status, "#[fg=green]🌳 ORCHARD#[fg=default]: 2 active");
     }
 
     #[test]

@@ -12,7 +12,9 @@ pub fn shell_escape(s: &str) -> String {
         return "''".to_string();
     }
     // If it only contains safe characters, return as-is
-    if s.chars().all(|c| c.is_alphanumeric() || "-_./=@:+~".contains(c)) {
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || "-_./=@:+~".contains(c))
+    {
         return s.to_string();
     }
     // Otherwise, wrap in single quotes and escape any internal single quotes
@@ -57,11 +59,17 @@ pub fn ssh_exec(host: &str, command: &str) -> anyhow::Result<String> {
 /// Returns all git worktrees on the remote machine for the configured repo path.
 /// Returns an empty `Vec` on any error.
 pub fn list_remote_worktrees(remote: &RemoteConfig) -> Vec<Worktree> {
-    let cmd = format!("cd {} && git worktree list --porcelain", shell_escape(&remote.repo_path));
+    let cmd = format!(
+        "cd {} && git worktree list --porcelain",
+        shell_escape(&remote.repo_path)
+    );
     let out = match ssh_exec(&remote.host, &cmd) {
         Ok(o) => o,
         Err(err) => {
-            LOG.warn(&format!("remote[{}]: failed to list worktrees: {}", remote.host, err));
+            LOG.warn(&format!(
+                "remote[{}]: failed to list worktrees: {}",
+                remote.host, err
+            ));
             return Vec::new();
         }
     };
@@ -70,21 +78,28 @@ pub fn list_remote_worktrees(remote: &RemoteConfig) -> Vec<Worktree> {
     for wt in &mut worktrees {
         wt.remote = Some(remote.host.clone());
     }
-    LOG.info(&format!("remote[{}]: {} worktrees", remote.host, worktrees.len()));
+    LOG.info(&format!(
+        "remote[{}]: {} worktrees",
+        remote.host,
+        worktrees.len()
+    ));
     worktrees
 }
 
 /// Returns all tmux sessions on the remote machine.
 /// Returns an empty `Vec` on any error.
 pub fn list_remote_tmux_sessions(remote: &RemoteConfig) -> Vec<TmuxSession> {
-    let cmd =
-        "tmux list-sessions -F '#{session_name}\t#{session_path}\t#{session_attached}'";
+    let cmd = "tmux list-sessions -F '#{session_name}\t#{session_path}\t#{session_attached}'";
     let out = match ssh_exec(&remote.host, cmd) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
     let sessions = parse_tmux_output(&out);
-    LOG.info(&format!("remote[{}]: {} tmux sessions", remote.host, sessions.len()));
+    LOG.info(&format!(
+        "remote[{}]: {} tmux sessions",
+        remote.host,
+        sessions.len()
+    ));
     sessions
 }
 
@@ -148,30 +163,31 @@ fn match_session<'a>(
             return Some(s);
         }
         if let Some(ref slug) = branch_slug
-            && &s.name == slug {
-                return Some(s);
-            }
+            && &s.name == slug
+        {
+            return Some(s);
+        }
     }
     None
 }
 
 /// Kills the named tmux session on the remote host.
 pub fn kill_remote_tmux_session(host: &str, name: &str) -> anyhow::Result<()> {
-    ssh_exec(host, &format!("tmux kill-session -t {}", shell_escape(name)))?;
+    ssh_exec(
+        host,
+        &format!("tmux kill-session -t {}", shell_escape(name)),
+    )?;
     LOG.info(&format!("remote: killed tmux session {}", name));
     Ok(())
 }
 
 /// Removes a worktree on the remote host.
 /// First tries `git worktree remove --force`; falls back to `git worktree prune && rm -rf`.
-pub fn remove_remote_worktree(
-    host: &str,
-    repo_path: &str,
-    wt_path: &str,
-) -> anyhow::Result<()> {
+pub fn remove_remote_worktree(host: &str, repo_path: &str, wt_path: &str) -> anyhow::Result<()> {
     let cmd = format!(
         "cd {} && git worktree remove --force {}",
-        shell_escape(repo_path), shell_escape(wt_path)
+        shell_escape(repo_path),
+        shell_escape(wt_path)
     );
     if ssh_exec(host, &cmd).is_ok() {
         return Ok(());
@@ -179,7 +195,8 @@ pub fn remove_remote_worktree(
 
     let fallback = format!(
         "cd {} && git worktree prune && rm -rf {}",
-        shell_escape(repo_path), shell_escape(wt_path)
+        shell_escape(repo_path),
+        shell_escape(wt_path)
     );
     ssh_exec(host, &fallback)?;
     Ok(())
@@ -188,7 +205,11 @@ pub fn remove_remote_worktree(
 /// Creates a new detached tmux session on the remote host.
 /// If the session already exists the error is silently ignored.
 pub fn create_remote_session(host: &str, name: &str, path: &str) -> anyhow::Result<()> {
-    let cmd = format!("tmux new-session -d -s {} -c {}", shell_escape(name), shell_escape(path));
+    let cmd = format!(
+        "tmux new-session -d -s {} -c {}",
+        shell_escape(name),
+        shell_escape(path)
+    );
     match ssh_exec(host, &cmd) {
         Ok(_) => Ok(()),
         Err(e) if e.to_string().contains("duplicate session") => Ok(()),
@@ -214,7 +235,10 @@ fn should_recreate_proxy(local_name: &str, remote_was_fresh: bool) -> bool {
 
     // If we just created the remote session, the existing proxy is stale.
     if remote_was_fresh {
-        LOG.info(&format!("remote: killing stale proxy {} (remote was recreated)", local_name));
+        LOG.info(&format!(
+            "remote: killing stale proxy {} (remote was recreated)",
+            local_name
+        ));
         let _ = Command::new("tmux")
             .args(["kill-session", "-t", local_name])
             .status();
@@ -272,7 +296,8 @@ pub fn create_remote_proxy_session(
     let shell = if shell.is_empty() { "ssh" } else { shell };
 
     // Create the remote session if it doesn't exist yet.
-    let remote_was_fresh = ssh_exec(host, &format!("tmux has-session -t {}", shell_escape(name))).is_err();
+    let remote_was_fresh =
+        ssh_exec(host, &format!("tmux has-session -t {}", shell_escape(name))).is_err();
     if remote_was_fresh {
         create_remote_session(host, name, path)?;
     }
@@ -281,12 +306,14 @@ pub fn create_remote_proxy_session(
     let connect_cmd = if shell == "mosh" {
         format!(
             "env LC_ALL=en_US.UTF-8 mosh --predict=always {} -- tmux attach-session -t {}",
-            shell_escape(host), shell_escape(name)
+            shell_escape(host),
+            shell_escape(name)
         )
     } else {
         format!(
             "ssh -tt {} tmux attach-session -t {}",
-            shell_escape(host), shell_escape(name)
+            shell_escape(host),
+            shell_escape(name)
         )
     };
 
@@ -322,7 +349,10 @@ pub fn create_remote_proxy_session(
         .args(["set-option", "-t", &local_name, "remain-on-exit", "on"])
         .status();
 
-    LOG.info(&format!("createRemoteProxySession: {} -> {}", name, local_name));
+    LOG.info(&format!(
+        "createRemoteProxySession: {} -> {}",
+        name, local_name
+    ));
     Ok(local_name)
 }
 
@@ -334,7 +364,8 @@ pub fn capture_remote_pane_content(
 ) -> anyhow::Result<String> {
     let cmd = format!(
         "tmux capture-pane -t {} -p -J -S -{}",
-        shell_escape(session), lines
+        shell_escape(session),
+        lines
     );
     let out = ssh_exec(host, &cmd)?;
     Ok(out.trim_end_matches('\n').to_string())
@@ -343,7 +374,10 @@ pub fn capture_remote_pane_content(
 /// Removes the remmy session registry file for the given session name on the
 /// remote host.
 pub fn remove_remote_registry_entry(host: &str, name: &str) -> anyhow::Result<()> {
-    ssh_exec(host, &format!("rm -f ~/.remmy/sessions/{}.json", shell_escape(name)))?;
+    ssh_exec(
+        host,
+        &format!("rm -f ~/.remmy/sessions/{}.json", shell_escape(name)),
+    )?;
     Ok(())
 }
 

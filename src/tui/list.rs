@@ -8,10 +8,10 @@ use std::time::Instant;
 use crate::derive::{DisplayGroup, TaskRow};
 use crate::navigation;
 use crate::paths;
-use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
-use crate::tui::{filter_stale, App, SPINNER_FRAMES, WARNING_DURATION_SECS};
 use crate::remote;
 use crate::tmux;
+use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
+use crate::tui::{App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -93,6 +93,7 @@ pub(crate) struct VisibleTask<'a> {
 /// `filter_mode` and `search_text` narrow results; shepherd rows always bypass both.
 /// When `repo_slug_filter` is `Some(slug)`, only rows from that repo are shown
 /// (shepherds are also filtered so each repo only shows its own shepherd).
+#[cfg(test)]
 pub(crate) fn visible_tasks<'a>(
     task_rows: &'a [TaskRow],
     filter_mode: &FilterMode,
@@ -115,10 +116,10 @@ pub(crate) fn visible_tasks_filtered<'a>(
 
     for row in task_rows {
         // Apply repo slug filter (affects all rows including shepherds).
-        if let Some(slug) = repo_slug_filter {
-            if row.repo_slug != slug {
-                continue;
-            }
+        if let Some(slug) = repo_slug_filter
+            && row.repo_slug != slug
+        {
+            continue;
         }
 
         // Shepherd rows always pass filter and search.
@@ -127,9 +128,10 @@ pub(crate) fn visible_tasks_filtered<'a>(
             let passes_filter = match filter_mode {
                 FilterMode::All => true,
                 FilterMode::HasSession => !row.sessions.is_empty(),
-                FilterMode::HasClaude => row.sessions.iter().any(|s| {
-                    s.claude_state != crate::claude_state::ClaudeState::None
-                }),
+                FilterMode::HasClaude => row
+                    .sessions
+                    .iter()
+                    .any(|s| s.claude_state != crate::claude_state::ClaudeState::None),
                 FilterMode::HasPR => row.pr.is_some(),
             };
             if !passes_filter {
@@ -146,7 +148,11 @@ pub(crate) fn visible_tasks_filtered<'a>(
             }
         }
 
-        result.push(VisibleTask { num, row, group: row.display_group });
+        result.push(VisibleTask {
+            num,
+            row,
+            group: row.display_group,
+        });
         num += 1;
     }
 
@@ -159,10 +165,13 @@ pub(crate) fn visible_tasks_filtered<'a>(
 fn pr_status_text(row: &TaskRow) -> (String, Style) {
     let Some(ref pr) = row.pr else {
         // No PR — check if the linked issue is closed/completed (stale worktree)
-        if let Some(ref state) = row.issue_state {
-            if state == "closed" || state == "completed" {
-                return (format!("\u{2716} issue {}", state), Style::default().fg(Color::Red));
-            }
+        if let Some(ref state) = row.issue_state
+            && (state == "closed" || state == "completed")
+        {
+            return (
+                format!("\u{2716} issue {}", state),
+                Style::default().fg(Color::Red),
+            );
         }
         return ("no PR".to_string(), Style::default().fg(Color::DarkGray));
     };
@@ -171,20 +180,35 @@ fn pr_status_text(row: &TaskRow) -> (String, Style) {
 
     // Merged or closed PR = stale worktree
     if pr.state.as_deref() == Some("merged") {
-        return (format!("{}\u{2713} merged", prefix), Style::default().fg(Color::Magenta));
+        return (
+            format!("{}\u{2713} merged", prefix),
+            Style::default().fg(Color::Magenta),
+        );
     }
     if pr.state.as_deref() == Some("closed") {
-        return (format!("{}\u{2716} closed", prefix), Style::default().fg(Color::Red));
+        return (
+            format!("{}\u{2716} closed", prefix),
+            Style::default().fg(Color::Red),
+        );
     }
 
     if pr.review_decision.as_deref() == Some("approved") {
-        return (format!("{}\u{2713} approved", prefix), Style::default().fg(Color::Green));
+        return (
+            format!("{}\u{2713} approved", prefix),
+            Style::default().fg(Color::Green),
+        );
     }
     if pr.review_decision.as_deref() == Some("changes_requested") {
-        return (format!("{}\u{2716} changes req", prefix), Style::default().fg(Color::Red));
+        return (
+            format!("{}\u{2716} changes req", prefix),
+            Style::default().fg(Color::Red),
+        );
     }
     if pr.has_conflicts {
-        return (format!("{}\u{2716} conflict", prefix), Style::default().fg(Color::Red));
+        return (
+            format!("{}\u{2716} conflict", prefix),
+            Style::default().fg(Color::Red),
+        );
     }
     if pr.unresolved_threads > 0 {
         return (
@@ -193,13 +217,22 @@ fn pr_status_text(row: &TaskRow) -> (String, Style) {
         );
     }
     if pr.checks_state.as_deref() == Some("failing") {
-        return (format!("{}\u{2716} failing", prefix), Style::default().fg(Color::Red));
+        return (
+            format!("{}\u{2716} failing", prefix),
+            Style::default().fg(Color::Red),
+        );
     }
     if pr.checks_state.as_deref() == Some("pending") {
-        return (format!("{}\u{25d0} pending CI", prefix), Style::default().fg(Color::Yellow));
+        return (
+            format!("{}\u{25d0} pending CI", prefix),
+            Style::default().fg(Color::Yellow),
+        );
     }
     // Default for open PR with no special state
-    (format!("{}\u{25cb} needs review", prefix), Style::default().fg(Color::DarkGray))
+    (
+        format!("{}\u{25cb} needs review", prefix),
+        Style::default().fg(Color::DarkGray),
+    )
 }
 
 /// Returns a Claude activity indicator for the task row.
@@ -208,45 +241,83 @@ fn pr_status_text(row: &TaskRow) -> (String, Style) {
 /// window percentage. Falls back to boolean flags from terminal scraping.
 fn claude_status_text(row: &TaskRow) -> (String, Style) {
     if row.sessions.is_empty() {
-        return ("\u{25cb} none".to_string(), Style::default().fg(Color::DarkGray));
+        return (
+            "\u{25cb} none".to_string(),
+            Style::default().fg(Color::DarkGray),
+        );
     }
 
     let count = row.sessions.len();
-    let count_suffix = if count > 1 { format!(" {}", count) } else { String::new() };
+    let count_suffix = if count > 1 {
+        format!(" {}", count)
+    } else {
+        String::new()
+    };
 
     // Find the most "urgent" structured state across sessions.
-    let has_input = row.sessions.iter().any(|s| s.claude_state == crate::claude_state::ClaudeState::Input);
-    let has_working = row.sessions.iter().any(|s| s.claude_state == crate::claude_state::ClaudeState::Working);
-    let has_idle = row.sessions.iter().any(|s| s.claude_state == crate::claude_state::ClaudeState::Idle);
+    let has_input = row
+        .sessions
+        .iter()
+        .any(|s| s.claude_state == crate::claude_state::ClaudeState::Input);
+    let has_working = row
+        .sessions
+        .iter()
+        .any(|s| s.claude_state == crate::claude_state::ClaudeState::Working);
+    let has_idle = row
+        .sessions
+        .iter()
+        .any(|s| s.claude_state == crate::claude_state::ClaudeState::Idle);
 
     // Get context % from any session that has it.
     let ctx_pct = row.sessions.iter().find_map(|s| s.context_window_pct);
-    let ctx_suffix = ctx_pct.map(|p| format!(" {}%", p as u32)).unwrap_or_default();
+    let ctx_suffix = ctx_pct
+        .map(|p| format!(" {}%", p as u32))
+        .unwrap_or_default();
 
     if has_input {
-        return (format!("\u{2757} input{}{}", count_suffix, ctx_suffix), Style::default().fg(Color::Red));
+        return (
+            format!("\u{2757} input{}{}", count_suffix, ctx_suffix),
+            Style::default().fg(Color::Red),
+        );
     }
     if has_working {
-        return (format!("\u{26a1} active{}{}", count_suffix, ctx_suffix), Style::default().fg(Color::Green));
+        return (
+            format!("\u{26a1} active{}{}", count_suffix, ctx_suffix),
+            Style::default().fg(Color::Green),
+        );
     }
     if has_idle {
-        return (format!("\u{25cf} idle{}{}", count_suffix, ctx_suffix), Style::default().fg(Color::Yellow));
+        return (
+            format!("\u{25cf} idle{}{}", count_suffix, ctx_suffix),
+            Style::default().fg(Color::Yellow),
+        );
     }
 
     // Fallback to boolean checks for sessions without hook data.
     if row.sessions.iter().any(|s| s.claude_needs_input) {
-        return (format!("\u{2757} input{}", count_suffix), Style::default().fg(Color::Red));
+        return (
+            format!("\u{2757} input{}", count_suffix),
+            Style::default().fg(Color::Red),
+        );
     }
     if row.sessions.iter().any(|s| s.claude_is_working) {
-        return (format!("\u{26a1} active{}", count_suffix), Style::default().fg(Color::Green));
+        return (
+            format!("\u{26a1} active{}", count_suffix),
+            Style::default().fg(Color::Green),
+        );
     }
     if row.sessions.iter().any(|s| s.has_claude_active) {
-        return (format!("\u{25cf} idle{}", count_suffix), Style::default().fg(Color::Yellow));
+        return (
+            format!("\u{25cf} idle{}", count_suffix),
+            Style::default().fg(Color::Yellow),
+        );
     }
 
-    ("\u{25cf} idle".to_string(), Style::default().fg(Color::Yellow))
+    (
+        "\u{25cf} idle".to_string(),
+        Style::default().fg(Color::Yellow),
+    )
 }
-
 
 impl App {
     pub(crate) fn handle_list_key(&mut self, key: KeyEvent) -> bool {
@@ -274,12 +345,23 @@ impl App {
                 _ => {}
             }
             // Clamp cursor after search text change.
-            let tasks = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+            let tasks = visible_tasks_filtered(
+                &self.task_rows,
+                &self.filter_mode,
+                &self.search_text,
+                self.active_repo_slug(),
+            );
             self.cursor = self.cursor.min(tasks.len().saturating_sub(1));
             return false;
         }
 
-        let visible_count = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug()).len();
+        let visible_count = visible_tasks_filtered(
+            &self.task_rows,
+            &self.filter_mode,
+            &self.search_text,
+            self.active_repo_slug(),
+        )
+        .len();
 
         match key.code {
             // Digit jump 1-9: jump to flat index
@@ -307,7 +389,12 @@ impl App {
             KeyCode::Enter => {
                 // Switch to the task's session, or create a worktree + session if none exist.
                 // Compute tasks, extract owned data, then drop before calling &mut self methods.
-                let tasks = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+                let tasks = visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
                 let action = tasks.get(self.cursor).map(|vt| {
                     if let Some(session) = vt.row.sessions.first() {
                         TaskEnterAction::JoinSession {
@@ -328,18 +415,24 @@ impl App {
                 drop(tasks);
                 match action {
                     None => false,
-                    Some(TaskEnterAction::JoinSession { session_name, worktree_path, branch, host }) => {
+                    Some(TaskEnterAction::JoinSession {
+                        session_name,
+                        worktree_path,
+                        branch,
+                        host,
+                    }) => {
                         // Guard: refuse to join a session on a host not confirmed reachable.
                         if let Some(ref h) = host
-                            && self.host_reachable.get(h.as_str()) != Some(&true) {
-                                let msg = if self.host_reachable.contains_key(h.as_str()) {
-                                    format!("@{} is unreachable", h)
-                                } else {
-                                    format!("@{} — checking connectivity…", h)
-                                };
-                                self.warning = Some((msg, Instant::now()));
-                                return false;
-                            }
+                            && self.host_reachable.get(h.as_str()) != Some(&true)
+                        {
+                            let msg = if self.host_reachable.contains_key(h.as_str()) {
+                                format!("@{} is unreachable", h)
+                            } else {
+                                format!("@{} — checking connectivity…", h)
+                            };
+                            self.warning = Some((msg, Instant::now()));
+                            return false;
+                        }
                         // Has a session — join or create it (handles both remote and local).
                         self.join_or_create_session(
                             &session_name,
@@ -349,18 +442,22 @@ impl App {
                             None,
                         )
                     }
-                    Some(TaskEnterAction::CreateSession { worktree_path, branch, host }) => {
+                    Some(TaskEnterAction::CreateSession {
+                        worktree_path,
+                        branch,
+                        host,
+                    }) => {
                         // Guard: refuse to create a session on a host not confirmed reachable.
-                        if let Some(ref h) = host {
-                            if self.host_reachable.get(h.as_str()) != Some(&true) {
-                                let msg = if self.host_reachable.contains_key(h.as_str()) {
-                                    format!("@{} is unreachable", h)
-                                } else {
-                                    format!("@{} — checking connectivity…", h)
-                                };
-                                self.warning = Some((msg, Instant::now()));
-                                return false;
-                            }
+                        if let Some(ref h) = host
+                            && self.host_reachable.get(h.as_str()) != Some(&true)
+                        {
+                            let msg = if self.host_reachable.contains_key(h.as_str()) {
+                                format!("@{} is unreachable", h)
+                            } else {
+                                format!("@{} — checking connectivity…", h)
+                            };
+                            self.warning = Some((msg, Instant::now()));
+                            return false;
                         }
                         // No session but worktree exists — derive session name and create.
                         let repo_name = self.repo_name.clone();
@@ -381,23 +478,35 @@ impl App {
             }
             KeyCode::Char('o') => {
                 // Open PR URL in browser for the selected task.
-                let visible = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+                let visible = visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
                 if let Some(vt) = visible.get(self.cursor)
-                    && let Some(ref pr) = vt.row.pr {
-                        // Construct PR URL from repo_slug and PR number.
-                        let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
-                        crate::browser::open_url(&url);
-                    }
+                    && let Some(ref pr) = vt.row.pr
+                {
+                    // Construct PR URL from repo_slug and PR number.
+                    let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
+                    crate::browser::open_url(&url);
+                }
                 false
             }
             KeyCode::Char('i') => {
                 // Open issue URL in browser for the selected task.
-                let visible = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+                let visible = visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
                 if let Some(vt) = visible.get(self.cursor)
-                    && let Some(num) = vt.row.issue_number {
-                        let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
-                        crate::browser::open_url(&url);
-                    }
+                    && let Some(num) = vt.row.issue_number
+                {
+                    let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
+                    crate::browser::open_url(&url);
+                }
                 false
             }
             KeyCode::Char('B') => {
@@ -406,7 +515,12 @@ impl App {
             }
             KeyCode::Char('p') => {
                 // Toggle priority flag for the selected worktree.
-                let visible = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+                let visible = visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
                 if let Some(vt) = visible.get(self.cursor) {
                     let path = vt.row.worktree_path.clone();
                     drop(visible);
@@ -457,7 +571,12 @@ impl App {
     /// Fetches pane content for the task at the current cursor position.
     pub(crate) fn fetch_task_pane_content(&mut self) {
         self.pane_content.clear();
-        let visible = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+        let visible = visible_tasks_filtered(
+            &self.task_rows,
+            &self.filter_mode,
+            &self.search_text,
+            self.active_repo_slug(),
+        );
         if let Some(vt) = visible.get(self.cursor) {
             // Find a session to capture pane content from.
             if let Some(session) = vt.row.sessions.first() {
@@ -466,11 +585,20 @@ impl App {
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let content = if let Some(host) = remote_host {
-                        remote::capture_remote_pane_content(&host, &session_name, PANE_CAPTURE_LINES).unwrap_or_default()
+                        remote::capture_remote_pane_content(
+                            &host,
+                            &session_name,
+                            PANE_CAPTURE_LINES,
+                        )
+                        .unwrap_or_default()
                     } else {
-                        tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES).unwrap_or_default()
+                        tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
+                            .unwrap_or_default()
                     };
-                    let _ = tx.send(crate::tui::state::AppMsg::PaneContent(session_name, content));
+                    let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
+                        session_name,
+                        content,
+                    ));
                 });
             }
         }
@@ -482,7 +610,8 @@ impl App {
     /// spawns a background thread to probe each unreachable host and send results
     /// back via the App message channel.
     fn reconnect_unreachable_hosts(&mut self) {
-        let unreachable: Vec<String> = self.host_reachable
+        let unreachable: Vec<String> = self
+            .host_reachable
             .iter()
             .filter(|(_, v)| !*v)
             .map(|(k, _)| k.clone())
@@ -513,7 +642,11 @@ impl App {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(hdr_height), Constraint::Length(1), Constraint::Min(3)])
+            .constraints([
+                Constraint::Length(hdr_height),
+                Constraint::Length(1),
+                Constraint::Min(3),
+            ])
             .split(area);
 
         self.render_header(f, chunks[0]);
@@ -542,15 +675,16 @@ impl App {
                 .alignment(Alignment::Center);
             f.render_widget(para, chunks[2]);
         } else {
-            let empty = Paragraph::new("No worktrees found. Run `orchard init` to configure a repo.")
-                .style(Style::default().fg(Color::Yellow))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
-                        .border_type(BorderType::Rounded),
-                )
-                .alignment(Alignment::Center);
+            let empty =
+                Paragraph::new("No worktrees found. Run `orchard init` to configure a repo.")
+                    .style(Style::default().fg(Color::Yellow))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Yellow))
+                            .border_type(BorderType::Rounded),
+                    )
+                    .alignment(Alignment::Center);
             f.render_widget(empty, chunks[2]);
         }
     }
@@ -570,7 +704,10 @@ impl App {
             } else {
                 host_spans.push(Span::styled(format!("  @{}", host), red_style));
                 host_spans.push(Span::styled(" \u{2717}", red_style)); // ✗
-                host_spans.push(Span::styled(" (stale)", Style::default().fg(Color::DarkGray)));
+                host_spans.push(Span::styled(
+                    " (stale)",
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
         }
 
@@ -622,7 +759,10 @@ impl App {
             } else {
                 host_line_spans.push(Span::styled(format!(" @{} ", host), red_style));
                 host_line_spans.push(Span::styled("\u{2717}", red_style));
-                host_line_spans.push(Span::styled(" (stale)", Style::default().fg(Color::DarkGray)));
+                host_line_spans.push(Span::styled(
+                    " (stale)",
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
         }
 
@@ -713,7 +853,10 @@ impl App {
 
     fn enter_cleanup_view(&mut self) {
         let stale = filter_stale(&self.task_rows);
-        let selected = stale.iter().map(|row| row.worktree_path.clone()).collect::<HashSet<_>>();
+        let selected = stale
+            .iter()
+            .map(|row| row.worktree_path.clone())
+            .collect::<HashSet<_>>();
         self.view = ViewState::Cleanup(CleanupState {
             stale,
             selected,
@@ -735,12 +878,18 @@ impl App {
         let area = f.area();
         let hdr_height = header_height(area.height);
 
-        let tasks = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
+        let tasks = visible_tasks_filtered(
+            &self.task_rows,
+            &self.filter_mode,
+            &self.search_text,
+            self.active_repo_slug(),
+        );
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
-        let has_remote = self.task_rows.iter().any(|r| {
-            r.sessions.iter().any(|s| s.host.is_some()) || r.worktree_host.is_some()
-        });
+        let has_remote = self
+            .task_rows
+            .iter()
+            .any(|r| r.sessions.iter().any(|s| s.host.is_some()) || r.worktree_host.is_some());
 
         let show_branch = self.show_branch_column;
 
@@ -756,9 +905,9 @@ impl App {
 
         // Column widths — BRANCH column optional, HOST column included only when remotes exist.
         let mut widths: Vec<Constraint> = vec![
-            Constraint::Length(3),   // #
-            Constraint::Length(6),   // ISSUE
-            Constraint::Min(20),     // TITLE (flexible)
+            Constraint::Length(3), // #
+            Constraint::Length(6), // ISSUE
+            Constraint::Min(20),   // TITLE (flexible)
         ];
         if show_branch {
             widths.push(Constraint::Length(20)); // BRANCH (left-truncated)
@@ -771,7 +920,8 @@ impl App {
 
         // Build rows for the table, including section header rows.
         let num_columns = widths.len();
-        let (rows, row_heights) = self.build_task_table_rows(&tasks, show_branch, has_remote, title_width, num_columns);
+        let (rows, row_heights) =
+            self.build_task_table_rows(&tasks, show_branch, has_remote, title_width, num_columns);
 
         let has_warning = self
             .warning
@@ -784,9 +934,8 @@ impl App {
 
         // Check if selected task has a preview
         let selected_task = tasks.get(self.cursor);
-        let has_preview = selected_task.is_some_and(|vt| {
-            !self.pane_content.is_empty() && !vt.row.sessions.is_empty()
-        });
+        let has_preview = selected_task
+            .is_some_and(|vt| !self.pane_content.is_empty() && !vt.row.sessions.is_empty());
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
@@ -796,7 +945,7 @@ impl App {
 
         if has_preview {
             constraints.push(Constraint::Length(1)); // spacer
-            constraints.push(Constraint::Min(4));    // preview fills remaining
+            constraints.push(Constraint::Min(4)); // preview fills remaining
         }
 
         if has_warning {
@@ -824,11 +973,7 @@ impl App {
         let header_style = Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::BOLD);
-        let mut header_cells = vec![
-            Cell::from(" #"),
-            Cell::from("ISSUE"),
-            Cell::from("TITLE"),
-        ];
+        let mut header_cells = vec![Cell::from(" #"), Cell::from("ISSUE"), Cell::from("TITLE")];
         if show_branch {
             header_cells.push(Cell::from("BRANCH"));
         }
@@ -845,7 +990,11 @@ impl App {
         };
         let block = Block::default()
             .title(table_title)
-            .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .title_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .border_type(BorderType::Rounded);
@@ -910,7 +1059,11 @@ impl App {
 
             let title_raw = if vt.row.is_shepherd {
                 // Shepherd rows show the repo name, not the branch.
-                vt.row.repo_slug.split('/').nth(1).unwrap_or(&vt.row.repo_slug)
+                vt.row
+                    .repo_slug
+                    .split('/')
+                    .nth(1)
+                    .unwrap_or(&vt.row.repo_slug)
             } else {
                 match vt.row.issue_title.as_deref() {
                     Some(title) if !title.is_empty() => title,
@@ -920,16 +1073,19 @@ impl App {
             let title_display = crate::paths::truncate_left(title_raw, title_width);
 
             // Determine host name for reachability lookup: prefer session host, fall back to worktree host.
-            let task_host: Option<&str> = vt.row.sessions.iter().find_map(|s| s.host.as_deref())
+            let task_host: Option<&str> = vt
+                .row
+                .sessions
+                .iter()
+                .find_map(|s| s.host.as_deref())
                 .or(vt.row.worktree_host.as_deref());
             let host_unreachable = task_host.is_some()
-                && task_host
-                    .and_then(|h| self.host_reachable.get(h))
-                    .copied()
-                    != Some(true);
+                && task_host.and_then(|h| self.host_reachable.get(h)).copied() != Some(true);
 
             let row_style = if selected {
-                let base = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                let base = Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD);
                 if host_unreachable {
                     base.add_modifier(Modifier::DIM)
                 } else {
@@ -955,7 +1111,8 @@ impl App {
 
             if show_branch {
                 let branch_display = crate::paths::truncate_left(branch_tail(&vt.row.branch), 20);
-                let branch_cell = Cell::from(branch_display).style(Style::default().fg(Color::DarkGray));
+                let branch_cell =
+                    Cell::from(branch_display).style(Style::default().fg(Color::DarkGray));
                 cells.push(branch_cell);
             }
 
@@ -966,8 +1123,9 @@ impl App {
                             .style(Style::default().fg(Color::Red)),
                         Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
                             .style(Style::default().fg(Color::Green)),
-                        None => Cell::from(format!("@{}", h))
-                            .style(Style::default().fg(Color::Magenta)),
+                        None => {
+                            Cell::from(format!("@{}", h)).style(Style::default().fg(Color::Magenta))
+                        }
                     }
                 } else {
                     Cell::from("")
@@ -1004,10 +1162,17 @@ impl App {
             let short = paths::tildify(&vt.row.worktree_path);
             format!(" \u{2502} wt: {}", short)
         };
-        let pr_part = vt.row.pr.as_ref().map(|p| format!(" \u{2502} pr: #{}", p.number)).unwrap_or_default();
+        let pr_part = vt
+            .row
+            .pr
+            .as_ref()
+            .map(|p| format!(" \u{2502} pr: #{}", p.number))
+            .unwrap_or_default();
 
-        let title = format!("\u{2500}\u{2500} {}{}{}{} \u{2500}\u{2500}",
-            issue_part, title_part, wt_part, pr_part);
+        let title = format!(
+            "\u{2500}\u{2500} {}{}{}{} \u{2500}\u{2500}",
+            issue_part, title_part, wt_part, pr_part
+        );
 
         let block = Block::default()
             .title(title)
@@ -1037,7 +1202,13 @@ impl App {
     }
 
     /// Appends the common trailing hint keys: refresh, reconnect, quit, help.
-    fn append_common_hints(&self, spans: &mut Vec<Span<'static>>, sep: &Span<'static>, key_style: Style, quit_label: &'static str) {
+    fn append_common_hints(
+        &self,
+        spans: &mut Vec<Span<'static>>,
+        sep: &Span<'static>,
+        key_style: Style,
+        quit_label: &'static str,
+    ) {
         if self.refreshing {
             let spinner = SPINNER_FRAMES[self.spinner_frame];
             spans.push(Span::styled(
@@ -1068,15 +1239,21 @@ impl App {
     /// Renders the hint bar for task mode.
     pub(crate) fn render_hints_task(&self, f: &mut Frame, area: Rect) {
         let sep = Span::styled(" \u{2502} ", Style::default().fg(Color::DarkGray));
-        let key_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let key_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
 
         // When search is active, show the search input indicator.
         if self.search_active {
             let search_display = format!("/ {}_", self.search_text);
             let hints = Paragraph::new(Line::from(vec![
                 Span::styled(search_display, Style::default().fg(Color::Yellow)),
-                Span::styled("  esc:cancel  enter:apply", Style::default().fg(Color::DarkGray)),
-            ])).alignment(Alignment::Center);
+                Span::styled(
+                    "  esc:cancel  enter:apply",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+            .alignment(Alignment::Center);
             f.render_widget(hints, area);
             return;
         }
@@ -1089,8 +1266,15 @@ impl App {
 
         // PR link hint — dim when selected task has no PR.
         let has_pr = !self.task_rows.is_empty() && {
-            let visible = visible_tasks_filtered(&self.task_rows, &self.filter_mode, &self.search_text, self.active_repo_slug());
-            visible.get(self.cursor).is_some_and(|vt| vt.row.pr.is_some())
+            let visible = visible_tasks_filtered(
+                &self.task_rows,
+                &self.filter_mode,
+                &self.search_text,
+                self.active_repo_slug(),
+            );
+            visible
+                .get(self.cursor)
+                .is_some_and(|vt| vt.row.pr.is_some())
         };
         if has_pr {
             spans.push(Span::styled("o", key_style));
@@ -1168,10 +1352,7 @@ impl App {
 ///
 /// `num_columns` is the total number of columns in the table (must match the data rows).
 /// The Shepherd header uses bold + Cyan styling.
-fn group_header_row(
-    group: DisplayGroup,
-    num_columns: usize,
-) -> Row<'static> {
+fn group_header_row(group: DisplayGroup, num_columns: usize) -> Row<'static> {
     let label = group.label().to_string();
 
     // ──── label ────
@@ -1215,7 +1396,11 @@ fn group_header_row(
 /// shown in a bordered block (7 rows). On shorter terminals a single compact
 /// line is used instead so the task list gets as much vertical space as possible.
 pub(crate) fn header_height(terminal_height: u16) -> u16 {
-    if terminal_height >= FULL_HEADER_MIN_HEIGHT { 9 } else { 1 }
+    if terminal_height >= FULL_HEADER_MIN_HEIGHT {
+        9
+    } else {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -1315,7 +1500,10 @@ mod tests {
             sessions: vec![make_session_info("sess")],
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
-        let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
+        let shepherd = TaskRow {
+            is_shepherd: true,
+            ..make_task_row(3, DisplayGroup::Shepherd)
+        };
         let rows = vec![shepherd, row_no_session, row_with_session];
         let visible = visible_tasks(&rows, &FilterMode::HasSession, "");
         // shepherd always passes + row with session
@@ -1340,7 +1528,10 @@ mod tests {
             }),
             ..make_task_row(2, DisplayGroup::ReadyToMerge)
         };
-        let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
+        let shepherd = TaskRow {
+            is_shepherd: true,
+            ..make_task_row(3, DisplayGroup::Shepherd)
+        };
         let rows = vec![shepherd, row_no_pr, row_with_pr];
         let visible = visible_tasks(&rows, &FilterMode::HasPR, "");
         assert_eq!(visible.len(), 2);
@@ -1360,12 +1551,20 @@ mod tests {
             }],
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
-        let shepherd = TaskRow { is_shepherd: true, ..make_task_row(3, DisplayGroup::Shepherd) };
+        let shepherd = TaskRow {
+            is_shepherd: true,
+            ..make_task_row(3, DisplayGroup::Shepherd)
+        };
         let rows = vec![shepherd, row_no_claude, row_with_claude];
         let visible = visible_tasks(&rows, &FilterMode::HasClaude, "");
         assert_eq!(visible.len(), 2);
         assert!(visible.iter().any(|v| v.row.is_shepherd));
-        assert!(visible.iter().any(|v| v.row.sessions.iter().any(|s| s.claude_state != crate::claude_state::ClaudeState::None)));
+        assert!(visible.iter().any(|v| {
+            v.row
+                .sessions
+                .iter()
+                .any(|s| s.claude_state != crate::claude_state::ClaudeState::None)
+        }));
     }
 
     #[test]
@@ -1414,8 +1613,16 @@ mod tests {
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
         let (text, _) = pr_status_text(&row);
-        assert!(text.starts_with("#42 "), "expected '#42 ' prefix in: {}", text);
-        assert!(text.contains("approved"), "expected 'approved' in: {}", text);
+        assert!(
+            text.starts_with("#42 "),
+            "expected '#42 ' prefix in: {}",
+            text
+        );
+        assert!(
+            text.contains("approved"),
+            "expected 'approved' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -1485,7 +1692,7 @@ mod tests {
         assert!(text.contains("input"), "expected 'input' in: {}", text);
     }
 
-        #[test]
+    #[test]
     fn claude_status_none_when_no_session() {
         let row = make_task_row(1, DisplayGroup::Other);
         let (text, _) = claude_status_text(&row);
@@ -1507,7 +1714,11 @@ mod tests {
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
         let (text, _) = pr_status_text(&row);
-        assert!(text.contains("changes req"), "expected 'changes req' in: {}", text);
+        assert!(
+            text.contains("changes req"),
+            "expected 'changes req' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -1525,7 +1736,11 @@ mod tests {
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
         let (text, _) = pr_status_text(&row);
-        assert!(text.contains("conflict"), "expected 'conflict' in: {}", text);
+        assert!(
+            text.contains("conflict"),
+            "expected 'conflict' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -1543,7 +1758,11 @@ mod tests {
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
         let (text, _) = pr_status_text(&row);
-        assert!(text.contains("unresolved"), "expected 'unresolved' in: {}", text);
+        assert!(
+            text.contains("unresolved"),
+            "expected 'unresolved' in: {}",
+            text
+        );
         assert!(text.contains("3"), "expected count 3 in: {}", text);
     }
 
@@ -1581,7 +1800,10 @@ mod tests {
 
     #[test]
     fn branch_tail_returns_last_segment_with_multiple_slashes() {
-        assert_eq!(branch_tail("user/feat/issue-456-refactor"), "issue-456-refactor");
+        assert_eq!(
+            branch_tail("user/feat/issue-456-refactor"),
+            "issue-456-refactor"
+        );
     }
 
     #[test]
@@ -1598,7 +1820,10 @@ mod tests {
     // claude_status_text with hook state
     // -----------------------------------------------------------------------
 
-    fn session_with_hook_state(state: crate::claude_state::ClaudeState, ctx_pct: Option<f64>) -> SessionInfo {
+    fn session_with_hook_state(
+        state: crate::claude_state::ClaudeState,
+        ctx_pct: Option<f64>,
+    ) -> SessionInfo {
         let (has_active, is_working, needs_input) = match state {
             crate::claude_state::ClaudeState::Working => (true, true, false),
             crate::claude_state::ClaudeState::Idle => (true, false, false),
@@ -1621,7 +1846,10 @@ mod tests {
     #[test]
     fn claude_status_working_with_context_shows_percentage() {
         let row = TaskRow {
-            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Working, Some(73.0))],
+            sessions: vec![session_with_hook_state(
+                crate::claude_state::ClaudeState::Working,
+                Some(73.0),
+            )],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
         let (text, _) = claude_status_text(&row);
@@ -1632,7 +1860,10 @@ mod tests {
     #[test]
     fn claude_status_idle_from_hook_state() {
         let row = TaskRow {
-            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Idle, None)],
+            sessions: vec![session_with_hook_state(
+                crate::claude_state::ClaudeState::Idle,
+                None,
+            )],
             ..make_task_row(1, DisplayGroup::Other)
         };
         let (text, _) = claude_status_text(&row);
@@ -1642,7 +1873,10 @@ mod tests {
     #[test]
     fn claude_status_input_from_hook_state() {
         let row = TaskRow {
-            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Input, None)],
+            sessions: vec![session_with_hook_state(
+                crate::claude_state::ClaudeState::Input,
+                None,
+            )],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
         let (text, _) = claude_status_text(&row);
@@ -1652,7 +1886,10 @@ mod tests {
     #[test]
     fn claude_status_input_with_context_shows_percentage() {
         let row = TaskRow {
-            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Input, Some(95.0))],
+            sessions: vec![session_with_hook_state(
+                crate::claude_state::ClaudeState::Input,
+                Some(95.0),
+            )],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
         let (text, _) = claude_status_text(&row);
@@ -1663,11 +1900,18 @@ mod tests {
     #[test]
     fn claude_status_no_context_pct_when_none() {
         let row = TaskRow {
-            sessions: vec![session_with_hook_state(crate::claude_state::ClaudeState::Working, None)],
+            sessions: vec![session_with_hook_state(
+                crate::claude_state::ClaudeState::Working,
+                None,
+            )],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
         let (text, _) = claude_status_text(&row);
-        assert!(!text.contains('%'), "expected no % when context_window_pct is None: {}", text);
+        assert!(
+            !text.contains('%'),
+            "expected no % when context_window_pct is None: {}",
+            text
+        );
     }
 
     #[test]
@@ -1720,14 +1964,16 @@ mod tests {
         let (text, _) = claude_status_text(&row);
         // Input takes priority over working; count suffix should show " 2"
         assert!(text.contains("input"), "expected 'input' in: {}", text);
-        assert!(text.contains("2"), "expected session count '2' in: {}", text);
+        assert!(
+            text.contains("2"),
+            "expected session count '2' in: {}",
+            text
+        );
     }
 
     #[test]
     fn search_is_case_insensitive() {
-        let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-        ];
+        let rows = vec![make_task_row(1, DisplayGroup::NeedsAttention)];
         // Search with uppercase should match lowercase branch "feat/issue-1"
         let visible = visible_tasks(&rows, &FilterMode::All, "FEAT/ISSUE");
         assert_eq!(visible.len(), 1);

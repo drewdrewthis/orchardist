@@ -37,8 +37,7 @@ const MARKER_END: &str = "# <<< orchard <<<";
 ///  5. Optionally adding a status bar segment
 ///  6. Reloading tmux config
 pub fn run_init_wizard() -> Result<(), String> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| "Could not determine home directory".to_string())?;
+    let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
 
     // Step 1: Check tmux version.
     let tmux_version = check_tmux_version_step()?;
@@ -102,17 +101,16 @@ fn remove_old_shell_function_step(home: &Path) -> Result<(), String> {
     for rc in &[".zshrc", ".bashrc"] {
         let rc_path = home.join(rc);
         if let Ok(content) = std::fs::read_to_string(&rc_path)
-            && content.contains(MARKER_START) {
-                eprintln!("  Found old orchard shell function in ~/{rc}");
-                if prompt_yn("  Remove it? [Y/n]", true) {
-                    remove_old_shell_function(&rc_path)?;
-                    eprintln!("  Removed old shell function from ~/{rc}");
-                } else {
-                    eprintln!(
-                        "  Old shell function left in place — it may conflict with popup mode"
-                    );
-                }
+            && content.contains(MARKER_START)
+        {
+            eprintln!("  Found old orchard shell function in ~/{rc}");
+            if prompt_yn("  Remove it? [Y/n]", true) {
+                remove_old_shell_function(&rc_path)?;
+                eprintln!("  Removed old shell function from ~/{rc}");
+            } else {
+                eprintln!("  Old shell function left in place — it may conflict with popup mode");
             }
+        }
     }
     Ok(())
 }
@@ -122,8 +120,7 @@ pub fn remove_old_shell_function(rc_path: &Path) -> Result<(), String> {
     let content = std::fs::read_to_string(rc_path)
         .map_err(|e| format!("reading {}: {e}", rc_path.display()))?;
     let cleaned = remove_marker_block(&content);
-    std::fs::write(rc_path, cleaned)
-        .map_err(|e| format!("writing {}: {e}", rc_path.display()))?;
+    std::fs::write(rc_path, cleaned).map_err(|e| format!("writing {}: {e}", rc_path.display()))?;
     Ok(())
 }
 
@@ -152,8 +149,7 @@ fn remove_marker_block(content: &str) -> String {
 fn install_wrapper(home: &Path) -> Result<(), String> {
     eprintln!("Step 3: Creating wrapper script...");
     let bin_dir = home.join(".local/bin");
-    std::fs::create_dir_all(&bin_dir)
-        .map_err(|e| format!("creating ~/.local/bin: {e}"))?;
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("creating ~/.local/bin: {e}"))?;
 
     let script_path = bin_dir.join("orchard-popup");
     std::fs::write(&script_path, get_wrapper_script())
@@ -173,7 +169,10 @@ fn install_wrapper(home: &Path) -> Result<(), String> {
     // Warn if ~/.local/bin is not in PATH.
     let path_var = std::env::var("PATH").unwrap_or_default();
     let bin_str = bin_dir.to_string_lossy();
-    if !path_var.split(':').any(|p| p == bin_str.as_ref() || p == "~/.local/bin") {
+    if !path_var
+        .split(':')
+        .any(|p| p == bin_str.as_ref() || p == "~/.local/bin")
+    {
         eprintln!("  Warning: ~/.local/bin is not in your PATH");
         eprintln!(r#"    Add: export PATH="$HOME/.local/bin:$PATH""#);
     }
@@ -370,10 +369,11 @@ pub fn inject_config_block(existing: &str, content: &str) -> String {
     let new_block = format!("{MARKER_START}\n{content}\n{MARKER_END}");
 
     if let Some(start) = existing.find(MARKER_START)
-        && let Some(end_offset) = existing[start..].find(MARKER_END) {
-            let end = start + end_offset + MARKER_END.len();
-            return format!("{}{}{}", &existing[..start], new_block, &existing[end..]);
-        }
+        && let Some(end_offset) = existing[start..].find(MARKER_END)
+    {
+        let end = start + end_offset + MARKER_END.len();
+        return format!("{}{}{}", &existing[..start], new_block, &existing[end..]);
+    }
 
     if existing.is_empty() || existing.ends_with('\n') {
         format!("{existing}{new_block}\n")
@@ -404,8 +404,7 @@ pub fn install_claude_hooks(home: &Path) -> Result<(), String> {
     eprintln!("Step 7: Installing Claude Code hooks...");
 
     let hooks_dir = home.join(".claude/hooks");
-    std::fs::create_dir_all(&hooks_dir)
-        .map_err(|e| format!("creating ~/.claude/hooks: {e}"))?;
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("creating ~/.claude/hooks: {e}"))?;
 
     // Install the hook script.
     let script_path = hooks_dir.join("orchard-state.sh");
@@ -446,8 +445,8 @@ pub fn register_claude_hooks(settings_path: &Path, hook_command: &str) -> Result
         "{}".to_string()
     };
 
-    let mut settings: serde_json::Value = serde_json::from_str(&existing)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&existing).unwrap_or_else(|_| serde_json::json!({}));
 
     let hooks_obj = settings
         .as_object_mut()
@@ -471,9 +470,7 @@ pub fn register_claude_hooks(settings_path: &Path, hook_command: &str) -> Result
                 .and_then(|h| h.as_array())
                 .map(|arr| {
                     arr.iter().any(|hook| {
-                        hook.get("command")
-                            .and_then(|c| c.as_str())
-                            == Some(hook_command)
+                        hook.get("command").and_then(|c| c.as_str()) == Some(hook_command)
                     })
                 })
                 .unwrap_or(false)
@@ -490,14 +487,12 @@ pub fn register_claude_hooks(settings_path: &Path, hook_command: &str) -> Result
     let dir = settings_path
         .parent()
         .ok_or_else(|| "settings.json has no parent dir".to_string())?;
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
 
     let tmp_path = settings_path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("serializing settings: {e}"))?;
-    std::fs::write(&tmp_path, &json)
-        .map_err(|e| format!("writing {}: {e}", tmp_path.display()))?;
+    std::fs::write(&tmp_path, &json).map_err(|e| format!("writing {}: {e}", tmp_path.display()))?;
     std::fs::rename(&tmp_path, settings_path)
         .map_err(|e| format!("renaming to {}: {e}", settings_path.display()))?;
 
@@ -631,9 +626,8 @@ mod tests {
 
     #[test]
     fn remove_old_shell_function_strips_marker_block() {
-        let content = format!(
-            "# before\n{MARKER_START}\norchard() {{ echo old; }}\n{MARKER_END}\n# after\n"
-        );
+        let content =
+            format!("# before\n{MARKER_START}\norchard() {{ echo old; }}\n{MARKER_END}\n# after\n");
         let result = remove_marker_block(&content);
         assert!(!result.contains("orchard()"));
         assert!(!result.contains(MARKER_START));
@@ -701,7 +695,11 @@ mod tests {
                 "PreToolUse": [{"hooks": [{"type": "command", "command": "other-hook.sh"}]}]
             }
         });
-        std::fs::write(&settings_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
         register_claude_hooks(&settings_path, "~/.claude/hooks/orchard-state.sh").unwrap();
 
@@ -709,7 +707,11 @@ mod tests {
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         let pre_tool_hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre_tool_hooks.len(), 2, "should preserve existing hook and add new one");
+        assert_eq!(
+            pre_tool_hooks.len(),
+            2,
+            "should preserve existing hook and add new one"
+        );
     }
 
     #[test]
@@ -722,7 +724,13 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
 
-        for event in &["PreToolUse", "PostToolUse", "Stop", "Notification", "SessionEnd"] {
+        for event in &[
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "Notification",
+            "SessionEnd",
+        ] {
             assert!(
                 settings["hooks"][event].is_array(),
                 "expected hook for event: {event}"

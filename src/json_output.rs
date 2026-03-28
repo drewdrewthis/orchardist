@@ -10,7 +10,9 @@ use serde::Serialize;
 
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
-use crate::orchard_state::{IssueInfo, OrchardState, PrState, RepoState, SessionState, WorktreeState};
+use crate::orchard_state::{
+    IssueInfo, OrchardState, PrState, RepoState, SessionState, WorktreeState,
+};
 
 // ---------------------------------------------------------------------------
 // JSON output types (versioned, camelCase)
@@ -202,7 +204,14 @@ impl From<&OrchardState> for JsonOutput {
         let hosts = state
             .hosts
             .iter()
-            .map(|(host, h)| (host.clone(), JsonHostState { reachable: h.reachable }))
+            .map(|(host, h)| {
+                (
+                    host.clone(),
+                    JsonHostState {
+                        reachable: h.reachable,
+                    },
+                )
+            })
             .collect();
 
         Self {
@@ -296,14 +305,20 @@ mod tests {
     #[test]
     fn json_repo_has_camelcase_slug_field() {
         let state = OrchardState {
-            repos: vec![RepoState { slug: "owner/repo".to_string(), worktrees: vec![] }],
+            repos: vec![RepoState {
+                slug: "owner/repo".to_string(),
+                worktrees: vec![],
+            }],
             hosts: HashMap::new(),
         };
         let output = JsonOutput::from(&state);
         let value = serde_json::to_value(&output).unwrap();
         let repo = &value["repos"][0];
         assert!(repo.get("slug").is_some(), "expected 'slug' key in repo");
-        assert!(repo.get("worktrees").is_some(), "expected 'worktrees' key in repo");
+        assert!(
+            repo.get("worktrees").is_some(),
+            "expected 'worktrees' key in repo"
+        );
     }
 
     #[test]
@@ -318,8 +333,14 @@ mod tests {
         let output = JsonOutput::from(&state);
         let value = serde_json::to_value(&output).unwrap();
         let wt = &value["repos"][0]["worktrees"][0];
-        assert!(wt.get("isShepherd").is_some(), "expected camelCase 'isShepherd' key");
-        assert!(wt.get("displayGroup").is_some(), "expected camelCase 'displayGroup' key");
+        assert!(
+            wt.get("isShepherd").is_some(),
+            "expected camelCase 'isShepherd' key"
+        );
+        assert!(
+            wt.get("displayGroup").is_some(),
+            "expected camelCase 'displayGroup' key"
+        );
     }
 
     #[test]

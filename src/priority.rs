@@ -51,7 +51,9 @@ pub fn load_priorities() -> HashSet<String> {
 ///
 /// Silently ignores IO errors so a failure to persist never disrupts the TUI.
 pub fn save_priorities(priorities: &HashSet<String>) {
-    let Some(path) = priorities_path() else { return };
+    let Some(path) = priorities_path() else {
+        return;
+    };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -128,9 +130,8 @@ mod tests {
         let json = serde_json::to_string_pretty(&store).unwrap();
         std::fs::write(&path, json).unwrap();
 
-        let loaded: PriorityStore = serde_json::from_str(
-            &std::fs::read_to_string(&path).unwrap()
-        ).unwrap();
+        let loaded: PriorityStore =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let loaded_set: HashSet<String> = loaded.priorities.into_iter().collect();
         assert_eq!(loaded_set, set);
     }
@@ -139,20 +140,18 @@ mod tests {
     #[test]
     fn load_missing_file_returns_empty() {
         // Directly parse an empty/missing JSON scenario.
-        let result: HashSet<String> =
-            serde_json::from_str::<PriorityStore>("{\"priorities\":[]}")
-                .map(|s| s.priorities.into_iter().collect())
-                .unwrap_or_default();
+        let result: HashSet<String> = serde_json::from_str::<PriorityStore>("{\"priorities\":[]}")
+            .map(|s| s.priorities.into_iter().collect())
+            .unwrap_or_default();
         assert!(result.is_empty());
     }
 
     /// Malformed JSON returns empty set rather than panicking.
     #[test]
     fn malformed_json_returns_empty() {
-        let result: HashSet<String> =
-            serde_json::from_str::<PriorityStore>("not json at all")
-                .map(|s| s.priorities.into_iter().collect())
-                .unwrap_or_default();
+        let result: HashSet<String> = serde_json::from_str::<PriorityStore>("not json at all")
+            .map(|s| s.priorities.into_iter().collect())
+            .unwrap_or_default();
         assert!(result.is_empty());
     }
 }

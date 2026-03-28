@@ -6,11 +6,11 @@
 mod common;
 
 use common::{
-    make_approved_pr, make_changes_requested_pr, make_claude_session, make_issue, make_pr,
-    make_session, make_worktree, TestCacheDir,
+    TestCacheDir, make_approved_pr, make_changes_requested_pr, make_claude_session, make_issue,
+    make_pr, make_session, make_worktree,
 };
-use orchard::cache::{read_cache, CachedPr, CachedWorktree};
-use orchard::derive::{derive_all_repos, derive_worktree_rows, DisplayGroup};
+use orchard::cache::{CachedPr, CachedWorktree, read_cache};
+use orchard::derive::{DisplayGroup, derive_all_repos, derive_worktree_rows};
 
 // ---------------------------------------------------------------------------
 // Multi-repo: tasks from all repos appear in the result

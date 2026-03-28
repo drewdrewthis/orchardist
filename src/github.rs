@@ -107,9 +107,7 @@ pub fn get_all_prs(branches: &[String]) -> HashMap<String, PrInfo> {
     if branches.is_empty() {
         return HashMap::new();
     }
-    timed!("getAllPrs", {
-        get_all_prs_inner(branches)
-    })
+    timed!("getAllPrs", get_all_prs_inner(branches))
 }
 
 fn get_all_prs_inner(branches: &[String]) -> HashMap<String, PrInfo> {
@@ -126,7 +124,10 @@ fn get_all_prs_inner(branches: &[String]) -> HashMap<String, PrInfo> {
         .collect();
 
     if !missing.is_empty() {
-        LOG.info(&format!("getAllPrs: looking up {} missing branches", missing.len()));
+        LOG.info(&format!(
+            "getAllPrs: looking up {} missing branches",
+            missing.len()
+        ));
 
         let sem = Arc::new(Semaphore::new(5));
         let collected: Arc<Mutex<HashMap<String, PrInfo>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -175,10 +176,7 @@ fn fetch_open_prs() -> anyhow::Result<HashMap<String, PrInfo>> {
     let mut map = HashMap::with_capacity(raws.len());
     for r in &raws {
         if let Some(pr) = raw_to_pr_info(r) {
-            let branch = r["headRefName"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
+            let branch = r["headRefName"].as_str().unwrap_or_default().to_string();
             map.insert(branch, pr);
         }
     }
@@ -342,9 +340,7 @@ fn enrich_pr_details_inner(pr_map: &mut HashMap<String, PrInfo>) {
         let check_contexts: Vec<serde_json::Value> = node_val["commits"]["nodes"]
             .as_array()
             .and_then(|nodes| nodes.first())
-            .and_then(|n| {
-                n["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array()
-            })
+            .and_then(|n| n["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array())
             .cloned()
             .unwrap_or_default();
         pr.checks_status = derive_checks_status(&check_contexts);
@@ -378,10 +374,7 @@ fn build_enrich_query(entries: &[(String, u32)]) -> String {
 /// Derives the effective review decision. If `decision` is non-empty it is used
 /// directly; otherwise it is derived from individual reviews (CHANGES_REQUESTED
 /// takes priority over APPROVED).
-pub fn derive_review_decision(
-    decision: &str,
-    reviews: &[serde_json::Value],
-) -> ReviewDecision {
+pub fn derive_review_decision(decision: &str, reviews: &[serde_json::Value]) -> ReviewDecision {
     if !decision.is_empty() {
         return parse_review_decision(decision);
     }
@@ -474,24 +467,27 @@ pub fn extract_issue_number(branch: &str) -> Option<u32> {
     for candidate in &[branch, stripped.as_str()] {
         if let Some(caps) = issue_keyword_re().captures(candidate)
             && let Ok(n) = caps[1].parse::<u32>()
-                && n >= 1 {
-                    return Some(n);
-                }
+            && n >= 1
+        {
+            return Some(n);
+        }
     }
 
     // Leading number (>= 100) on stripped.
     if let Some(caps) = leading_number_re().captures(&stripped)
         && let Ok(n) = caps[1].parse::<u32>()
-            && n >= 100 {
-                return Some(n);
-            }
+        && n >= 100
+    {
+        return Some(n);
+    }
 
     // Embedded number (>= 100) on stripped.
     if let Some(caps) = embedded_number_re().captures(&stripped)
         && let Ok(n) = caps[1].parse::<u32>()
-            && n >= 100 {
-                return Some(n);
-            }
+        && n >= 100
+    {
+        return Some(n);
+    }
 
     None
 }
@@ -506,9 +502,7 @@ pub fn get_issue_states(numbers: &[u32]) -> HashMap<u32, IssueState> {
     if numbers.is_empty() {
         return HashMap::new();
     }
-    timed!("getIssueStates", {
-        get_issue_states_inner(numbers)
-    })
+    timed!("getIssueStates", get_issue_states_inner(numbers))
 }
 
 fn get_issue_states_inner(numbers: &[u32]) -> HashMap<u32, IssueState> {

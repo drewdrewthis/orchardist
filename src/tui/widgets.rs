@@ -20,14 +20,12 @@ pub fn render_popup(
         .border_type(BorderType::Rounded)
         .padding(padding);
     if let Some(t) = title {
-        block = block
-            .title(t)
-            .title_style(
-                Style::default()
-                    .fg(border_color)
-                    .bg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            );
+        block = block.title(t).title_style(
+            Style::default()
+                .fg(border_color)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        );
     }
     let content = Paragraph::new(lines)
         .style(Style::default().bg(Color::Black))

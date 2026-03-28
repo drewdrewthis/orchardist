@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 /// State written by the orchard-state.sh hook script.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeStateFile {
-    pub state: String,           // "working", "idle", "input"
+    pub state: String, // "working", "idle", "input"
     pub session_id: String,
     pub tmux_session: String,
     pub cwd: String,
     pub event: String,
-    pub timestamp: String,       // ISO 8601
+    pub timestamp: String, // ISO 8601
     // Optional enrichment from statusline
     #[serde(default)]
     pub context_window_pct: Option<f64>,
@@ -51,21 +51,15 @@ pub fn read_all_state_files(dir: &Path) -> Vec<ClaudeStateFile> {
     let pattern = format!("{}/orchard-claude-*.json", dir.display());
     let mut results = Vec::new();
 
-    for entry in glob::glob(&pattern).into_iter().flatten() {
-        if let Ok(path) = entry {
-            // Skip .tmp files (in-progress atomic writes)
-            if path.to_string_lossy().contains(".tmp.") {
-                continue;
-            }
-            match std::fs::read(&path) {
-                Ok(data) => {
-                    match serde_json::from_slice::<ClaudeStateFile>(&data) {
-                        Ok(state) => results.push(state),
-                        Err(_) => {} // Skip malformed files
-                    }
-                }
-                Err(_) => {} // Skip unreadable files
-            }
+    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
+        // Skip .tmp files (in-progress atomic writes)
+        if path.to_string_lossy().contains(".tmp.") {
+            continue;
+        }
+        if let Ok(data) = std::fs::read(&path)
+            && let Ok(state) = serde_json::from_slice::<ClaudeStateFile>(&data)
+        {
+            results.push(state);
         }
     }
 
@@ -73,7 +67,10 @@ pub fn read_all_state_files(dir: &Path) -> Vec<ClaudeStateFile> {
 }
 
 /// Finds the state for a specific tmux session name.
-pub fn state_for_session<'a>(states: &'a [ClaudeStateFile], tmux_session: &str) -> Option<&'a ClaudeStateFile> {
+pub fn state_for_session<'a>(
+    states: &'a [ClaudeStateFile],
+    tmux_session: &str,
+) -> Option<&'a ClaudeStateFile> {
     states.iter().find(|s| s.tmux_session == tmux_session)
 }
 
@@ -97,7 +94,10 @@ mod tests {
 
     #[test]
     fn claude_state_from_str_working() {
-        assert_eq!("working".parse::<ClaudeState>().unwrap(), ClaudeState::Working);
+        assert_eq!(
+            "working".parse::<ClaudeState>().unwrap(),
+            ClaudeState::Working
+        );
     }
 
     #[test]

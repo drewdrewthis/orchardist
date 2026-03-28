@@ -4,8 +4,8 @@
 /// directories, covering the acceptance criteria from `cache-architecture.feature`.
 mod common;
 
-use common::{make_issue, make_pr, make_session, make_worktree, TestCacheDir};
-use orchard::cache::{read_cache, write_cache, write_cache_if_nonempty, CachedIssue, CachedPr};
+use common::{TestCacheDir, make_issue, make_pr, make_session, make_worktree};
+use orchard::cache::{CachedIssue, CachedPr, read_cache, write_cache, write_cache_if_nonempty};
 
 // ---------------------------------------------------------------------------
 // Independence: different source types are independent
@@ -20,8 +20,8 @@ fn background_refresh_sources_are_independent() {
     let issue = make_issue(1, "First issue");
     let pr = make_pr(10, "feat/x");
 
-    cache.write_issues("owner", "repo", &[issue.clone()]);
-    cache.write_prs("owner", "repo", &[pr.clone()]);
+    cache.write_issues("owner", "repo", std::slice::from_ref(&issue));
+    cache.write_prs("owner", "repo", std::slice::from_ref(&pr));
 
     let issues_path = cache.repo_cache_path("owner", "repo", "issues");
     let prs_path = cache.repo_cache_path("owner", "repo", "prs");
@@ -183,7 +183,11 @@ fn each_source_cache_read_and_written_independently() {
     let issues_mtime = std::fs::metadata(&issues_path).unwrap().modified().unwrap();
 
     // Update only PRs.
-    write_cache(&prs_path, &[make_pr(10, "feat/branch"), make_pr(11, "fix/bug")]).unwrap();
+    write_cache(
+        &prs_path,
+        &[make_pr(10, "feat/branch"), make_pr(11, "fix/bug")],
+    )
+    .unwrap();
 
     let issues_mtime_after = std::fs::metadata(&issues_path).unwrap().modified().unwrap();
     assert_eq!(
@@ -204,7 +208,7 @@ fn each_source_cache_read_and_written_independently() {
 fn worktrees_cache_round_trips_via_file() {
     let cache = TestCacheDir::new();
     let wt = make_worktree("/workspace/repo-feat", "feat/new-thing");
-    cache.write_worktrees("owner", "repo", &[wt.clone()]);
+    cache.write_worktrees("owner", "repo", std::slice::from_ref(&wt));
 
     let path = cache.repo_cache_path("owner", "repo", "worktrees");
     let loaded = read_cache::<orchard::cache::CachedWorktree>(&path);
@@ -219,7 +223,7 @@ fn worktrees_cache_round_trips_via_file() {
 fn tmux_sessions_cache_round_trips_via_file() {
     let cache = TestCacheDir::new();
     let session = make_session("my-session", "/workspace/repo", vec!["bash"]);
-    cache.write_tmux_sessions(&[session.clone()]);
+    cache.write_tmux_sessions(std::slice::from_ref(&session));
 
     let path = cache.dir.path().join("tmux_sessions.json");
     let loaded = read_cache::<orchard::cache::CachedTmuxSession>(&path);

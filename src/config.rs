@@ -55,8 +55,13 @@ fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
 
     // New format takes precedence.
     if let Some(remote) = raw.remote {
-        LOG.info(&format!("config: loaded remote {} from {}", remote.host, path));
-        return OrchardConfig { remote: Some(remote) };
+        LOG.info(&format!(
+            "config: loaded remote {} from {}",
+            remote.host, path
+        ));
+        return OrchardConfig {
+            remote: Some(remote),
+        };
     }
 
     // Legacy format: use the first entry that has both host and repoPath.
@@ -69,7 +74,10 @@ fn parse_config(data: &[u8], path: &str) -> OrchardConfig {
         } else {
             entry.shell
         };
-        LOG.info(&format!("config: migrated remote {} from legacy format", entry.host));
+        LOG.info(&format!(
+            "config: migrated remote {} from legacy format",
+            entry.host
+        ));
         return OrchardConfig {
             remote: Some(RemoteConfig {
                 host: entry.host,
@@ -131,7 +139,9 @@ mod tests {
 
     #[test]
     fn legacy_format_skips_incomplete_entries() {
-        let f = write_temp(r#"{"remotes":[{"host":"","repoPath":"/p"},{"host":"h2","repoPath":"/p2"}]}"#);
+        let f = write_temp(
+            r#"{"remotes":[{"host":"","repoPath":"/p"},{"host":"h2","repoPath":"/p2"}]}"#,
+        );
         let cfg = load_from_file(f.path().to_str().unwrap());
         let remote = cfg.remote.unwrap();
         assert_eq!(remote.host, "h2");

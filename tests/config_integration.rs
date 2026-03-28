@@ -132,7 +132,10 @@ fn config_with_path_field_round_trips() {
     }"#;
     let cfg = parse_public(json);
 
-    assert_eq!(cfg.repos[0].remotes[0].path, "~/webapp-workspace/webapp-bare");
+    assert_eq!(
+        cfg.repos[0].remotes[0].path,
+        "~/webapp-workspace/webapp-bare"
+    );
 }
 
 // ---------------------------------------------------------------------------
