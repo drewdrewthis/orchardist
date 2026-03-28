@@ -103,12 +103,7 @@ pub fn send_notification_with_session(title: &str, message: &str, _session_name:
 
 /// No-op on unsupported platforms.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn send_notification_with_session(
-    _title: &str,
-    _message: &str,
-    _session_name: Option<&str>,
-) {
-}
+pub fn send_notification_with_session(_title: &str, _message: &str, _session_name: Option<&str>) {}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
