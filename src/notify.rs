@@ -1,14 +1,22 @@
-//! Desktop notifications with click-to-switch-session support.
+//! Desktop notifications with platform-specific backends.
 //!
-//! Uses `terminal-notifier` when available (click opens Warp and switches
-//! tmux session). Falls back to `osascript` if not installed.
+//! - **macOS**: Uses `terminal-notifier` when available (click opens terminal and switches
+//!   tmux session). Falls back to `osascript` if not installed.
+//! - **Linux**: Uses `notify-send` (libnotify) when available.
+//! - **Other platforms**: Notifications are silently ignored.
 
 use std::process::Command;
+
+// ── macOS implementation ──────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
 use std::sync::OnceLock;
 
+#[cfg(target_os = "macos")]
 use crate::remote;
 
 /// Cached check for terminal-notifier availability.
+#[cfg(target_os = "macos")]
 fn has_terminal_notifier() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
@@ -20,15 +28,29 @@ fn has_terminal_notifier() -> bool {
     })
 }
 
-/// Sends a macOS desktop notification.
+/// Sends a desktop notification.
 ///
-/// When `session_name` is provided and `terminal-notifier` is installed,
-/// clicking the notification opens Warp and switches to that tmux session.
+/// On macOS, when `terminal-notifier` is installed, clicking the notification
+/// opens Warp and switches to the given tmux session. Falls back to `osascript`
+/// if `terminal-notifier` is not available.
+///
+/// On Linux, uses `notify-send`. The `session_name` argument is ignored because
+/// `notify-send` does not support action callbacks from the CLI.
+///
+/// On other platforms, this is a no-op.
 pub fn send_notification(title: &str, message: &str) {
     send_notification_with_session(title, message, None);
 }
 
 /// Sends a notification with an optional tmux session to switch to on click.
+///
+/// On macOS with `terminal-notifier`, clicking the notification activates Warp
+/// and runs `tmux switch-client -t <session_name>`.
+///
+/// On Linux, `session_name` is ignored.
+///
+/// On other platforms, this is a no-op.
+#[cfg(target_os = "macos")]
 pub fn send_notification_with_session(title: &str, message: &str, session_name: Option<&str>) {
     if has_terminal_notifier() {
         let mut args = vec![
@@ -64,16 +86,39 @@ pub fn send_notification_with_session(title: &str, message: &str, session_name: 
     }
 }
 
+// ── Linux implementation ──────────────────────────────────────────────────────
+
+/// Sends a notification using `notify-send` (libnotify).
+///
+/// Session switching is not supported on Linux via `notify-send`, so
+/// `session_name` is ignored.
+#[cfg(target_os = "linux")]
+pub fn send_notification_with_session(title: &str, message: &str, _session_name: Option<&str>) {
+    let _ = Command::new("notify-send")
+        .args(["-a", "orchard", title, message])
+        .output();
+}
+
+// ── Fallback (unsupported platforms) ─────────────────────────────────────────
+
+/// No-op on unsupported platforms.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn send_notification_with_session(_title: &str, _message: &str, _session_name: Option<&str>) {}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn notification_message_escapes_quotes() {
         // Smoke test: verifies escaping logic doesn't panic.
         send_notification("Test \"title\"", "Test \"message\"");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn has_terminal_notifier_returns_bool() {
         // Just verify it doesn't panic
@@ -87,5 +132,13 @@ mod tests {
         let escaped = crate::remote::shell_escape(session);
         let cmd = format!("tmux switch-client -t {}", escaped);
         assert_eq!(cmd, "tmux switch-client -t 'test'\\''session'");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_send_notification_with_session_ignores_session_name() {
+        // Smoke test: verifies Linux path doesn't panic with or without session_name.
+        send_notification("Title", "Message");
+        send_notification_with_session("Title", "Message", Some("my-session"));
     }
 }
