@@ -164,17 +164,13 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "config path has no parent directory".to_string())?;
 
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
 
-    let json = serde_json::to_string_pretty(cfg)
-        .map_err(|e| format!("serializing config: {e}"))?;
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| format!("serializing config: {e}"))?;
 
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)
-        .map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("renaming to {}: {e}", path.display()))?;
+    std::fs::write(&tmp, &json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("renaming to {}: {e}", path.display()))?;
 
     LOG.info(&format!("global_config: saved to {}", path.display()));
     Ok(())
