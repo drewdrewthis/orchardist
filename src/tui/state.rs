@@ -45,7 +45,6 @@ impl fmt::Display for FilterMode {
 // View state (sum type carrying dialog state)
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 pub enum ViewState {
     List,
     ConfirmDelete(DeleteState),
@@ -86,7 +85,6 @@ pub struct NewSessionState {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Phase {
     Idle,
     Confirm,
