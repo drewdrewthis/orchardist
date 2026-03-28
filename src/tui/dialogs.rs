@@ -9,7 +9,6 @@ use ratatui::widgets::Padding;
 use crate::heal::{HealAction, Severity};
 use crate::paths;
 use crate::tui::App;
-use crate::tui::SPINNER_FRAMES;
 use crate::tui::state::{
     CleanupState, DeleteState, HealState, NewSessionState, NewWorktreeState, Phase, TransferState,
 };
@@ -52,8 +51,10 @@ impl App {
                 ]));
             }
             Phase::InProgress => {
-                let spinner = SPINNER_FRAMES[self.spinner_frame];
-                lines.push(Line::from(format!("{} Removing worktree...", spinner)));
+                let throbber = throbber_widgets_tui::Throbber::default()
+                    .label("Deleting worktree...")
+                    .throbber_style(Style::default().fg(theme.accent));
+                lines.push(throbber.to_line(&self.throbber_state));
             }
             Phase::Done => {
                 lines.push(Line::styled(
@@ -134,8 +135,10 @@ impl App {
                 ]));
             }
             Phase::InProgress => {
-                let spinner = SPINNER_FRAMES[self.spinner_frame];
-                lines.push(Line::from(format!("{} Transferring...", spinner)));
+                let throbber = throbber_widgets_tui::Throbber::default()
+                    .label("Transferring worktree...")
+                    .throbber_style(Style::default().fg(theme.accent));
+                lines.push(throbber.to_line(&self.throbber_state));
             }
             Phase::Done => {
                 lines.push(Line::styled(
@@ -229,11 +232,13 @@ impl App {
                 ));
             }
             Phase::InProgress => {
-                let spinner = SPINNER_FRAMES[self.spinner_frame];
+                let throbber = throbber_widgets_tui::Throbber::default()
+                    .throbber_style(Style::default().fg(theme.accent));
+                let symbol = throbber.to_symbol_span(&self.throbber_state);
                 lines.push(Line::styled(
                     format!(
-                        "{} Deleting {} worktree(s)...",
-                        spinner,
+                        "{}Cleaning up {} worktree(s)...",
+                        symbol.content,
                         state.selected.len()
                     ),
                     Style::default()
@@ -245,7 +250,7 @@ impl App {
                     if state.selected.contains(&row.worktree_path) {
                         let short = paths::truncate_left(&paths::tildify(&row.worktree_path), 50);
                         lines.push(Line::styled(
-                            format!("  {} {}", spinner, short),
+                            format!("  {}{}", symbol.content, short),
                             Style::default().fg(theme.dimmed),
                         ));
                     }
@@ -474,6 +479,10 @@ impl App {
                 Span::styled("Push / pull worktree", dim),
             ]),
             Line::from(vec![
+                Span::styled("PgUp/Dn  ", key_style),
+                Span::styled("Scroll preview pane", dim),
+            ]),
+            Line::from(vec![
                 Span::styled("q / esc  ", key_style),
                 Span::styled("Quit", dim),
             ]),
@@ -566,11 +575,10 @@ impl App {
 
         lines.push(Line::from(""));
         if state.fixing {
-            let spinner = crate::tui::SPINNER_FRAMES[self.spinner_frame];
-            lines.push(Line::styled(
-                format!("{spinner} Applying fixes..."),
-                Style::default().fg(theme.accent),
-            ));
+            let throbber = throbber_widgets_tui::Throbber::default()
+                .label("Applying fixes...")
+                .throbber_style(Style::default().fg(theme.accent));
+            lines.push(throbber.to_line(&self.throbber_state));
         } else if state.fix_results.is_none() && !state.findings.is_empty() {
             lines.push(Line::styled(
                 "f apply fixes  q/esc go back",
@@ -631,6 +639,52 @@ mod tests {
         assert!(
             text.contains("w") && text.contains("New worktree"),
             "help overlay must include 'w' keybinding mapped to 'New worktree', got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn delete_dialog_uses_throbber_label() {
+        let mut app = App::new_test(vec![]);
+        // Advance throbber state so it renders a symbol.
+        app.throbber_state.calc_next();
+        let state = DeleteState {
+            target: crate::types::Worktree {
+                path: "/test/wt".to_string(),
+                branch: Some("feat/test".to_string()),
+                head: "abc1234".to_string(),
+                is_bare: false,
+                has_conflicts: false,
+                pr: None,
+                pr_loading: false,
+                tmux_session: None,
+                tmux_attached: false,
+                tmux_pane_title: None,
+                remote: None,
+                issue_number: None,
+                issue_state: None,
+            },
+            phase: Phase::InProgress,
+            error: None,
+        };
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_delete(&state, f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+        }
+
+        assert!(
+            text.contains("Deleting worktree..."),
+            "delete dialog InProgress must show labeled throbber, got:\n{text}"
         );
     }
 }

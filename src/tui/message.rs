@@ -99,6 +99,12 @@ pub enum Message {
     /// Open the attribution URL in the browser.
     OpenAttribution,
 
+    // -- Preview scroll actions --
+    /// Scroll the preview pane up by one page.
+    PreviewPageUp,
+    /// Scroll the preview pane down by one page.
+    PreviewPageDown,
+
     // -- Heal actions --
     /// Open the heal diagnosis view.
     Heal,

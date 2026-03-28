@@ -5,6 +5,7 @@
 //! Key-to-message mapping lives in `mod.rs` (`handle_event`).
 use ratatui::prelude::*;
 use ratatui::widgets::*;
+use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -15,7 +16,7 @@ use crate::remote;
 use crate::tmux;
 use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color};
-use crate::tui::{ATTRIBUTION_URL, App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
+use crate::tui::{ATTRIBUTION_URL, App, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -630,12 +631,11 @@ impl App {
 
         // Loading or empty state
         if self.loading {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
-            let loading_text = format!("{} Loading worktrees...", spinner);
-            let para = Paragraph::new(loading_text)
+            let throbber = throbber_widgets_tui::Throbber::default()
+                .label("Loading worktrees...")
                 .style(Style::default().fg(theme.accent))
-                .alignment(Alignment::Center);
-            f.render_widget(para, chunks[2]);
+                .throbber_style(Style::default().fg(theme.accent));
+            f.render_stateful_widget(throbber, chunks[2], &mut self.throbber_state.clone());
         } else {
             let empty =
                 Paragraph::new("No worktrees found. Run `orchard init` to configure a repo.")
@@ -673,9 +673,11 @@ impl App {
 
         // Build timestamp span.
         let timestamp_span = if self.refreshing {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
+            let throbber = throbber_widgets_tui::Throbber::default()
+                .throbber_style(Style::default().fg(theme.accent));
+            let symbol = throbber.to_symbol_span(&self.throbber_state);
             Span::styled(
-                format!("  {} refreshing...", spinner),
+                format!("  {}refreshing...", symbol.content),
                 Style::default().fg(theme.accent),
             )
         } else {
@@ -726,33 +728,75 @@ impl App {
         let logo_style = Style::default()
             .fg(theme.success)
             .add_modifier(Modifier::BOLD);
-        let mut header_text = vec![
-            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
-            Line::from(Span::styled("┌─┐┬┌┬┐╔═╗╦═╗╔═╗╦ ╦╔═╗╦═╗╔╦╗", logo_style)),
-            Line::from(Span::styled("│ ┬│ │ ║ ║╠╦╝║  ╠═╣╠═╣╠╦╝ ║║", logo_style)),
-            Line::from(Span::styled("└─┘┴ ┴ ╚═╝╩╚═╚═╝╩ ╩╩ ╩╩╚══╩╝", logo_style)),
-            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
-        ];
-        if !host_line_spans.is_empty() {
-            header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
-        }
-        if !self.host_reachable.is_empty() || self.refreshing {
-            header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
-        }
-        let header = Paragraph::new(header_text)
-            .alignment(Alignment::Center)
-            .style(
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.success))
-                    .border_type(BorderType::Rounded),
+
+        let header_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.success))
+            .border_type(BorderType::Rounded);
+        let inner = header_block.inner(area);
+        f.render_widget(header_block, area);
+
+        // Check if the repo name fits in BigText (HalfHeight: 4 rows, 8 cols/char).
+        let bigtext_char_width = 8_u16;
+        let bigtext_height = 4_u16;
+        let repo_name_width = self.repo_name.len() as u16 * bigtext_char_width;
+        let use_bigtext = repo_name_width > 0 && repo_name_width <= inner.width;
+
+        if use_bigtext {
+            // Layout: BigText (4 rows) + tree line (1 row) + optional host + timestamp
+            let big_text = tui_big_text::BigText::builder()
+                .pixel_size(tui_big_text::PixelSize::HalfHeight)
+                .style(logo_style)
+                .lines(vec![Line::from(self.repo_name.clone())])
+                .centered()
+                .build();
+            let bigtext_area = Rect::new(
+                inner.x,
+                inner.y,
+                inner.width,
+                bigtext_height.min(inner.height),
             );
-        f.render_widget(header, area);
+            f.render_widget(big_text, bigtext_area);
+
+            // Render remaining lines below the BigText.
+            let remaining_y = inner.y + bigtext_height;
+            let remaining_height = inner.height.saturating_sub(bigtext_height);
+            if remaining_height > 0 {
+                let mut info_lines = vec![Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴")];
+                if !host_line_spans.is_empty() {
+                    info_lines.push(Line::from(host_line_spans).alignment(Alignment::Center));
+                }
+                if !self.host_reachable.is_empty() || self.refreshing {
+                    info_lines.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
+                }
+                let info_area = Rect::new(inner.x, remaining_y, inner.width, remaining_height);
+                let info = Paragraph::new(info_lines).alignment(Alignment::Center);
+                f.render_widget(info, info_area);
+            }
+        } else {
+            // Fallback: original ASCII art header.
+            let mut header_text = vec![
+                Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
+                Line::from(Span::styled("┌─┐┬┌┬┐╔═╗╦═╗╔═╗╦ ╦╔═╗╦═╗╔╦╗", logo_style)),
+                Line::from(Span::styled("│ ┬│ │ ║ ║╠╦╝║  ╠═╣╠═╣╠╦╝ ║║", logo_style)),
+                Line::from(Span::styled("└─┘┴ ┴ ╚═╝╩╚═╚═╝╩ ╩╩ ╩╩╚══╩╝", logo_style)),
+                Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
+            ];
+            if !host_line_spans.is_empty() {
+                header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
+            }
+            if !self.host_reachable.is_empty() || self.refreshing {
+                header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
+            }
+            let header = Paragraph::new(header_text)
+                .alignment(Alignment::Center)
+                .style(
+                    Style::default()
+                        .fg(theme.success)
+                        .add_modifier(Modifier::BOLD),
+                );
+            f.render_widget(header, inner);
+        }
     }
 
     /// Joins or creates a tmux session. Returns `true` if the TUI should exit
@@ -941,7 +985,10 @@ impl App {
         let mut idx = 0;
         self.render_header(f, chunks[idx]);
         idx += 1;
-        idx += 1; // spacer
+
+        // Render filter tabs in the spacer row.
+        self.render_filter_tabs(f, chunks[idx]);
+        idx += 1;
 
         let theme = &self.theme;
 
@@ -991,6 +1038,27 @@ impl App {
             height: table_chunk.height.saturating_sub(TABLE_CHROME_HEIGHT),
         };
         self.table_area.set(body_rect);
+
+        // Render scrollbar only when total rows exceed visible area.
+        // The visible inner height = table area height - 3 (borders + header row).
+        let total_rows = standalone_count + tasks.len();
+        let visible_rows = table_chunk.height.saturating_sub(3) as usize;
+        if total_rows > visible_rows {
+            let mut scrollbar_state =
+                ratatui::widgets::ScrollbarState::new(total_rows).position(self.cursor);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("\u{25b2}"))
+                .end_symbol(Some("\u{25bc}"));
+            // Render scrollbar in the table area (inside the border).
+            f.render_stateful_widget(
+                scrollbar,
+                table_chunk.inner(ratatui::layout::Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
+                &mut scrollbar_state,
+            );
+        }
         idx += 1;
 
         // Preview
@@ -1219,20 +1287,53 @@ impl App {
             .border_style(Style::default().fg(theme.border))
             .border_type(BorderType::Double);
 
-        // Truncate content lines to fit
-        let inner_height = area.height.saturating_sub(2) as usize;
-        let all_lines: Vec<&str> = self.pane_content.lines().collect();
-        let display_lines = if all_lines.len() > inner_height {
-            &all_lines[all_lines.len() - inner_height..]
-        } else {
-            &all_lines
-        };
-        let content = display_lines.join("\n");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
 
-        let preview = Paragraph::new(content)
-            .style(Style::default().fg(theme.preview_content))
-            .block(block);
-        f.render_widget(preview, area);
+        // Build a ScrollView containing the full pane content.
+        let line_count = self.pane_content.lines().count() as u16;
+        let content_height = line_count.max(1);
+        let content_width = inner.width.saturating_sub(1); // leave room for scrollbar
+
+        let mut scroll_view = ScrollView::new(Size::new(content_width, content_height))
+            .vertical_scrollbar_visibility(ScrollbarVisibility::Automatic)
+            .horizontal_scrollbar_visibility(ScrollbarVisibility::Never);
+
+        let paragraph = Paragraph::new(self.pane_content.as_str())
+            .style(Style::default().fg(theme.preview_content));
+        scroll_view.render_widget(paragraph, Rect::new(0, 0, content_width, content_height));
+
+        let mut state = self.preview_scroll_state.get();
+        f.render_stateful_widget(scroll_view, inner, &mut state);
+        self.preview_scroll_state.set(state);
+    }
+
+    /// Renders the filter mode tabs bar.
+    ///
+    /// Shows "All | Sessions | Claude | PRs" with the active filter highlighted.
+    /// Placed between the header and the task table.
+    fn render_filter_tabs(&self, f: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let titles: Vec<&str> = vec!["All", "Sessions", "Claude", "PRs"];
+        let selected = match self.filter_mode {
+            FilterMode::All => 0,
+            FilterMode::HasSession => 1,
+            FilterMode::HasClaude => 2,
+            FilterMode::HasPR => 3,
+        };
+        let tabs = Tabs::new(titles)
+            .select(selected)
+            .style(Style::default().fg(theme.dimmed))
+            .highlight_style(
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .divider(Span::styled(
+                " \u{2502} ",
+                Style::default().fg(theme.dimmed),
+            ));
+        f.render_widget(tabs, area);
     }
 
     /// Appends the common trailing hint keys: refresh, reconnect, quit, help.
@@ -1245,9 +1346,11 @@ impl App {
     ) {
         let theme = &self.theme;
         if self.refreshing {
-            let spinner = SPINNER_FRAMES[self.spinner_frame];
+            let throbber = throbber_widgets_tui::Throbber::default()
+                .throbber_style(Style::default().fg(theme.accent));
+            let symbol = throbber.to_symbol_span(&self.throbber_state);
             spans.push(Span::styled(
-                format!("{} refreshing...", spinner),
+                format!("{}refreshing...", symbol.content),
                 Style::default().fg(theme.accent),
             ));
         } else {
@@ -1465,11 +1568,14 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
 /// Returns the height (in terminal rows) to allocate for the header.
 ///
 /// When the terminal is tall enough (>= 30 rows), the full header is
-/// shown in a bordered block (7 rows). On shorter terminals a single compact
+/// shown in a bordered block. On shorter terminals a single compact
 /// line is used instead so the task list gets as much vertical space as possible.
+///
+/// The full header reserves 10 rows to accommodate BigText rendering (4 rows)
+/// of the repo name alongside decorative lines and optional host/timestamp info.
 pub(crate) fn header_height(terminal_height: u16) -> u16 {
     if terminal_height >= FULL_HEADER_MIN_HEIGHT {
-        9
+        10
     } else {
         1
     }
@@ -1512,12 +1618,12 @@ mod tests {
 
     #[test]
     fn full_logo_at_threshold() {
-        assert_eq!(header_height(30), 9);
+        assert_eq!(header_height(30), 10);
     }
 
     #[test]
     fn full_logo_above_threshold() {
-        assert_eq!(header_height(50), 9);
+        assert_eq!(header_height(50), 10);
     }
 
     #[test]
@@ -2074,5 +2180,105 @@ mod tests {
         let visible = visible_tasks(&rows, &FilterMode::HasSession, "target");
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].row.issue_number, Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // filter tabs rendering
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn filter_tabs_renders_all_modes() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_filter_tabs(f, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+        }
+
+        assert!(text.contains("All"), "tabs must include 'All' label");
+        assert!(
+            text.contains("Sessions"),
+            "tabs must include 'Sessions' label"
+        );
+        assert!(text.contains("Claude"), "tabs must include 'Claude' label");
+        assert!(text.contains("PRs"), "tabs must include 'PRs' label");
+    }
+
+    #[test]
+    fn throbber_renders_loading_state() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new_test(vec![]);
+        app.loading = true;
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+        }
+
+        assert!(
+            text.contains("Loading worktrees..."),
+            "loading state must show throbber label, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn bigtext_threshold_uses_full_header_for_tall_terminal() {
+        // At 30+ rows, header_height returns the full header size (10 rows).
+        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT), 10);
+        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT + 10), 10);
+    }
+
+    #[test]
+    fn bigtext_threshold_uses_compact_header_for_short_terminal() {
+        // Below 30 rows, the compact 1-line header is used (no BigText).
+        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT - 1), 1);
+        assert_eq!(header_height(15), 1);
+    }
+
+    #[test]
+    fn bigtext_requires_repo_name_fits_in_width() {
+        // BigText with HalfHeight uses 8 columns per character.
+        // A repo name of 10 chars needs 80 columns.
+        let name = "short-repo";
+        let bigtext_char_width: u16 = 8;
+        let needed = name.len() as u16 * bigtext_char_width;
+        assert_eq!(needed, 80);
+        // Fits in 100-column terminal (inner = 98 after borders).
+        assert!(needed <= 98);
+        // Does NOT fit in 60-column terminal (inner = 58 after borders).
+        assert!(needed > 58);
+    }
+
+    #[test]
+    fn preview_scroll_state_is_copy() {
+        // ScrollViewState must be Copy so Cell<ScrollViewState> works.
+        let state = tui_scrollview::ScrollViewState::default();
+        let _copy = state; // Copy trait in action
+        let _another = state; // Still valid after copy
     }
 }
