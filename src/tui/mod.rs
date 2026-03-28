@@ -5,6 +5,7 @@
 //! to the `list`, `dialogs`, and `widgets` sub-modules.
 mod dialogs;
 mod list;
+mod message;
 mod state;
 pub mod theme;
 mod widgets;
@@ -23,12 +24,14 @@ use crate::cache_sources;
 use crate::derive;
 use crate::git;
 use crate::global_config;
+use crate::navigation;
 use crate::remote;
 use crate::session::StandaloneSessionRow;
 use crate::tmux;
 use crate::transfer;
 use crate::types::Worktree;
 
+use message::{Message, UpdateResult};
 use state::{AppMsg, CleanupState, FilterMode, Phase, ViewState};
 
 // ---------------------------------------------------------------------------
@@ -449,71 +452,469 @@ impl App {
     }
 
     // -------------------------------------------------------------------
-    // Key handling -- returns true to quit
+    // TEA: handle_event — pure key-to-message mapping
     // -------------------------------------------------------------------
 
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    /// Maps a raw key event to a semantic [`Message`] based on the current view state.
+    ///
+    /// This is a pure function: it reads `&self` but never mutates state.
+    /// Returns `None` for unbound keys (the event loop ignores them).
+    fn handle_event(&self, key: KeyEvent) -> Option<Message> {
         crate::logger::LOG.info(&format!(
             "tui: key event: {:?} view={:?}",
             key.code,
             self.view_name()
         ));
 
-        // Ctrl+C: quit (same as q — no switch target).
+        // Ctrl+C always quits regardless of view.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return true;
+            return Some(Message::Quit);
         }
 
-        // ? opens help from the List view.
-        if key.code == KeyCode::Char('?') && matches!(self.view, ViewState::List) {
-            self.view = ViewState::Help;
-            return false;
-        }
-
-        // We need to temporarily take the view out of self so we can pass
-        // mutable references to both self and the dialog state.
-        let mut view = std::mem::replace(&mut self.view, ViewState::List);
-        match view {
+        match &self.view {
             ViewState::List => {
-                self.view = ViewState::List;
-                self.handle_list_key(key)
-            }
-            ViewState::ConfirmDelete(ref mut ds) => {
-                let r = self.handle_delete_key(ds, key);
-                if !matches!(self.view, ViewState::List) {
-                    self.view = view;
+                if self.search_active {
+                    return match key.code {
+                        KeyCode::Esc => Some(Message::SearchCancel),
+                        KeyCode::Enter => Some(Message::SearchConfirm),
+                        KeyCode::Backspace => Some(Message::SearchBackspace),
+                        KeyCode::Char(c) => Some(Message::SearchChar(c)),
+                        _ => None,
+                    };
                 }
-                r
-            }
-            ViewState::Transfer(ref mut ts) => {
-                let r = self.handle_transfer_key(ts, key);
-                if !matches!(self.view, ViewState::List) {
-                    self.view = view;
+
+                let standalone_count = self.standalone_sessions.len();
+                let worktree_visible_count = list::visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                )
+                .len();
+                let visible_count = standalone_count + worktree_visible_count;
+
+                match key.code {
+                    KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                        navigation::cursor_index_from_digit(c, visible_count).map(Message::CursorTo)
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => Some(Message::CursorUp),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Message::CursorDown),
+                    KeyCode::Enter => Some(Message::Enter),
+                    KeyCode::Char('o') => Some(Message::OpenPR),
+                    KeyCode::Char('i') => Some(Message::OpenIssue),
+                    KeyCode::Char('B') => Some(Message::ToggleBranchColumn),
+                    KeyCode::Char('d') => Some(Message::Delete),
+                    KeyCode::Char('p') => Some(Message::Transfer),
+                    KeyCode::Char('n') => Some(Message::NewSession),
+                    KeyCode::Char('f') => Some(Message::CycleFilter),
+                    KeyCode::Char('/') => Some(Message::StartSearch),
+                    KeyCode::Char('c') => Some(Message::Cleanup),
+                    KeyCode::Left => Some(Message::PrevRepo),
+                    KeyCode::Right => Some(Message::NextRepo),
+                    KeyCode::Char('r') => Some(Message::Refresh),
+                    KeyCode::Char('R') => Some(Message::ReconnectHosts),
+                    KeyCode::Char('?') => Some(Message::ToggleHelp),
+                    KeyCode::Char('q') | KeyCode::Esc => Some(Message::Quit),
+                    _ => None,
                 }
-                r
             }
-            ViewState::Cleanup(ref mut cs) => {
-                let r = self.handle_cleanup_key(cs, key);
-                if !matches!(self.view, ViewState::List) {
-                    self.view = view;
+            ViewState::ConfirmDelete(ds) => match ds.phase {
+                Phase::Confirm => match key.code {
+                    KeyCode::Char('y') => Some(Message::ConfirmYes),
+                    KeyCode::Char('n') | KeyCode::Esc => Some(Message::ConfirmNo),
+                    _ => None,
+                },
+                Phase::Done | Phase::Error => Some(Message::DismissDialog),
+                _ => None,
+            },
+            ViewState::Transfer(ts) => match ts.phase {
+                Phase::Confirm => match key.code {
+                    KeyCode::Char('y') => Some(Message::ConfirmYes),
+                    KeyCode::Char('n') | KeyCode::Esc => Some(Message::ConfirmNo),
+                    _ => None,
+                },
+                Phase::Done | Phase::Error => Some(Message::DismissDialog),
+                _ => None,
+            },
+            ViewState::Cleanup(cs) => {
+                if cs.phase == Phase::Done {
+                    return match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => Some(Message::Cancel),
+                        _ => None,
+                    };
                 }
-                r
+                if cs.phase == Phase::InProgress {
+                    return None;
+                }
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => Some(Message::CursorUp),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Message::CursorDown),
+                    KeyCode::Char(' ') => Some(Message::ToggleSelection),
+                    KeyCode::Enter => Some(Message::ConfirmCleanup),
+                    KeyCode::Char('q') | KeyCode::Esc => Some(Message::Cancel),
+                    _ => None,
+                }
             }
-            ViewState::NewSession(ref mut ns) => {
-                let r = self.handle_new_session_key(ns, key);
-                if !matches!(self.view, ViewState::List) {
-                    self.view = view;
+            ViewState::NewSession(_) => match key.code {
+                KeyCode::Esc => Some(Message::Cancel),
+                KeyCode::Enter => Some(Message::ConfirmNewSession),
+                KeyCode::Backspace => Some(Message::DeleteChar),
+                KeyCode::Char(c) if c.is_alphanumeric() || c == '-' || c == '_' => {
+                    Some(Message::InputChar(c))
                 }
-                r
-            }
-            ViewState::Help => {
-                self.handle_help_key(key);
-                if !matches!(self.view, ViewState::List) {
-                    self.view = view;
-                }
-                false
+                _ => None,
+            },
+            ViewState::Help => match key.code {
+                KeyCode::Char('?') => Some(Message::ToggleHelp),
+                KeyCode::Esc | KeyCode::Char('q') => Some(Message::Cancel),
+                _ => None,
+            },
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // TEA: update — all state mutation
+    // -------------------------------------------------------------------
+
+    /// Processes a [`Message`] and applies the corresponding state mutation.
+    ///
+    /// Returns an [`UpdateResult`] indicating whether the TUI should quit
+    /// and whether a follow-up message should be processed immediately.
+    fn update(&mut self, msg: Message) -> UpdateResult {
+        /// Shorthand for a non-quitting result with no follow-up.
+        fn ok() -> UpdateResult {
+            UpdateResult {
+                quit: false,
+                next_msg: None,
             }
         }
+
+        match msg {
+            Message::Quit => UpdateResult {
+                quit: true,
+                next_msg: None,
+            },
+            Message::CursorUp => {
+                match &mut self.view {
+                    ViewState::Cleanup(cs) => {
+                        if cs.cursor > 0 {
+                            cs.cursor -= 1;
+                        }
+                    }
+                    _ => {
+                        if self.cursor > 0 {
+                            self.cursor -= 1;
+                            self.fetch_task_pane_content();
+                        }
+                    }
+                }
+                ok()
+            }
+            Message::CursorDown => {
+                match &mut self.view {
+                    ViewState::Cleanup(cs) => {
+                        if !cs.stale.is_empty() && cs.cursor < cs.stale.len() - 1 {
+                            cs.cursor += 1;
+                        }
+                    }
+                    _ => {
+                        let standalone_count = self.standalone_sessions.len();
+                        let worktree_visible_count = list::visible_tasks_filtered(
+                            &self.task_rows,
+                            &self.filter_mode,
+                            &self.search_text,
+                            self.active_repo_slug(),
+                        )
+                        .len();
+                        let visible_count = standalone_count + worktree_visible_count;
+                        if visible_count > 0 && self.cursor < visible_count - 1 {
+                            self.cursor += 1;
+                            self.fetch_task_pane_content();
+                        }
+                    }
+                }
+                ok()
+            }
+            Message::CursorTo(idx) => {
+                self.cursor = idx;
+                self.fetch_task_pane_content();
+                ok()
+            }
+            Message::Enter => {
+                let quit = self.handle_enter_action();
+                UpdateResult {
+                    quit,
+                    next_msg: None,
+                }
+            }
+            Message::OpenPR => {
+                let standalone_count = self.standalone_sessions.len();
+                if self.guard_requires_worktree(standalone_count) {
+                    return ok();
+                }
+                let worktree_cursor = self.cursor - standalone_count;
+                let visible = list::visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
+                if let Some(vt) = visible.get(worktree_cursor)
+                    && let Some(ref pr) = vt.row.pr
+                {
+                    let url = format!("https://github.com/{}/pull/{}", vt.row.repo_slug, pr.number);
+                    crate::browser::open_url(&url);
+                }
+                ok()
+            }
+            Message::OpenIssue => {
+                let standalone_count = self.standalone_sessions.len();
+                if self.guard_requires_worktree(standalone_count) {
+                    return ok();
+                }
+                let worktree_cursor = self.cursor - standalone_count;
+                let visible = list::visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
+                if let Some(vt) = visible.get(worktree_cursor)
+                    && let Some(num) = vt.row.issue_number
+                {
+                    let url = format!("https://github.com/{}/issues/{}", vt.row.repo_slug, num);
+                    crate::browser::open_url(&url);
+                }
+                ok()
+            }
+            Message::ToggleBranchColumn => {
+                self.show_branch_column = !self.show_branch_column;
+                ok()
+            }
+            Message::Delete => {
+                let standalone_count = self.standalone_sessions.len();
+                if self.guard_requires_worktree(standalone_count) {
+                    return ok();
+                }
+                let worktree_cursor = self.cursor - standalone_count;
+                let visible = list::visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
+                if let Some(vt) = visible.get(worktree_cursor) {
+                    let wt = list::worktree_from_task_row(vt.row);
+                    self.view = ViewState::ConfirmDelete(state::DeleteState {
+                        target: wt,
+                        phase: Phase::Confirm,
+                        error: None,
+                    });
+                }
+                ok()
+            }
+            Message::Transfer => {
+                let standalone_count = self.standalone_sessions.len();
+                if self.guard_requires_worktree(standalone_count) {
+                    return ok();
+                }
+                let worktree_cursor = self.cursor - standalone_count;
+                let visible = list::visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_mode,
+                    &self.search_text,
+                    self.active_repo_slug(),
+                );
+                if let Some(vt) = visible.get(worktree_cursor) {
+                    let wt = list::worktree_from_task_row(vt.row);
+                    self.view = ViewState::Transfer(state::TransferState {
+                        target: wt,
+                        phase: Phase::Confirm,
+                        error: None,
+                    });
+                }
+                ok()
+            }
+            Message::NewSession => {
+                self.view = ViewState::NewSession(state::NewSessionState {
+                    name: String::new(),
+                    cursor: 0,
+                });
+                ok()
+            }
+            Message::CycleFilter => {
+                self.filter_mode = self.filter_mode.next();
+                self.cursor = 0;
+                ok()
+            }
+            Message::StartSearch => {
+                self.search_active = true;
+                self.search_text.clear();
+                ok()
+            }
+            Message::Cleanup => {
+                self.enter_cleanup_view();
+                ok()
+            }
+            Message::PrevRepo => {
+                self.active_repo_index = self.active_repo_index.saturating_sub(1);
+                self.cursor = 0;
+                ok()
+            }
+            Message::NextRepo => {
+                let repo_count = self.global_config.repos.len();
+                self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
+                self.cursor = 0;
+                ok()
+            }
+            Message::Refresh => {
+                self.refreshing = true;
+                self.start_refresh();
+                ok()
+            }
+            Message::ReconnectHosts => {
+                self.reconnect_unreachable_hosts();
+                ok()
+            }
+            Message::ToggleHelp => {
+                self.view = if matches!(self.view, ViewState::Help) {
+                    ViewState::List
+                } else {
+                    ViewState::Help
+                };
+                ok()
+            }
+            Message::SearchChar(c) => {
+                self.search_text.push(c);
+                self.clamp_cursor_to_visible();
+                ok()
+            }
+            Message::SearchBackspace => {
+                self.search_text.pop();
+                self.clamp_cursor_to_visible();
+                ok()
+            }
+            Message::SearchConfirm => {
+                self.search_active = false;
+                ok()
+            }
+            Message::SearchCancel => {
+                self.search_active = false;
+                self.search_text.clear();
+                ok()
+            }
+            Message::ConfirmYes => {
+                match &mut self.view {
+                    ViewState::ConfirmDelete(ds) => {
+                        ds.phase = Phase::InProgress;
+                        let target = ds.target.clone();
+                        self.start_delete(&target);
+                    }
+                    ViewState::Transfer(ts) => {
+                        ts.phase = Phase::InProgress;
+                        let target = ts.target.clone();
+                        self.start_transfer(&target);
+                    }
+                    _ => {}
+                }
+                ok()
+            }
+            Message::ConfirmNo | Message::Cancel | Message::DismissDialog => {
+                self.view = ViewState::List;
+                ok()
+            }
+            Message::ToggleSelection => {
+                if let ViewState::Cleanup(cs) = &mut self.view
+                    && !cs.stale.is_empty()
+                    && cs.cursor < cs.stale.len()
+                {
+                    let path = cs.stale[cs.cursor].worktree_path.clone();
+                    if cs.selected.contains(&path) {
+                        cs.selected.remove(&path);
+                    } else {
+                        cs.selected.insert(path);
+                    }
+                }
+                ok()
+            }
+            Message::ConfirmCleanup => {
+                if let ViewState::Cleanup(cs) = &mut self.view {
+                    let selected: Vec<_> = cs
+                        .stale
+                        .iter()
+                        .filter(|row| cs.selected.contains(&row.worktree_path))
+                        .cloned()
+                        .collect();
+                    if selected.is_empty() {
+                        self.warning = Some(("No items selected.".to_string(), Instant::now()));
+                    } else {
+                        cs.phase = Phase::InProgress;
+                        self.start_cleanup(selected);
+                    }
+                }
+                ok()
+            }
+            Message::InputChar(c) => {
+                if let ViewState::NewSession(ns) = &mut self.view {
+                    ns.name.push(c);
+                    ns.cursor = ns.name.len();
+                }
+                ok()
+            }
+            Message::DeleteChar => {
+                if let ViewState::NewSession(ns) = &mut self.view {
+                    ns.name.pop();
+                    ns.cursor = ns.name.len();
+                }
+                ok()
+            }
+            Message::ConfirmNewSession => {
+                let result = if let ViewState::NewSession(ns) = &self.view {
+                    if !ns.name.is_empty() {
+                        let name = ns.name.clone();
+                        let worktree_path = self.repo_root.clone();
+                        let opts = crate::types::SwitchToSessionOptions {
+                            session_name: name.clone(),
+                            worktree_path,
+                            branch: None,
+                            pr: None,
+                        };
+                        Some((name, opts))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some((name, opts)) = result {
+                    match crate::tmux::create_session(&opts) {
+                        Ok(()) => {
+                            self.switch_target = Some(name);
+                            return UpdateResult {
+                                quit: true,
+                                next_msg: None,
+                            };
+                        }
+                        Err(e) => {
+                            self.view = ViewState::List;
+                            self.warning = Some((format!("session error: {e}"), Instant::now()));
+                        }
+                    }
+                }
+                ok()
+            }
+        }
+    }
+
+    /// Clamps the cursor to the visible task count after search text changes.
+    fn clamp_cursor_to_visible(&mut self) {
+        let tasks = list::visible_tasks_filtered(
+            &self.task_rows,
+            &self.filter_mode,
+            &self.search_text,
+            self.active_repo_slug(),
+        );
+        self.cursor = self.cursor.min(tasks.len().saturating_sub(1));
     }
 
     /// Returns a debug-friendly name for the current view state.
@@ -532,44 +933,21 @@ impl App {
     // Rendering
     // -------------------------------------------------------------------
 
-    fn render(&mut self, f: &mut Frame) {
-        self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
-
+    /// Renders the current view state to the terminal frame.
+    ///
+    /// This is a read-only operation: it borrows `&self` and dispatches
+    /// to the appropriate render method based on the current [`ViewState`].
+    fn render(&self, f: &mut Frame) {
         match &self.view {
             ViewState::List => self.render_list(f),
-            ViewState::ConfirmDelete(_) => {
-                // Need to temporarily take view out to get the state
-                let view = std::mem::replace(&mut self.view, ViewState::List);
-                if let ViewState::ConfirmDelete(ds) = &view {
-                    self.render_delete(ds, f);
-                }
-                self.view = view;
-            }
-            ViewState::Transfer(_) => {
-                let view = std::mem::replace(&mut self.view, ViewState::List);
-                if let ViewState::Transfer(ts) = &view {
-                    self.render_transfer(ts, f);
-                }
-                self.view = view;
-            }
-            ViewState::Cleanup(_) => {
-                let view = std::mem::replace(&mut self.view, ViewState::List);
-                if let ViewState::Cleanup(cs) = &view {
-                    self.render_cleanup(cs, f);
-                }
-                self.view = view;
-            }
-            ViewState::NewSession(_) => {
+            ViewState::ConfirmDelete(ds) => self.render_delete(ds, f),
+            ViewState::Transfer(ts) => self.render_transfer(ts, f),
+            ViewState::Cleanup(cs) => self.render_cleanup(cs, f),
+            ViewState::NewSession(ns) => {
                 self.render_list(f);
-                let view = std::mem::replace(&mut self.view, ViewState::List);
-                if let ViewState::NewSession(ns) = &view {
-                    self.render_new_session(ns, f);
-                }
-                self.view = view;
+                self.render_new_session(ns, f);
             }
-            ViewState::Help => {
-                self.render_help(f);
-            }
+            ViewState::Help => self.render_help(f),
         }
     }
 
@@ -737,14 +1115,23 @@ fn run_loop(
     app: &mut App,
 ) -> anyhow::Result<Option<String>> {
     loop {
+        // Advance spinner before drawing so animation progresses each frame.
+        app.spinner_frame = (app.spinner_frame + 1) % SPINNER_FRAMES.len();
+
         terminal.draw(|f| app.render(f))?;
 
         // Poll for events with timeout (for spinner animation).
         if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))?
             && let Event::Key(key) = event::read()?
-            && app.handle_key(key)
+            && let Some(msg) = app.handle_event(key)
         {
-            break;
+            let mut result = app.update(msg);
+            while let Some(next) = result.next_msg.take() {
+                result = app.update(next);
+            }
+            if result.quit {
+                break;
+            }
         }
 
         // Check for background data updates.
@@ -1176,18 +1563,36 @@ mod tests {
         );
     }
 
+    /// Sends a key through handle_event + update and returns the UpdateResult.
+    fn send_key(app: &mut App, key: KeyEvent) -> UpdateResult {
+        if let Some(msg) = app.handle_event(key) {
+            app.update(msg)
+        } else {
+            UpdateResult {
+                quit: false,
+                next_msg: None,
+            }
+        }
+    }
+
     #[test]
     fn q_key_quits() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
-        assert!(app.handle_key(key));
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::Quit));
+        let r = app.update(msg.unwrap());
+        assert!(r.quit);
     }
 
     #[test]
     fn ctrl_c_quits() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert!(app.handle_key(key));
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::Quit));
+        let r = app.update(msg.unwrap());
+        assert!(r.quit);
     }
 
     #[test]
@@ -1199,7 +1604,8 @@ mod tests {
         let mut app = App::new_test(rows);
         assert_eq!(app.cursor, 0);
         let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        app.handle_key(key);
+        let msg = app.handle_event(key);
+        app.update(msg.unwrap());
         assert_eq!(app.cursor, 1);
     }
 
@@ -1212,7 +1618,8 @@ mod tests {
         let mut app = App::new_test(rows);
         app.cursor = 1;
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        app.handle_key(key);
+        let msg = app.handle_event(key);
+        app.update(msg.unwrap());
         assert_eq!(app.cursor, 0);
     }
 
@@ -1254,8 +1661,9 @@ mod tests {
         app.host_reachable.insert("gpu1".to_string(), false);
 
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let quit = app.handle_key(key);
-        assert!(!quit, "enter on unreachable host should not quit");
+        let msg = app.handle_event(key);
+        let r = app.update(msg.unwrap());
+        assert!(!r.quit, "enter on unreachable host should not quit");
         assert!(app.warning.is_some(), "expected warning to be set");
         assert!(
             app.warning.as_ref().unwrap().0.contains("unreachable"),
@@ -1282,7 +1690,8 @@ mod tests {
     fn question_mark_opens_help() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-        app.handle_key(key);
+        let msg = app.handle_event(key);
+        app.update(msg.unwrap());
         assert_eq!(app.view_name(), "Help");
     }
 
@@ -1291,7 +1700,8 @@ mod tests {
         let mut app = App::new_test(vec![]);
         app.view = ViewState::Help;
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        app.handle_key(key);
+        let msg = app.handle_event(key);
+        app.update(msg.unwrap());
         assert_eq!(app.view_name(), "List");
     }
 
@@ -1302,8 +1712,8 @@ mod tests {
         let rows = vec![make_task_row(42, DisplayGroup::NeedsAttention)];
         let mut app = App::new_test(rows);
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        app.handle_key(key);
-        // View should remain List — no confirmation dialog should appear.
+        send_key(&mut app, key);
+        // View should remain List -- no confirmation dialog should appear.
         assert_ne!(app.view_name(), "Help");
     }
 
@@ -1565,7 +1975,7 @@ mod tests {
     fn help_overlay_renders_when_question_mark_pressed() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-        app.handle_key(key);
+        send_key(&mut app, key);
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(
@@ -1593,7 +2003,7 @@ mod tests {
         assert_eq!(app.cursor, 0);
 
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        app.handle_key(j);
+        send_key(&mut app, j);
         assert_eq!(app.cursor, 1, "j should advance cursor from 0 to 1");
     }
 
@@ -1608,7 +2018,7 @@ mod tests {
         app.cursor = 1;
 
         let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        app.handle_key(k);
+        send_key(&mut app, k);
         assert_eq!(app.cursor, 0, "k should move cursor from 1 to 0");
     }
 
@@ -1621,7 +2031,106 @@ mod tests {
         ];
         let mut app = App::new_test(rows);
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
-        assert!(app.handle_key(q), "q should return true (quit)");
+        let r = send_key(&mut app, q);
+        assert!(r.quit, "q should return quit=true");
+    }
+
+    // -----------------------------------------------------------------------
+    // handle_event tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn handle_event_returns_none_for_unbound_key() {
+        let app = App::new_test(vec![]);
+        let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), None);
+    }
+
+    #[test]
+    fn handle_event_ctrl_c_in_any_view() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        let app_help = {
+            let mut a = App::new_test(vec![]);
+            a.view = ViewState::Help;
+            a
+        };
+        assert_eq!(app_help.handle_event(ctrl_c), Some(Message::Quit));
+
+        let app_cleanup = {
+            let mut a = App::new_test(vec![]);
+            a.view = ViewState::Cleanup(state::CleanupState {
+                stale: vec![],
+                selected: std::collections::HashSet::new(),
+                cursor: 0,
+                phase: Phase::Idle,
+                deleted: vec![],
+                errors: vec![],
+            });
+            a
+        };
+        assert_eq!(app_cleanup.handle_event(ctrl_c), Some(Message::Quit));
+    }
+
+    #[test]
+    fn handle_event_search_mode_intercepts_chars() {
+        let mut app = App::new_test(vec![]);
+        app.search_active = true;
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::SearchChar('a')));
+    }
+
+    #[test]
+    fn handle_event_digit_returns_cursor_to() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::ClaudeWorking),
+            make_task_row(3, DisplayGroup::Other),
+        ];
+        let app = App::new_test(rows);
+        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::CursorTo(0)));
+    }
+
+    #[test]
+    fn handle_event_delete_confirm_y() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::ConfirmDelete(state::DeleteState {
+            target: crate::types::Worktree {
+                path: "/test/wt".to_string(),
+                branch: Some("feat/test".to_string()),
+                head: String::new(),
+                is_bare: false,
+                has_conflicts: false,
+                pr: None,
+                pr_loading: false,
+                tmux_session: None,
+                tmux_attached: false,
+                tmux_pane_title: None,
+                remote: None,
+                issue_number: None,
+                issue_state: None,
+            },
+            phase: Phase::Confirm,
+            error: None,
+        });
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::ConfirmYes));
+    }
+
+    #[test]
+    fn handle_event_cleanup_space_toggles() {
+        let mut app = App::new_test(vec![]);
+        app.view = ViewState::Cleanup(state::CleanupState {
+            stale: vec![],
+            selected: std::collections::HashSet::new(),
+            cursor: 0,
+            phase: Phase::Idle,
+            deleted: vec![],
+            errors: vec![],
+        });
+        let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::ToggleSelection));
     }
 
     // -----------------------------------------------------------------------

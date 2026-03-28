@@ -1,50 +1,22 @@
 //! TUI confirmation and progress dialogs.
 //!
-//! Implements keyboard handlers and Ratatui rendering for the delete,
-//! cleanup, new-session, and transfer dialogs shown as modal overlays
-//! over the main worktree list.
-use crossterm::event::{KeyCode, KeyEvent};
+//! Renders the delete, cleanup, new-session, transfer, and help dialogs
+//! as modal overlays over the main worktree list. Key handling has moved
+//! to the TEA pattern (`handle_event` / `update`) in `mod.rs`.
 use ratatui::prelude::*;
 use ratatui::widgets::Padding;
 
 use crate::paths;
 use crate::tui::App;
 use crate::tui::SPINNER_FRAMES;
-use crate::tui::state::{
-    CleanupState, DeleteState, NewSessionState, Phase, TransferState, ViewState,
-};
+use crate::tui::state::{CleanupState, DeleteState, NewSessionState, Phase, TransferState};
 use crate::tui::widgets::render_popup;
-use crate::types::SwitchToSessionOptions;
-
-use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Delete dialog
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_delete_key(&mut self, state: &mut DeleteState, key: KeyEvent) -> bool {
-        match state.phase {
-            Phase::Confirm => match key.code {
-                KeyCode::Char('y') => {
-                    state.phase = Phase::InProgress;
-                    self.start_delete(&state.target);
-                    false
-                }
-                KeyCode::Char('n') | KeyCode::Esc => {
-                    self.view = ViewState::List;
-                    false
-                }
-                _ => false,
-            },
-            Phase::Done | Phase::Error => {
-                self.view = ViewState::List;
-                false
-            }
-            _ => false,
-        }
-    }
-
     pub(crate) fn render_delete(&self, state: &DeleteState, f: &mut Frame) {
         let theme = &self.theme;
         let wt = &state.target;
@@ -124,28 +96,6 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_transfer_key(&mut self, state: &mut TransferState, key: KeyEvent) -> bool {
-        match state.phase {
-            Phase::Confirm => match key.code {
-                KeyCode::Char('y') => {
-                    state.phase = Phase::InProgress;
-                    self.start_transfer(&state.target);
-                    false
-                }
-                KeyCode::Char('n') | KeyCode::Esc => {
-                    self.view = ViewState::List;
-                    false
-                }
-                _ => false,
-            },
-            Phase::Done | Phase::Error => {
-                self.view = ViewState::List;
-                false
-            }
-            _ => false,
-        }
-    }
-
     pub(crate) fn render_transfer(&self, state: &TransferState, f: &mut Frame) {
         let theme = &self.theme;
         let wt = &state.target;
@@ -228,64 +178,6 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_cleanup_key(&mut self, state: &mut CleanupState, key: KeyEvent) -> bool {
-        if state.phase == Phase::Done {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    self.view = ViewState::List;
-                }
-                _ => {}
-            }
-            return false;
-        }
-
-        if state.phase == Phase::InProgress {
-            return false;
-        }
-
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if state.cursor > 0 {
-                    state.cursor -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !state.stale.is_empty() && state.cursor < state.stale.len() - 1 {
-                    state.cursor += 1;
-                }
-            }
-            KeyCode::Char(' ') => {
-                if !state.stale.is_empty() && state.cursor < state.stale.len() {
-                    let path = state.stale[state.cursor].worktree_path.clone();
-                    if state.selected.contains(&path) {
-                        state.selected.remove(&path);
-                    } else {
-                        state.selected.insert(path);
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                let selected: Vec<_> = state
-                    .stale
-                    .iter()
-                    .filter(|row| state.selected.contains(&row.worktree_path))
-                    .cloned()
-                    .collect();
-                if selected.is_empty() {
-                    self.warning = Some(("No items selected.".to_string(), Instant::now()));
-                } else {
-                    state.phase = Phase::InProgress;
-                    self.start_cleanup(selected);
-                }
-            }
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.view = ViewState::List;
-            }
-            _ => {}
-        }
-        false
-    }
-
     pub(crate) fn render_cleanup(&self, state: &CleanupState, f: &mut Frame) {
         let theme = &self.theme;
         let mut lines: Vec<Line> = Vec::new();
@@ -436,52 +328,6 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_new_session_key(
-        &mut self,
-        state: &mut NewSessionState,
-        key: KeyEvent,
-    ) -> bool {
-        match key.code {
-            KeyCode::Esc => {
-                self.view = ViewState::List;
-            }
-            KeyCode::Enter => {
-                if !state.name.is_empty() {
-                    let name = state.name.clone();
-                    let worktree_path = self.repo_root.clone();
-                    let opts = SwitchToSessionOptions {
-                        session_name: name.clone(),
-                        worktree_path,
-                        branch: None,
-                        pr: None,
-                    };
-                    match crate::tmux::create_session(&opts) {
-                        Ok(()) => {
-                            self.switch_target = Some(name);
-                            return true;
-                        }
-                        Err(e) => {
-                            self.view = ViewState::List;
-                            self.warning = Some((format!("session error: {e}"), Instant::now()));
-                        }
-                    }
-                }
-            }
-            KeyCode::Backspace => {
-                state.name.pop();
-                state.cursor = state.name.len();
-            }
-            KeyCode::Char(c) => {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    state.name.push(c);
-                    state.cursor = state.name.len();
-                }
-            }
-            _ => {}
-        }
-        false
-    }
-
     pub(crate) fn render_new_session(&self, state: &NewSessionState, f: &mut Frame) {
         let theme = &self.theme;
         let input_with_cursor = format!("{}\u{2588}", state.name);
@@ -519,16 +365,6 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(crate) fn handle_help_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
-                self.view = ViewState::List;
-                false
-            }
-            _ => false,
-        }
-    }
-
     pub(crate) fn render_help(&self, f: &mut Frame) {
         self.render_list(f);
 
