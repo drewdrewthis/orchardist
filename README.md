@@ -26,6 +26,10 @@ Orchard gives you a single dashboard showing everything happening across your re
 - **Remote worktrees** — manage worktrees on remote machines via SSH, with reachability indicators
 - **JSON output** — `orchard --json` returns complete, fresh data for scripting
 - **Auto-refresh** — background refresh with two-phase loading (fast locals, then slow remotes)
+- **Mouse support** — click to select worktrees, scroll to navigate
+- **Transfer** — push/pull worktrees between local and remote machines
+- **Self-healing** — `orchard heal` audits and repairs drifted state
+- **Theme system** — centralized semantic color definitions for consistent styling
 
 ## Install
 
@@ -52,6 +56,9 @@ This will:
 ```
 orchard                    Interactive dashboard
 orchard cleanup            Jump straight to cleanup view
+orchard heal               Audit state for drift (dry-run by default)
+orchard heal --fix         Apply repairs
+orchard setup-remote HOST  Provision a remote host for SSH worktrees
 orchard init               Setup wizard
 orchard --json             Full state as JSON (always fresh, never cached)
 ```
@@ -68,12 +75,16 @@ orchard --json             Full state as JSON (always fresh, never cached)
 | `i` | Open issue in browser |
 | `p` | Toggle priority flag |
 | `d` | Delete worktree |
+| `n` | New worktree |
+| `t` | Transfer worktree (push/pull to remote) |
 | `c` | Cleanup stale worktrees |
 | `f` | Cycle filter mode |
 | `/` | Search |
 | `r` | Refresh |
 | `R` | Reconnect (SSH) |
 | `?` | Help |
+| Mouse click | Select worktree |
+| Mouse scroll | Navigate list |
 | `q` | Quit |
 
 ## Configuration
@@ -96,6 +107,14 @@ orchard --json             Full state as JSON (always fresh, never cached)
           "shell": "ssh"
         }
       ]
+    }
+  ],
+  "tmux_sessions": [
+    {
+      "name": "shepherd",
+      "command": "claude --continue",
+      "cwd": "/path/to/repo",
+      "start_on_launch": true
     }
   ]
 }

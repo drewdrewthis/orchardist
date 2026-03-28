@@ -76,53 +76,97 @@ ssh probe         ──→  (in-memory only)                     ┘         �
 
 Both modes produce an `OrchardState` — the single unified data model.
 
+### TUI Event Architecture (TEA Pattern)
+
+The TUI follows The Elm Architecture (TEA) — a unidirectional data flow:
+
+1. **`handle_event(key/mouse) → Option<Message>`** — pure mapping from input to intent
+2. **`update(msg) → UpdateResult`** — all state mutation happens here
+3. **`render(frame)`** — stateless view function, reads App state
+
+The `Message` enum in `tui/message.rs` defines every possible user intent (navigation,
+actions, dialog interactions). This separates input handling from state mutation,
+making the event loop testable and predictable. Mouse events (click, scroll) are
+mapped to the same `Message` variants as their keyboard equivalents.
+
 ## Module Structure
 
 ```
 src/
-├── main.rs              # Entry point: CLI args, mode dispatch
-├── state.rs             # OrchardState and all sub-types (data models)
-├── build_state.rs       # Pure compositor: joins source data → OrchardState
+├── main.rs                # Entry point: CLI args, mode dispatch
+├── lib.rs                 # Crate root: module declarations
 │
-├── sources/             # Shell layer: fetching + caching (one file per source)
-│   ├── mod.rs           # Re-exports, shared helpers
-│   ├── github.rs        # Issues, PRs, check runs via gh CLI / GraphQL
-│   ├── worktrees.rs     # Local git worktree list
-│   ├── remote.rs        # Remote worktrees via SSH
-│   ├── tmux.rs          # Tmux session listing (local + remote)
-│   ├── claude.rs        # Claude Code hook state files
-│   └── hosts.rs         # SSH reachability probes
+├── orchard_state.rs       # OrchardState and sub-types (unified data model)
+├── build_state.rs         # Pure compositor: joins source data → OrchardState
+├── state.rs               # Persistent task state (AppState, Task)
+├── session.rs             # Session domain types: TmuxSessionInfo, ClaudeSessionInfo,
+│                          #   EnrichedSession, StandaloneConfig, ListEntry
+├── session_discovery.rs   # Tmux session discovery and task reconciliation
+├── derive.rs              # Display group derivation logic
+├── types.rs               # Shared type definitions (OrchardConfig, RemoteConfig)
 │
-├── tui/                 # TUI rendering and interaction
-│   ├── mod.rs           # App struct, event loop, refresh orchestration
-│   ├── list.rs          # Task list view rendering
-│   ├── dialogs.rs       # Cleanup, new session, transfer dialogs
-│   ├── state.rs         # View state enums
-│   └── widgets.rs       # Reusable badge/status widgets
+├── config.rs              # Per-repo config loader (.orchard.json + .git/orchard.json)
+├── global_config.rs       # Global config (~/.config/orchard/config.json)
+├── cache.rs               # Generic cache read/write helpers
+├── cache_sources.rs       # Orchestrates multi-source cache refresh
 │
-├── json.rs              # JsonOutput mapping from OrchardState (versioned)
+├── json_output.rs         # JsonOutput mapping from OrchardState (versioned)
+├── heal.rs                # Self-repair: diagnose() → HealReport → apply_fixes()
+├── setup_remote.rs        # Remote host provisioning (orchard setup-remote)
+├── transfer.rs            # Worktree transfer between local and remote machines
 │
-├── config/              # Configuration loading
-│   ├── global.rs        # ~/.config/orchard/config.json + CWD auto-discovery
-│   └── repo.rs          # .orchard.json + .git/orchard.json (two-layer merge)
+├── navigation.rs          # Cursor and selection navigation logic
+├── priority.rs            # Priority flag persistence
+├── events.rs              # Structured event logging (events.jsonl)
+├── status.rs              # Tmux status bar segment writer
+├── shell.rs               # Shell integration (rc files, tmux keybindings)
+├── browser.rs             # Open URLs in browser
 │
-└── util/                # Shared utilities
-    ├── paths.rs         # Path manipulation (tildify, truncate_left)
-    ├── logger.rs        # File-based logging
-    └── notify.rs        # Desktop notifications
+├── claude_state.rs        # Claude Code hook state file parsing
+├── git.rs                 # Git operations (worktree create/delete, branch ops)
+├── github.rs              # GitHub API helpers (issue/PR queries)
+├── remote.rs              # Remote operations over SSH
+├── tmux.rs                # Tmux session management (create, switch, kill)
+│
+├── logger.rs              # File-based logging
+├── notify.rs              # Desktop notifications
+├── paths.rs               # Path manipulation (tildify, truncate_left)
+│
+├── sources/               # Shell layer: fetching + caching (one file per source)
+│   ├── mod.rs             # Re-exports, shared helpers
+│   ├── github.rs          # Issues, PRs, check runs via gh CLI / GraphQL
+│   ├── worktrees.rs       # Local git worktree list
+│   ├── tmux.rs            # Tmux session listing (local + remote)
+│   ├── claude.rs          # Claude Code hook state files
+│   └── hosts.rs           # SSH reachability probes
+│
+└── tui/                   # TUI rendering and interaction (TEA pattern)
+    ├── mod.rs             # App struct, event loop, refresh orchestration
+    ├── list.rs            # Task list view rendering
+    ├── dialogs.rs         # Cleanup, new worktree, transfer, heal dialogs
+    ├── message.rs         # Message enum (TEA: event → message → update)
+    ├── state.rs           # View state enums (ViewState, FilterMode, Phase)
+    ├── theme.rs           # Centralized semantic color theme
+    └── widgets.rs         # Reusable badge/status widgets
 ```
 
 ### What goes where
 
 | I need to... | Look in... |
 |---|---|
-| Understand the full data model | `state.rs` |
+| Understand the full data model | `orchard_state.rs` |
 | See how data sources are joined | `build_state.rs` |
+| Understand session types | `session.rs` (TmuxSessionInfo, EnrichedSession, ListEntry) |
 | Fix a GitHub API issue | `sources/github.rs` |
 | Change how worktrees are detected | `sources/worktrees.rs` |
 | Modify the TUI layout | `tui/list.rs` |
-| Change JSON output format | `json.rs` |
-| Add per-repo config options | `config/repo.rs` |
+| Understand TUI event flow | `tui/message.rs` (TEA pattern) |
+| Change colors/styling | `tui/theme.rs` |
+| Change JSON output format | `json_output.rs` |
+| Add per-repo config options | `config.rs` |
+| Add global config options | `global_config.rs` |
+| Fix self-healing/repair | `heal.rs` |
+| Fix worktree transfer | `transfer.rs` |
 
 ## Data Model
 
@@ -133,14 +177,14 @@ knows, fully joined and enriched.
 OrchardState
 ├── repos: Vec<RepoState>
 │   ├── slug: "owner/repo"
-│   ├── config: RepoLocalConfig (CI filters, etc.)
 │   └── worktrees: Vec<WorktreeState>
-│       ├── path, branch, is_bare, host
+│       ├── path, branch, is_bare, host, is_main_worktree
 │       ├── issue: Option<IssueInfo>      # number, title, state
-│       ├── pr: Option<PrInfo>            # number, state, checks, review
-│       ├── sessions: Vec<SessionInfo>    # tmux name, claude state, cost
+│       ├── pr: Option<PrState>           # number, state, checks, review, conflicts
+│       ├── sessions: Vec<SessionState>   # name, host, claude enrichment
 │       └── display_group: DisplayGroup   # derived from joined data
-└── hosts: HashMap<String, HostInfo>      # reachability per remote host
+├── standalone_sessions: Vec<StandaloneSessionRow>  # non-worktree sessions (e.g. shepherd)
+└── hosts: HashMap<String, HostState>     # reachability per remote host
 ```
 
 Display-only fields (like `display_group`) are computed by `build_state`, not
@@ -187,3 +231,5 @@ caching layer.
 - **ADR-002**: No OOP service layers (superseded by ADR-004 for scope)
 - **ADR-003**: Per-repo config — `.orchard.json` + `.git/orchard.json`
 - **ADR-004**: Unified data model with functional core, imperative shell
+- **ADR-006**: TEA pattern for TUI event handling
+- **ADR-007**: Session data model (TmuxSessionInfo → EnrichedSession composition)
