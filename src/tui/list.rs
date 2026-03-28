@@ -15,7 +15,7 @@ use crate::remote;
 use crate::tmux;
 use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color};
-use crate::tui::{App, ATTRIBUTION_URL, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
+use crate::tui::{ATTRIBUTION_URL, App, SPINNER_FRAMES, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
 // Constants
