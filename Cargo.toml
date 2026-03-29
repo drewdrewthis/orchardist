@@ -25,7 +25,6 @@ open = "5"
 shellexpand = "3.1.2"
 throbber-widgets-tui = "0.11.0"
 tui-scrollview = "0.6.2"
-tui-big-text = "0.8.2"
 
 [dev-dependencies]
 tempfile = "3"

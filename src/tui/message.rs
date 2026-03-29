@@ -40,8 +40,6 @@ pub enum Message {
     Transfer,
     /// Open the new-session name-entry dialog.
     NewSession,
-    /// Cycle through filter modes (All -> HasSession -> HasClaude -> HasPR).
-    CycleFilter,
     /// Activate the search bar.
     StartSearch,
     /// Open the stale-worktree cleanup dialog.

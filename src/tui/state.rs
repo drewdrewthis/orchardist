@@ -1,56 +1,14 @@
 //! TUI application state types.
 //!
-//! Defines `ViewState` (which screen is active), `FilterMode`, `Phase`,
+//! Defines `ViewState` (which screen is active), `Phase`,
 //! `AppMsg` (messages from the background worker), and the various dialog
 //! state structs (`DeleteState`, `CleanupState`, etc.). Consumed by the
 //! main TUI event loop, `list`, and `dialogs` modules.
 use std::collections::HashSet;
-use std::fmt;
 
 use crate::derive::WorktreeRow;
 use crate::heal::{FixResult, HealFinding, HealReport};
 use crate::types::Worktree;
-
-// ---------------------------------------------------------------------------
-// Filter mode for the task list
-// ---------------------------------------------------------------------------
-
-/// Determines which rows are shown in the task list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterMode {
-    /// Show all worktrees regardless of state.
-    All,
-    /// Show only worktrees that have an active tmux session.
-    HasSession,
-    /// Show only worktrees where a Claude agent is running.
-    HasClaude,
-    /// Show only worktrees with an open pull request.
-    HasPR,
-}
-
-impl FilterMode {
-    /// Cycles to the next filter mode in order: All→HasSession→HasClaude→HasPR→All.
-    pub fn next(self) -> Self {
-        match self {
-            Self::All => Self::HasSession,
-            Self::HasSession => Self::HasClaude,
-            Self::HasClaude => Self::HasPR,
-            Self::HasPR => Self::All,
-        }
-    }
-}
-
-impl fmt::Display for FilterMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            Self::All => "All",
-            Self::HasSession => "Has Session",
-            Self::HasClaude => "Has Claude",
-            Self::HasPR => "Has PR",
-        };
-        write!(f, "{}", label)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // View state (sum type carrying dialog state)

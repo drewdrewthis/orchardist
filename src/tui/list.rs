@@ -14,7 +14,7 @@ use crate::derive::{DisplayGroup, WorktreeRow};
 use crate::paths;
 use crate::remote;
 use crate::tmux;
-use crate::tui::state::{CleanupState, FilterMode, Phase, ViewState};
+use crate::tui::state::{CleanupState, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color};
 use crate::tui::{ATTRIBUTION_URL, App, WARNING_DURATION_SECS, filter_stale};
 
@@ -123,22 +123,20 @@ pub(crate) struct VisibleTask<'a> {
 /// Returns the visible tasks from the pre-sorted task_rows.
 ///
 /// All rows are always visible — there is no backlog collapsing.
-/// `filter_mode` and `search_text` narrow results; main worktree rows always bypass both.
+/// `search_text` narrows results; main worktree rows always bypass it.
 /// When `repo_slug_filter` is `Some(slug)`, only rows from that repo are shown
 /// (main worktree rows are also filtered so each repo only shows its own).
 #[cfg(test)]
 pub(crate) fn visible_tasks<'a>(
     task_rows: &'a [WorktreeRow],
-    filter_mode: &FilterMode,
     search_text: &str,
 ) -> Vec<VisibleTask<'a>> {
-    visible_tasks_filtered(task_rows, filter_mode, search_text, None)
+    visible_tasks_filtered(task_rows, search_text, None)
 }
 
 /// Like `visible_tasks` but with an optional repo slug filter.
 pub(crate) fn visible_tasks_filtered<'a>(
     task_rows: &'a [WorktreeRow],
-    filter_mode: &FilterMode,
     search_text: &str,
     repo_slug_filter: Option<&str>,
 ) -> Vec<VisibleTask<'a>> {
@@ -157,17 +155,6 @@ pub(crate) fn visible_tasks_filtered<'a>(
 
         // Main worktree rows always pass filter and search.
         if !row.is_main_worktree {
-            // Apply filter_mode.
-            let passes_filter = match filter_mode {
-                FilterMode::All => true,
-                FilterMode::HasSession => !row.sessions.is_empty(),
-                FilterMode::HasClaude => row.sessions.iter().any(|s| s.claude.is_some()),
-                FilterMode::HasPR => row.pr.is_some(),
-            };
-            if !passes_filter {
-                continue;
-            }
-
             // Apply search text.
             if !search_lower.is_empty() {
                 let matches = row.repo_slug.to_lowercase().contains(&search_lower)
@@ -390,7 +377,6 @@ impl App {
             let worktree_cursor = self.cursor - standalone_count;
             let tasks = visible_tasks_filtered(
                 &self.task_rows,
-                &self.filter_mode,
                 &self.search_text,
                 self.active_repo_slug(),
             );
@@ -532,7 +518,6 @@ impl App {
         let worktree_cursor = self.cursor - standalone_count;
         let visible = visible_tasks_filtered(
             &self.task_rows,
-            &self.filter_mode,
             &self.search_text,
             self.active_repo_slug(),
         );
@@ -732,71 +717,32 @@ impl App {
         let header_block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.success))
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Double);
         let inner = header_block.inner(area);
         f.render_widget(header_block, area);
 
-        // Check if the repo name fits in BigText (HalfHeight: 4 rows, 8 cols/char).
-        let bigtext_char_width = 8_u16;
-        let bigtext_height = 4_u16;
-        let repo_name_width = self.repo_name.len() as u16 * bigtext_char_width;
-        let use_bigtext = repo_name_width > 0 && repo_name_width <= inner.width;
-
-        if use_bigtext {
-            // Layout: BigText (4 rows) + tree line (1 row) + optional host + timestamp
-            let big_text = tui_big_text::BigText::builder()
-                .pixel_size(tui_big_text::PixelSize::HalfHeight)
-                .style(logo_style)
-                .lines(vec![Line::from(self.repo_name.clone())])
-                .centered()
-                .build();
-            let bigtext_area = Rect::new(
-                inner.x,
-                inner.y,
-                inner.width,
-                bigtext_height.min(inner.height),
-            );
-            f.render_widget(big_text, bigtext_area);
-
-            // Render remaining lines below the BigText.
-            let remaining_y = inner.y + bigtext_height;
-            let remaining_height = inner.height.saturating_sub(bigtext_height);
-            if remaining_height > 0 {
-                let mut info_lines = vec![Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴")];
-                if !host_line_spans.is_empty() {
-                    info_lines.push(Line::from(host_line_spans).alignment(Alignment::Center));
-                }
-                if !self.host_reachable.is_empty() || self.refreshing {
-                    info_lines.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
-                }
-                let info_area = Rect::new(inner.x, remaining_y, inner.width, remaining_height);
-                let info = Paragraph::new(info_lines).alignment(Alignment::Center);
-                f.render_widget(info, info_area);
-            }
-        } else {
-            // Fallback: original ASCII art header.
-            let mut header_text = vec![
-                Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
-                Line::from(Span::styled("┌─┐┬┌┬┐╔═╗╦═╗╔═╗╦ ╦╔═╗╦═╗╔╦╗", logo_style)),
-                Line::from(Span::styled("│ ┬│ │ ║ ║╠╦╝║  ╠═╣╠═╣╠╦╝ ║║", logo_style)),
-                Line::from(Span::styled("└─┘┴ ┴ ╚═╝╩╚═╚═╝╩ ╩╩ ╩╩╚══╩╝", logo_style)),
-                Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
-            ];
-            if !host_line_spans.is_empty() {
-                header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
-            }
-            if !self.host_reachable.is_empty() || self.refreshing {
-                header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
-            }
-            let header = Paragraph::new(header_text)
-                .alignment(Alignment::Center)
-                .style(
-                    Style::default()
-                        .fg(theme.success)
-                        .add_modifier(Modifier::BOLD),
-                );
-            f.render_widget(header, inner);
+        // ASCII art logo header.
+        let mut header_text = vec![
+            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
+            Line::from(Span::styled("┌─┐┬┌┬┐╔═╗╦═╗╔═╗╦ ╦╔═╗╦═╗╔╦╗", logo_style)),
+            Line::from(Span::styled("│ ┬│ │ ║ ║╠╦╝║  ╠═╣╠═╣╠╦╝ ║║", logo_style)),
+            Line::from(Span::styled("└─┘┴ ┴ ╚═╝╩╚═╚═╝╩ ╩╩ ╩╩╚══╩╝", logo_style)),
+            Line::from("🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴🌲🌳🌴"),
+        ];
+        if !host_line_spans.is_empty() {
+            header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
         }
+        if !self.host_reachable.is_empty() || self.refreshing {
+            header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
+        }
+        let header = Paragraph::new(header_text)
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            );
+        f.render_widget(header, inner);
     }
 
     /// Joins or creates a tmux session. Returns `true` if the TUI should exit
@@ -889,7 +835,6 @@ impl App {
 
         let tasks = visible_tasks_filtered(
             &self.task_rows,
-            &self.filter_mode,
             &self.search_text,
             self.active_repo_slug(),
         );
@@ -957,7 +902,6 @@ impl App {
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
-            Constraint::Length(1), // spacer
             Constraint::Length(table_height),
         ];
 
@@ -976,6 +920,7 @@ impl App {
         }
 
         constraints.push(Constraint::Length(1)); // hints
+        constraints.push(Constraint::Length(1)); // attribution footer
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -984,10 +929,6 @@ impl App {
 
         let mut idx = 0;
         self.render_header(f, chunks[idx]);
-        idx += 1;
-
-        // Render filter tabs in the spacer row.
-        self.render_filter_tabs(f, chunks[idx]);
         idx += 1;
 
         let theme = &self.theme;
@@ -1020,7 +961,7 @@ impl App {
             )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.accent))
-            .border_type(BorderType::Rounded);
+            .border_set(ratatui::symbols::border::ONE_EIGHTH_WIDE);
 
         let table = Table::new(rows, &widths)
             .header(header_row)
@@ -1083,6 +1024,53 @@ impl App {
         }
 
         self.render_hints_task(f, chunks[idx]);
+        idx += 1;
+
+        self.render_attribution_footer(f, chunks[idx]);
+    }
+
+    /// Renders the attribution footer: "made with ❤ — https://github.com/drewdrewthis/orchard-rs"
+    ///
+    /// The ❤ is rendered in error (red) color; the URL in dimmed + underlined.
+    /// The footer area is also used for mouse-click URL detection.
+    fn render_attribution_footer(&self, f: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+
+        let heart_span = Span::styled("\u{2764}", Style::default().fg(theme.error));
+        let dash_span = Span::raw(" \u{2014} ");
+        let url_span = Span::styled(
+            ATTRIBUTION_URL,
+            Style::default()
+                .fg(theme.dimmed)
+                .add_modifier(Modifier::UNDERLINED),
+        );
+
+        let spans = vec![
+            Span::raw("made with "),
+            heart_span,
+            dash_span,
+            url_span,
+        ];
+
+        // Compute URL click area.
+        let prefix_width = "made with \u{2764} \u{2014} ".len();
+        let url_len = ATTRIBUTION_URL.len();
+        let total_width = prefix_width + url_len;
+        let left_pad = if (area.width as usize) > total_width {
+            ((area.width as usize) - total_width) / 2
+        } else {
+            0
+        };
+        let url_x = area.x + (left_pad + prefix_width) as u16;
+        self.url_area.set(Rect {
+            x: url_x,
+            y: area.y,
+            width: url_len as u16,
+            height: 1,
+        });
+
+        let footer = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
+        f.render_widget(footer, area);
     }
 
     /// Builds table rows: standalone sessions first, then worktree task rows with group headers.
@@ -1308,34 +1296,6 @@ impl App {
         self.preview_scroll_state.set(state);
     }
 
-    /// Renders the filter mode tabs bar.
-    ///
-    /// Shows "All | Sessions | Claude | PRs" with the active filter highlighted.
-    /// Placed between the header and the task table.
-    fn render_filter_tabs(&self, f: &mut Frame, area: Rect) {
-        let theme = &self.theme;
-        let titles: Vec<&str> = vec!["All", "Sessions", "Claude", "PRs"];
-        let selected = match self.filter_mode {
-            FilterMode::All => 0,
-            FilterMode::HasSession => 1,
-            FilterMode::HasClaude => 2,
-            FilterMode::HasPR => 3,
-        };
-        let tabs = Tabs::new(titles)
-            .select(selected)
-            .style(Style::default().fg(theme.dimmed))
-            .highlight_style(
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .divider(Span::styled(
-                " \u{2502} ",
-                Style::default().fg(theme.dimmed),
-            ));
-        f.render_widget(tabs, area);
-    }
-
     /// Appends the common trailing hint keys: refresh, reconnect, quit, help.
     fn append_common_hints(
         &self,
@@ -1412,7 +1372,6 @@ impl App {
             let worktree_cursor = self.cursor.saturating_sub(standalone_count);
             let visible = visible_tasks_filtered(
                 &self.task_rows,
-                &self.filter_mode,
                 &self.search_text,
                 self.active_repo_slug(),
             );
@@ -1441,10 +1400,6 @@ impl App {
         spans.push(Span::raw(":branch"));
         spans.push(sep.clone());
 
-        spans.push(Span::styled("f", key_style));
-        spans.push(Span::raw(":filter"));
-        spans.push(sep.clone());
-
         spans.push(Span::styled("/", key_style));
         spans.push(Span::raw(":search"));
         spans.push(sep.clone());
@@ -1459,15 +1414,6 @@ impl App {
             spans.push(Span::styled(
                 format!("[\u{25c4} {} \u{25ba}]", label),
                 Style::default().fg(theme.accent),
-            ));
-        }
-
-        // Active filter label.
-        if self.filter_mode != crate::tui::state::FilterMode::All {
-            spans.push(sep.clone());
-            spans.push(Span::styled(
-                format!("[{}]", self.filter_mode),
-                Style::default().fg(theme.search_highlight),
             ));
         }
 
@@ -1487,32 +1433,6 @@ impl App {
         spans.push(sep.clone());
 
         self.append_common_hints(&mut spans, &sep, key_style, "quit");
-
-        // Attribution URL at the end of the hints bar.
-        spans.push(sep);
-        let url_span_start = spans.iter().map(|s| s.width()).sum::<usize>();
-        spans.push(Span::styled(
-            ATTRIBUTION_URL,
-            Style::default()
-                .fg(theme.dimmed)
-                .add_modifier(Modifier::UNDERLINED),
-        ));
-        let url_len = ATTRIBUTION_URL.len();
-        let total_width: usize = spans.iter().map(|s| s.width()).sum();
-
-        // Compute the pixel position of the URL within the centered line.
-        let left_pad = if (area.width as usize) > total_width {
-            ((area.width as usize) - total_width) / 2
-        } else {
-            0
-        };
-        let url_x = area.x + (left_pad + url_span_start) as u16;
-        self.url_area.set(Rect {
-            x: url_x,
-            y: area.y,
-            width: url_len as u16,
-            height: 1,
-        });
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
@@ -1567,15 +1487,15 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
 
 /// Returns the height (in terminal rows) to allocate for the header.
 ///
-/// When the terminal is tall enough (>= 30 rows), the full header is
+/// When the terminal is tall enough (>= 30 rows), the full ASCII art logo header is
 /// shown in a bordered block. On shorter terminals a single compact
 /// line is used instead so the task list gets as much vertical space as possible.
 ///
-/// The full header reserves 10 rows to accommodate BigText rendering (4 rows)
-/// of the repo name alongside decorative lines and optional host/timestamp info.
+/// The full header reserves 9 rows: 5 logo lines + optional host + optional
+/// timestamp + 2 double-line border rows.
 pub(crate) fn header_height(terminal_height: u16) -> u16 {
     if terminal_height >= FULL_HEADER_MIN_HEIGHT {
-        10
+        9
     } else {
         1
     }
@@ -1618,12 +1538,12 @@ mod tests {
 
     #[test]
     fn full_logo_at_threshold() {
-        assert_eq!(header_height(30), 10);
+        assert_eq!(header_height(30), 9);
     }
 
     #[test]
     fn full_logo_above_threshold() {
-        assert_eq!(header_height(50), 10);
+        assert_eq!(header_height(50), 9);
     }
 
     #[test]
@@ -1644,7 +1564,7 @@ mod tests {
             make_task_row(3, DisplayGroup::Other),
         ];
         // All rows are always visible — no backlog collapsing.
-        let visible = visible_tasks(&rows, &FilterMode::All, "");
+        let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
     }
 
@@ -1653,7 +1573,7 @@ mod tests {
         let rows: Vec<WorktreeRow> = (1u32..=5)
             .map(|i| make_task_row(i, DisplayGroup::Other))
             .collect();
-        let visible = visible_tasks(&rows, &FilterMode::All, "");
+        let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 5, "Other rows are always visible");
     }
 
@@ -1664,91 +1584,11 @@ mod tests {
             make_task_row(20, DisplayGroup::ClaudeWorking),
             make_task_row(30, DisplayGroup::Other),
         ];
-        let visible = visible_tasks(&rows, &FilterMode::All, "");
+        let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
         assert_eq!(visible[0].num, 1);
         assert_eq!(visible[1].num, 2);
         assert_eq!(visible[2].num, 3);
-    }
-
-    #[test]
-    fn filter_has_session() {
-        let row_no_session = make_task_row(1, DisplayGroup::NeedsAttention);
-        let row_with_session = WorktreeRow {
-            sessions: vec![make_session("sess")],
-            ..make_task_row(2, DisplayGroup::ClaudeWorking)
-        };
-        let shepherd = WorktreeRow {
-            is_main_worktree: true,
-            ..make_task_row(3, DisplayGroup::RepoMain)
-        };
-        let rows = vec![shepherd, row_no_session, row_with_session];
-        let visible = visible_tasks(&rows, &FilterMode::HasSession, "");
-        // shepherd always passes + row with session
-        assert_eq!(visible.len(), 2);
-        assert!(visible.iter().any(|v| v.row.is_main_worktree));
-        assert!(visible.iter().any(|v| !v.row.sessions.is_empty()));
-    }
-
-    #[test]
-    fn filter_has_pr() {
-        use crate::derive::PrInfo as DPrInfo;
-        let row_no_pr = make_task_row(1, DisplayGroup::NeedsAttention);
-        let row_with_pr = WorktreeRow {
-            pr: Some(DPrInfo {
-                number: 10,
-                branch: "feat/pr".to_string(),
-                state: None,
-                review_decision: None,
-                checks_state: None,
-                has_conflicts: false,
-                unresolved_threads: 0,
-            }),
-            ..make_task_row(2, DisplayGroup::ReadyToMerge)
-        };
-        let shepherd = WorktreeRow {
-            is_main_worktree: true,
-            ..make_task_row(3, DisplayGroup::RepoMain)
-        };
-        let rows = vec![shepherd, row_no_pr, row_with_pr];
-        let visible = visible_tasks(&rows, &FilterMode::HasPR, "");
-        assert_eq!(visible.len(), 2);
-        assert!(visible.iter().any(|v| v.row.is_main_worktree));
-        assert!(visible.iter().any(|v| v.row.pr.is_some()));
-    }
-
-    #[test]
-    fn filter_has_claude() {
-        let row_no_claude = make_task_row(1, DisplayGroup::NeedsAttention);
-        let row_with_claude = WorktreeRow {
-            sessions: vec![EnrichedSession {
-                tmux: TmuxSessionInfo {
-                    host: Host::Local,
-                    name: "sess".to_string(),
-                    status: SessionStatus::Running { attached: false },
-                },
-                claude: Some(ClaudeSessionInfo {
-                    status: crate::claude_state::ClaudeState::Working,
-                    cost_usd: None,
-                    context_window_pct: None,
-                    model: None,
-                }),
-            }],
-            ..make_task_row(2, DisplayGroup::ClaudeWorking)
-        };
-        let shepherd = WorktreeRow {
-            is_main_worktree: true,
-            ..make_task_row(3, DisplayGroup::RepoMain)
-        };
-        let rows = vec![shepherd, row_no_claude, row_with_claude];
-        let visible = visible_tasks(&rows, &FilterMode::HasClaude, "");
-        assert_eq!(visible.len(), 2);
-        assert!(visible.iter().any(|v| v.row.is_main_worktree));
-        assert!(
-            visible
-                .iter()
-                .any(|v| { v.row.sessions.iter().any(|s| s.claude.is_some()) })
-        );
     }
 
     #[test]
@@ -1762,7 +1602,7 @@ mod tests {
             ..make_task_row(2, DisplayGroup::ClaudeWorking)
         };
         let rows = vec![row_match, row_no_match];
-        let visible = visible_tasks(&rows, &FilterMode::All, "my-feature");
+        let visible = visible_tasks(&rows, "my-feature");
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].row.branch, "feat/my-feature");
     }
@@ -1776,8 +1616,8 @@ mod tests {
         };
         let other = make_task_row(2, DisplayGroup::NeedsAttention);
         let rows = vec![shepherd, other];
-        // HasPR filter would exclude both, but shepherd bypasses it.
-        let visible = visible_tasks(&rows, &FilterMode::HasPR, "nomatch");
+        // Shepherd bypasses search filter.
+        let visible = visible_tasks(&rows, "nomatch");
         assert_eq!(visible.len(), 1);
         assert!(visible[0].row.is_main_worktree);
     }
@@ -2158,63 +1998,24 @@ mod tests {
     fn search_is_case_insensitive() {
         let rows = vec![make_task_row(1, DisplayGroup::NeedsAttention)];
         // Search with uppercase should match lowercase branch "feat/issue-1"
-        let visible = visible_tasks(&rows, &FilterMode::All, "FEAT/ISSUE");
+        let visible = visible_tasks(&rows, "FEAT/ISSUE");
         assert_eq!(visible.len(), 1);
     }
 
     #[test]
-    fn combined_filter_and_search() {
-        let mut row_with_session = make_task_row(1, DisplayGroup::NeedsAttention);
-        row_with_session.sessions = vec![make_session("sess1")];
-        row_with_session.branch = "feat/target-branch".to_string();
+    fn search_with_multiple_rows() {
+        let mut row_match = make_task_row(1, DisplayGroup::NeedsAttention);
+        row_match.branch = "feat/target-branch".to_string();
 
-        let mut row_with_session_no_match = make_task_row(2, DisplayGroup::NeedsAttention);
-        row_with_session_no_match.sessions = vec![make_session("sess2")];
-        row_with_session_no_match.branch = "feat/other-branch".to_string();
+        let mut row_no_match = make_task_row(2, DisplayGroup::NeedsAttention);
+        row_no_match.branch = "feat/other-branch".to_string();
 
-        let row_no_session = make_task_row(3, DisplayGroup::NeedsAttention);
+        let rows = vec![row_match, row_no_match];
 
-        let rows = vec![row_with_session, row_with_session_no_match, row_no_session];
-
-        // HasSession filter + search "target" should only match the first row
-        let visible = visible_tasks(&rows, &FilterMode::HasSession, "target");
+        // Search "target" should only match the first row
+        let visible = visible_tasks(&rows, "target");
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].row.issue_number, Some(1));
-    }
-
-    // -----------------------------------------------------------------------
-    // filter tabs rendering
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn filter_tabs_renders_all_modes() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
-        let backend = TestBackend::new(80, 30);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                app.render_filter_tabs(f, f.area());
-            })
-            .unwrap();
-
-        let buffer = terminal.backend().buffer().clone();
-        let mut text = String::new();
-        for y in 0..buffer.area.height {
-            for x in 0..buffer.area.width {
-                text.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-        }
-
-        assert!(text.contains("All"), "tabs must include 'All' label");
-        assert!(
-            text.contains("Sessions"),
-            "tabs must include 'Sessions' label"
-        );
-        assert!(text.contains("Claude"), "tabs must include 'Claude' label");
-        assert!(text.contains("PRs"), "tabs must include 'PRs' label");
     }
 
     #[test]
@@ -2247,31 +2048,17 @@ mod tests {
     }
 
     #[test]
-    fn bigtext_threshold_uses_full_header_for_tall_terminal() {
-        // At 30+ rows, header_height returns the full header size (10 rows).
-        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT), 10);
-        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT + 10), 10);
+    fn ascii_header_height_for_tall_terminal() {
+        // At 30+ rows, header_height returns the full ASCII logo size (9 rows).
+        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT), 9);
+        assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT + 10), 9);
     }
 
     #[test]
-    fn bigtext_threshold_uses_compact_header_for_short_terminal() {
-        // Below 30 rows, the compact 1-line header is used (no BigText).
+    fn ascii_header_height_for_short_terminal() {
+        // Below 30 rows, the compact 1-line header is used.
         assert_eq!(header_height(FULL_HEADER_MIN_HEIGHT - 1), 1);
         assert_eq!(header_height(15), 1);
-    }
-
-    #[test]
-    fn bigtext_requires_repo_name_fits_in_width() {
-        // BigText with HalfHeight uses 8 columns per character.
-        // A repo name of 10 chars needs 80 columns.
-        let name = "short-repo";
-        let bigtext_char_width: u16 = 8;
-        let needed = name.len() as u16 * bigtext_char_width;
-        assert_eq!(needed, 80);
-        // Fits in 100-column terminal (inner = 98 after borders).
-        assert!(needed <= 98);
-        // Does NOT fit in 60-column terminal (inner = 58 after borders).
-        assert!(needed > 58);
     }
 
     #[test]

@@ -33,7 +33,7 @@ use crate::transfer;
 use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
-use state::{AppMsg, CleanupState, FilterMode, HealState, Phase, ViewState};
+use state::{AppMsg, CleanupState, HealState, Phase, ViewState};
 use std::path::Path;
 use std::process::Command;
 
@@ -90,7 +90,6 @@ pub struct App {
     /// Index into `global_config.repos`: 0 = all repos, 1+ = specific repo.
     active_repo_index: usize,
     show_branch_column: bool,
-    filter_mode: FilterMode,
     search_text: String,
     search_active: bool,
 
@@ -125,6 +124,7 @@ pub struct App {
     /// Uses `Cell` for interior mutability so `render_task_preview` (which takes
     /// `&self`) can update the state via `StatefulWidget::render`.
     preview_scroll_state: std::cell::Cell<tui_scrollview::ScrollViewState>,
+
 }
 
 impl App {
@@ -166,7 +166,6 @@ impl App {
             global_config: global_cfg,
             active_repo_index: 0,
             show_branch_column: false,
-            filter_mode: FilterMode::All,
             search_text: String::new(),
             search_active: false,
             host_reachable: HashMap::new(),
@@ -541,7 +540,6 @@ impl App {
                 let standalone_count = self.standalone_sessions.len();
                 let worktree_visible_count = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 )
@@ -562,7 +560,6 @@ impl App {
                     KeyCode::Char('p') => Some(Message::Transfer),
                     KeyCode::Char('n') => Some(Message::NewSession),
                     KeyCode::Char('w') => Some(Message::NewWorktree),
-                    KeyCode::Char('f') => Some(Message::CycleFilter),
                     KeyCode::Char('/') => Some(Message::StartSearch),
                     KeyCode::Char('c') => Some(Message::Cleanup),
                     KeyCode::Char('h') => Some(Message::Heal),
@@ -735,7 +732,6 @@ impl App {
         // For worktree rows, account for group header rows.
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
-            &self.filter_mode,
             &self.search_text,
             self.active_repo_slug(),
         );
@@ -811,7 +807,6 @@ impl App {
                         let standalone_count = self.standalone_sessions.len();
                         let worktree_visible_count = list::visible_tasks_filtered(
                             &self.task_rows,
-                            &self.filter_mode,
                             &self.search_text,
                             self.active_repo_slug(),
                         )
@@ -869,7 +864,6 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
@@ -889,7 +883,6 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
@@ -913,7 +906,6 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
@@ -935,7 +927,6 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.filter_mode,
                     &self.search_text,
                     self.active_repo_slug(),
                 );
@@ -954,11 +945,6 @@ impl App {
                     name: String::new(),
                     cursor: 0,
                 });
-                ok()
-            }
-            Message::CycleFilter => {
-                self.filter_mode = self.filter_mode.next();
-                self.cursor = 0;
                 ok()
             }
             Message::StartSearch => {
@@ -1189,7 +1175,6 @@ impl App {
     fn clamp_cursor_to_visible(&mut self) {
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
-            &self.filter_mode,
             &self.search_text,
             self.active_repo_slug(),
         );
@@ -1479,7 +1464,6 @@ impl App {
             global_config: global_config::GlobalConfig::default(),
             active_repo_index: 0,
             show_branch_column: false,
-            filter_mode: FilterMode::All,
             search_text: String::new(),
             search_active: false,
             host_reachable: HashMap::new(),
@@ -3412,7 +3396,7 @@ mod tests {
         assert_eq!(app.handle_mouse_event(event), None);
     }
 
-    // Rich content widget tests (ScrollView preview, BigText header)
+    // Rich content widget tests (ScrollView preview, ASCII art header)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -3460,33 +3444,14 @@ mod tests {
     }
 
     #[test]
-    fn bigtext_renders_repo_name_in_tall_terminal() {
+    fn ascii_art_renders_in_tall_terminal() {
         let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
         app.repo_name = "orchard".to_string();
-        // Use a tall terminal (40 rows) with enough width for BigText.
-        // "orchard" = 7 chars * 8 cols = 56 cols needed.
         let output = render_to_string(&mut app, 120, 40);
-        // The BigText rendering uses block characters (half-height pixels).
-        // Verify the repo name does NOT appear as plain text "orchard" in the header
-        // (it should be rendered as pixel blocks instead).
-        // The ASCII art "GIT ORCHARD" should NOT be present since BigText takes over.
-        assert!(
-            !output.contains("╔═╗╦═╗╔═╗"),
-            "ASCII art logo should not appear when BigText is used"
-        );
-    }
-
-    #[test]
-    fn ascii_art_renders_when_repo_name_too_wide() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
-        // A very long repo name that won't fit in BigText.
-        app.repo_name = "a-very-long-repository-name-that-exceeds-width".to_string();
-        // Use a narrow terminal: 46 chars * 8 = 368 cols needed > 80 available.
-        let output = render_to_string(&mut app, 80, 40);
-        // Should fall back to ASCII art header.
+        // The ASCII art logo should always appear in tall terminals.
         assert!(
             output.contains("╔═╗╦═╗╔═╗"),
-            "ASCII art logo should appear when repo name is too wide for BigText"
+            "ASCII art logo should appear in tall terminal, got:\n{output}"
         );
     }
 
