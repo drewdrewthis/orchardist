@@ -401,11 +401,8 @@ impl App {
                 })
         } else {
             let worktree_cursor = self.cursor - standalone_count;
-            let tasks = visible_tasks_filtered(
-                &self.task_rows,
-                &self.search_text,
-                self.active_repo_slug(),
-            );
+            let tasks =
+                visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
             let action = tasks.get(worktree_cursor).map(|vt| {
                 if let Some(session) = vt.row.sessions.first() {
                     let host = match &session.tmux.host {
@@ -542,11 +539,8 @@ impl App {
         }
 
         let worktree_cursor = self.cursor - standalone_count;
-        let visible = visible_tasks_filtered(
-            &self.task_rows,
-            &self.search_text,
-            self.active_repo_slug(),
-        );
+        let visible =
+            visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
         if let Some(vt) = visible.get(worktree_cursor) {
             // Find a session to capture pane content from.
             if let Some(session) = vt.row.sessions.first() {
@@ -859,11 +853,8 @@ impl App {
         let area = f.area();
         let hdr_height = header_height(area.height);
 
-        let tasks = visible_tasks_filtered(
-            &self.task_rows,
-            &self.search_text,
-            self.active_repo_slug(),
-        );
+        let tasks =
+            visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
         let has_remote = self.task_rows.iter().any(|r| {
@@ -1078,12 +1069,7 @@ impl App {
                 .add_modifier(Modifier::UNDERLINED),
         );
 
-        let spans = vec![
-            Span::raw("made with "),
-            heart_span,
-            dash_span,
-            url_span,
-        ];
+        let spans = vec![Span::raw("made with "), heart_span, dash_span, url_span];
 
         // Compute URL click area using display widths (not byte lengths)
         // so that multi-byte characters like ❤ and — are measured correctly.
@@ -1417,11 +1403,8 @@ impl App {
         let has_pr = !is_standalone && !self.task_rows.is_empty() && {
             let standalone_count = self.standalone_sessions.len();
             let worktree_cursor = self.cursor.saturating_sub(standalone_count);
-            let visible = visible_tasks_filtered(
-                &self.task_rows,
-                &self.search_text,
-                self.active_repo_slug(),
-            );
+            let visible =
+                visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
             visible
                 .get(worktree_cursor)
                 .is_some_and(|vt| vt.row.pr.is_some())

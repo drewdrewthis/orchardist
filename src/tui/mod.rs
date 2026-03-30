@@ -124,7 +124,6 @@ pub struct App {
     /// Uses `Cell` for interior mutability so `render_task_preview` (which takes
     /// `&self`) can update the state via `StatefulWidget::render`.
     preview_scroll_state: std::cell::Cell<tui_scrollview::ScrollViewState>,
-
 }
 
 impl App {
