@@ -275,6 +275,13 @@ impl App {
                     self.task_rows = derive_from_all_caches(&self.global_config);
                     let state = crate::build_state::build_state(&self.global_config);
                     self.standalone_sessions = state.standalone_sessions;
+                    // Warn on refresh (not fatal) — a new worktree may have
+                    // introduced a collision after boot. Don't crash the TUI.
+                    if let Err(e) =
+                        check_standalone_collisions(&self.standalone_sessions, &self.task_rows)
+                    {
+                        crate::logger::LOG.warn(&format!("{e}"));
+                    }
                     self.loading = false;
                     self.refreshing = false;
                     self.error = None;
@@ -1513,6 +1520,9 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
 
     let mut app = App::new(command);
 
+    // Guard: standalone session names must not collide with worktree-derived names.
+    check_standalone_collisions(&app.standalone_sessions, &app.task_rows)?;
+
     // Start standalone sessions with start_on_launch = true.
     ensure_standalone_sessions(&app.global_config)?;
 
@@ -1792,6 +1802,42 @@ fn ensure_standalone_sessions(config: &global_config::GlobalConfig) -> anyhow::R
                 e
             )
         })?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Collision detection
+// ---------------------------------------------------------------------------
+
+/// Checks that no standalone session name collides with a worktree-derived session name.
+///
+/// Returns `Err` with a descriptive message if a collision is found. The error
+/// identifies the standalone config name and the worktree branch that owns the
+/// conflicting session, so the user knows exactly what to fix.
+fn check_standalone_collisions(
+    standalone: &[StandaloneSessionRow],
+    task_rows: &[derive::WorktreeRow],
+) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+
+    // Build a map from session name → owning worktree branch for fast lookup.
+    let mut wt_sessions: HashMap<&str, &str> = HashMap::new();
+    for row in task_rows {
+        for s in &row.sessions {
+            wt_sessions.insert(s.tmux.name.as_str(), row.branch.as_str());
+        }
+    }
+
+    for row in standalone {
+        let name = &row.config.name;
+        if let Some(branch) = wt_sessions.get(name.as_str()) {
+            return Err(anyhow::anyhow!(
+                "Standalone session '{}' collides with worktree session on branch '{}'",
+                name,
+                branch,
+            ));
+        }
     }
     Ok(())
 }
@@ -3466,5 +3512,87 @@ mod tests {
             output.contains("Git Orchard"),
             "compact header should show 'Git Orchard' text"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // check_standalone_collisions tests
+    // -----------------------------------------------------------------------
+
+    fn make_standalone_row(name: &str) -> crate::session::StandaloneSessionRow {
+        crate::session::StandaloneSessionRow {
+            config: crate::session::StandaloneConfig {
+                name: name.to_string(),
+                command: "bash".to_string(),
+                cwd: "/tmp".to_string(),
+                start_on_launch: false,
+            },
+            session: EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: name.to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Dead,
+                },
+                claude: None,
+            },
+        }
+    }
+
+    fn make_task_row_with_session(branch: &str, session_name: &str) -> WorktreeRow {
+        WorktreeRow {
+            repo_slug: "owner/repo".to_string(),
+            worktree_path: format!("/workspace/{}", branch),
+            branch: branch.to_string(),
+            worktree_host: None,
+            issue_number: None,
+            issue_title: None,
+            issue_state: None,
+            pr: None,
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: session_name.to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+            }],
+            display_group: DisplayGroup::Other,
+            is_main_worktree: false,
+        }
+    }
+
+    #[test]
+    fn no_collision_returns_ok() {
+        let standalone = vec![make_standalone_row("shepherd")];
+        let task_rows = vec![make_task_row_with_session("feat/issue-1", "repo_1")];
+        assert!(check_standalone_collisions(&standalone, &task_rows).is_ok());
+    }
+
+    #[test]
+    fn collision_with_worktree_session_returns_error() {
+        let standalone = vec![make_standalone_row("repo_1")];
+        let task_rows = vec![make_task_row_with_session("feat/issue-1", "repo_1")];
+        let err = check_standalone_collisions(&standalone, &task_rows).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repo_1"),
+            "error should mention the colliding session name, got: {msg}"
+        );
+        assert!(
+            msg.contains("feat/issue-1"),
+            "error should mention the owning worktree branch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_when_names_differ() {
+        let standalone = vec![
+            make_standalone_row("shepherd"),
+            make_standalone_row("monitor"),
+        ];
+        let task_rows = vec![
+            make_task_row_with_session("feat/issue-1", "repo_1"),
+            make_task_row_with_session("feat/issue-2", "repo_2"),
+        ];
+        assert!(check_standalone_collisions(&standalone, &task_rows).is_ok());
     }
 }
