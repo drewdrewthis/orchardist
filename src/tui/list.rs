@@ -66,6 +66,32 @@ pub(crate) fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bo
     cursor < standalone_count
 }
 
+/// Returns whether the preview pane should be shown for the current cursor position.
+///
+/// For worktree rows: preview is shown when there is pane content and the row has sessions.
+/// For standalone rows: preview is shown when the session is Running and there is pane content.
+pub(crate) fn preview_visible(
+    cursor: usize,
+    standalone_sessions: &[crate::session::StandaloneSessionRow],
+    selected_task: Option<&VisibleTask>,
+    pane_content_empty: bool,
+) -> bool {
+    let standalone_count = standalone_sessions.len();
+    if cursor_is_standalone(cursor, standalone_count) {
+        standalone_sessions
+            .get(cursor)
+            .is_some_and(|ss| {
+                matches!(
+                    ss.session.tmux.status,
+                    crate::session::SessionStatus::Running { .. }
+                )
+            })
+            && !pane_content_empty
+    } else {
+        selected_task.is_some_and(|vt| !pane_content_empty && !vt.row.sessions.is_empty())
+    }
+}
+
 impl DisplayGroup {
     fn label(self) -> &'static str {
         match self {
@@ -894,11 +920,15 @@ impl App {
         let body_height: u16 = row_heights.iter().sum::<u16>();
         let table_height = body_height.saturating_add(3); // +2 borders +1 header row
 
-        // Check if selected task has a preview (only worktree rows have previews)
+        // Check if selected task has a preview (worktree rows and running standalone sessions).
         let worktree_cursor = self.cursor.checked_sub(standalone_count);
         let selected_task = worktree_cursor.and_then(|wc| tasks.get(wc));
-        let has_preview = selected_task
-            .is_some_and(|vt| !self.pane_content.is_empty() && !vt.row.sessions.is_empty());
+        let has_preview = preview_visible(
+            self.cursor,
+            &self.standalone_sessions,
+            selected_task,
+            self.pane_content.is_empty(),
+        );
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
@@ -1005,7 +1035,10 @@ impl App {
         // Preview
         if has_preview {
             idx += 1; // spacer
-            self.render_task_preview(f, chunks[idx], selected_task);
+            let standalone_at_cursor = cursor_is_standalone(self.cursor, standalone_count)
+                .then(|| self.standalone_sessions.get(self.cursor))
+                .flatten();
+            self.render_task_preview(f, chunks[idx], selected_task, standalone_at_cursor);
             idx += 1;
         }
 
@@ -1052,9 +1085,10 @@ impl App {
             url_span,
         ];
 
-        // Compute URL click area.
-        let prefix_width = "made with \u{2764} \u{2014} ".len();
-        let url_len = ATTRIBUTION_URL.len();
+        // Compute URL click area using display widths (not byte lengths)
+        // so that multi-byte characters like ❤ and — are measured correctly.
+        let prefix_width: usize = spans.iter().take(3).map(|s| s.width()).sum();
+        let url_len = spans.last().map_or(0, |s| s.width());
         let total_width = prefix_width + url_len;
         let left_pad = if (area.width as usize) > total_width {
             ((area.width as usize) - total_width) / 2
@@ -1233,35 +1267,48 @@ impl App {
     }
 
     /// Renders the preview pane with task metadata in the border title.
-    fn render_task_preview(&self, f: &mut Frame, area: Rect, selected_task: Option<&VisibleTask>) {
+    ///
+    /// Either `selected_task` (worktree row) or `standalone_session` must be `Some`.
+    /// When `standalone_session` is provided, the session name is used as the title.
+    fn render_task_preview(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        selected_task: Option<&VisibleTask>,
+        standalone_session: Option<&crate::session::StandaloneSessionRow>,
+    ) {
         if self.pane_content.is_empty() {
             return;
         }
-        let Some(vt) = selected_task else { return };
 
-        let issue_part = match vt.row.issue_number {
-            Some(num) => format!("#{}", num),
-            None => branch_tail(&vt.row.branch).to_string(),
+        let title = if let Some(ss) = standalone_session {
+            format!("\u{2500}\u{2500} {} \u{2500}\u{2500}", ss.session.tmux.name)
+        } else if let Some(vt) = selected_task {
+            let issue_part = match vt.row.issue_number {
+                Some(num) => format!("#{}", num),
+                None => branch_tail(&vt.row.branch).to_string(),
+            };
+            let title_part = match vt.row.issue_title.as_deref() {
+                Some(t) if !t.is_empty() => format!(" {}", t),
+                _ => String::new(),
+            };
+            let wt_part = {
+                let short = paths::tildify(&vt.row.worktree_path);
+                format!(" \u{2502} wt: {}", short)
+            };
+            let pr_part = vt
+                .row
+                .pr
+                .as_ref()
+                .map(|p| format!(" \u{2502} pr: #{}", p.number))
+                .unwrap_or_default();
+            format!(
+                "\u{2500}\u{2500} {}{}{}{} \u{2500}\u{2500}",
+                issue_part, title_part, wt_part, pr_part
+            )
+        } else {
+            return;
         };
-        let title_part = match vt.row.issue_title.as_deref() {
-            Some(t) if !t.is_empty() => format!(" {}", t),
-            _ => String::new(),
-        };
-        let wt_part = {
-            let short = paths::tildify(&vt.row.worktree_path);
-            format!(" \u{2502} wt: {}", short)
-        };
-        let pr_part = vt
-            .row
-            .pr
-            .as_ref()
-            .map(|p| format!(" \u{2502} pr: #{}", p.number))
-            .unwrap_or_default();
-
-        let title = format!(
-            "\u{2500}\u{2500} {}{}{}{} \u{2500}\u{2500}",
-            issue_part, title_part, wt_part, pr_part
-        );
 
         let theme = &self.theme;
         let block = Block::default()
@@ -2067,5 +2114,64 @@ mod tests {
         let state = tui_scrollview::ScrollViewState::default();
         let _copy = state; // Copy trait in action
         let _another = state; // Still valid after copy
+    }
+
+    // -----------------------------------------------------------------------
+    // preview_visible — standalone session preview logic
+    // -----------------------------------------------------------------------
+
+    fn make_standalone(name: &str, status: SessionStatus) -> crate::session::StandaloneSessionRow {
+        crate::session::StandaloneSessionRow {
+            session: EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: name.to_string(),
+                    status,
+                },
+                claude: None,
+            },
+            config: crate::session::StandaloneConfig {
+                name: name.to_string(),
+                command: "bash".to_string(),
+                cwd: "/workspace".to_string(),
+                start_on_launch: false,
+            },
+        }
+    }
+
+    #[test]
+    fn preview_visible_true_for_running_standalone_with_content() {
+        let sessions = vec![make_standalone("shepherd", SessionStatus::Running { attached: false })];
+        assert!(preview_visible(0, &sessions, None, false));
+    }
+
+    #[test]
+    fn preview_visible_false_for_standalone_when_pane_content_empty() {
+        let sessions = vec![make_standalone("shepherd", SessionStatus::Running { attached: false })];
+        assert!(!preview_visible(0, &sessions, None, true));
+    }
+
+    #[test]
+    fn preview_visible_false_for_dead_standalone_with_content() {
+        // Dead sessions never show preview even when pane_content is present.
+        let sessions = vec![make_standalone("shepherd", SessionStatus::Dead)];
+        assert!(!preview_visible(0, &sessions, None, false));
+    }
+
+    #[test]
+    fn preview_visible_false_for_dead_standalone_without_content() {
+        let sessions = vec![make_standalone("shepherd", SessionStatus::Dead)];
+        assert!(!preview_visible(0, &sessions, None, true));
+    }
+
+    #[test]
+    fn preview_visible_false_when_cursor_between_standalone_and_worktree() {
+        // Cursor 5 is past standalone (len 3) but selected_task is None.
+        let sessions = vec![
+            make_standalone("a", SessionStatus::Running { attached: false }),
+            make_standalone("b", SessionStatus::Running { attached: false }),
+            make_standalone("c", SessionStatus::Running { attached: false }),
+        ];
+        assert!(!preview_visible(5, &sessions, None, true));
     }
 }
