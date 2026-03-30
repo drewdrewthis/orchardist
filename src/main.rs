@@ -210,17 +210,20 @@ fn handle_tui(command: &str) {
             .unwrap_or_else(|| std::path::PathBuf::from("orchard-popup"));
 
         if wrapper.exists() {
-            let _ = std::process::Command::new("tmux")
-                .args([
-                    "display-popup",
-                    "-E",
-                    "-w",
-                    "90%",
-                    "-h",
-                    "80%",
-                    &wrapper.to_string_lossy(),
-                ])
-                .status();
+            let mut cmd = std::process::Command::new("tmux");
+            cmd.args([
+                "display-popup",
+                "-E",
+                "-w",
+                "90%",
+                "-h",
+                "80%",
+                &wrapper.to_string_lossy(),
+            ]);
+            if !command.is_empty() {
+                cmd.arg(command);
+            }
+            let _ = cmd.status();
         } else {
             eprintln!("Wrapper script not found. Run `orchard init` first.");
             std::process::exit(1);
