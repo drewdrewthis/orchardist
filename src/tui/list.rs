@@ -78,15 +78,12 @@ pub(crate) fn preview_visible(
 ) -> bool {
     let standalone_count = standalone_sessions.len();
     if cursor_is_standalone(cursor, standalone_count) {
-        standalone_sessions
-            .get(cursor)
-            .is_some_and(|ss| {
-                matches!(
-                    ss.session.tmux.status,
-                    crate::session::SessionStatus::Running { .. }
-                )
-            })
-            && !pane_content_empty
+        standalone_sessions.get(cursor).is_some_and(|ss| {
+            matches!(
+                ss.session.tmux.status,
+                crate::session::SessionStatus::Running { .. }
+            )
+        }) && !pane_content_empty
     } else {
         selected_task.is_some_and(|vt| !pane_content_empty && !vt.row.sessions.is_empty())
     }
@@ -2124,13 +2121,19 @@ mod tests {
 
     #[test]
     fn preview_visible_true_for_running_standalone_with_content() {
-        let sessions = vec![make_standalone("shepherd", SessionStatus::Running { attached: false })];
+        let sessions = vec![make_standalone(
+            "shepherd",
+            SessionStatus::Running { attached: false },
+        )];
         assert!(preview_visible(0, &sessions, None, false));
     }
 
     #[test]
     fn preview_visible_false_for_standalone_when_pane_content_empty() {
-        let sessions = vec![make_standalone("shepherd", SessionStatus::Running { attached: false })];
+        let sessions = vec![make_standalone(
+            "shepherd",
+            SessionStatus::Running { attached: false },
+        )];
         assert!(!preview_visible(0, &sessions, None, true));
     }
 
