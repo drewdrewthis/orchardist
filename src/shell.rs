@@ -22,7 +22,7 @@ const RESET: &str = "\x1b[0m";
 pub fn get_wrapper_script() -> &'static str {
     r#"#!/bin/sh
 errfile=$(mktemp "${TMPDIR:-/tmp}/orchard-err.XXXXXX")
-session=$(orchard 2>"$errfile")
+session=$(orchard "$@" 2>"$errfile")
 rc=$?
 if [ $rc -ne 0 ]; then
   msg=$(head -1 "$errfile" 2>/dev/null)
@@ -690,6 +690,11 @@ mod tests {
     #[test]
     fn wrapper_script_captures_stdout_as_session() {
         assert!(get_wrapper_script().contains("session=$(orchard"));
+    }
+
+    #[test]
+    fn wrapper_script_forwards_arguments() {
+        assert!(get_wrapper_script().contains("\"$@\""));
     }
 
     #[test]
