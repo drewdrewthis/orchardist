@@ -849,10 +849,8 @@ impl App {
     pub(crate) fn render_task_list(&self, f: &mut Frame) {
         let full_area = f.area();
 
-        // Paint the orchard background and add 1-cell horizontal padding.
-        let outer_block = Block::default()
-            .style(Style::default().bg(self.theme.background))
-            .padding(Padding::horizontal(1));
+        // Add 1-cell horizontal padding for breathing room.
+        let outer_block = Block::default().padding(Padding::horizontal(1));
         let area = outer_block.inner(full_area);
         f.render_widget(outer_block, full_area);
 

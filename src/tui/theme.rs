@@ -131,7 +131,7 @@ impl Default for Theme {
             claude_active: Color::Green,
             claude_idle: Color::DarkGray,
             claude_needs_input: Color::Red,
-            background: Color::Rgb(10, 18, 10), // dark forest floor
+            background: Color::Reset, // inherit terminal background
             text: Color::White,
             shepherd: Color::Magenta,
             merge_conflict: Color::Red,
@@ -219,8 +219,8 @@ mod tests {
     }
 
     #[test]
-    fn default_background_is_dark_forest() {
-        assert_eq!(Theme::default().background, Color::Rgb(10, 18, 10));
+    fn default_background_inherits_terminal() {
+        assert_eq!(Theme::default().background, Color::Reset);
     }
 
     #[test]
