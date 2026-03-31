@@ -1064,10 +1064,11 @@ impl App {
     /// Renders the repository tab bar.
     ///
     /// Shows an "ALL" tab followed by one tab per configured repo. The active
-    /// tab uses bold styling with a rounded pill decorator `( TAB )`. Inactive
-    /// tabs are dimmed and rendered without pill decorators. Each repo tab is
-    /// colored using [`repo_color`] by config index; the ALL tab uses
-    /// `theme.accent` (active) or `theme.dimmed` (inactive).
+    /// tab uses a filled badge style: colored background, black foreground, bold.
+    /// Inactive tabs show their label in the repo color with DIM modifier and no
+    /// background fill. Each repo tab is colored using [`repo_color`] by config
+    /// index; the ALL tab uses `theme.accent` (active) or `theme.dimmed`
+    /// (inactive).
     pub(crate) fn render_repo_tabs(&self, f: &mut Frame, area: Rect) {
         let theme = &self.theme;
         let mut spans: Vec<Span> = Vec::new();
@@ -1075,9 +1076,10 @@ impl App {
         // ALL tab (active_repo_index == 0 means "all repos").
         if self.active_repo_index == 0 {
             spans.push(Span::styled(
-                "( ALL )",
+                " ALL ",
                 Style::default()
-                    .fg(theme.accent)
+                    .bg(theme.accent)
+                    .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
@@ -1090,7 +1092,7 @@ impl App {
         }
 
         for (i, repo) in self.global_config.repos.iter().enumerate() {
-            spans.push(Span::raw("  "));
+            spans.push(Span::raw(" "));
 
             // Label: repo name portion of the slug, uppercased.
             let name = repo
@@ -1104,8 +1106,11 @@ impl App {
             // active_repo_index is 1-based for repos (0 = ALL).
             if self.active_repo_index == i + 1 {
                 spans.push(Span::styled(
-                    format!("( {} )", name),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    format!(" {} ", name),
+                    Style::default()
+                        .bg(color)
+                        .fg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 spans.push(Span::styled(
@@ -1288,7 +1293,7 @@ impl App {
                 .iter()
                 .position(|r| r.slug == vt.row.repo_slug)
                 .unwrap_or(0);
-            let bar_cell = Cell::from("\u{258e}") // ▎
+            let bar_cell = Cell::from("\u{25cf}") // ●
                 .style(Style::default().fg(repo_color(repo_idx)));
 
             let mut cells = vec![
@@ -1521,6 +1526,10 @@ impl App {
             ));
         }
 
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("\u{25c4}\u{25ba}", key_style)); // ◄►
+        spans.push(Span::raw(":repos"));
         spans.push(sep.clone());
 
         spans.push(Span::styled("c", key_style));
@@ -2236,7 +2245,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn hints_task_does_not_contain_repo_cycling_hint() {
+    fn hints_task_contains_repo_cycling_hint() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -2258,12 +2267,12 @@ mod tests {
         }
 
         assert!(
-            !text.contains(":repos"),
-            "hints bar must not contain ':repos' after removal"
+            text.contains(":repos"),
+            "hints bar must contain ':repos' repo cycling hint"
         );
         assert!(
-            !text.contains("◄►"),
-            "hints bar must not contain '◄►' after removal"
+            text.contains("◄►"),
+            "hints bar must contain '◄►' repo cycling hint"
         );
     }
 
@@ -2340,7 +2349,8 @@ mod tests {
         use crate::tui::theme::repo_color;
         use ratatui::style::Color;
 
-        let repos = [RepoConfig {
+        let repos = [
+            RepoConfig {
                 slug: "owner/alpha".to_string(),
                 path: "/workspace/alpha".to_string(),
                 remotes: vec![],
@@ -2354,11 +2364,13 @@ mod tests {
                 slug: "owner/gamma".to_string(),
                 path: "/workspace/gamma".to_string(),
                 remotes: vec![],
-            }];
+            },
+        ];
 
         let beta_idx = repos.iter().position(|r| r.slug == "owner/beta").unwrap();
         assert_eq!(beta_idx, 1);
-        assert_eq!(repo_color(beta_idx), Color::Green);
+        // index 1 → tangerine orange in the fruit palette
+        assert_eq!(repo_color(beta_idx), Color::Rgb(255, 165, 0));
     }
 
     // -----------------------------------------------------------------------
@@ -2407,19 +2419,22 @@ mod tests {
     }
 
     #[test]
-    fn render_repo_tabs_all_active_uses_pill_decorators() {
+    fn render_repo_tabs_all_active_uses_badge_bg_color() {
+        use ratatui::style::Color;
         let app = make_repo_app(vec![], 0);
         let buf = render_tabs_to_buffer(&app);
-        let text = buffer_to_string(&buf);
-        // Active ALL tab renders as "( ALL )" with pill parens.
+        // Active ALL tab: find an 'A' cell from "ALL" and verify it has a bg color set.
+        let all_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "A");
         assert!(
-            text.contains("( ALL )"),
-            "active ALL tab must use pill decorators, got: {text}"
+            all_cell.is_some_and(|c| c.style().bg == Some(Color::Rgb(0, 200, 120))),
+            "active ALL tab must use accent bg color (badge style)"
         );
     }
 
     #[test]
-    fn render_repo_tabs_all_inactive_has_no_pill_decorators() {
+    fn render_repo_tabs_all_inactive_has_no_badge_bg() {
         use crate::global_config::RepoConfig;
         let repos = vec![RepoConfig {
             slug: "owner/alpha".to_string(),
@@ -2429,12 +2444,14 @@ mod tests {
         // active_repo_index = 1 means the first repo tab is active, ALL is inactive.
         let app = make_repo_app(repos, 1);
         let buf = render_tabs_to_buffer(&app);
-        let text = buffer_to_string(&buf);
+        // Inactive ALL tab: find an 'A' cell from "ALL" and verify no bg is set.
+        let all_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "A");
         assert!(
-            !text.contains("( ALL )"),
-            "inactive ALL tab must not use pill decorators, got: {text}"
+            all_cell.is_some_and(|c| matches!(c.style().bg, None | Some(Color::Reset))),
+            "inactive ALL tab must not have a badge bg color"
         );
-        assert!(text.contains("ALL"), "ALL label must still appear");
     }
 
     #[test]
@@ -2455,8 +2472,9 @@ mod tests {
     }
 
     #[test]
-    fn render_repo_tabs_active_repo_uses_pill_decorators() {
+    fn render_repo_tabs_active_repo_uses_badge_bg_color() {
         use crate::global_config::RepoConfig;
+        use crate::tui::theme::repo_color;
         let repos = vec![RepoConfig {
             slug: "owner/beta".to_string(),
             path: "/workspace/beta".to_string(),
@@ -2465,15 +2483,19 @@ mod tests {
         // active_repo_index = 1 → first repo is active.
         let app = make_repo_app(repos, 1);
         let buf = render_tabs_to_buffer(&app);
-        let text = buffer_to_string(&buf);
+        // Find a 'B' cell from "BETA" and verify it has the repo_color(0) as bg.
+        let beta_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "B");
+        let expected_bg = repo_color(0);
         assert!(
-            text.contains("( BETA )"),
-            "active repo tab must use pill decorators, got: {text}"
+            beta_cell.is_some_and(|c| c.style().bg == Some(expected_bg)),
+            "active repo tab must use repo_color as bg (badge style)"
         );
     }
 
     #[test]
-    fn render_repo_tabs_inactive_repo_has_no_pill_decorators() {
+    fn render_repo_tabs_inactive_repo_has_no_badge_bg() {
         use crate::global_config::RepoConfig;
         let repos = vec![
             RepoConfig {
@@ -2491,13 +2513,18 @@ mod tests {
         let app = make_repo_app(repos, 2);
         let buf = render_tabs_to_buffer(&app);
         let text = buffer_to_string(&buf);
-        assert!(
-            !text.contains("( ALPHA )"),
-            "inactive repo tab must not use pill decorators, got: {text}"
-        );
+        // Inactive ALPHA: label still present.
         assert!(
             text.contains("ALPHA"),
             "inactive repo label must still appear"
+        );
+        // Inactive ALPHA cell must have no bg.
+        let alpha_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "A");
+        assert!(
+            alpha_cell.is_some_and(|c| matches!(c.style().bg, None | Some(Color::Reset))),
+            "inactive repo tab must not have a badge bg color"
         );
     }
 
@@ -2507,13 +2534,13 @@ mod tests {
         let app = make_repo_app(vec![], 0);
         let buf = render_tabs_to_buffer(&app);
         // Find a cell containing "A" from "ALL" and check its fg color.
-        // The active ALL tab is styled with theme.accent (Cyan).
+        // The active ALL tab badge uses fg=Black and bg=accent.
         let all_cell = (0..buf.area.width)
             .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "(");
+            .find(|c| c.symbol() == "A");
         assert!(
-            all_cell.is_some_and(|c| c.style().fg == Some(Color::Cyan)),
-            "active ALL tab must use accent (Cyan) color"
+            all_cell.is_some_and(|c| c.style().bg == Some(Color::Rgb(0, 200, 120))),
+            "active ALL tab must use accent (Rgb(0,200,120)) as badge bg color"
         );
     }
 
@@ -2533,16 +2560,17 @@ mod tests {
                 remotes: vec![],
             },
         ];
+        // ALL is active (index 0), so both repo tabs are inactive — fg = repo_color, no bg.
         let app = make_repo_app(repos, 0);
         let buf = render_tabs_to_buffer(&app);
-        // repo at index 0 → repo_color(0) = Cyan; index 1 → repo_color(1) = Green.
+        // repo at index 0 → repo_color(0) (strawberry red); index 1 → repo_color(1) (tangerine).
         // Find a cell from "FIRST" label and verify its fg matches repo_color(0).
         let first_cell = (0..buf.area.width)
             .map(|x| &buf[(x, 0)])
             .find(|c| c.symbol() == "F");
         assert!(
             first_cell.is_some_and(|c| c.style().fg == Some(repo_color(0))),
-            "first repo tab must use repo_color(0)"
+            "first repo tab must use repo_color(0) as fg when inactive"
         );
     }
 

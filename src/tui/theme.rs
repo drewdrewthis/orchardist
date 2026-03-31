@@ -17,15 +17,16 @@ use crate::derive::DisplayGroup;
 
 /// Fixed palette of per-repo colors, cycled by config index.
 ///
+/// Vibrant fruit-inspired colors that pop against the dark forest base theme.
 /// Used by [`repo_color`] to assign a consistent color to each configured
 /// repository in the tab bar and the row indicator column.
 pub const REPO_COLORS: [Color; 6] = [
-    Color::Cyan,
-    Color::Green,
-    Color::Yellow,
-    Color::Magenta,
-    Color::Blue,
-    Color::Red,
+    Color::Rgb(255, 100, 100), // strawberry red
+    Color::Rgb(255, 165, 0),   // orange/tangerine
+    Color::Rgb(255, 220, 50),  // lemon yellow
+    Color::Rgb(180, 100, 255), // plum purple
+    Color::Rgb(255, 130, 180), // pink/dragonfruit
+    Color::Rgb(100, 200, 255), // blueberry
 ];
 
 /// Returns the color for a repository at the given config index.
@@ -38,8 +39,8 @@ pub const REPO_COLORS: [Color; 6] = [
 /// ```
 /// use orchard::tui::theme::repo_color;
 /// use ratatui::style::Color;
-/// assert_eq!(repo_color(0), Color::Cyan);
-/// assert_eq!(repo_color(6), Color::Cyan); // wraps around
+/// assert_eq!(repo_color(0), Color::Rgb(255, 100, 100));
+/// assert_eq!(repo_color(6), Color::Rgb(255, 100, 100)); // wraps around
 /// ```
 pub fn repo_color(index: usize) -> Color {
     REPO_COLORS[index % REPO_COLORS.len()]
@@ -120,13 +121,13 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            accent: Color::Cyan,
+            accent: Color::Rgb(0, 200, 120),
             error: Color::Red,
             warning: Color::Yellow,
-            success: Color::Green,
-            dimmed: Color::DarkGray,
-            selected_bg: Color::DarkGray,
-            border: Color::DarkGray,
+            success: Color::Rgb(80, 220, 100),
+            dimmed: Color::Rgb(100, 110, 100),
+            selected_bg: Color::Rgb(30, 50, 30),
+            border: Color::Rgb(60, 75, 60),
             claude_active: Color::Green,
             claude_idle: Color::DarkGray,
             claude_needs_input: Color::Red,
@@ -168,8 +169,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_accent_is_cyan() {
-        assert_eq!(Theme::default().accent, Color::Cyan);
+    fn default_accent_is_bright_emerald_green() {
+        assert_eq!(Theme::default().accent, Color::Rgb(0, 200, 120));
     }
 
     #[test]
@@ -183,23 +184,23 @@ mod tests {
     }
 
     #[test]
-    fn default_success_is_green() {
-        assert_eq!(Theme::default().success, Color::Green);
+    fn default_success_is_lush_green() {
+        assert_eq!(Theme::default().success, Color::Rgb(80, 220, 100));
     }
 
     #[test]
-    fn default_dimmed_is_dark_gray() {
-        assert_eq!(Theme::default().dimmed, Color::DarkGray);
+    fn default_dimmed_is_mossy_gray_green() {
+        assert_eq!(Theme::default().dimmed, Color::Rgb(100, 110, 100));
     }
 
     #[test]
-    fn default_selected_bg_is_dark_gray() {
-        assert_eq!(Theme::default().selected_bg, Color::DarkGray);
+    fn default_selected_bg_is_deep_forest_floor() {
+        assert_eq!(Theme::default().selected_bg, Color::Rgb(30, 50, 30));
     }
 
     #[test]
-    fn default_border_is_dark_gray() {
-        assert_eq!(Theme::default().border, Color::DarkGray);
+    fn default_border_is_dark_forest() {
+        assert_eq!(Theme::default().border, Color::Rgb(60, 75, 60));
     }
 
     #[test]
@@ -341,46 +342,46 @@ mod tests {
     }
 
     #[test]
-    fn repo_color_index_0_is_cyan() {
-        assert_eq!(repo_color(0), Color::Cyan);
+    fn repo_color_index_0_is_strawberry_red() {
+        assert_eq!(repo_color(0), Color::Rgb(255, 100, 100));
     }
 
     #[test]
-    fn repo_color_index_1_is_green() {
-        assert_eq!(repo_color(1), Color::Green);
+    fn repo_color_index_1_is_tangerine() {
+        assert_eq!(repo_color(1), Color::Rgb(255, 165, 0));
     }
 
     #[test]
-    fn repo_color_index_2_is_yellow() {
-        assert_eq!(repo_color(2), Color::Yellow);
+    fn repo_color_index_2_is_lemon_yellow() {
+        assert_eq!(repo_color(2), Color::Rgb(255, 220, 50));
     }
 
     #[test]
-    fn repo_color_index_3_is_magenta() {
-        assert_eq!(repo_color(3), Color::Magenta);
+    fn repo_color_index_3_is_plum_purple() {
+        assert_eq!(repo_color(3), Color::Rgb(180, 100, 255));
     }
 
     #[test]
-    fn repo_color_index_4_is_blue() {
-        assert_eq!(repo_color(4), Color::Blue);
+    fn repo_color_index_4_is_dragonfruit_pink() {
+        assert_eq!(repo_color(4), Color::Rgb(255, 130, 180));
     }
 
     #[test]
-    fn repo_color_index_5_is_red() {
-        assert_eq!(repo_color(5), Color::Red);
+    fn repo_color_index_5_is_blueberry() {
+        assert_eq!(repo_color(5), Color::Rgb(100, 200, 255));
     }
 
     #[test]
     fn repo_color_wraps_at_palette_size() {
-        // Index 6 wraps back to Cyan (same as index 0).
-        assert_eq!(repo_color(6), Color::Cyan);
-        // Index 7 wraps to Green (same as index 1).
-        assert_eq!(repo_color(7), Color::Green);
+        // Index 6 wraps back to strawberry red (same as index 0).
+        assert_eq!(repo_color(6), Color::Rgb(255, 100, 100));
+        // Index 7 wraps to tangerine (same as index 1).
+        assert_eq!(repo_color(7), Color::Rgb(255, 165, 0));
     }
 
     #[test]
     fn repo_color_large_index_wraps_correctly() {
-        // 14 % 6 == 2 → Yellow
-        assert_eq!(repo_color(14), Color::Yellow);
+        // 14 % 6 == 2 → lemon yellow
+        assert_eq!(repo_color(14), Color::Rgb(255, 220, 50));
     }
 }
