@@ -1407,11 +1407,11 @@ impl App {
             .title(title)
             .title_style(
                 Style::default()
-                    .fg(theme.border)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border))
+            .border_style(Style::default().fg(theme.accent))
             .border_type(BorderType::Double);
 
         let inner = block.inner(area);
