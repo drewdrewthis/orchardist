@@ -1122,10 +1122,19 @@ impl App {
             if tab.active {
                 let block = Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(tab.color).add_modifier(Modifier::BOLD));
+                    .border_style(
+                        Style::default()
+                            .fg(tab.color)
+                            .bg(tab.color)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .style(Style::default().bg(tab.color));
                 let label = Paragraph::new(Line::from(Span::styled(
                     tab.label.as_str(),
-                    Style::default().fg(tab.color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(tab.color)
+                        .add_modifier(Modifier::BOLD),
                 )))
                 .alignment(Alignment::Center)
                 .block(block);
@@ -2458,17 +2467,19 @@ mod tests {
     }
 
     #[test]
-    fn render_repo_tabs_active_all_label_uses_accent_fg() {
+    fn render_repo_tabs_active_all_label_has_solid_bg() {
         use ratatui::style::Color;
         let app = make_repo_app(vec![], 0);
         let buf = render_tabs_to_buffer(&app);
         // Label text is on row 1 (content row inside the block).
+        // Active tab has solid colored bg with black fg text.
         let all_cell = (0..buf.area.width)
             .map(|x| &buf[(x, 1)])
             .find(|c| c.symbol() == "A");
         assert!(
-            all_cell.is_some_and(|c| c.style().fg == Some(Color::Rgb(0, 200, 120))),
-            "active ALL tab label must use accent fg color"
+            all_cell.is_some_and(|c| c.style().fg == Some(Color::Black)
+                && c.style().bg == Some(Color::Rgb(0, 200, 120))),
+            "active ALL tab label must have black fg on accent bg (solid badge)"
         );
     }
 
