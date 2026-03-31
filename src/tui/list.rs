@@ -996,8 +996,7 @@ impl App {
             )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.accent))
-            .border_set(ratatui::symbols::border::ONE_EIGHTH_WIDE)
-            .style(Style::default().bg(Color::Black));
+            .border_set(ratatui::symbols::border::ONE_EIGHTH_WIDE);
 
         let table = Table::new(rows, &widths)
             .header(header_row)
@@ -1134,12 +1133,10 @@ impl App {
             } else {
                 let block = Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.dimmed));
+                    .border_style(Style::default().fg(Color::White));
                 let label = Paragraph::new(Line::from(Span::styled(
                     tab.label.as_str(),
-                    Style::default()
-                        .fg(theme.dimmed)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(Color::White),
                 )))
                 .alignment(Alignment::Center)
                 .block(block);
