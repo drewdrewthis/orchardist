@@ -7,10 +7,43 @@
 //! This module also provides [`display_group_color`], a free function that
 //! maps a [`DisplayGroup`] to a themed color without modifying `DisplayGroup`'s
 //! own API.
+//!
+//! It also provides [`REPO_COLORS`] and [`repo_color`] for assigning a stable
+//! per-repo color by config index throughout the TUI (tab bar, row indicator).
 
 use ratatui::style::Color;
 
 use crate::derive::DisplayGroup;
+
+/// Fixed palette of per-repo colors, cycled by config index.
+///
+/// Used by [`repo_color`] to assign a consistent color to each configured
+/// repository in the tab bar and the row indicator column.
+pub const REPO_COLORS: [Color; 6] = [
+    Color::Cyan,
+    Color::Green,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Blue,
+    Color::Red,
+];
+
+/// Returns the color for a repository at the given config index.
+///
+/// Indexes into [`REPO_COLORS`] with modulo wrapping, so repos beyond the
+/// palette size cycle back to the start.
+///
+/// # Examples
+///
+/// ```
+/// use orchard::tui::theme::repo_color;
+/// use ratatui::style::Color;
+/// assert_eq!(repo_color(0), Color::Cyan);
+/// assert_eq!(repo_color(6), Color::Cyan); // wraps around
+/// ```
+pub fn repo_color(index: usize) -> Color {
+    REPO_COLORS[index % REPO_COLORS.len()]
+}
 
 /// All semantic color roles for the TUI.
 ///
@@ -296,5 +329,58 @@ mod tests {
             display_group_color(DisplayGroup::Other, &theme),
             theme.dimmed
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // REPO_COLORS / repo_color
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn repo_colors_has_six_entries() {
+        assert_eq!(REPO_COLORS.len(), 6);
+    }
+
+    #[test]
+    fn repo_color_index_0_is_cyan() {
+        assert_eq!(repo_color(0), Color::Cyan);
+    }
+
+    #[test]
+    fn repo_color_index_1_is_green() {
+        assert_eq!(repo_color(1), Color::Green);
+    }
+
+    #[test]
+    fn repo_color_index_2_is_yellow() {
+        assert_eq!(repo_color(2), Color::Yellow);
+    }
+
+    #[test]
+    fn repo_color_index_3_is_magenta() {
+        assert_eq!(repo_color(3), Color::Magenta);
+    }
+
+    #[test]
+    fn repo_color_index_4_is_blue() {
+        assert_eq!(repo_color(4), Color::Blue);
+    }
+
+    #[test]
+    fn repo_color_index_5_is_red() {
+        assert_eq!(repo_color(5), Color::Red);
+    }
+
+    #[test]
+    fn repo_color_wraps_at_palette_size() {
+        // Index 6 wraps back to Cyan (same as index 0).
+        assert_eq!(repo_color(6), Color::Cyan);
+        // Index 7 wraps to Green (same as index 1).
+        assert_eq!(repo_color(7), Color::Green);
+    }
+
+    #[test]
+    fn repo_color_large_index_wraps_correctly() {
+        // 14 % 6 == 2 → Yellow
+        assert_eq!(repo_color(14), Color::Yellow);
     }
 }

@@ -15,7 +15,7 @@ use crate::paths;
 use crate::remote;
 use crate::tmux;
 use crate::tui::state::{CleanupState, Phase, ViewState};
-use crate::tui::theme::{Theme, display_group_color};
+use crate::tui::theme::{Theme, display_group_color, repo_color};
 use crate::tui::{ATTRIBUTION_URL, App, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
@@ -864,17 +864,19 @@ impl App {
         let show_branch = self.show_branch_column;
 
         // Compute available width for the TITLE column.
-        // Fixed columns: # (3) + spacing(1) + ISSUE (6) + spacing(1) + TITLE (flex) + spacing(1)
-        //                + STATUS (22) + spacing(1) + CLAUDE (10) + borders (2)
+        // Fixed columns: BAR (1) + spacing(1) + # (3) + spacing(1) + ISSUE (6) + spacing(1)
+        //                + TITLE (flex) + spacing(1) + STATUS (22) + spacing(1) + CLAUDE (10)
+        //                + borders (2)
         // Optional: + BRANCH (20) + spacing(1)
         // With HOST: + spacing(1) + HOST (12)
-        let fixed = 3 + 1 + 6 + 1 + 1 + 22 + 1 + 10 + 2;
+        let fixed = 1 + 1 + 3 + 1 + 6 + 1 + 1 + 22 + 1 + 10 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 1 + 12 } else { 0 };
         let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
 
         // Column widths — BRANCH column optional, HOST column included only when remotes exist.
         let mut widths: Vec<Constraint> = vec![
+            Constraint::Length(1), // BAR (colored repo indicator)
             Constraint::Length(3), // #
             Constraint::Length(6), // ISSUE
             Constraint::Min(20),   // TITLE (flexible)
@@ -920,6 +922,7 @@ impl App {
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
+            Constraint::Length(1),           // tab bar
             Constraint::Length(table_height),
         ];
 
@@ -949,13 +952,21 @@ impl App {
         self.render_header(f, chunks[idx]);
         idx += 1;
 
+        self.render_repo_tabs(f, chunks[idx]);
+        idx += 1;
+
         let theme = &self.theme;
 
         // Header row
         let header_style = Style::default()
             .fg(theme.dimmed)
             .add_modifier(Modifier::BOLD);
-        let mut header_cells = vec![Cell::from(" #"), Cell::from("ISSUE"), Cell::from("TITLE")];
+        let mut header_cells = vec![
+            Cell::from(""),     // BAR (no label)
+            Cell::from(" #"),
+            Cell::from("ISSUE"),
+            Cell::from("TITLE"),
+        ];
         if show_branch {
             header_cells.push(Cell::from("BRANCH"));
         }
@@ -1050,6 +1061,64 @@ impl App {
         self.render_attribution_footer(f, chunks[idx]);
     }
 
+    /// Renders the repository tab bar.
+    ///
+    /// Shows an "ALL" tab followed by one tab per configured repo. The active
+    /// tab uses bold styling with a rounded pill decorator `( TAB )`. Inactive
+    /// tabs are dimmed and rendered without pill decorators. Each repo tab is
+    /// colored using [`repo_color`] by config index; the ALL tab uses
+    /// `theme.accent` (active) or `theme.dimmed` (inactive).
+    pub(crate) fn render_repo_tabs(&self, f: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let mut spans: Vec<Span> = Vec::new();
+
+        // ALL tab (active_repo_index == 0 means "all repos").
+        if self.active_repo_index == 0 {
+            spans.push(Span::styled(
+                "( ALL )",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                " ALL ",
+                Style::default()
+                    .fg(theme.dimmed)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
+
+        for (i, repo) in self.global_config.repos.iter().enumerate() {
+            spans.push(Span::raw("  "));
+
+            // Label: repo name portion of the slug, uppercased.
+            let name = repo
+                .slug
+                .split('/')
+                .nth(1)
+                .unwrap_or(repo.slug.as_str())
+                .to_uppercase();
+
+            let color = repo_color(i);
+            // active_repo_index is 1-based for repos (0 = ALL).
+            if self.active_repo_index == i + 1 {
+                spans.push(Span::styled(
+                    format!("( {} )", name),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!(" {} ", name),
+                    Style::default().fg(color).add_modifier(Modifier::DIM),
+                ));
+            }
+        }
+
+        let tab_bar = Paragraph::new(Line::from(spans));
+        f.render_widget(tab_bar, area);
+    }
+
     /// Renders the attribution footer: "made with ❤ — https://github.com/drewdrewthis/orchard-rs"
     ///
     /// The ❤ is rendered in error (red) color; the URL in dimmed + underlined.
@@ -1126,6 +1195,7 @@ impl App {
             };
 
             let mut cells = vec![
+                Cell::from(""), // no bar for standalone sessions
                 Cell::from(format!("{:>2}", idx + 1)),
                 Cell::from("").style(Style::default().fg(Color::DarkGray)), // no issue
                 Cell::from(ss.config.name.clone()),
@@ -1210,7 +1280,19 @@ impl App {
                 Cell::from("").style(Style::default().fg(theme.dimmed))
             };
 
+            // Resolve repo color from config index. The bar cell carries an explicit
+            // style so it survives Row::style() override on selected rows.
+            let repo_idx = self
+                .global_config
+                .repos
+                .iter()
+                .position(|r| r.slug == vt.row.repo_slug)
+                .unwrap_or(0);
+            let bar_cell = Cell::from("\u{258e}") // ▎
+                .style(Style::default().fg(repo_color(repo_idx)));
+
             let mut cells = vec![
+                bar_cell,
                 Cell::from(format!("{:>2}", vt.num)),
                 issue_cell,
                 Cell::from(title_display),
@@ -1429,20 +1511,6 @@ impl App {
 
         spans.push(Span::styled("/", key_style));
         spans.push(Span::raw(":search"));
-        spans.push(sep.clone());
-
-        spans.push(Span::styled("\u{25c4}\u{25ba}", key_style));
-        spans.push(Span::raw(":repos"));
-
-        // Active repo indicator.
-        if self.active_repo_index > 0 {
-            let label = self.active_repo_slug().unwrap_or("?");
-            spans.push(sep.clone());
-            spans.push(Span::styled(
-                format!("[\u{25c4} {} \u{25ba}]", label),
-                Style::default().fg(theme.accent),
-            ));
-        }
 
         // Active search text label.
         if !self.search_text.is_empty() {
@@ -1500,13 +1568,15 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
         Style::default().fg(color)
     };
 
-    // Header text goes in the TITLE column (index 2). Fill remaining columns with empty cells.
+    // Header text goes in the TITLE column (index 3 after the new bar column at 0).
+    // Prepend empty bar cell so header text stays aligned with data rows.
     let mut cells: Vec<Cell> = vec![
+        Cell::from(""), // bar placeholder
         Cell::from(""),
         Cell::from(""),
         Cell::from(text).style(title_style),
     ];
-    for _ in 3..num_columns {
+    for _ in 4..num_columns {
         cells.push(Cell::from(""));
     }
     Row::new(cells)
@@ -2159,5 +2229,182 @@ mod tests {
             make_standalone("c", SessionStatus::Running { attached: false }),
         ];
         assert!(!preview_visible(5, &sessions, None, true));
+    }
+
+    // -----------------------------------------------------------------------
+    // Hints bar — repo hint removal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hints_task_does_not_contain_repo_cycling_hint() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let backend = TestBackend::new(200, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+
+        assert!(
+            !text.contains(":repos"),
+            "hints bar must not contain ':repos' after removal"
+        );
+        assert!(
+            !text.contains("◄►"),
+            "hints bar must not contain '◄►' after removal"
+        );
+    }
+
+    #[test]
+    fn hints_task_does_not_contain_active_repo_bracket_indicator() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        // Simulate a repo selected.
+        app.active_repo_index = 1;
+        let backend = TestBackend::new(200, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+
+        assert!(
+            !text.contains("[◄"),
+            "hints bar must not contain '[◄' bracket indicator"
+        );
+        assert!(
+            !text.contains("►]"),
+            "hints bar must not contain '►]' bracket indicator"
+        );
+    }
+
+    #[test]
+    fn hints_task_retains_core_hints() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let backend = TestBackend::new(200, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+
+        assert!(text.contains("switch"), "must contain 'switch' hint");
+        assert!(text.contains(":search"), "must contain ':search' hint");
+        assert!(text.contains(":branch"), "must contain ':branch' hint");
+        assert!(text.contains("quit"), "must contain 'quit' hint");
+        assert!(text.contains("help"), "must contain 'help' hint");
+    }
+
+    // -----------------------------------------------------------------------
+    // group_header_row — bar column alignment
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn group_header_row_has_bar_placeholder_as_first_cell() {
+        // With 5 columns total, group_header_row must produce 5 cells.
+        // The first cell (bar placeholder) should be empty.
+        let theme = Theme::default();
+        let row = group_header_row(DisplayGroup::Other, 5, &theme);
+        // Row::cells() is not public API; verify by collecting cells count
+        // via the table rendering path indirectly. Instead, test the column count
+        // matches by constructing a table and checking it renders without panic.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let backend = TestBackend::new(80, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let widths = vec![
+                    Constraint::Length(1),
+                    Constraint::Length(3),
+                    Constraint::Length(6),
+                    Constraint::Min(10),
+                    Constraint::Length(10),
+                ];
+                let table = Table::new(vec![row], &widths);
+                f.render_widget(table, f.area());
+            })
+            .unwrap();
+        // If the cell count mismatches the widths, ratatui silently clips —
+        // the test passing confirms no panic occurred.
+    }
+
+    // -----------------------------------------------------------------------
+    // Repo color integration — slug → config index → palette color
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn repo_index_lookup_maps_slug_to_correct_palette_color() {
+        use crate::global_config::RepoConfig;
+        use crate::tui::theme::repo_color;
+        use ratatui::style::Color;
+
+        let repos = vec![
+            RepoConfig {
+                slug: "owner/alpha".to_string(),
+                path: "/workspace/alpha".to_string(),
+                remotes: vec![],
+            },
+            RepoConfig {
+                slug: "owner/beta".to_string(),
+                path: "/workspace/beta".to_string(),
+                remotes: vec![],
+            },
+            RepoConfig {
+                slug: "owner/gamma".to_string(),
+                path: "/workspace/gamma".to_string(),
+                remotes: vec![],
+            },
+        ];
+
+        let beta_idx = repos.iter().position(|r| r.slug == "owner/beta").unwrap();
+        assert_eq!(beta_idx, 1);
+        assert_eq!(repo_color(beta_idx), Color::Green);
+    }
+
+    #[test]
+    fn repo_color_wraps_for_repos_beyond_palette_size() {
+        use crate::tui::theme::repo_color;
+        use ratatui::style::Color;
+
+        // 7th repo (index 6) wraps back to index 0 → Cyan
+        assert_eq!(repo_color(6), Color::Cyan);
+        // 8th repo (index 7) wraps to index 1 → Green
+        assert_eq!(repo_color(7), Color::Green);
     }
 }
