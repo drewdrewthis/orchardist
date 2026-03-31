@@ -1412,8 +1412,7 @@ impl App {
             )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.border))
-            .border_type(BorderType::Double)
-            .style(Style::default().bg(Color::Black));
+            .border_type(BorderType::Double);
 
         let inner = block.inner(area);
         f.render_widget(block, area);
