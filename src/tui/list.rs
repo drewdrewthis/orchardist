@@ -1122,19 +1122,10 @@ impl App {
             if tab.active {
                 let block = Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(
-                        Style::default()
-                            .fg(tab.color)
-                            .bg(tab.color)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .style(Style::default().bg(tab.color));
+                    .border_style(Style::default().fg(tab.color).add_modifier(Modifier::BOLD));
                 let label = Paragraph::new(Line::from(Span::styled(
                     tab.label.as_str(),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(tab.color)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(tab.color).add_modifier(Modifier::BOLD),
                 )))
                 .alignment(Alignment::Center)
                 .block(block);
@@ -2477,9 +2468,8 @@ mod tests {
             .map(|x| &buf[(x, 1)])
             .find(|c| c.symbol() == "A");
         assert!(
-            all_cell.is_some_and(|c| c.style().fg == Some(Color::Black)
-                && c.style().bg == Some(Color::Rgb(0, 200, 120))),
-            "active ALL tab label must have black fg on accent bg (solid badge)"
+            all_cell.is_some_and(|c| c.style().fg == Some(Color::Rgb(0, 200, 120))),
+            "active ALL tab label must use accent fg color"
         );
     }
 
