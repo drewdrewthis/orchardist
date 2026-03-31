@@ -922,7 +922,7 @@ impl App {
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
-            Constraint::Length(1),           // tab bar
+            Constraint::Length(1), // tab bar
             Constraint::Length(table_height),
         ];
 
@@ -962,7 +962,7 @@ impl App {
             .fg(theme.dimmed)
             .add_modifier(Modifier::BOLD);
         let mut header_cells = vec![
-            Cell::from(""),     // BAR (no label)
+            Cell::from(""), // BAR (no label)
             Cell::from(" #"),
             Cell::from("ISSUE"),
             Cell::from("TITLE"),
@@ -2340,8 +2340,7 @@ mod tests {
         use crate::tui::theme::repo_color;
         use ratatui::style::Color;
 
-        let repos = vec![
-            RepoConfig {
+        let repos = [RepoConfig {
                 slug: "owner/alpha".to_string(),
                 path: "/workspace/alpha".to_string(),
                 remotes: vec![],
@@ -2355,8 +2354,7 @@ mod tests {
                 slug: "owner/gamma".to_string(),
                 path: "/workspace/gamma".to_string(),
                 remotes: vec![],
-            },
-        ];
+            }];
 
         let beta_idx = repos.iter().position(|r| r.slug == "owner/beta").unwrap();
         assert_eq!(beta_idx, 1);
@@ -2367,7 +2365,10 @@ mod tests {
     // render_repo_tabs — tab bar content and styling
     // -----------------------------------------------------------------------
 
-    fn make_repo_app(repos: Vec<crate::global_config::RepoConfig>, active_repo_index: usize) -> App {
+    fn make_repo_app(
+        repos: Vec<crate::global_config::RepoConfig>,
+        active_repo_index: usize,
+    ) -> App {
         let mut app = App::new_test(vec![]);
         app.global_config.repos = repos;
         app.active_repo_index = active_repo_index;
@@ -2509,7 +2510,7 @@ mod tests {
         // The active ALL tab is styled with theme.accent (Cyan).
         let all_cell = (0..buf.area.width)
             .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "(" );
+            .find(|c| c.symbol() == "(");
         assert!(
             all_cell.is_some_and(|c| c.style().fg == Some(Color::Cyan)),
             "active ALL tab must use accent (Cyan) color"
