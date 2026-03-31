@@ -2331,40 +2331,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // group_header_row — bar column alignment
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn group_header_row_has_bar_placeholder_as_first_cell() {
-        // With 5 columns total, group_header_row must produce 5 cells.
-        // The first cell (bar placeholder) should be empty.
-        let theme = Theme::default();
-        let row = group_header_row(DisplayGroup::Other, 5, &theme);
-        // Row::cells() is not public API; verify by collecting cells count
-        // via the table rendering path indirectly. Instead, test the column count
-        // matches by constructing a table and checking it renders without panic.
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let backend = TestBackend::new(80, 5);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                let widths = vec![
-                    Constraint::Length(1),
-                    Constraint::Length(3),
-                    Constraint::Length(6),
-                    Constraint::Min(10),
-                    Constraint::Length(10),
-                ];
-                let table = Table::new(vec![row], &widths);
-                f.render_widget(table, f.area());
-            })
-            .unwrap();
-        // If the cell count mismatches the widths, ratatui silently clips —
-        // the test passing confirms no panic occurred.
-    }
-
-    // -----------------------------------------------------------------------
     // Repo color integration — slug → config index → palette color
     // -----------------------------------------------------------------------
 
@@ -2397,14 +2363,222 @@ mod tests {
         assert_eq!(repo_color(beta_idx), Color::Green);
     }
 
-    #[test]
-    fn repo_color_wraps_for_repos_beyond_palette_size() {
-        use crate::tui::theme::repo_color;
-        use ratatui::style::Color;
+    // -----------------------------------------------------------------------
+    // render_repo_tabs — tab bar content and styling
+    // -----------------------------------------------------------------------
 
-        // 7th repo (index 6) wraps back to index 0 → Cyan
-        assert_eq!(repo_color(6), Color::Cyan);
-        // 8th repo (index 7) wraps to index 1 → Green
-        assert_eq!(repo_color(7), Color::Green);
+    fn make_repo_app(repos: Vec<crate::global_config::RepoConfig>, active_repo_index: usize) -> App {
+        let mut app = App::new_test(vec![]);
+        app.global_config.repos = repos;
+        app.active_repo_index = active_repo_index;
+        app
+    }
+
+    fn render_tabs_to_buffer(app: &App) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let backend = TestBackend::new(120, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_repo_tabs(f, f.area());
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn render_repo_tabs_all_tab_label_present() {
+        let app = make_repo_app(vec![], 0);
+        let buf = render_tabs_to_buffer(&app);
+        let text = buffer_to_string(&buf);
+        assert!(text.contains("ALL"), "tab bar must contain 'ALL'");
+    }
+
+    #[test]
+    fn render_repo_tabs_all_active_uses_pill_decorators() {
+        let app = make_repo_app(vec![], 0);
+        let buf = render_tabs_to_buffer(&app);
+        let text = buffer_to_string(&buf);
+        // Active ALL tab renders as "( ALL )" with pill parens.
+        assert!(
+            text.contains("( ALL )"),
+            "active ALL tab must use pill decorators, got: {text}"
+        );
+    }
+
+    #[test]
+    fn render_repo_tabs_all_inactive_has_no_pill_decorators() {
+        use crate::global_config::RepoConfig;
+        let repos = vec![RepoConfig {
+            slug: "owner/alpha".to_string(),
+            path: "/workspace/alpha".to_string(),
+            remotes: vec![],
+        }];
+        // active_repo_index = 1 means the first repo tab is active, ALL is inactive.
+        let app = make_repo_app(repos, 1);
+        let buf = render_tabs_to_buffer(&app);
+        let text = buffer_to_string(&buf);
+        assert!(
+            !text.contains("( ALL )"),
+            "inactive ALL tab must not use pill decorators, got: {text}"
+        );
+        assert!(text.contains("ALL"), "ALL label must still appear");
+    }
+
+    #[test]
+    fn render_repo_tabs_repo_name_uppercased() {
+        use crate::global_config::RepoConfig;
+        let repos = vec![RepoConfig {
+            slug: "owner/myrepo".to_string(),
+            path: "/workspace/myrepo".to_string(),
+            remotes: vec![],
+        }];
+        let app = make_repo_app(repos, 0);
+        let buf = render_tabs_to_buffer(&app);
+        let text = buffer_to_string(&buf);
+        assert!(
+            text.contains("MYREPO"),
+            "repo tab label must be uppercased, got: {text}"
+        );
+    }
+
+    #[test]
+    fn render_repo_tabs_active_repo_uses_pill_decorators() {
+        use crate::global_config::RepoConfig;
+        let repos = vec![RepoConfig {
+            slug: "owner/beta".to_string(),
+            path: "/workspace/beta".to_string(),
+            remotes: vec![],
+        }];
+        // active_repo_index = 1 → first repo is active.
+        let app = make_repo_app(repos, 1);
+        let buf = render_tabs_to_buffer(&app);
+        let text = buffer_to_string(&buf);
+        assert!(
+            text.contains("( BETA )"),
+            "active repo tab must use pill decorators, got: {text}"
+        );
+    }
+
+    #[test]
+    fn render_repo_tabs_inactive_repo_has_no_pill_decorators() {
+        use crate::global_config::RepoConfig;
+        let repos = vec![
+            RepoConfig {
+                slug: "owner/alpha".to_string(),
+                path: "/workspace/alpha".to_string(),
+                remotes: vec![],
+            },
+            RepoConfig {
+                slug: "owner/beta".to_string(),
+                path: "/workspace/beta".to_string(),
+                remotes: vec![],
+            },
+        ];
+        // active_repo_index = 2 → second repo (beta) is active; alpha is inactive.
+        let app = make_repo_app(repos, 2);
+        let buf = render_tabs_to_buffer(&app);
+        let text = buffer_to_string(&buf);
+        assert!(
+            !text.contains("( ALPHA )"),
+            "inactive repo tab must not use pill decorators, got: {text}"
+        );
+        assert!(
+            text.contains("ALPHA"),
+            "inactive repo label must still appear"
+        );
+    }
+
+    #[test]
+    fn render_repo_tabs_all_active_uses_accent_color() {
+        use ratatui::style::Color;
+        let app = make_repo_app(vec![], 0);
+        let buf = render_tabs_to_buffer(&app);
+        // Find a cell containing "A" from "ALL" and check its fg color.
+        // The active ALL tab is styled with theme.accent (Cyan).
+        let all_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "(" );
+        assert!(
+            all_cell.is_some_and(|c| c.style().fg == Some(Color::Cyan)),
+            "active ALL tab must use accent (Cyan) color"
+        );
+    }
+
+    #[test]
+    fn render_repo_tabs_repo_color_by_index() {
+        use crate::global_config::RepoConfig;
+        use crate::tui::theme::repo_color;
+        let repos = vec![
+            RepoConfig {
+                slug: "owner/first".to_string(),
+                path: "/workspace/first".to_string(),
+                remotes: vec![],
+            },
+            RepoConfig {
+                slug: "owner/second".to_string(),
+                path: "/workspace/second".to_string(),
+                remotes: vec![],
+            },
+        ];
+        let app = make_repo_app(repos, 0);
+        let buf = render_tabs_to_buffer(&app);
+        // repo at index 0 → repo_color(0) = Cyan; index 1 → repo_color(1) = Green.
+        // Find a cell from "FIRST" label and verify its fg matches repo_color(0).
+        let first_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "F");
+        assert!(
+            first_cell.is_some_and(|c| c.style().fg == Some(repo_color(0))),
+            "first repo tab must use repo_color(0)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // group_header_row — bar column alignment (strengthened)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn group_header_row_first_cell_is_empty() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = Theme::default();
+        let row = group_header_row(DisplayGroup::Other, 5, &theme);
+        let backend = TestBackend::new(80, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let widths = vec![
+                    Constraint::Length(1),
+                    Constraint::Length(3),
+                    Constraint::Length(6),
+                    Constraint::Min(10),
+                    Constraint::Length(10),
+                ];
+                let table = Table::new(vec![row], &widths);
+                f.render_widget(table, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        // The first cell (bar column, x=0) must be blank — the group header row
+        // does not draw a color bar, leaving that column empty as a placeholder.
+        assert_eq!(
+            buffer[(0u16, 0u16)].symbol(),
+            " ",
+            "first cell (bar placeholder) must be a blank space"
+        );
     }
 }
