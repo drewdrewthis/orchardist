@@ -1131,16 +1131,15 @@ impl App {
                 .block(block);
                 f.render_widget(label, badge_area);
             } else {
-                let block = Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::White));
+                // No border — just colored text, vertically centered on row 1.
                 let label = Paragraph::new(Line::from(Span::styled(
                     tab.label.as_str(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(tab.color),
                 )))
-                .alignment(Alignment::Center)
-                .block(block);
-                f.render_widget(label, badge_area);
+                .alignment(Alignment::Center);
+                // Render on row 1 (middle of the 3-row badge area) to align with active tab text.
+                let text_area = Rect::new(badge_area.x, badge_area.y + 1, badge_area.width, 1);
+                f.render_widget(label, text_area);
             }
 
             x += w + 1; // 1 gap between badges
@@ -2523,17 +2522,10 @@ mod tests {
         // Active repo badge starts after ALL badge (width 7) + 1 gap = x=8.
         // The border corner at row 0 should have repo_color(0) fg.
         let expected_color = repo_color(0);
-        // Find the second ╭ (first is ALL's).
-        let mut found_first = false;
-        let corner = (0..buf.area.width).map(|x| &buf[(x, 0)]).find(|c| {
-            if c.symbol() == "╭" {
-                if found_first {
-                    return true;
-                }
-                found_first = true;
-            }
-            false
-        });
+        // Inactive ALL has no border, so the only ╭ is the active repo's.
+        let corner = (0..buf.area.width)
+            .map(|x| &buf[(x, 0)])
+            .find(|c| c.symbol() == "╭");
         assert!(
             corner.is_some_and(|c| c.style().fg == Some(expected_color)),
             "active repo tab border must use repo_color"
