@@ -1073,15 +1073,26 @@ impl App {
         let theme = &self.theme;
         let mut spans: Vec<Span> = Vec::new();
 
-        // ALL tab (active_repo_index == 0 means "all repos").
-        if self.active_repo_index == 0 {
-            spans.push(Span::styled(
-                " ALL ",
+        // Badge helper: ▐ LABEL ▌ with half-block caps for rounded look.
+        // Left cap (▐ U+2590): fg=badge_color, bg=reset → colored right-half merges into badge.
+        // Right cap (▌ U+258C): fg=badge_color, bg=reset → colored left-half tapers off.
+        let badge_cap_left = |color: Color| Span::styled("\u{2590}", Style::default().fg(color));
+        let badge_cap_right = |color: Color| Span::styled("\u{258c}", Style::default().fg(color));
+        let badge_body = |label: &str, bg: Color| {
+            Span::styled(
+                format!(" {} ", label),
                 Style::default()
-                    .bg(theme.accent)
+                    .bg(bg)
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
-            ));
+            )
+        };
+
+        // ALL tab (active_repo_index == 0 means "all repos").
+        if self.active_repo_index == 0 {
+            spans.push(badge_cap_left(theme.accent));
+            spans.push(badge_body("ALL", theme.accent));
+            spans.push(badge_cap_right(theme.accent));
         } else {
             spans.push(Span::styled(
                 " ALL ",
@@ -1105,13 +1116,9 @@ impl App {
             let color = repo_color(i);
             // active_repo_index is 1-based for repos (0 = ALL).
             if self.active_repo_index == i + 1 {
-                spans.push(Span::styled(
-                    format!(" {} ", name),
-                    Style::default()
-                        .bg(color)
-                        .fg(Color::Black)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                spans.push(badge_cap_left(color));
+                spans.push(badge_body(&name, color));
+                spans.push(badge_cap_right(color));
             } else {
                 spans.push(Span::styled(
                     format!(" {} ", name),
