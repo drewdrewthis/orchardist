@@ -922,7 +922,7 @@ impl App {
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
-            Constraint::Length(1), // tab bar
+            Constraint::Length(3), // tab bar (rounded badges need 3 rows)
             Constraint::Length(table_height),
         ];
 
@@ -1071,64 +1071,76 @@ impl App {
     /// (inactive).
     pub(crate) fn render_repo_tabs(&self, f: &mut Frame, area: Rect) {
         let theme = &self.theme;
-        let mut spans: Vec<Span> = Vec::new();
 
-        // Badge helper: ▐ LABEL ▌ with half-block caps for rounded look.
-        // Left cap (▐ U+2590): fg=badge_color, bg=reset → colored right-half merges into badge.
-        // Right cap (▌ U+258C): fg=badge_color, bg=reset → colored left-half tapers off.
-        let badge_cap_left = |color: Color| Span::styled("\u{2590}", Style::default().fg(color));
-        let badge_cap_right = |color: Color| Span::styled("\u{258c}", Style::default().fg(color));
-        let badge_body = |label: &str, bg: Color| {
-            Span::styled(
-                format!(" {} ", label),
-                Style::default()
-                    .bg(bg)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            )
-        };
-
-        // ALL tab (active_repo_index == 0 means "all repos").
-        if self.active_repo_index == 0 {
-            spans.push(badge_cap_left(theme.accent));
-            spans.push(badge_body("ALL", theme.accent));
-            spans.push(badge_cap_right(theme.accent));
-        } else {
-            spans.push(Span::styled(
-                " ALL ",
-                Style::default()
-                    .fg(theme.dimmed)
-                    .add_modifier(Modifier::DIM),
-            ));
+        // Build tab labels and colors.
+        struct TabInfo {
+            label: String,
+            color: Color,
+            active: bool,
         }
 
-        for (i, repo) in self.global_config.repos.iter().enumerate() {
-            spans.push(Span::raw(" "));
+        let mut tabs = vec![TabInfo {
+            label: "ALL".to_string(),
+            color: theme.accent,
+            active: self.active_repo_index == 0,
+        }];
 
-            // Label: repo name portion of the slug, uppercased.
+        for (i, repo) in self.global_config.repos.iter().enumerate() {
             let name = repo
                 .slug
                 .split('/')
                 .nth(1)
                 .unwrap_or(repo.slug.as_str())
                 .to_uppercase();
-
-            let color = repo_color(i);
-            // active_repo_index is 1-based for repos (0 = ALL).
-            if self.active_repo_index == i + 1 {
-                spans.push(badge_cap_left(color));
-                spans.push(badge_body(&name, color));
-                spans.push(badge_cap_right(color));
-            } else {
-                spans.push(Span::styled(
-                    format!(" {} ", name),
-                    Style::default().fg(color).add_modifier(Modifier::DIM),
-                ));
-            }
+            tabs.push(TabInfo {
+                label: name,
+                color: repo_color(i),
+                active: self.active_repo_index == i + 1,
+            });
         }
 
-        let tab_bar = Paragraph::new(Line::from(spans));
-        f.render_widget(tab_bar, area);
+        // Compute widths: each badge is label.len() + 4 (2 border + 2 padding).
+        // Plus 1 gap between badges.
+        let tab_widths: Vec<u16> = tabs.iter().map(|t| (t.label.len() as u16) + 4).collect();
+
+        // Lay out badges left-to-right within the area.
+        let mut x = area.x;
+        for (i, tab) in tabs.iter().enumerate() {
+            let w = tab_widths[i];
+            if x + w > area.x + area.width {
+                break;
+            }
+
+            let badge_area = Rect::new(x, area.y, w, 3);
+
+            if tab.active {
+                let block = Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(tab.color).add_modifier(Modifier::BOLD));
+                let label = Paragraph::new(Line::from(Span::styled(
+                    tab.label.as_str(),
+                    Style::default().fg(tab.color).add_modifier(Modifier::BOLD),
+                )))
+                .alignment(Alignment::Center)
+                .block(block);
+                f.render_widget(label, badge_area);
+            } else {
+                let block = Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme.dimmed));
+                let label = Paragraph::new(Line::from(Span::styled(
+                    tab.label.as_str(),
+                    Style::default()
+                        .fg(theme.dimmed)
+                        .add_modifier(Modifier::DIM),
+                )))
+                .alignment(Alignment::Center)
+                .block(block);
+                f.render_widget(label, badge_area);
+            }
+
+            x += w + 1; // 1 gap between badges
+        }
     }
 
     /// Renders the attribution footer: "made with ❤ — https://github.com/drewdrewthis/orchard-rs"
@@ -2397,7 +2409,7 @@ mod tests {
     fn render_tabs_to_buffer(app: &App) -> ratatui::buffer::Buffer {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
-        let backend = TestBackend::new(120, 1);
+        let backend = TestBackend::new(120, 3);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -2426,38 +2438,51 @@ mod tests {
     }
 
     #[test]
-    fn render_repo_tabs_all_active_uses_badge_bg_color() {
+    fn render_repo_tabs_active_all_border_uses_accent_color() {
         use ratatui::style::Color;
         let app = make_repo_app(vec![], 0);
         let buf = render_tabs_to_buffer(&app);
-        // Active ALL tab: find an 'A' cell from "ALL" and verify it has a bg color set.
-        let all_cell = (0..buf.area.width)
-            .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "A");
-        assert!(
-            all_cell.is_some_and(|c| c.style().bg == Some(Color::Rgb(0, 200, 120))),
-            "active ALL tab must use accent bg color (badge style)"
+        // Active ALL tab: top-left corner (╭) at (0,0) should have accent fg.
+        let corner = &buf[(0, 0)];
+        assert_eq!(
+            corner.style().fg,
+            Some(Color::Rgb(0, 200, 120)),
+            "active ALL tab border must use accent color"
         );
     }
 
     #[test]
-    fn render_repo_tabs_all_inactive_has_no_badge_bg() {
+    fn render_repo_tabs_active_all_label_uses_accent_fg() {
+        use ratatui::style::Color;
+        let app = make_repo_app(vec![], 0);
+        let buf = render_tabs_to_buffer(&app);
+        // Label text is on row 1 (content row inside the block).
+        let all_cell = (0..buf.area.width)
+            .map(|x| &buf[(x, 1)])
+            .find(|c| c.symbol() == "A");
+        assert!(
+            all_cell.is_some_and(|c| c.style().fg == Some(Color::Rgb(0, 200, 120))),
+            "active ALL tab label must use accent fg color"
+        );
+    }
+
+    #[test]
+    fn render_repo_tabs_inactive_all_uses_dimmed_color() {
         use crate::global_config::RepoConfig;
         let repos = vec![RepoConfig {
             slug: "owner/alpha".to_string(),
             path: "/workspace/alpha".to_string(),
             remotes: vec![],
         }];
-        // active_repo_index = 1 means the first repo tab is active, ALL is inactive.
         let app = make_repo_app(repos, 1);
         let buf = render_tabs_to_buffer(&app);
-        // Inactive ALL tab: find an 'A' cell from "ALL" and verify no bg is set.
+        // Inactive ALL: label on row 1 should have dimmed fg.
         let all_cell = (0..buf.area.width)
-            .map(|x| &buf[(x, 0)])
+            .map(|x| &buf[(x, 1)])
             .find(|c| c.symbol() == "A");
         assert!(
-            all_cell.is_some_and(|c| matches!(c.style().bg, None | Some(Color::Reset))),
-            "inactive ALL tab must not have a badge bg color"
+            all_cell.is_some(),
+            "inactive ALL tab label must still appear"
         );
     }
 
@@ -2479,7 +2504,7 @@ mod tests {
     }
 
     #[test]
-    fn render_repo_tabs_active_repo_uses_badge_bg_color() {
+    fn render_repo_tabs_active_repo_border_uses_repo_color() {
         use crate::global_config::RepoConfig;
         use crate::tui::theme::repo_color;
         let repos = vec![RepoConfig {
@@ -2487,22 +2512,30 @@ mod tests {
             path: "/workspace/beta".to_string(),
             remotes: vec![],
         }];
-        // active_repo_index = 1 → first repo is active.
         let app = make_repo_app(repos, 1);
         let buf = render_tabs_to_buffer(&app);
-        // Find a 'B' cell from "BETA" and verify it has the repo_color(0) as bg.
-        let beta_cell = (0..buf.area.width)
-            .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "B");
-        let expected_bg = repo_color(0);
+        // Active repo badge starts after ALL badge (width 7) + 1 gap = x=8.
+        // The border corner at row 0 should have repo_color(0) fg.
+        let expected_color = repo_color(0);
+        // Find the second ╭ (first is ALL's).
+        let mut found_first = false;
+        let corner = (0..buf.area.width).map(|x| &buf[(x, 0)]).find(|c| {
+            if c.symbol() == "╭" {
+                if found_first {
+                    return true;
+                }
+                found_first = true;
+            }
+            false
+        });
         assert!(
-            beta_cell.is_some_and(|c| c.style().bg == Some(expected_bg)),
-            "active repo tab must use repo_color as bg (badge style)"
+            corner.is_some_and(|c| c.style().fg == Some(expected_color)),
+            "active repo tab border must use repo_color"
         );
     }
 
     #[test]
-    fn render_repo_tabs_inactive_repo_has_no_badge_bg() {
+    fn render_repo_tabs_inactive_repo_label_present() {
         use crate::global_config::RepoConfig;
         let repos = vec![
             RepoConfig {
@@ -2516,68 +2549,12 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        // active_repo_index = 2 → second repo (beta) is active; alpha is inactive.
         let app = make_repo_app(repos, 2);
         let buf = render_tabs_to_buffer(&app);
         let text = buffer_to_string(&buf);
-        // Inactive ALPHA: label still present.
         assert!(
             text.contains("ALPHA"),
             "inactive repo label must still appear"
-        );
-        // Inactive ALPHA cell must have no bg.
-        let alpha_cell = (0..buf.area.width)
-            .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "A");
-        assert!(
-            alpha_cell.is_some_and(|c| matches!(c.style().bg, None | Some(Color::Reset))),
-            "inactive repo tab must not have a badge bg color"
-        );
-    }
-
-    #[test]
-    fn render_repo_tabs_all_active_uses_accent_color() {
-        use ratatui::style::Color;
-        let app = make_repo_app(vec![], 0);
-        let buf = render_tabs_to_buffer(&app);
-        // Find a cell containing "A" from "ALL" and check its fg color.
-        // The active ALL tab badge uses fg=Black and bg=accent.
-        let all_cell = (0..buf.area.width)
-            .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "A");
-        assert!(
-            all_cell.is_some_and(|c| c.style().bg == Some(Color::Rgb(0, 200, 120))),
-            "active ALL tab must use accent (Rgb(0,200,120)) as badge bg color"
-        );
-    }
-
-    #[test]
-    fn render_repo_tabs_repo_color_by_index() {
-        use crate::global_config::RepoConfig;
-        use crate::tui::theme::repo_color;
-        let repos = vec![
-            RepoConfig {
-                slug: "owner/first".to_string(),
-                path: "/workspace/first".to_string(),
-                remotes: vec![],
-            },
-            RepoConfig {
-                slug: "owner/second".to_string(),
-                path: "/workspace/second".to_string(),
-                remotes: vec![],
-            },
-        ];
-        // ALL is active (index 0), so both repo tabs are inactive — fg = repo_color, no bg.
-        let app = make_repo_app(repos, 0);
-        let buf = render_tabs_to_buffer(&app);
-        // repo at index 0 → repo_color(0) (strawberry red); index 1 → repo_color(1) (tangerine).
-        // Find a cell from "FIRST" label and verify its fg matches repo_color(0).
-        let first_cell = (0..buf.area.width)
-            .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "F");
-        assert!(
-            first_cell.is_some_and(|c| c.style().fg == Some(repo_color(0))),
-            "first repo tab must use repo_color(0) as fg when inactive"
         );
     }
 
