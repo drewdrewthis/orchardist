@@ -996,7 +996,8 @@ impl App {
             )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.accent))
-            .border_set(ratatui::symbols::border::ONE_EIGHTH_WIDE);
+            .border_set(ratatui::symbols::border::ONE_EIGHTH_WIDE)
+            .style(Style::default().bg(Color::Black));
 
         let table = Table::new(rows, &widths)
             .header(header_row)
