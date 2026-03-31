@@ -847,7 +847,15 @@ impl App {
 impl App {
     /// Renders the task-grouped view. Called by `render_list` when tasks are present.
     pub(crate) fn render_task_list(&self, f: &mut Frame) {
-        let area = f.area();
+        let full_area = f.area();
+
+        // Paint the orchard background and add 1-cell horizontal padding.
+        let outer_block = Block::default()
+            .style(Style::default().bg(self.theme.background))
+            .padding(Padding::horizontal(1));
+        let area = outer_block.inner(full_area);
+        f.render_widget(outer_block, full_area);
+
         let hdr_height = header_height(area.height);
 
         let tasks =
