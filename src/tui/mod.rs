@@ -1211,6 +1211,11 @@ impl App {
     /// to the appropriate render method based on the current [`ViewState`].
     /// The preview scroll state uses `Cell` for interior mutability.
     fn render(&self, f: &mut Frame) {
+        // Paint the entire screen with the orchard background color.
+        let bg_block =
+            ratatui::widgets::Block::default().style(Style::default().bg(self.theme.background));
+        f.render_widget(bg_block, f.area());
+
         match &self.view {
             ViewState::List => self.render_list(f),
             ViewState::ConfirmDelete(ds) => self.render_delete(ds, f),

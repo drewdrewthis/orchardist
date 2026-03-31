@@ -21,12 +21,12 @@ use crate::derive::DisplayGroup;
 /// Used by [`repo_color`] to assign a consistent color to each configured
 /// repository in the tab bar and the row indicator column.
 pub const REPO_COLORS: [Color; 6] = [
-    Color::Rgb(255, 100, 100), // strawberry red
-    Color::Rgb(255, 165, 0),   // orange/tangerine
-    Color::Rgb(255, 220, 50),  // lemon yellow
-    Color::Rgb(180, 100, 255), // plum purple
-    Color::Rgb(255, 130, 180), // pink/dragonfruit
-    Color::Rgb(100, 200, 255), // blueberry
+    Color::Rgb(255, 120, 120), // strawberry — bright enough on dark green bg
+    Color::Rgb(255, 180, 40),  // tangerine — warm orange, high contrast
+    Color::Rgb(255, 230, 80),  // lemon — vivid yellow
+    Color::Rgb(200, 140, 255), // plum — lighter purple for readability
+    Color::Rgb(255, 150, 200), // dragonfruit — soft pink
+    Color::Rgb(130, 210, 255), // blueberry — brighter blue
 ];
 
 /// Returns the color for a repository at the given config index.
@@ -39,8 +39,8 @@ pub const REPO_COLORS: [Color; 6] = [
 /// ```
 /// use orchard::tui::theme::repo_color;
 /// use ratatui::style::Color;
-/// assert_eq!(repo_color(0), Color::Rgb(255, 100, 100));
-/// assert_eq!(repo_color(6), Color::Rgb(255, 100, 100)); // wraps around
+/// assert_eq!(repo_color(0), Color::Rgb(255, 120, 120));
+/// assert_eq!(repo_color(6), Color::Rgb(255, 120, 120)); // wraps around
 /// ```
 pub fn repo_color(index: usize) -> Color {
     REPO_COLORS[index % REPO_COLORS.len()]
@@ -131,7 +131,7 @@ impl Default for Theme {
             claude_active: Color::Green,
             claude_idle: Color::DarkGray,
             claude_needs_input: Color::Red,
-            background: Color::Black,
+            background: Color::Rgb(10, 18, 10), // dark forest floor
             text: Color::White,
             shepherd: Color::Magenta,
             merge_conflict: Color::Red,
@@ -219,8 +219,8 @@ mod tests {
     }
 
     #[test]
-    fn default_background_is_black() {
-        assert_eq!(Theme::default().background, Color::Black);
+    fn default_background_is_dark_forest() {
+        assert_eq!(Theme::default().background, Color::Rgb(10, 18, 10));
     }
 
     #[test]
@@ -343,45 +343,45 @@ mod tests {
 
     #[test]
     fn repo_color_index_0_is_strawberry_red() {
-        assert_eq!(repo_color(0), Color::Rgb(255, 100, 100));
+        assert_eq!(repo_color(0), Color::Rgb(255, 120, 120));
     }
 
     #[test]
     fn repo_color_index_1_is_tangerine() {
-        assert_eq!(repo_color(1), Color::Rgb(255, 165, 0));
+        assert_eq!(repo_color(1), Color::Rgb(255, 180, 40));
     }
 
     #[test]
     fn repo_color_index_2_is_lemon_yellow() {
-        assert_eq!(repo_color(2), Color::Rgb(255, 220, 50));
+        assert_eq!(repo_color(2), Color::Rgb(255, 230, 80));
     }
 
     #[test]
     fn repo_color_index_3_is_plum_purple() {
-        assert_eq!(repo_color(3), Color::Rgb(180, 100, 255));
+        assert_eq!(repo_color(3), Color::Rgb(200, 140, 255));
     }
 
     #[test]
     fn repo_color_index_4_is_dragonfruit_pink() {
-        assert_eq!(repo_color(4), Color::Rgb(255, 130, 180));
+        assert_eq!(repo_color(4), Color::Rgb(255, 150, 200));
     }
 
     #[test]
     fn repo_color_index_5_is_blueberry() {
-        assert_eq!(repo_color(5), Color::Rgb(100, 200, 255));
+        assert_eq!(repo_color(5), Color::Rgb(130, 210, 255));
     }
 
     #[test]
     fn repo_color_wraps_at_palette_size() {
         // Index 6 wraps back to strawberry red (same as index 0).
-        assert_eq!(repo_color(6), Color::Rgb(255, 100, 100));
+        assert_eq!(repo_color(6), Color::Rgb(255, 120, 120));
         // Index 7 wraps to tangerine (same as index 1).
-        assert_eq!(repo_color(7), Color::Rgb(255, 165, 0));
+        assert_eq!(repo_color(7), Color::Rgb(255, 180, 40));
     }
 
     #[test]
     fn repo_color_large_index_wraps_correctly() {
         // 14 % 6 == 2 → lemon yellow
-        assert_eq!(repo_color(14), Color::Rgb(255, 220, 50));
+        assert_eq!(repo_color(14), Color::Rgb(255, 230, 80));
     }
 }
