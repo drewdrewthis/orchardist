@@ -140,6 +140,7 @@ pub fn make_pr(number: u32, branch: &str) -> CachedPr {
         checks_state: None,
         has_conflicts: false,
         unresolved_threads: 0,
+        linked_issue_state: None,
     }
 }
 

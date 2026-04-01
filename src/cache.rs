@@ -48,6 +48,10 @@ pub struct CachedPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// State of the linked issue (e.g. `"open"`, `"closed"`), if resolved from
+    /// the GraphQL `closingIssuesReferences` nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_issue_state: Option<String>,
 }
 
 /// A git worktree entry as stored in the worktrees cache file.
@@ -294,6 +298,7 @@ mod tests {
             checks_state: Some("passing".to_string()),
             has_conflicts: false,
             unresolved_threads: 0,
+            linked_issue_state: None,
         }
     }
 

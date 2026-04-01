@@ -139,16 +139,14 @@ pub fn derive_worktree_rows(
             .map(|s| enrich_session(s, claude_states))
             .collect();
 
-        let issue_number = github::extract_issue_number(&wt.branch);
+        // Two-tier issue linking: prefer the authoritative GitHub link from
+        // the PR's closingIssuesReferences, fall back to branch-name regex.
+        let issue_number = pr
+            .and_then(|p| p.linked_issue)
+            .or_else(|| github::extract_issue_number(&wt.branch));
         let linked_issue = issue_number.and_then(|num| issues.iter().find(|i| i.number == num));
         let issue_title = linked_issue.map(|i| i.title.clone());
-        // Only populate issue_state when there is no PR — mirrors the legacy collector
-        // logic in `apply_issue_states`, where PRs take precedence over issue state.
-        let issue_state = if pr_info.is_none() {
-            linked_issue.map(|i| i.state.clone())
-        } else {
-            None
-        };
+        let issue_state = linked_issue.map(|i| i.state.clone());
 
         let is_main_worktree =
             is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));
@@ -494,6 +492,7 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            linked_issue_state: None,
         }
     }
 
@@ -507,6 +506,7 @@ mod tests {
             checks_state: Some("passing".to_string()),
             has_conflicts: false,
             unresolved_threads: 0,
+            linked_issue_state: None,
         }
     }
 
@@ -662,6 +662,63 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(rows[0].issue_number.is_none());
         assert!(rows[0].issue_title.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-tier issue linking tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn issue_number_from_pr_linked_issue_takes_priority() {
+        // PR's linked_issue (42) should win over branch-name extraction (200).
+        let issues = vec![open_issue(42)];
+        let prs = vec![CachedPr {
+            linked_issue: Some(42),
+            ..pr_for_branch(10, "feat/200-my-feature")
+        }];
+        let worktrees = vec![worktree("/workspace/repo-feat", "feat/200-my-feature")];
+
+        let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[0].issue_number, Some(42));
+        assert_eq!(rows[0].issue_title.as_deref(), Some("Issue #42"));
+    }
+
+    #[test]
+    fn issue_number_falls_back_to_branch_name_when_pr_has_no_linked_issue() {
+        let issues = vec![open_issue(200)];
+        let prs = vec![pr_for_branch(10, "feat/200-my-feature")]; // linked_issue: None
+        let worktrees = vec![worktree("/workspace/repo-feat", "feat/200-my-feature")];
+
+        let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[0].issue_number, Some(200));
+        assert_eq!(rows[0].issue_title.as_deref(), Some("Issue #200"));
+    }
+
+    #[test]
+    fn issue_number_falls_back_to_branch_name_when_no_pr() {
+        let issues = vec![open_issue(200)];
+        let worktrees = vec![worktree("/workspace/repo-feat", "feat/200-my-feature")];
+
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[0].issue_number, Some(200));
+        assert_eq!(rows[0].issue_title.as_deref(), Some("Issue #200"));
+    }
+
+    #[test]
+    fn issue_state_populated_when_pr_exists() {
+        // After removing the suppression guard, issue_state should be present
+        // even when a PR exists for the same worktree.
+        let issues = vec![open_issue(200)];
+        let prs = vec![pr_for_branch(10, "feat/200-my-feature")];
+        let worktrees = vec![worktree("/workspace/repo-feat", "feat/200-my-feature")];
+
+        let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[0].issue_state.as_deref(), Some("open"));
+        assert!(rows[0].pr.is_some());
     }
 
     // -----------------------------------------------------------------------
@@ -1290,8 +1347,8 @@ mod tests {
     }
 
     #[test]
-    fn issue_state_none_when_worktree_has_pr() {
-        // When a PR exists, issue_state should be None (PR takes precedence).
+    fn issue_state_present_when_worktree_has_pr() {
+        // issue_state is always populated regardless of PR presence.
         let issues = vec![completed_issue(200)];
         let prs = vec![pr_for_branch(55, "feat/issue-200-my-feature")];
         let worktrees = vec![
@@ -1302,9 +1359,10 @@ mod tests {
         let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
 
         assert!(rows[1].pr.is_some(), "PR should be matched");
-        assert!(
-            rows[1].issue_state.is_none(),
-            "issue_state suppressed by PR"
+        assert_eq!(
+            rows[1].issue_state.as_deref(),
+            Some("completed"),
+            "issue_state should be populated even when PR exists"
         );
     }
 
