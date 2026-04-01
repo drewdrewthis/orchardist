@@ -335,11 +335,11 @@ fn format_claude_state(
         .unwrap_or_default();
     match state {
         ClaudeState::Input => (
-            format!("\u{26a1}input{}{}", suffix, ctx_suffix),
+            format!("\u{26a1} input{}{}", suffix, ctx_suffix),
             Style::default().fg(theme.claude_needs_input),
         ),
         ClaudeState::Working => (
-            format!("\u{26a1}active{}{}", suffix, ctx_suffix),
+            format!("\u{26a1} active{}{}", suffix, ctx_suffix),
             Style::default().fg(theme.claude_active),
         ),
         ClaudeState::Idle => (
@@ -1756,7 +1756,7 @@ pub(crate) fn expand_indicator(base_text: &str, pane_count: usize, expanded: boo
         .nth(1)
         .map(|(i, _)| &base_text[i..])
         .unwrap_or(base_text);
-    format!("{}{}({})", caret, rest, pane_count)
+    format!("{} {}({})", caret, rest.trim_start(), pane_count)
 }
 
 /// Creates a section header row spanning all columns for a display group.
@@ -2797,20 +2797,20 @@ mod tests {
 
     #[test]
     fn expand_indicator_collapsed_multi_pane() {
-        let result = expand_indicator("\u{26a1}active", 3, false);
-        assert_eq!(result, "\u{25b6}active(3)", "got: {}", result);
+        let result = expand_indicator("\u{26a1} active", 3, false);
+        assert_eq!(result, "\u{25b6} active(3)", "got: {}", result);
     }
 
     #[test]
     fn expand_indicator_expanded_multi_pane() {
-        let result = expand_indicator("\u{26a1}active", 3, true);
-        assert_eq!(result, "\u{25bc}active(3)", "got: {}", result);
+        let result = expand_indicator("\u{26a1} active", 3, true);
+        assert_eq!(result, "\u{25bc} active(3)", "got: {}", result);
     }
 
     #[test]
     fn expand_indicator_single_pane_no_indicator() {
-        let result = expand_indicator("\u{26a1}active", 1, false);
-        assert_eq!(result, "\u{26a1}active");
+        let result = expand_indicator("\u{26a1} active", 1, false);
+        assert_eq!(result, "\u{26a1} active");
     }
 
     #[test]
