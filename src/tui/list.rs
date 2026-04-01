@@ -45,6 +45,8 @@ enum TaskEnterAction {
         worktree_path: String,
         branch: Option<String>,
         host: Option<String>,
+        /// When `Some(n)`, select pane `n` after switching (tmux select-pane -t session.n).
+        pane_index: Option<usize>,
     },
     CreateSession {
         worktree_path: String,
@@ -56,6 +58,8 @@ enum TaskEnterAction {
         session_name: String,
         command: String,
         cwd: String,
+        /// When `Some(n)`, select pane `n` after switching (tmux select-pane -t session.n).
+        pane_index: Option<usize>,
     },
 }
 
@@ -137,8 +141,6 @@ pub(crate) fn worktree_from_task_row(row: &crate::derive::WorktreeRow) -> crate:
 /// A task entry prepared for rendering in the task-centric view.
 #[derive(Debug)]
 pub(crate) struct VisibleTask<'a> {
-    /// Sequential display number (1-based).
-    pub num: usize,
     pub row: &'a WorktreeRow,
     pub group: DisplayGroup,
 }
@@ -166,7 +168,6 @@ pub(crate) fn visible_tasks_filtered<'a>(
     let search_lower = search_text.to_lowercase();
 
     let mut result = Vec::new();
-    let mut num = 1usize;
 
     for row in task_rows {
         // Apply repo slug filter (affects all rows including main worktrees).
@@ -189,11 +190,9 @@ pub(crate) fn visible_tasks_filtered<'a>(
         }
 
         result.push(VisibleTask {
-            num,
             row,
             group: row.display_group,
         });
-        num += 1;
     }
 
     result
@@ -388,6 +387,7 @@ impl App {
     pub(crate) fn handle_enter_action(&mut self) -> bool {
         let standalone_count = self.standalone_sessions.len();
 
+        let pane_index = self.selected_pane;
         let action = if cursor_is_standalone(self.cursor, standalone_count) {
             self.standalone_sessions
                 .get(self.cursor)
@@ -395,6 +395,7 @@ impl App {
                     session_name: ss.session.tmux.name.clone(),
                     command: ss.config.command.clone(),
                     cwd: ss.config.cwd.clone(),
+                    pane_index,
                 })
         } else {
             let worktree_cursor = self.cursor - standalone_count;
@@ -411,6 +412,7 @@ impl App {
                         worktree_path: vt.row.worktree_path.clone(),
                         branch: Some(vt.row.branch.clone()),
                         host,
+                        pane_index,
                     }
                 } else {
                     TaskEnterAction::CreateSession {
@@ -430,6 +432,7 @@ impl App {
                 worktree_path,
                 branch,
                 host,
+                pane_index,
             }) => {
                 // Guard: refuse to join a session on a host not confirmed reachable.
                 if let Some(ref h) = host
@@ -449,7 +452,12 @@ impl App {
                     branch.as_deref(),
                     host.as_deref(),
                     None,
-                )
+                );
+                // Select specific pane after switching if a sub-row was active.
+                if let Some(pi) = pane_index {
+                    let _ = tmux::select_pane(&session_name, pi);
+                }
+                self.switch_target.is_some()
             }
             Some(TaskEnterAction::CreateSession {
                 worktree_path,
@@ -483,8 +491,12 @@ impl App {
                 session_name,
                 command,
                 cwd,
+                pane_index,
             }) => {
                 if tmux::session_exists(&session_name) {
+                    if let Some(pi) = pane_index {
+                        let _ = tmux::select_pane(&session_name, pi);
+                    }
                     self.switch_target = Some(session_name);
                     true
                 } else {
@@ -506,9 +518,19 @@ impl App {
         }
     }
 
+    /// Returns the pane index to use for preview capture.
+    ///
+    /// When `selected_pane` is `Some(n)`, returns `Some(n)` for pane-level preview.
+    /// When `None`, returns `None` (default pane 0 behavior).
+    pub(crate) fn preview_pane_index(&self) -> Option<usize> {
+        self.selected_pane
+    }
+
     /// Fetches pane content for the task at the current cursor position.
     pub(crate) fn fetch_task_pane_content(&mut self) {
         self.pane_content.clear();
+
+        let pane_index = self.preview_pane_index();
 
         // Handle standalone sessions first.
         let standalone_count = self.standalone_sessions.len();
@@ -522,8 +544,9 @@ impl App {
             let session_name = ss.session.tmux.name.clone();
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                let content = tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
-                    .unwrap_or_default();
+                let content =
+                    tmux::capture_pane_content_at(&session_name, pane_index, PANE_CAPTURE_LINES)
+                        .unwrap_or_default();
                 let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
                     session_name,
                     content,
@@ -556,8 +579,12 @@ impl App {
                         )
                         .unwrap_or_default()
                     } else {
-                        tmux::capture_pane_content(&session_name, PANE_CAPTURE_LINES)
-                            .unwrap_or_default()
+                        tmux::capture_pane_content_at(
+                            &session_name,
+                            pane_index,
+                            PANE_CAPTURE_LINES,
+                        )
+                        .unwrap_or_default()
                     };
                     let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
                         session_name,
@@ -831,13 +858,6 @@ impl App {
         });
     }
 
-    /// Starts a background heal diagnosis and transitions to a loading state.
-    ///
-    /// The `HealDone` message will arrive asynchronously and trigger the
-    /// transition to `ViewState::Heal`.
-    pub(crate) fn enter_heal_view(&mut self) {
-        self.start_heal();
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -870,21 +890,20 @@ impl App {
         let show_branch = self.show_branch_column;
 
         // Compute available width for the TITLE column.
-        // Fixed columns: BAR (1) + spacing(1) + # (3) + spacing(1) + ISSUE (6) + spacing(1)
-        //                + TITLE (flex) + spacing(1) + STATUS (22) + spacing(1) + CLAUDE (10)
-        //                + borders (2)
-        // Optional: + BRANCH (20) + spacing(1)
-        // With HOST: + spacing(1) + HOST (12)
-        let fixed = 1 + 1 + 3 + 1 + 6 + 1 + 1 + 22 + 1 + 10 + 2;
+        // Column order: BAR (1) + # (3) + CLAUDE (10) + ISSUE (6) + TITLE (flex)
+        //               + [BRANCH (20)] + [HOST (12)] + STATUS (22)
+        // Each column has 1 spacing. Plus borders (2).
+        let fixed = 1 + 1 + 3 + 1 + 10 + 1 + 6 + 1 + 1 + 22 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
-        let host_extra = if has_remote { 1 + 12 } else { 0 };
+        let host_extra = if has_remote { 12 + 1 } else { 0 };
         let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
 
-        // Column widths — BRANCH column optional, HOST column included only when remotes exist.
+        // Column widths — CLAUDE after #, STATUS at end.
         let mut widths: Vec<Constraint> = vec![
-            Constraint::Length(1), // BAR (colored repo indicator)
-            Constraint::Length(3), // #
-            Constraint::Length(6), // ISSUE
+            Constraint::Length(1),  // BAR (colored repo indicator)
+            Constraint::Length(3),  // #
+            Constraint::Length(10), // CLAUDE (moved from last to position 2)
+            Constraint::Length(6),  // ISSUE
             Constraint::Min(20),   // TITLE (flexible)
         ];
         if show_branch {
@@ -893,8 +912,7 @@ impl App {
         if has_remote {
             widths.push(Constraint::Length(12)); // HOST
         }
-        widths.push(Constraint::Length(22)); // STATUS
-        widths.push(Constraint::Length(10)); // CLAUDE
+        widths.push(Constraint::Length(22)); // STATUS (last)
 
         // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
@@ -970,6 +988,7 @@ impl App {
         let mut header_cells = vec![
             Cell::from(""), // BAR (no label)
             Cell::from(" #"),
+            Cell::from("CLAUDE"),
             Cell::from("ISSUE"),
             Cell::from("TITLE"),
         ];
@@ -980,7 +999,6 @@ impl App {
             header_cells.push(Cell::from("HOST"));
         }
         header_cells.push(Cell::from("STATUS"));
-        header_cells.push(Cell::from("CLAUDE"));
         let header_row = Row::new(header_cells).style(header_style);
 
         let table_title = match self.active_repo_slug() {
@@ -1017,7 +1035,8 @@ impl App {
 
         // Render scrollbar only when total rows exceed visible area.
         // The visible inner height = table area height - 3 (borders + header row).
-        let total_rows = standalone_count + tasks.len();
+        // Total rows includes sub-rows for expanded parents.
+        let total_rows = row_heights.len();
         let visible_rows = table_chunk.height.saturating_sub(3) as usize;
         if total_rows > visible_rows {
             let mut scrollbar_state =
@@ -1187,6 +1206,10 @@ impl App {
     }
 
     /// Builds table rows: standalone sessions first, then worktree task rows with group headers.
+    ///
+    /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], STATUS.
+    /// Unified sequential numbering across standalone + worktree rows.
+    /// Expanded rows get pane sub-rows inserted after the parent.
     fn build_task_table_rows_with_standalone(
         &self,
         tasks: &[VisibleTask],
@@ -1200,9 +1223,12 @@ impl App {
         let mut row_heights: Vec<u16> = Vec::new();
         let standalone_count = self.standalone_sessions.len();
 
+        // Unified numbering counter (1-based, spans standalone + worktree).
+        let mut unified_num = 1usize;
+
         // Render standalone session rows first.
         for (idx, ss) in self.standalone_sessions.iter().enumerate() {
-            let selected = idx == self.cursor;
+            let selected = idx == self.cursor && self.selected_pane.is_none();
             let (claude_text, claude_style) = standalone_claude_status(&ss.session, theme);
             let status_text = match &ss.session.tmux.status {
                 crate::session::SessionStatus::Running { .. } => "running",
@@ -1212,6 +1238,11 @@ impl App {
                 crate::session::SessionStatus::Running { .. } => Style::default().fg(Color::Green),
                 crate::session::SessionStatus::Dead => Style::default().fg(Color::DarkGray),
             };
+
+            // Expand/collapse indicator in STATUS cell.
+            let pane_count = ss.session.panes.len();
+            let is_expanded = self.expanded.contains(&ss.session.tmux.name);
+            let status_display = expand_indicator(status_text, pane_count, is_expanded);
 
             let row_style = if selected {
                 Style::default()
@@ -1223,7 +1254,8 @@ impl App {
 
             let mut cells = vec![
                 Cell::from(""), // no bar for standalone sessions
-                Cell::from(format!("{:>2}", idx + 1)),
+                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(claude_text).style(claude_style),
                 Cell::from("").style(Style::default().fg(Color::DarkGray)), // no issue
                 Cell::from(ss.config.name.clone()),
             ];
@@ -1234,18 +1266,35 @@ impl App {
             if has_remote {
                 cells.push(Cell::from("")); // always local
             }
-            cells.push(Cell::from(status_text.to_string()).style(status_style));
-            cells.push(Cell::from(claude_text).style(claude_style));
+            cells.push(Cell::from(status_display).style(status_style));
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
+
+            // Pane sub-rows for expanded standalone sessions.
+            if is_expanded {
+                self.push_pane_sub_rows(
+                    &ss.session.panes,
+                    idx,
+                    Color::DarkGray, // no repo color for standalone
+                    num_columns,
+                    show_branch,
+                    has_remote,
+                    theme,
+                    &mut rows,
+                    &mut row_heights,
+                );
+            }
+
+            unified_num += 1;
         }
 
         // Render worktree task rows.
         let mut last_group: Option<DisplayGroup> = None;
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
-            let selected = (flat_idx + standalone_count) == self.cursor;
+            let cursor_idx = flat_idx + standalone_count;
+            let selected = cursor_idx == self.cursor && self.selected_pane.is_none();
 
             // Section header when display group changes
             if last_group != Some(vt.group) {
@@ -1259,7 +1308,6 @@ impl App {
             let (claude_text, claude_style) = claude_status_text(vt.row, theme);
 
             let title_raw = if vt.row.is_main_worktree {
-                // Main worktree rows show the repo name, not the branch.
                 vt.row
                     .repo_slug
                     .split('/')
@@ -1273,7 +1321,6 @@ impl App {
             };
             let title_display = crate::paths::truncate_left(title_raw, title_width);
 
-            // Determine host name for reachability lookup: prefer session host, fall back to worktree host.
             let task_host: Option<&str> = vt
                 .row
                 .sessions
@@ -1307,20 +1354,31 @@ impl App {
                 Cell::from("").style(Style::default().fg(theme.dimmed))
             };
 
-            // Resolve repo color from config index. The bar cell carries an explicit
-            // style so it survives Row::style() override on selected rows.
             let repo_idx = self
                 .global_config
                 .repos
                 .iter()
                 .position(|r| r.slug == vt.row.repo_slug)
                 .unwrap_or(0);
+            let bar_color = repo_color(repo_idx);
             let bar_cell = Cell::from("\u{25cf}") // ●
-                .style(Style::default().fg(repo_color(repo_idx)));
+                .style(Style::default().fg(bar_color));
 
+            // Expand/collapse indicator appended to STATUS cell.
+            let pane_count = vt
+                .row
+                .sessions
+                .first()
+                .map(|s| s.panes.len())
+                .unwrap_or(0);
+            let is_expanded = self.expanded.contains(&vt.row.worktree_path);
+            let pr_display = expand_indicator(&pr_text, pane_count, is_expanded);
+
+            // Use unified numbering (continues from standalone count).
             let mut cells = vec![
                 bar_cell,
-                Cell::from(format!("{:>2}", vt.num)),
+                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(claude_text).style(claude_style),
                 issue_cell,
                 Cell::from(title_display),
             ];
@@ -1348,14 +1406,101 @@ impl App {
                 cells.push(host_cell);
             }
 
-            cells.push(Cell::from(pr_text).style(pr_style));
-            cells.push(Cell::from(claude_text).style(claude_style));
+            cells.push(Cell::from(pr_display).style(pr_style));
+
+            rows.push(Row::new(cells).style(row_style));
+            row_heights.push(1);
+
+            // Pane sub-rows for expanded worktree rows.
+            if is_expanded {
+                let panes = vt
+                    .row
+                    .sessions
+                    .first()
+                    .map(|s| s.panes.as_slice())
+                    .unwrap_or(&[]);
+                self.push_pane_sub_rows(
+                    panes,
+                    cursor_idx,
+                    bar_color,
+                    num_columns,
+                    show_branch,
+                    has_remote,
+                    theme,
+                    &mut rows,
+                    &mut row_heights,
+                );
+            }
+
+            unified_num += 1;
+        }
+
+        (rows, row_heights)
+    }
+
+    /// Appends pane sub-rows for an expanded parent row.
+    ///
+    /// Each sub-row shows: tree connector in # cell, claude indicator, command in TITLE,
+    /// and empty cells elsewhere. The BAR cell inherits the parent's repo color.
+    fn push_pane_sub_rows(
+        &self,
+        panes: &[crate::session::PaneInfo],
+        parent_cursor_idx: usize,
+        bar_color: Color,
+        _num_columns: usize,
+        show_branch: bool,
+        has_remote: bool,
+        theme: &Theme,
+        rows: &mut Vec<Row<'static>>,
+        row_heights: &mut Vec<u16>,
+    ) {
+        let pane_count = panes.len();
+        for (pi, pane) in panes.iter().enumerate() {
+            let is_last = pi == pane_count - 1;
+            let selected = self.cursor == parent_cursor_idx
+                && self.selected_pane == Some(pi);
+
+            // Tree connector: ├─N for non-last, └─N for last pane.
+            let connector = if is_last {
+                format!("\u{2514}\u{2500}{}", pane.index)
+            } else {
+                format!("\u{251c}\u{2500}{}", pane.index)
+            };
+
+            // Claude indicator for this pane.
+            let claude_cell = if pane.has_claude {
+                Cell::from("\u{26a1}").style(Style::default().fg(theme.claude_active))
+            } else {
+                Cell::from("\u{2500}").style(Style::default().fg(theme.dimmed))
+            };
+
+            let row_style = if selected {
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.dimmed)
+            };
+
+            let mut cells = vec![
+                Cell::from("\u{25cf}").style(Style::default().fg(bar_color)), // BAR inherits parent
+                Cell::from(connector),    // # cell: tree connector
+                claude_cell,              // CLAUDE cell
+                Cell::from(""),           // ISSUE: empty
+                Cell::from(pane.command.clone()), // TITLE: running command
+            ];
+
+            if show_branch {
+                cells.push(Cell::from("")); // BRANCH: empty
+            }
+            if has_remote {
+                cells.push(Cell::from("")); // HOST: empty
+            }
+            cells.push(Cell::from("")); // STATUS: empty
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
         }
-
-        (rows, row_heights)
     }
 
     /// Renders the preview pane with task metadata in the border title.
@@ -1550,8 +1695,16 @@ impl App {
 
         spans.push(sep.clone());
 
-        spans.push(Span::styled("\u{25c4}\u{25ba}", key_style)); // ◄►
+        spans.push(Span::styled("Tab", key_style));
         spans.push(Span::raw(":repos"));
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("l/h", key_style));
+        spans.push(Span::raw(":expand"));
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("E", key_style));
+        spans.push(Span::raw(":expand all"));
         spans.push(sep.clone());
 
         spans.push(Span::styled("c", key_style));
@@ -1568,6 +1721,18 @@ impl App {
 // ---------------------------------------------------------------------------
 // Task view helpers (free functions)
 // ---------------------------------------------------------------------------
+
+/// Appends an expand/collapse indicator to a status string when pane count > 1.
+///
+/// Returns the original text unchanged for single-pane or zero-pane rows.
+/// Multi-pane rows get `" ▶N"` (collapsed) or `" ▼N"` (expanded) appended.
+pub(crate) fn expand_indicator(base_text: &str, pane_count: usize, expanded: bool) -> String {
+    if pane_count <= 1 {
+        return base_text.to_string();
+    }
+    let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
+    format!("{} {}{}", base_text, icon, pane_count)
+}
 
 /// Creates a section header row spanning all columns for a display group.
 ///
@@ -1599,15 +1764,15 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
         Style::default().fg(color)
     };
 
-    // Header text goes in the TITLE column (index 3 after the new bar column at 0).
-    // Prepend empty bar cell so header text stays aligned with data rows.
+    // Header text goes in the TITLE column (index 4: BAR, #, CLAUDE, ISSUE, TITLE).
     let mut cells: Vec<Cell> = vec![
         Cell::from(""), // bar placeholder
-        Cell::from(""),
-        Cell::from(""),
+        Cell::from(""), // # placeholder
+        Cell::from(""), // CLAUDE placeholder
+        Cell::from(""), // ISSUE placeholder
         Cell::from(text).style(title_style),
     ];
-    for _ in 4..num_columns {
+    for _ in 5..num_columns {
         cells.push(Cell::from(""));
     }
     Row::new(cells)
@@ -1661,6 +1826,7 @@ mod tests {
                 status: SessionStatus::Running { attached: false },
             },
             claude: None,
+            panes: vec![],
         }
     }
 
@@ -1714,9 +1880,11 @@ mod tests {
         ];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
-        assert_eq!(visible[0].num, 1);
-        assert_eq!(visible[1].num, 2);
-        assert_eq!(visible[2].num, 3);
+        // Unified numbering now happens at render time, not in visible_tasks.
+        // Verify all three rows pass through with correct groups.
+        assert_eq!(visible[0].group, DisplayGroup::NeedsAttention);
+        assert_eq!(visible[1].group, DisplayGroup::ClaudeWorking);
+        assert_eq!(visible[2].group, DisplayGroup::Other);
     }
 
     #[test]
@@ -1799,6 +1967,7 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
+                panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -1831,6 +2000,7 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
+                panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -1987,6 +2157,7 @@ mod tests {
                 status: SessionStatus::Running { attached: false },
             },
             claude,
+            panes: vec![],
         }
     }
 
@@ -2095,6 +2266,7 @@ mod tests {
                         context_window_pct: None,
                         model: None,
                     }),
+                    panes: vec![],
                 },
                 EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -2108,6 +2280,7 @@ mod tests {
                         context_window_pct: Some(45.0),
                         model: None,
                     }),
+                    panes: vec![],
                 },
             ],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
@@ -2210,6 +2383,7 @@ mod tests {
                     status,
                 },
                 claude: None,
+                panes: vec![],
             },
             config: crate::session::StandaloneConfig {
                 name: name.to_string(),
@@ -2293,8 +2467,8 @@ mod tests {
             "hints bar must contain ':repos' repo cycling hint"
         );
         assert!(
-            text.contains("◄►"),
-            "hints bar must contain '◄►' repo cycling hint"
+            text.contains("Tab"),
+            "hints bar must contain 'Tab' repo cycling hint"
         );
     }
 
@@ -2589,6 +2763,127 @@ mod tests {
             buffer[(0u16, 0u16)].symbol(),
             " ",
             "first cell (bar placeholder) must be a blank space"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Expand/collapse indicator tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn expand_indicator_collapsed_multi_pane() {
+        let result = expand_indicator("no PR", 3, false);
+        assert!(result.ends_with("\u{25b6}3"), "expected '▶3' suffix, got: {}", result);
+    }
+
+    #[test]
+    fn expand_indicator_expanded_multi_pane() {
+        let result = expand_indicator("no PR", 3, true);
+        assert!(result.ends_with("\u{25bc}3"), "expected '▼3' suffix, got: {}", result);
+    }
+
+    #[test]
+    fn expand_indicator_single_pane_no_indicator() {
+        let result = expand_indicator("no PR", 1, false);
+        assert_eq!(result, "no PR");
+        assert!(!result.contains('\u{25b6}'));
+        assert!(!result.contains('\u{25bc}'));
+    }
+
+    #[test]
+    fn expand_indicator_zero_panes_no_indicator() {
+        let result = expand_indicator("no PR", 0, false);
+        assert_eq!(result, "no PR");
+    }
+
+    // -----------------------------------------------------------------------
+    // Column order tests (BAR, #, CLAUDE, ISSUE, TITLE, ...)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn column_order_claude_after_number() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let row = WorktreeRow {
+            sessions: vec![make_session("sess")],
+            ..make_task_row(42, DisplayGroup::Other)
+        };
+        let app = App::new_test(vec![row]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        // Check that the header row contains CLAUDE before ISSUE
+        let mut header_text = String::new();
+        // Header row is in the table area; check all rows for the header
+        for y in 0..buffer.area.height {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            if line.contains("CLAUDE") && line.contains("ISSUE") && line.contains("TITLE") {
+                header_text = line;
+                break;
+            }
+        }
+        assert!(!header_text.is_empty(), "should find header row with CLAUDE, ISSUE, TITLE");
+        let claude_pos = header_text.find("CLAUDE").unwrap();
+        let issue_pos = header_text.find("ISSUE").unwrap();
+        let title_pos = header_text.find("TITLE").unwrap();
+        assert!(
+            claude_pos < issue_pos,
+            "CLAUDE ({}) must appear before ISSUE ({})",
+            claude_pos, issue_pos
+        );
+        assert!(
+            issue_pos < title_pos,
+            "ISSUE ({}) must appear before TITLE ({})",
+            issue_pos, title_pos
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Hints bar — expand/collapse hints
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hints_bar_shows_expand_hints() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let backend = TestBackend::new(200, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut full_text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                full_text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        assert!(
+            full_text.contains("l/h"),
+            "hints bar must contain 'l/h' expand hint"
+        );
+        assert!(
+            full_text.contains(":expand"),
+            "hints bar must contain ':expand' hint"
+        );
+        assert!(
+            full_text.contains("E"),
+            "hints bar must contain 'E' expand all hint"
         );
     }
 }

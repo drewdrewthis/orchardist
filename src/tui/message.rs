@@ -48,6 +48,12 @@ pub enum Message {
     PrevRepo,
     /// Switch to the next repo filter.
     NextRepo,
+    /// Expand the current row's pane sub-rows.
+    ExpandRow,
+    /// Collapse the current row's pane sub-rows.
+    CollapseRow,
+    /// Toggle expand/collapse on all multi-pane rows.
+    ToggleExpandAll,
     /// Trigger a full background refresh.
     Refresh,
     /// Re-probe unreachable SSH hosts.
@@ -103,17 +109,6 @@ pub enum Message {
     /// Scroll the preview pane down by one page.
     PreviewPageDown,
 
-    // -- Heal actions --
-    /// Open the heal diagnosis view.
-    Heal,
-    /// Move the cursor up in the heal results view.
-    HealUp,
-    /// Move the cursor down in the heal results view.
-    HealDown,
-    /// Apply fixes from the heal results view.
-    HealFix,
-    /// Return from the heal results view to the list.
-    HealBack,
 }
 
 /// Result of processing a [`Message`] through the `update` function.

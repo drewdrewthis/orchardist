@@ -5,7 +5,9 @@
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
-use crate::session::{ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo};
+use crate::session::{
+    build_pane_infos, ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo,
+};
 
 /// Tuple type for per-repo cache data passed to [`derive_all_repos`].
 ///
@@ -257,13 +259,19 @@ fn enrich_session(
         status: SessionStatus::Running { attached: false },
     };
 
+    let panes = build_pane_infos(&session.pane_commands, &session.pane_titles);
+
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
     if let Some(state_file) = hook_state {
         let is_stale = is_state_stale(&state_file.timestamp, HOOK_STATE_STALENESS_SECS);
         if !is_stale {
             let claude = ClaudeSessionInfo::from_state_file(state_file);
-            return EnrichedSession { tmux, claude };
+            return EnrichedSession {
+                tmux,
+                claude,
+                panes,
+            };
         }
     }
 
@@ -277,6 +285,8 @@ fn enrich_session_from_scraping(
     tmux: TmuxSessionInfo,
 ) -> EnrichedSession {
     use crate::claude_state::ClaudeState;
+
+    let panes = build_pane_infos(&session.pane_commands, &session.pane_titles);
 
     let has_claude_active = session
         .pane_commands
@@ -334,7 +344,11 @@ fn enrich_session_from_scraping(
         None
     };
 
-    EnrichedSession { tmux, claude }
+    EnrichedSession {
+        tmux,
+        claude,
+        panes,
+    }
 }
 
 /// Returns true if a Claude state file timestamp is older than the default threshold.
@@ -1326,5 +1340,74 @@ mod tests {
                 "branch '{branch}' should not be matched to a PR"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // PaneInfo population during session enrichment
+    // -----------------------------------------------------------------------
+
+    fn session_with_panes(
+        name: &str,
+        path: &str,
+        pane_commands: Vec<&str>,
+        pane_titles: Vec<&str>,
+    ) -> CachedTmuxSession {
+        CachedTmuxSession {
+            name: name.to_string(),
+            path: path.to_string(),
+            pane_titles: pane_titles.into_iter().map(|s| s.to_string()).collect(),
+            pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
+            host: None,
+            last_output_lines: vec![],
+            claude_state_raw: None,
+        }
+    }
+
+    #[test]
+    fn enrich_session_populates_pane_infos() {
+        let sess = session_with_panes(
+            "my-session",
+            "/workspace/repo",
+            vec!["claude", "nvim", "cargo watch -x test"],
+            vec!["claude", "nvim", "cargo"],
+        );
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert_eq!(enriched.panes.len(), 3);
+        assert_eq!(enriched.panes[0].index, 0);
+        assert!(enriched.panes[0].has_claude);
+        assert_eq!(enriched.panes[0].command, "claude");
+        assert_eq!(enriched.panes[1].index, 1);
+        assert!(!enriched.panes[1].has_claude);
+        assert_eq!(enriched.panes[2].index, 2);
+        assert!(!enriched.panes[2].has_claude);
+        assert_eq!(enriched.panes[2].command, "cargo watch -x test");
+    }
+
+    #[test]
+    fn enrich_session_empty_panes() {
+        let sess = CachedTmuxSession {
+            name: "empty".to_string(),
+            path: "/workspace/repo".to_string(),
+            pane_titles: vec![],
+            pane_commands: vec![],
+            host: None,
+            last_output_lines: vec![],
+            claude_state_raw: None,
+        };
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(enriched.panes.is_empty());
+    }
+
+    #[test]
+    fn enrich_session_pane_claude_detection_case_insensitive() {
+        let sess = session_with_panes(
+            "my-session",
+            "/workspace/repo",
+            vec!["Claude --model opus"],
+            vec!["bash"],
+        );
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert_eq!(enriched.panes.len(), 1);
+        assert!(enriched.panes[0].has_claude);
     }
 }
