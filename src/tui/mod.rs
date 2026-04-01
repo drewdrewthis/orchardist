@@ -12,7 +12,7 @@ mod widgets;
 
 pub use theme::Theme;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,7 @@ use crate::transfer;
 use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
-use state::{AppMsg, CleanupState, HealState, Phase, ViewState};
+use state::{AppMsg, CleanupState, Phase, ViewState};
 use std::path::Path;
 use std::process::Command;
 
@@ -124,6 +124,18 @@ pub struct App {
     /// Uses `Cell` for interior mutability so `render_task_preview` (which takes
     /// `&self`) can update the state via `StatefulWidget::render`.
     preview_scroll_state: std::cell::Cell<tui_scrollview::ScrollViewState>,
+
+    /// Expanded rows keyed by worktree path or standalone session name.
+    ///
+    /// When a key is present, the row's pane sub-rows are rendered below it.
+    /// Entries are silently removed on refresh when the row's pane count drops to <= 1.
+    expanded: HashSet<String>,
+
+    /// Currently selected pane sub-row within the focused parent row.
+    ///
+    /// `None` means the parent row itself is selected. `Some(n)` means
+    /// pane sub-row `n` is selected. This does NOT affect `self.cursor`.
+    selected_pane: Option<usize>,
 }
 
 impl App {
@@ -178,6 +190,8 @@ impl App {
             url_area: Cell::new(Rect::default()),
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
+            expanded: HashSet::new(),
+            selected_pane: None,
         }
     }
 
@@ -195,6 +209,119 @@ impl App {
         }
         let idx = self.active_repo_index.saturating_sub(1);
         self.global_config.repos.get(idx).map(|r| r.slug.as_str())
+    }
+
+    // -------------------------------------------------------------------
+    // Expand/collapse helpers
+    // -------------------------------------------------------------------
+
+    /// Returns the expansion key for the row at cursor position `idx`.
+    ///
+    /// For standalone sessions (idx < standalone_count), the key is the session name.
+    /// For worktree rows, the key is the worktree path.
+    fn expansion_key_at(&self, idx: usize) -> Option<String> {
+        let standalone_count = self.standalone_sessions.len();
+        if idx < standalone_count {
+            self.standalone_sessions
+                .get(idx)
+                .map(|ss| ss.session.tmux.name.clone())
+        } else {
+            let wt_idx = idx - standalone_count;
+            let tasks = list::visible_tasks_filtered(
+                &self.task_rows,
+                &self.search_text,
+                self.active_repo_slug(),
+            );
+            tasks.get(wt_idx).map(|vt| vt.row.worktree_path.clone())
+        }
+    }
+
+    /// Returns the pane count for the row at cursor position `idx`.
+    ///
+    /// For standalone sessions: pane count from the session's panes vec.
+    /// For worktree rows: pane count from the first session (if any).
+    fn pane_count_at(&self, idx: usize) -> usize {
+        let standalone_count = self.standalone_sessions.len();
+        if idx < standalone_count {
+            self.standalone_sessions
+                .get(idx)
+                .map(|ss| ss.session.panes.len())
+                .unwrap_or(0)
+        } else {
+            let wt_idx = idx - standalone_count;
+            let tasks = list::visible_tasks_filtered(
+                &self.task_rows,
+                &self.search_text,
+                self.active_repo_slug(),
+            );
+            tasks
+                .get(wt_idx)
+                .and_then(|vt| vt.row.sessions.first())
+                .map(|s| s.panes.len())
+                .unwrap_or(0)
+        }
+    }
+
+    /// Returns the pane index to use for preview capture.
+    ///
+    /// When the cursor is on a sub-row, returns `Some(pane_index)`.
+    /// When on a parent row, returns `None` (default pane 0).
+    #[cfg(test)]
+    pub(crate) fn preview_pane_index(&self) -> Option<usize> {
+        self.selected_pane
+    }
+
+    /// Returns true if the row at cursor `idx` is currently expanded.
+    fn is_row_expanded(&self, idx: usize) -> bool {
+        self.expansion_key_at(idx)
+            .is_some_and(|key| self.expanded.contains(&key))
+    }
+
+    /// Collects expansion keys for all rows with pane count > 1.
+    fn all_expandable_keys(&self) -> Vec<String> {
+        let tasks = list::visible_tasks_filtered(
+            &self.task_rows,
+            &self.search_text,
+            self.active_repo_slug(),
+        );
+        let mut keys = Vec::new();
+        for ss in &self.standalone_sessions {
+            if ss.session.panes.len() > 1 {
+                keys.push(ss.session.tmux.name.clone());
+            }
+        }
+        for vt in tasks.iter() {
+            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+            if pane_count > 1 {
+                keys.push(vt.row.worktree_path.clone());
+            }
+        }
+        keys
+    }
+
+    /// Prunes expansion state: removes entries for rows whose pane count <= 1
+    /// or that no longer exist in the current data set.
+    fn prune_expansion_state(&mut self) {
+        let tasks = list::visible_tasks_filtered(
+            &self.task_rows,
+            &self.search_text,
+            self.active_repo_slug(),
+        );
+
+        let mut valid_keys: HashSet<String> = HashSet::new();
+        for ss in &self.standalone_sessions {
+            if ss.session.panes.len() > 1 {
+                valid_keys.insert(ss.session.tmux.name.clone());
+            }
+        }
+        for vt in tasks.iter() {
+            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+            if pane_count > 1 {
+                valid_keys.insert(vt.row.worktree_path.clone());
+            }
+        }
+
+        self.expanded.retain(|k| valid_keys.contains(k));
     }
 
     // -------------------------------------------------------------------
@@ -299,6 +426,9 @@ impl App {
                             .map(|row| row.worktree_path.clone())
                             .collect();
                     }
+                    // Prune expansion state for rows that lost their panes.
+                    self.prune_expansion_state();
+
                     // Fetch pane content for the current task selection.
                     self.fetch_task_pane_content();
 
@@ -491,22 +621,6 @@ impl App {
                     }
                     self.start_refresh();
                 }
-                AppMsg::HealDone(report) => {
-                    let findings = report.findings.clone();
-                    self.view = ViewState::Heal(HealState {
-                        report,
-                        findings,
-                        cursor: 0,
-                        fixing: false,
-                        fix_results: None,
-                    });
-                }
-                AppMsg::HealFixDone(fix_results) => {
-                    if let ViewState::Heal(ref mut hs) = self.view {
-                        hs.fixing = false;
-                        hs.fix_results = Some(fix_results);
-                    }
-                }
             }
         }
     }
@@ -568,9 +682,13 @@ impl App {
                     KeyCode::Char('w') => Some(Message::NewWorktree),
                     KeyCode::Char('/') => Some(Message::StartSearch),
                     KeyCode::Char('c') => Some(Message::Cleanup),
-                    KeyCode::Char('h') => Some(Message::Heal),
-                    KeyCode::Left => Some(Message::PrevRepo),
-                    KeyCode::Right => Some(Message::NextRepo),
+                    // h/Left = collapse, l/Right = expand, E = toggle all
+                    KeyCode::Char('h') | KeyCode::Left => Some(Message::CollapseRow),
+                    KeyCode::Char('l') | KeyCode::Right => Some(Message::ExpandRow),
+                    KeyCode::Char('E') => Some(Message::ToggleExpandAll),
+                    // Tab/BackTab = repo cycling (replaces Left/Right)
+                    KeyCode::Tab => Some(Message::NextRepo),
+                    KeyCode::BackTab => Some(Message::PrevRepo),
                     KeyCode::Char('r') => Some(Message::Refresh),
                     KeyCode::Char('R') => Some(Message::ReconnectHosts),
                     KeyCode::Char('?') => Some(Message::ToggleHelp),
@@ -642,18 +760,6 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Message::Cancel),
                 _ => None,
             },
-            ViewState::Heal(hs) => {
-                if hs.fixing {
-                    return None;
-                }
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => Some(Message::HealUp),
-                    KeyCode::Down | KeyCode::Char('j') => Some(Message::HealDown),
-                    KeyCode::Char('f') => Some(Message::HealFix),
-                    KeyCode::Char('q') | KeyCode::Esc => Some(Message::HealBack),
-                    _ => None,
-                }
-            }
         }
     }
 
@@ -724,25 +830,37 @@ impl App {
 
     /// Maps a visual row offset within the table body to a cursor index.
     ///
-    /// Returns `None` if the row maps to a group header or is out of range.
-    /// Visual rows include standalone sessions first, then group headers
-    /// interleaved with worktree task rows.
+    /// Returns `None` if the row maps to a group header, sub-row, or is out of range.
+    /// Visual rows include standalone sessions (with optional sub-rows), then
+    /// group headers interleaved with worktree task rows (with optional sub-rows).
     fn visual_row_to_cursor(&self, visual_row: usize) -> Option<usize> {
-        let standalone_count = self.standalone_sessions.len();
+        let mut table_row = 0usize;
 
-        // Standalone session rows come first (no group headers before them).
-        if visual_row < standalone_count {
-            return Some(visual_row);
+        // Standalone session rows come first.
+        for (idx, ss) in self.standalone_sessions.iter().enumerate() {
+            if table_row == visual_row {
+                return Some(idx);
+            }
+            table_row += 1;
+            // Skip sub-rows if expanded.
+            if self.expanded.contains(&ss.session.tmux.name) {
+                let sub_count = ss.session.panes.len();
+                if visual_row < table_row + sub_count {
+                    return None; // clicked on a sub-row
+                }
+                table_row += sub_count;
+            }
         }
 
-        // For worktree rows, account for group header rows.
+        let standalone_count = self.standalone_sessions.len();
+
+        // For worktree rows, account for group header rows and sub-rows.
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
             &self.search_text,
             self.active_repo_slug(),
         );
 
-        let mut table_row = standalone_count; // current visual row index
         let mut last_group: Option<crate::derive::DisplayGroup> = None;
 
         for (task_idx, vt) in tasks.iter().enumerate() {
@@ -759,6 +877,15 @@ impl App {
                 return Some(task_idx + standalone_count);
             }
             table_row += 1;
+
+            // Skip sub-rows if expanded.
+            if self.expanded.contains(&vt.row.worktree_path) {
+                let sub_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+                if visual_row < table_row + sub_count {
+                    return None; // clicked on a sub-row
+                }
+                table_row += sub_count;
+            }
         }
 
         None // clicked below all rows
@@ -794,8 +921,24 @@ impl App {
                         }
                     }
                     _ => {
-                        if self.cursor > 0 {
+                        if let Some(pane) = self.selected_pane {
+                            if pane > 0 {
+                                // Move up within sub-rows.
+                                self.selected_pane = Some(pane - 1);
+                            } else {
+                                // First sub-row → back to parent.
+                                self.selected_pane = None;
+                            }
+                            self.fetch_task_pane_content();
+                        } else if self.cursor > 0 {
                             self.cursor -= 1;
+                            // If moving up onto an expanded row, select the last sub-row.
+                            if self.is_row_expanded(self.cursor) {
+                                let count = self.pane_count_at(self.cursor);
+                                if count > 0 {
+                                    self.selected_pane = Some(count - 1);
+                                }
+                            }
                             self.fetch_task_pane_content();
                         }
                     }
@@ -818,7 +961,25 @@ impl App {
                         )
                         .len();
                         let visible_count = standalone_count + worktree_visible_count;
-                        if visible_count > 0 && self.cursor < visible_count - 1 {
+
+                        if let Some(pane) = self.selected_pane {
+                            let count = self.pane_count_at(self.cursor);
+                            if pane + 1 < count {
+                                // Move down within sub-rows.
+                                self.selected_pane = Some(pane + 1);
+                            } else {
+                                // Last sub-row → next parent row.
+                                self.selected_pane = None;
+                                if visible_count > 0 && self.cursor < visible_count - 1 {
+                                    self.cursor += 1;
+                                }
+                            }
+                            self.fetch_task_pane_content();
+                        } else if self.is_row_expanded(self.cursor) {
+                            // Parent of expanded row → enter first sub-row.
+                            self.selected_pane = Some(0);
+                            self.fetch_task_pane_content();
+                        } else if visible_count > 0 && self.cursor < visible_count - 1 {
                             self.cursor += 1;
                             self.fetch_task_pane_content();
                         }
@@ -828,6 +989,7 @@ impl App {
             }
             Message::CursorTo(idx) => {
                 self.cursor = idx;
+                self.selected_pane = None;
                 self.fetch_task_pane_content();
                 ok()
             }
@@ -965,12 +1127,54 @@ impl App {
             Message::PrevRepo => {
                 self.active_repo_index = self.active_repo_index.saturating_sub(1);
                 self.cursor = 0;
+                self.selected_pane = None;
                 ok()
             }
             Message::NextRepo => {
                 let repo_count = self.global_config.repos.len();
                 self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
                 self.cursor = 0;
+                self.selected_pane = None;
+                ok()
+            }
+            Message::ExpandRow => {
+                let pane_count = self.pane_count_at(self.cursor);
+                if pane_count > 1
+                    && let Some(key) = self.expansion_key_at(self.cursor)
+                {
+                    self.expanded.insert(key);
+                }
+                ok()
+            }
+            Message::CollapseRow => {
+                if self.selected_pane.is_some() {
+                    // On a sub-row: collapse parent + clear selected_pane.
+                    if let Some(key) = self.expansion_key_at(self.cursor) {
+                        self.expanded.remove(&key);
+                    }
+                    self.selected_pane = None;
+                } else if let Some(key) = self.expansion_key_at(self.cursor) {
+                    self.expanded.remove(&key);
+                }
+                ok()
+            }
+            Message::ToggleExpandAll => {
+                let expandable = self.all_expandable_keys();
+                if expandable.is_empty() {
+                    return ok();
+                }
+                // If any expandable row is collapsed, expand all. Otherwise collapse all.
+                let all_expanded = expandable.iter().all(|k| self.expanded.contains(k));
+                if all_expanded {
+                    for key in &expandable {
+                        self.expanded.remove(key);
+                    }
+                } else {
+                    for key in expandable {
+                        self.expanded.insert(key);
+                    }
+                }
+                // Don't clear selected_pane — persists for re-expansion.
                 ok()
             }
             Message::Refresh => {
@@ -1143,37 +1347,6 @@ impl App {
                 }
                 ok()
             }
-            Message::Heal => {
-                self.enter_heal_view();
-                ok()
-            }
-            Message::HealUp => {
-                if let ViewState::Heal(hs) = &mut self.view {
-                    hs.cursor = hs.cursor.saturating_sub(1);
-                }
-                ok()
-            }
-            Message::HealDown => {
-                if let ViewState::Heal(hs) = &mut self.view
-                    && !hs.findings.is_empty()
-                    && hs.cursor < hs.findings.len() - 1
-                {
-                    hs.cursor += 1;
-                }
-                ok()
-            }
-            Message::HealFix => {
-                if let ViewState::Heal(hs) = &mut self.view {
-                    let findings = hs.findings.clone();
-                    hs.fixing = true;
-                    self.start_heal_fix(findings);
-                }
-                ok()
-            }
-            Message::HealBack => {
-                self.view = ViewState::List;
-                ok()
-            }
         }
     }
 
@@ -1197,7 +1370,6 @@ impl App {
             ViewState::NewSession(_) => "NewSession",
             ViewState::NewWorktree(_) => "NewWorktree",
             ViewState::Help => "Help",
-            ViewState::Heal(_) => "Heal",
         }
     }
 
@@ -1225,7 +1397,6 @@ impl App {
                 self.render_new_worktree(nw, f);
             }
             ViewState::Help => self.render_help(f),
-            ViewState::Heal(hs) => self.render_heal(hs, f),
         }
     }
 
@@ -1416,39 +1587,6 @@ impl App {
         });
     }
 
-    /// Starts a background heal diagnosis run and transitions to a loading state.
-    pub(crate) fn start_heal(&self) {
-        let tx = self.tx.clone();
-        let config = self.global_config.clone();
-        std::thread::spawn(move || {
-            let sessions = crate::tmux::list_tmux_sessions();
-            let claude_states = crate::heal::gather_claude_states();
-            let cache_files = crate::heal::gather_cache_files();
-            let known_slugs: Vec<String> = config.repos.iter().map(|r| r.slug.clone()).collect();
-
-            // Build HealWorktree list from the cache.
-            let worktrees = build_heal_worktrees(&config);
-
-            let report = crate::heal::diagnose(
-                &sessions,
-                &worktrees,
-                &claude_states,
-                &cache_files,
-                &known_slugs,
-            );
-            let _ = tx.send(AppMsg::HealDone(report));
-        });
-    }
-
-    /// Applies fixes from the current heal state in a background thread.
-    pub(crate) fn start_heal_fix(&self, findings: Vec<crate::heal::HealFinding>) {
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let results = crate::heal::apply_fixes(&findings);
-            let _ = tx.send(AppMsg::HealFixDone(results));
-        });
-    }
-
     /// Constructs a minimal `App` for use in unit tests without touching the
     /// filesystem, git, or any external services.
     #[cfg(test)]
@@ -1483,6 +1621,8 @@ impl App {
             url_area: Cell::new(Rect::default()),
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
+            expanded: HashSet::new(),
+            selected_pane: None,
         }
     }
 }
@@ -1851,58 +1991,6 @@ fn check_standalone_collisions(
 /// authoritative cache-reading and derivation logic.
 fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::WorktreeRow> {
     crate::build_state::build_task_rows(config)
-}
-
-// ---------------------------------------------------------------------------
-// Heal worktree builder
-// ---------------------------------------------------------------------------
-
-/// Builds `HealWorktree` entries from all configured repo caches.
-///
-/// Reads the worktrees and PRs cache for each repo to produce the lightweight
-/// `HealWorktree` structs needed by `heal::diagnose`.
-fn build_heal_worktrees(config: &global_config::GlobalConfig) -> Vec<crate::heal::HealWorktree> {
-    let mut result = Vec::new();
-    for repo in &config.repos {
-        let worktrees = cache::read_cache::<cache::CachedWorktree>(&cache::cache_path(
-            repo.owner(),
-            repo.repo_name(),
-            "worktrees",
-        ))
-        .entries;
-        let prs = cache::read_cache::<cache::CachedPr>(&cache::cache_path(
-            repo.owner(),
-            repo.repo_name(),
-            "prs",
-        ))
-        .entries;
-        let issues = cache::read_cache::<cache::CachedIssue>(&cache::cache_path(
-            repo.owner(),
-            repo.repo_name(),
-            "issues",
-        ))
-        .entries;
-
-        for wt in worktrees.iter().filter(|w| !w.is_bare) {
-            let pr = prs.iter().find(|p| p.branch == wt.branch);
-            let issue_number = crate::github::extract_issue_number(&wt.branch);
-            let issue_state = issue_number
-                .and_then(|n| issues.iter().find(|i| i.number == n))
-                .map(|i| i.state.clone());
-
-            let expected_session_name = tmux::derive_main_session_name(&wt.path, Some(&wt.branch));
-
-            result.push(crate::heal::HealWorktree {
-                path: wt.path.clone(),
-                branch: wt.branch.clone(),
-                expected_session_name: Some(expected_session_name),
-                pr_state: pr.map(|p| p.state.clone()),
-                pr_number: pr.map(|p| p.number),
-                issue_state,
-            });
-        }
-    }
-    result
 }
 
 // ---------------------------------------------------------------------------
@@ -2375,6 +2463,7 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -2535,6 +2624,7 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
+                panes: vec![],
             }],
             ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
         };
@@ -2593,6 +2683,7 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
+                panes: vec![],
             }],
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
         };
@@ -2661,6 +2752,7 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                panes: vec![],
             }],
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
@@ -2872,6 +2964,7 @@ mod tests {
         cache::CachedTmuxSession {
             name: name.to_string(),
             path: "/some/path".to_string(),
+            pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
             host: None,
@@ -3031,6 +3124,7 @@ mod tests {
                     context_window_pct: Some(23.0),
                     model: Some("opus".to_string()),
                 }),
+                panes: vec![],
             }],
             ..make_worktree_row("main", DisplayGroup::RepoMain)
         };
@@ -3056,6 +3150,7 @@ mod tests {
                     context_window_pct: Some(67.0),
                     model: Some("sonnet".to_string()),
                 }),
+                panes: vec![],
             }],
             ..make_task_row_with_title(53, "TEA pattern refactor", DisplayGroup::NeedsAttention)
         };
@@ -3081,6 +3176,7 @@ mod tests {
                     context_window_pct: Some(19.0),
                     model: Some("opus".to_string()),
                 }),
+                panes: vec![],
             }],
             ..make_task_row_with_title(
                 47,
@@ -3352,6 +3448,7 @@ mod tests {
                         status: SessionStatus::Dead,
                     },
                     claude: None,
+                    panes: vec![],
                 },
             });
 
@@ -3532,6 +3629,7 @@ mod tests {
                     status: SessionStatus::Dead,
                 },
                 claude: None,
+                panes: vec![],
             },
         }
     }
@@ -3553,6 +3651,7 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                panes: vec![],
             }],
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
@@ -3593,5 +3692,303 @@ mod tests {
             make_task_row_with_session("feat/issue-2", "repo_2"),
         ];
         assert!(check_standalone_collisions(&standalone, &task_rows).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Key binding: h → CollapseRow (not Heal)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn h_key_maps_to_collapse_not_heal() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::CollapseRow));
+    }
+
+    #[test]
+    fn left_arrow_maps_to_collapse() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::CollapseRow));
+    }
+
+    #[test]
+    fn right_arrow_maps_to_expand() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::ExpandRow));
+    }
+
+    #[test]
+    fn l_key_maps_to_expand() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::ExpandRow));
+    }
+
+    #[test]
+    fn tab_maps_to_next_repo() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::NextRepo));
+    }
+
+    #[test]
+    fn backtab_maps_to_prev_repo() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::PrevRepo));
+    }
+
+    #[test]
+    fn e_key_maps_to_toggle_expand_all() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
+        let msg = app.handle_event(key);
+        assert_eq!(msg, Some(Message::ToggleExpandAll));
+    }
+
+    // -----------------------------------------------------------------------
+    // Expand/collapse state management
+    // -----------------------------------------------------------------------
+
+    fn make_task_row_with_panes(issue: u32, pane_count: usize) -> WorktreeRow {
+        let panes: Vec<crate::session::PaneInfo> = (0..pane_count)
+            .map(|i| crate::session::PaneInfo {
+                index: i,
+                tmux_target: format!("0.{i}"),
+                command: format!("cmd{}", i),
+                title: format!("pane{}", i),
+                has_claude: i == 0, // first pane has claude
+            })
+            .collect();
+        WorktreeRow {
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: format!("sess-{}", issue),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                panes,
+            }],
+            ..make_task_row(issue, DisplayGroup::Other)
+        }
+    }
+
+    #[test]
+    fn expand_row_adds_to_expanded_set() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.update(Message::ExpandRow);
+        assert!(app.expanded.contains("/workspace/repo-1"));
+    }
+
+    #[test]
+    fn expand_row_noop_for_single_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 1)]);
+        app.update(Message::ExpandRow);
+        assert!(app.expanded.is_empty());
+    }
+
+    #[test]
+    fn collapse_row_removes_from_expanded_set() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.update(Message::CollapseRow);
+        assert!(!app.expanded.contains("/workspace/repo-1"));
+    }
+
+    #[test]
+    fn toggle_expand_all_expands_when_any_collapsed() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 3),
+            make_task_row_with_panes(3, 3),
+        ]);
+        app.update(Message::ToggleExpandAll);
+        assert_eq!(app.expanded.len(), 3);
+    }
+
+    #[test]
+    fn toggle_expand_all_collapses_when_all_expanded() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 3),
+            make_task_row_with_panes(3, 3),
+        ]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.expanded.insert("/workspace/repo-2".to_string());
+        app.expanded.insert("/workspace/repo-3".to_string());
+        app.update(Message::ToggleExpandAll);
+        assert!(app.expanded.is_empty());
+    }
+
+    #[test]
+    fn expand_preserves_cursor_position() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 3),
+        ]);
+        app.cursor = 1;
+        app.update(Message::ToggleExpandAll);
+        assert_eq!(app.cursor, 1, "cursor should stay on same logical row");
+        assert_eq!(app.selected_pane, None, "selected_pane should remain None");
+    }
+
+    #[test]
+    fn collapse_all_preserves_selected_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.selected_pane = Some(1);
+        app.update(Message::ToggleExpandAll);
+        assert_eq!(
+            app.selected_pane,
+            Some(1),
+            "selected_pane should persist across collapse-all"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Navigation with sub-rows
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn down_on_expanded_row_enters_first_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.update(Message::CursorDown);
+        assert_eq!(app.cursor, 0, "cursor stays on parent row");
+        assert_eq!(app.selected_pane, Some(0), "enters first sub-row");
+    }
+
+    #[test]
+    fn down_on_last_sub_row_moves_to_next_parent() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 2),
+        ]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.selected_pane = Some(2); // last sub-row of row 0
+        app.update(Message::CursorDown);
+        assert_eq!(app.cursor, 1, "cursor moves to next parent");
+        assert_eq!(app.selected_pane, None, "selected_pane cleared");
+    }
+
+    #[test]
+    fn up_on_first_sub_row_returns_to_parent() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.selected_pane = Some(0);
+        app.update(Message::CursorUp);
+        assert_eq!(app.cursor, 0);
+        assert_eq!(app.selected_pane, None, "back to parent row");
+    }
+
+    #[test]
+    fn up_on_middle_sub_row_moves_up_within_sub_rows() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.selected_pane = Some(2);
+        app.update(Message::CursorUp);
+        assert_eq!(app.selected_pane, Some(1));
+    }
+
+    #[test]
+    fn cursor_to_clears_selected_pane() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 2),
+        ]);
+        app.selected_pane = Some(1);
+        app.update(Message::CursorTo(1));
+        assert_eq!(app.cursor, 1);
+        assert_eq!(app.selected_pane, None, "digit-jump clears selected_pane");
+    }
+
+    #[test]
+    fn collapse_from_sub_row_clears_selected_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.selected_pane = Some(1);
+        app.update(Message::CollapseRow);
+        assert_eq!(app.selected_pane, None);
+        assert!(!app.expanded.contains("/workspace/repo-1"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Expansion state tracked by worktree path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn expansion_state_tracked_by_worktree_path() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(42, 3)]);
+        app.update(Message::ExpandRow);
+        assert!(app.expanded.contains("/workspace/repo-42"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Preview pane index selection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preview_pane_index_none_for_parent() {
+        let app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        assert_eq!(app.preview_pane_index(), None);
+    }
+
+    #[test]
+    fn preview_pane_index_some_for_sub_row() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.selected_pane = Some(1);
+        assert_eq!(app.preview_pane_index(), Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // Up arrow onto expanded row selects last sub-row
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn up_onto_expanded_row_selects_last_sub_row() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 2),
+        ]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.cursor = 1; // on row 2
+        app.update(Message::CursorUp);
+        assert_eq!(app.cursor, 0, "cursor moves to expanded row");
+        assert_eq!(app.selected_pane, Some(2), "selects last sub-row");
+    }
+
+    // -----------------------------------------------------------------------
+    // prune_expansion_state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn prune_expansion_state_removes_entry_when_row_has_one_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 1)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.prune_expansion_state();
+        assert!(
+            app.expanded.is_empty(),
+            "single-pane row should be pruned from expanded set"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_retains_entry_when_row_still_has_multiple_panes() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.prune_expansion_state();
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "multi-pane row should remain in expanded set"
+        );
     }
 }

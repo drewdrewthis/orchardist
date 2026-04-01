@@ -224,15 +224,60 @@ pub fn kill_tmux_session(name: &str) -> Result<()> {
 }
 
 /// Captures the pane content of a tmux session, returning the last `lines` lines.
+///
+/// When `pane_index` is `Some(n)`, captures from `session.n` (a specific pane).
+/// When `None`, captures from the default pane (pane 0).
 pub fn capture_pane_content(session: &str, lines: u32) -> Result<String> {
+    capture_pane_content_at(session, None, lines)
+}
+
+/// Captures pane content with an explicit pane target.
+///
+/// The tmux target is `session` when `pane_target` is `None`, or
+/// `session:{target}` when `pane_target` is `Some(target)` (e.g., "0.1").
+pub fn capture_pane_content_at(
+    session: &str,
+    pane_target: Option<&str>,
+    lines: u32,
+) -> Result<String> {
+    let target = match pane_target {
+        Some(t) => format!("{}:{}", session, t),
+        None => session.to_string(),
+    };
     let lines_arg = format!("-{lines}");
     let out = Command::new("tmux")
-        .args(["capture-pane", "-t", session, "-p", "-J", "-S", &lines_arg])
+        .args(["capture-pane", "-t", &target, "-p", "-J", "-S", &lines_arg])
         .output()
         .context("tmux capture-pane")?;
 
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(text.trim_end_matches('\n').to_string())
+}
+
+/// Selects a specific pane within a tmux session.
+///
+/// Runs `tmux select-pane -t session:{pane_target}` where `pane_target` is
+/// a window.pane address like "0.1" (window 0, pane 1).
+pub fn select_pane(session: &str, pane_target: &str) -> Result<()> {
+    let target = format!("{}:{}", session, pane_target);
+    let out = Command::new("tmux")
+        .args(["select-pane", "-t", &target])
+        .output()
+        .context("tmux select-pane")?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("tmux select-pane failed: {}", stderr.trim());
+    }
+    Ok(())
+}
+
+/// Builds a tmux target string: `session` or `session.N`.
+pub fn build_pane_target(session: &str, pane_index: Option<usize>) -> String {
+    match pane_index {
+        Some(n) => format!("{}.{}", session, n),
+        None => session.to_string(),
+    }
 }
 
 /// Derives the tmux session name in the format "repoName_branch".
@@ -529,5 +574,20 @@ mod tests {
         };
         let s = format_status_left(Some("feat"), Some(&pr));
         assert!(s.contains("PR#42"));
+    }
+
+    #[test]
+    fn build_pane_target_without_index() {
+        assert_eq!(build_pane_target("my-session", None), "my-session");
+    }
+
+    #[test]
+    fn build_pane_target_with_index_zero() {
+        assert_eq!(build_pane_target("my-session", Some(0)), "my-session.0");
+    }
+
+    #[test]
+    fn build_pane_target_with_index_two() {
+        assert_eq!(build_pane_target("my-session", Some(2)), "my-session.2");
     }
 }

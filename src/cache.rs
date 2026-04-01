@@ -73,6 +73,9 @@ pub struct CachedTmuxSession {
     pub name: String,
     /// Working directory of the session's first window.
     pub path: String,
+    /// Tmux window.pane target addresses (e.g., "0.0", "0.1", "1.0") for each pane.
+    #[serde(default)]
+    pub pane_targets: Vec<String>,
     /// Titles of all panes in the session.
     pub pane_titles: Vec<String>,
     /// Commands running in each pane of the session.
@@ -308,6 +311,7 @@ mod tests {
         CachedTmuxSession {
             name: "my-session".to_string(),
             path: "/home/user/repo".to_string(),
+            pane_targets: vec!["0.0".to_string()],
             pane_titles: vec!["bash".to_string()],
             pane_commands: vec!["vim".to_string()],
             host: None,

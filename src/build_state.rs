@@ -136,6 +136,16 @@ fn build_standalone_sessions(
                 .filter(|cs| !crate::derive::is_state_stale_default(&cs.timestamp))
                 .and_then(ClaudeSessionInfo::from_state_file);
 
+            let panes = live
+                .map(|s| {
+                    crate::session::build_pane_infos(
+                        &s.pane_targets,
+                        &s.pane_commands,
+                        &s.pane_titles,
+                    )
+                })
+                .unwrap_or_default();
+
             StandaloneSessionRow {
                 session: EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -144,6 +154,7 @@ fn build_standalone_sessions(
                         status,
                     },
                     claude,
+                    panes,
                 },
                 config: cfg.clone(),
             }
@@ -348,6 +359,7 @@ mod tests {
         cache::CachedTmuxSession {
             name: name.to_string(),
             path: "/tmp".to_string(),
+            pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
             host: None,
@@ -471,6 +483,7 @@ mod tests {
         cache::CachedTmuxSession {
             name: name.to_string(),
             path: "/workspace".to_string(),
+            pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
@@ -549,6 +562,7 @@ mod tests {
         let session = cache::CachedTmuxSession {
             name: "repo_48_main".to_string(),
             path: "/workspace".to_string(),
+            pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),

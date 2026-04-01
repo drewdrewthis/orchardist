@@ -6,11 +6,10 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Padding;
 
-use crate::heal::{HealAction, Severity};
 use crate::paths;
 use crate::tui::App;
 use crate::tui::state::{
-    CleanupState, DeleteState, HealState, NewSessionState, NewWorktreeState, Phase, TransferState,
+    CleanupState, DeleteState, NewSessionState, NewWorktreeState, Phase, TransferState,
 };
 use crate::tui::widgets::render_popup;
 
@@ -459,8 +458,12 @@ impl App {
                 Span::styled("Cleanup stale worktrees", dim),
             ]),
             Line::from(vec![
-                Span::styled("h        ", key_style),
-                Span::styled("Run heal check", dim),
+                Span::styled("h / l    ", key_style),
+                Span::styled("Collapse / expand pane sub-rows", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("E        ", key_style),
+                Span::styled("Toggle expand all rows", dim),
             ]),
             Line::from(vec![
                 Span::styled("n        ", key_style),
@@ -502,108 +505,6 @@ impl App {
             60,
             20,
             Some(" HELP "),
-            Padding::new(2, 2, 1, 1),
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Heal dialog
-// ---------------------------------------------------------------------------
-
-impl App {
-    /// Renders the heal results view as a popup dialog.
-    pub(crate) fn render_heal(&self, state: &HealState, f: &mut Frame) {
-        let theme = &self.theme;
-        let mut lines: Vec<Line> = Vec::new();
-
-        if state.findings.is_empty() && state.fix_results.is_none() {
-            lines.push(Line::styled(
-                "\u{2713} All healthy — nothing to repair.",
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            for (i, finding) in state.findings.iter().enumerate() {
-                let (icon, color) = match finding.severity {
-                    Severity::Ok => ("\u{2713}", theme.success),
-                    Severity::Warning => ("\u{26a0}", theme.warning),
-                    Severity::Error => ("\u{2716}", theme.error),
-                };
-                let prefix = if i == state.cursor { "> " } else { "  " };
-                let action_hint = match &finding.action {
-                    HealAction::KillSession(n) => format!(" [kill: {n}]"),
-                    HealAction::DeleteFile(p) => format!(" [delete: {p}]"),
-                    HealAction::FlagForCleanup(_) => " [manual cleanup]".to_string(),
-                    HealAction::ReportOnly(_) | HealAction::None => String::new(),
-                };
-                lines.push(Line::from(vec![
-                    Span::raw(format!("{prefix}{icon} ")),
-                    Span::styled(
-                        format!("{}{}", finding.message, action_hint),
-                        Style::default().fg(color),
-                    ),
-                ]));
-            }
-        }
-
-        // Fix results section.
-        if let Some(results) = &state.fix_results {
-            lines.push(Line::from(""));
-            lines.push(Line::styled(
-                "Applied fixes:",
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
-            for r in results {
-                let (icon, color) = if r.success {
-                    ("\u{2713}", theme.success)
-                } else {
-                    ("\u{2716}", theme.error)
-                };
-                let msg = if let Some(ref e) = r.error {
-                    format!("{} ({})", r.message, e)
-                } else {
-                    r.message.clone()
-                };
-                lines.push(Line::styled(
-                    format!("  {icon} {msg}"),
-                    Style::default().fg(color),
-                ));
-            }
-        }
-
-        lines.push(Line::from(""));
-        if state.fixing {
-            let throbber = throbber_widgets_tui::Throbber::default()
-                .label("Applying fixes...")
-                .throbber_style(Style::default().fg(theme.accent));
-            lines.push(throbber.to_line(&self.throbber_state));
-        } else if state.fix_results.is_none() && !state.findings.is_empty() {
-            lines.push(Line::styled(
-                "f apply fixes  q/esc go back",
-                Style::default()
-                    .fg(theme.dimmed)
-                    .add_modifier(Modifier::DIM),
-            ));
-        } else {
-            lines.push(Line::styled(
-                "q / esc to go back",
-                Style::default()
-                    .fg(theme.dimmed)
-                    .add_modifier(Modifier::DIM),
-            ));
-        }
-
-        let height = (lines.len() + 4).min(30) as u16;
-        render_popup(
-            f,
-            lines,
-            theme.accent,
-            theme.background,
-            80,
-            height,
-            Some(" Heal "),
             Padding::new(2, 2, 1, 1),
         );
     }
