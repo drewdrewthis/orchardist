@@ -2925,6 +2925,13 @@ mod tests {
         assert_eq!(app.handle_event(key), Some(Message::TogglePriority));
     }
 
+    #[test]
+    fn toggle_priority_update_does_not_quit() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let result = app.update(Message::TogglePriority);
+        assert!(!result.quit);
+    }
+
     // -----------------------------------------------------------------------
     // compute_sessions_to_create
     // -----------------------------------------------------------------------
