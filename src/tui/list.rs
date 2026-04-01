@@ -918,8 +918,8 @@ impl App {
         // Column widths — CLAUDE after #, STATUS at end.
         let mut widths: Vec<Constraint> = vec![
             Constraint::Length(1),  // BAR (colored repo indicator)
-            Constraint::Length(5),  // # (includes expand indicator like "▶3")
-            Constraint::Length(10), // CLAUDE (moved from last to position 2)
+            Constraint::Length(3),  // #
+            Constraint::Length(14), // CLAUDE (status + expand indicator like "▶3")
             Constraint::Length(6),  // ISSUE
             Constraint::Min(20),    // TITLE (flexible)
         ];
@@ -1256,11 +1256,10 @@ impl App {
                 crate::session::SessionStatus::Dead => Style::default().fg(Color::DarkGray),
             };
 
-            // Expand/collapse indicator in # cell.
+            // Expand/collapse indicator in CLAUDE cell.
             let pane_count = ss.session.panes.len();
             let is_expanded = self.expanded.contains(&ss.session.tmux.name);
-            let num_display =
-                expand_indicator(&format!("{:>2}", unified_num), pane_count, is_expanded);
+            let claude_display = expand_indicator(&claude_text, pane_count, is_expanded);
 
             let row_style = if selected {
                 Style::default()
@@ -1272,8 +1271,8 @@ impl App {
 
             let mut cells = vec![
                 Cell::from(""), // no bar for standalone sessions
-                Cell::from(num_display),
-                Cell::from(claude_text).style(claude_style),
+                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(claude_display).style(claude_style),
                 Cell::from("").style(Style::default().fg(Color::DarkGray)), // no issue
                 Cell::from(ss.config.name.clone()),
             ];
@@ -1383,17 +1382,16 @@ impl App {
             let bar_cell = Cell::from("\u{25cf}") // ●
                 .style(Style::default().fg(bar_color));
 
-            // Expand/collapse indicator in # cell.
+            // Expand/collapse indicator in CLAUDE cell.
             let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
-            let num_display =
-                expand_indicator(&format!("{:>2}", unified_num), pane_count, is_expanded);
+            let claude_display = expand_indicator(&claude_text, pane_count, is_expanded);
 
             // Use unified numbering (continues from standalone count).
             let mut cells = vec![
                 bar_cell,
-                Cell::from(num_display),
-                Cell::from(claude_text).style(claude_style),
+                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(claude_display).style(claude_style),
                 issue_cell,
                 Cell::from(title_display),
             ];
