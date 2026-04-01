@@ -137,9 +137,7 @@ fn build_standalone_sessions(
                 .and_then(ClaudeSessionInfo::from_state_file);
 
             let panes = live
-                .map(|s| {
-                    crate::session::build_pane_infos(&s.pane_commands, &s.pane_titles)
-                })
+                .map(|s| crate::session::build_pane_infos(&s.pane_commands, &s.pane_titles))
                 .unwrap_or_default();
 
             StandaloneSessionRow {

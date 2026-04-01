@@ -282,12 +282,7 @@ impl App {
             }
         }
         for vt in tasks.iter() {
-            let pane_count = vt
-                .row
-                .sessions
-                .first()
-                .map(|s| s.panes.len())
-                .unwrap_or(0);
+            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             if pane_count > 1 {
                 keys.push(vt.row.worktree_path.clone());
             }
@@ -311,12 +306,7 @@ impl App {
             }
         }
         for vt in tasks.iter() {
-            let pane_count = vt
-                .row
-                .sessions
-                .first()
-                .map(|s| s.panes.len())
-                .unwrap_or(0);
+            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             if pane_count > 1 {
                 valid_keys.insert(vt.row.worktree_path.clone());
             }
@@ -881,12 +871,7 @@ impl App {
 
             // Skip sub-rows if expanded.
             if self.expanded.contains(&vt.row.worktree_path) {
-                let sub_count = vt
-                    .row
-                    .sessions
-                    .first()
-                    .map(|s| s.panes.len())
-                    .unwrap_or(0);
+                let sub_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
                 if visual_row < table_row + sub_count {
                     return None; // clicked on a sub-row
                 }
@@ -1145,7 +1130,9 @@ impl App {
             }
             Message::ExpandRow => {
                 let pane_count = self.pane_count_at(self.cursor);
-                if pane_count > 1 && let Some(key) = self.expansion_key_at(self.cursor) {
+                if pane_count > 1
+                    && let Some(key) = self.expansion_key_at(self.cursor)
+                {
                     self.expanded.insert(key);
                 }
                 ok()
@@ -3848,7 +3835,11 @@ mod tests {
         app.expanded.insert("/workspace/repo-1".to_string());
         app.selected_pane = Some(1);
         app.update(Message::ToggleExpandAll);
-        assert_eq!(app.selected_pane, Some(1), "selected_pane should persist across collapse-all");
+        assert_eq!(
+            app.selected_pane,
+            Some(1),
+            "selected_pane should persist across collapse-all"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -3972,7 +3963,10 @@ mod tests {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 1)]);
         app.expanded.insert("/workspace/repo-1".to_string());
         app.prune_expansion_state();
-        assert!(app.expanded.is_empty(), "single-pane row should be pruned from expanded set");
+        assert!(
+            app.expanded.is_empty(),
+            "single-pane row should be pruned from expanded set"
+        );
     }
 
     #[test]
@@ -3980,6 +3974,9 @@ mod tests {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
         app.expanded.insert("/workspace/repo-1".to_string());
         app.prune_expansion_state();
-        assert!(app.expanded.contains("/workspace/repo-1"), "multi-pane row should remain in expanded set");
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "multi-pane row should remain in expanded set"
+        );
     }
 }

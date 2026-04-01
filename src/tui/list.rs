@@ -579,12 +579,8 @@ impl App {
                         )
                         .unwrap_or_default()
                     } else {
-                        tmux::capture_pane_content_at(
-                            &session_name,
-                            pane_index,
-                            PANE_CAPTURE_LINES,
-                        )
-                        .unwrap_or_default()
+                        tmux::capture_pane_content_at(&session_name, pane_index, PANE_CAPTURE_LINES)
+                            .unwrap_or_default()
                     };
                     let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
                         session_name,
@@ -857,7 +853,6 @@ impl App {
             errors: Vec::new(),
         });
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -911,7 +906,7 @@ impl App {
             Constraint::Length(3),  // #
             Constraint::Length(10), // CLAUDE (moved from last to position 2)
             Constraint::Length(6),  // ISSUE
-            Constraint::Min(20),   // TITLE (flexible)
+            Constraint::Min(20),    // TITLE (flexible)
         ];
         if show_branch {
             widths.push(Constraint::Length(20)); // BRANCH (left-truncated)
@@ -1284,7 +1279,11 @@ impl App {
                     &ss.session.panes,
                     idx,
                     Color::DarkGray, // no repo color for standalone
-                    &SubRowContext { show_branch, has_remote, theme },
+                    &SubRowContext {
+                        show_branch,
+                        has_remote,
+                        theme,
+                    },
                     &mut rows,
                     &mut row_heights,
                 );
@@ -1369,12 +1368,7 @@ impl App {
                 .style(Style::default().fg(bar_color));
 
             // Expand/collapse indicator appended to STATUS cell.
-            let pane_count = vt
-                .row
-                .sessions
-                .first()
-                .map(|s| s.panes.len())
-                .unwrap_or(0);
+            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
             let pr_display = expand_indicator(&pr_text, pane_count, is_expanded);
 
@@ -1427,7 +1421,11 @@ impl App {
                     panes,
                     cursor_idx,
                     bar_color,
-                    &SubRowContext { show_branch, has_remote, theme },
+                    &SubRowContext {
+                        show_branch,
+                        has_remote,
+                        theme,
+                    },
                     &mut rows,
                     &mut row_heights,
                 );
@@ -1455,8 +1453,7 @@ impl App {
         let pane_count = panes.len();
         for (pi, pane) in panes.iter().enumerate() {
             let is_last = pi == pane_count - 1;
-            let selected = self.cursor == parent_cursor_idx
-                && self.selected_pane == Some(pi);
+            let selected = self.cursor == parent_cursor_idx && self.selected_pane == Some(pi);
 
             // Tree connector: ├─N for non-last, └─N for last pane.
             let connector = if is_last {
@@ -1482,9 +1479,9 @@ impl App {
 
             let mut cells = vec![
                 Cell::from("\u{25cf}").style(Style::default().fg(bar_color)), // BAR inherits parent
-                Cell::from(connector),    // # cell: tree connector
-                claude_cell,              // CLAUDE cell
-                Cell::from(""),           // ISSUE: empty
+                Cell::from(connector),            // # cell: tree connector
+                claude_cell,                      // CLAUDE cell
+                Cell::from(""),                   // ISSUE: empty
                 Cell::from(pane.command.clone()), // TITLE: running command
             ];
 
@@ -2771,13 +2768,21 @@ mod tests {
     #[test]
     fn expand_indicator_collapsed_multi_pane() {
         let result = expand_indicator("no PR", 3, false);
-        assert!(result.ends_with("\u{25b6}3"), "expected '▶3' suffix, got: {}", result);
+        assert!(
+            result.ends_with("\u{25b6}3"),
+            "expected '▶3' suffix, got: {}",
+            result
+        );
     }
 
     #[test]
     fn expand_indicator_expanded_multi_pane() {
         let result = expand_indicator("no PR", 3, true);
-        assert!(result.ends_with("\u{25bc}3"), "expected '▼3' suffix, got: {}", result);
+        assert!(
+            result.ends_with("\u{25bc}3"),
+            "expected '▼3' suffix, got: {}",
+            result
+        );
     }
 
     #[test]
@@ -2830,19 +2835,24 @@ mod tests {
                 break;
             }
         }
-        assert!(!header_text.is_empty(), "should find header row with CLAUDE, ISSUE, TITLE");
+        assert!(
+            !header_text.is_empty(),
+            "should find header row with CLAUDE, ISSUE, TITLE"
+        );
         let claude_pos = header_text.find("CLAUDE").unwrap();
         let issue_pos = header_text.find("ISSUE").unwrap();
         let title_pos = header_text.find("TITLE").unwrap();
         assert!(
             claude_pos < issue_pos,
             "CLAUDE ({}) must appear before ISSUE ({})",
-            claude_pos, issue_pos
+            claude_pos,
+            issue_pos
         );
         assert!(
             issue_pos < title_pos,
             "ISSUE ({}) must appear before TITLE ({})",
-            issue_pos, title_pos
+            issue_pos,
+            title_pos
         );
     }
 

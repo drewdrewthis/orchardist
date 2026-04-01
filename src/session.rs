@@ -103,8 +103,8 @@ impl PaneInfo {
     /// Detection is case-insensitive: any occurrence of "claude" in either
     /// the command or title marks `has_claude` as true.
     pub fn new(index: usize, command: &str, title: &str) -> Self {
-        let has_claude = command.to_lowercase().contains("claude")
-            || title.to_lowercase().contains("claude");
+        let has_claude =
+            command.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
         PaneInfo {
             index,
             command: command.to_string(),

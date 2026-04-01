@@ -108,7 +108,6 @@ pub enum Message {
     PreviewPageUp,
     /// Scroll the preview pane down by one page.
     PreviewPageDown,
-
 }
 
 /// Result of processing a [`Message`] through the `update` function.
