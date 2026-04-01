@@ -31,6 +31,5 @@ pub mod shell;
 pub mod sources;
 pub mod status;
 pub mod tmux;
-pub mod transfer;
 pub mod tui;
 pub mod types;

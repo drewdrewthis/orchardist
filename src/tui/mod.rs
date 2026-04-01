@@ -29,7 +29,6 @@ use crate::navigation;
 use crate::remote;
 use crate::session::StandaloneSessionRow;
 use crate::tmux;
-use crate::transfer;
 use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
@@ -583,19 +582,6 @@ impl App {
                         ds.error = Some(e);
                     }
                 }
-                AppMsg::TransferDone => {
-                    if let ViewState::Transfer(ref mut ts) = self.view {
-                        ts.phase = Phase::Done;
-                    }
-                    self.warning = Some(("Transfer complete.".to_string(), Instant::now()));
-                    self.start_refresh();
-                }
-                AppMsg::TransferErr(e) => {
-                    if let ViewState::Transfer(ref mut ts) = self.view {
-                        ts.phase = Phase::Error;
-                        ts.error = Some(e);
-                    }
-                }
                 AppMsg::CleanupDone { deleted, errors } => {
                     if let ViewState::Cleanup(ref mut cs) = self.view {
                         cs.deleted = deleted;
@@ -677,7 +663,7 @@ impl App {
                     KeyCode::Char('i') => Some(Message::OpenIssue),
                     KeyCode::Char('B') => Some(Message::ToggleBranchColumn),
                     KeyCode::Char('d') => Some(Message::Delete),
-                    KeyCode::Char('p') => Some(Message::Transfer),
+                    KeyCode::Char('p') => Some(Message::TogglePriority),
                     KeyCode::Char('n') => Some(Message::NewSession),
                     KeyCode::Char('w') => Some(Message::NewWorktree),
                     KeyCode::Char('/') => Some(Message::StartSearch),
@@ -699,15 +685,6 @@ impl App {
                 }
             }
             ViewState::ConfirmDelete(ds) => match ds.phase {
-                Phase::Confirm => match key.code {
-                    KeyCode::Char('y') => Some(Message::ConfirmYes),
-                    KeyCode::Char('n') | KeyCode::Esc => Some(Message::ConfirmNo),
-                    _ => None,
-                },
-                Phase::Done | Phase::Error => Some(Message::DismissDialog),
-                _ => None,
-            },
-            ViewState::Transfer(ts) => match ts.phase {
                 Phase::Confirm => match key.code {
                     KeyCode::Char('y') => Some(Message::ConfirmYes),
                     KeyCode::Char('n') | KeyCode::Esc => Some(Message::ConfirmNo),
@@ -1087,7 +1064,7 @@ impl App {
                 }
                 ok()
             }
-            Message::Transfer => {
+            Message::TogglePriority => {
                 let standalone_count = self.standalone_sessions.len();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
@@ -1099,12 +1076,14 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
-                    let wt = list::worktree_from_task_row(vt.row);
-                    self.view = ViewState::Transfer(state::TransferState {
-                        target: wt,
-                        phase: Phase::Confirm,
-                        error: None,
-                    });
+                    let path = vt.row.worktree_path.clone();
+                    drop(visible);
+                    crate::priority::toggle_priority(&path);
+                    self.task_rows = crate::build_state::build_task_rows(&self.global_config);
+                    let total = standalone_count + self.task_rows.len();
+                    if total > 0 && self.cursor >= total {
+                        self.cursor = total - 1;
+                    }
                 }
                 ok()
             }
@@ -1219,11 +1198,6 @@ impl App {
                         ds.phase = Phase::InProgress;
                         let target = ds.target.clone();
                         self.start_delete(&target);
-                    }
-                    ViewState::Transfer(ts) => {
-                        ts.phase = Phase::InProgress;
-                        let target = ts.target.clone();
-                        self.start_transfer(&target);
                     }
                     _ => {}
                 }
@@ -1365,7 +1339,6 @@ impl App {
         match self.view {
             ViewState::List => "List",
             ViewState::ConfirmDelete(_) => "ConfirmDelete",
-            ViewState::Transfer(_) => "Transfer",
             ViewState::Cleanup(_) => "Cleanup",
             ViewState::NewSession(_) => "NewSession",
             ViewState::NewWorktree(_) => "NewWorktree",
@@ -1386,7 +1359,6 @@ impl App {
         match &self.view {
             ViewState::List => self.render_list(f),
             ViewState::ConfirmDelete(ds) => self.render_delete(ds, f),
-            ViewState::Transfer(ts) => self.render_transfer(ts, f),
             ViewState::Cleanup(cs) => self.render_cleanup(cs, f),
             ViewState::NewSession(ns) => {
                 self.render_list(f);
@@ -1401,7 +1373,7 @@ impl App {
     }
 
     // -------------------------------------------------------------------
-    // Actions (delete, transfer, cleanup)
+    // Actions (delete, cleanup)
     // -------------------------------------------------------------------
 
     fn start_delete(&self, target: &Worktree) {
@@ -1414,49 +1386,6 @@ impl App {
             }
             Err(e) => {
                 let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
-            }
-        });
-    }
-
-    fn start_transfer(&self, target: &Worktree) {
-        let wt = target.clone();
-        let global_config = self.global_config.clone();
-        let repo_root = self.repo_root.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            // Find the remote config: if the worktree has a host, look up that
-            // host; otherwise use the first remote.
-            let remote_cfg = global_config.repos.iter().find_map(|repo| {
-                if let Some(ref host) = wt.remote {
-                    repo.remote_for_host(host).cloned()
-                } else {
-                    repo.first_remote().cloned()
-                }
-            });
-            let remote_cfg = match remote_cfg {
-                Some(r) => r,
-                None => {
-                    let _ = tx.send(AppMsg::TransferErr("No remote configured".to_string()));
-                    return;
-                }
-            };
-            let types_remote = crate::types::RemoteConfig {
-                host: remote_cfg.host.clone(),
-                repo_path: remote_cfg.path.clone(),
-                shell: remote_cfg.shell.clone(),
-            };
-            let result = if wt.remote.is_some() {
-                transfer::pull_to_local(&wt, &types_remote, &repo_root, &|_| {})
-            } else {
-                transfer::push_to_remote(&wt, &types_remote, &|_| {})
-            };
-            match result {
-                Ok(()) => {
-                    let _ = tx.send(AppMsg::TransferDone);
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMsg::TransferErr(e.to_string()));
-                }
             }
         });
     }
@@ -1490,7 +1419,7 @@ impl App {
         let setup_script = crate::config::load_config().setup_script;
 
         std::thread::spawn(move || {
-            let worktree_path = transfer::derive_local_worktree_path(&repo_root, &branch);
+            let worktree_path = derive_local_worktree_path(&repo_root, &branch);
 
             // Try creating a new branch; fall back to checking out an existing one.
             let new_branch_result = Command::new("git")
@@ -1748,6 +1677,52 @@ fn filter_stale(rows: &[derive::WorktreeRow]) -> Vec<derive::WorktreeRow> {
 // Delete worktree (shared by single-delete and cleanup)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Worktree path helpers (previously in transfer.rs)
+// ---------------------------------------------------------------------------
+
+/// Converts a branch name to a filesystem-safe slug by replacing `/` with `-`
+/// and stripping non-alphanumeric characters except `.`, `-`, `_`.
+fn sanitize_branch_slug(branch: &str) -> String {
+    use std::sync::OnceLock;
+
+    use regex::Regex;
+
+    fn non_slug_re() -> &'static Regex {
+        static RE: OnceLock<Regex> = OnceLock::new();
+        RE.get_or_init(|| Regex::new(r"[^a-zA-Z0-9.\-_]").unwrap())
+    }
+
+    let replaced = branch.replace('/', "-");
+    non_slug_re().replace_all(&replaced, "").into_owned()
+}
+
+/// Returns the absolute conventional path for a local worktree:
+/// `parent(repo_root)/worktrees/worktree-SLUG`.
+fn derive_local_worktree_path(repo_root: &str, branch: &str) -> String {
+    use std::path::Path;
+
+    let slug = sanitize_branch_slug(branch);
+    let parent = Path::new(repo_root)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let joined = parent.join("worktrees").join(format!("worktree-{}", slug));
+    match joined.canonicalize() {
+        Ok(abs) => abs.to_string_lossy().into_owned(),
+        Err(_) => {
+            if joined.is_absolute() {
+                joined.to_string_lossy().into_owned()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&joined))
+                    .unwrap_or(joined)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+    }
+}
+
 fn delete_worktree(
     wt: &Worktree,
     global_config: &global_config::GlobalConfig,
@@ -1758,7 +1733,7 @@ fn delete_worktree(
             let _ = remote::kill_remote_tmux_session(host, sess);
         }
         if let Some(ref branch) = wt.branch {
-            let slug = transfer::sanitize_branch_slug(branch);
+            let slug = sanitize_branch_slug(branch);
             let _ = remote::remove_remote_registry_entry(host, &slug);
         }
         // Find the remote config matching this host to get the repo_path.
@@ -1796,7 +1771,7 @@ fn delete_task_row(
         if let Some(sess) = session_name {
             let _ = remote::kill_remote_tmux_session(host, sess);
         }
-        let slug = transfer::sanitize_branch_slug(&row.branch);
+        let slug = sanitize_branch_slug(&row.branch);
         let _ = remote::remove_remote_registry_entry(host, &slug);
         // Find the remote config matching this host to get the repo_path.
         let remote_cfg = global_config
@@ -2944,6 +2919,13 @@ mod tests {
         });
         let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::ToggleSelection));
+    }
+
+    #[test]
+    fn handle_event_p_maps_to_toggle_priority() {
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::TogglePriority));
     }
 
     // -----------------------------------------------------------------------

@@ -36,8 +36,8 @@ pub enum Message {
     ToggleBranchColumn,
     /// Open the delete-worktree confirmation dialog.
     Delete,
-    /// Open the transfer (push/pull) confirmation dialog.
-    Transfer,
+    /// Toggle the priority flag for the selected worktree.
+    TogglePriority,
     /// Open the new-session name-entry dialog.
     NewSession,
     /// Activate the search bar.
@@ -72,7 +72,7 @@ pub enum Message {
     SearchCancel,
 
     // -- Dialog actions --
-    /// Confirm a yes/no dialog (delete, transfer).
+    /// Confirm a yes/no dialog (delete).
     ConfirmYes,
     /// Decline a yes/no dialog.
     ConfirmNo,

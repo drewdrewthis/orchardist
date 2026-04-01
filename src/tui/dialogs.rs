@@ -1,6 +1,6 @@
 //! TUI confirmation and progress dialogs.
 //!
-//! Renders the delete, cleanup, new-session, new-worktree, transfer, and help
+//! Renders the delete, cleanup, new-session, new-worktree, and help
 //! dialogs as modal overlays over the main worktree list. Key handling has moved
 //! to the TEA pattern (`handle_event` / `update`) in `mod.rs`.
 use ratatui::prelude::*;
@@ -8,9 +8,7 @@ use ratatui::widgets::Padding;
 
 use crate::paths;
 use crate::tui::App;
-use crate::tui::state::{
-    CleanupState, DeleteState, NewSessionState, NewWorktreeState, Phase, TransferState,
-};
+use crate::tui::state::{CleanupState, DeleteState, NewSessionState, NewWorktreeState, Phase};
 use crate::tui::widgets::render_popup;
 
 // ---------------------------------------------------------------------------
@@ -75,90 +73,6 @@ impl App {
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     "Press any key to go back.",
-                    Style::default().fg(theme.dimmed),
-                ));
-            }
-            Phase::Idle => {}
-        }
-
-        render_popup(
-            f,
-            lines,
-            theme.warning,
-            theme.background,
-            70,
-            12,
-            None,
-            Padding::new(2, 2, 1, 1),
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Transfer dialog
-// ---------------------------------------------------------------------------
-
-impl App {
-    pub(crate) fn render_transfer(&self, state: &TransferState, f: &mut Frame) {
-        let theme = &self.theme;
-        let wt = &state.target;
-        let branch_label = wt.branch.as_deref().unwrap_or("(detached)");
-        let path_str = paths::tildify(&wt.path);
-        let direction = if wt.remote.is_some() {
-            "pull to local"
-        } else {
-            "push to remote"
-        };
-
-        let mut lines: Vec<Line> = Vec::new();
-
-        match state.phase {
-            Phase::Confirm => {
-                lines.push(Line::from(format!(
-                    "Transfer {} \u{2014} {}",
-                    branch_label, direction
-                )));
-                lines.push(Line::from(format!("from {}", path_str)));
-                if wt.tmux_attached {
-                    lines.push(Line::styled(
-                        "Session is currently attached \u{2014} it will be killed.",
-                        Style::default().fg(theme.warning),
-                    ));
-                }
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("y", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw(" yes  "),
-                    Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw(" no"),
-                ]));
-            }
-            Phase::InProgress => {
-                let throbber = throbber_widgets_tui::Throbber::default()
-                    .label("Transferring worktree...")
-                    .throbber_style(Style::default().fg(theme.accent));
-                lines.push(throbber.to_line(&self.throbber_state));
-            }
-            Phase::Done => {
-                lines.push(Line::styled(
-                    "\u{2713} Transfer complete.",
-                    Style::default().fg(theme.success),
-                ));
-                lines.push(Line::from(""));
-                lines.push(Line::styled(
-                    "Press any key to continue.",
-                    Style::default().fg(theme.dimmed),
-                ));
-            }
-            Phase::Error => {
-                let err_msg = state.error.as_deref().unwrap_or("unknown error");
-                lines.push(Line::styled(
-                    format!("\u{2716} Error: {}", err_msg),
-                    Style::default().fg(theme.error),
-                ));
-                lines.push(Line::from(""));
-                lines.push(Line::styled(
-                    "Press any key to continue.",
                     Style::default().fg(theme.dimmed),
                 ));
             }
@@ -479,7 +393,7 @@ impl App {
             ]),
             Line::from(vec![
                 Span::styled("p        ", key_style),
-                Span::styled("Push / pull worktree", dim),
+                Span::styled("Toggle priority", dim),
             ]),
             Line::from(vec![
                 Span::styled("PgUp/Dn  ", key_style),
