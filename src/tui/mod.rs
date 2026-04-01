@@ -1674,11 +1674,7 @@ fn filter_stale(rows: &[derive::WorktreeRow]) -> Vec<derive::WorktreeRow> {
 }
 
 // ---------------------------------------------------------------------------
-// Delete worktree (shared by single-delete and cleanup)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Worktree path helpers (previously in transfer.rs)
+// Worktree path helpers
 // ---------------------------------------------------------------------------
 
 /// Converts a branch name to a filesystem-safe slug by replacing `/` with `-`
@@ -1722,6 +1718,10 @@ fn derive_local_worktree_path(repo_root: &str, branch: &str) -> String {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Delete worktree (shared by single-delete and cleanup)
+// ---------------------------------------------------------------------------
 
 fn delete_worktree(
     wt: &Worktree,
@@ -3971,6 +3971,50 @@ mod tests {
         assert!(
             app.expanded.contains("/workspace/repo-1"),
             "multi-pane row should remain in expanded set"
+        );
+    }
+
+    // --- sanitize_branch_slug ---
+
+    #[test]
+    fn sanitize_replaces_slash_with_dash() {
+        assert_eq!(sanitize_branch_slug("feat/my-branch"), "feat-my-branch");
+    }
+
+    #[test]
+    fn sanitize_strips_special_characters() {
+        assert_eq!(sanitize_branch_slug("feat/hello world!"), "feat-helloworld");
+    }
+
+    #[test]
+    fn sanitize_preserves_dots_dashes_underscores() {
+        assert_eq!(sanitize_branch_slug("fix/v1.2_patch"), "fix-v1.2_patch");
+    }
+
+    #[test]
+    fn sanitize_plain_branch_unchanged() {
+        assert_eq!(sanitize_branch_slug("main"), "main");
+    }
+
+    // --- derive_local_worktree_path ---
+
+    #[test]
+    fn local_path_uses_parent_and_slug() {
+        let result = derive_local_worktree_path("/home/user/repo", "feat/my-feature");
+        assert!(
+            result.ends_with("worktrees/worktree-feat-my-feature"),
+            "got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn local_path_parent_segment_correct() {
+        let result = derive_local_worktree_path("/srv/repos/myrepo", "fix/bug-101");
+        assert!(
+            result.contains("worktrees/worktree-fix-bug-101"),
+            "got: {}",
+            result
         );
     }
 }
