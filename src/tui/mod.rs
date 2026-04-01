@@ -1193,13 +1193,10 @@ impl App {
                 ok()
             }
             Message::ConfirmYes => {
-                match &mut self.view {
-                    ViewState::ConfirmDelete(ds) => {
-                        ds.phase = Phase::InProgress;
-                        let target = ds.target.clone();
-                        self.start_delete(&target);
-                    }
-                    _ => {}
+                if let ViewState::ConfirmDelete(ds) = &mut self.view {
+                    ds.phase = Phase::InProgress;
+                    let target = ds.target.clone();
+                    self.start_delete(&target);
                 }
                 ok()
             }
