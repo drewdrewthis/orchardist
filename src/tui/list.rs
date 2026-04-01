@@ -335,11 +335,11 @@ fn format_claude_state(
         .unwrap_or_default();
     match state {
         ClaudeState::Input => (
-            format!("\u{25c6} input{}{}", suffix, ctx_suffix), // ◆ (1-cell)
+            format!("\u{26a1}input{}{}", suffix, ctx_suffix),
             Style::default().fg(theme.claude_needs_input),
         ),
         ClaudeState::Working => (
-            format!("\u{25b8} active{}{}", suffix, ctx_suffix), // ▸ (1-cell)
+            format!("\u{26a1}active{}{}", suffix, ctx_suffix),
             Style::default().fg(theme.claude_active),
         ),
         ClaudeState::Idle => (
@@ -1479,7 +1479,7 @@ impl App {
 
             // Claude indicator for this pane.
             let claude_cell = if pane.has_claude {
-                Cell::from("\u{25b8}").style(Style::default().fg(ctx.theme.claude_active)) // ▸ (1-cell)
+                Cell::from("\u{26a1}").style(Style::default().fg(ctx.theme.claude_active))
             } else {
                 Cell::from("\u{2500}").style(Style::default().fg(ctx.theme.dimmed))
             };
@@ -1740,12 +1740,23 @@ impl App {
 ///
 /// Returns the original text unchanged for single-pane or zero-pane rows.
 /// Multi-pane rows get `" ▶N"` (collapsed) or `" ▼N"` (expanded) appended.
+/// Adds expand/collapse caret and pane count to the CLAUDE status text.
+///
+/// For multi-pane rows, replaces the leading status icon (⚡, ●, ○) with
+/// ▶ (collapsed) or ▼ (expanded) and appends `(N)`.
+/// Single-pane or zero-pane rows are returned unchanged.
 pub(crate) fn expand_indicator(base_text: &str, pane_count: usize, expanded: bool) -> String {
     if pane_count <= 1 {
         return base_text.to_string();
     }
-    let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
-    format!("{} {}{}", base_text, icon, pane_count)
+    let caret = if expanded { "\u{25bc}" } else { "\u{25b6}" }; // ▼ / ▶
+    // Strip the leading icon character (⚡, ●, ○, etc.) and replace with caret.
+    let rest = base_text
+        .char_indices()
+        .nth(1)
+        .map(|(i, _)| &base_text[i..])
+        .unwrap_or(base_text);
+    format!("{}{}({})", caret, rest, pane_count)
 }
 
 /// Creates a section header row spanning all columns for a display group.
@@ -2786,36 +2797,26 @@ mod tests {
 
     #[test]
     fn expand_indicator_collapsed_multi_pane() {
-        let result = expand_indicator("no PR", 3, false);
-        assert!(
-            result.ends_with("\u{25b6}3"),
-            "expected '▶3' suffix, got: {}",
-            result
-        );
+        let result = expand_indicator("\u{26a1}active", 3, false);
+        assert_eq!(result, "\u{25b6}active(3)", "got: {}", result);
     }
 
     #[test]
     fn expand_indicator_expanded_multi_pane() {
-        let result = expand_indicator("no PR", 3, true);
-        assert!(
-            result.ends_with("\u{25bc}3"),
-            "expected '▼3' suffix, got: {}",
-            result
-        );
+        let result = expand_indicator("\u{26a1}active", 3, true);
+        assert_eq!(result, "\u{25bc}active(3)", "got: {}", result);
     }
 
     #[test]
     fn expand_indicator_single_pane_no_indicator() {
-        let result = expand_indicator("no PR", 1, false);
-        assert_eq!(result, "no PR");
-        assert!(!result.contains('\u{25b6}'));
-        assert!(!result.contains('\u{25bc}'));
+        let result = expand_indicator("\u{26a1}active", 1, false);
+        assert_eq!(result, "\u{26a1}active");
     }
 
     #[test]
     fn expand_indicator_zero_panes_no_indicator() {
-        let result = expand_indicator("no PR", 0, false);
-        assert_eq!(result, "no PR");
+        let result = expand_indicator("\u{25cf} idle", 0, false);
+        assert_eq!(result, "\u{25cf} idle");
     }
 
     // -----------------------------------------------------------------------
