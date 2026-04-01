@@ -247,7 +247,11 @@ fn enrich_session(
         status: SessionStatus::Running { attached: false },
     };
 
-    let panes = build_pane_infos(&session.pane_commands, &session.pane_titles);
+    let panes = build_pane_infos(
+        &session.pane_targets,
+        &session.pane_commands,
+        &session.pane_titles,
+    );
 
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
@@ -274,7 +278,11 @@ fn enrich_session_from_scraping(
 ) -> EnrichedSession {
     use crate::claude_state::ClaudeState;
 
-    let panes = build_pane_infos(&session.pane_commands, &session.pane_titles);
+    let panes = build_pane_infos(
+        &session.pane_targets,
+        &session.pane_commands,
+        &session.pane_titles,
+    );
 
     let has_claude_active = session
         .pane_commands
@@ -523,9 +531,11 @@ mod tests {
     }
 
     fn session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedTmuxSession {
+        let targets: Vec<String> = (0..pane_commands.len()).map(|i| format!("0.{i}")).collect();
         CachedTmuxSession {
             name: name.to_string(),
             path: path.to_string(),
+            pane_targets: targets,
             pane_titles: vec![],
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
             host: None,
@@ -1340,9 +1350,12 @@ mod tests {
         pane_commands: Vec<&str>,
         pane_titles: Vec<&str>,
     ) -> CachedTmuxSession {
+        let count = pane_commands.len().max(pane_titles.len());
+        let targets: Vec<String> = (0..count).map(|i| format!("0.{i}")).collect();
         CachedTmuxSession {
             name: name.to_string(),
             path: path.to_string(),
+            pane_targets: targets,
             pane_titles: pane_titles.into_iter().map(|s| s.to_string()).collect(),
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
             host: None,
@@ -1376,6 +1389,7 @@ mod tests {
         let sess = CachedTmuxSession {
             name: "empty".to_string(),
             path: "/workspace/repo".to_string(),
+            pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
             host: None,

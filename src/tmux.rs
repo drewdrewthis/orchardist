@@ -231,16 +231,19 @@ pub fn capture_pane_content(session: &str, lines: u32) -> Result<String> {
     capture_pane_content_at(session, None, lines)
 }
 
-/// Captures pane content with an explicit pane index.
+/// Captures pane content with an explicit pane target.
 ///
-/// The tmux target is `session` when `pane_index` is `None`, or
-/// `session.N` when `pane_index` is `Some(N)`.
+/// The tmux target is `session` when `pane_target` is `None`, or
+/// `session:{target}` when `pane_target` is `Some(target)` (e.g., "0.1").
 pub fn capture_pane_content_at(
     session: &str,
-    pane_index: Option<usize>,
+    pane_target: Option<&str>,
     lines: u32,
 ) -> Result<String> {
-    let target = build_pane_target(session, pane_index);
+    let target = match pane_target {
+        Some(t) => format!("{}:{}", session, t),
+        None => session.to_string(),
+    };
     let lines_arg = format!("-{lines}");
     let out = Command::new("tmux")
         .args(["capture-pane", "-t", &target, "-p", "-J", "-S", &lines_arg])
@@ -253,9 +256,10 @@ pub fn capture_pane_content_at(
 
 /// Selects a specific pane within a tmux session.
 ///
-/// Runs `tmux select-pane -t session.pane_index`.
-pub fn select_pane(session: &str, pane_index: usize) -> Result<()> {
-    let target = format!("{}.{}", session, pane_index);
+/// Runs `tmux select-pane -t session:{pane_target}` where `pane_target` is
+/// a window.pane address like "0.1" (window 0, pane 1).
+pub fn select_pane(session: &str, pane_target: &str) -> Result<()> {
+    let target = format!("{}:{}", session, pane_target);
     let out = Command::new("tmux")
         .args(["select-pane", "-t", &target])
         .output()

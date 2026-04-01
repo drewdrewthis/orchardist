@@ -45,8 +45,8 @@ enum TaskEnterAction {
         worktree_path: String,
         branch: Option<String>,
         host: Option<String>,
-        /// When `Some(n)`, select pane `n` after switching (tmux select-pane -t session.n).
-        pane_index: Option<usize>,
+        /// When `Some`, select this pane after switching (tmux target "window.pane").
+        pane_target: Option<String>,
     },
     CreateSession {
         worktree_path: String,
@@ -58,8 +58,8 @@ enum TaskEnterAction {
         session_name: String,
         command: String,
         cwd: String,
-        /// When `Some(n)`, select pane `n` after switching (tmux select-pane -t session.n).
-        pane_index: Option<usize>,
+        /// When `Some`, select this pane after switching (tmux target "window.pane").
+        pane_target: Option<String>,
     },
 }
 
@@ -335,11 +335,11 @@ fn format_claude_state(
         .unwrap_or_default();
     match state {
         ClaudeState::Input => (
-            format!("\u{2757} input{}{}", suffix, ctx_suffix),
+            format!("\u{25c6} input{}{}", suffix, ctx_suffix), // ◆ (1-cell)
             Style::default().fg(theme.claude_needs_input),
         ),
         ClaudeState::Working => (
-            format!("\u{26a1} active{}{}", suffix, ctx_suffix),
+            format!("\u{25b8} active{}{}", suffix, ctx_suffix), // ▸ (1-cell)
             Style::default().fg(theme.claude_active),
         ),
         ClaudeState::Idle => (
@@ -387,16 +387,19 @@ impl App {
     pub(crate) fn handle_enter_action(&mut self) -> bool {
         let standalone_count = self.standalone_sessions.len();
 
-        let pane_index = self.selected_pane;
+        let pane_idx = self.selected_pane;
         let action = if cursor_is_standalone(self.cursor, standalone_count) {
-            self.standalone_sessions
-                .get(self.cursor)
-                .map(|ss| TaskEnterAction::JoinStandalone {
+            self.standalone_sessions.get(self.cursor).map(|ss| {
+                let pane_target = pane_idx
+                    .and_then(|i| ss.session.panes.get(i))
+                    .map(|p| p.tmux_target.clone());
+                TaskEnterAction::JoinStandalone {
                     session_name: ss.session.tmux.name.clone(),
                     command: ss.config.command.clone(),
                     cwd: ss.config.cwd.clone(),
-                    pane_index,
-                })
+                    pane_target,
+                }
+            })
         } else {
             let worktree_cursor = self.cursor - standalone_count;
             let tasks =
@@ -407,12 +410,15 @@ impl App {
                         crate::session::Host::Local => None,
                         crate::session::Host::Remote(h) => Some(h.clone()),
                     };
+                    let pane_target = pane_idx
+                        .and_then(|i| session.panes.get(i))
+                        .map(|p| p.tmux_target.clone());
                     TaskEnterAction::JoinSession {
                         session_name: session.tmux.name.clone(),
                         worktree_path: vt.row.worktree_path.clone(),
                         branch: Some(vt.row.branch.clone()),
                         host,
-                        pane_index,
+                        pane_target,
                     }
                 } else {
                     TaskEnterAction::CreateSession {
@@ -432,7 +438,7 @@ impl App {
                 worktree_path,
                 branch,
                 host,
-                pane_index,
+                pane_target,
             }) => {
                 // Guard: refuse to join a session on a host not confirmed reachable.
                 if let Some(ref h) = host
@@ -454,8 +460,8 @@ impl App {
                     None,
                 );
                 // Select specific pane after switching if a sub-row was active.
-                if let Some(pi) = pane_index {
-                    let _ = tmux::select_pane(&session_name, pi);
+                if let Some(ref target) = pane_target {
+                    let _ = tmux::select_pane(&session_name, target);
                 }
                 self.switch_target.is_some()
             }
@@ -491,11 +497,11 @@ impl App {
                 session_name,
                 command,
                 cwd,
-                pane_index,
+                pane_target,
             }) => {
                 if tmux::session_exists(&session_name) {
-                    if let Some(pi) = pane_index {
-                        let _ = tmux::select_pane(&session_name, pi);
+                    if let Some(ref target) = pane_target {
+                        let _ = tmux::select_pane(&session_name, target);
                     }
                     self.switch_target = Some(session_name);
                     true
@@ -518,19 +524,19 @@ impl App {
         }
     }
 
-    /// Returns the pane index to use for preview capture.
+    /// Resolves the tmux pane target string for the selected sub-row pane.
     ///
-    /// When `selected_pane` is `Some(n)`, returns `Some(n)` for pane-level preview.
-    /// When `None`, returns `None` (default pane 0 behavior).
-    pub(crate) fn preview_pane_index(&self) -> Option<usize> {
+    /// Looks up the `PaneInfo.tmux_target` from the session's pane list using
+    /// `self.selected_pane` as the sequential index.
+    fn resolve_pane_target(&self, panes: &[crate::session::PaneInfo]) -> Option<String> {
         self.selected_pane
+            .and_then(|i| panes.get(i))
+            .map(|p| p.tmux_target.clone())
     }
 
     /// Fetches pane content for the task at the current cursor position.
     pub(crate) fn fetch_task_pane_content(&mut self) {
         self.pane_content.clear();
-
-        let pane_index = self.preview_pane_index();
 
         // Handle standalone sessions first.
         let standalone_count = self.standalone_sessions.len();
@@ -542,11 +548,15 @@ impl App {
             )
         {
             let session_name = ss.session.tmux.name.clone();
+            let pane_target = self.resolve_pane_target(&ss.session.panes);
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                let content =
-                    tmux::capture_pane_content_at(&session_name, pane_index, PANE_CAPTURE_LINES)
-                        .unwrap_or_default();
+                let content = tmux::capture_pane_content_at(
+                    &session_name,
+                    pane_target.as_deref(),
+                    PANE_CAPTURE_LINES,
+                )
+                .unwrap_or_default();
                 let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
                     session_name,
                     content,
@@ -569,6 +579,7 @@ impl App {
                     crate::session::Host::Local => None,
                     crate::session::Host::Remote(h) => Some(h.clone()),
                 };
+                let pane_target = self.resolve_pane_target(&session.panes);
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let content = if let Some(host) = remote_host {
@@ -579,8 +590,12 @@ impl App {
                         )
                         .unwrap_or_default()
                     } else {
-                        tmux::capture_pane_content_at(&session_name, pane_index, PANE_CAPTURE_LINES)
-                            .unwrap_or_default()
+                        tmux::capture_pane_content_at(
+                            &session_name,
+                            pane_target.as_deref(),
+                            PANE_CAPTURE_LINES,
+                        )
+                        .unwrap_or_default()
                     };
                     let _ = tx.send(crate::tui::state::AppMsg::PaneContent(
                         session_name,
@@ -903,7 +918,7 @@ impl App {
         // Column widths — CLAUDE after #, STATUS at end.
         let mut widths: Vec<Constraint> = vec![
             Constraint::Length(1),  // BAR (colored repo indicator)
-            Constraint::Length(3),  // #
+            Constraint::Length(5),  // # (includes expand indicator like "▶3")
             Constraint::Length(10), // CLAUDE (moved from last to position 2)
             Constraint::Length(6),  // ISSUE
             Constraint::Min(20),    // TITLE (flexible)
@@ -1241,10 +1256,11 @@ impl App {
                 crate::session::SessionStatus::Dead => Style::default().fg(Color::DarkGray),
             };
 
-            // Expand/collapse indicator in STATUS cell.
+            // Expand/collapse indicator in # cell.
             let pane_count = ss.session.panes.len();
             let is_expanded = self.expanded.contains(&ss.session.tmux.name);
-            let status_display = expand_indicator(status_text, pane_count, is_expanded);
+            let num_display =
+                expand_indicator(&format!("{:>2}", unified_num), pane_count, is_expanded);
 
             let row_style = if selected {
                 Style::default()
@@ -1256,7 +1272,7 @@ impl App {
 
             let mut cells = vec![
                 Cell::from(""), // no bar for standalone sessions
-                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(num_display),
                 Cell::from(claude_text).style(claude_style),
                 Cell::from("").style(Style::default().fg(Color::DarkGray)), // no issue
                 Cell::from(ss.config.name.clone()),
@@ -1268,7 +1284,7 @@ impl App {
             if has_remote {
                 cells.push(Cell::from("")); // always local
             }
-            cells.push(Cell::from(status_display).style(status_style));
+            cells.push(Cell::from(status_text).style(status_style));
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -1367,15 +1383,16 @@ impl App {
             let bar_cell = Cell::from("\u{25cf}") // ●
                 .style(Style::default().fg(bar_color));
 
-            // Expand/collapse indicator appended to STATUS cell.
+            // Expand/collapse indicator in # cell.
             let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
-            let pr_display = expand_indicator(&pr_text, pane_count, is_expanded);
+            let num_display =
+                expand_indicator(&format!("{:>2}", unified_num), pane_count, is_expanded);
 
             // Use unified numbering (continues from standalone count).
             let mut cells = vec![
                 bar_cell,
-                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(num_display),
                 Cell::from(claude_text).style(claude_style),
                 issue_cell,
                 Cell::from(title_display),
@@ -1404,7 +1421,7 @@ impl App {
                 cells.push(host_cell);
             }
 
-            cells.push(Cell::from(pr_display).style(pr_style));
+            cells.push(Cell::from(pr_text).style(pr_style));
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -1464,7 +1481,7 @@ impl App {
 
             // Claude indicator for this pane.
             let claude_cell = if pane.has_claude {
-                Cell::from("\u{26a1}").style(Style::default().fg(ctx.theme.claude_active))
+                Cell::from("\u{25b8}").style(Style::default().fg(ctx.theme.claude_active)) // ▸ (1-cell)
             } else {
                 Cell::from("\u{2500}").style(Style::default().fg(ctx.theme.dimmed))
             };
@@ -1479,10 +1496,14 @@ impl App {
 
             let mut cells = vec![
                 Cell::from("\u{25cf}").style(Style::default().fg(bar_color)), // BAR inherits parent
-                Cell::from(connector),            // # cell: tree connector
-                claude_cell,                      // CLAUDE cell
-                Cell::from(""),                   // ISSUE: empty
-                Cell::from(pane.command.clone()), // TITLE: running command
+                Cell::from(connector), // # cell: tree connector
+                claude_cell,           // CLAUDE cell
+                Cell::from(""),        // ISSUE: empty
+                Cell::from(if pane.title.is_empty() {
+                    pane.command.clone()
+                } else {
+                    pane.title.clone()
+                }), // TITLE: pane title (falls back to command)
             ];
 
             if ctx.show_branch {

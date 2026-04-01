@@ -252,12 +252,13 @@ pub fn parse_tmux_output(
         };
 
         let pane_output = panes_fn(name);
-        let (pane_titles, pane_commands) = parse_pane_lines(&pane_output);
+        let (pane_targets, pane_titles, pane_commands) = parse_pane_lines(&pane_output);
         let last_output_lines = content_fn(name);
 
         sessions.push(CachedTmuxSession {
             name: name.to_string(),
             path: path.to_string(),
+            pane_targets,
             pane_titles,
             pane_commands,
             host: host.map(|h| h.to_string()),
@@ -269,8 +270,12 @@ pub fn parse_tmux_output(
     sessions
 }
 
-/// Parses pane info lines in the format `{pane_title}:{pane_current_command}`.
-fn parse_pane_lines(output: &str) -> (Vec<String>, Vec<String>) {
+/// Parses pane info lines in the format `{window}.{pane}\t{pane_title}:{pane_current_command}`.
+///
+/// Returns `(targets, titles, commands)` where `targets` contains tmux
+/// window.pane addresses (e.g., "0.1") for each pane.
+fn parse_pane_lines(output: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut targets = Vec::new();
     let mut titles = Vec::new();
     let mut commands = Vec::new();
 
@@ -278,14 +283,22 @@ fn parse_pane_lines(output: &str) -> (Vec<String>, Vec<String>) {
         if line.is_empty() {
             continue;
         }
-        // Split on first colon; title may contain colons.
-        if let Some((title, cmd)) = line.split_once(':') {
-            titles.push(title.to_string());
-            commands.push(cmd.to_string());
+        // Format: "{window_index}.{pane_index}\t{pane_title}:{pane_current_command}"
+        // Split on tab first to separate target from title:command.
+        if let Some((target, rest)) = line.split_once('\t') {
+            targets.push(target.to_string());
+            // Split rest on first colon; title may contain colons.
+            if let Some((title, cmd)) = rest.split_once(':') {
+                titles.push(title.to_string());
+                commands.push(cmd.to_string());
+            } else {
+                titles.push(rest.to_string());
+                commands.push(String::new());
+            }
         }
     }
 
-    (titles, commands)
+    (targets, titles, commands)
 }
 
 // ---------------------------------------------------------------------------
@@ -513,13 +526,18 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         sessions_output,
         host,
         |session_name| {
-            let pane_fmt = "#{pane_title}:#{pane_current_command}";
+            // -s lists panes across ALL windows in the session.
+            // Format: "window.pane\ttitle:command" for parse_pane_lines.
+            let pane_fmt = "#{window_index}.#{pane_index}\t#{pane_title}:#{pane_current_command}";
             match host {
-                None => run_local("tmux", &["list-panes", "-t", session_name, "-F", pane_fmt])
-                    .unwrap_or_default(),
+                None => run_local(
+                    "tmux",
+                    &["list-panes", "-s", "-t", session_name, "-F", pane_fmt],
+                )
+                .unwrap_or_default(),
                 Some(h) => {
                     let cmd = format!(
-                        "tmux list-panes -t {} -F '{}'",
+                        "tmux list-panes -s -t {} -F '{}'",
                         remote::shell_escape(session_name),
                         pane_fmt
                     );
@@ -1010,13 +1028,14 @@ mod tests {
             None,
             |name| {
                 assert_eq!(name, "my-session");
-                "zsh:zsh\nbash:bash\n".to_string()
+                "0.0\tzsh:zsh\n0.1\tbash:bash\n".to_string()
             },
             |_| vec![],
         );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "my-session");
         assert_eq!(result[0].path, "/home/user/repo");
+        assert_eq!(result[0].pane_targets, vec!["0.0", "0.1"]);
         assert_eq!(result[0].pane_titles, vec!["zsh", "bash"]);
         assert_eq!(result[0].pane_commands, vec!["zsh", "bash"]);
         assert!(result[0].host.is_none());
@@ -1155,5 +1174,42 @@ mod tests {
         let sessions_str = "my-session:/path\n";
         let result = parse_tmux_output(sessions_str, None, |_| "".to_string(), |_| vec![]);
         assert!(result[0].claude_state_raw.is_none());
+    }
+
+    // -- parse_pane_lines ---------------------------------------------------
+
+    #[test]
+    fn parse_pane_lines_single_window() {
+        let output = "0.0\tbash:bash\n0.1\tvim:vim\n";
+        let (targets, titles, commands) = parse_pane_lines(output);
+        assert_eq!(targets, vec!["0.0", "0.1"]);
+        assert_eq!(titles, vec!["bash", "vim"]);
+        assert_eq!(commands, vec!["bash", "vim"]);
+    }
+
+    #[test]
+    fn parse_pane_lines_multi_window() {
+        let output = "0.0\tbash:bash\n0.1\tclaude:claude\n1.0\tnvim:nvim\n";
+        let (targets, titles, commands) = parse_pane_lines(output);
+        assert_eq!(targets, vec!["0.0", "0.1", "1.0"]);
+        assert_eq!(titles, vec!["bash", "claude", "nvim"]);
+        assert_eq!(commands, vec!["bash", "claude", "nvim"]);
+    }
+
+    #[test]
+    fn parse_pane_lines_empty_input() {
+        let (targets, titles, commands) = parse_pane_lines("");
+        assert!(targets.is_empty());
+        assert!(titles.is_empty());
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn parse_pane_lines_title_with_colon() {
+        let output = "0.0\tClaude: my-project:node\n";
+        let (targets, titles, commands) = parse_pane_lines(output);
+        assert_eq!(targets, vec!["0.0"]);
+        assert_eq!(titles, vec!["Claude"]);
+        assert_eq!(commands, vec![" my-project:node"]);
     }
 }

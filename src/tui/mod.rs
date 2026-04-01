@@ -262,6 +262,15 @@ impl App {
         }
     }
 
+    /// Returns the pane index to use for preview capture.
+    ///
+    /// When the cursor is on a sub-row, returns `Some(pane_index)`.
+    /// When on a parent row, returns `None` (default pane 0).
+    #[cfg(test)]
+    pub(crate) fn preview_pane_index(&self) -> Option<usize> {
+        self.selected_pane
+    }
+
     /// Returns true if the row at cursor `idx` is currently expanded.
     fn is_row_expanded(&self, idx: usize) -> bool {
         self.expansion_key_at(idx)
@@ -2955,6 +2964,7 @@ mod tests {
         cache::CachedTmuxSession {
             name: name.to_string(),
             path: "/some/path".to_string(),
+            pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
             host: None,
@@ -3752,7 +3762,9 @@ mod tests {
         let panes: Vec<crate::session::PaneInfo> = (0..pane_count)
             .map(|i| crate::session::PaneInfo {
                 index: i,
+                tmux_target: format!("0.{i}"),
                 command: format!("cmd{}", i),
+                title: format!("pane{}", i),
                 has_claude: i == 0, // first pane has claude
             })
             .collect();

@@ -169,11 +169,14 @@ pub fn make_worktree(path: &str, branch: &str) -> CachedWorktree {
 }
 
 pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedTmuxSession {
+    let cmds: Vec<String> = pane_commands.into_iter().map(|s| s.to_string()).collect();
+    let targets: Vec<String> = (0..cmds.len()).map(|i| format!("0.{i}")).collect();
     CachedTmuxSession {
         name: name.to_string(),
         path: path.to_string(),
+        pane_targets: targets,
         pane_titles: vec![],
-        pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
+        pane_commands: cmds,
         host: None,
         last_output_lines: vec![],
         claude_state_raw: None,
