@@ -1145,10 +1145,8 @@ impl App {
             }
             Message::ExpandRow => {
                 let pane_count = self.pane_count_at(self.cursor);
-                if pane_count > 1 {
-                    if let Some(key) = self.expansion_key_at(self.cursor) {
-                        self.expanded.insert(key);
-                    }
+                if pane_count > 1 && let Some(key) = self.expansion_key_at(self.cursor) {
+                    self.expanded.insert(key);
                 }
                 ok()
             }
@@ -3963,5 +3961,25 @@ mod tests {
         app.update(Message::CursorUp);
         assert_eq!(app.cursor, 0, "cursor moves to expanded row");
         assert_eq!(app.selected_pane, Some(2), "selects last sub-row");
+    }
+
+    // -----------------------------------------------------------------------
+    // prune_expansion_state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn prune_expansion_state_removes_entry_when_row_has_one_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 1)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.prune_expansion_state();
+        assert!(app.expanded.is_empty(), "single-pane row should be pruned from expanded set");
+    }
+
+    #[test]
+    fn prune_expansion_state_retains_entry_when_row_still_has_multiple_panes() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.prune_expansion_state();
+        assert!(app.expanded.contains("/workspace/repo-1"), "multi-pane row should remain in expanded set");
     }
 }

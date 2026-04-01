@@ -864,6 +864,13 @@ impl App {
 // Task-centric rendering
 // ---------------------------------------------------------------------------
 
+/// Rendering context for pane sub-rows, bundling display flags and theme.
+struct SubRowContext<'a> {
+    show_branch: bool,
+    has_remote: bool,
+    theme: &'a Theme,
+}
+
 impl App {
     /// Renders the task-grouped view. Called by `render_list` when tasks are present.
     pub(crate) fn render_task_list(&self, f: &mut Frame) {
@@ -1277,10 +1284,7 @@ impl App {
                     &ss.session.panes,
                     idx,
                     Color::DarkGray, // no repo color for standalone
-                    num_columns,
-                    show_branch,
-                    has_remote,
-                    theme,
+                    &SubRowContext { show_branch, has_remote, theme },
                     &mut rows,
                     &mut row_heights,
                 );
@@ -1423,10 +1427,7 @@ impl App {
                     panes,
                     cursor_idx,
                     bar_color,
-                    num_columns,
-                    show_branch,
-                    has_remote,
-                    theme,
+                    &SubRowContext { show_branch, has_remote, theme },
                     &mut rows,
                     &mut row_heights,
                 );
@@ -1447,10 +1448,7 @@ impl App {
         panes: &[crate::session::PaneInfo],
         parent_cursor_idx: usize,
         bar_color: Color,
-        _num_columns: usize,
-        show_branch: bool,
-        has_remote: bool,
-        theme: &Theme,
+        ctx: &SubRowContext<'_>,
         rows: &mut Vec<Row<'static>>,
         row_heights: &mut Vec<u16>,
     ) {
@@ -1469,17 +1467,17 @@ impl App {
 
             // Claude indicator for this pane.
             let claude_cell = if pane.has_claude {
-                Cell::from("\u{26a1}").style(Style::default().fg(theme.claude_active))
+                Cell::from("\u{26a1}").style(Style::default().fg(ctx.theme.claude_active))
             } else {
-                Cell::from("\u{2500}").style(Style::default().fg(theme.dimmed))
+                Cell::from("\u{2500}").style(Style::default().fg(ctx.theme.dimmed))
             };
 
             let row_style = if selected {
                 Style::default()
-                    .fg(theme.accent)
+                    .fg(ctx.theme.accent)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.dimmed)
+                Style::default().fg(ctx.theme.dimmed)
             };
 
             let mut cells = vec![
@@ -1490,10 +1488,10 @@ impl App {
                 Cell::from(pane.command.clone()), // TITLE: running command
             ];
 
-            if show_branch {
+            if ctx.show_branch {
                 cells.push(Cell::from("")); // BRANCH: empty
             }
-            if has_remote {
+            if ctx.has_remote {
                 cells.push(Cell::from("")); // HOST: empty
             }
             cells.push(Cell::from("")); // STATUS: empty

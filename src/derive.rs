@@ -181,18 +181,6 @@ pub fn derive_worktree_rows(
     rows
 }
 
-/// Alias for backward compatibility.
-pub fn derive_task_rows(
-    issues: &[CachedIssue],
-    prs: &[CachedPr],
-    worktrees: &[CachedWorktree],
-    sessions: &[CachedTmuxSession],
-    repo_slug: &str,
-    claude_states: &[crate::claude_state::ClaudeStateFile],
-) -> Vec<WorktreeRow> {
-    derive_worktree_rows(issues, prs, worktrees, sessions, repo_slug, claude_states)
-}
-
 // ---------------------------------------------------------------------------
 // Multi-repo aggregation
 // ---------------------------------------------------------------------------
