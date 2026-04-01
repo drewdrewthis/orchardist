@@ -4,35 +4,11 @@
 //! sources (GitHub CLI, git, SSH remotes) and writes the results to the
 //! cache files consumed by `sources::*` and `derive`.
 use std::process::Command;
-use std::sync::OnceLock;
-
-use regex::Regex;
 
 use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
 use crate::remote;
-
-// ---------------------------------------------------------------------------
-// Linked issue extraction
-// ---------------------------------------------------------------------------
-
-fn closing_keyword_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)").unwrap()
-    })
-}
-
-/// Extracts the first linked issue number from a PR body.
-///
-/// Recognises GitHub closing keywords: "Closes #N", "Fixes #N", "Resolves #N"
-/// (and their conjugated forms), case-insensitively.
-pub fn extract_linked_issue_from_body(body: &str) -> Option<u32> {
-    closing_keyword_re()
-        .captures(body)
-        .and_then(|caps| caps[1].parse::<u32>().ok())
-}
 
 // ---------------------------------------------------------------------------
 // Parse helpers
@@ -131,11 +107,24 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 .unwrap_or(0);
 
             // Use GitHub's closingIssuesReferences (first linked issue).
-            let linked_issue = v["closingIssuesReferences"]["nodes"]
+            let first_linked = v["closingIssuesReferences"]["nodes"]
                 .as_array()
-                .and_then(|arr| arr.first())
+                .and_then(|arr| arr.first());
+            let linked_issue = first_linked
                 .and_then(|issue| issue["number"].as_u64())
                 .map(|n| n as u32);
+            let linked_issue_state = first_linked.and_then(|issue| {
+                let s = issue["state"].as_str()?;
+                let reason = issue["stateReason"].as_str().unwrap_or("");
+                let normalised = if s == "OPEN" {
+                    "open"
+                } else if reason == "COMPLETED" {
+                    "completed"
+                } else {
+                    "closed"
+                };
+                Some(normalised.to_string())
+            });
 
             Some(CachedPr {
                 number,
@@ -146,6 +135,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 checks_state,
                 has_conflicts,
                 unresolved_threads,
+                linked_issue_state,
             })
         })
         .collect()
@@ -398,6 +388,8 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
         closingIssuesReferences(first: 5) {{
           nodes {{
             number
+            state
+            stateReason
           }}
         }}
         commits(last: 1) {{
@@ -661,53 +653,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // -- extract_linked_issue_from_body --------------------------------------
-
-    #[test]
-    fn extract_closes_keyword() {
-        assert_eq!(extract_linked_issue_from_body("Closes #47"), Some(47));
-    }
-
-    #[test]
-    fn extract_fixes_keyword() {
-        assert_eq!(extract_linked_issue_from_body("Fixes #12"), Some(12));
-    }
-
-    #[test]
-    fn extract_resolves_keyword() {
-        assert_eq!(extract_linked_issue_from_body("Resolves #99"), Some(99));
-    }
-
-    #[test]
-    fn extract_case_insensitive() {
-        assert_eq!(extract_linked_issue_from_body("closes #5"), Some(5));
-        assert_eq!(extract_linked_issue_from_body("FIXES #200"), Some(200));
-    }
-
-    #[test]
-    fn extract_closed_conjugation() {
-        assert_eq!(extract_linked_issue_from_body("Closed #10"), Some(10));
-    }
-
-    #[test]
-    fn extract_fixed_conjugation() {
-        assert_eq!(extract_linked_issue_from_body("Fixed #77"), Some(77));
-    }
-
-    #[test]
-    fn extract_no_match_returns_none() {
-        assert_eq!(
-            extract_linked_issue_from_body("This PR does some stuff"),
-            None
-        );
-    }
-
-    #[test]
-    fn extract_from_longer_body() {
-        let body = "## Summary\nThis implements the feature.\n\nFixes #42\n\nSome trailing text.";
-        assert_eq!(extract_linked_issue_from_body(body), Some(42));
-    }
-
     // -- parse_issues_json --------------------------------------------------
 
     #[test]
@@ -824,7 +769,7 @@ mod tests {
             .collect();
         let issues: Vec<serde_json::Value> = linked_issues
             .into_iter()
-            .map(|n| json!({"number": n}))
+            .map(|n| json!({"number": n, "state": "OPEN", "stateReason": null}))
             .collect();
         let commits = match check_state {
             Some(s) => json!([{"commit": {"statusCheckRollup": {"state": s}}}]),
@@ -861,6 +806,7 @@ mod tests {
         assert_eq!(pr.number, 55);
         assert_eq!(pr.branch, "feat/task-centric");
         assert_eq!(pr.linked_issue, Some(47));
+        assert_eq!(pr.linked_issue_state.as_deref(), Some("open"));
         assert_eq!(pr.state, "open");
         assert_eq!(pr.review_decision.as_deref(), Some("approved"));
         assert_eq!(pr.checks_state.as_deref(), Some("passing"));
@@ -930,6 +876,47 @@ mod tests {
 
         let prs = parse_prs_graphql(&json);
         assert_eq!(prs[0].linked_issue, None);
+        assert_eq!(prs[0].linked_issue_state, None);
+    }
+
+    #[test]
+    fn parse_prs_graphql_linked_issue_closed_completed() {
+        let issues = vec![json!({"number": 42, "state": "CLOSED", "stateReason": "COMPLETED"})];
+        let pr_node = json!({
+            "number": 10,
+            "headRefName": "fix/done",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": issues},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let json = graphql_prs(json!([pr_node]));
+
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs[0].linked_issue, Some(42));
+        assert_eq!(prs[0].linked_issue_state.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn parse_prs_graphql_linked_issue_closed_not_completed() {
+        let issues = vec![json!({"number": 42, "state": "CLOSED", "stateReason": "NOT_PLANNED"})];
+        let pr_node = json!({
+            "number": 10,
+            "headRefName": "fix/wontfix",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": issues},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let json = graphql_prs(json!([pr_node]));
+
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs[0].linked_issue, Some(42));
+        assert_eq!(prs[0].linked_issue_state.as_deref(), Some("closed"));
     }
 
     #[test]
