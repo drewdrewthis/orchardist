@@ -1682,7 +1682,7 @@ impl App {
         }
         spans.push(sep.clone());
 
-        // Dim 'p' (priority/transfer) for standalone sessions.
+        // Dim 'p' (priority) for standalone sessions.
         if is_standalone {
             spans.push(Span::styled("p:priority", dim));
         } else {

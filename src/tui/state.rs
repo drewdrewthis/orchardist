@@ -19,8 +19,6 @@ pub enum ViewState {
     List,
     /// A confirmation dialog for deleting a worktree.
     ConfirmDelete(DeleteState),
-    /// A dialog for transferring a worktree to a remote host.
-    Transfer(TransferState),
     /// A multi-select dialog for cleaning up stale worktrees.
     Cleanup(CleanupState),
     /// A text-entry dialog for creating a new tmux session.
@@ -36,16 +34,6 @@ pub struct DeleteState {
     /// The worktree that the user has chosen to delete.
     pub target: Worktree,
     /// Current progress phase of the delete operation.
-    pub phase: Phase,
-    /// Error message to display if the operation failed.
-    pub error: Option<String>,
-}
-
-/// State carried while the remote-transfer dialog is open.
-pub struct TransferState {
-    /// The worktree being transferred to a remote host.
-    pub target: Worktree,
-    /// Current progress phase of the transfer operation.
     pub phase: Phase,
     /// Error message to display if the operation failed.
     pub error: Option<String>,
@@ -85,7 +73,7 @@ pub struct NewWorktreeState {
 // Phase enum
 // ---------------------------------------------------------------------------
 
-/// Progress phase for async dialog operations (delete, transfer, cleanup).
+/// Progress phase for async dialog operations (delete, cleanup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     /// Waiting for user confirmation before starting.
@@ -116,10 +104,6 @@ pub enum AppMsg {
     DeleteDone,
     /// The delete operation failed with the given error message.
     DeleteErr(String),
-    /// The transfer operation finished successfully.
-    TransferDone,
-    /// The transfer operation failed with the given error message.
-    TransferErr(String),
     /// The cleanup batch operation finished; reports per-path outcomes.
     CleanupDone {
         /// Paths that were successfully deleted.
