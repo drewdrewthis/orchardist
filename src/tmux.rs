@@ -8,8 +8,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::logger::LOG;
-use crate::types::resolve_pr_status;
-use crate::types::{PrInfo, SwitchToSessionOptions, TmuxSession};
+use crate::types::{SwitchToSessionOptions, TmuxSession};
 
 /// Lists all active tmux sessions. Returns an empty vec when tmux is not running.
 pub fn list_tmux_sessions() -> Vec<TmuxSession> {
@@ -302,7 +301,7 @@ pub fn derive_session_name(repo_name: &str, branch: Option<&str>, worktree_path:
 }
 
 /// Creates the tmux session for the given worktree if it does not already exist.
-/// Applies orchard status bar style. Does NOT switch the client.
+/// Does NOT switch the client.
 pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
     let exists = Command::new("tmux")
         .args(["has-session", "-t", &opts.session_name])
@@ -330,62 +329,12 @@ pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
         if exists { "existing" } else { "new" }
     ));
 
-    apply_session_style(&opts.session_name, opts.branch.as_deref(), opts.pr.as_ref())?;
-
     Ok(())
-}
-
-pub(crate) const CHEATSHEET: &str = "#[fg=colour8]prefix: ctrl-b | o: orchard | (/): prev/next | %%: split-v | \": split-h | arrows: pane | z: zoom | x: close | d: detach";
-
-/// Applies the orchard status bar style to a tmux session.
-pub fn apply_session_style(name: &str, branch: Option<&str>, pr: Option<&PrInfo>) -> Result<()> {
-    let status_left = format_status_left(branch, pr);
-    let t = ["-t", name];
-
-    let opts: &[(&str, &str)] = &[
-        ("status", "on"),
-        ("status-style", "bg=colour235,fg=colour248"),
-        ("status-left-length", "60"),
-        ("status-right-length", "150"),
-        ("status-left", &status_left),
-        ("status-right", CHEATSHEET),
-    ];
-
-    for (key, value) in opts {
-        Command::new("tmux")
-            .arg("set-option")
-            .args(t)
-            .args([*key, value])
-            .status()
-            .with_context(|| format!("tmux set-option {key}"))?;
-    }
-
-    Ok(())
-}
-
-/// Formats the tmux status-left string for an orchard session.
-pub fn format_status_left(branch: Option<&str>, pr: Option<&PrInfo>) -> String {
-    let branch_label = branch.unwrap_or("detached");
-    let mut parts = vec![format!(
-        "#[fg=colour2,bold] {branch_label} #[fg=colour248,nobold]"
-    )];
-
-    if let Some(pr) = pr {
-        let status = resolve_pr_status(pr);
-        let display = status.display();
-        parts.push(format!(
-            "PR#{} {} {}",
-            pr.number, display.icon, display.label
-        ));
-    }
-
-    parts.join(" ")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ChecksStatus, PrInfo, ReviewDecision};
 
     fn make_sessions() -> Vec<TmuxSession> {
         vec![
@@ -541,39 +490,6 @@ mod tests {
             derive_main_session_name("/home/user/myrepo", Some("feature/login")),
             "myrepo_feature-login"
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // format_status_left
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn format_status_left_detached() {
-        let s = format_status_left(None, None);
-        assert!(s.contains("detached"));
-    }
-
-    #[test]
-    fn format_status_left_with_branch() {
-        let s = format_status_left(Some("main"), None);
-        assert!(s.contains("main"));
-        assert!(!s.contains("PR#"));
-    }
-
-    #[test]
-    fn format_status_left_with_pr() {
-        let pr = PrInfo {
-            number: 42,
-            state: "open".into(),
-            title: "My PR".into(),
-            url: "https://example.com".into(),
-            review_decision: ReviewDecision::None,
-            unresolved_threads: 0,
-            checks_status: ChecksStatus::Pass,
-            has_conflicts: false,
-        };
-        let s = format_status_left(Some("feat"), Some(&pr));
-        assert!(s.contains("PR#42"));
     }
 
     #[test]
