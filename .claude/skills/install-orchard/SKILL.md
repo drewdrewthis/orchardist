@@ -44,7 +44,16 @@ If they're new to tmux, give a brief orientation:
 - They don't need to master tmux — Orchard manages sessions for them
 - The main thing they'll do: `tmux attach -t <session>` to jump into a workspace
 
-## Step 3: Build & Install
+## Step 3: Clone & Build
+
+Clone the repo if not already in it:
+
+```bash
+git clone https://github.com/drewdrewthis/git-orchard-rs.git
+cd git-orchard-rs
+```
+
+Build the release binary:
 
 ```bash
 cargo build --release
