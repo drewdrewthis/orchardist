@@ -89,7 +89,7 @@ jobs:
       - name: Set version from release tag
         run: |
           VERSION="${{ needs.release-please.outputs.tag_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${VERSION##*v}"
           cd npm
           npm version "$VERSION" --no-git-tag-version
       - name: Publish to npm
