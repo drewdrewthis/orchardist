@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/drewdrewthis/git-orchard-rs/compare/v0.1.0...v0.1.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* correct softprops/action-gh-release SHA (v2.6.1) ([#126](https://github.com/drewdrewthis/git-orchard-rs/issues/126)) ([3a86005](https://github.com/drewdrewthis/git-orchard-rs/commit/3a8600549585ba935052bec25225712a84fc361b))
+
 ## 0.1.0 (2026-04-04)
 
 
