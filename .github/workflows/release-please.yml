@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - name: Set version from release tag
         run: |
@@ -94,3 +94,5 @@ jobs:
           npm version "$VERSION" --no-git-tag-version
       - name: Publish to npm
         run: npm publish ./npm --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ''
