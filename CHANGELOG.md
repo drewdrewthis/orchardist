@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.3.0...orchard-v0.3.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* strip component prefix from release tag for npm version ([#136](https://github.com/drewdrewthis/git-orchard-rs/issues/136)) ([28ead07](https://github.com/drewdrewthis/git-orchard-rs/commit/28ead0735fcf0ab14e7b613450c4439595eb4618))
+
 ## [0.3.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.2.0...orchard-v0.3.0) (2026-04-04)
 
 
