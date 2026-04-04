@@ -3,7 +3,6 @@ import {
   AgentRole,
   type ScenarioExecutionStateLike,
 } from "@langwatch/scenario";
-import { expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import { spawn, execSync } from "child_process";
@@ -13,13 +12,44 @@ import chalk from "chalk";
  * Creates a Claude Code agent adapter for use with @langwatch/scenario.
  *
  * Spawns Claude Code via child_process.spawn in the given working directory.
- * Copies the skill's SKILL.md into .skills/ so Claude Code auto-discovers it.
+ * Optionally copies a SKILL.md into .skills/ so Claude Code auto-discovers it.
  */
 export function createClaudeCodeAgent({
   workingDirectory,
+  skillPath,
 }: {
   workingDirectory: string;
+  skillPath?: string;
 }): AgentAdapter {
+  if (skillPath) {
+    const skillName = path.basename(path.dirname(skillPath));
+    const skillDir = path.join(workingDirectory, ".skills", skillName);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.copyFileSync(skillPath, path.join(skillDir, "SKILL.md"));
+  }
+
+  // Create a CLAUDE.md that points to discovered skills
+  const skillsDir = path.join(workingDirectory, ".skills");
+  const claudeMdPath = path.join(workingDirectory, "CLAUDE.md");
+  if (fs.existsSync(skillsDir) && !fs.existsSync(claudeMdPath)) {
+    const skillDirs = fs
+      .readdirSync(skillsDir, { withFileTypes: true })
+      .filter(
+        (d) =>
+          d.isDirectory() &&
+          fs.existsSync(path.join(skillsDir, d.name, "SKILL.md"))
+      );
+    if (skillDirs.length > 0) {
+      const instructions = skillDirs
+        .map((d) => `.skills/${d.name}/SKILL.md`)
+        .join(" and ");
+      fs.writeFileSync(
+        claudeMdPath,
+        `Read and follow the instructions in ${instructions} before doing anything else.\n`
+      );
+    }
+  }
+
   return {
     role: AgentRole.AGENT,
     call: async (state) => {
@@ -41,10 +71,7 @@ export function createClaudeCodeAgent({
           formattedMessages,
         ];
 
-        console.log(
-          chalk.blue("Starting claude in:"),
-          workingDirectory
-        );
+        console.log(chalk.blue("Starting claude in:"), workingDirectory);
 
         const child = spawn(claudeBin, args, {
           cwd: workingDirectory,

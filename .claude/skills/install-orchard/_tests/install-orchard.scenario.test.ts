@@ -22,26 +22,6 @@ const isCI = !!process.env.CI;
 
 const judgeModel = openai("gpt-5-mini");
 
-function setupWorkDir(tempFolder: string) {
-  // Initialize a git repo so Claude Code can operate
-  execSync("git init", { cwd: tempFolder });
-  execSync("git commit --allow-empty -m 'init'", { cwd: tempFolder });
-
-  // Copy the install-orchard skill into .skills/
-  const skillDir = path.join(tempFolder, ".skills", "install-orchard");
-  fs.mkdirSync(skillDir, { recursive: true });
-  fs.copyFileSync(
-    path.resolve(__dirname, "../../SKILL.md"),
-    path.join(skillDir, "SKILL.md")
-  );
-
-  // Create a CLAUDE.md that points to the skill
-  fs.writeFileSync(
-    path.join(tempFolder, "CLAUDE.md"),
-    "Read and follow the instructions in .skills/install-orchard/SKILL.md before doing anything else.\n"
-  );
-}
-
 describe("Install Orchard Skill", () => {
   const tempFolders: string[] = [];
 
@@ -59,22 +39,32 @@ describe("Install Orchard Skill", () => {
       );
       tempFolders.push(tempFolder);
 
-      setupWorkDir(tempFolder);
+      // Initialize a git repo so Claude Code can operate
+      execSync("git init", { cwd: tempFolder });
+      execSync("git commit --allow-empty -m 'init'", { cwd: tempFolder });
 
       const result = await scenario.run({
         name: "New user installs Orchard",
         description:
-          "A new user invokes the install-orchard skill and is guided through prerequisites, build, and configuration.",
+          "A new user invokes the install-orchard skill and is guided through " +
+          "prerequisites, cloning the git-orchard-rs repository, building from " +
+          "source, configuring a repo, and optionally setting up Telegram.",
         agents: [
-          createClaudeCodeAgent({ workingDirectory: tempFolder }),
+          createClaudeCodeAgent({
+            workingDirectory: tempFolder,
+            skillPath: path.resolve(__dirname, "../../SKILL.md"),
+          }),
           scenario.userSimulatorAgent({ model: judgeModel }),
           scenario.judgeAgent({
             model: judgeModel,
             criteria: [
-              "Agent should check for prerequisites (git, tmux, gh, cargo)",
-              "Agent should ask about tmux familiarity",
-              "Agent should explain how to clone and build Orchard",
-              "Agent should guide the user through repo configuration",
+              "Agent checks for prerequisites (git, tmux, gh, cargo) by running version commands",
+              "Agent asks about tmux familiarity level and adapts explanation accordingly",
+              "Agent instructs the user to clone from https://github.com/drewdrewthis/git-orchard-rs.git and build with cargo build --release",
+              "Agent explains how to add the orchard binary to PATH (symlink or cargo install)",
+              "Agent guides configuration of a repo with .orchard.json",
+              "Agent mentions Telegram setup for orchardist notifications",
+              "Agent explains how to resume sessions with --continue flag",
             ],
           }),
         ],
@@ -85,6 +75,8 @@ describe("Install Orchard Skill", () => {
             toolCallFix(state);
             assertSkillWasRead(state, "install-orchard");
           },
+          // The install skill is multi-turn (asks questions), let it run
+          scenario.proceed(6),
           scenario.judge(),
         ],
       });
