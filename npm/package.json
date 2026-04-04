@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/drewdrewthis/git-orchard-rs"
+    "url": "git+https://github.com/drewdrewthis/git-orchard-rs.git"
   },
   "bin": {
     "git-orchard": "run.js",
