@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/drewdrewthis/git-orchard-rs/compare/v0.1.1...v0.1.2) (2026-04-04)
+
+
+### Bug Fixes
+
+* switch x86_64-apple-darwin to macos-14 runner ([#128](https://github.com/drewdrewthis/git-orchard-rs/issues/128)) ([8ad2aba](https://github.com/drewdrewthis/git-orchard-rs/commit/8ad2aba74bac768a61ba0051642fc2d0169dcfec))
+
 ## [0.1.1](https://github.com/drewdrewthis/git-orchard-rs/compare/v0.1.0...v0.1.1) (2026-04-04)
 
 
