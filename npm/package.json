@@ -1,0 +1,22 @@
+{
+  "name": "git-orchard",
+  "version": "0.0.0",
+  "description": "Git worktree manager — thin wrapper that downloads the Rust binary",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drewdrewthis/git-orchard-rs"
+  },
+  "bin": {
+    "git-orchard": "run.js",
+    "orchard": "run.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": ["darwin", "linux"],
+  "cpu": ["x64", "arm64"],
+  "engines": {
+    "node": ">=16"
+  }
+}
