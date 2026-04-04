@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/drewdrewthis/git-orchard-rs/compare/v0.1.2...v0.1.3) (2026-04-04)
+
+
+### Bug Fixes
+
+* use correct git+https repository URL format in npm package ([#132](https://github.com/drewdrewthis/git-orchard-rs/issues/132)) ([a049444](https://github.com/drewdrewthis/git-orchard-rs/commit/a049444b78d4b7b96602436da6c8b4e9d396e29f))
+
 ## [0.1.2](https://github.com/drewdrewthis/git-orchard-rs/compare/v0.1.1...v0.1.2) (2026-04-04)
 
 
