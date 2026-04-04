@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.3.1...orchard-v0.3.2) (2026-04-04)
+
+
+### Bug Fixes
+
+* upgrade to Node 24 for npm trusted publishing (OIDC) ([#138](https://github.com/drewdrewthis/git-orchard-rs/issues/138)) ([2129866](https://github.com/drewdrewthis/git-orchard-rs/commit/2129866501b3524ecb8f093b8d5379fc4a18b0ad))
+
 ## [0.3.1](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.3.0...orchard-v0.3.1) (2026-04-04)
 
 
