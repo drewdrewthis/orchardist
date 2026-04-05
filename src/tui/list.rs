@@ -721,7 +721,7 @@ impl App {
                 Style::default().fg(theme.accent),
             )
         } else {
-            let elapsed = self.last_refresh.elapsed().as_secs();
+            let elapsed = self.last_full_refresh.elapsed().as_secs();
             let ts_text = if elapsed < 60 {
                 format!("  ({}s ago)", elapsed)
             } else if elapsed < 3600 {

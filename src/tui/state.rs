@@ -98,6 +98,8 @@ pub enum AppMsg {
     PaneContent(String, String),
     /// The cache refresh cycle completed; the TUI should re-derive task rows.
     CacheRefreshed,
+    /// A local-only cache refresh completed (worktrees + tmux sessions).
+    LocalCacheRefreshed,
     /// SSH reachability result for a host; carries `(host, is_reachable)`.
     HostReachability(String, bool),
     /// The delete operation finished successfully.
