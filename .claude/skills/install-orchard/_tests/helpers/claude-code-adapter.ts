@@ -17,9 +17,11 @@ import chalk from "chalk";
 export function createClaudeCodeAgent({
   workingDirectory,
   skillPath,
+  model,
 }: {
   workingDirectory: string;
   skillPath?: string;
+  model?: string;
 }): AgentAdapter {
   if (skillPath) {
     const skillName = path.basename(path.dirname(skillPath));
@@ -68,6 +70,7 @@ export function createClaudeCodeAgent({
           "-p",
           "--dangerously-skip-permissions",
           "--verbose",
+          ...(model ? ["--model", model] : []),
           formattedMessages,
         ];
 

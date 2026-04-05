@@ -18,6 +18,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const judgeModel = openai("gpt-5-mini");
+const userSimModel = openai("gpt-4o-nano");
 
 const CRITERIA = [
   "Agent checked for git and installed it if missing",
@@ -66,8 +67,9 @@ describe("Install Orchard Skill", () => {
           createClaudeCodeAgent({
             workingDirectory: tempFolder,
             skillPath: path.resolve(__dirname, "../SKILL.md"),
+            model: "haiku",
           }),
-          scenario.userSimulatorAgent({ model: judgeModel }),
+          scenario.userSimulatorAgent({ model: userSimModel }),
           scenario.judgeAgent({ model: judgeModel, criteria: CRITERIA }),
         ],
         script: [
