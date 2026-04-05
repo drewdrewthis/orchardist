@@ -597,9 +597,9 @@ impl App {
 
             // Claude was working, now needs input.
             if row.sessions.iter().any(|s| {
-                s.claude.as_ref().is_some_and(|c| {
-                    c.status == crate::claude_state::ClaudeState::Input
-                })
+                s.claude
+                    .as_ref()
+                    .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
             }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
             {
                 notify(
@@ -610,9 +610,9 @@ impl App {
 
             // Claude was working, now idle (finished).
             if !row.sessions.iter().any(|s| {
-                s.claude.as_ref().is_some_and(|c| {
-                    c.status == crate::claude_state::ClaudeState::Working
-                })
+                s.claude
+                    .as_ref()
+                    .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)
             }) && old.map(|o| o.claude_working).unwrap_or(false)
             {
                 notify("Claude finished", label);
@@ -650,14 +650,14 @@ impl App {
             .map(|row| {
                 let snapshot = WorktreeSnapshot {
                     claude_working: row.sessions.iter().any(|s| {
-                        s.claude.as_ref().is_some_and(|c| {
-                            c.status == crate::claude_state::ClaudeState::Working
-                        })
+                        s.claude
+                            .as_ref()
+                            .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)
                     }),
                     claude_needs_input: row.sessions.iter().any(|s| {
-                        s.claude.as_ref().is_some_and(|c| {
-                            c.status == crate::claude_state::ClaudeState::Input
-                        })
+                        s.claude
+                            .as_ref()
+                            .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
                     }),
                     ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
                     has_unresolved_threads: row
