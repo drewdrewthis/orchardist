@@ -82,9 +82,7 @@ export function createClaudeCodeAgent({
         let output = "";
 
         child.stdout.on("data", (data: Buffer) => {
-          const text = data.toString();
-          console.log(chalk.cyan("Claude Code:"), text);
-          output += text;
+          output += data.toString();
         });
 
         child.stderr.on("data", (data: Buffer) => {
@@ -93,7 +91,7 @@ export function createClaudeCodeAgent({
 
         child.on("close", (exitCode) => {
           if (exitCode === 0) {
-            const messages: any = output
+            const parsed = output
               .split("\n")
               .map((line) => {
                 try {
@@ -102,16 +100,31 @@ export function createClaudeCodeAgent({
                   return null;
                 }
               })
-              .filter(
-                (message) => message !== null && "message" in message
-              )
-              .map((message) => message.message);
-            console.log(
-              "messages",
-              JSON.stringify(messages, undefined, 2)
-            );
+              .filter((msg) => msg !== null);
 
-            resolve(messages);
+            // Extract clean text from stream-json output
+            const text = parsed
+              .filter((msg) => "message" in msg)
+              .map((msg) => msg.message)
+              .map((msg: any) => {
+                if (typeof msg.content === "string") return msg.content;
+                if (!Array.isArray(msg.content)) return "";
+                return msg.content
+                  .map((block: any) => {
+                    if (block.type === "text") return block.text;
+                    if (block.type === "tool_use")
+                      return `Tool Called: ${block.name}(${JSON.stringify(block.input)})`;
+                    if (block.type === "tool_result")
+                      return `Tool Result: ${block.content}`;
+                    return "";
+                  })
+                  .filter(Boolean)
+                  .join("\n");
+              })
+              .filter(Boolean)
+              .join("\n\n");
+
+            resolve(text);
           } else {
             reject(
               new Error(`Command failed with exit code ${exitCode}`)
@@ -154,21 +167,3 @@ export function assertSkillWasRead(
   }
 }
 
-/**
- * Fixes Anthropic tool use format in message state so it is compatible
- * with the Vercel AI SDK judge agent.
- */
-export function toolCallFix(state: ScenarioExecutionStateLike): void {
-  state.messages.forEach((message) => {
-    if (Array.isArray(message.content)) {
-      message.content.forEach((content, index) => {
-        if (content.type !== "text") {
-          (message.content as any)[index] = {
-            type: "text",
-            text: JSON.stringify(content),
-          };
-        }
-      });
-    }
-  });
-}

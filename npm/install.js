@@ -109,7 +109,7 @@ async function main() {
     process.exit(1);
   }
 
-  const baseUrl = `https://github.com/${REPO}/releases/download/v${version}`;
+  const baseUrl = `https://github.com/${REPO}/releases/download/orchard-v${version}`;
   const tarball = `orchard-${target}.tar.gz`;
   const checksumFile = `${tarball}.sha256`;
 

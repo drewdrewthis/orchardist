@@ -30,7 +30,7 @@ Don't proceed until all four are available.
 
 ## Step 2: Tmux Familiarity
 
-Ask the user (via AskUserQuestion):
+Ask the user:
 
 > **How familiar are you with tmux?**
 > - **I use it daily** — skip the intro
