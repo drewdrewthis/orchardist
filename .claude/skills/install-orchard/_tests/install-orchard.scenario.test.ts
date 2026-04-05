@@ -6,7 +6,7 @@ import dotenv from "dotenv";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import {
   createClaudeCodeAgent,
   toolCallFix,
@@ -16,11 +16,9 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
-const isCI = !!process.env.CI;
-
-const judgeModel = openai("gpt-5-mini");
+const judgeModel = anthropic("claude-haiku-4-5-20251001");
 
 describe("Install Orchard Skill", () => {
   const tempFolders: string[] = [];
@@ -31,7 +29,7 @@ describe("Install Orchard Skill", () => {
     }
   });
 
-  it.skipIf(isCI)(
+  it(
     "guides a new user through orchard setup",
     async () => {
       const tempFolder = fs.mkdtempSync(
@@ -47,21 +45,20 @@ describe("Install Orchard Skill", () => {
         name: "New user installs Orchard",
         description:
           "A new user invokes the install-orchard skill and is guided through " +
-          "prerequisites, cloning the git-orchard-rs repository, building from " +
-          "source, configuring a repo, and optionally setting up Telegram.",
+          "prerequisites, installing orchard via npm, configuring a repo, " +
+          "and optionally setting up Telegram.",
         agents: [
           createClaudeCodeAgent({
             workingDirectory: tempFolder,
-            skillPath: path.resolve(__dirname, "../../SKILL.md"),
+            skillPath: path.resolve(__dirname, "../SKILL.md"),
           }),
           scenario.userSimulatorAgent({ model: judgeModel }),
           scenario.judgeAgent({
             model: judgeModel,
             criteria: [
-              "Agent checks for prerequisites (git, tmux, gh, cargo) by running version commands",
+              "Agent checks for prerequisites (git, tmux, gh) by running version commands",
               "Agent asks about tmux familiarity level and adapts explanation accordingly",
-              "Agent instructs the user to clone from https://github.com/drewdrewthis/git-orchard-rs.git and build with cargo build --release",
-              "Agent explains how to add the orchard binary to PATH (symlink or cargo install)",
+              "Agent instructs the user to install orchard via npm (npm install -g git-orchard or npx git-orchard) and verifies it works with orchard --help",
               "Agent guides configuration of a repo with .orchard.json",
               "Agent mentions Telegram setup for orchardist notifications",
               "Agent explains how to resume sessions with --continue flag",
