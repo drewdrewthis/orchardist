@@ -17,20 +17,20 @@ Greet the user and check prerequisites by running these commands:
 git --version
 tmux -V
 gh --version
-cargo --version
+node --version
 ```
 
 Report what's installed and what's missing. If anything is missing, explain how to install it before continuing:
 - **git**: system package manager or https://git-scm.com
 - **tmux**: `brew install tmux` (macOS), `apt install tmux` (Linux)
 - **gh**: `brew install gh` (macOS), or https://cli.github.com
-- **cargo**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **node/npm**: `brew install node` (macOS), or https://nodejs.org
 
 Don't proceed until all four are available.
 
 ## Step 2: Tmux Familiarity
 
-Ask the user (via AskUserQuestion):
+Ask the user:
 
 > **How familiar are you with tmux?**
 > - **I use it daily** — skip the intro
@@ -44,32 +44,28 @@ If they're new to tmux, give a brief orientation:
 - They don't need to master tmux — Orchard manages sessions for them
 - The main thing they'll do: `tmux attach -t <session>` to jump into a workspace
 
-## Step 3: Clone & Build
+## Step 3: Install Orchard
 
-Clone the repo if not already in it:
+Install via npm (downloads the pre-built binary automatically):
+
+```bash
+npm install -g git-orchard
+```
+
+Verify it works:
+
+```bash
+orchard --help
+```
+
+**Alternative — build from source** (if npm isn't available or they prefer it):
 
 ```bash
 git clone https://github.com/drewdrewthis/git-orchard-rs.git
 cd git-orchard-rs
-```
-
-Build the release binary:
-
-```bash
 cargo build --release
-```
-
-Explain that `target/release/orchard` is the binary. Suggest they add it to their PATH or symlink it:
-
-```bash
-# Option A: symlink (recommended)
 ln -sf "$(pwd)/target/release/orchard" ~/.local/bin/orchard
-
-# Option B: cargo install
-cargo install --path .
 ```
-
-Verify it works: `orchard --help`
 
 ## Step 4: Configure a Repo
 
