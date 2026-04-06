@@ -1348,7 +1348,7 @@ mod tests {
 
     #[test]
     fn issue_state_present_when_worktree_has_pr() {
-        // issue_state is always populated regardless of PR presence. a2d6783 (fix: always populate issue_state regardless of PR presence)
+        // issue_state is always populated regardless of PR presence.
         let issues = vec![completed_issue(200)];
         let prs = vec![pr_for_branch(55, "feat/issue-200-my-feature")];
         let worktrees = vec![
