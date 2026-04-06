@@ -6,6 +6,8 @@ Built with [Rust](https://www.rust-lang.org/) + [Ratatui](https://ratatui.rs/).
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+📰 **Blog:** [Grow the Orchard](https://growtheorchard.substack.com/)
+
 ## What it does
 
 Orchard gives you a single dashboard showing everything happening across your repos: which worktrees have PRs, what state they're in, which Claude sessions are working/idle/waiting for input, and what needs your attention.

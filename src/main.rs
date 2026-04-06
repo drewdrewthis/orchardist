@@ -101,7 +101,7 @@ fn handle_setup_remote(args: &[String]) {
 fn handle_upgrade() {
     eprintln!("Upgrade not yet implemented for the Rust binary.");
     eprintln!(
-        "Download the latest from: https://github.com/drewdrewthis/orchard-rs/releases/latest"
+        "Download the latest from: https://github.com/drewdrewthis/git-orchard-rs/releases/latest"
     );
 }
 
