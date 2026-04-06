@@ -32,7 +32,7 @@ use crate::tmux;
 use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
-use state::{AppMsg, CleanupState, Phase, ViewState};
+use state::{AppMsg, CleanupState, InputPhase, Phase, ViewState};
 use std::path::Path;
 use std::process::Command;
 
@@ -89,8 +89,10 @@ pub struct App {
     /// Index into `global_config.repos`: 0 = all repos, 1+ = specific repo.
     active_repo_index: usize,
     show_branch_column: bool,
-    search_text: String,
-    search_active: bool,
+    /// Text accumulated by bare keystrokes — filters the visible task list in real time.
+    filter_text: String,
+    /// Current input phase: bare keys filter (`Filtering`) or dispatch an action (`AwaitingLeader`).
+    input_phase: InputPhase,
 
     // Reachability state keyed by SSH host name
     host_reachable: HashMap<String, bool>,
@@ -176,8 +178,8 @@ impl App {
             global_config: global_cfg,
             active_repo_index: 0,
             show_branch_column: false,
-            search_text: String::new(),
-            search_active: false,
+            filter_text: String::new(),
+            input_phase: InputPhase::Filtering,
             host_reachable: HashMap::new(),
             tx,
             rx,
@@ -228,7 +230,7 @@ impl App {
             let wt_idx = idx - standalone_count;
             let tasks = list::visible_tasks_filtered(
                 &self.task_rows,
-                &self.search_text,
+                &self.filter_text,
                 self.active_repo_slug(),
             );
             tasks.get(wt_idx).map(|vt| vt.row.worktree_path.clone())
@@ -250,7 +252,7 @@ impl App {
             let wt_idx = idx - standalone_count;
             let tasks = list::visible_tasks_filtered(
                 &self.task_rows,
-                &self.search_text,
+                &self.filter_text,
                 self.active_repo_slug(),
             );
             tasks
@@ -280,7 +282,7 @@ impl App {
     fn all_expandable_keys(&self) -> Vec<String> {
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
-            &self.search_text,
+            &self.filter_text,
             self.active_repo_slug(),
         );
         let mut keys = Vec::new();
@@ -303,7 +305,7 @@ impl App {
     fn prune_expansion_state(&mut self) {
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
-            &self.search_text,
+            &self.filter_text,
             self.active_repo_slug(),
         );
 
@@ -633,55 +635,65 @@ impl App {
 
         match &self.view {
             ViewState::List => {
-                if self.search_active {
-                    return match key.code {
-                        KeyCode::Esc => Some(Message::SearchCancel),
-                        KeyCode::Enter => Some(Message::SearchConfirm),
-                        KeyCode::Backspace => Some(Message::SearchBackspace),
-                        KeyCode::Char(c) => Some(Message::SearchChar(c)),
-                        _ => None,
-                    };
-                }
-
                 let standalone_count = self.standalone_sessions.len();
                 let worktree_visible_count = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.search_text,
+                    &self.filter_text,
                     self.active_repo_slug(),
                 )
                 .len();
                 let visible_count = standalone_count + worktree_visible_count;
 
-                match key.code {
-                    KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                        navigation::cursor_index_from_digit(c, visible_count).map(Message::CursorTo)
+                match self.input_phase {
+                    InputPhase::AwaitingLeader => {
+                        // Next key dispatches an action; any unrecognized key is ignored
+                        // and returns to Filtering (update() resets the phase for non-leader msgs).
+                        match key.code {
+                            KeyCode::Char('o') => Some(Message::OpenPR),
+                            KeyCode::Char('i') => Some(Message::OpenIssue),
+                            KeyCode::Char('B') => Some(Message::ToggleBranchColumn),
+                            KeyCode::Char('d') => Some(Message::Delete),
+                            KeyCode::Char('p') => Some(Message::TogglePriority),
+                            KeyCode::Char('n') => Some(Message::NewSession),
+                            KeyCode::Char('w') => Some(Message::NewWorktree),
+                            KeyCode::Char('c') => Some(Message::Cleanup),
+                            KeyCode::Char('h') => Some(Message::CollapseRow),
+                            KeyCode::Char('l') => Some(Message::ExpandRow),
+                            KeyCode::Char('E') => Some(Message::ToggleExpandAll),
+                            KeyCode::Char('r') => Some(Message::Refresh),
+                            KeyCode::Char('R') => Some(Message::ReconnectHosts),
+                            KeyCode::Char('?') => Some(Message::ToggleHelp),
+                            KeyCode::Char('q') => Some(Message::Quit),
+                            KeyCode::Char('j') => Some(Message::CursorDown),
+                            KeyCode::Char('k') => Some(Message::CursorUp),
+                            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                                navigation::cursor_index_from_digit(c, visible_count)
+                                    .map(Message::CursorTo)
+                            }
+                            // Unrecognized key: cancel leader and return to Filtering.
+                            _ => Some(Message::LeaderCancel),
+                        }
                     }
-                    KeyCode::Up | KeyCode::Char('k') => Some(Message::CursorUp),
-                    KeyCode::Down | KeyCode::Char('j') => Some(Message::CursorDown),
-                    KeyCode::Enter => Some(Message::Enter),
-                    KeyCode::Char('o') => Some(Message::OpenPR),
-                    KeyCode::Char('i') => Some(Message::OpenIssue),
-                    KeyCode::Char('B') => Some(Message::ToggleBranchColumn),
-                    KeyCode::Char('d') => Some(Message::Delete),
-                    KeyCode::Char('p') => Some(Message::TogglePriority),
-                    KeyCode::Char('n') => Some(Message::NewSession),
-                    KeyCode::Char('w') => Some(Message::NewWorktree),
-                    KeyCode::Char('/') => Some(Message::StartSearch),
-                    KeyCode::Char('c') => Some(Message::Cleanup),
-                    // h/Left = collapse, l/Right = expand, E = toggle all
-                    KeyCode::Char('h') | KeyCode::Left => Some(Message::CollapseRow),
-                    KeyCode::Char('l') | KeyCode::Right => Some(Message::ExpandRow),
-                    KeyCode::Char('E') => Some(Message::ToggleExpandAll),
-                    // Tab/BackTab = repo cycling (replaces Left/Right)
-                    KeyCode::Tab => Some(Message::NextRepo),
-                    KeyCode::BackTab => Some(Message::PrevRepo),
-                    KeyCode::Char('r') => Some(Message::Refresh),
-                    KeyCode::Char('R') => Some(Message::ReconnectHosts),
-                    KeyCode::Char('?') => Some(Message::ToggleHelp),
-                    KeyCode::PageUp => Some(Message::PreviewPageUp),
-                    KeyCode::PageDown => Some(Message::PreviewPageDown),
-                    KeyCode::Char('q') | KeyCode::Esc => Some(Message::Quit),
-                    _ => None,
+                    InputPhase::Filtering => {
+                        // Direct navigation keys work without a leader prefix.
+                        // Printable chars feed the instant filter.
+                        match key.code {
+                            KeyCode::Up => Some(Message::CursorUp),
+                            KeyCode::Down => Some(Message::CursorDown),
+                            KeyCode::Left => Some(Message::CollapseRow),
+                            KeyCode::Right => Some(Message::ExpandRow),
+                            KeyCode::Enter => Some(Message::Enter),
+                            KeyCode::Esc => Some(Message::Quit),
+                            KeyCode::Tab => Some(Message::NextRepo),
+                            KeyCode::BackTab => Some(Message::PrevRepo),
+                            KeyCode::PageUp => Some(Message::PreviewPageUp),
+                            KeyCode::PageDown => Some(Message::PreviewPageDown),
+                            KeyCode::Char(' ') => Some(Message::LeaderKey),
+                            KeyCode::Backspace => Some(Message::FilterBackspace),
+                            KeyCode::Char(c) => Some(Message::FilterChar(c)),
+                            _ => None,
+                        }
+                    }
                 }
             }
             ViewState::ConfirmDelete(ds) => match ds.phase {
@@ -750,8 +762,8 @@ impl App {
     /// Scroll events map to CursorUp/CursorDown; clicks select rows or
     /// open the attribution URL; double-clicks activate the selected row.
     fn handle_mouse_event(&mut self, event: crossterm::event::MouseEvent) -> Option<Message> {
-        // Mouse events only handled in List view with search inactive.
-        if !matches!(self.view, ViewState::List) || self.search_active {
+        // Mouse events only handled in List view.
+        if !matches!(self.view, ViewState::List) {
             return None;
         }
 
@@ -834,7 +846,7 @@ impl App {
         // For worktree rows, account for group header rows and sub-rows.
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
-            &self.search_text,
+            &self.filter_text,
             self.active_repo_slug(),
         );
 
@@ -885,6 +897,14 @@ impl App {
             }
         }
 
+        // Reset to Filtering phase on any message that is not a filter/leader message.
+        // This ensures that after a leader-dispatched action (or any unrecognized key
+        // that causes update to be called), the input phase returns to baseline.
+        match msg {
+            Message::LeaderKey | Message::FilterChar(_) | Message::FilterBackspace => {}
+            _ => self.input_phase = InputPhase::Filtering,
+        }
+
         match msg {
             Message::Quit => UpdateResult {
                 quit: true,
@@ -933,7 +953,7 @@ impl App {
                         let standalone_count = self.standalone_sessions.len();
                         let worktree_visible_count = list::visible_tasks_filtered(
                             &self.task_rows,
-                            &self.search_text,
+                            &self.filter_text,
                             self.active_repo_slug(),
                         )
                         .len();
@@ -983,6 +1003,7 @@ impl App {
                 ok()
             }
             Message::Enter => {
+                self.filter_text.clear();
                 let quit = self.handle_enter_action();
                 UpdateResult {
                     quit,
@@ -1009,7 +1030,7 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.search_text,
+                    &self.filter_text,
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor)
@@ -1028,7 +1049,7 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.search_text,
+                    &self.filter_text,
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor)
@@ -1051,7 +1072,7 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.search_text,
+                    &self.filter_text,
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
@@ -1072,7 +1093,7 @@ impl App {
                 let worktree_cursor = self.cursor - standalone_count;
                 let visible = list::visible_tasks_filtered(
                     &self.task_rows,
-                    &self.search_text,
+                    &self.filter_text,
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
@@ -1092,11 +1113,6 @@ impl App {
                     name: String::new(),
                     cursor: 0,
                 });
-                ok()
-            }
-            Message::StartSearch => {
-                self.search_active = true;
-                self.search_text.clear();
                 ok()
             }
             Message::Cleanup => {
@@ -1173,23 +1189,23 @@ impl App {
                 };
                 ok()
             }
-            Message::SearchChar(c) => {
-                self.search_text.push(c);
+            Message::LeaderKey => {
+                self.input_phase = InputPhase::AwaitingLeader;
+                ok()
+            }
+            Message::LeaderCancel => {
+                // Phase already reset to Filtering by the reset block above.
+                ok()
+            }
+            Message::FilterChar(c) => {
+                self.filter_text.push(c);
+                self.cursor = 0;
                 self.clamp_cursor_to_visible();
                 ok()
             }
-            Message::SearchBackspace => {
-                self.search_text.pop();
+            Message::FilterBackspace => {
+                self.filter_text.pop();
                 self.clamp_cursor_to_visible();
-                ok()
-            }
-            Message::SearchConfirm => {
-                self.search_active = false;
-                ok()
-            }
-            Message::SearchCancel => {
-                self.search_active = false;
-                self.search_text.clear();
                 ok()
             }
             Message::ConfirmYes => {
@@ -1325,7 +1341,7 @@ impl App {
     fn clamp_cursor_to_visible(&mut self) {
         let tasks = list::visible_tasks_filtered(
             &self.task_rows,
-            &self.search_text,
+            &self.filter_text,
             self.active_repo_slug(),
         );
         self.cursor = self.cursor.min(tasks.len().saturating_sub(1));
@@ -1534,8 +1550,8 @@ impl App {
             global_config: global_config::GlobalConfig::default(),
             active_repo_index: 0,
             show_branch_column: false,
-            search_text: String::new(),
-            search_active: false,
+            filter_text: String::new(),
+            input_phase: InputPhase::Filtering,
             host_reachable: HashMap::new(),
             tx,
             rx,
@@ -2192,8 +2208,16 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn w_key_opens_new_worktree_dialog() {
+    fn spc_w_key_opens_new_worktree_dialog() {
+        // NewWorktree is a leader-prefixed action: Space then 'w'.
         let mut app = App::new_test(vec![]);
+        // Press Space to enter AwaitingLeader.
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let leader_msg = app.handle_event(space);
+        assert_eq!(leader_msg, Some(Message::LeaderKey));
+        app.update(leader_msg.unwrap());
+        assert_eq!(app.input_phase, InputPhase::AwaitingLeader);
+        // Press 'w' to dispatch NewWorktree.
         let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::NewWorktree));
@@ -2356,13 +2380,18 @@ mod tests {
         }
     }
 
+    /// Send Space (leader) then a key — shorthand for leader-prefixed actions.
+    fn send_leader_key(app: &mut App, key: KeyEvent) -> UpdateResult {
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        send_key(app, space);
+        send_key(app, key)
+    }
+
     #[test]
     fn q_key_quits() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
-        let msg = app.handle_event(key);
-        assert_eq!(msg, Some(Message::Quit));
-        let r = app.update(msg.unwrap());
+        let r = send_leader_key(&mut app, key);
         assert!(r.quit);
     }
 
@@ -2385,8 +2414,7 @@ mod tests {
         let mut app = App::new_test(rows);
         assert_eq!(app.cursor, 0);
         let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        let msg = app.handle_event(key);
-        app.update(msg.unwrap());
+        send_leader_key(&mut app, key);
         assert_eq!(app.cursor, 1);
     }
 
@@ -2399,8 +2427,7 @@ mod tests {
         let mut app = App::new_test(rows);
         app.cursor = 1;
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        let msg = app.handle_event(key);
-        app.update(msg.unwrap());
+        send_leader_key(&mut app, key);
         assert_eq!(app.cursor, 0);
     }
 
@@ -2472,8 +2499,7 @@ mod tests {
     fn question_mark_opens_help() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-        let msg = app.handle_event(key);
-        app.update(msg.unwrap());
+        send_leader_key(&mut app, key);
         assert_eq!(app.view_name(), "Help");
     }
 
@@ -2760,7 +2786,7 @@ mod tests {
     fn help_overlay_renders_when_question_mark_pressed() {
         let mut app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-        send_key(&mut app, key);
+        send_leader_key(&mut app, key);
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(
@@ -2788,7 +2814,7 @@ mod tests {
         assert_eq!(app.cursor, 0);
 
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        send_key(&mut app, j);
+        send_leader_key(&mut app, j);
         assert_eq!(app.cursor, 1, "j should advance cursor from 0 to 1");
     }
 
@@ -2803,7 +2829,7 @@ mod tests {
         app.cursor = 1;
 
         let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        send_key(&mut app, k);
+        send_leader_key(&mut app, k);
         assert_eq!(app.cursor, 0, "k should move cursor from 1 to 0");
     }
 
@@ -2816,7 +2842,7 @@ mod tests {
         ];
         let mut app = App::new_test(rows);
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
-        let r = send_key(&mut app, q);
+        let r = send_leader_key(&mut app, q);
         assert!(r.quit, "q should return quit=true");
     }
 
@@ -2825,10 +2851,21 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn handle_event_returns_none_for_unbound_key() {
+    fn handle_event_printable_char_goes_to_filter() {
         let app = App::new_test(vec![]);
         let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE);
-        assert_eq!(app.handle_event(key), None);
+        assert_eq!(app.handle_event(key), Some(Message::FilterChar('z')));
+    }
+
+    #[test]
+    fn handle_event_unbound_leader_key_returns_leader_cancel() {
+        let mut app = App::new_test(vec![]);
+        // Enter AwaitingLeader phase
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        send_key(&mut app, space);
+        // F5 is not bound in leader mode — produces LeaderCancel
+        let key = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::LeaderCancel));
     }
 
     #[test]
@@ -2858,21 +2895,37 @@ mod tests {
     }
 
     #[test]
-    fn handle_event_search_mode_intercepts_chars() {
-        let mut app = App::new_test(vec![]);
-        app.search_active = true;
+    fn handle_event_filtering_phase_routes_chars_to_filter() {
+        // In the default Filtering phase, printable chars become FilterChar messages.
+        let app = App::new_test(vec![]);
+        assert_eq!(app.input_phase, InputPhase::Filtering);
         let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
-        assert_eq!(app.handle_event(key), Some(Message::SearchChar('a')));
+        assert_eq!(app.handle_event(key), Some(Message::FilterChar('a')));
     }
 
     #[test]
-    fn handle_event_digit_returns_cursor_to() {
+    fn handle_event_digit_in_filtering_goes_to_filter() {
+        // Digits are printable chars — in Filtering phase they feed the filter.
         let rows = vec![
             make_task_row(1, DisplayGroup::NeedsAttention),
             make_task_row(2, DisplayGroup::ClaudeWorking),
             make_task_row(3, DisplayGroup::Other),
         ];
         let app = App::new_test(rows);
+        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::FilterChar('1')));
+    }
+
+    #[test]
+    fn handle_event_digit_in_awaiting_leader_returns_cursor_to() {
+        // Digits dispatch CursorTo when behind the leader prefix.
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::ClaudeWorking),
+            make_task_row(3, DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows);
+        app.input_phase = InputPhase::AwaitingLeader;
         let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::CursorTo(0)));
     }
@@ -2919,8 +2972,10 @@ mod tests {
     }
 
     #[test]
-    fn handle_event_p_maps_to_toggle_priority() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+    fn handle_event_spc_p_maps_to_toggle_priority() {
+        // 'p' dispatches TogglePriority only when behind the Space leader prefix.
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.input_phase = InputPhase::AwaitingLeader;
         let key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::TogglePriority));
     }
@@ -3332,11 +3387,15 @@ mod tests {
     }
 
     #[test]
-    fn mouse_events_ignored_during_search() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
-        app.search_active = true;
+    fn mouse_events_work_during_filtering() {
+        // Mouse events are processed in List view regardless of filter state.
+        let mut app = app_with_table_area(vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::NeedsAttention),
+        ]);
+        app.filter_text = "some-filter".to_string();
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 7);
-        assert_eq!(app.handle_mouse_event(event), None);
+        assert_eq!(app.handle_mouse_event(event), Some(Message::CursorDown));
     }
 
     #[test]
@@ -3685,8 +3744,10 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn h_key_maps_to_collapse_not_heal() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+    fn h_key_maps_to_collapse_behind_leader() {
+        // 'h' dispatches CollapseRow only when behind the Space leader prefix.
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.input_phase = InputPhase::AwaitingLeader;
         let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::CollapseRow));
@@ -3709,8 +3770,10 @@ mod tests {
     }
 
     #[test]
-    fn l_key_maps_to_expand() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+    fn l_key_maps_to_expand_behind_leader() {
+        // 'l' dispatches ExpandRow only when behind the Space leader prefix.
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.input_phase = InputPhase::AwaitingLeader;
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::ExpandRow));
@@ -3733,8 +3796,10 @@ mod tests {
     }
 
     #[test]
-    fn e_key_maps_to_toggle_expand_all() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+    fn e_key_maps_to_toggle_expand_all_behind_leader() {
+        // 'E' dispatches ToggleExpandAll only when behind the Space leader prefix.
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.input_phase = InputPhase::AwaitingLeader;
         let key = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::ToggleExpandAll));
@@ -4020,5 +4085,122 @@ mod tests {
             "got: {}",
             result
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Leader-key input model tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn filter_char_appends_and_resets_cursor() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows);
+        app.cursor = 1;
+        app.update(Message::FilterChar('f'));
+        assert_eq!(app.filter_text, "f");
+        assert_eq!(app.cursor, 0, "cursor resets to 0 after filter char");
+        app.update(Message::FilterChar('o'));
+        assert_eq!(app.filter_text, "fo");
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn filter_backspace_removes_last_char() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.filter_text = "abc".to_string();
+        app.update(Message::FilterBackspace);
+        assert_eq!(app.filter_text, "ab");
+        app.update(Message::FilterBackspace);
+        assert_eq!(app.filter_text, "a");
+        app.update(Message::FilterBackspace);
+        assert_eq!(app.filter_text, "");
+        // Backspace on empty string is a no-op.
+        app.update(Message::FilterBackspace);
+        assert_eq!(app.filter_text, "");
+    }
+
+    #[test]
+    fn leader_key_sets_awaiting_leader() {
+        let mut app = App::new_test(vec![]);
+        assert_eq!(app.input_phase, InputPhase::Filtering);
+        app.update(Message::LeaderKey);
+        assert_eq!(app.input_phase, InputPhase::AwaitingLeader);
+    }
+
+    #[test]
+    fn leader_then_action_dispatches_open_pr() {
+        let mut app = App::new_test(vec![]);
+        // Space sets AwaitingLeader.
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let leader_msg = app.handle_event(space).unwrap();
+        app.update(leader_msg);
+        assert_eq!(app.input_phase, InputPhase::AwaitingLeader);
+        // 'o' in AwaitingLeader → OpenPR.
+        let o_key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(o_key), Some(Message::OpenPR));
+    }
+
+    #[test]
+    fn leader_then_unknown_key_cancels_and_resets_phase() {
+        let mut app = App::new_test(vec![]);
+        app.input_phase = InputPhase::AwaitingLeader;
+        // An unrecognized key in AwaitingLeader produces LeaderCancel.
+        let unknown = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE);
+        let msg = app.handle_event(unknown);
+        assert_eq!(msg, Some(Message::LeaderCancel));
+        // Processing LeaderCancel resets phase to Filtering.
+        app.update(msg.unwrap());
+        assert_eq!(app.input_phase, InputPhase::Filtering);
+    }
+
+    #[test]
+    fn enter_clears_filter() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.filter_text = "feat".to_string();
+        app.update(Message::Enter);
+        assert_eq!(app.filter_text, "", "Enter should clear the filter");
+    }
+
+    #[test]
+    fn arrow_keys_work_without_leader_in_filtering() {
+        // Up/Down arrow keys dispatch directly without requiring a leader prefix.
+        let rows = vec![
+            make_task_row(1, DisplayGroup::NeedsAttention),
+            make_task_row(2, DisplayGroup::Other),
+        ];
+        let mut app = App::new_test(rows);
+        app.cursor = 1;
+        assert_eq!(app.input_phase, InputPhase::Filtering);
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.handle_event(up), Some(Message::CursorUp));
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.handle_event(down), Some(Message::CursorDown));
+    }
+
+    #[test]
+    fn printable_chars_go_to_filter_not_actions() {
+        // In Filtering phase, 'o' becomes FilterChar('o'), not OpenPR.
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        assert_eq!(app.input_phase, InputPhase::Filtering);
+        let key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::FilterChar('o')));
+    }
+
+    #[test]
+    fn space_key_produces_leader_key_message_in_filtering() {
+        let app = App::new_test(vec![]);
+        let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(app.handle_event(key), Some(Message::LeaderKey));
+    }
+
+    #[test]
+    fn any_action_message_resets_phase_to_filtering() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.input_phase = InputPhase::AwaitingLeader;
+        app.update(Message::CursorDown);
+        assert_eq!(app.input_phase, InputPhase::Filtering);
     }
 }

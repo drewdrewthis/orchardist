@@ -26,7 +26,7 @@ pub enum Message {
     CursorDown,
     /// Jump the cursor to a specific index (from digit keys 1-9).
     CursorTo(usize),
-    /// Activate / join the session for the selected row.
+    /// Activate / join the session for the selected row (also clears the active filter).
     Enter,
     /// Open the selected row's PR in the browser.
     OpenPR,
@@ -40,8 +40,6 @@ pub enum Message {
     TogglePriority,
     /// Open the new-session name-entry dialog.
     NewSession,
-    /// Activate the search bar.
-    StartSearch,
     /// Open the stale-worktree cleanup dialog.
     Cleanup,
     /// Switch to the previous repo filter.
@@ -61,15 +59,15 @@ pub enum Message {
     /// Toggle the keybinding help overlay.
     ToggleHelp,
 
-    // -- Search actions --
-    /// Append a character to the search text.
-    SearchChar(char),
-    /// Delete the last character from the search text.
-    SearchBackspace,
-    /// Confirm the current search (deactivate search bar, keep filter).
-    SearchConfirm,
-    /// Cancel the current search (deactivate search bar, clear filter).
-    SearchCancel,
+    // -- Instant filter actions --
+    /// Append a character to the instant filter (bare keystroke in Filtering phase).
+    FilterChar(char),
+    /// Remove the last character from the instant filter.
+    FilterBackspace,
+    /// Space pressed — enter the leader-key phase for action dispatch.
+    LeaderKey,
+    /// Unrecognized key in leader phase — cancel and return to filtering.
+    LeaderCancel,
 
     // -- Dialog actions --
     /// Confirm a yes/no dialog (delete).

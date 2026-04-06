@@ -26,8 +26,9 @@ Feature: TEA pattern — Message enum for TUI event handling
       | Delete              | none                       |
       | Transfer            | none                       |
       | NewSession          | none                       |
-      | CycleFilter         | none                       |
-      | StartSearch         | none                       |
+      | FilterChar          | char                       |
+      | FilterBackspace     | none                       |
+      | LeaderKey           | none                       |
       | Cleanup             | none                       |
       | PrevRepo            | none                       |
       | NextRepo            | none                       |
@@ -41,14 +42,14 @@ Feature: TEA pattern — Message enum for TUI event handling
   # ===================================================================
 
   @unit
-  Scenario: handle_event maps key events to Messages based on current view
-    Given the App is in ViewState::List
+  Scenario: handle_event maps key events to Messages based on current view and input phase
+    Given the App is in ViewState::List with input_phase=AwaitingLeader
     When a KeyEvent for 'q' is received
     Then handle_event returns Some(Message::Quit)
 
   @unit
-  Scenario: handle_event returns None for unbound keys
-    Given the App is in ViewState::List
+  Scenario: handle_event in AwaitingLeader returns None for unbound keys
+    Given the App is in ViewState::List with input_phase=AwaitingLeader
     When a KeyEvent for 'z' is received
     Then handle_event returns None
 
@@ -59,10 +60,10 @@ Feature: TEA pattern — Message enum for TUI event handling
     Then handle_event returns Some(Message::Quit)
 
   @unit
-  Scenario: Search mode intercepts character keys
-    Given the App is in ViewState::List with search_active=true
+  Scenario: Filtering phase routes printable chars to FilterChar
+    Given the App is in ViewState::List with input_phase=Filtering (default)
     When a KeyEvent for 'a' is received
-    Then handle_event returns Some(Message::SearchChar('a'))
+    Then handle_event returns Some(Message::FilterChar('a'))
     And it does not return CursorUp or any list action
 
   # ===================================================================
