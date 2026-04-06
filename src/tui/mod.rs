@@ -3688,14 +3688,20 @@ mod tests {
     fn mouse_scroll_down_in_preview_returns_preview_scroll_down() {
         let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 22);
-        assert_eq!(app.handle_mouse_event(event), Some(Message::PreviewScrollDown));
+        assert_eq!(
+            app.handle_mouse_event(event),
+            Some(Message::PreviewScrollDown)
+        );
     }
 
     #[test]
     fn mouse_scroll_up_in_preview_returns_preview_scroll_up() {
         let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
         let event = make_mouse_event(MouseEventKind::ScrollUp, 10, 22);
-        assert_eq!(app.handle_mouse_event(event), Some(Message::PreviewScrollUp));
+        assert_eq!(
+            app.handle_mouse_event(event),
+            Some(Message::PreviewScrollUp)
+        );
     }
 
     #[test]

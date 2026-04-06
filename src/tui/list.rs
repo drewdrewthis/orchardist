@@ -969,8 +969,8 @@ impl App {
 
         // Cap table height when preview is visible to leave room for it.
         let table_height = if has_preview {
-            let max_table_height = ((area.height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16)
-                .max(TABLE_MIN_HEIGHT);
+            let max_table_height =
+                ((area.height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16).max(TABLE_MIN_HEIGHT);
             table_height.min(max_table_height)
         } else {
             table_height
@@ -2971,8 +2971,8 @@ mod tests {
         // 40% of 50 = 20.0 -> max_table_height = max(20, TABLE_MIN_HEIGHT=5) = 20.
         // Capped table_chunk.height = min(23, 20) = 20.
         // table_area.height = 20 - 3 = 17.
-        let max_table_chunk_height = ((terminal_height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16)
-            .max(TABLE_MIN_HEIGHT);
+        let max_table_chunk_height =
+            ((terminal_height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16).max(TABLE_MIN_HEIGHT);
         let table_area = app.table_area.get();
         let table_chunk_height = table_area.height + TABLE_CHROME_HEIGHT;
         assert!(
