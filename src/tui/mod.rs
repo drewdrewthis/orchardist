@@ -48,7 +48,7 @@ const POLL_TIMEOUT_MS: u64 = 100;
 const DOUBLE_CLICK_MS: u128 = 400;
 
 /// Attribution URL displayed in the hints bar footer.
-const ATTRIBUTION_URL: &str = "https://github.com/drewdrewthis/orchard-rs";
+const ATTRIBUTION_URL: &str = "https://github.com/drewdrewthis/git-orchard-rs";
 
 // ---------------------------------------------------------------------------
 // Notification snapshot
