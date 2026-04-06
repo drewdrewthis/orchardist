@@ -40,7 +40,8 @@ use std::process::Command;
 // Constants
 // ---------------------------------------------------------------------------
 
-const AUTO_REFRESH_SECS: u64 = 60;
+const LOCAL_REFRESH_SECS: u64 = 5;
+const FULL_REFRESH_SECS: u64 = 60;
 const WARNING_DURATION_SECS: u64 = 3;
 const POLL_TIMEOUT_MS: u64 = 100;
 
@@ -104,6 +105,7 @@ pub struct App {
 
     // Auto-refresh
     last_refresh: Instant,
+    last_full_refresh: Instant,
     /// Throbber animation state — advanced each frame via `calc_next()`.
     throbber_state: throbber_widgets_tui::ThrobberState,
 
@@ -182,6 +184,7 @@ impl App {
             tx,
             rx,
             last_refresh: Instant::now(),
+            last_full_refresh: Instant::now(),
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
             previous_worktree_states: HashMap::new(),
@@ -327,7 +330,11 @@ impl App {
     // Background refresh pipeline
     // -------------------------------------------------------------------
 
-    fn start_refresh(&self) {
+    /// Starts a full background refresh of all data sources.
+    ///
+    /// Probes remote SSH hosts, refreshes GitHub issues/PRs, local and remote
+    /// worktrees, and all tmux sessions. Sends `AppMsg::CacheRefreshed` when done.
+    fn start_full_refresh(&self) {
         // Cache-based refresh pipeline.
         let config = self.global_config.clone();
         let tx = self.tx.clone();
@@ -388,6 +395,22 @@ impl App {
         });
     }
 
+    /// Starts a local-only background refresh (worktrees + tmux sessions).
+    ///
+    /// Skips GitHub API calls, remote host probing, and remote worktree/session
+    /// refreshes. Sends `AppMsg::LocalCacheRefreshed` when done.
+    fn start_local_refresh(&self) {
+        let config = self.global_config.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            for repo in &config.repos {
+                let _ = cache_sources::refresh_worktrees(repo);
+            }
+            let _ = cache_sources::refresh_tmux_sessions(None);
+            let _ = tx.send(AppMsg::LocalCacheRefreshed);
+        });
+    }
+
     // -------------------------------------------------------------------
     // Drain messages from background threads
     // -------------------------------------------------------------------
@@ -431,96 +454,7 @@ impl App {
                     // Fetch pane content for the current task selection.
                     self.fetch_task_pane_content();
 
-                    // Detect state transitions and fire desktop notifications.
-                    let terminal_app = self.global_config.terminal_app.as_str();
-                    for row in &self.task_rows {
-                        let key = row.worktree_path.clone();
-                        let old = old_states.get(&key);
-                        let label = row.issue_title.as_deref().unwrap_or(&row.branch);
-                        let session = row.sessions.first().map(|s| s.tmux.name.as_str());
-                        let notify = |title: &str, message: &str| {
-                            crate::notify::send_notification_with_session(
-                                title,
-                                message,
-                                session,
-                                terminal_app,
-                            );
-                        };
-
-                        // Claude was working, now needs input.
-                        if row.sessions.iter().any(|s| {
-                            s.claude.as_ref().is_some_and(|c| {
-                                c.status == crate::claude_state::ClaudeState::Input
-                            })
-                        }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
-                        {
-                            notify(
-                                "Claude needs input",
-                                &format!("{} is waiting for you", label),
-                            );
-                        }
-
-                        // Claude was working, now idle (finished).
-                        if !row.sessions.iter().any(|s| {
-                            s.claude.as_ref().is_some_and(|c| {
-                                c.status == crate::claude_state::ClaudeState::Working
-                            })
-                        }) && old.map(|o| o.claude_working).unwrap_or(false)
-                        {
-                            notify("Claude finished", label);
-                        }
-
-                        // CI transitioned to failing.
-                        if let Some(ref pr) = row.pr {
-                            if pr.checks_state.as_deref() == Some("failing")
-                                && old
-                                    .map(|o| o.ci_status.as_deref() != Some("failing"))
-                                    .unwrap_or(false)
-                            {
-                                notify("CI Failed", &format!("#{} {}", pr.number, label));
-                            }
-
-                            // New unresolved review threads appeared.
-                            if pr.unresolved_threads > 0
-                                && old.map(|o| !o.has_unresolved_threads).unwrap_or(false)
-                            {
-                                notify(
-                                    "Review comments",
-                                    &format!(
-                                        "#{} has {} unresolved thread(s)",
-                                        pr.number, pr.unresolved_threads
-                                    ),
-                                );
-                            }
-                        }
-                    }
-
-                    // Save current state as snapshots for the next comparison.
-                    self.previous_worktree_states = self
-                        .task_rows
-                        .iter()
-                        .map(|row| {
-                            let snapshot = WorktreeSnapshot {
-                                claude_working: row.sessions.iter().any(|s| {
-                                    s.claude.as_ref().is_some_and(|c| {
-                                        c.status == crate::claude_state::ClaudeState::Working
-                                    })
-                                }),
-                                claude_needs_input: row.sessions.iter().any(|s| {
-                                    s.claude.as_ref().is_some_and(|c| {
-                                        c.status == crate::claude_state::ClaudeState::Input
-                                    })
-                                }),
-                                ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
-                                has_unresolved_threads: row
-                                    .pr
-                                    .as_ref()
-                                    .map(|p| p.unresolved_threads > 0)
-                                    .unwrap_or(false),
-                            };
-                            (row.worktree_path.clone(), snapshot)
-                        })
-                        .collect();
+                    self.detect_and_notify(&old_states);
 
                     // Write session manifest so resurrection knows which
                     // worktrees had active sessions at last refresh.
@@ -569,12 +503,41 @@ impl App {
                         self.preview_scroll_state.set(state);
                     }
                 }
+                AppMsg::LocalCacheRefreshed => {
+                    let old_states = std::mem::take(&mut self.previous_worktree_states);
+                    self.task_rows = derive_from_all_caches(&self.global_config);
+                    let state = crate::build_state::build_state(&self.global_config);
+                    self.standalone_sessions = state.standalone_sessions;
+                    if let Err(e) =
+                        check_standalone_collisions(&self.standalone_sessions, &self.task_rows)
+                    {
+                        crate::logger::LOG.warn(&format!("{e}"));
+                    }
+                    self.error = None;
+                    let total = self.standalone_sessions.len() + self.task_rows.len();
+                    if total > 0 && self.cursor >= total {
+                        self.cursor = total - 1;
+                    }
+                    if let ViewState::Cleanup(ref mut cs) = self.view
+                        && cs.stale.is_empty()
+                    {
+                        cs.stale = filter_stale(&self.task_rows);
+                        cs.selected = cs
+                            .stale
+                            .iter()
+                            .map(|row| row.worktree_path.clone())
+                            .collect();
+                    }
+                    self.prune_expansion_state();
+                    self.fetch_task_pane_content();
+                    self.detect_and_notify(&old_states);
+                }
                 AppMsg::DeleteDone => {
                     if let ViewState::ConfirmDelete(ref mut ds) = self.view {
                         ds.phase = Phase::Done;
                     }
                     self.warning = Some(("Worktree deleted.".to_string(), Instant::now()));
-                    self.start_refresh();
+                    self.start_full_refresh();
                 }
                 AppMsg::DeleteErr(e) => {
                     if let ViewState::ConfirmDelete(ref mut ds) = self.view {
@@ -588,11 +551,11 @@ impl App {
                         cs.errors = errors;
                         cs.phase = Phase::Done;
                     }
-                    self.start_refresh();
+                    self.start_full_refresh();
                 }
                 AppMsg::CreateWorktreeDone { session_name } => {
                     self.switch_target = Some(session_name);
-                    self.start_refresh();
+                    self.start_full_refresh();
                 }
                 AppMsg::CreateWorktreeErr(e) => {
                     self.warning = Some((e, Instant::now()));
@@ -605,10 +568,107 @@ impl App {
                     if !session_name.is_empty() {
                         self.switch_target = Some(session_name);
                     }
-                    self.start_refresh();
+                    self.start_full_refresh();
                 }
             }
         }
+    }
+
+    /// Detects state transitions between the previous and current worktree snapshots
+    /// and fires desktop notifications for significant changes (Claude needs input,
+    /// Claude finished, CI failed, new review comments).
+    ///
+    /// Also saves the current row states as snapshots for the next comparison.
+    fn detect_and_notify(&mut self, old_states: &HashMap<String, WorktreeSnapshot>) {
+        let terminal_app = self.global_config.terminal_app.as_str();
+        for row in &self.task_rows {
+            let key = row.worktree_path.clone();
+            let old = old_states.get(&key);
+            let label = row.issue_title.as_deref().unwrap_or(&row.branch);
+            let session = row.sessions.first().map(|s| s.tmux.name.as_str());
+            let notify = |title: &str, message: &str| {
+                crate::notify::send_notification_with_session(
+                    title,
+                    message,
+                    session,
+                    terminal_app,
+                );
+            };
+
+            // Claude was working, now needs input.
+            if row.sessions.iter().any(|s| {
+                s.claude
+                    .as_ref()
+                    .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
+            }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
+            {
+                notify(
+                    "Claude needs input",
+                    &format!("{} is waiting for you", label),
+                );
+            }
+
+            // Claude was working, now idle (finished).
+            if !row.sessions.iter().any(|s| {
+                s.claude
+                    .as_ref()
+                    .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)
+            }) && old.map(|o| o.claude_working).unwrap_or(false)
+            {
+                notify("Claude finished", label);
+            }
+
+            // CI transitioned to failing.
+            if let Some(ref pr) = row.pr {
+                if pr.checks_state.as_deref() == Some("failing")
+                    && old
+                        .map(|o| o.ci_status.as_deref() != Some("failing"))
+                        .unwrap_or(false)
+                {
+                    notify("CI Failed", &format!("#{} {}", pr.number, label));
+                }
+
+                // New unresolved review threads appeared.
+                if pr.unresolved_threads > 0
+                    && old.map(|o| !o.has_unresolved_threads).unwrap_or(false)
+                {
+                    notify(
+                        "Review comments",
+                        &format!(
+                            "#{} has {} unresolved thread(s)",
+                            pr.number, pr.unresolved_threads
+                        ),
+                    );
+                }
+            }
+        }
+
+        // Save current state as snapshots for the next comparison.
+        self.previous_worktree_states = self
+            .task_rows
+            .iter()
+            .map(|row| {
+                let snapshot = WorktreeSnapshot {
+                    claude_working: row.sessions.iter().any(|s| {
+                        s.claude
+                            .as_ref()
+                            .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)
+                    }),
+                    claude_needs_input: row.sessions.iter().any(|s| {
+                        s.claude
+                            .as_ref()
+                            .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
+                    }),
+                    ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
+                    has_unresolved_threads: row
+                        .pr
+                        .as_ref()
+                        .map(|p| p.unresolved_threads > 0)
+                        .unwrap_or(false),
+                };
+                (row.worktree_path.clone(), snapshot)
+            })
+            .collect();
     }
 
     // -------------------------------------------------------------------
@@ -1158,7 +1218,7 @@ impl App {
             }
             Message::Refresh => {
                 self.refreshing = true;
-                self.start_refresh();
+                self.start_full_refresh();
                 ok()
             }
             Message::ReconnectHosts => {
@@ -1540,6 +1600,7 @@ impl App {
             tx,
             rx,
             last_refresh: Instant::now(),
+            last_full_refresh: Instant::now(),
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
             previous_worktree_states: HashMap::new(),
@@ -1592,7 +1653,7 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     ensure_standalone_sessions(&app.global_config)?;
 
     // Initial data fetch in background
-    app.start_refresh();
+    app.start_full_refresh();
 
     let result = run_loop(&mut terminal, &mut app);
 
@@ -1640,11 +1701,16 @@ fn run_loop(
         // Check for background data updates.
         app.check_updates();
 
-        // Auto-refresh.
-        if app.last_refresh.elapsed() > Duration::from_secs(AUTO_REFRESH_SECS) {
+        // Auto-refresh: local sources every 5s, full refresh every 60s.
+        if app.last_refresh.elapsed() > Duration::from_secs(LOCAL_REFRESH_SECS) {
             app.last_refresh = Instant::now();
-            app.refreshing = true;
-            app.start_refresh();
+            if app.last_full_refresh.elapsed() > Duration::from_secs(FULL_REFRESH_SECS) {
+                app.last_full_refresh = Instant::now();
+                app.refreshing = true;
+                app.start_full_refresh();
+            } else {
+                app.start_local_refresh();
+            }
         }
     }
     Ok(app.switch_target.take())
