@@ -108,6 +108,10 @@ pub enum Message {
     PreviewPageUp,
     /// Scroll the preview pane down by one page.
     PreviewPageDown,
+    /// Scroll the preview pane up by a few lines (mouse wheel).
+    PreviewScrollUp,
+    /// Scroll the preview pane down by a few lines (mouse wheel).
+    PreviewScrollDown,
 }
 
 /// Result of processing a [`Message`] through the `update` function.

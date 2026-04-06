@@ -32,6 +32,12 @@ const FULL_HEADER_MIN_HEIGHT: u16 = 30;
 const TABLE_BODY_Y_OFFSET: u16 = 2;
 /// Total rows consumed by table chrome (top border + header + bottom border).
 const TABLE_CHROME_HEIGHT: u16 = 3;
+/// Maximum fraction of terminal height allocated to the task table (when preview is visible).
+const TABLE_MAX_HEIGHT_FRACTION: f32 = 0.40;
+/// Minimum useful table height (top border + header + 1 data row + bottom border).
+const TABLE_MIN_HEIGHT: u16 = 5;
+/// Lines scrolled per mouse wheel tick on the preview pane.
+pub(crate) const MOUSE_SCROLL_LINES: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Task view helpers
@@ -961,6 +967,15 @@ impl App {
             self.pane_content.is_empty(),
         );
 
+        // Cap table height when preview is visible to leave room for it.
+        let table_height = if has_preview {
+            let max_table_height = ((area.height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16)
+                .max(TABLE_MIN_HEIGHT);
+            table_height.min(max_table_height)
+        } else {
+            table_height
+        };
+
         let mut constraints = vec![
             Constraint::Length(hdr_height),
             Constraint::Length(3), // tab bar (rounded badges need 3 rows)
@@ -1081,6 +1096,8 @@ impl App {
                 .flatten();
             self.render_task_preview(f, chunks[idx], selected_task, standalone_at_cursor);
             idx += 1;
+        } else {
+            self.preview_area.set(Rect::default());
         }
 
         if has_warning {
@@ -1529,6 +1546,7 @@ impl App {
         standalone_session: Option<&crate::session::StandaloneSessionRow>,
     ) {
         if self.pane_content.is_empty() {
+            self.preview_area.set(Rect::default());
             return;
         }
 
@@ -1558,8 +1576,11 @@ impl App {
                 issue_part, title_part, wt_part, pr_part
             )
         } else {
+            self.preview_area.set(Rect::default());
             return;
         };
+
+        self.preview_area.set(area);
 
         let theme = &self.theme;
         let block = Block::default()
@@ -2912,6 +2933,55 @@ mod tests {
         assert!(
             full_text.contains("E"),
             "hints bar must contain 'E' expand all hint"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Table height cap tests
+    // -----------------------------------------------------------------------
+
+    /// Makes a task row that has an active session (needed to trigger preview).
+    fn make_task_row_with_session_for_preview(issue: u32) -> WorktreeRow {
+        WorktreeRow {
+            sessions: vec![make_session(&format!("sess-{}", issue))],
+            ..make_task_row(issue, DisplayGroup::Other)
+        }
+    }
+
+    #[test]
+    fn table_height_capped_at_40_percent_when_preview_visible() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // Build an app with 20 task rows (each height=1) + sessions so preview shows.
+        let rows: Vec<WorktreeRow> = (1u32..=20)
+            .map(make_task_row_with_session_for_preview)
+            .collect();
+        let mut app = App::new_test(rows);
+        // Set pane_content so preview_visible returns true.
+        app.pane_content = "some pane output".to_string();
+
+        let terminal_height: u16 = 50;
+        let backend = TestBackend::new(120, terminal_height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        // The table_area is the body rect (table_chunk.height - TABLE_CHROME_HEIGHT).
+        // With preview visible and 20 rows, uncapped table_height = 20 + 3 = 23.
+        // 40% of 50 = 20.0 -> max_table_height = max(20, TABLE_MIN_HEIGHT=5) = 20.
+        // Capped table_chunk.height = min(23, 20) = 20.
+        // table_area.height = 20 - 3 = 17.
+        let max_table_chunk_height = ((terminal_height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16)
+            .max(TABLE_MIN_HEIGHT);
+        let table_area = app.table_area.get();
+        let table_chunk_height = table_area.height + TABLE_CHROME_HEIGHT;
+        assert!(
+            table_chunk_height <= max_table_chunk_height,
+            "table chunk height {table_chunk_height} should be <= {max_table_chunk_height}"
+        );
+        assert!(
+            table_chunk_height >= TABLE_MIN_HEIGHT,
+            "table chunk height {table_chunk_height} should be >= {TABLE_MIN_HEIGHT}"
         );
     }
 }
