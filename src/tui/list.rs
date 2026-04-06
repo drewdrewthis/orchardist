@@ -2533,7 +2533,10 @@ mod tests {
         assert!(text.contains("branch"), "must contain 'branch' hint");
         assert!(text.contains("quit"), "must contain 'quit' hint");
         assert!(text.contains("help"), "must contain 'help' hint");
-        assert!(text.contains("Spc+"), "must contain 'Spc+' leader prefix hints");
+        assert!(
+            text.contains("Spc+"),
+            "must contain 'Spc+' leader prefix hints"
+        );
     }
 
     // -----------------------------------------------------------------------
