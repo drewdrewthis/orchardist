@@ -611,7 +611,12 @@ fn extract_repo_slug_from_cache_filename(filename: &str) -> Option<String> {
     let without_ext = filename.strip_suffix(".json")?;
 
     // Known non-repo files.
-    let non_repo_prefixes = ["tmux_sessions", "config", "session_manifest"];
+    let non_repo_prefixes = [
+        "tmux_sessions",
+        "config",
+        "session_manifest",
+        "last_selection",
+    ];
     if non_repo_prefixes.iter().any(|p| without_ext.starts_with(p)) {
         return None;
     }

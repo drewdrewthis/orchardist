@@ -4,6 +4,7 @@
 //! background cache refreshes via a worker thread, and delegates rendering
 //! to the `list`, `dialogs`, and `widgets` sub-modules.
 mod dialogs;
+pub(crate) mod last_selection;
 mod list;
 mod message;
 mod state;
@@ -105,6 +106,10 @@ pub struct App {
     // Session to switch to after the TUI exits. Set by Enter key handler.
     switch_target: Option<String>,
 
+    /// Whether the last selection should be persisted on exit and restored on launch.
+    /// False in "cleanup" mode, which has its own cursor and no selection to save.
+    persist_selection: bool,
+
     // Auto-refresh
     last_refresh: Instant,
     last_full_refresh: Instant,
@@ -154,7 +159,11 @@ impl App {
         let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
 
-        let view = if command == "cleanup" {
+        let persist_selection = command != "cleanup";
+
+        let view = if persist_selection {
+            ViewState::List
+        } else {
             ViewState::Cleanup(CleanupState {
                 stale: Vec::new(),
                 selected: std::collections::HashSet::new(),
@@ -163,12 +172,19 @@ impl App {
                 deleted: Vec::new(),
                 errors: Vec::new(),
             })
+        };
+
+        // Resolve the initial cursor position from the last saved selection.
+        // Cleanup mode always starts at 0 (it has its own cursor).
+        let initial_cursor = if persist_selection {
+            let sel = last_selection::load();
+            last_selection::resolve_cursor(&sel, &standalone_sessions, &task_rows)
         } else {
-            ViewState::List
+            0
         };
 
         App {
-            cursor: 0,
+            cursor: initial_cursor,
             loading: true,
             refreshing: false,
             error: None,
@@ -192,6 +208,7 @@ impl App {
             last_full_refresh: Instant::now(),
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
+            persist_selection,
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
@@ -1649,6 +1666,7 @@ impl App {
             last_full_refresh: Instant::now(),
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
+            persist_selection: true,
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
@@ -1699,10 +1717,25 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     // Start standalone sessions with start_on_launch = true.
     ensure_standalone_sessions(&app.global_config)?;
 
+    // Hydrate the preview pane for the restored cursor row so the first paint
+    // shows content without requiring a key press. Skip in cleanup mode.
+    if app.persist_selection {
+        app.fetch_task_pane_content();
+    }
+
     // Initial data fetch in background
     app.start_full_refresh();
 
     let result = run_loop(&mut terminal, &mut app);
+
+    // Persist the current selection so it can be restored on the next launch.
+    // Skip in cleanup mode — cleanup has its own cursor and no selection to save.
+    if app.persist_selection
+        && let Some(sel) = current_selection(&app)
+        && let Err(e) = last_selection::save(&sel)
+    {
+        crate::logger::LOG.warn(&format!("last_selection: save error: {e}"));
+    }
 
     // Restore terminal
     crossterm::terminal::disable_raw_mode()?;
@@ -2076,6 +2109,34 @@ fn check_standalone_collisions(
 /// authoritative cache-reading and derivation logic.
 fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::WorktreeRow> {
     crate::build_state::build_task_rows(config)
+}
+
+// ---------------------------------------------------------------------------
+// Last-selection helpers (pure, testable)
+// ---------------------------------------------------------------------------
+
+/// Builds a `LastSelection` from the current app state.
+///
+/// Returns `None` when the cursor is out of bounds for both lists,
+/// so the caller can skip saving and preserve the previous file.
+pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelection> {
+    let standalone_count = app.standalone_sessions.len();
+    if app.cursor < standalone_count
+        && let Some(ss) = app.standalone_sessions.get(app.cursor)
+    {
+        return Some(last_selection::LastSelection {
+            kind: last_selection::SelectionKind::Standalone,
+            key: ss.session.tmux.name.clone(),
+        });
+    }
+    let wt_idx = app.cursor.saturating_sub(standalone_count);
+    if let Some(row) = app.task_rows.get(wt_idx) {
+        return Some(last_selection::LastSelection {
+            kind: last_selection::SelectionKind::Worktree,
+            key: row.worktree_path.clone(),
+        });
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -4372,5 +4433,62 @@ mod tests {
         app.input_phase = InputPhase::AwaitingLeader;
         app.update(Message::CursorDown);
         assert_eq!(app.input_phase, InputPhase::Filtering);
+    }
+
+    // -----------------------------------------------------------------------
+    // current_selection tests
+    // -----------------------------------------------------------------------
+
+    fn make_standalone_session(name: &str) -> crate::session::StandaloneSessionRow {
+        use crate::session::{
+            EnrichedSession, Host, SessionStatus, StandaloneConfig, StandaloneSessionRow,
+            TmuxSessionInfo,
+        };
+        StandaloneSessionRow {
+            session: EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: name.to_string(),
+                    status: SessionStatus::Dead,
+                },
+                claude: None,
+                panes: vec![],
+            },
+            config: StandaloneConfig {
+                name: name.to_string(),
+                command: String::new(),
+                cwd: String::new(),
+                start_on_launch: false,
+            },
+        }
+    }
+
+    #[test]
+    fn current_selection_for_worktree_row() {
+        let mut app = App::new_test(vec![
+            make_task_row(1, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Other),
+        ]);
+        app.cursor = 1;
+        let sel = current_selection(&app).unwrap();
+        assert_eq!(sel.kind, last_selection::SelectionKind::Worktree);
+        assert_eq!(sel.key, "/workspace/repo-2");
+    }
+
+    #[test]
+    fn current_selection_for_standalone_row() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.standalone_sessions = vec![make_standalone_session("my-standalone")];
+        app.cursor = 0;
+        let sel = current_selection(&app).unwrap();
+        assert_eq!(sel.kind, last_selection::SelectionKind::Standalone);
+        assert_eq!(sel.key, "my-standalone");
+    }
+
+    #[test]
+    fn current_selection_returns_none_when_cursor_out_of_bounds() {
+        let app = App::new_test(vec![]);
+        // cursor=0, no rows, no standalone
+        assert!(current_selection(&app).is_none());
     }
 }
