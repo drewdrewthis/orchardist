@@ -117,6 +117,9 @@ pub struct App {
     table_area: Cell<Rect>,
     /// Last rendered attribution URL rect. Updated by render.
     url_area: Cell<Rect>,
+    /// Last rendered preview pane rect. Updated by render_task_preview.
+    /// Zero rect when preview is not visible.
+    preview_area: Cell<Rect>,
     /// Row index and timestamp of last mouse click, for double-click detection.
     last_click: Option<(usize, Instant)>,
 
@@ -190,6 +193,7 @@ impl App {
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
+            preview_area: Cell::new(Rect::default()),
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
             expanded: HashSet::new(),
@@ -823,7 +827,16 @@ impl App {
             && event.row >= table.y
             && event.row < table.y + table.height;
 
+        let preview = self.preview_area.get();
+        let in_preview = preview.width > 0
+            && event.column >= preview.x
+            && event.column < preview.x + preview.width
+            && event.row >= preview.y
+            && event.row < preview.y + preview.height;
+
         match event.kind {
+            MouseEventKind::ScrollDown if in_preview => Some(Message::PreviewScrollDown),
+            MouseEventKind::ScrollUp if in_preview => Some(Message::PreviewScrollUp),
             MouseEventKind::ScrollDown if in_table => Some(Message::CursorDown),
             MouseEventKind::ScrollUp if in_table => Some(Message::CursorUp),
             MouseEventKind::Down(MouseButton::Left) => {
@@ -1039,6 +1052,23 @@ impl App {
             Message::PreviewPageDown => {
                 let mut state = self.preview_scroll_state.get();
                 state.scroll_page_down();
+                self.preview_scroll_state.set(state);
+                ok()
+            }
+            Message::PreviewScrollUp => {
+                let mut state = self.preview_scroll_state.get();
+                // scroll_up() moves 1 row; loop for mouse-wheel granularity.
+                for _ in 0..list::MOUSE_SCROLL_LINES {
+                    state.scroll_up();
+                }
+                self.preview_scroll_state.set(state);
+                ok()
+            }
+            Message::PreviewScrollDown => {
+                let mut state = self.preview_scroll_state.get();
+                for _ in 0..list::MOUSE_SCROLL_LINES {
+                    state.scroll_down();
+                }
                 self.preview_scroll_state.set(state);
                 ok()
             }
@@ -1606,6 +1636,7 @@ impl App {
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
+            preview_area: Cell::new(Rect::default()),
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
             expanded: HashSet::new(),
@@ -3634,6 +3665,79 @@ mod tests {
         assert!(
             after.offset().y <= before.offset().y,
             "scroll_page_up should decrease y offset"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Preview mouse scroll tests
+    // -----------------------------------------------------------------------
+
+    /// Creates an App with both table_area and preview_area pre-set.
+    fn app_with_preview_area(task_rows: Vec<WorktreeRow>) -> App {
+        let app = app_with_table_area(task_rows);
+        app.preview_area.set(Rect {
+            x: 0,
+            y: 20,
+            width: 80,
+            height: 10,
+        });
+        app
+    }
+
+    #[test]
+    fn mouse_scroll_down_in_preview_returns_preview_scroll_down() {
+        let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 22);
+        assert_eq!(
+            app.handle_mouse_event(event),
+            Some(Message::PreviewScrollDown)
+        );
+    }
+
+    #[test]
+    fn mouse_scroll_up_in_preview_returns_preview_scroll_up() {
+        let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let event = make_mouse_event(MouseEventKind::ScrollUp, 10, 22);
+        assert_eq!(
+            app.handle_mouse_event(event),
+            Some(Message::PreviewScrollUp)
+        );
+    }
+
+    #[test]
+    fn mouse_scroll_in_preview_with_zero_rect_returns_none() {
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        // preview_area defaults to Rect::default() (width=0), so no hit.
+        let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 22);
+        assert_eq!(app.handle_mouse_event(event), None);
+    }
+
+    #[test]
+    fn preview_scroll_down_advances_state_by_three_lines() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let initial = app.preview_scroll_state.get();
+        app.update(Message::PreviewScrollDown);
+        let after = app.preview_scroll_state.get();
+        assert_eq!(
+            after.offset().y,
+            initial.offset().y + 3,
+            "PreviewScrollDown should advance y offset by 3"
+        );
+    }
+
+    #[test]
+    fn preview_scroll_up_decreases_state_by_three_lines() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        // Scroll down first so we have room to scroll up.
+        app.update(Message::PreviewScrollDown);
+        app.update(Message::PreviewScrollDown);
+        let before = app.preview_scroll_state.get();
+        app.update(Message::PreviewScrollUp);
+        let after = app.preview_scroll_state.get();
+        assert_eq!(
+            after.offset().y,
+            before.offset().y.saturating_sub(3),
+            "PreviewScrollUp should decrease y offset by 3"
         );
     }
 

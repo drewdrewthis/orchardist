@@ -96,8 +96,8 @@ pub struct Theme {
     /// Default foreground text color.
     pub text: Color,
 
-    /// Color for the shepherd (main session) display group.
-    pub shepherd: Color,
+    /// Color for the orchardist (main session) display group.
+    pub orchardist: Color,
 
     /// Color for merge-conflict indicators.
     pub merge_conflict: Color,
@@ -133,7 +133,7 @@ impl Default for Theme {
             claude_needs_input: Color::Red,
             background: Color::Reset, // inherit terminal background
             text: Color::White,
-            shepherd: Color::Magenta,
+            orchardist: Color::Magenta,
             merge_conflict: Color::Red,
             prioritized: Color::White,
             pr_merged: Color::Magenta,
@@ -151,7 +151,7 @@ impl Default for Theme {
 /// domain model.
 pub fn display_group_color(group: DisplayGroup, theme: &Theme) -> Color {
     match group {
-        DisplayGroup::RepoMain => theme.shepherd,
+        DisplayGroup::RepoMain => theme.orchardist,
         DisplayGroup::Prioritized => theme.prioritized,
         DisplayGroup::NeedsAttention => theme.error,
         DisplayGroup::ClaudeWorking => theme.claude_active,
@@ -229,8 +229,8 @@ mod tests {
     }
 
     #[test]
-    fn default_shepherd_is_magenta() {
-        assert_eq!(Theme::default().shepherd, Color::Magenta);
+    fn default_orchardist_is_magenta() {
+        assert_eq!(Theme::default().orchardist, Color::Magenta);
     }
 
     #[test]
@@ -279,11 +279,11 @@ mod tests {
     }
 
     #[test]
-    fn display_group_shepherd_returns_theme_shepherd() {
+    fn display_group_repo_main_returns_theme_orchardist() {
         let theme = Theme::default();
         assert_eq!(
             display_group_color(DisplayGroup::RepoMain, &theme),
-            theme.shepherd
+            theme.orchardist
         );
     }
 
