@@ -70,6 +70,24 @@ pub struct NewWorktreeState {
 }
 
 // ---------------------------------------------------------------------------
+// Input phase
+// ---------------------------------------------------------------------------
+
+/// Input phase for the main list view.
+///
+/// There are no modes — only phases. The default `Filtering` phase routes
+/// bare printable keystrokes directly into the instant filter. `AwaitingLeader`
+/// is entered by pressing Space and routes the *next* key to an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputPhase {
+    /// Bare keystrokes append to the filter. This is the default state.
+    #[default]
+    Filtering,
+    /// Space was pressed; the next key dispatches an action.
+    AwaitingLeader,
+}
+
+// ---------------------------------------------------------------------------
 // Phase enum
 // ---------------------------------------------------------------------------
 

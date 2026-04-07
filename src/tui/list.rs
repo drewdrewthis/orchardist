@@ -131,24 +131,24 @@ pub(crate) struct VisibleTask<'a> {
 /// Returns the visible tasks from the pre-sorted task_rows.
 ///
 /// All rows are always visible — there is no backlog collapsing.
-/// `search_text` narrows results; main worktree rows always bypass it.
+/// `filter_text` narrows results; main worktree rows always bypass it.
 /// When `repo_slug_filter` is `Some(slug)`, only rows from that repo are shown
 /// (main worktree rows are also filtered so each repo only shows its own).
 #[cfg(test)]
 pub(crate) fn visible_tasks<'a>(
     task_rows: &'a [WorktreeRow],
-    search_text: &str,
+    filter_text: &str,
 ) -> Vec<VisibleTask<'a>> {
-    visible_tasks_filtered(task_rows, search_text, None)
+    visible_tasks_filtered(task_rows, filter_text, None)
 }
 
 /// Like `visible_tasks` but with an optional repo slug filter.
 pub(crate) fn visible_tasks_filtered<'a>(
     task_rows: &'a [WorktreeRow],
-    search_text: &str,
+    filter_text: &str,
     repo_slug_filter: Option<&str>,
 ) -> Vec<VisibleTask<'a>> {
-    let search_lower = search_text.to_lowercase();
+    let search_lower = filter_text.to_lowercase();
 
     let mut result = Vec::new();
 
@@ -386,7 +386,7 @@ impl App {
         } else {
             let worktree_cursor = self.cursor - standalone_count;
             let tasks =
-                visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
+                visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
             let action = tasks.get(worktree_cursor).map(|vt| {
                 if let Some(session) = vt.row.sessions.first() {
                     let host = match &session.tmux.host {
@@ -553,7 +553,7 @@ impl App {
 
         let worktree_cursor = self.cursor - standalone_count;
         let visible =
-            visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
+            visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
         if let Some(vt) = visible.get(worktree_cursor) {
             // Find a session to capture pane content from.
             if let Some(session) = vt.row.sessions.first() {
@@ -877,7 +877,7 @@ impl App {
         let hdr_height = header_height(area.height);
 
         let tasks =
-            visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
+            visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
         let has_remote = self.task_rows.iter().any(|r| {
@@ -1646,23 +1646,23 @@ impl App {
                 Style::default().fg(theme.accent),
             ));
         } else {
-            spans.push(Span::styled("r", key_style));
+            spans.push(Span::styled("Spc+r", key_style));
             spans.push(Span::raw(" refresh"));
         }
 
         let has_unreachable = self.host_reachable.values().any(|&v| !v);
         if has_unreachable {
             spans.push(sep.clone());
-            spans.push(Span::styled("R", key_style));
+            spans.push(Span::styled("Spc+R", key_style));
             spans.push(Span::raw(" reconnect"));
         }
 
         spans.push(sep.clone());
-        spans.push(Span::styled("q", key_style));
+        spans.push(Span::styled("Spc+q", key_style));
         spans.push(Span::raw(format!(" {}", quit_label)));
 
         spans.push(sep.clone());
-        spans.push(Span::styled("?", key_style));
+        spans.push(Span::styled("Spc+?", key_style));
         spans.push(Span::raw(" help"));
     }
 
@@ -1674,21 +1674,6 @@ impl App {
             .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
 
-        // When search is active, show the search input indicator.
-        if self.search_active {
-            let search_display = format!("/ {}_", self.search_text);
-            let hints = Paragraph::new(Line::from(vec![
-                Span::styled(search_display, Style::default().fg(theme.search_highlight)),
-                Span::styled(
-                    "  esc:cancel  enter:apply",
-                    Style::default().fg(theme.dimmed),
-                ),
-            ]))
-            .alignment(Alignment::Center);
-            f.render_widget(hints, area);
-            return;
-        }
-
         let is_standalone = cursor_is_standalone(self.cursor, self.standalone_sessions.len());
         let dim = Style::default().fg(theme.dimmed);
 
@@ -1698,64 +1683,55 @@ impl App {
             sep.clone(),
         ];
 
+        // Active filter text indicator — shown inline when filter is non-empty.
+        if !self.filter_text.is_empty() {
+            spans.push(Span::styled(
+                format!("[{}_]", self.filter_text),
+                Style::default().fg(theme.search_highlight),
+            ));
+            spans.push(sep.clone());
+        }
+
         // PR link hint — dim when standalone or selected task has no PR.
         let has_pr = !is_standalone && !self.task_rows.is_empty() && {
             let standalone_count = self.standalone_sessions.len();
             let worktree_cursor = self.cursor.saturating_sub(standalone_count);
             let visible =
-                visible_tasks_filtered(&self.task_rows, &self.search_text, self.active_repo_slug());
+                visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
             visible
                 .get(worktree_cursor)
                 .is_some_and(|vt| vt.row.pr.is_some())
         };
         if has_pr {
-            spans.push(Span::styled("o", key_style));
+            spans.push(Span::styled("Spc+o", key_style));
             spans.push(Span::raw(" pr"));
         } else {
-            spans.push(Span::styled("o pr", dim));
+            spans.push(Span::styled("Spc+o pr", dim));
         }
         spans.push(sep.clone());
 
         // Dim 'p' (priority) for standalone sessions.
         if is_standalone {
-            spans.push(Span::styled("p:priority", dim));
+            spans.push(Span::styled("Spc+p priority", dim));
         } else {
-            spans.push(Span::styled("p", key_style));
-            spans.push(Span::raw(":priority"));
+            spans.push(Span::styled("Spc+p", key_style));
+            spans.push(Span::raw(" priority"));
         }
         spans.push(sep.clone());
 
-        spans.push(Span::styled("B", key_style));
-        spans.push(Span::raw(":branch"));
-        spans.push(sep.clone());
-
-        spans.push(Span::styled("/", key_style));
-        spans.push(Span::raw(":search"));
-
-        // Active search text label.
-        if !self.search_text.is_empty() {
-            spans.push(sep.clone());
-            spans.push(Span::styled(
-                format!("[/{}]", self.search_text),
-                Style::default().fg(theme.search_highlight),
-            ));
-        }
-
+        spans.push(Span::styled("Spc+B", key_style));
+        spans.push(Span::raw(" branch"));
         spans.push(sep.clone());
 
         spans.push(Span::styled("Tab", key_style));
-        spans.push(Span::raw(":repos"));
+        spans.push(Span::raw(" repos"));
         spans.push(sep.clone());
 
-        spans.push(Span::styled("l/h", key_style));
-        spans.push(Span::raw(":expand"));
+        spans.push(Span::styled("↔", key_style));
+        spans.push(Span::raw(" expand"));
         spans.push(sep.clone());
 
-        spans.push(Span::styled("E", key_style));
-        spans.push(Span::raw(":expand all"));
-        spans.push(sep.clone());
-
-        spans.push(Span::styled("c", key_style));
+        spans.push(Span::styled("Spc+c", key_style));
         spans.push(Span::raw(" cleanup"));
         spans.push(sep.clone());
 
@@ -2456,8 +2432,8 @@ mod tests {
         }
 
         assert!(
-            text.contains(":repos"),
-            "hints bar must contain ':repos' repo cycling hint"
+            text.contains("repos"),
+            "hints bar must contain 'repos' repo cycling hint"
         );
         assert!(
             text.contains("Tab"),
@@ -2522,10 +2498,13 @@ mod tests {
         }
 
         assert!(text.contains("switch"), "must contain 'switch' hint");
-        assert!(text.contains(":search"), "must contain ':search' hint");
-        assert!(text.contains(":branch"), "must contain ':branch' hint");
+        assert!(text.contains("branch"), "must contain 'branch' hint");
         assert!(text.contains("quit"), "must contain 'quit' hint");
         assert!(text.contains("help"), "must contain 'help' hint");
+        assert!(
+            text.contains("Spc+"),
+            "must contain 'Spc+' leader prefix hints"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2868,16 +2847,8 @@ mod tests {
             }
         }
         assert!(
-            full_text.contains("l/h"),
-            "hints bar must contain 'l/h' expand hint"
-        );
-        assert!(
-            full_text.contains(":expand"),
-            "hints bar must contain ':expand' hint"
-        );
-        assert!(
-            full_text.contains("E"),
-            "hints bar must contain 'E' expand all hint"
+            full_text.contains("expand"),
+            "hints bar must contain 'expand' hint"
         );
     }
 
