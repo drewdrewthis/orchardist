@@ -7,7 +7,6 @@
 use std::collections::HashSet;
 
 use crate::derive::WorktreeRow;
-use crate::types::Worktree;
 
 // ---------------------------------------------------------------------------
 // View state (sum type carrying dialog state)
@@ -31,8 +30,8 @@ pub enum ViewState {
 
 /// State carried while the delete-worktree confirmation dialog is open.
 pub struct DeleteState {
-    /// The worktree that the user has chosen to delete.
-    pub target: Worktree,
+    /// The worktree row that the user has chosen to delete.
+    pub target: WorktreeRow,
     /// Current progress phase of the delete operation.
     pub phase: Phase,
     /// Error message to display if the operation failed.

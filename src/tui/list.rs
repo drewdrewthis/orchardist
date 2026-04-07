@@ -100,27 +100,6 @@ pub(crate) fn branch_tail(branch: &str) -> &str {
     }
 }
 
-/// Converts a `WorktreeRow` reference into a `Worktree` for use in dialog state.
-///
-/// Fields not tracked in `WorktreeRow` are set to safe defaults.
-pub(crate) fn worktree_from_task_row(row: &crate::derive::WorktreeRow) -> crate::types::Worktree {
-    crate::types::Worktree {
-        path: row.worktree_path.clone(),
-        branch: Some(row.branch.clone()),
-        head: String::new(),
-        is_bare: false,
-        has_conflicts: false,
-        pr: None,
-        pr_loading: false,
-        tmux_session: row.sessions.first().map(|s| s.tmux.name.clone()),
-        tmux_attached: false,
-        tmux_pane_title: None,
-        remote: row.worktree_host.clone(),
-        issue_number: row.issue_number,
-        issue_state: None,
-    }
-}
-
 /// A task entry prepared for rendering in the task-centric view.
 #[derive(Debug)]
 pub(crate) struct VisibleTask<'a> {

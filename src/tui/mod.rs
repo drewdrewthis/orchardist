@@ -7,11 +7,16 @@ mod dialogs;
 pub(crate) mod last_selection;
 mod list;
 mod message;
+mod sessions;
 mod state;
 pub mod theme;
 mod widgets;
+mod worktree_ops;
 
 pub use theme::Theme;
+
+use sessions::{check_standalone_collisions, ensure_main_sessions, ensure_standalone_sessions};
+use worktree_ops::{WorktreeSnapshot, delete_task_row, filter_stale};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
@@ -27,10 +32,8 @@ use crate::derive;
 use crate::git;
 use crate::global_config;
 use crate::navigation;
-use crate::remote;
 use crate::session::StandaloneSessionRow;
 use crate::tmux;
-use crate::types::Worktree;
 
 use message::{Message, UpdateResult};
 use state::{AppMsg, CleanupState, InputPhase, Phase, ViewState};
@@ -51,19 +54,6 @@ const DOUBLE_CLICK_MS: u128 = 400;
 
 /// Attribution URL displayed in the hints bar footer.
 const ATTRIBUTION_URL: &str = "https://github.com/drewdrewthis/git-orchard-rs";
-
-// ---------------------------------------------------------------------------
-// Notification snapshot
-// ---------------------------------------------------------------------------
-
-/// Captures the notification-relevant state of one worktree row so that
-/// transitions can be detected between cache refresh cycles.
-struct WorktreeSnapshot {
-    claude_working: bool,
-    claude_needs_input: bool,
-    ci_status: Option<String>,
-    has_unresolved_threads: bool,
-}
 
 // ---------------------------------------------------------------------------
 // App
@@ -154,7 +144,7 @@ impl App {
         let repo_root = git::find_repo_root();
         let repo_name = git::get_repo_name();
         let global_cfg = global_config::load_global_config();
-        let task_rows = derive_from_all_caches(&global_cfg);
+        let task_rows = crate::build_state::build_task_rows(&global_cfg);
         let state = crate::build_state::build_state(&global_cfg);
         let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
@@ -443,7 +433,7 @@ impl App {
             match msg {
                 AppMsg::CacheRefreshed => {
                     let old_states = std::mem::take(&mut self.previous_worktree_states);
-                    self.task_rows = derive_from_all_caches(&self.global_config);
+                    self.task_rows = crate::build_state::build_task_rows(&self.global_config);
                     let state = crate::build_state::build_state(&self.global_config);
                     self.standalone_sessions = state.standalone_sessions;
                     // Warn on refresh (not fatal) — a new worktree may have
@@ -528,7 +518,7 @@ impl App {
                 }
                 AppMsg::LocalCacheRefreshed => {
                     let old_states = std::mem::take(&mut self.previous_worktree_states);
-                    self.task_rows = derive_from_all_caches(&self.global_config);
+                    self.task_rows = crate::build_state::build_task_rows(&self.global_config);
                     let state = crate::build_state::build_state(&self.global_config);
                     self.standalone_sessions = state.standalone_sessions;
                     if let Err(e) =
@@ -1183,9 +1173,8 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
-                    let wt = list::worktree_from_task_row(vt.row);
                     self.view = ViewState::ConfirmDelete(state::DeleteState {
-                        target: wt,
+                        target: vt.row.clone(),
                         phase: Phase::Confirm,
                         error: None,
                     });
@@ -1496,11 +1485,11 @@ impl App {
     // Actions (delete, cleanup)
     // -------------------------------------------------------------------
 
-    fn start_delete(&self, target: &Worktree) {
+    fn start_delete(&self, target: &derive::WorktreeRow) {
         let wt = target.clone();
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
-        std::thread::spawn(move || match delete_worktree(&wt, &global_config) {
+        std::thread::spawn(move || match delete_task_row(&wt, &global_config) {
             Ok(()) => {
                 let _ = tx.send(AppMsg::DeleteDone);
             }
@@ -1539,7 +1528,7 @@ impl App {
         let setup_script = crate::config::load_config().setup_script;
 
         std::thread::spawn(move || {
-            let worktree_path = derive_local_worktree_path(&repo_root, &branch);
+            let worktree_path = crate::paths::derive_local_worktree_path(&repo_root, &branch);
 
             // Try creating a new branch; fall back to checking out an existing one.
             let new_branch_result = Command::new("git")
@@ -1797,321 +1786,6 @@ fn run_loop(
 }
 
 // ---------------------------------------------------------------------------
-// Stale worktree filter
-// ---------------------------------------------------------------------------
-
-fn filter_stale(rows: &[derive::WorktreeRow]) -> Vec<derive::WorktreeRow> {
-    rows.iter()
-        .filter(|row| {
-            if let Some(ref pr) = row.pr {
-                let state = pr.state.as_deref().unwrap_or("");
-                return state == "merged" || state == "closed";
-            }
-            if let Some(ref state) = row.issue_state {
-                return state == "completed" || state == "closed";
-            }
-            false
-        })
-        .cloned()
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Worktree path helpers
-// ---------------------------------------------------------------------------
-
-/// Converts a branch name to a filesystem-safe slug by replacing `/` with `-`
-/// and stripping non-alphanumeric characters except `.`, `-`, `_`.
-fn sanitize_branch_slug(branch: &str) -> String {
-    use std::sync::OnceLock;
-
-    use regex::Regex;
-
-    fn non_slug_re() -> &'static Regex {
-        static RE: OnceLock<Regex> = OnceLock::new();
-        RE.get_or_init(|| Regex::new(r"[^a-zA-Z0-9.\-_]").unwrap())
-    }
-
-    let replaced = branch.replace('/', "-");
-    non_slug_re().replace_all(&replaced, "").into_owned()
-}
-
-/// Returns the absolute conventional path for a local worktree:
-/// `parent(repo_root)/worktrees/worktree-SLUG`.
-fn derive_local_worktree_path(repo_root: &str, branch: &str) -> String {
-    use std::path::Path;
-
-    let slug = sanitize_branch_slug(branch);
-    let parent = Path::new(repo_root)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let joined = parent.join("worktrees").join(format!("worktree-{}", slug));
-    match joined.canonicalize() {
-        Ok(abs) => abs.to_string_lossy().into_owned(),
-        Err(_) => {
-            if joined.is_absolute() {
-                joined.to_string_lossy().into_owned()
-            } else {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(&joined))
-                    .unwrap_or(joined)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Delete worktree (shared by single-delete and cleanup)
-// ---------------------------------------------------------------------------
-
-fn delete_worktree(
-    wt: &Worktree,
-    global_config: &global_config::GlobalConfig,
-) -> anyhow::Result<()> {
-    if let Some(ref host) = wt.remote {
-        // Remote deletion
-        if let Some(ref sess) = wt.tmux_session {
-            let _ = remote::kill_remote_tmux_session(host, sess);
-        }
-        if let Some(ref branch) = wt.branch {
-            let slug = sanitize_branch_slug(branch);
-            let _ = remote::remove_remote_registry_entry(host, &slug);
-        }
-        // Find the remote config matching this host to get the repo_path.
-        let remote_cfg = global_config
-            .repos
-            .iter()
-            .find_map(|repo| repo.remote_for_host(host));
-        if let Some(remote_cfg) = remote_cfg {
-            remote::remove_remote_worktree(host, &remote_cfg.path, &wt.path)?;
-        }
-        return Ok(());
-    }
-
-    // Local deletion
-    if let Some(ref sess) = wt.tmux_session {
-        let _ = tmux::kill_tmux_session(sess);
-    }
-    if git::remove_worktree(&wt.path, false).is_err() {
-        git::remove_worktree(&wt.path, true)?;
-    }
-    Ok(())
-}
-
-/// Deletes the worktree represented by a `WorktreeRow`.
-///
-/// Equivalent to `delete_worktree` but operates on `WorktreeRow` fields, which is
-/// the only data model available after removing the legacy `Vec<Worktree>`.
-fn delete_task_row(
-    row: &derive::WorktreeRow,
-    global_config: &global_config::GlobalConfig,
-) -> anyhow::Result<()> {
-    let session_name = row.sessions.first().map(|s| s.tmux.name.as_str());
-    if let Some(ref host) = row.worktree_host {
-        // Remote deletion
-        if let Some(sess) = session_name {
-            let _ = remote::kill_remote_tmux_session(host, sess);
-        }
-        let slug = sanitize_branch_slug(&row.branch);
-        let _ = remote::remove_remote_registry_entry(host, &slug);
-        // Find the remote config matching this host to get the repo_path.
-        let remote_cfg = global_config
-            .repos
-            .iter()
-            .find_map(|repo| repo.remote_for_host(host));
-        if let Some(remote_cfg) = remote_cfg {
-            remote::remove_remote_worktree(host, &remote_cfg.path, &row.worktree_path)?;
-        }
-        return Ok(());
-    }
-
-    // Local deletion
-    if let Some(sess) = session_name {
-        let _ = tmux::kill_tmux_session(sess);
-    }
-    if git::remove_worktree(&row.worktree_path, false).is_err() {
-        git::remove_worktree(&row.worktree_path, true)?;
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Main session auto-creation
-// ---------------------------------------------------------------------------
-
-/// A session that needs to be created for a repo.
-#[derive(Debug, PartialEq)]
-pub(crate) struct SessionToCreate {
-    /// Derived tmux session name (e.g. "git-orchard-rs_main").
-    pub name: String,
-    /// Absolute path on disk for the session start directory.
-    pub start_dir: String,
-    /// Slug of the repo this session belongs to (for error messages).
-    pub repo_slug: String,
-}
-
-/// Pure function: given worktrees and existing sessions per repo, returns the
-/// list of sessions that need to be created.
-///
-/// A session is needed when:
-/// - The repo has at least one non-bare worktree (the origin).
-/// - No existing session has the derived name.
-pub(crate) fn compute_sessions_to_create(
-    repos: &[(
-        String,                        // repo slug
-        Vec<cache::CachedWorktree>,    // worktrees cache entries
-        Vec<cache::CachedTmuxSession>, // existing local tmux sessions
-    )],
-) -> Vec<SessionToCreate> {
-    let mut result = Vec::new();
-
-    for (slug, worktrees, sessions) in repos {
-        let origin = match worktrees.iter().find(|wt| !wt.is_bare) {
-            Some(wt) => wt,
-            None => continue,
-        };
-
-        let session_name = tmux::derive_main_session_name(&origin.path, Some(&origin.branch));
-
-        if sessions.iter().any(|s| s.name == session_name) {
-            continue;
-        }
-
-        result.push(SessionToCreate {
-            name: session_name,
-            start_dir: origin.path.clone(),
-            repo_slug: slug.clone(),
-        });
-    }
-
-    result
-}
-
-/// Ensures a main tmux session exists for each configured repo.
-///
-/// For each repo, reads the worktrees cache to find the origin (first non-bare
-/// entry), then checks the local tmux sessions cache. If no session with the
-/// derived name exists, creates one with `tmux::new_detached_session`.
-///
-/// Idempotent: skips repos whose session already exists.
-/// Errors from individual repos are logged but do not block others.
-///
-/// After creating any sessions, refreshes the local tmux sessions cache so
-/// that `derive_from_all_caches` picks them up.
-pub(crate) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
-    let existing_sessions =
-        cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
-
-    let repo_data: Vec<_> = config
-        .repos
-        .iter()
-        .map(|repo| {
-            let worktrees = cache::read_cache::<cache::CachedWorktree>(&cache::cache_path(
-                repo.owner(),
-                repo.repo_name(),
-                "worktrees",
-            ))
-            .entries;
-            (repo.slug.clone(), worktrees, existing_sessions.clone())
-        })
-        .collect();
-
-    let to_create = compute_sessions_to_create(&repo_data);
-    let mut any_created = false;
-
-    for session in &to_create {
-        match tmux::new_detached_session(&session.name, &session.start_dir) {
-            Ok(()) => {
-                any_created = true;
-            }
-            Err(e) => {
-                crate::logger::LOG.warn(&format!(
-                    "ensure_main_sessions: failed to create session '{}' for repo '{}': {}",
-                    session.name, session.repo_slug, e
-                ));
-            }
-        }
-    }
-
-    if any_created {
-        let _ = cache_sources::refresh_tmux_sessions(None);
-    }
-}
-
-/// Creates standalone tmux sessions with `start_on_launch: true` if they don't already exist.
-///
-/// Returns an error if any session command fails immediately — broken config is a hard failure.
-fn ensure_standalone_sessions(config: &global_config::GlobalConfig) -> anyhow::Result<()> {
-    for session_cfg in &config.tmux_sessions {
-        if !session_cfg.start_on_launch {
-            continue;
-        }
-        if tmux::session_exists(&session_cfg.name) {
-            continue;
-        }
-        tmux::new_session_with_command(&session_cfg.name, &session_cfg.cwd, &session_cfg.command)
-            .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to start standalone session '{}': {}",
-                session_cfg.name,
-                e
-            )
-        })?;
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Collision detection
-// ---------------------------------------------------------------------------
-
-/// Checks that no standalone session name collides with a worktree-derived session name.
-///
-/// Returns `Err` with a descriptive message if a collision is found. The error
-/// identifies the standalone config name and the worktree branch that owns the
-/// conflicting session, so the user knows exactly what to fix.
-fn check_standalone_collisions(
-    standalone: &[StandaloneSessionRow],
-    task_rows: &[derive::WorktreeRow],
-) -> anyhow::Result<()> {
-    use std::collections::HashMap;
-
-    // Build a map from session name → owning worktree branch for fast lookup.
-    let mut wt_sessions: HashMap<&str, &str> = HashMap::new();
-    for row in task_rows {
-        for s in &row.sessions {
-            wt_sessions.insert(s.tmux.name.as_str(), row.branch.as_str());
-        }
-    }
-
-    for row in standalone {
-        let name = &row.config.name;
-        if let Some(branch) = wt_sessions.get(name.as_str()) {
-            return Err(anyhow::anyhow!(
-                "Standalone session '{}' collides with worktree session on branch '{}'",
-                name,
-                branch,
-            ));
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Cache-based derivation
-// ---------------------------------------------------------------------------
-
-/// Reads all caches for all configured repos and derives task rows.
-///
-/// Delegates to `build_state::build_task_rows` which owns the single
-/// authoritative cache-reading and derivation logic.
-fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::WorktreeRow> {
-    crate::build_state::build_task_rows(config)
-}
-
-// ---------------------------------------------------------------------------
 // Last-selection helpers (pure, testable)
 // ---------------------------------------------------------------------------
 
@@ -2153,6 +1827,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use sessions::compute_sessions_to_create;
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -3092,21 +2767,7 @@ mod tests {
     fn handle_event_delete_confirm_y() {
         let mut app = App::new_test(vec![]);
         app.view = ViewState::ConfirmDelete(state::DeleteState {
-            target: crate::types::Worktree {
-                path: "/test/wt".to_string(),
-                branch: Some("feat/test".to_string()),
-                head: String::new(),
-                is_bare: false,
-                has_conflicts: false,
-                pr: None,
-                pr_loading: false,
-                tmux_session: None,
-                tmux_attached: false,
-                tmux_pane_title: None,
-                remote: None,
-                issue_number: None,
-                issue_state: None,
-            },
+            target: make_task_row(1, DisplayGroup::Other),
             phase: Phase::Confirm,
             error: None,
         });
@@ -3568,21 +3229,7 @@ mod tests {
     fn mouse_events_ignored_in_confirm_delete_view() {
         let mut app = app_with_table_area(vec![]);
         app.view = ViewState::ConfirmDelete(state::DeleteState {
-            target: crate::types::Worktree {
-                path: "/test/wt".to_string(),
-                branch: Some("feat/test".to_string()),
-                head: String::new(),
-                is_bare: false,
-                has_conflicts: false,
-                pr: None,
-                pr_loading: false,
-                tmux_session: None,
-                tmux_attached: false,
-                tmux_pane_title: None,
-                remote: None,
-                issue_number: None,
-                issue_state: None,
-            },
+            target: make_task_row(1, DisplayGroup::Other),
             phase: Phase::Confirm,
             error: None,
         });
@@ -4271,50 +3918,6 @@ mod tests {
         assert!(
             app.expanded.contains("/workspace/repo-1"),
             "multi-pane row should remain in expanded set"
-        );
-    }
-
-    // --- sanitize_branch_slug ---
-
-    #[test]
-    fn sanitize_replaces_slash_with_dash() {
-        assert_eq!(sanitize_branch_slug("feat/my-branch"), "feat-my-branch");
-    }
-
-    #[test]
-    fn sanitize_strips_special_characters() {
-        assert_eq!(sanitize_branch_slug("feat/hello world!"), "feat-helloworld");
-    }
-
-    #[test]
-    fn sanitize_preserves_dots_dashes_underscores() {
-        assert_eq!(sanitize_branch_slug("fix/v1.2_patch"), "fix-v1.2_patch");
-    }
-
-    #[test]
-    fn sanitize_plain_branch_unchanged() {
-        assert_eq!(sanitize_branch_slug("main"), "main");
-    }
-
-    // --- derive_local_worktree_path ---
-
-    #[test]
-    fn local_path_uses_parent_and_slug() {
-        let result = derive_local_worktree_path("/home/user/repo", "feat/my-feature");
-        assert!(
-            result.ends_with("worktrees/worktree-feat-my-feature"),
-            "got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn local_path_parent_segment_correct() {
-        let result = derive_local_worktree_path("/srv/repos/myrepo", "fix/bug-101");
-        assert!(
-            result.contains("worktrees/worktree-fix-bug-101"),
-            "got: {}",
-            result
         );
     }
 

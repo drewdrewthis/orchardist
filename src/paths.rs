@@ -1,8 +1,9 @@
-//! Path display utilities for the TUI.
+//! Path utilities for Orchard.
 //!
 //! `tildify` shortens absolute paths by replacing the home directory prefix
 //! with `~`; `truncate_left` caps display width by eliding from the left with
-//! a `…` character.
+//! a `…` character. `sanitize_branch_slug` and `derive_local_worktree_path`
+//! produce filesystem-safe paths for worktree directories.
 /// Replaces the user's home directory prefix in `path` with `~`.
 /// Returns the path unchanged if it does not start with `$HOME`.
 pub fn tildify(path: &str) -> String {
@@ -40,6 +41,56 @@ pub fn truncate_left(path: &str, max_width: usize) -> String {
     }
     let tail: String = runes[runes.len() - (max_width - 1)..].iter().collect();
     format!("…{tail}")
+}
+
+// ---------------------------------------------------------------------------
+// Worktree path helpers
+// ---------------------------------------------------------------------------
+
+/// Converts a branch name to a filesystem-safe slug by replacing `/` with `-`
+/// and stripping non-alphanumeric characters except `.`, `-`, `_`.
+pub(crate) fn sanitize_branch_slug(branch: &str) -> String {
+    use std::sync::OnceLock;
+
+    use regex::Regex;
+
+    fn non_slug_re() -> &'static Regex {
+        static RE: OnceLock<Regex> = OnceLock::new();
+        RE.get_or_init(|| Regex::new(r"[^a-zA-Z0-9.\-_]").unwrap())
+    }
+
+    let replaced = branch.replace('/', "-");
+    non_slug_re().replace_all(&replaced, "").into_owned()
+}
+
+/// Returns the absolute conventional path for a local worktree:
+/// `parent(repo_root)/worktrees/worktree-SLUG`.
+pub(crate) fn derive_local_worktree_path(repo_root: &str, branch: &str) -> String {
+    use std::path::Path;
+
+    let slug = sanitize_branch_slug(branch);
+    let parent = Path::new(repo_root)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let joined = parent.join("worktrees").join(format!("worktree-{}", slug));
+    // Try canonicalize to resolve symlinks and get an absolute path when the
+    // directory already exists. For new worktrees (the common case), the path
+    // doesn't exist yet and canonicalize fails — we fall through to building
+    // an absolute path manually instead.
+    match joined.canonicalize() {
+        Ok(abs) => abs.to_string_lossy().into_owned(),
+        Err(_) => {
+            if joined.is_absolute() {
+                joined.to_string_lossy().into_owned()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&joined))
+                    .unwrap_or(joined)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -100,5 +151,49 @@ mod tests {
         // 5 multibyte codepoints
         let s = "αβγδε";
         assert_eq!(truncate_left(s, 3), "…δε");
+    }
+
+    // --- sanitize_branch_slug ---
+
+    #[test]
+    fn sanitize_replaces_slash_with_dash() {
+        assert_eq!(sanitize_branch_slug("feat/my-branch"), "feat-my-branch");
+    }
+
+    #[test]
+    fn sanitize_strips_special_characters() {
+        assert_eq!(sanitize_branch_slug("feat/hello world!"), "feat-helloworld");
+    }
+
+    #[test]
+    fn sanitize_preserves_dots_dashes_underscores() {
+        assert_eq!(sanitize_branch_slug("fix/v1.2_patch"), "fix-v1.2_patch");
+    }
+
+    #[test]
+    fn sanitize_plain_branch_unchanged() {
+        assert_eq!(sanitize_branch_slug("main"), "main");
+    }
+
+    // --- derive_local_worktree_path ---
+
+    #[test]
+    fn local_path_uses_parent_and_slug() {
+        let result = derive_local_worktree_path("/home/user/repo", "feat/my-feature");
+        assert!(
+            result.ends_with("worktrees/worktree-feat-my-feature"),
+            "got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn local_path_parent_segment_correct() {
+        let result = derive_local_worktree_path("/srv/repos/myrepo", "fix/bug-101");
+        assert!(
+            result.contains("worktrees/worktree-fix-bug-101"),
+            "got: {}",
+            result
+        );
     }
 }

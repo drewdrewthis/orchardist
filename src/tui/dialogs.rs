@@ -19,8 +19,8 @@ impl App {
     pub(crate) fn render_delete(&self, state: &DeleteState, f: &mut Frame) {
         let theme = &self.theme;
         let wt = &state.target;
-        let branch_label = wt.branch.as_deref().unwrap_or("(detached)");
-        let path_str = paths::tildify(&wt.path);
+        let branch_label = &wt.branch;
+        let path_str = paths::tildify(&wt.worktree_path);
 
         let mut lines: Vec<Line> = Vec::new();
 
@@ -31,12 +31,13 @@ impl App {
                     branch_label, path_str
                 )));
                 if let Some(ref pr) = wt.pr {
-                    lines.push(Line::from(format!("PR #{} is {}.", pr.number, pr.state)));
+                    let state_str = pr.state.as_deref().unwrap_or("unknown");
+                    lines.push(Line::from(format!("PR #{} is {}.", pr.number, state_str)));
                 }
-                if let Some(ref sess) = wt.tmux_session {
+                if let Some(sess) = wt.sessions.first() {
                     lines.push(Line::from(format!(
                         "tmux session {:?} will be killed.",
-                        sess
+                        sess.tmux.name
                     )));
                 }
                 lines.push(Line::from(""));
@@ -463,20 +464,18 @@ mod tests {
         // Advance throbber state so it renders a symbol.
         app.throbber_state.calc_next();
         let state = DeleteState {
-            target: crate::types::Worktree {
-                path: "/test/wt".to_string(),
-                branch: Some("feat/test".to_string()),
-                head: "abc1234".to_string(),
-                is_bare: false,
-                has_conflicts: false,
-                pr: None,
-                pr_loading: false,
-                tmux_session: None,
-                tmux_attached: false,
-                tmux_pane_title: None,
-                remote: None,
+            target: crate::derive::WorktreeRow {
+                repo_slug: "owner/repo".to_string(),
+                worktree_path: "/test/wt".to_string(),
+                branch: "feat/test".to_string(),
+                worktree_host: None,
                 issue_number: None,
+                issue_title: None,
                 issue_state: None,
+                pr: None,
+                sessions: vec![],
+                display_group: crate::derive::DisplayGroup::Other,
+                is_main_worktree: false,
             },
             phase: Phase::InProgress,
             error: None,
