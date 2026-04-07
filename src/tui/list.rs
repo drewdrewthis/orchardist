@@ -76,29 +76,6 @@ pub(crate) fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bo
     cursor < standalone_count
 }
 
-/// Returns whether the preview pane should be shown for the current cursor position.
-///
-/// For worktree rows: preview is shown when there is pane content and the row has sessions.
-/// For standalone rows: preview is shown when the session is Running and there is pane content.
-pub(crate) fn preview_visible(
-    cursor: usize,
-    standalone_sessions: &[crate::session::StandaloneSessionRow],
-    selected_task: Option<&VisibleTask>,
-    pane_content_empty: bool,
-) -> bool {
-    let standalone_count = standalone_sessions.len();
-    if cursor_is_standalone(cursor, standalone_count) {
-        standalone_sessions.get(cursor).is_some_and(|ss| {
-            matches!(
-                ss.session.tmux.status,
-                crate::session::SessionStatus::Running { .. }
-            )
-        }) && !pane_content_empty
-    } else {
-        selected_task.is_some_and(|vt| !pane_content_empty && !vt.row.sessions.is_empty())
-    }
-}
-
 impl DisplayGroup {
     fn label(self) -> &'static str {
         match self {
@@ -940,7 +917,7 @@ impl App {
         // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
         let standalone_count = self.standalone_sessions.len();
-        let (rows, row_heights) = self.build_task_table_rows_with_standalone(
+        let (rows, row_heights, selected_visual_idx) = self.build_task_table_rows_with_standalone(
             &tasks,
             show_branch,
             has_remote,
@@ -957,43 +934,27 @@ impl App {
         let body_height: u16 = row_heights.iter().sum::<u16>();
         let table_height = body_height.saturating_add(3); // +2 borders +1 header row
 
-        // Check if selected task has a preview (worktree rows and running standalone sessions).
+        // Identify the selected task (used by both preview content and title).
         let worktree_cursor = self.cursor.checked_sub(standalone_count);
         let selected_task = worktree_cursor.and_then(|wc| tasks.get(wc));
-        let has_preview = preview_visible(
-            self.cursor,
-            &self.standalone_sessions,
-            selected_task,
-            self.pane_content.is_empty(),
-        );
 
-        // Cap table height when preview is visible to leave room for it.
-        let table_height = if has_preview {
-            let max_table_height =
-                ((area.height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16).max(TABLE_MIN_HEIGHT);
-            table_height.min(max_table_height)
-        } else {
-            table_height
-        };
+        // Always reserve preview space — the layout never shifts based on whether
+        // a preview is currently available. When no content is ready, the preview
+        // pane renders a placeholder. This prevents flicker as the cursor moves.
+        let max_table_height =
+            ((area.height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16).max(TABLE_MIN_HEIGHT);
+        let table_height = table_height.min(max_table_height);
 
         let mut constraints = vec![
             Constraint::Length(hdr_height),
             Constraint::Length(3), // tab bar (rounded badges need 3 rows)
             Constraint::Length(table_height),
+            Constraint::Length(1), // spacer
+            Constraint::Min(4),    // preview fills remaining
         ];
-
-        if has_preview {
-            constraints.push(Constraint::Length(1)); // spacer
-            constraints.push(Constraint::Min(4)); // preview fills remaining
-        }
 
         if has_warning {
             constraints.push(Constraint::Length(1));
-        }
-
-        // If no preview, add remainder absorber between table and hints
-        if !has_preview {
-            constraints.push(Constraint::Min(0));
         }
 
         constraints.push(Constraint::Length(1)); // hints
@@ -1051,10 +1012,20 @@ impl App {
         let table = Table::new(rows, &widths)
             .header(header_row)
             .block(block)
-            .column_spacing(1);
+            .column_spacing(1)
+            .row_highlight_style(
+                Style::default()
+                    .bg(theme.accent)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let table_chunk = chunks[idx];
-        f.render_widget(table, table_chunk);
+        // Stateful render lets ratatui auto-scroll the viewport so the selected
+        // row is always visible when the table is capped/clipped.
+        let mut table_state = ratatui::widgets::TableState::default();
+        table_state.select(selected_visual_idx);
+        f.render_stateful_widget(table, table_chunk, &mut table_state);
 
         // Store the table body rect (excluding chrome) for mouse hit testing.
         let body_rect = Rect {
@@ -1071,8 +1042,12 @@ impl App {
         let total_rows = row_heights.len();
         let visible_rows = table_chunk.height.saturating_sub(3) as usize;
         if total_rows > visible_rows {
+            // Use the visual row index (matches what the table widget actually scrolls).
+            // self.cursor is a task-row index that skips group headers, so it would
+            // lag behind the true scroll position.
+            let scrollbar_pos = selected_visual_idx.unwrap_or(0);
             let mut scrollbar_state =
-                ratatui::widgets::ScrollbarState::new(total_rows).position(self.cursor);
+                ratatui::widgets::ScrollbarState::new(total_rows).position(scrollbar_pos);
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("\u{25b2}"))
                 .end_symbol(Some("\u{25bc}"));
@@ -1088,17 +1063,13 @@ impl App {
         }
         idx += 1;
 
-        // Preview
-        if has_preview {
-            idx += 1; // spacer
-            let standalone_at_cursor = cursor_is_standalone(self.cursor, standalone_count)
-                .then(|| self.standalone_sessions.get(self.cursor))
-                .flatten();
-            self.render_task_preview(f, chunks[idx], selected_task, standalone_at_cursor);
-            idx += 1;
-        } else {
-            self.preview_area.set(Rect::default());
-        }
+        // Preview — always rendered (placeholder when no content available).
+        idx += 1; // spacer
+        let standalone_at_cursor = cursor_is_standalone(self.cursor, standalone_count)
+            .then(|| self.standalone_sessions.get(self.cursor))
+            .flatten();
+        self.render_task_preview(f, chunks[idx], selected_task, standalone_at_cursor);
+        idx += 1;
 
         if has_warning {
             if let Some((ref msg, _)) = self.warning {
@@ -1108,10 +1079,6 @@ impl App {
                 f.render_widget(warn, chunks[idx]);
             }
             idx += 1;
-        }
-
-        if !has_preview {
-            idx += 1; // absorber
         }
 
         self.render_hints_task(f, chunks[idx]);
@@ -1251,10 +1218,11 @@ impl App {
         has_remote: bool,
         title_width: usize,
         num_columns: usize,
-    ) -> (Vec<Row<'static>>, Vec<u16>) {
+    ) -> (Vec<Row<'static>>, Vec<u16>, Option<usize>) {
         let theme = &self.theme;
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
+        let mut selected_visual_idx: Option<usize> = None;
         let standalone_count = self.standalone_sessions.len();
 
         // Unified numbering counter (1-based, spans standalone + worktree).
@@ -1263,6 +1231,9 @@ impl App {
         // Render standalone session rows first.
         for (idx, ss) in self.standalone_sessions.iter().enumerate() {
             let selected = idx == self.cursor && self.selected_pane.is_none();
+            if selected {
+                selected_visual_idx = Some(rows.len());
+            }
             let (claude_text, claude_style) = standalone_claude_status(&ss.session, theme);
             let status_text = match &ss.session.tmux.status {
                 crate::session::SessionStatus::Running { .. } => "running",
@@ -1337,6 +1308,10 @@ impl App {
                 let header_row = group_header_row(vt.group, num_columns, theme);
                 rows.push(header_row);
                 row_heights.push(1);
+            }
+
+            if selected {
+                selected_visual_idx = Some(rows.len());
             }
 
             let (pr_text, pr_style) = pr_status_text(vt.row, theme);
@@ -1466,7 +1441,7 @@ impl App {
             unified_num += 1;
         }
 
-        (rows, row_heights)
+        (rows, row_heights, selected_visual_idx)
     }
 
     /// Appends pane sub-rows for an expanded parent row.
@@ -1545,13 +1520,13 @@ impl App {
         selected_task: Option<&VisibleTask>,
         standalone_session: Option<&crate::session::StandaloneSessionRow>,
     ) {
-        if self.pane_content.is_empty() {
-            self.preview_area.set(Rect::default());
-            return;
-        }
-
-        let title = if let Some(ss) = standalone_session {
-            format!("\u{2500}\u{2500} {} \u{2500}\u{2500}", ss.session.tmux.name)
+        // Build the title based on what's selected; fall back to a generic header
+        // when the row has no associated session or task (e.g. group separator).
+        let title_opt = if let Some(ss) = standalone_session {
+            Some(format!(
+                "\u{2500}\u{2500} {} \u{2500}\u{2500}",
+                ss.session.tmux.name
+            ))
         } else if let Some(vt) = selected_task {
             let issue_part = match vt.row.issue_number {
                 Some(num) => format!("#{}", num),
@@ -1571,14 +1546,22 @@ impl App {
                 .as_ref()
                 .map(|p| format!(" \u{2502} pr: #{}", p.number))
                 .unwrap_or_default();
-            format!(
+            Some(format!(
                 "\u{2500}\u{2500} {}{}{}{} \u{2500}\u{2500}",
                 issue_part, title_part, wt_part, pr_part
-            )
+            ))
         } else {
+            None
+        };
+
+        // Render placeholder when no content is available — keeps layout stable.
+        if self.pane_content.is_empty() || title_opt.is_none() {
+            self.render_preview_placeholder(f, area);
+            // Placeholder is not scroll-interactive; clear hit-test rect.
             self.preview_area.set(Rect::default());
             return;
-        };
+        }
+        let title = title_opt.unwrap();
 
         self.preview_area.set(area);
 
@@ -1613,6 +1596,36 @@ impl App {
         let mut state = self.preview_scroll_state.get();
         f.render_stateful_widget(scroll_view, inner, &mut state);
         self.preview_scroll_state.set(state);
+    }
+
+    /// Renders an empty bordered preview pane with a centered "no preview" message.
+    ///
+    /// Used when the selected row has no associated session/task or the pane
+    /// content has not yet loaded. Keeps the layout stable so the menu does not
+    /// flicker as the cursor moves between rows with and without previews.
+    fn render_preview_placeholder(&self, f: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let block = Block::default()
+            .title("\u{2500}\u{2500} preview \u{2500}\u{2500}")
+            .title_style(Style::default().fg(theme.dimmed))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.dimmed))
+            .border_type(BorderType::Double);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let message = Paragraph::new("no preview available")
+            .style(Style::default().fg(theme.dimmed))
+            .alignment(Alignment::Center);
+        // Vertically center the single-line message in the inner area.
+        let y_offset = inner.height / 2;
+        let centered = Rect {
+            x: inner.x,
+            y: inner.y + y_offset,
+            width: inner.width,
+            height: 1.min(inner.height),
+        };
+        f.render_widget(message, centered);
     }
 
     /// Appends the common trailing hint keys: refresh, reconnect, quit, help.
@@ -2417,72 +2430,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // preview_visible — standalone session preview logic
-    // -----------------------------------------------------------------------
-
-    fn make_standalone(name: &str, status: SessionStatus) -> crate::session::StandaloneSessionRow {
-        crate::session::StandaloneSessionRow {
-            session: EnrichedSession {
-                tmux: TmuxSessionInfo {
-                    host: Host::Local,
-                    name: name.to_string(),
-                    status,
-                },
-                claude: None,
-                panes: vec![],
-            },
-            config: crate::session::StandaloneConfig {
-                name: name.to_string(),
-                command: "bash".to_string(),
-                cwd: "/workspace".to_string(),
-                start_on_launch: false,
-            },
-        }
-    }
-
-    #[test]
-    fn preview_visible_true_for_running_standalone_with_content() {
-        let sessions = vec![make_standalone(
-            "shepherd",
-            SessionStatus::Running { attached: false },
-        )];
-        assert!(preview_visible(0, &sessions, None, false));
-    }
-
-    #[test]
-    fn preview_visible_false_for_standalone_when_pane_content_empty() {
-        let sessions = vec![make_standalone(
-            "shepherd",
-            SessionStatus::Running { attached: false },
-        )];
-        assert!(!preview_visible(0, &sessions, None, true));
-    }
-
-    #[test]
-    fn preview_visible_false_for_dead_standalone_with_content() {
-        // Dead sessions never show preview even when pane_content is present.
-        let sessions = vec![make_standalone("shepherd", SessionStatus::Dead)];
-        assert!(!preview_visible(0, &sessions, None, false));
-    }
-
-    #[test]
-    fn preview_visible_false_for_dead_standalone_without_content() {
-        let sessions = vec![make_standalone("shepherd", SessionStatus::Dead)];
-        assert!(!preview_visible(0, &sessions, None, true));
-    }
-
-    #[test]
-    fn preview_visible_false_when_cursor_between_standalone_and_worktree() {
-        // Cursor 5 is past standalone (len 3) but selected_task is None.
-        let sessions = vec![
-            make_standalone("a", SessionStatus::Running { attached: false }),
-            make_standalone("b", SessionStatus::Running { attached: false }),
-            make_standalone("c", SessionStatus::Running { attached: false }),
-        ];
-        assert!(!preview_visible(5, &sessions, None, true));
-    }
-
-    // -----------------------------------------------------------------------
     // Hints bar — repo hint removal
     // -----------------------------------------------------------------------
 
@@ -2662,21 +2609,19 @@ mod tests {
 
     #[test]
     fn render_repo_tabs_active_all_border_uses_accent_color() {
-        use ratatui::style::Color;
         let app = make_repo_app(vec![], 0);
         let buf = render_tabs_to_buffer(&app);
         // Active ALL tab: top-left corner (╭) at (0,0) should have accent fg.
         let corner = &buf[(0, 0)];
         assert_eq!(
             corner.style().fg,
-            Some(Color::Rgb(0, 200, 120)),
+            Some(app.theme.accent),
             "active ALL tab border must use accent color"
         );
     }
 
     #[test]
     fn render_repo_tabs_active_all_label_has_solid_bg() {
-        use ratatui::style::Color;
         let app = make_repo_app(vec![], 0);
         let buf = render_tabs_to_buffer(&app);
         // Label text is on row 1 (content row inside the block).
@@ -2685,7 +2630,7 @@ mod tests {
             .map(|x| &buf[(x, 1)])
             .find(|c| c.symbol() == "A");
         assert!(
-            all_cell.is_some_and(|c| c.style().fg == Some(Color::Rgb(0, 200, 120))),
+            all_cell.is_some_and(|c| c.style().fg == Some(app.theme.accent)),
             "active ALL tab label must use accent fg color"
         );
     }
@@ -2933,6 +2878,51 @@ mod tests {
         assert!(
             full_text.contains("E"),
             "hints bar must contain 'E' expand all hint"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Preview placeholder tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preview_placeholder_renders_when_pane_content_empty() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // Row exists but pane_content is empty — placeholder should render.
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let backend = TestBackend::new(120, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        assert!(
+            text.contains("no preview available"),
+            "preview placeholder must render 'no preview available' message"
+        );
+    }
+
+    #[test]
+    fn preview_placeholder_clears_hit_test_rect() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // Placeholder should not be scroll-interactive — preview_area must be zero.
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let backend = TestBackend::new(120, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+        assert_eq!(
+            app.preview_area.get().width,
+            0,
+            "placeholder render should leave preview_area as zero rect"
         );
     }
 
