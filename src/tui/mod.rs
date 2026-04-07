@@ -106,6 +106,10 @@ pub struct App {
     // Session to switch to after the TUI exits. Set by Enter key handler.
     switch_target: Option<String>,
 
+    /// Whether the last selection should be persisted on exit and restored on launch.
+    /// False in "cleanup" mode, which has its own cursor and no selection to save.
+    persist_selection: bool,
+
     // Auto-refresh
     last_refresh: Instant,
     last_full_refresh: Instant,
@@ -155,7 +159,11 @@ impl App {
         let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
 
-        let view = if command == "cleanup" {
+        let persist_selection = command != "cleanup";
+
+        let view = if persist_selection {
+            ViewState::List
+        } else {
             ViewState::Cleanup(CleanupState {
                 stale: Vec::new(),
                 selected: std::collections::HashSet::new(),
@@ -164,17 +172,15 @@ impl App {
                 deleted: Vec::new(),
                 errors: Vec::new(),
             })
-        } else {
-            ViewState::List
         };
 
-        // Resolve the initial cursor position from the last saved selection,
-        // unless we're in cleanup mode (which has its own cursor).
-        let initial_cursor = if command == "cleanup" {
-            0
-        } else {
+        // Resolve the initial cursor position from the last saved selection.
+        // Cleanup mode always starts at 0 (it has its own cursor).
+        let initial_cursor = if persist_selection {
             let sel = last_selection::load();
-            resolve_cursor(&sel, &standalone_sessions, &task_rows)
+            last_selection::resolve_cursor(&sel, &standalone_sessions, &task_rows)
+        } else {
+            0
         };
 
         App {
@@ -202,6 +208,7 @@ impl App {
             last_full_refresh: Instant::now(),
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
+            persist_selection,
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
@@ -1659,6 +1666,7 @@ impl App {
             last_full_refresh: Instant::now(),
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
+            persist_selection: true,
             previous_worktree_states: HashMap::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
@@ -1711,7 +1719,7 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
 
     // Hydrate the preview pane for the restored cursor row so the first paint
     // shows content without requiring a key press. Skip in cleanup mode.
-    if command != "cleanup" {
+    if app.persist_selection {
         app.fetch_task_pane_content();
     }
 
@@ -1722,10 +1730,11 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
 
     // Persist the current selection so it can be restored on the next launch.
     // Skip in cleanup mode — cleanup has its own cursor and no selection to save.
-    if command != "cleanup" {
-        let sel = current_selection(&app);
-        if let Err(e) = last_selection::save(&sel) {
-            crate::logger::LOG.warn(&format!("last_selection: save error: {e}"));
+    if app.persist_selection {
+        if let Some(sel) = current_selection(&app) {
+            if let Err(e) = last_selection::save(&sel) {
+                crate::logger::LOG.warn(&format!("last_selection: save error: {e}"));
+            }
         }
     }
 
@@ -2107,54 +2116,28 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::W
 // Last-selection helpers (pure, testable)
 // ---------------------------------------------------------------------------
 
-/// Resolves a `LastSelection` to a cursor index.
-///
-/// Resolution rules:
-/// - `SelectionKind::Standalone`: find by session name in `standalone`.
-/// - `SelectionKind::Worktree`: find by `worktree_path` in `rows`, offset by `standalone.len()`.
-/// - `SelectionKind::None` or not found: return 0.
-pub(crate) fn resolve_cursor(
-    sel: &last_selection::LastSelection,
-    standalone: &[crate::session::StandaloneSessionRow],
-    rows: &[derive::WorktreeRow],
-) -> usize {
-    match sel.kind {
-        last_selection::SelectionKind::None => 0,
-        last_selection::SelectionKind::Standalone => standalone
-            .iter()
-            .position(|ss| ss.session.tmux.name == sel.key)
-            .unwrap_or(0),
-        last_selection::SelectionKind::Worktree => rows
-            .iter()
-            .position(|r| r.worktree_path == sel.key)
-            .map(|i| standalone.len() + i)
-            .unwrap_or(0),
-    }
-}
-
 /// Builds a `LastSelection` from the current app state.
 ///
-/// Returns `SelectionKind::None` when the cursor is out of bounds for both lists.
-pub(crate) fn current_selection(app: &App) -> last_selection::LastSelection {
+/// Returns `None` when the cursor is out of bounds for both lists,
+/// so the caller can skip saving and preserve the previous file.
+pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelection> {
     let standalone_count = app.standalone_sessions.len();
     if app.cursor < standalone_count {
         if let Some(ss) = app.standalone_sessions.get(app.cursor) {
-            return last_selection::LastSelection {
-                version: 1,
+            return Some(last_selection::LastSelection {
                 kind: last_selection::SelectionKind::Standalone,
                 key: ss.session.tmux.name.clone(),
-            };
+            });
         }
     }
     let wt_idx = app.cursor.saturating_sub(standalone_count);
     if let Some(row) = app.task_rows.get(wt_idx) {
-        return last_selection::LastSelection {
-            version: 1,
+        return Some(last_selection::LastSelection {
             kind: last_selection::SelectionKind::Worktree,
             key: row.worktree_path.clone(),
-        };
+        });
     }
-    last_selection::LastSelection::default()
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -4454,7 +4437,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // resolve_cursor tests
+    // current_selection tests
     // -----------------------------------------------------------------------
 
     fn make_standalone_session(name: &str) -> crate::session::StandaloneSessionRow {
@@ -4482,94 +4465,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_cursor_returns_zero_for_kind_none() {
-        let sel = last_selection::LastSelection::default();
-        let idx = resolve_cursor(&sel, &[], &[]);
-        assert_eq!(idx, 0);
-    }
-
-    #[test]
-    fn resolve_cursor_finds_worktree_row() {
-        let rows = vec![
-            make_task_row(1, DisplayGroup::Other),
-            make_task_row(2, DisplayGroup::Other),
-        ];
-        let sel = last_selection::LastSelection {
-            version: 1,
-            kind: last_selection::SelectionKind::Worktree,
-            key: "/workspace/repo-2".to_string(),
-        };
-        let idx = resolve_cursor(&sel, &[], &rows);
-        assert_eq!(idx, 1);
-    }
-
-    #[test]
-    fn resolve_cursor_offsets_worktree_by_standalone_count() {
-        let standalone = vec![make_standalone_session("my-session")];
-        let rows = vec![make_task_row(1, DisplayGroup::Other)];
-        let sel = last_selection::LastSelection {
-            version: 1,
-            kind: last_selection::SelectionKind::Worktree,
-            key: "/workspace/repo-1".to_string(),
-        };
-        let idx = resolve_cursor(&sel, &standalone, &rows);
-        // 1 standalone + index 0 in rows = 1
-        assert_eq!(idx, 1);
-    }
-
-    #[test]
-    fn resolve_cursor_finds_standalone_row() {
-        let standalone = vec![
-            make_standalone_session("alpha"),
-            make_standalone_session("beta"),
-        ];
-        let sel = last_selection::LastSelection {
-            version: 1,
-            kind: last_selection::SelectionKind::Standalone,
-            key: "beta".to_string(),
-        };
-        let idx = resolve_cursor(&sel, &standalone, &[]);
-        assert_eq!(idx, 1);
-    }
-
-    #[test]
-    fn resolve_cursor_returns_zero_when_worktree_deleted() {
-        let rows = vec![make_task_row(1, DisplayGroup::Other)];
-        let sel = last_selection::LastSelection {
-            version: 1,
-            kind: last_selection::SelectionKind::Worktree,
-            key: "/workspace/deleted-worktree".to_string(),
-        };
-        let idx = resolve_cursor(&sel, &[], &rows);
-        assert_eq!(idx, 0);
-    }
-
-    #[test]
-    fn resolve_cursor_returns_zero_for_empty_lists() {
-        let sel = last_selection::LastSelection {
-            version: 1,
-            kind: last_selection::SelectionKind::Worktree,
-            key: "/workspace/repo-1".to_string(),
-        };
-        let idx = resolve_cursor(&sel, &[], &[]);
-        assert_eq!(idx, 0);
-    }
-
-    // -----------------------------------------------------------------------
-    // current_selection tests
-    // -----------------------------------------------------------------------
-
-    #[test]
     fn current_selection_for_worktree_row() {
         let mut app = App::new_test(vec![
             make_task_row(1, DisplayGroup::Other),
             make_task_row(2, DisplayGroup::Other),
         ]);
         app.cursor = 1;
-        let sel = current_selection(&app);
+        let sel = current_selection(&app).unwrap();
         assert_eq!(sel.kind, last_selection::SelectionKind::Worktree);
         assert_eq!(sel.key, "/workspace/repo-2");
-        assert_eq!(sel.version, 1);
     }
 
     #[test]
@@ -4577,16 +4481,15 @@ mod tests {
         let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
         app.standalone_sessions = vec![make_standalone_session("my-standalone")];
         app.cursor = 0;
-        let sel = current_selection(&app);
+        let sel = current_selection(&app).unwrap();
         assert_eq!(sel.kind, last_selection::SelectionKind::Standalone);
         assert_eq!(sel.key, "my-standalone");
     }
 
     #[test]
-    fn current_selection_returns_default_when_cursor_out_of_bounds() {
+    fn current_selection_returns_none_when_cursor_out_of_bounds() {
         let app = App::new_test(vec![]);
         // cursor=0, no rows, no standalone
-        let sel = current_selection(&app);
-        assert_eq!(sel.kind, last_selection::SelectionKind::None);
+        assert!(current_selection(&app).is_none());
     }
 }
