@@ -4,6 +4,7 @@
 //! background cache refreshes via a worker thread, and delegates rendering
 //! to the `list`, `dialogs`, and `widgets` sub-modules.
 mod dialogs;
+pub(crate) mod last_selection;
 mod list;
 mod message;
 mod state;
@@ -167,8 +168,17 @@ impl App {
             ViewState::List
         };
 
+        // Resolve the initial cursor position from the last saved selection,
+        // unless we're in cleanup mode (which has its own cursor).
+        let initial_cursor = if command == "cleanup" {
+            0
+        } else {
+            let sel = last_selection::load();
+            resolve_cursor(&sel, &standalone_sessions, &task_rows)
+        };
+
         App {
-            cursor: 0,
+            cursor: initial_cursor,
             loading: true,
             refreshing: false,
             error: None,
@@ -1699,10 +1709,25 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     // Start standalone sessions with start_on_launch = true.
     ensure_standalone_sessions(&app.global_config)?;
 
+    // Hydrate the preview pane for the restored cursor row so the first paint
+    // shows content without requiring a key press. Skip in cleanup mode.
+    if command != "cleanup" {
+        app.fetch_task_pane_content();
+    }
+
     // Initial data fetch in background
     app.start_full_refresh();
 
     let result = run_loop(&mut terminal, &mut app);
+
+    // Persist the current selection so it can be restored on the next launch.
+    // Skip in cleanup mode — cleanup has its own cursor and no selection to save.
+    if command != "cleanup" {
+        let sel = current_selection(&app);
+        if let Err(e) = last_selection::save(&sel) {
+            crate::logger::LOG.warn(&format!("last_selection: save error: {e}"));
+        }
+    }
 
     // Restore terminal
     crossterm::terminal::disable_raw_mode()?;
@@ -2076,6 +2101,60 @@ fn check_standalone_collisions(
 /// authoritative cache-reading and derivation logic.
 fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::WorktreeRow> {
     crate::build_state::build_task_rows(config)
+}
+
+// ---------------------------------------------------------------------------
+// Last-selection helpers (pure, testable)
+// ---------------------------------------------------------------------------
+
+/// Resolves a `LastSelection` to a cursor index.
+///
+/// Resolution rules:
+/// - `SelectionKind::Standalone`: find by session name in `standalone`.
+/// - `SelectionKind::Worktree`: find by `worktree_path` in `rows`, offset by `standalone.len()`.
+/// - `SelectionKind::None` or not found: return 0.
+pub(crate) fn resolve_cursor(
+    sel: &last_selection::LastSelection,
+    standalone: &[crate::session::StandaloneSessionRow],
+    rows: &[derive::WorktreeRow],
+) -> usize {
+    match sel.kind {
+        last_selection::SelectionKind::None => 0,
+        last_selection::SelectionKind::Standalone => standalone
+            .iter()
+            .position(|ss| ss.session.tmux.name == sel.key)
+            .unwrap_or(0),
+        last_selection::SelectionKind::Worktree => rows
+            .iter()
+            .position(|r| r.worktree_path == sel.key)
+            .map(|i| standalone.len() + i)
+            .unwrap_or(0),
+    }
+}
+
+/// Builds a `LastSelection` from the current app state.
+///
+/// Returns `SelectionKind::None` when the cursor is out of bounds for both lists.
+pub(crate) fn current_selection(app: &App) -> last_selection::LastSelection {
+    let standalone_count = app.standalone_sessions.len();
+    if app.cursor < standalone_count {
+        if let Some(ss) = app.standalone_sessions.get(app.cursor) {
+            return last_selection::LastSelection {
+                version: 1,
+                kind: last_selection::SelectionKind::Standalone,
+                key: ss.session.tmux.name.clone(),
+            };
+        }
+    }
+    let wt_idx = app.cursor.saturating_sub(standalone_count);
+    if let Some(row) = app.task_rows.get(wt_idx) {
+        return last_selection::LastSelection {
+            version: 1,
+            kind: last_selection::SelectionKind::Worktree,
+            key: row.worktree_path.clone(),
+        };
+    }
+    last_selection::LastSelection::default()
 }
 
 // ---------------------------------------------------------------------------
@@ -4372,5 +4451,142 @@ mod tests {
         app.input_phase = InputPhase::AwaitingLeader;
         app.update(Message::CursorDown);
         assert_eq!(app.input_phase, InputPhase::Filtering);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_cursor tests
+    // -----------------------------------------------------------------------
+
+    fn make_standalone_session(name: &str) -> crate::session::StandaloneSessionRow {
+        use crate::session::{
+            EnrichedSession, Host, SessionStatus, StandaloneConfig, StandaloneSessionRow,
+            TmuxSessionInfo,
+        };
+        StandaloneSessionRow {
+            session: EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: name.to_string(),
+                    status: SessionStatus::Dead,
+                },
+                claude: None,
+                panes: vec![],
+            },
+            config: StandaloneConfig {
+                name: name.to_string(),
+                command: String::new(),
+                cwd: String::new(),
+                start_on_launch: false,
+            },
+        }
+    }
+
+    #[test]
+    fn resolve_cursor_returns_zero_for_kind_none() {
+        let sel = last_selection::LastSelection::default();
+        let idx = resolve_cursor(&sel, &[], &[]);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn resolve_cursor_finds_worktree_row() {
+        let rows = vec![
+            make_task_row(1, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Other),
+        ];
+        let sel = last_selection::LastSelection {
+            version: 1,
+            kind: last_selection::SelectionKind::Worktree,
+            key: "/workspace/repo-2".to_string(),
+        };
+        let idx = resolve_cursor(&sel, &[], &rows);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn resolve_cursor_offsets_worktree_by_standalone_count() {
+        let standalone = vec![make_standalone_session("my-session")];
+        let rows = vec![make_task_row(1, DisplayGroup::Other)];
+        let sel = last_selection::LastSelection {
+            version: 1,
+            kind: last_selection::SelectionKind::Worktree,
+            key: "/workspace/repo-1".to_string(),
+        };
+        let idx = resolve_cursor(&sel, &standalone, &rows);
+        // 1 standalone + index 0 in rows = 1
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn resolve_cursor_finds_standalone_row() {
+        let standalone = vec![
+            make_standalone_session("alpha"),
+            make_standalone_session("beta"),
+        ];
+        let sel = last_selection::LastSelection {
+            version: 1,
+            kind: last_selection::SelectionKind::Standalone,
+            key: "beta".to_string(),
+        };
+        let idx = resolve_cursor(&sel, &standalone, &[]);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn resolve_cursor_returns_zero_when_worktree_deleted() {
+        let rows = vec![make_task_row(1, DisplayGroup::Other)];
+        let sel = last_selection::LastSelection {
+            version: 1,
+            kind: last_selection::SelectionKind::Worktree,
+            key: "/workspace/deleted-worktree".to_string(),
+        };
+        let idx = resolve_cursor(&sel, &[], &rows);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn resolve_cursor_returns_zero_for_empty_lists() {
+        let sel = last_selection::LastSelection {
+            version: 1,
+            kind: last_selection::SelectionKind::Worktree,
+            key: "/workspace/repo-1".to_string(),
+        };
+        let idx = resolve_cursor(&sel, &[], &[]);
+        assert_eq!(idx, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // current_selection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn current_selection_for_worktree_row() {
+        let mut app = App::new_test(vec![
+            make_task_row(1, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Other),
+        ]);
+        app.cursor = 1;
+        let sel = current_selection(&app);
+        assert_eq!(sel.kind, last_selection::SelectionKind::Worktree);
+        assert_eq!(sel.key, "/workspace/repo-2");
+        assert_eq!(sel.version, 1);
+    }
+
+    #[test]
+    fn current_selection_for_standalone_row() {
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        app.standalone_sessions = vec![make_standalone_session("my-standalone")];
+        app.cursor = 0;
+        let sel = current_selection(&app);
+        assert_eq!(sel.kind, last_selection::SelectionKind::Standalone);
+        assert_eq!(sel.key, "my-standalone");
+    }
+
+    #[test]
+    fn current_selection_returns_default_when_cursor_out_of_bounds() {
+        let app = App::new_test(vec![]);
+        // cursor=0, no rows, no standalone
+        let sel = current_selection(&app);
+        assert_eq!(sel.kind, last_selection::SelectionKind::None);
     }
 }
