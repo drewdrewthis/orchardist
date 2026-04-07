@@ -1730,12 +1730,11 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
 
     // Persist the current selection so it can be restored on the next launch.
     // Skip in cleanup mode — cleanup has its own cursor and no selection to save.
-    if app.persist_selection {
-        if let Some(sel) = current_selection(&app) {
-            if let Err(e) = last_selection::save(&sel) {
-                crate::logger::LOG.warn(&format!("last_selection: save error: {e}"));
-            }
-        }
+    if app.persist_selection
+        && let Some(sel) = current_selection(&app)
+        && let Err(e) = last_selection::save(&sel)
+    {
+        crate::logger::LOG.warn(&format!("last_selection: save error: {e}"));
     }
 
     // Restore terminal
@@ -2122,13 +2121,13 @@ fn derive_from_all_caches(config: &global_config::GlobalConfig) -> Vec<derive::W
 /// so the caller can skip saving and preserve the previous file.
 pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelection> {
     let standalone_count = app.standalone_sessions.len();
-    if app.cursor < standalone_count {
-        if let Some(ss) = app.standalone_sessions.get(app.cursor) {
-            return Some(last_selection::LastSelection {
-                kind: last_selection::SelectionKind::Standalone,
-                key: ss.session.tmux.name.clone(),
-            });
-        }
+    if app.cursor < standalone_count
+        && let Some(ss) = app.standalone_sessions.get(app.cursor)
+    {
+        return Some(last_selection::LastSelection {
+            kind: last_selection::SelectionKind::Standalone,
+            key: ss.session.tmux.name.clone(),
+        });
     }
     let wt_idx = app.cursor.saturating_sub(standalone_count);
     if let Some(row) = app.task_rows.get(wt_idx) {
