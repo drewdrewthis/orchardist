@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.3.2...orchard-v0.4.0) (2026-04-07)
+
+
+### Features
+
+* add GitNexus code intelligence integration ([#130](https://github.com/drewdrewthis/git-orchard-rs/issues/130)) ([#143](https://github.com/drewdrewthis/git-orchard-rs/issues/143)) ([9780d08](https://github.com/drewdrewthis/git-orchard-rs/commit/9780d08b1c5369d56ef426c3ecff10aa072f784d))
+* cap table height and add preview mouse scrolling ([#150](https://github.com/drewdrewthis/git-orchard-rs/issues/150)) ([3e273cc](https://github.com/drewdrewthis/git-orchard-rs/commit/3e273cc9c6a5b9b821f30de0336a0152ab61511b))
+* leader-key input model with instant search ([#149](https://github.com/drewdrewthis/git-orchard-rs/issues/149)) ([bffdc5d](https://github.com/drewdrewthis/git-orchard-rs/commit/bffdc5dbc1dffb314de177ff844f51b8c33716a6))
+* remember last selected worktree on launch ([#154](https://github.com/drewdrewthis/git-orchard-rs/issues/154)) ([89fc5ae](https://github.com/drewdrewthis/git-orchard-rs/commit/89fc5ae55fdf0f0b5ccedc116e7005f2d72462bc))
+* two-tier TUI refresh — local 5s, full 60s ([#141](https://github.com/drewdrewthis/git-orchard-rs/issues/141)) ([2fd8409](https://github.com/drewdrewthis/git-orchard-rs/commit/2fd8409cf03df88762bfa03ee9c6301820b7b014))
+
+
+### Bug Fixes
+
+* correct GitHub URLs and add Substack link ([#147](https://github.com/drewdrewthis/git-orchard-rs/issues/147)) ([#148](https://github.com/drewdrewthis/git-orchard-rs/issues/148)) ([b1a62fd](https://github.com/drewdrewthis/git-orchard-rs/commit/b1a62fd73ac953e36768227a03c49753608d2ec4))
+
 ## [0.3.2](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.3.1...orchard-v0.3.2) (2026-04-04)
 
 
