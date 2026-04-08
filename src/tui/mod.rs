@@ -4,6 +4,7 @@
 //! background cache refreshes via a worker thread, and delegates rendering
 //! to the `list`, `dialogs`, and `widgets` sub-modules.
 mod dialogs;
+pub mod fuzzy;
 pub(crate) mod last_selection;
 mod list;
 mod message;
