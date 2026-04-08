@@ -31,6 +31,18 @@ pub struct ClaudeStateFile {
     /// Model identifier in use (e.g. `"opus"`, `"sonnet"`), if available from the statusline.
     #[serde(default)]
     pub model: Option<String>,
+    /// The `stop_reason` field from the `Stop` hook event payload.
+    ///
+    /// Present only on state files written by a `Stop` event. Values: `"end_turn"`,
+    /// `"tool_use"`, `"max_tokens"`, `"other"`. Absent for all other events.
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+    /// Number of in-flight tool calls at the time this state was written.
+    ///
+    /// Maintained by the hook script via the `inflight.json` sidecar. Non-zero
+    /// during `PreToolUse`/`PostToolUse`/`PostToolUseFailure` events.
+    #[serde(default)]
+    pub inflight_tool_count: Option<u32>,
 }
 
 /// Parsed Claude state for use in derive logic.
@@ -171,6 +183,8 @@ mod tests {
             context_window_pct: None,
             cost_usd: None,
             model: None,
+            stop_reason: None,
+            inflight_tool_count: None,
         }
     }
 
@@ -360,5 +374,37 @@ mod tests {
         assert!(sf.context_window_pct.is_none());
         assert!(sf.cost_usd.is_none());
         assert!(sf.model.is_none());
+    }
+
+    #[test]
+    fn state_file_deserializes_stop_reason_and_inflight_tool_count() {
+        let json = r#"{
+            "state": "idle",
+            "session_id": "abc",
+            "tmux_session": "repo_47",
+            "cwd": "/workspace",
+            "event": "Stop",
+            "timestamp": "2026-03-25T10:00:00Z",
+            "stop_reason": "end_turn",
+            "inflight_tool_count": 0
+        }"#;
+        let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
+        assert_eq!(sf.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(sf.inflight_tool_count, Some(0));
+    }
+
+    #[test]
+    fn state_file_stop_reason_and_inflight_tool_count_default_to_none() {
+        let json = r#"{
+            "state": "working",
+            "session_id": "abc",
+            "tmux_session": "repo_47",
+            "cwd": "/workspace",
+            "event": "PreToolUse",
+            "timestamp": "2026-03-25T10:00:00Z"
+        }"#;
+        let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
+        assert!(sf.stop_reason.is_none());
+        assert!(sf.inflight_tool_count.is_none());
     }
 }
