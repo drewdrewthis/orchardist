@@ -38,7 +38,10 @@ Orchard gives you a single dashboard showing everything happening across your re
 ### From source
 
 ```bash
-cargo install --git https://github.com/drewdrewthis/git-orchard-rs
+cargo install --git https://github.com/drewdrewthis/git-orchard-rs orchard
+
+# Or from a local checkout:
+cargo install --path crates/orchard
 ```
 
 ### Setup
