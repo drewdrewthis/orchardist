@@ -9,6 +9,7 @@ mod browser;
 pub mod build_state;
 pub mod cache;
 pub mod cache_sources;
+pub mod chat;
 pub mod claude_state;
 pub mod config;
 pub mod derive;

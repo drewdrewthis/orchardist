@@ -99,3 +99,76 @@ fn json_mode_outputs_valid_json() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Help text includes quick-chat information
+// ---------------------------------------------------------------------------
+
+/// `orchard --help` must mention the `chat` subcommand so users can discover it.
+#[test]
+fn help_includes_chat_subcommand() {
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stderr(contains("orchard chat"));
+}
+
+/// `orchard --help` must mention the `--message` flag.
+#[test]
+fn help_includes_chat_message_flag() {
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stderr(contains("--message"));
+}
+
+/// `orchard --help` must mention the quick-chat keybinding (`prefix + O`).
+#[test]
+fn help_includes_chat_keybinding() {
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stderr(contains("prefix + O"));
+}
+
+// ---------------------------------------------------------------------------
+// orchard chat --message required
+// ---------------------------------------------------------------------------
+
+/// `orchard chat` with no `--message` flag must exit non-zero and print an error.
+#[test]
+fn chat_missing_message_exits_nonzero() {
+    let repo = common::TestRepo::new();
+    let home = tempfile::TempDir::new().unwrap();
+
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .args(["chat"])
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .assert()
+        .failure()
+        .stderr(contains("--message"));
+}
+
+/// `orchard chat --message ""` (empty string) must exit non-zero and print an error.
+#[test]
+fn chat_empty_message_exits_nonzero() {
+    let repo = common::TestRepo::new();
+    let home = tempfile::TempDir::new().unwrap();
+
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .args(["chat", "--message", ""])
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .assert()
+        .failure()
+        .stderr(contains("--message"));
+}

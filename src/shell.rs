@@ -41,6 +41,38 @@ pub fn get_tmux_binding(key: &str) -> String {
     format!(r#"bind-key {key} display-popup -E -w 90% -h 80% "$HOME/.local/bin/orchard-popup""#)
 }
 
+/// Returns the orchard-chat wrapper script content.
+///
+/// The script reads a single line from the user, passes it to `orchard chat
+/// --message`, and surfaces any errors via `tmux display-message`.
+pub fn get_chat_wrapper_script() -> &'static str {
+    r#"#!/bin/sh
+printf "> "
+read -r prompt
+if [ -z "$prompt" ]; then
+  exit 0
+fi
+errfile=$(mktemp "${TMPDIR:-/tmp}/orchard-chat-err.XXXXXX")
+trap 'rm -f "$errfile"' EXIT
+orchard chat --message "$prompt" 2>"$errfile"
+rc=$?
+if [ $rc -ne 0 ]; then
+  msg=$(head -1 "$errfile" 2>/dev/null)
+  rm -f "$errfile"
+  tmux display-message "orchard chat: ${msg:-unknown error}"
+else
+  rm -f "$errfile"
+fi"#
+}
+
+/// Returns the tmux.conf keybinding line for the chat popup, using the given key.
+///
+/// Default key is `O` (capital O) to avoid conflicting with the existing
+/// `o` binding for the main orchard TUI.
+pub fn get_chat_tmux_binding(key: &str) -> String {
+    format!(r#"bind-key {key} display-popup -E -w 60% -h 20% "$HOME/.local/bin/orchard-chat""#)
+}
+
 const MARKER_START: &str = "# >>> orchard >>>";
 const MARKER_END: &str = "# <<< orchard <<<";
 
@@ -192,25 +224,36 @@ fn remove_marker_block(content: &str) -> String {
     result
 }
 
-/// Step 3: Install the wrapper script to ~/.local/bin/orchard-popup.
+/// Step 3: Install the wrapper scripts to ~/.local/bin/.
+///
+/// Writes both `orchard-popup` (TUI popup) and `orchard-chat` (quick-chat
+/// popup) and makes both executable. Safe to run multiple times (idempotent).
 fn install_wrapper(home: &Path) -> Result<(), String> {
-    eprintln!("{BOLD}{CYAN}[3/{TOTAL_STEPS}] Creating wrapper script{RESET}");
+    eprintln!("{BOLD}{CYAN}[3/{TOTAL_STEPS}] Creating wrapper scripts{RESET}");
     let bin_dir = home.join(".local/bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("creating ~/.local/bin: {e}"))?;
 
-    let script_path = bin_dir.join("orchard-popup");
-    std::fs::write(&script_path, get_wrapper_script())
-        .map_err(|e| format!("writing {}: {e}", script_path.display()))?;
+    // Install orchard-popup.
+    let popup_path = bin_dir.join("orchard-popup");
+    std::fs::write(&popup_path, get_wrapper_script())
+        .map_err(|e| format!("writing {}: {e}", popup_path.display()))?;
+
+    // Install orchard-chat.
+    let chat_path = bin_dir.join("orchard-chat");
+    std::fs::write(&chat_path, get_chat_wrapper_script())
+        .map_err(|e| format!("writing {}: {e}", chat_path.display()))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script_path)
-            .map_err(|e| format!("stat {}: {e}", script_path.display()))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms)
-            .map_err(|e| format!("chmod {}: {e}", script_path.display()))?;
+        for script_path in &[&popup_path, &chat_path] {
+            let mut perms = std::fs::metadata(script_path)
+                .map_err(|e| format!("stat {}: {e}", script_path.display()))?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(script_path, perms)
+                .map_err(|e| format!("chmod {}: {e}", script_path.display()))?;
+        }
     }
 
     // Warn if ~/.local/bin is not in PATH.
@@ -225,6 +268,7 @@ fn install_wrapper(home: &Path) -> Result<(), String> {
     }
 
     eprintln!("  Created ~/.local/bin/orchard-popup");
+    eprintln!("  Created ~/.local/bin/orchard-chat");
     Ok(())
 }
 
@@ -255,11 +299,25 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
         state_dir.display()
     );
 
+    // Warn about conflict between the main popup key and chat key.
+    // Then prompt the user for the chat key (default O).
+    let default_chat_key = if key == "O" { "P" } else { "O" };
+    if key == "O" {
+        eprintln!("  Warning: prefix + O would conflict with the main popup key; defaulting to P");
+    }
+    let chat_key = prompt_key(
+        &format!("  Bind quick-chat popup to which key? [{default_chat_key}]"),
+        default_chat_key,
+    );
+    if chat_key == key {
+        eprintln!("  Warning: quick-chat key conflicts with main popup key (prefix + {key})");
+    }
     let binding = get_tmux_binding(&key);
+    let chat_binding = get_chat_tmux_binding(&chat_key);
     let block_content = if add_status {
-        format!("{binding}\n{status_line}")
+        format!("{binding}\n{chat_binding}\n{status_line}")
     } else {
-        binding
+        format!("{binding}\n{chat_binding}")
     };
 
     let updated = inject_config_block(&existing, &block_content);
@@ -1004,5 +1062,72 @@ mod tests {
     #[test]
     fn terminal_options_has_five_known_entries() {
         assert_eq!(TERMINAL_OPTIONS.len(), 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // Chat wrapper script and binding
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chat_wrapper_script_contains_orchard_chat_message() {
+        assert!(get_chat_wrapper_script().contains("orchard chat --message"));
+    }
+
+    #[test]
+    fn chat_wrapper_script_reads_input_from_user() {
+        assert!(get_chat_wrapper_script().contains("read -r prompt"));
+    }
+
+    #[test]
+    fn chat_wrapper_script_exits_on_empty_input() {
+        assert!(get_chat_wrapper_script().contains("exit 0"));
+    }
+
+    #[test]
+    fn chat_wrapper_script_shows_error_via_tmux_display_message() {
+        assert!(get_chat_wrapper_script().contains("tmux display-message"));
+    }
+
+    #[test]
+    fn chat_wrapper_script_cleans_up_tempfile_on_exit() {
+        // The script must install a trap so the tempfile is removed on signal/exit.
+        assert!(
+            get_chat_wrapper_script().contains("trap"),
+            "script must contain a trap to clean up errfile"
+        );
+        assert!(
+            get_chat_wrapper_script().contains("EXIT"),
+            "trap must fire on EXIT"
+        );
+    }
+
+    #[test]
+    fn chat_tmux_binding_uses_display_popup() {
+        assert!(get_chat_tmux_binding("O").contains("display-popup"));
+    }
+
+    #[test]
+    fn chat_tmux_binding_binds_given_key() {
+        assert!(get_chat_tmux_binding("O").contains("bind-key O"));
+    }
+
+    #[test]
+    fn chat_tmux_binding_references_orchard_chat_script() {
+        assert!(get_chat_tmux_binding("O").contains("orchard-chat"));
+    }
+
+    #[test]
+    fn chat_tmux_binding_custom_key() {
+        let binding = get_chat_tmux_binding("C");
+        assert!(binding.contains("bind-key C"));
+        assert!(!binding.contains("bind-key O"));
+    }
+
+    #[test]
+    fn chat_tmux_binding_uses_smaller_popup_dimensions() {
+        // Chat popup should be smaller than the TUI popup (60% wide, 20% tall).
+        let binding = get_chat_tmux_binding("O");
+        assert!(binding.contains("60%"), "chat popup should be 60% wide");
+        assert!(binding.contains("20%"), "chat popup should be 20% tall");
     }
 }
