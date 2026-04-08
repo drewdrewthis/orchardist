@@ -143,7 +143,8 @@ impl App {
     fn new(command: &str) -> Self {
         let repo_root = git::find_repo_root();
         let repo_name = git::get_repo_name();
-        let global_cfg = global_config::load_global_config();
+        let mut global_cfg = global_config::load_global_config();
+        global_config::register_cwd_repo_if_new(&mut global_cfg);
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
         let state = crate::build_state::build_state(&global_cfg);
         let standalone_sessions = state.standalone_sessions;

@@ -141,6 +141,9 @@ fn global_config_path() -> Option<PathBuf> {
 
 /// Loads the global Orchard configuration.
 ///
+/// Pure: reads from disk (or returns the CWD-based fallback) without any
+/// side effects. Does not auto-register the current directory.
+///
 /// Resolution order:
 /// 1. `~/.config/orchard/config.json` — explicit multi-repo config.
 /// 2. CWD-based single-repo fallback: calls `gh repo view` to detect the
@@ -151,24 +154,52 @@ pub fn load_global_config() -> GlobalConfig {
     if let Some(path) = global_config_path()
         && path.exists()
     {
-        let mut cfg = load_from_path(&path);
-        // If CWD is a repo not already in the config, append it so
-        // orchard works seamlessly from any repo directory.
-        ensure_cwd_repo(&mut cfg);
-        return cfg;
+        return load_from_path(&path);
     }
 
     fallback_single_repo()
 }
 
+/// Registers the CWD repo in `cfg` if it is not already present.
+///
+/// Detects the current repo via `gh repo view`, appends it to `cfg`, and
+/// persists the updated config to disk. On save failure, logs a warning but
+/// still returns `true` because the in-memory config was mutated.
+///
+/// Returns `true` if the config was mutated (a new repo was added), `false`
+/// if the CWD was already covered by an existing entry or could not be
+/// detected.
+///
+/// Call this from interactive startup only (TUI launch path). Do **not** call
+/// it from `--json`, `heal`, `setup-remote`, or tests.
+pub fn register_cwd_repo_if_new(cfg: &mut GlobalConfig) -> bool {
+    if !ensure_cwd_repo(cfg) {
+        return false;
+    }
+    if let Err(e) = save_global_config(cfg) {
+        LOG.warn(&format!(
+            "global_config: failed to persist auto-registered CWD repo: {e}"
+        ));
+    }
+    true
+}
+
 /// Persists the given `GlobalConfig` to `~/.config/orchard/config.json`.
 ///
-/// Creates the parent directory if it does not exist. Writes atomically via a
-/// temporary file to avoid partial writes.
+/// Thin wrapper around [`save_to_path`] that resolves the canonical write
+/// path. Creates the parent directory if it does not exist.
 pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
     let path = global_config_write_path()
         .ok_or_else(|| "Could not determine home directory".to_string())?;
+    save_to_path(cfg, &path)
+}
 
+/// Persists `cfg` to the given `path`.
+///
+/// Creates the parent directory if needed. Writes atomically via a temporary
+/// file to avoid partial writes. Used directly in tests to avoid touching
+/// the real `~/.config/orchard/config.json`.
+pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), String> {
     let dir = path
         .parent()
         .ok_or_else(|| "config path has no parent directory".to_string())?;
@@ -179,48 +210,67 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("renaming to {}: {e}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("renaming to {}: {e}", path.display()))?;
 
     LOG.info(&format!("global_config: saved to {}", path.display()));
     Ok(())
 }
 
-/// Checks whether CWD belongs to a configured repo. If not, adds it.
-fn ensure_cwd_repo(cfg: &mut GlobalConfig) {
-    let cwd = match std::env::current_dir() {
-        Ok(d) => d.to_string_lossy().to_string(),
-        Err(_) => return,
-    };
-
+/// Pure inner logic: appends `(cwd, slug, remotes)` to `cfg` if not already present.
+///
+/// Returns `true` if the config was mutated (a new repo was appended), `false` otherwise.
+/// This function performs no I/O and is fully unit-testable.
+fn append_repo_if_new(
+    cfg: &mut GlobalConfig,
+    cwd: &str,
+    slug: &str,
+    remotes: Vec<RemoteConfig>,
+) -> bool {
     // Check if CWD is inside any configured repo path.
-    for repo in &cfg.repos {
-        if cwd.starts_with(&repo.path) {
-            return;
-        }
+    // Use Path-aware prefix matching so "/workspace/my-project2" does not
+    // falsely match a registered "/workspace/my-project".
+    // Use Path::starts_with which matches on component boundaries, so
+    // "/workspace/my-project2" does not falsely match "/workspace/my-project".
+    let cwd_path = std::path::Path::new(cwd);
+    if cfg.repos.iter().any(|r| cwd_path.starts_with(&r.path)) {
+        return false;
     }
 
-    // CWD is not in any configured repo — try to detect it.
-    let (owner, name) = match crate::github::get_repo() {
-        Ok(pair) => pair,
-        Err(_) => return,
-    };
-
-    let slug = format!("{owner}/{name}");
     // Guard against duplicate slugs (repo could be checked out at a different path).
     if cfg.repos.iter().any(|r| r.slug == slug) {
-        return;
+        return false;
     }
-
-    let remotes = load_orchard_json_remotes(&std::path::PathBuf::from(&cwd));
 
     LOG.info(&format!(
         "global_config: appending CWD repo {slug} at {cwd}"
     ));
     cfg.repos.push(RepoConfig {
-        slug,
-        path: cwd,
+        slug: slug.to_string(),
+        path: cwd.to_string(),
         remotes,
     });
+    true
+}
+
+/// Checks whether CWD belongs to a configured repo. If not, adds it.
+///
+/// Returns `true` if the config was mutated (a new repo was appended), `false` otherwise.
+fn ensure_cwd_repo(cfg: &mut GlobalConfig) -> bool {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d.to_string_lossy().to_string(),
+        Err(_) => return false,
+    };
+
+    // CWD is not in any configured repo — try to detect it.
+    let (owner, name) = match crate::github::get_repo() {
+        Ok(pair) => pair,
+        Err(_) => return false,
+    };
+
+    let slug = format!("{owner}/{name}");
+    let remotes = load_orchard_json_remotes(&std::path::PathBuf::from(&cwd));
+
+    append_repo_if_new(cfg, &cwd, &slug, remotes)
 }
 
 fn load_from_path(path: &PathBuf) -> GlobalConfig {
@@ -739,11 +789,8 @@ mod tests {
         let path = write_config(dir.path(), json);
         let cfg = load_from_path(&path);
 
-        assert_eq!(cfg.repos.len(), 1, "repos should still parse");
-        assert_eq!(
-            cfg.terminal_app, "com.apple.Terminal",
-            "terminal_app should default"
-        );
+        assert_eq!(cfg.repos.len(), 1);
+        assert_eq!(cfg.terminal_app, "com.apple.Terminal");
     }
 
     #[test]
@@ -869,5 +916,100 @@ mod tests {
         assert_eq!(cfg.tmux_sessions[0].name, "shepherd");
         assert_eq!(cfg.tmux_sessions[0].command, "claude --agent shepherd");
         assert!(cfg.tmux_sessions[0].start_on_launch);
+    }
+
+    // -----------------------------------------------------------------------
+    // append_repo_if_new / ensure-and-persist regression tests (issue #158)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn append_repo_if_new_adds_unknown_repo() {
+        let mut cfg = GlobalConfig::default();
+        let mutated =
+            append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
+        assert!(mutated);
+        assert_eq!(cfg.repos.len(), 1);
+        assert_eq!(cfg.repos[0].slug, "acme/my-project");
+        assert_eq!(cfg.repos[0].path, "/workspace/my-project");
+    }
+
+    #[test]
+    fn append_repo_if_new_skips_when_cwd_inside_known_path() {
+        let mut cfg = GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: "acme/my-project".to_string(),
+                path: "/workspace/my-project".to_string(),
+                remotes: vec![],
+            }],
+            terminal_app: default_terminal_app(),
+            tmux_sessions: vec![],
+        };
+        // CWD is a sub-directory of the already-registered path.
+        let mutated = append_repo_if_new(
+            &mut cfg,
+            "/workspace/my-project/.worktrees/feature",
+            "acme/my-project",
+            vec![],
+        );
+        assert!(!mutated);
+        assert_eq!(cfg.repos.len(), 1);
+    }
+
+    #[test]
+    fn append_repo_if_new_skips_duplicate_slug() {
+        let mut cfg = GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: "acme/my-project".to_string(),
+                path: "/other/path".to_string(),
+                remotes: vec![],
+            }],
+            terminal_app: default_terminal_app(),
+            tmux_sessions: vec![],
+        };
+        let mutated =
+            append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
+        assert!(!mutated);
+        assert_eq!(cfg.repos.len(), 1);
+    }
+
+    #[test]
+    fn append_repo_if_new_does_not_match_path_prefix_of_sibling() {
+        // Regression: "/workspace/my-project2" must NOT match a registered
+        // "/workspace/my-project" — raw string prefix match would falsely skip it.
+        let mut cfg = GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: "acme/my-project".to_string(),
+                path: "/workspace/my-project".to_string(),
+                remotes: vec![],
+            }],
+            terminal_app: default_terminal_app(),
+            tmux_sessions: vec![],
+        };
+        let mutated = append_repo_if_new(
+            &mut cfg,
+            "/workspace/my-project2",
+            "acme/my-project2",
+            vec![],
+        );
+        assert!(mutated);
+        assert_eq!(cfg.repos.len(), 2);
+    }
+
+    #[test]
+    fn append_repo_if_new_persists_via_save_to_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        let mut cfg = GlobalConfig::default();
+        let mutated =
+            append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
+        assert!(mutated);
+
+        save_to_path(&cfg, &config_path).expect("save_to_path failed");
+
+        let reloaded = load_from_path(&config_path);
+        assert_eq!(reloaded.repos.len(), 1);
+        assert_eq!(reloaded.repos[0].slug, "acme/my-project");
+        assert_eq!(reloaded.repos[0].path, "/workspace/my-project");
     }
 }
