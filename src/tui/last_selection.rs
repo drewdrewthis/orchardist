@@ -11,6 +11,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cache;
+use crate::global_config;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +40,14 @@ pub struct LastSelection {
     pub kind: SelectionKind,
     /// The stable identity: worktree path for `Worktree`, session name for `Standalone`.
     pub key: String,
+    /// The slug of the active repo filter tab, e.g. `"owner/repo"`.
+    ///
+    /// `None` means "all repos" (index 0). Stored as a slug rather than an index
+    /// so it stays valid even if the repos list is reordered.
+    ///
+    /// Defaults to `None` so cache files written by older versions still parse.
+    #[serde(default)]
+    pub active_repo_slug: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +152,26 @@ pub(crate) fn resolve_cursor(
     }
 }
 
+/// Resolves a `LastSelection` to an `active_repo_index`.
+///
+/// Resolution rules:
+/// - `active_repo_slug` is `None`: return 0 ("all repos").
+/// - Slug found at position `i` in `repos`: return `i + 1` (1-based, index 0 = all repos).
+/// - Slug not found (repo removed): return 0 ("all repos").
+pub(crate) fn resolve_active_repo_index(
+    sel: &LastSelection,
+    repos: &[global_config::RepoConfig],
+) -> usize {
+    match &sel.active_repo_slug {
+        None => 0,
+        Some(slug) => repos
+            .iter()
+            .position(|r| &r.slug == slug)
+            .map(|i| i + 1)
+            .unwrap_or(0),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -170,6 +199,7 @@ mod tests {
         let original = LastSelection {
             kind: SelectionKind::Worktree,
             key: "/home/user/workspace/my-repo".to_string(),
+            active_repo_slug: None,
         };
         save_to(dir.path(), &original).unwrap();
         let loaded = load_from(dir.path());
@@ -183,6 +213,7 @@ mod tests {
         let original = LastSelection {
             kind: SelectionKind::Standalone,
             key: "my-standalone-session".to_string(),
+            active_repo_slug: None,
         };
         save_to(dir.path(), &original).unwrap();
         let loaded = load_from(dir.path());
@@ -204,6 +235,7 @@ mod tests {
         let sel = LastSelection {
             kind: SelectionKind::Worktree,
             key: "/home/user/workspace/repo".to_string(),
+            active_repo_slug: None,
         };
         save_to(dir.path(), &sel).unwrap();
 
@@ -271,6 +303,7 @@ mod tests {
         let sel = LastSelection {
             kind: SelectionKind::Worktree,
             key: "/workspace/repo-2".to_string(),
+            active_repo_slug: None,
         };
         let idx = resolve_cursor(&sel, &[], &rows);
         assert_eq!(idx, 1);
@@ -283,6 +316,7 @@ mod tests {
         let sel = LastSelection {
             kind: SelectionKind::Worktree,
             key: "/workspace/repo-1".to_string(),
+            active_repo_slug: None,
         };
         let idx = resolve_cursor(&sel, &standalone, &rows);
         // 1 standalone + index 0 in rows = 1
@@ -298,6 +332,7 @@ mod tests {
         let sel = LastSelection {
             kind: SelectionKind::Standalone,
             key: "beta".to_string(),
+            active_repo_slug: None,
         };
         let idx = resolve_cursor(&sel, &standalone, &[]);
         assert_eq!(idx, 1);
@@ -309,6 +344,7 @@ mod tests {
         let sel = LastSelection {
             kind: SelectionKind::Worktree,
             key: "/workspace/deleted-worktree".to_string(),
+            active_repo_slug: None,
         };
         let idx = resolve_cursor(&sel, &[], &rows);
         assert_eq!(idx, 0);
@@ -319,8 +355,79 @@ mod tests {
         let sel = LastSelection {
             kind: SelectionKind::Worktree,
             key: "/workspace/repo-1".to_string(),
+            active_repo_slug: None,
         };
         let idx = resolve_cursor(&sel, &[], &[]);
         assert_eq!(idx, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // active_repo_slug roundtrip tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_then_load_roundtrip_preserves_active_repo_slug() {
+        let dir = tempdir().unwrap();
+        let original = LastSelection {
+            kind: SelectionKind::Worktree,
+            key: "/home/user/workspace/my-repo".to_string(),
+            active_repo_slug: Some("acme/my-project".to_string()),
+        };
+        save_to(dir.path(), &original).unwrap();
+        let loaded = load_from(dir.path());
+        assert_eq!(loaded.active_repo_slug, Some("acme/my-project".to_string()));
+    }
+
+    #[test]
+    fn load_returns_none_active_repo_for_old_file_format() {
+        let dir = tempdir().unwrap();
+        // Write a JSON file that lacks the active_repo_slug field (old format).
+        std::fs::write(
+            dir.path().join("last_selection.json"),
+            br#"{"kind":"worktree","key":"/home/user/workspace/my-repo"}"#,
+        )
+        .unwrap();
+        let loaded = load_from(dir.path());
+        assert_eq!(loaded.active_repo_slug, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_active_repo_index tests
+    // -----------------------------------------------------------------------
+
+    fn make_repo_config(slug: &str) -> global_config::RepoConfig {
+        global_config::RepoConfig {
+            slug: slug.to_string(),
+            path: "/home/user/workspace/repo".to_string(),
+            remotes: vec![],
+        }
+    }
+
+    #[test]
+    fn resolve_active_repo_index_returns_zero_when_none() {
+        let sel = LastSelection::default();
+        let repos = vec![make_repo_config("acme/alpha"), make_repo_config("acme/beta")];
+        assert_eq!(resolve_active_repo_index(&sel, &repos), 0);
+    }
+
+    #[test]
+    fn resolve_active_repo_index_finds_repo_by_slug() {
+        let sel = LastSelection {
+            active_repo_slug: Some("acme/beta".to_string()),
+            ..Default::default()
+        };
+        let repos = vec![make_repo_config("acme/alpha"), make_repo_config("acme/beta")];
+        // "acme/beta" is at index 1 in repos, so active_repo_index = 2 (1-based).
+        assert_eq!(resolve_active_repo_index(&sel, &repos), 2);
+    }
+
+    #[test]
+    fn resolve_active_repo_index_returns_zero_when_slug_not_found() {
+        let sel = LastSelection {
+            active_repo_slug: Some("acme/removed".to_string()),
+            ..Default::default()
+        };
+        let repos = vec![make_repo_config("acme/alpha"), make_repo_config("acme/beta")];
+        assert_eq!(resolve_active_repo_index(&sel, &repos), 0);
     }
 }
