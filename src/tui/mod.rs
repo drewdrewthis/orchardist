@@ -164,13 +164,15 @@ impl App {
             })
         };
 
-        // Resolve the initial cursor position from the last saved selection.
-        // Cleanup mode always starts at 0 (it has its own cursor).
-        let initial_cursor = if persist_selection {
+        // Resolve the initial cursor position and active repo from the last saved selection.
+        // Cleanup mode always starts at 0 (it has its own cursor and no repo filter to restore).
+        let (initial_cursor, initial_repo_index) = if persist_selection {
             let sel = last_selection::load();
-            last_selection::resolve_cursor(&sel, &standalone_sessions, &task_rows)
+            let cursor = last_selection::resolve_cursor(&sel, &standalone_sessions, &task_rows);
+            let repo_index = last_selection::resolve_active_repo_index(&sel, &global_cfg.repos);
+            (cursor, repo_index)
         } else {
-            0
+            (0, 0)
         };
 
         App {
@@ -187,7 +189,7 @@ impl App {
             task_rows,
             standalone_sessions,
             global_config: global_cfg,
-            active_repo_index: 0,
+            active_repo_index: initial_repo_index,
             show_branch_column: false,
             filter_text: String::new(),
             input_phase: InputPhase::Filtering,
@@ -1794,6 +1796,7 @@ fn run_loop(
 /// Returns `None` when the cursor is out of bounds for both lists,
 /// so the caller can skip saving and preserve the previous file.
 pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelection> {
+    let active_repo_slug = app.active_repo_slug().map(String::from);
     let standalone_count = app.standalone_sessions.len();
     if app.cursor < standalone_count
         && let Some(ss) = app.standalone_sessions.get(app.cursor)
@@ -1801,6 +1804,7 @@ pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelecti
         return Some(last_selection::LastSelection {
             kind: last_selection::SelectionKind::Standalone,
             key: ss.session.tmux.name.clone(),
+            active_repo_slug,
         });
     }
     let wt_idx = app.cursor.saturating_sub(standalone_count);
@@ -1808,6 +1812,7 @@ pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelecti
         return Some(last_selection::LastSelection {
             kind: last_selection::SelectionKind::Worktree,
             key: row.worktree_path.clone(),
+            active_repo_slug,
         });
     }
     None
@@ -4093,5 +4098,31 @@ mod tests {
         let app = App::new_test(vec![]);
         // cursor=0, no rows, no standalone
         assert!(current_selection(&app).is_none());
+    }
+
+    #[test]
+    fn current_selection_includes_active_repo_slug() {
+        let mut app = App::new_test(vec![
+            make_task_row(1, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Other),
+            make_task_row(3, DisplayGroup::Other),
+        ]);
+        // Populate two repos in global_config so index 2 maps to "acme/beta".
+        app.global_config.repos = vec![
+            global_config::RepoConfig {
+                slug: "acme/alpha".to_string(),
+                path: "/home/user/workspace/alpha".to_string(),
+                remotes: vec![],
+            },
+            global_config::RepoConfig {
+                slug: "acme/beta".to_string(),
+                path: "/home/user/workspace/beta".to_string(),
+                remotes: vec![],
+            },
+        ];
+        app.active_repo_index = 2; // index 2 = repos[1] = "acme/beta"
+        app.cursor = 0;
+        let sel = current_selection(&app).unwrap();
+        assert_eq!(sel.active_repo_slug, Some("acme/beta".to_string()));
     }
 }
