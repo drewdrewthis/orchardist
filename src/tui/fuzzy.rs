@@ -133,9 +133,10 @@ fn session_status_haystack(row: &WorktreeRow) -> String {
     if row.sessions.is_empty() {
         return "no session".to_string();
     }
-    let has_running = row.sessions.iter().any(|s| {
-        matches!(s.tmux.status, SessionStatus::Running { .. })
-    });
+    let has_running = row
+        .sessions
+        .iter()
+        .any(|s| matches!(s.tmux.status, SessionStatus::Running { .. }));
     if has_running {
         "running".to_string()
     } else {
@@ -214,7 +215,12 @@ pub fn fuzzy_score(pattern: &str, haystack: &str) -> Option<FuzzyMatch> {
             .collect();
         indices
             .iter()
-            .map(|&ci| char_to_byte.get(ci as usize).copied().unwrap_or(ci as usize) as u32)
+            .map(|&ci| {
+                char_to_byte
+                    .get(ci as usize)
+                    .copied()
+                    .unwrap_or(ci as usize) as u32
+            })
             .collect()
     };
 
@@ -517,7 +523,13 @@ mod tests {
 
     #[test]
     fn highlight_spans_no_indices_returns_single_span() {
-        let spans = highlight_spans("hello world", 0, &[], Style::default(), Style::default().add_modifier(Modifier::BOLD));
+        let spans = highlight_spans(
+            "hello world",
+            0,
+            &[],
+            Style::default(),
+            Style::default().add_modifier(Modifier::BOLD),
+        );
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content.as_ref(), "hello world");
     }
@@ -578,6 +590,11 @@ mod tests {
     fn row_haystack_fields_has_expected_count() {
         // 7 fields in the defined order.
         let fields = row_haystack_fields(&base_row());
-        assert_eq!(fields.len(), 7, "expected 7 haystack fields, got {}", fields.len());
+        assert_eq!(
+            fields.len(),
+            7,
+            "expected 7 haystack fields, got {}",
+            fields.len()
+        );
     }
 }

@@ -2509,9 +2509,7 @@ mod tests {
         let visible = visible_tasks(&rows, "azure");
         // The strong match should bubble to the top.
         assert!(
-            visible
-                .iter()
-                .position(|vt| vt.row.issue_number == Some(1))
+            visible.iter().position(|vt| vt.row.issue_number == Some(1))
                 < visible
                     .iter()
                     .position(|vt| vt.row.issue_number == Some(2))
@@ -2537,7 +2535,11 @@ mod tests {
         let rows = vec![main, other];
         // "nomatch" won't match either row normally, but main always passes.
         let visible = visible_tasks(&rows, "nomatch");
-        assert_eq!(visible.len(), 1, "only main worktree should survive the filter");
+        assert_eq!(
+            visible.len(),
+            1,
+            "only main worktree should survive the filter"
+        );
         assert!(visible[0].row.is_main_worktree);
     }
 
