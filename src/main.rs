@@ -352,37 +352,35 @@ Keybindings (after orchard init --install):
 
 #[cfg(test)]
 mod tests {
+    fn should_exit(message: Option<&str>) -> bool {
+        !matches!(message, Some(m) if !m.is_empty())
+    }
+
     #[test]
     fn handle_chat_missing_message_exits_nonzero() {
         // We can't call handle_chat directly (it calls process::exit), but we can
-        // verify the guard logic by checking the match arm.
+        // verify the guard logic by checking the predicate.
         // The production path for None/empty is tested via binary integration.
         // This test documents the expected behaviour contract.
-        let message: Option<&str> = None;
-        let should_exit = match message {
-            Some(m) if !m.is_empty() => false,
-            _ => true,
-        };
-        assert!(should_exit, "missing message must trigger non-zero exit");
+        assert!(
+            should_exit(None),
+            "missing message must trigger non-zero exit"
+        );
     }
 
     #[test]
     fn handle_chat_empty_string_message_exits_nonzero() {
-        let message: Option<&str> = Some("");
-        let should_exit = match message {
-            Some(m) if !m.is_empty() => false,
-            _ => true,
-        };
-        assert!(should_exit, "empty message must trigger non-zero exit");
+        assert!(
+            should_exit(Some("")),
+            "empty message must trigger non-zero exit"
+        );
     }
 
     #[test]
     fn handle_chat_nonempty_message_does_not_exit() {
-        let message: Option<&str> = Some("hello");
-        let should_exit = match message {
-            Some(m) if !m.is_empty() => false,
-            _ => true,
-        };
-        assert!(!should_exit, "non-empty message must not trigger exit");
+        assert!(
+            !should_exit(Some("hello")),
+            "non-empty message must not trigger exit"
+        );
     }
 }
