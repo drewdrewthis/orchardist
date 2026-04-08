@@ -956,6 +956,7 @@ mod tests {
             }],
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
+            chat_target: None,
         };
         // CWD is a sub-directory of the already-registered path.
         let mutated = append_repo_if_new(
@@ -978,6 +979,7 @@ mod tests {
             }],
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
+            chat_target: None,
         };
         let mutated =
             append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
@@ -997,6 +999,7 @@ mod tests {
             }],
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
+            chat_target: None,
         };
         let mutated = append_repo_if_new(
             &mut cfg,

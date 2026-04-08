@@ -352,8 +352,6 @@ Keybindings (after orchard init --install):
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn handle_chat_missing_message_exits_nonzero() {
         // We can't call handle_chat directly (it calls process::exit), but we can
