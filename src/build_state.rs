@@ -420,6 +420,8 @@ mod tests {
             context_window_pct: Some(42.0),
             cost_usd: Some(1.23),
             model: Some("opus".to_string()),
+            stop_reason: None,
+            inflight_tool_count: None,
         }];
         let rows = build_standalone_sessions(&config, &[], &claude_states);
         let claude = rows[0].session.claude.as_ref().unwrap();
@@ -472,6 +474,8 @@ mod tests {
             context_window_pct: None,
             cost_usd: None,
             model: None,
+            stop_reason: None,
+            inflight_tool_count: None,
         }
     }
 

@@ -76,6 +76,74 @@ Feature: Claude Code hooks for session state detection
     And the script exits 0
 
   @unit
+  Scenario: Hook script is a no-op when Stop event has stop_reason tool_use
+    Given a Claude session running in tmux session "repo_47_claude"
+    And a state file exists at "/tmp/orchard-claude-repo_47_claude.json" with state "working"
+    When the hook script receives a Stop event with stop_reason "tool_use"
+    Then the script exits 0
+    And the state file is unchanged
+
+  @unit
+  Scenario: Hook script writes idle when Stop event has stop_reason end_turn
+    Given a Claude session running in tmux session "repo_47_claude"
+    When the hook script receives a Stop event with stop_reason "end_turn"
+    Then the state file contains:
+      | field       | value       |
+      | state       | "idle"      |
+      | stop_reason | "end_turn"  |
+
+  @unit
+  Scenario: Hook script tracks in-flight tool_use_id on PreToolUse
+    Given a Claude session running in tmux session "repo_47_claude"
+    When the hook script receives a PreToolUse event with tool_use_id "tool-abc-123" and tool_name "Bash"
+    Then the state file contains:
+      | field               | value     |
+      | state               | "working" |
+      | inflight_tool_count | 1         |
+    And the inflight sidecar "/tmp/orchard-claude-repo_47_claude.inflight.json" contains "tool-abc-123"
+
+  @unit
+  Scenario: Hook script removes tool_use_id on PostToolUse
+    Given a Claude session running in tmux session "repo_47_claude"
+    And the inflight sidecar contains tool_use_id "tool-abc-123"
+    When the hook script receives a PostToolUse event with tool_use_id "tool-abc-123"
+    Then the inflight sidecar is empty
+    And the state file contains:
+      | field               | value     |
+      | state               | "working" |
+      | inflight_tool_count | 0         |
+
+  @unit
+  Scenario: Hook script handles PostToolUseFailure identically to PostToolUse for inflight tracking
+    Given a Claude session running in tmux session "repo_47_claude"
+    And the inflight sidecar contains tool_use_id "tool-fail-999"
+    When the hook script receives a PostToolUseFailure event with tool_use_id "tool-fail-999"
+    Then the inflight sidecar is empty
+    And the state file contains:
+      | field | value     |
+      | state | "working" |
+
+  @unit
+  Scenario: Hook script clears sidecar on SessionEnd
+    Given a state file exists at "/tmp/orchard-claude-repo_47_claude.json"
+    And the inflight sidecar exists at "/tmp/orchard-claude-repo_47_claude.inflight.json"
+    When the hook script receives a SessionEnd event
+    Then the file "/tmp/orchard-claude-repo_47_claude.json" no longer exists
+    And the file "/tmp/orchard-claude-repo_47_claude.inflight.json" no longer exists
+
+  @unit
+  Scenario: State file includes stop_reason field on Stop events
+    Given a Claude session running in tmux session "repo_47_claude"
+    When the hook script receives a Stop event with stop_reason "end_turn"
+    Then the state file contains a "stop_reason" field with value "end_turn"
+
+  @unit
+  Scenario: State file includes inflight_tool_count field on PreToolUse events
+    Given a Claude session running in tmux session "repo_47_claude"
+    When the hook script receives a PreToolUse event with tool_use_id "tool-xyz" and tool_name "Read"
+    Then the state file contains an "inflight_tool_count" field
+
+    @unit
   Scenario: State file contains required fields
     Given a Claude session running in tmux session "repo_47_claude"
     When the hook script writes a state file
@@ -352,12 +420,14 @@ Feature: Claude Code hooks for session state detection
     Then the hook script is installed at "~/.claude/hooks/orchard-state.sh"
     And the script is executable
     And "~/.claude/settings.json" contains hook registrations for:
-      | event         |
-      | PreToolUse    |
-      | PostToolUse   |
-      | Stop          |
-      | Notification  |
-      | SessionEnd    |
+      | event               |
+      | PreToolUse          |
+      | PostToolUse         |
+      | PostToolUseFailure  |
+      | Stop                |
+      | Notification        |
+      | SessionStart        |
+      | SessionEnd          |
 
   @integration
   Scenario: orchard init is idempotent for hook registration

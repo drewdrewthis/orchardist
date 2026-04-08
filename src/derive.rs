@@ -1152,6 +1152,8 @@ mod tests {
             context_window_pct: None,
             cost_usd: None,
             model: None,
+            stop_reason: None,
+            inflight_tool_count: None,
         }
     }
 
@@ -1168,6 +1170,8 @@ mod tests {
             context_window_pct: None,
             cost_usd: None,
             model: None,
+            stop_reason: None,
+            inflight_tool_count: None,
         }
     }
 
