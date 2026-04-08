@@ -30,11 +30,7 @@ fn setup_test_env() -> (tempfile::TempDir, std::path::PathBuf) {
     let bin_dir = tmpdir.path().join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_tmux = bin_dir.join("tmux");
-    fs::write(
-        &fake_tmux,
-        "#!/usr/bin/env bash\necho 'test_session'\n",
-    )
-    .unwrap();
+    fs::write(&fake_tmux, "#!/usr/bin/env bash\necho 'test_session'\n").unwrap();
     let mut perms = fs::metadata(&fake_tmux).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&fake_tmux, perms).unwrap();
@@ -168,7 +164,9 @@ fn post_tool_use_removes_inflight() {
     let (tmpdir, bin_dir) = setup_test_env();
 
     // Seed inflight sidecar with one entry.
-    let inflight_path = tmpdir.path().join("orchard-claude-test_session.inflight.json");
+    let inflight_path = tmpdir
+        .path()
+        .join("orchard-claude-test_session.inflight.json");
     fs::write(&inflight_path, r#"["tool-abc-123"]"#).unwrap();
 
     let payload = r#"{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Bash","tool_use_id":"tool-abc-123"}"#;
@@ -196,7 +194,9 @@ fn post_tool_use_failure_removes_inflight() {
     let (tmpdir, bin_dir) = setup_test_env();
 
     // Seed inflight sidecar with one entry.
-    let inflight_path = tmpdir.path().join("orchard-claude-test_session.inflight.json");
+    let inflight_path = tmpdir
+        .path()
+        .join("orchard-claude-test_session.inflight.json");
     fs::write(&inflight_path, r#"["tool-fail-999"]"#).unwrap();
 
     let payload = r#"{"hook_event_name":"PostToolUseFailure","session_id":"s1","cwd":"/workspace","tool_name":"Bash","tool_use_id":"tool-fail-999","error":"timeout"}"#;
@@ -224,7 +224,9 @@ fn session_end_clears_both_files() {
 
     // Seed both files.
     let state_path = tmpdir.path().join("orchard-claude-test_session.json");
-    let inflight_path = tmpdir.path().join("orchard-claude-test_session.inflight.json");
+    let inflight_path = tmpdir
+        .path()
+        .join("orchard-claude-test_session.inflight.json");
     fs::write(&state_path, r#"{"state":"working"}"#).unwrap();
     fs::write(&inflight_path, r#"["tool-abc-123"]"#).unwrap();
 
@@ -286,7 +288,9 @@ fn session_start_clears_inflight() {
     let (tmpdir, bin_dir) = setup_test_env();
 
     // Seed inflight sidecar with stale entry.
-    let inflight_path = tmpdir.path().join("orchard-claude-test_session.inflight.json");
+    let inflight_path = tmpdir
+        .path()
+        .join("orchard-claude-test_session.inflight.json");
     fs::write(&inflight_path, r#"["stale-id"]"#).unwrap();
 
     let payload = r#"{"hook_event_name":"SessionStart","session_id":"s1","cwd":"/workspace"}"#;
@@ -295,7 +299,8 @@ fn session_start_clears_inflight() {
     let state = read_state_file(tmpdir.path());
     assert_eq!(state["state"], "idle");
 
-    let inflight = read_inflight(tmpdir.path()).expect("inflight file must exist after SessionStart");
+    let inflight =
+        read_inflight(tmpdir.path()).expect("inflight file must exist after SessionStart");
     assert_eq!(
         inflight.as_array().unwrap().len(),
         0,
