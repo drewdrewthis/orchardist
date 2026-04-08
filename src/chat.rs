@@ -74,10 +74,10 @@ pub fn resolve_target(
     }
 
     // 2. Wizard-persisted chat_target.
-    if let Some(ref t) = config.chat_target {
-        if !t.is_empty() {
-            return Ok(t.clone());
-        }
+    if let Some(ref t) = config.chat_target
+        && !t.is_empty()
+    {
+        return Ok(t.clone());
     }
 
     // 3. First standalone tmux session.
@@ -306,10 +306,10 @@ mod tests {
         let captured_targets: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
 
         let _ = send_to_orchardist("my-session", "test", |_prog: &str, args: &[&str]| {
-            if let Some(pos) = args.iter().position(|&a| a == "-t") {
-                if let Some(target) = args.get(pos + 1) {
-                    captured_targets.borrow_mut().push(target.to_string());
-                }
+            if let Some(pos) = args.iter().position(|&a| a == "-t")
+                && let Some(target) = args.get(pos + 1)
+            {
+                captured_targets.borrow_mut().push(target.to_string());
             }
             Ok(std::process::Command::new("true").output().unwrap())
         });
