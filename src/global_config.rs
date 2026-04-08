@@ -210,7 +210,7 @@ pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), St
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("renaming to {}: {e}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("renaming to {}: {e}", path.display()))?;
 
     LOG.info(&format!("global_config: saved to {}", path.display()));
     Ok(())
@@ -220,7 +220,12 @@ pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), St
 ///
 /// Returns `true` if the config was mutated (a new repo was appended), `false` otherwise.
 /// This function performs no I/O and is fully unit-testable.
-fn append_repo_if_new(cfg: &mut GlobalConfig, cwd: &str, slug: &str, remotes: Vec<RemoteConfig>) -> bool {
+fn append_repo_if_new(
+    cfg: &mut GlobalConfig,
+    cwd: &str,
+    slug: &str,
+    remotes: Vec<RemoteConfig>,
+) -> bool {
     // Check if CWD is inside any configured repo path.
     // Use Path-aware prefix matching so "/workspace/my-project2" does not
     // falsely match a registered "/workspace/my-project".
@@ -920,12 +925,8 @@ mod tests {
     #[test]
     fn append_repo_if_new_adds_unknown_repo() {
         let mut cfg = GlobalConfig::default();
-        let mutated = append_repo_if_new(
-            &mut cfg,
-            "/workspace/my-project",
-            "acme/my-project",
-            vec![],
-        );
+        let mutated =
+            append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
         assert!(mutated);
         assert_eq!(cfg.repos.len(), 1);
         assert_eq!(cfg.repos[0].slug, "acme/my-project");
@@ -965,12 +966,8 @@ mod tests {
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
         };
-        let mutated = append_repo_if_new(
-            &mut cfg,
-            "/workspace/my-project",
-            "acme/my-project",
-            vec![],
-        );
+        let mutated =
+            append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
         assert!(!mutated);
         assert_eq!(cfg.repos.len(), 1);
     }
@@ -1004,12 +1001,8 @@ mod tests {
         let config_path = dir.path().join("config.json");
 
         let mut cfg = GlobalConfig::default();
-        let mutated = append_repo_if_new(
-            &mut cfg,
-            "/workspace/my-project",
-            "acme/my-project",
-            vec![],
-        );
+        let mutated =
+            append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
         assert!(mutated);
 
         save_to_path(&cfg, &config_path).expect("save_to_path failed");
