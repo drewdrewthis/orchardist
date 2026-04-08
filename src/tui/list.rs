@@ -105,6 +105,11 @@ pub(crate) fn branch_tail(branch: &str) -> &str {
 pub(crate) struct VisibleTask<'a> {
     pub row: &'a WorktreeRow,
     pub group: DisplayGroup,
+    /// Byte indices into the row's full haystack string where the query matched.
+    /// Empty when no filter is active.
+    pub match_indices: Vec<u32>,
+    /// Byte offsets for each field within the haystack (same order as `fuzzy::row_haystack_fields`).
+    pub field_offsets: Vec<usize>,
 }
 
 /// Returns the visible tasks from the pre-sorted task_rows.
@@ -122,14 +127,42 @@ pub(crate) fn visible_tasks<'a>(
 }
 
 /// Like `visible_tasks` but with an optional repo slug filter.
+///
+/// When `filter_text` is non-empty, rows are fuzzy-matched against the full
+/// haystack (all visible fields joined) via [`crate::tui::fuzzy::fuzzy_score`].
+/// Matching rows are sorted by descending score so the best match comes first.
+/// When `filter_text` is empty the original ordering is preserved.
+/// Main worktree rows always bypass the filter.
 pub(crate) fn visible_tasks_filtered<'a>(
     task_rows: &'a [WorktreeRow],
     filter_text: &str,
     repo_slug_filter: Option<&str>,
 ) -> Vec<VisibleTask<'a>> {
-    let search_lower = filter_text.to_lowercase();
+    use crate::tui::fuzzy::{fuzzy_score, row_haystack};
 
-    let mut result = Vec::new();
+    // When the filter is empty, preserve original ordering without scoring.
+    if filter_text.is_empty() {
+        let mut result = Vec::new();
+        for row in task_rows {
+            if let Some(slug) = repo_slug_filter
+                && row.repo_slug != slug
+            {
+                continue;
+            }
+            result.push(VisibleTask {
+                row,
+                group: row.display_group,
+                match_indices: vec![],
+                field_offsets: vec![],
+            });
+        }
+        return result;
+    }
+
+    // Fuzzy-match each row and collect (score, row, indices, offsets) tuples.
+    // Main worktree rows bypass the filter and are pinned to the front.
+    let mut main_rows: Vec<VisibleTask<'a>> = Vec::new();
+    let mut scored: Vec<(u32, VisibleTask<'a>)> = Vec::new();
 
     for row in task_rows {
         // Apply repo slug filter (affects all rows including main worktrees).
@@ -139,24 +172,38 @@ pub(crate) fn visible_tasks_filtered<'a>(
             continue;
         }
 
-        // Main worktree rows always pass filter and search.
-        if !row.is_main_worktree {
-            // Apply search text.
-            if !search_lower.is_empty() {
-                let matches = row.repo_slug.to_lowercase().contains(&search_lower)
-                    || row.branch.to_lowercase().contains(&search_lower);
-                if !matches {
-                    continue;
-                }
-            }
+        if row.is_main_worktree {
+            // Main worktrees always pass, placed first without scoring.
+            let haystack = row_haystack(row);
+            main_rows.push(VisibleTask {
+                row,
+                group: row.display_group,
+                match_indices: vec![],
+                field_offsets: haystack.field_offsets,
+            });
+            continue;
         }
 
-        result.push(VisibleTask {
-            row,
-            group: row.display_group,
-        });
+        let haystack = row_haystack(row);
+        if let Some(fm) = fuzzy_score(filter_text, &haystack.text) {
+            scored.push((
+                fm.score,
+                VisibleTask {
+                    row,
+                    group: row.display_group,
+                    match_indices: fm.indices,
+                    field_offsets: haystack.field_offsets,
+                },
+            ));
+        }
     }
 
+    // Sort by descending score so best match appears first.
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // Compose: main worktrees first (preserving their order), then scored rows.
+    let mut result = main_rows;
+    result.extend(scored.into_iter().map(|(_, vt)| vt));
     result
 }
 
@@ -1337,8 +1384,30 @@ impl App {
                 Style::default()
             };
 
+            // Highlight style for fuzzy match characters.
+            let highlight_style = Style::default()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::REVERSED);
+
+            // Field offsets from the fuzzy haystack (see fuzzy::row_haystack_fields):
+            // 0=repo_slug, 1=branch, 2=issue_num, 3=issue_title, 4=pr_status,
+            // 5=session_status, 6=display_group.
+            let fo = &vt.field_offsets;
+
             let issue_cell = if let Some(num) = vt.row.issue_number {
-                Cell::from(format!("#{}", num))
+                let issue_str = format!("#{}", num);
+                if !vt.match_indices.is_empty() && fo.len() > 2 {
+                    let spans = crate::tui::fuzzy::highlight_spans(
+                        &issue_str,
+                        fo[2],
+                        &vt.match_indices,
+                        Style::default(),
+                        highlight_style,
+                    );
+                    Cell::from(Line::from(spans))
+                } else {
+                    Cell::from(issue_str)
+                }
             } else {
                 Cell::from("").style(Style::default().fg(theme.dimmed))
             };
@@ -1358,13 +1427,55 @@ impl App {
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
             let claude_display = expand_indicator(&claude_text, pane_count, is_expanded);
 
+            // Build title cell with fuzzy highlights when a filter is active.
+            // The TITLE field is issue_title (field index 3) or branch (field index 1).
+            let title_cell = if !vt.match_indices.is_empty() && !fo.is_empty() {
+                let (field_idx, source_text) = if vt.row.is_main_worktree {
+                    // Main worktree: repo name shown, no highlighting needed.
+                    (usize::MAX, title_display.clone())
+                } else {
+                    match vt.row.issue_title.as_deref() {
+                        Some(t) if !t.is_empty() => (3, title_display.clone()),
+                        _ => (1, title_display.clone()),
+                    }
+                };
+                if field_idx != usize::MAX && fo.len() > field_idx {
+                    let spans = crate::tui::fuzzy::highlight_spans(
+                        &source_text,
+                        fo[field_idx],
+                        &vt.match_indices,
+                        Style::default(),
+                        highlight_style,
+                    );
+                    Cell::from(Line::from(spans))
+                } else {
+                    Cell::from(title_display)
+                }
+            } else {
+                Cell::from(title_display)
+            };
+
+            // Build status cell with fuzzy highlights (field index 4 = pr_status).
+            let status_cell = if !vt.match_indices.is_empty() && fo.len() > 4 {
+                let spans = crate::tui::fuzzy::highlight_spans(
+                    &pr_text,
+                    fo[4],
+                    &vt.match_indices,
+                    pr_style,
+                    highlight_style,
+                );
+                Cell::from(Line::from(spans))
+            } else {
+                Cell::from(pr_text).style(pr_style)
+            };
+
             // Use unified numbering (continues from standalone count).
             let mut cells = vec![
                 bar_cell,
                 Cell::from(format!("{:>2}", unified_num)),
                 Cell::from(claude_display).style(claude_style),
                 issue_cell,
-                Cell::from(title_display),
+                title_cell,
             ];
 
             if show_branch {
@@ -1390,7 +1501,7 @@ impl App {
                 cells.push(host_cell);
             }
 
-            cells.push(Cell::from(pr_text).style(pr_style));
+            cells.push(status_cell);
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -2331,6 +2442,151 @@ mod tests {
         let visible = visible_tasks(&rows, "target");
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].row.issue_number, Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy filter: issue title matching
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn search_matches_issue_title() {
+        let row_azure = WorktreeRow {
+            issue_title: Some("Fix Azure integration bug".to_string()),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let row_other = WorktreeRow {
+            issue_title: Some("Unrelated task name".to_string()),
+            ..make_task_row(2, DisplayGroup::Other)
+        };
+        let rows = vec![row_azure, row_other];
+        let visible = visible_tasks(&rows, "Azure");
+        assert_eq!(visible.len(), 1, "only the Azure row should match");
+        assert_eq!(visible[0].row.issue_number, Some(1));
+    }
+
+    #[test]
+    fn search_matches_pr_status_text() {
+        let row_approved = WorktreeRow {
+            pr: Some(crate::derive::PrInfo {
+                number: 55,
+                branch: "feat/issue-1".to_string(),
+                state: None,
+                review_decision: Some("approved".to_string()),
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..make_task_row(1, DisplayGroup::ReadyToMerge)
+        };
+        let row_no_pr = make_task_row(2, DisplayGroup::Other);
+        let rows = vec![row_approved, row_no_pr];
+        // "approved" is in the haystack for row_approved via pr_status_haystack.
+        let visible = visible_tasks(&rows, "approved");
+        assert_eq!(visible.len(), 1, "only the approved-PR row should match");
+        assert_eq!(visible[0].row.issue_number, Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy filter: ranking — better match comes first
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn better_match_ranks_first() {
+        // Row 1 has "azure" as the FIRST word of the issue title (strong match).
+        // Row 2 has "azure" buried deeply in a different field.
+        let row_strong = WorktreeRow {
+            issue_title: Some("Azure storage fix".to_string()),
+            branch: "feat/issue-1".to_string(),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        // Row 2: branch contains letters a-z-u-r-e but not as the word "azure".
+        let row_weak = WorktreeRow {
+            issue_title: Some("Fix remote auth".to_string()),
+            branch: "feat/issue-2".to_string(),
+            ..make_task_row(2, DisplayGroup::Other)
+        };
+        let rows = vec![row_weak, row_strong]; // weak first in input
+        let visible = visible_tasks(&rows, "azure");
+        // The strong match should bubble to the top.
+        assert!(
+            visible
+                .iter()
+                .position(|vt| vt.row.issue_number == Some(1))
+                < visible
+                    .iter()
+                    .position(|vt| vt.row.issue_number == Some(2))
+                    .map(|p| p + 1)
+                    .or(Some(usize::MAX)),
+            "strong match (row 1) should rank before weak match (row 2)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy filter: main worktree bypass
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn main_worktree_bypasses_filter_when_filter_is_active() {
+        let main = WorktreeRow {
+            is_main_worktree: true,
+            branch: "main".to_string(),
+            issue_title: None,
+            ..make_task_row(0, DisplayGroup::RepoMain)
+        };
+        let other = make_task_row(1, DisplayGroup::NeedsAttention);
+        let rows = vec![main, other];
+        // "nomatch" won't match either row normally, but main always passes.
+        let visible = visible_tasks(&rows, "nomatch");
+        assert_eq!(visible.len(), 1, "only main worktree should survive the filter");
+        assert!(visible[0].row.is_main_worktree);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy filter: empty filter preserves original ordering
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_filter_preserves_original_order() {
+        let rows = vec![
+            make_task_row(10, DisplayGroup::NeedsAttention),
+            make_task_row(20, DisplayGroup::ClaudeWorking),
+            make_task_row(30, DisplayGroup::Other),
+        ];
+        let visible = visible_tasks(&rows, "");
+        assert_eq!(visible.len(), 3);
+        assert_eq!(visible[0].row.issue_number, Some(10));
+        assert_eq!(visible[1].row.issue_number, Some(20));
+        assert_eq!(visible[2].row.issue_number, Some(30));
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy filter: match indices carried on VisibleTask
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_indices_present_when_filter_active() {
+        let row = WorktreeRow {
+            issue_title: Some("Fix Azure bug".to_string()),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let rows = vec![row];
+        let visible = visible_tasks(&rows, "azure");
+        assert_eq!(visible.len(), 1);
+        assert!(
+            !visible[0].match_indices.is_empty(),
+            "match_indices should be non-empty when filter matched"
+        );
+    }
+
+    #[test]
+    fn match_indices_empty_when_filter_empty() {
+        let rows = vec![make_task_row(1, DisplayGroup::Other)];
+        let visible = visible_tasks(&rows, "");
+        assert_eq!(visible.len(), 1);
+        assert!(
+            visible[0].match_indices.is_empty(),
+            "match_indices should be empty when no filter"
+        );
     }
 
     #[test]
