@@ -406,7 +406,10 @@ mod tests {
     #[test]
     fn resolve_active_repo_index_returns_zero_when_none() {
         let sel = LastSelection::default();
-        let repos = vec![make_repo_config("acme/alpha"), make_repo_config("acme/beta")];
+        let repos = vec![
+            make_repo_config("acme/alpha"),
+            make_repo_config("acme/beta"),
+        ];
         assert_eq!(resolve_active_repo_index(&sel, &repos), 0);
     }
 
@@ -416,7 +419,10 @@ mod tests {
             active_repo_slug: Some("acme/beta".to_string()),
             ..Default::default()
         };
-        let repos = vec![make_repo_config("acme/alpha"), make_repo_config("acme/beta")];
+        let repos = vec![
+            make_repo_config("acme/alpha"),
+            make_repo_config("acme/beta"),
+        ];
         // "acme/beta" is at index 1 in repos, so active_repo_index = 2 (1-based).
         assert_eq!(resolve_active_repo_index(&sel, &repos), 2);
     }
@@ -427,7 +433,10 @@ mod tests {
             active_repo_slug: Some("acme/removed".to_string()),
             ..Default::default()
         };
-        let repos = vec![make_repo_config("acme/alpha"), make_repo_config("acme/beta")];
+        let repos = vec![
+            make_repo_config("acme/alpha"),
+            make_repo_config("acme/beta"),
+        ];
         assert_eq!(resolve_active_repo_index(&sel, &repos), 0);
     }
 }

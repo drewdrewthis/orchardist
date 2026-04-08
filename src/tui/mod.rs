@@ -169,8 +169,7 @@ impl App {
         let (initial_cursor, initial_repo_index) = if persist_selection {
             let sel = last_selection::load();
             let cursor = last_selection::resolve_cursor(&sel, &standalone_sessions, &task_rows);
-            let repo_index =
-                last_selection::resolve_active_repo_index(&sel, &global_cfg.repos);
+            let repo_index = last_selection::resolve_active_repo_index(&sel, &global_cfg.repos);
             (cursor, repo_index)
         } else {
             (0, 0)
