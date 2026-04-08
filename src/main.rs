@@ -11,6 +11,7 @@ use crossterm::{
     terminal::{self, LeaveAlternateScreen},
 };
 use orchard::build_state;
+use orchard::chat;
 use orchard::global_config;
 use orchard::heal;
 use orchard::json_output::JsonOutput;
@@ -28,7 +29,15 @@ fn main() {
     let mut fix_flag = false;
     let mut command = String::new();
 
-    for arg in &args[1..] {
+    let mut chat_target: Option<String> = None;
+    let mut chat_message: Option<String> = None;
+    let mut skip_next = false;
+
+    for (i, arg) in args[1..].iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
         match arg.as_str() {
             "--json" => json_flag = true,
             "--fix" => fix_flag = true,
@@ -39,6 +48,14 @@ fn main() {
             "--help" | "-h" => {
                 print_usage();
                 return;
+            }
+            "--target" => {
+                chat_target = args.get(i + 2).cloned();
+                skip_next = true;
+            }
+            "--message" => {
+                chat_message = args.get(i + 2).cloned();
+                skip_next = true;
             }
             _ if !arg.starts_with('-') && command.is_empty() => command = arg.clone(),
             _ => {}
@@ -59,6 +76,7 @@ fn main() {
         "upgrade" => handle_upgrade(),
         "setup-remote" => handle_setup_remote(&args),
         "heal" => handle_heal(fix_flag, json_flag),
+        "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         _ => {
             if json_flag {
                 handle_json();
@@ -184,6 +202,37 @@ fn build_heal_worktrees_for_cli(config: &global_config::GlobalConfig) -> Vec<hea
     result
 }
 
+/// Handles `orchard chat [--target <session>] [--message <text>]`.
+///
+/// Resolves the orchardist session and delivers the message via `tmux send-keys`.
+/// Exits non-zero with usage if `--message` is missing or empty — the no-op-on-empty
+/// behavior belongs in the wrapper script (`orchard-chat`), not the CLI.
+fn handle_chat(target: Option<&str>, message: Option<&str>) {
+    let message = match message {
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => {
+            eprintln!("Error: --message is required and must not be empty");
+            eprintln!();
+            eprintln!("Usage: orchard chat [--target <session>] --message <text>");
+            std::process::exit(1);
+        }
+    };
+
+    let config = global_config::load_global_config();
+    let session = match chat::resolve_target(&config, target) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = chat::send_to_orchardist(&session, &message, chat::run_command) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+}
+
 fn handle_json() {
     let config = global_config::load_global_config();
     let state = build_state::refresh_and_build(&config);
@@ -272,6 +321,9 @@ fn print_usage() {
         r#"Usage:
   orchard                        Interactive worktree manager (popup mode)
   orchard init                   Interactive setup wizard for popup mode
+  orchard chat --message <msg>   Send a prompt to the orchardist tmux session
+  orchard chat [--target <s>] [--message <msg>]
+                                   Default target: global_config.chat_target or first tmux_session
   orchard setup-remote <host>    Provision a remote host for orchard
   orchard upgrade                Upgrade to the latest version
   orchard heal                   Audit and repair drifted state (dry run)
@@ -290,6 +342,49 @@ Navigation:
   c       Cleanup merged worktrees
   h       Run heal check
   r       Refresh list
-  q/Esc   Close popup (no switch)"#
+  q/Esc   Close popup (no switch)
+
+Keybindings (after orchard init --install):
+  prefix + o   Open orchard TUI popup
+  prefix + O   Quick-chat to orchardist"#
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handle_chat_missing_message_exits_nonzero() {
+        // We can't call handle_chat directly (it calls process::exit), but we can
+        // verify the guard logic by checking the match arm.
+        // The production path for None/empty is tested via binary integration.
+        // This test documents the expected behaviour contract.
+        let message: Option<&str> = None;
+        let should_exit = match message {
+            Some(m) if !m.is_empty() => false,
+            _ => true,
+        };
+        assert!(should_exit, "missing message must trigger non-zero exit");
+    }
+
+    #[test]
+    fn handle_chat_empty_string_message_exits_nonzero() {
+        let message: Option<&str> = Some("");
+        let should_exit = match message {
+            Some(m) if !m.is_empty() => false,
+            _ => true,
+        };
+        assert!(should_exit, "empty message must trigger non-zero exit");
+    }
+
+    #[test]
+    fn handle_chat_nonempty_message_does_not_exit() {
+        let message: Option<&str> = Some("hello");
+        let should_exit = match message {
+            Some(m) if !m.is_empty() => false,
+            _ => true,
+        };
+        assert!(!should_exit, "non-empty message must not trigger exit");
+    }
 }

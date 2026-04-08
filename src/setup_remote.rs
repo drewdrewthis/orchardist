@@ -361,6 +361,7 @@ mod tests {
             }],
             terminal_app: "com.apple.Terminal".to_string(),
             tmux_sessions: vec![],
+            chat_target: None,
         }
     }
 

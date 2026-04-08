@@ -96,6 +96,12 @@ pub struct GlobalConfig {
     /// Sessions with `start_on_launch: true` are auto-created when orchard starts.
     #[serde(default)]
     pub tmux_sessions: Vec<StandaloneConfig>,
+    /// The orchardist tmux session name to use as the default target for `orchard chat`.
+    ///
+    /// Set by the `orchard init` wizard. When `None` (the default), `orchard chat`
+    /// falls back to the first entry in `tmux_sessions`.
+    #[serde(default)]
+    pub chat_target: Option<String>,
 }
 
 impl Default for GlobalConfig {
@@ -104,6 +110,7 @@ impl Default for GlobalConfig {
             repos: Vec::new(),
             terminal_app: default_terminal_app(),
             tmux_sessions: Vec::new(),
+            chat_target: None,
         }
     }
 }
@@ -319,6 +326,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         terminal_app: String,
         #[serde(default)]
         tmux_sessions: Vec<StandaloneConfig>,
+        #[serde(default)]
+        chat_target: Option<String>,
     }
 
     let raw: RawGlobalConfig = match serde_json::from_slice(&data) {
@@ -387,6 +396,7 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         repos,
         terminal_app: raw.terminal_app,
         tmux_sessions,
+        chat_target: raw.chat_target,
     };
     LOG.info(&format!(
         "global_config: loaded {} repo(s), {} standalone session(s) from {}",
@@ -434,6 +444,7 @@ fn fallback_single_repo() -> GlobalConfig {
         repos: vec![repo],
         terminal_app: default_terminal_app(),
         tmux_sessions: Vec::new(),
+        chat_target: None,
     }
 }
 
@@ -772,6 +783,7 @@ mod tests {
             repos: vec![],
             terminal_app: "dev.warp.Warp-Stable".to_string(),
             tmux_sessions: vec![],
+            chat_target: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
 
@@ -804,6 +816,7 @@ mod tests {
             repos: vec![],
             terminal_app: "org.alacritty".to_string(),
             tmux_sessions: vec![],
+            chat_target: None,
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let mut f = std::fs::File::create(&path).unwrap();
@@ -1011,5 +1024,56 @@ mod tests {
         assert_eq!(reloaded.repos.len(), 1);
         assert_eq!(reloaded.repos[0].slug, "acme/my-project");
         assert_eq!(reloaded.repos[0].path, "/workspace/my-project");
+    }
+
+    // -----------------------------------------------------------------------
+    // chat_target field tests (issue #165)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chat_target_defaults_to_none_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path(), r#"{ "repos": [] }"#);
+        let cfg = load_from_path(&path);
+        assert!(
+            cfg.chat_target.is_none(),
+            "chat_target must default to None for backward compatibility"
+        );
+    }
+
+    #[test]
+    fn chat_target_loads_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{ "repos": [], "chat_target": "orchardist" }"#;
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+        assert_eq!(cfg.chat_target.as_deref(), Some("orchardist"));
+    }
+
+    #[test]
+    fn chat_target_serializes_in_global_config() {
+        let cfg = GlobalConfig {
+            repos: vec![],
+            terminal_app: "com.apple.Terminal".to_string(),
+            tmux_sessions: vec![],
+            chat_target: Some("orchardist".to_string()),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains(r#""chat_target":"orchardist""#));
+    }
+
+    #[test]
+    fn chat_target_none_omits_field_or_serializes_null() {
+        let cfg = GlobalConfig::default();
+        // Backward-compatible: None serializes as null or is omitted — either is fine.
+        // We just verify it round-trips.
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let reloaded: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // chat_target should be null or absent — not a non-null value.
+        let ct = &reloaded["chat_target"];
+        assert!(
+            ct.is_null() || ct == &serde_json::Value::Null,
+            "chat_target None must serialize as null"
+        );
     }
 }

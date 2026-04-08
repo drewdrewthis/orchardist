@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* feat: quick-chat popup to send one-line prompts to the live orchardist Claude session ([#165](https://github.com/drewdrewthis/git-orchard-rs/issues/165))
+  - New `orchard chat [--target <session>] [--message <text>]` subcommand delivers a prompt to the orchardist pane via `tmux send-keys`
+  - New `orchard-chat` wrapper script installed by `orchard init --install`
+  - New tmux keybinding `prefix + O` (capital O) opens a 60%×20% popup for quick dispatch
+  - `chat_target` field added to global config for persisting the preferred orchardist session
+  - Falls back to the first `tmux_sessions` entry when `chat_target` is unset
+
 ## [0.4.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.3.2...orchard-v0.4.0) (2026-04-07)
 
 
