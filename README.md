@@ -151,6 +151,55 @@ Orchard follows a **Functional Core, Imperative Shell** pattern:
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture guide.
 
+## The Orchardist (optional)
+
+> **Optional power-user workflow.** Orchard is a fully functional worktree, PR, and session dashboard on its own. The orchardist is an advanced layer on top — skip this section unless you want it.
+
+The **orchardist** is a persistent Claude Code session attached to a repo that acts like an always-on engineering lead: it reviews PRs, launches worktrees for issues, drives sessions to green, and keeps the orchard tidy. It lives in a dedicated tmux session that orchard starts and reconnects to automatically, so it's always one keystroke away from the dashboard.
+
+### Easy setup
+
+The recommended path is automated — no JSON editing required:
+
+- From a Claude Code session inside the repo, run `/install-orchard` and follow the prompts, **or**
+- Re-run `orchard init`, which can offer to configure an orchardist for you.
+
+Either option writes the right `tmux_sessions` entry into your config and starts the session.
+
+### Using it
+
+Once configured, the orchardist shows up as a row in the orchard dashboard:
+
+- Press **Enter** on the orchardist row to jump straight into its tmux session.
+- Delegate work with slash commands:
+  - `/launch <issue>` — create a worktree and Claude session for a GitHub issue
+  - `/drive-pr <pr>` — loop a PR to green (fix CI, address review comments)
+  - `/orchard-view` — dashboard view of active worktrees
+  - `/prune` — clean up stale worktrees and dead sessions
+  - `/recover` — self-heal after a reboot or crash
+
+### Manual config (reference)
+
+If you'd rather configure it by hand, add a `tmux_sessions` entry to `~/.config/orchard/config.json`:
+
+```json
+"tmux_sessions": [
+  {
+    "name": "shepherd",
+    "command": "claude --continue",
+    "cwd": "/path/to/repo",
+    "start_on_launch": true
+  }
+]
+```
+
+- `name` — tmux session name shown in the dashboard.
+- `command` — command to run in the session (`claude --continue` resumes the last conversation).
+- `cwd` — working directory for the session (usually the repo root).
+- `start_on_launch` — if `true`, orchard starts the session automatically when it launches.
+
+This is the same snippet the automated setup writes for you; edit it only if you want to customize what the skill produces.
+
 ## Claude Code Integration
 
 Orchard detects Claude session state via hooks (not terminal scraping):
