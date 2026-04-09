@@ -232,18 +232,26 @@ impl From<&EnrichedSession> for SessionState {
             context_window_pct: c.context_window_pct,
             model: c.model.clone(),
         });
-        let windows = s.windows.iter().map(|w| WindowState {
-            index: w.index,
-            name: w.name.clone(),
-            is_active: w.is_active,
-            panes: w.panes.iter().map(|p| PaneState {
-                index: p.index,
-                tmux_target: p.tmux_target.clone(),
-                command: p.command.clone(),
-                title: p.title.clone(),
-                has_claude: p.has_claude,
-            }).collect(),
-        }).collect();
+        let windows = s
+            .windows
+            .iter()
+            .map(|w| WindowState {
+                index: w.index,
+                name: w.name.clone(),
+                is_active: w.is_active,
+                panes: w
+                    .panes
+                    .iter()
+                    .map(|p| PaneState {
+                        index: p.index,
+                        tmux_target: p.tmux_target.clone(),
+                        command: p.command.clone(),
+                        title: p.title.clone(),
+                        has_claude: p.has_claude,
+                    })
+                    .collect(),
+            })
+            .collect();
         Self {
             name: s.tmux.name.clone(),
             host,

@@ -263,7 +263,7 @@ mod tests {
                 },
                 claude: None,
                 windows: vec![],
-            panes: vec![],
+                panes: vec![],
             },
             config: StandaloneConfig {
                 name: name.to_string(),

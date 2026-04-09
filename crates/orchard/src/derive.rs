@@ -6,8 +6,8 @@
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
 use crate::session::{
-    ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo,
-    WindowInfo, build_windows_and_panes,
+    ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
+    build_windows_and_panes,
 };
 
 /// Tuple type for per-repo cache data passed to [`derive_all_repos`].

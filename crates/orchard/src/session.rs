@@ -571,13 +571,9 @@ mod tests {
         let names = svec(&["main", "main", "editor"]);
         let active = svec(&["1", "1", "0"]);
 
-        let (windows, panes) =
-            build_windows_and_panes(&targets, &cmds, &titles, &names, &active);
+        let (windows, panes) = build_windows_and_panes(&targets, &cmds, &titles, &names, &active);
 
-        let expected: Vec<PaneInfo> = windows
-            .iter()
-            .flat_map(|w| w.panes.clone())
-            .collect();
+        let expected: Vec<PaneInfo> = windows.iter().flat_map(|w| w.panes.clone()).collect();
 
         assert_eq!(panes, expected);
         assert_eq!(panes.len(), 3);

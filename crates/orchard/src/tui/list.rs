@@ -401,14 +401,12 @@ impl App {
         let resolve_pane_target_from_sub_cursor =
             |sub_cursor: &SubCursor, session: &crate::session::EnrichedSession| -> Option<String> {
                 match sub_cursor {
-                    SubCursor::Pane { window, pane } => {
-                        session
-                            .windows
-                            .iter()
-                            .find(|w| w.index == *window)
-                            .and_then(|w| w.panes.get(*pane))
-                            .map(|p| p.tmux_target.clone())
-                    }
+                    SubCursor::Pane { window, pane } => session
+                        .windows
+                        .iter()
+                        .find(|w| w.index == *window)
+                        .and_then(|w| w.panes.get(*pane))
+                        .map(|p| p.tmux_target.clone()),
                     SubCursor::Window(_) => {
                         // Enter on window → switch to that window (target is "session:window_index").
                         // Return None; the window switch is handled above.
@@ -433,7 +431,11 @@ impl App {
                 return false;
             } else {
                 let worktree_cursor = self.cursor - standalone_count;
-                let tasks = visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
+                let tasks = visible_tasks_filtered(
+                    &self.task_rows,
+                    &self.filter_text,
+                    self.active_repo_slug(),
+                );
                 if let Some(vt) = tasks.get(worktree_cursor) {
                     if let Some(session) = vt.row.sessions.first() {
                         let session_name = session.tmux.name.clone();
@@ -1449,7 +1451,8 @@ impl App {
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
             let cursor_idx = flat_idx + standalone_count;
-            let selected = cursor_idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
+            let selected =
+                cursor_idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
 
             // Section header when display group changes
             if last_group != Some(vt.group) {
@@ -1547,7 +1550,12 @@ impl App {
 
             // Expand/collapse indicator in CLAUDE cell.
             let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
-            let window_count = vt.row.sessions.first().map(|s| s.windows.len()).unwrap_or(0);
+            let window_count = vt
+                .row
+                .sessions
+                .first()
+                .map(|s| s.windows.len())
+                .unwrap_or(0);
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
             let claude_display = if window_count > 1 {
                 expand_indicator_windows(&claude_text, window_count, is_expanded)
@@ -1695,7 +1703,11 @@ impl App {
         for (pi, pane) in panes.iter().enumerate() {
             let is_last = pi == pane_count - 1;
             let selected = self.cursor == parent_cursor_idx
-                && self.sub_cursor == SubCursor::Pane { window: window_index, pane: pi };
+                && self.sub_cursor
+                    == SubCursor::Pane {
+                        window: window_index,
+                        pane: pi,
+                    };
 
             // Tree connector: ├─N for non-last, └─N for last pane.
             let connector = if is_last {
@@ -1774,9 +1786,12 @@ impl App {
                 format!("\u{251c}\u{2500} win:{} {}", window.index, window.name)
             };
 
-            let is_window_expanded = self
-                .window_expanded
-                .contains(&super::App::window_expansion_key(session_name, window.index));
+            let is_window_expanded =
+                self.window_expanded
+                    .contains(&super::App::window_expansion_key(
+                        session_name,
+                        window.index,
+                    ));
 
             // Expand indicator for the window (in STATUS cell).
             let status_text = if window.panes.len() > 1 {
@@ -2376,7 +2391,7 @@ mod tests {
                     model: None,
                 }),
                 windows: vec![],
-            panes: vec![],
+                panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -2410,7 +2425,7 @@ mod tests {
                     model: None,
                 }),
                 windows: vec![],
-            panes: vec![],
+                panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2678,7 +2693,7 @@ mod tests {
                         model: None,
                     }),
                     windows: vec![],
-            panes: vec![],
+                    panes: vec![],
                 },
                 EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -2693,7 +2708,7 @@ mod tests {
                         model: None,
                     }),
                     windows: vec![],
-            panes: vec![],
+                    panes: vec![],
                 },
             ],
             ..make_task_row(1, DisplayGroup::NeedsAttention)

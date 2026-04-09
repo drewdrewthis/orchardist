@@ -244,13 +244,17 @@ impl From<&WindowState> for JsonWindow {
             index: w.index,
             name: w.name.clone(),
             is_active: w.is_active,
-            panes: w.panes.iter().map(|p| JsonPane {
-                index: p.index,
-                tmux_target: p.tmux_target.clone(),
-                command: p.command.clone(),
-                title: p.title.clone(),
-                has_claude: p.has_claude,
-            }).collect(),
+            panes: w
+                .panes
+                .iter()
+                .map(|p| JsonPane {
+                    index: p.index,
+                    tmux_target: p.tmux_target.clone(),
+                    command: p.command.clone(),
+                    title: p.title.clone(),
+                    has_claude: p.has_claude,
+                })
+                .collect(),
         }
     }
 }
@@ -320,18 +324,27 @@ impl From<&StandaloneSessionRow> for JsonSession {
             context_window_pct: c.context_window_pct,
             model: c.model.clone(),
         });
-        let windows = row.session.windows.iter().map(|w| JsonWindow {
-            index: w.index,
-            name: w.name.clone(),
-            is_active: w.is_active,
-            panes: w.panes.iter().map(|p| JsonPane {
-                index: p.index,
-                tmux_target: p.tmux_target.clone(),
-                command: p.command.clone(),
-                title: p.title.clone(),
-                has_claude: p.has_claude,
-            }).collect(),
-        }).collect();
+        let windows = row
+            .session
+            .windows
+            .iter()
+            .map(|w| JsonWindow {
+                index: w.index,
+                name: w.name.clone(),
+                is_active: w.is_active,
+                panes: w
+                    .panes
+                    .iter()
+                    .map(|p| JsonPane {
+                        index: p.index,
+                        tmux_target: p.tmux_target.clone(),
+                        command: p.command.clone(),
+                        title: p.title.clone(),
+                        has_claude: p.has_claude,
+                    })
+                    .collect(),
+            })
+            .collect();
         Self {
             name: row.session.tmux.name.clone(),
             host,
@@ -535,29 +548,25 @@ mod tests {
                     index: 0,
                     name: "main".to_string(),
                     is_active: true,
-                    panes: vec![
-                        PaneState {
-                            index: 0,
-                            tmux_target: "0.0".to_string(),
-                            command: "bash".to_string(),
-                            title: "bash".to_string(),
-                            has_claude: false,
-                        },
-                    ],
+                    panes: vec![PaneState {
+                        index: 0,
+                        tmux_target: "0.0".to_string(),
+                        command: "bash".to_string(),
+                        title: "bash".to_string(),
+                        has_claude: false,
+                    }],
                 },
                 WindowState {
                     index: 1,
                     name: "editor".to_string(),
                     is_active: false,
-                    panes: vec![
-                        PaneState {
-                            index: 1,
-                            tmux_target: "1.0".to_string(),
-                            command: "claude".to_string(),
-                            title: "claude".to_string(),
-                            has_claude: true,
-                        },
-                    ],
+                    panes: vec![PaneState {
+                        index: 1,
+                        tmux_target: "1.0".to_string(),
+                        command: "claude".to_string(),
+                        title: "claude".to_string(),
+                        has_claude: true,
+                    }],
                 },
             ],
         }
@@ -583,7 +592,10 @@ mod tests {
         let win0 = &value["windows"][0];
         assert!(win0.get("index").is_some(), "expected 'index'");
         assert!(win0.get("name").is_some(), "expected 'name'");
-        assert!(win0.get("isActive").is_some(), "expected camelCase 'isActive'");
+        assert!(
+            win0.get("isActive").is_some(),
+            "expected camelCase 'isActive'"
+        );
         assert!(win0.get("panes").is_some(), "expected 'panes'");
         assert_eq!(win0["index"], 0);
         assert_eq!(win0["name"], "main");
@@ -596,10 +608,16 @@ mod tests {
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
         let pane = &value["windows"][1]["panes"][0];
         assert!(pane.get("index").is_some(), "expected 'index'");
-        assert!(pane.get("tmuxTarget").is_some(), "expected camelCase 'tmuxTarget'");
+        assert!(
+            pane.get("tmuxTarget").is_some(),
+            "expected camelCase 'tmuxTarget'"
+        );
         assert!(pane.get("command").is_some(), "expected 'command'");
         assert!(pane.get("title").is_some(), "expected 'title'");
-        assert!(pane.get("hasClaude").is_some(), "expected camelCase 'hasClaude'");
+        assert!(
+            pane.get("hasClaude").is_some(),
+            "expected camelCase 'hasClaude'"
+        );
         assert_eq!(pane["hasClaude"], true);
     }
 

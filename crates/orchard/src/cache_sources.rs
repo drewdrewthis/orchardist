@@ -1215,7 +1215,8 @@ mod tests {
 
     #[test]
     fn parse_pane_lines_new_format_extracts_window_metadata() {
-        let output = "0.0\tmain\t1\tbash:bash\n0.1\tmain\t1\tclaude:claude\n1.0\teditor\t0\tnvim:nvim\n";
+        let output =
+            "0.0\tmain\t1\tbash:bash\n0.1\tmain\t1\tclaude:claude\n1.0\teditor\t0\tnvim:nvim\n";
         let parsed = parse_pane_lines(output);
         assert_eq!(parsed.targets, vec!["0.0", "0.1", "1.0"]);
         assert_eq!(parsed.window_names, vec!["main", "main", "editor"]);
