@@ -8,9 +8,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::io::Write;
 
-use orchard_gui_lib::commands::{
-    list_sessions_in, read_session_file, send_to_tmux_with, Shell,
-};
+use orchard_gui_lib::commands::{list_sessions_in, read_session_file, send_to_tmux_with, Shell};
 
 /// Records every `run` invocation so tests can assert on how the command was
 /// constructed, without spawning a real tmux process.
@@ -78,7 +76,11 @@ fn read_session_file_parses_each_line_as_json() {
     let mut f = fs::File::create(&path).unwrap();
     writeln!(f, r#"{{"type":"user","message":{{"content":"hi"}}}}"#).unwrap();
     writeln!(f).unwrap();
-    writeln!(f, r#"{{"type":"assistant","message":{{"content":"hello"}}}}"#).unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"assistant","message":{{"content":"hello"}}}}"#
+    )
+    .unwrap();
 
     let events = read_session_file(&path).unwrap();
     assert_eq!(events.len(), 2);
@@ -90,7 +92,11 @@ fn read_session_file_parses_each_line_as_json() {
 fn read_session_file_skips_malformed_lines() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("session.jsonl");
-    fs::write(&path, "{\"type\":\"user\"}\nnot json\n{\"type\":\"assistant\"}\n").unwrap();
+    fs::write(
+        &path,
+        "{\"type\":\"user\"}\nnot json\n{\"type\":\"assistant\"}\n",
+    )
+    .unwrap();
 
     let events = read_session_file(&path).unwrap();
     assert_eq!(events.len(), 2);

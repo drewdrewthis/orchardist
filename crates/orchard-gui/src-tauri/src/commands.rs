@@ -139,11 +139,7 @@ pub fn read_session(path: String) -> Result<Vec<serde_json::Value>, String> {
 /// provided [`Shell`]. The `-l` flag disables key-name lookup so the text is
 /// written literally. Multi-line strings are passed through as-is; handling
 /// the newline-vs-paste-buffer tradeoff is deferred to a later commit.
-pub fn send_to_tmux_with<S: Shell>(
-    shell: &S,
-    target: &str,
-    text: &str,
-) -> anyhow::Result<i32> {
+pub fn send_to_tmux_with<S: Shell>(shell: &S, target: &str, text: &str) -> anyhow::Result<i32> {
     shell.run("tmux", &["send-keys", "-t", target, "-l", text])
 }
 
