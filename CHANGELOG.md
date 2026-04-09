@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.4.0...orchard-v0.5.0) (2026-04-08)
+
+
+### Features
+
+* ephemeral quick-chat popup with orchardist ([#165](https://github.com/drewdrewthis/git-orchard-rs/issues/165)) ([#170](https://github.com/drewdrewthis/git-orchard-rs/issues/170)) ([5dec054](https://github.com/drewdrewthis/git-orchard-rs/commit/5dec0543fe636f921587614707d16144189080bd))
+* **tui:** fuzzy filter across all visible fields ([#162](https://github.com/drewdrewthis/git-orchard-rs/issues/162)) ([#169](https://github.com/drewdrewthis/git-orchard-rs/issues/169)) ([6a3df42](https://github.com/drewdrewthis/git-orchard-rs/commit/6a3df42f35e93e12cd2ba3d8e767a382738e8bc6))
+
+
+### Bug Fixes
+
+* **hooks:** claude state machine + structured stop_reason handling ([#113](https://github.com/drewdrewthis/git-orchard-rs/issues/113)) ([#171](https://github.com/drewdrewthis/git-orchard-rs/issues/171)) ([aa7d7c6](https://github.com/drewdrewthis/git-orchard-rs/commit/aa7d7c6b8f3f448b6370d7bd81dd862e7503c668))
+* persist auto-registered CWD repo to global config ([#160](https://github.com/drewdrewthis/git-orchard-rs/issues/160)) ([dd66c98](https://github.com/drewdrewthis/git-orchard-rs/commit/dd66c98d1a1724e7a52fd2a2e25c2b24156d48a6))
+* **tui:** remember last selected workspace/repo on launch ([#164](https://github.com/drewdrewthis/git-orchard-rs/issues/164)) ([#167](https://github.com/drewdrewthis/git-orchard-rs/issues/167)) ([c339589](https://github.com/drewdrewthis/git-orchard-rs/commit/c33958924f745b612c3288748389d4c0060a888a))
+
 ## [Unreleased]
 
 ### Features
