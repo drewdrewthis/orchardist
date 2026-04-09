@@ -467,10 +467,6 @@ mod tests {
 
     // -- WindowInfo / build_windows tests -----------------------------------
 
-    fn s(v: &str) -> String {
-        v.to_string()
-    }
-
     fn svec(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
     }

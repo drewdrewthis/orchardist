@@ -395,10 +395,10 @@ impl App {
             }
         }
         for vt in tasks.iter() {
-            if expanded_ref.contains(&vt.row.worktree_path) {
-                if let Some(s) = vt.row.sessions.first() {
-                    expanded_session_names.insert(s.tmux.name.clone());
-                }
+            if expanded_ref.contains(&vt.row.worktree_path)
+                && let Some(s) = vt.row.sessions.first()
+            {
+                expanded_session_names.insert(s.tmux.name.clone());
             }
         }
 
@@ -1328,15 +1328,13 @@ impl App {
                                     self.session_name_at(self.cursor).unwrap_or_default();
                                 let windows = self.windows_at(self.cursor);
                                 let win = windows.iter().find(|wi| wi.index == w);
-                                if self.is_window_expanded(&session_name, w) {
-                                    if let Some(win) = win {
-                                        if !win.panes.is_empty() {
-                                            self.sub_cursor =
-                                                SubCursor::Pane { window: w, pane: 0 };
-                                            self.fetch_task_pane_content();
-                                            return ok();
-                                        }
-                                    }
+                                if self.is_window_expanded(&session_name, w)
+                                    && let Some(win) = win
+                                    && !win.panes.is_empty()
+                                {
+                                    self.sub_cursor = SubCursor::Pane { window: w, pane: 0 };
+                                    self.fetch_task_pane_content();
+                                    return ok();
                                 }
                                 // Window collapsed: go to next window or next parent.
                                 let pos = windows.iter().position(|wi| wi.index == w);
@@ -1550,11 +1548,11 @@ impl App {
                         if let Some(session_name) = self.session_name_at(self.cursor) {
                             let windows = self.windows_at(self.cursor);
                             let win = windows.iter().find(|wi| wi.index == *w);
-                            if let Some(win) = win {
-                                if win.panes.len() > 1 {
-                                    let key = Self::window_expansion_key(&session_name, *w);
-                                    self.window_expanded.insert(key);
-                                }
+                            if let Some(win) = win
+                                && win.panes.len() > 1
+                            {
+                                let key = Self::window_expansion_key(&session_name, *w);
+                                self.window_expanded.insert(key);
                             }
                         }
                     }

@@ -436,38 +436,38 @@ impl App {
                     &self.filter_text,
                     self.active_repo_slug(),
                 );
-                if let Some(vt) = tasks.get(worktree_cursor) {
-                    if let Some(session) = vt.row.sessions.first() {
-                        let session_name = session.tmux.name.clone();
-                        let worktree_path = vt.row.worktree_path.clone();
-                        let branch = Some(vt.row.branch.clone());
-                        let host = match &session.tmux.host {
-                            crate::session::Host::Local => None,
-                            crate::session::Host::Remote(h) => Some(h.clone()),
+                if let Some(vt) = tasks.get(worktree_cursor)
+                    && let Some(session) = vt.row.sessions.first()
+                {
+                    let session_name = session.tmux.name.clone();
+                    let worktree_path = vt.row.worktree_path.clone();
+                    let branch = Some(vt.row.branch.clone());
+                    let host = match &session.tmux.host {
+                        crate::session::Host::Local => None,
+                        crate::session::Host::Remote(h) => Some(h.clone()),
+                    };
+                    drop(tasks);
+                    // Guard: refuse to join a session on a host not confirmed reachable.
+                    if let Some(ref h) = host
+                        && self.host_reachable.get(h.as_str()) != Some(&true)
+                    {
+                        let msg = if self.host_reachable.contains_key(h.as_str()) {
+                            format!("@{} is unreachable", h)
+                        } else {
+                            format!("@{} -- checking connectivity...", h)
                         };
-                        drop(tasks);
-                        // Guard: refuse to join a session on a host not confirmed reachable.
-                        if let Some(ref h) = host
-                            && self.host_reachable.get(h.as_str()) != Some(&true)
-                        {
-                            let msg = if self.host_reachable.contains_key(h.as_str()) {
-                                format!("@{} is unreachable", h)
-                            } else {
-                                format!("@{} -- checking connectivity...", h)
-                            };
-                            self.warning = Some((msg, Instant::now()));
-                            return false;
-                        }
-                        self.join_or_create_session(
-                            &session_name,
-                            &worktree_path,
-                            branch.as_deref(),
-                            host.as_deref(),
-                            None,
-                        );
-                        let _ = tmux::select_window(&session_name, window_idx);
-                        return self.switch_target.is_some();
+                        self.warning = Some((msg, Instant::now()));
+                        return false;
                     }
+                    self.join_or_create_session(
+                        &session_name,
+                        &worktree_path,
+                        branch.as_deref(),
+                        host.as_deref(),
+                        None,
+                    );
+                    let _ = tmux::select_window(&session_name, window_idx);
+                    return self.switch_target.is_some();
                 }
                 return false;
             }
@@ -980,6 +980,8 @@ struct SubRowContext<'a> {
     show_branch: bool,
     has_remote: bool,
     theme: &'a Theme,
+    bar_color: Color,
+    prefix: &'a str,
 }
 
 impl App {
@@ -1417,12 +1419,13 @@ impl App {
                     show_branch,
                     has_remote,
                     theme,
+                    bar_color: Color::DarkGray,
+                    prefix: "",
                 };
                 if ss.session.windows.len() > 1 {
                     self.push_window_sub_rows(
                         &ss.session,
                         idx,
-                        Color::DarkGray,
                         &sub_ctx,
                         &mut rows,
                         &mut row_heights,
@@ -1434,8 +1437,6 @@ impl App {
                         &ss.session.panes,
                         idx,
                         win_idx,
-                        Color::DarkGray,
-                        "",
                         &sub_ctx,
                         &mut rows,
                         &mut row_heights,
@@ -1648,13 +1649,14 @@ impl App {
                     show_branch,
                     has_remote,
                     theme,
+                    bar_color,
+                    prefix: "",
                 };
                 if let Some(session) = vt.row.sessions.first() {
                     if session.windows.len() > 1 {
                         self.push_window_sub_rows(
                             session,
                             cursor_idx,
-                            bar_color,
                             &sub_ctx,
                             &mut rows,
                             &mut row_heights,
@@ -1666,8 +1668,6 @@ impl App {
                             &session.panes,
                             cursor_idx,
                             win_idx,
-                            bar_color,
-                            "",
                             &sub_ctx,
                             &mut rows,
                             &mut row_heights,
@@ -1692,12 +1692,12 @@ impl App {
         panes: &[crate::session::PaneInfo],
         parent_cursor_idx: usize,
         window_index: usize,
-        bar_color: Color,
-        prefix: &str,
         ctx: &SubRowContext<'_>,
         rows: &mut Vec<Row<'static>>,
         row_heights: &mut Vec<u16>,
     ) {
+        let bar_color = ctx.bar_color;
+        let prefix = ctx.prefix;
         use super::SubCursor;
         let pane_count = panes.len();
         for (pi, pane) in panes.iter().enumerate() {
@@ -1764,11 +1764,11 @@ impl App {
         &self,
         session: &crate::session::EnrichedSession,
         parent_cursor_idx: usize,
-        bar_color: Color,
         ctx: &SubRowContext<'_>,
         rows: &mut Vec<Row<'static>>,
         row_heights: &mut Vec<u16>,
     ) {
+        let bar_color = ctx.bar_color;
         use super::SubCursor;
         let windows = &session.windows;
         let window_count = windows.len();
@@ -1839,13 +1839,12 @@ impl App {
                 } else {
                     "\u{2502} " // │ vertical line continuation
                 };
+                let pane_ctx = SubRowContext { prefix, ..*ctx };
                 self.push_pane_sub_rows(
                     &window.panes,
                     parent_cursor_idx,
                     window.index,
-                    bar_color,
-                    prefix,
-                    ctx,
+                    &pane_ctx,
                     rows,
                     row_heights,
                 );
