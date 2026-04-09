@@ -24,7 +24,8 @@ const RESET: &str = "\x1b[0m";
 /// embedded directly into the script so it works even when `~/.cargo/bin`
 /// is not in PATH.
 pub fn get_wrapper_script(orchard_bin: &str) -> String {
-    format!(r#"#!/bin/sh
+    format!(
+        r#"#!/bin/sh
 errfile=$(mktemp "${{TMPDIR:-/tmp}}/orchard-err.XXXXXX")
 session=$("{orchard_bin}" "$@" 2>"$errfile")
 rc=$?
@@ -37,7 +38,9 @@ elif [ -n "$session" ]; then
   tmux switch-client -t "$session"
 else
   rm -f "$errfile"
-fi"#, orchard_bin = orchard_bin)
+fi"#,
+        orchard_bin = orchard_bin
+    )
 }
 
 /// Returns the tmux.conf keybinding line for the popup, using the given key.
@@ -54,7 +57,8 @@ pub fn get_tmux_binding(key: &str) -> String {
 /// embedded directly into the script so it works even when `~/.cargo/bin`
 /// is not in PATH.
 pub fn get_chat_wrapper_script(orchard_bin: &str) -> String {
-    format!(r#"#!/bin/sh
+    format!(
+        r#"#!/bin/sh
 printf "> "
 read -r prompt
 if [ -z "$prompt" ]; then
@@ -70,7 +74,9 @@ if [ $rc -ne 0 ]; then
   tmux display-message "orchard chat: ${{msg:-unknown error}}"
 else
   rm -f "$errfile"
-fi"#, orchard_bin = orchard_bin)
+fi"#,
+        orchard_bin = orchard_bin
+    )
 }
 
 /// Returns the tmux.conf keybinding line for the chat popup, using the given key.
@@ -764,7 +770,10 @@ mod tests {
 
     #[test]
     fn wrapper_script_captures_stdout_as_session() {
-        assert!(get_wrapper_script("/usr/local/bin/orchard").contains("session=$(\"/usr/local/bin/orchard\""));
+        assert!(
+            get_wrapper_script("/usr/local/bin/orchard")
+                .contains("session=$(\"/usr/local/bin/orchard\"")
+        );
     }
 
     #[test]
@@ -1087,7 +1096,10 @@ mod tests {
 
     #[test]
     fn chat_wrapper_script_contains_orchard_chat_message() {
-        assert!(get_chat_wrapper_script("/usr/local/bin/orchard").contains("\"/usr/local/bin/orchard\" chat --message"));
+        assert!(
+            get_chat_wrapper_script("/usr/local/bin/orchard")
+                .contains("\"/usr/local/bin/orchard\" chat --message")
+        );
     }
 
     #[test]
@@ -1147,6 +1159,7 @@ mod tests {
         assert!(binding.contains("60%"), "chat popup should be 60% wide");
         assert!(binding.contains("20%"), "chat popup should be 20% tall");
     }
+
     #[test]
     fn wrapper_script_embeds_absolute_path() {
         let script = get_wrapper_script("/custom/path/orchard");
@@ -1158,5 +1171,4 @@ mod tests {
         let script = get_chat_wrapper_script("/custom/path/orchard");
         assert!(script.contains("\"/custom/path/orchard\""));
     }
-
 }
