@@ -273,11 +273,31 @@ pub fn select_pane(session: &str, pane_target: &str) -> Result<()> {
 
 /// Zooms (maximises) a specific pane within a tmux session.
 ///
-/// Runs `tmux resize-pane -Z -t session:{pane_target}` to toggle zoom
-/// on the target pane. Typically called after [`select_pane`] so the
-/// user lands in a focused, full-screen view.
+/// Checks `#{window_zoomed_flag}` first and skips the zoom if the pane's
+/// window is already zoomed, making this call idempotent. Typically called
+/// after [`select_pane`] so the user lands in a focused, full-screen view.
 pub fn zoom_pane(session: &str, pane_target: &str) -> Result<()> {
     let target = format!("{}:{}", session, pane_target);
+
+    // Check if the window is already zoomed to avoid toggling it off.
+    let check = Command::new("tmux")
+        .args([
+            "display-message",
+            "-t",
+            &target,
+            "-p",
+            "#{window_zoomed_flag}",
+        ])
+        .output()
+        .context("tmux display-message (zoom check)")?;
+
+    if check.status.success() {
+        let flag = String::from_utf8_lossy(&check.stdout);
+        if flag.trim() == "1" {
+            return Ok(());
+        }
+    }
+
     let out = Command::new("tmux")
         .args(["resize-pane", "-Z", "-t", &target])
         .output()
