@@ -552,5 +552,4 @@ mod tests {
         let result = zoom_pane("nonexistent-session-xyz", "0.0");
         assert!(result.is_err());
     }
-
 }
