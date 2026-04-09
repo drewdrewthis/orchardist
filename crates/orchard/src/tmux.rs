@@ -271,6 +271,25 @@ pub fn select_pane(session: &str, pane_target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Zooms (maximises) a specific pane within a tmux session.
+///
+/// Runs `tmux resize-pane -Z -t session:{pane_target}` to toggle zoom
+/// on the target pane. Typically called after [`select_pane`] so the
+/// user lands in a focused, full-screen view.
+pub fn zoom_pane(session: &str, pane_target: &str) -> Result<()> {
+    let target = format!("{}:{}", session, pane_target);
+    let out = Command::new("tmux")
+        .args(["resize-pane", "-Z", "-t", &target])
+        .output()
+        .context("tmux resize-pane -Z")?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("tmux resize-pane -Z failed: {}", stderr.trim());
+    }
+    Ok(())
+}
+
 /// Builds a tmux target string: `session` or `session.N`.
 pub fn build_pane_target(session: &str, pane_index: Option<usize>) -> String {
     match pane_index {
@@ -506,4 +525,12 @@ mod tests {
     fn build_pane_target_with_index_two() {
         assert_eq!(build_pane_target("my-session", Some(2)), "my-session.2");
     }
+    #[test]
+    fn zoom_pane_returns_error_for_nonexistent_session() {
+        // zoom_pane calls `tmux resize-pane -Z`; when the target session does
+        // not exist tmux exits non-zero, so the function must return Err.
+        let result = zoom_pane("nonexistent-session-xyz", "0.0");
+        assert!(result.is_err());
+    }
+
 }
