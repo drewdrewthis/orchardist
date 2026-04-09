@@ -74,16 +74,17 @@ pub struct NewWorktreeState {
 
 /// Input phase for the main list view.
 ///
-/// There are no modes — only phases. The default `Filtering` phase routes
-/// bare printable keystrokes directly into the instant filter. `AwaitingLeader`
-/// is entered by pressing Space and routes the *next* key to an action.
+/// `Idle` is the default: bare keys dispatch actions directly (no prefix required).
+/// `Searching` means the search bar is open; all printable keystrokes feed the
+/// fuzzy filter. Only `Message::CloseSearch` and `Message::Quit` transition from
+/// `Searching` back to `Idle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InputPhase {
-    /// Bare keystrokes append to the filter. This is the default state.
+    /// Bare keys dispatch actions directly. This is the default state.
     #[default]
-    Filtering,
-    /// Space was pressed; the next key dispatches an action.
-    AwaitingLeader,
+    Idle,
+    /// Search bar is open; printable keystrokes feed the filter.
+    Searching,
 }
 
 // ---------------------------------------------------------------------------
