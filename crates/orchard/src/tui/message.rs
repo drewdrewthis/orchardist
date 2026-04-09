@@ -60,14 +60,14 @@ pub enum Message {
     ToggleHelp,
 
     // -- Instant filter actions --
-    /// Append a character to the instant filter (bare keystroke in Filtering phase).
+    /// Append a character to the instant filter (keystroke in Searching phase).
     FilterChar(char),
     /// Remove the last character from the instant filter.
     FilterBackspace,
-    /// Space pressed — enter the leader-key phase for action dispatch.
-    LeaderKey,
-    /// Unrecognized key in leader phase — cancel and return to filtering.
-    LeaderCancel,
+    /// Open the search bar.
+    OpenSearch,
+    /// Close the search bar, preserving filter text.
+    CloseSearch,
 
     // -- Dialog actions --
     /// Confirm a yes/no dialog (delete).

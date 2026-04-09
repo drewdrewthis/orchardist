@@ -14,7 +14,7 @@ use crate::derive::{DisplayGroup, WorktreeRow};
 use crate::paths;
 use crate::remote;
 use crate::tmux;
-use crate::tui::state::{CleanupState, Phase, ViewState};
+use crate::tui::state::{CleanupState, InputPhase, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color, repo_color};
 use crate::tui::{ATTRIBUTION_URL, App, WARNING_DURATION_SECS, filter_stale};
 
@@ -971,13 +971,20 @@ impl App {
             ((area.height as f32 * TABLE_MAX_HEIGHT_FRACTION) as u16).max(TABLE_MIN_HEIGHT);
         let table_height = table_height.min(max_table_height);
 
+        let search_active = self.input_phase == InputPhase::Searching;
+
         let mut constraints = vec![
             Constraint::Length(hdr_height),
             Constraint::Length(3), // tab bar (rounded badges need 3 rows)
+        ];
+        if search_active {
+            constraints.push(Constraint::Length(1)); // search bar
+        }
+        constraints.extend([
             Constraint::Length(table_height),
             Constraint::Length(1), // spacer
             Constraint::Min(4),    // preview fills remaining
-        ];
+        ]);
 
         if has_warning {
             constraints.push(Constraint::Length(1));
@@ -997,6 +1004,11 @@ impl App {
 
         self.render_repo_tabs(f, chunks[idx]);
         idx += 1;
+
+        if search_active {
+            self.render_search_bar(f, chunks[idx]);
+            idx += 1;
+        }
 
         let theme = &self.theme;
 
@@ -1736,23 +1748,23 @@ impl App {
                 Style::default().fg(theme.accent),
             ));
         } else {
-            spans.push(Span::styled("Spc+r", key_style));
+            spans.push(Span::styled("r", key_style));
             spans.push(Span::raw(" refresh"));
         }
 
         let has_unreachable = self.host_reachable.values().any(|&v| !v);
         if has_unreachable {
             spans.push(sep.clone());
-            spans.push(Span::styled("Spc+R", key_style));
+            spans.push(Span::styled("R", key_style));
             spans.push(Span::raw(" reconnect"));
         }
 
         spans.push(sep.clone());
-        spans.push(Span::styled("Spc+q", key_style));
+        spans.push(Span::styled("q", key_style));
         spans.push(Span::raw(format!(" {}", quit_label)));
 
         spans.push(sep.clone());
-        spans.push(Span::styled("Spc+?", key_style));
+        spans.push(Span::styled("?", key_style));
         spans.push(Span::raw(" help"));
     }
 
@@ -1773,10 +1785,10 @@ impl App {
             sep.clone(),
         ];
 
-        // Active filter text indicator — shown inline when filter is non-empty.
-        if !self.filter_text.is_empty() {
+        // Active filter text indicator — shown inline when filter is non-empty and bar is closed.
+        if self.input_phase == InputPhase::Idle && !self.filter_text.is_empty() {
             spans.push(Span::styled(
-                format!("[{}_]", self.filter_text),
+                format!("[filter: {}]", self.filter_text),
                 Style::default().fg(theme.search_highlight),
             ));
             spans.push(sep.clone());
@@ -1793,23 +1805,23 @@ impl App {
                 .is_some_and(|vt| vt.row.pr.is_some())
         };
         if has_pr {
-            spans.push(Span::styled("Spc+o", key_style));
+            spans.push(Span::styled("o", key_style));
             spans.push(Span::raw(" pr"));
         } else {
-            spans.push(Span::styled("Spc+o pr", dim));
+            spans.push(Span::styled("o pr", dim));
         }
         spans.push(sep.clone());
 
         // Dim 'p' (priority) for standalone sessions.
         if is_standalone {
-            spans.push(Span::styled("Spc+p priority", dim));
+            spans.push(Span::styled("p priority", dim));
         } else {
-            spans.push(Span::styled("Spc+p", key_style));
+            spans.push(Span::styled("p", key_style));
             spans.push(Span::raw(" priority"));
         }
         spans.push(sep.clone());
 
-        spans.push(Span::styled("Spc+B", key_style));
+        spans.push(Span::styled("B", key_style));
         spans.push(Span::raw(" branch"));
         spans.push(sep.clone());
 
@@ -1821,14 +1833,36 @@ impl App {
         spans.push(Span::raw(" expand"));
         spans.push(sep.clone());
 
-        spans.push(Span::styled("Spc+c", key_style));
+        spans.push(Span::styled("c", key_style));
         spans.push(Span::raw(" cleanup"));
+        spans.push(sep.clone());
+
+        spans.push(Span::styled("Space", key_style));
+        spans.push(Span::raw(" search"));
         spans.push(sep.clone());
 
         self.append_common_hints(&mut spans, &sep, key_style, "quit");
 
         let hints = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         f.render_widget(hints, area);
+    }
+
+    /// Renders the search bar row between the tab bar and the table.
+    fn render_search_bar(&self, f: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let spans = vec![
+            Span::styled(" \u{1F50D} ", Style::default().fg(theme.accent)),
+            Span::styled(
+                self.filter_text.clone(),
+                Style::default()
+                    .fg(theme.text)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+        ];
+        let search_line =
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.background));
+        f.render_widget(search_line, area);
     }
 }
 
@@ -2738,10 +2772,8 @@ mod tests {
         assert!(text.contains("branch"), "must contain 'branch' hint");
         assert!(text.contains("quit"), "must contain 'quit' hint");
         assert!(text.contains("help"), "must contain 'help' hint");
-        assert!(
-            text.contains("Spc+"),
-            "must contain 'Spc+' leader prefix hints"
-        );
+        assert!(text.contains("Space"), "must contain 'Space search' hint");
+        assert!(text.contains("search"), "must contain 'search' hint");
     }
 
     // -----------------------------------------------------------------------

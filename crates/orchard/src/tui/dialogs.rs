@@ -353,6 +353,14 @@ impl App {
                 Span::styled("Jump to item", dim),
             ]),
             Line::from(vec![
+                Span::styled("Space    ", key_style),
+                Span::styled("Open search bar", dim),
+            ]),
+            Line::from(vec![
+                Span::styled("type     ", key_style),
+                Span::styled("Filter worktrees (in search bar)", dim),
+            ]),
+            Line::from(vec![
                 Span::styled("o        ", key_style),
                 Span::styled("Open PR in browser", dim),
             ]),
@@ -401,8 +409,8 @@ impl App {
                 Span::styled("Scroll preview pane", dim),
             ]),
             Line::from(vec![
-                Span::styled("q / esc  ", key_style),
-                Span::styled("Quit", dim),
+                Span::styled("q / Esc  ", key_style),
+                Span::styled("Close search bar / quit", dim),
             ]),
             Line::from(vec![
                 Span::styled("?        ", key_style),
@@ -418,7 +426,7 @@ impl App {
             theme.accent,
             theme.background,
             60,
-            20,
+            22,
             Some(" HELP "),
             Padding::new(2, 2, 1, 1),
         );
