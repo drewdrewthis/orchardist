@@ -84,6 +84,18 @@ pub struct CachedTmuxSession {
     pub pane_titles: Vec<String>,
     /// Commands running in each pane of the session.
     pub pane_commands: Vec<String>,
+    /// Window name per pane row, parallel to `pane_targets`.
+    ///
+    /// Uses `serde(default)` so old cache files without this field deserialize
+    /// with an empty vec, triggering synthetic window name fallback.
+    #[serde(default)]
+    pub window_names: Vec<String>,
+    /// Window active flag per pane row, parallel to `pane_targets`.
+    ///
+    /// "1" means the pane's window is the active window in this session;
+    /// anything else means inactive. Uses `serde(default)` for cache upgrade compat.
+    #[serde(default)]
+    pub window_active: Vec<String>,
     /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
     #[serde(default)]
@@ -319,6 +331,8 @@ mod tests {
             pane_targets: vec!["0.0".to_string()],
             pane_titles: vec!["bash".to_string()],
             pane_commands: vec!["vim".to_string()],
+            window_names: vec![],
+            window_active: vec![],
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
@@ -527,6 +541,52 @@ mod tests {
         // by confirming the function doesn't panic.
         let result = std::panic::catch_unwind(read_manifest);
         assert!(result.is_ok());
+    }
+
+    // -- CachedTmuxSession window fields ------------------------------------
+
+    #[test]
+    fn cached_tmux_session_window_fields_roundtrip() {
+        let session = CachedTmuxSession {
+            name: "my-session".to_string(),
+            path: "/home/user/repo".to_string(),
+            pane_targets: vec!["0.0".to_string(), "1.0".to_string()],
+            pane_titles: vec!["bash".to_string(), "nvim".to_string()],
+            pane_commands: vec!["bash".to_string(), "nvim".to_string()],
+            window_names: vec!["main".to_string(), "editor".to_string()],
+            window_active: vec!["1".to_string(), "0".to_string()],
+            host: None,
+            last_output_lines: vec![],
+            claude_state_raw: None,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: CachedTmuxSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.window_names, vec!["main", "editor"]);
+        assert_eq!(parsed.window_active, vec!["1", "0"]);
+    }
+
+    #[test]
+    fn cached_tmux_session_missing_window_fields_default_to_empty() {
+        // Old cache format without window_names or window_active fields.
+        let json = r#"{
+            "name": "old-session",
+            "path": "/home/user/repo",
+            "pane_targets": ["0.0"],
+            "pane_titles": ["bash"],
+            "pane_commands": ["bash"],
+            "host": null,
+            "last_output_lines": [],
+            "claude_state_raw": null
+        }"#;
+        let parsed: CachedTmuxSession = serde_json::from_str(json).unwrap();
+        assert!(
+            parsed.window_names.is_empty(),
+            "window_names should default to empty vec"
+        );
+        assert!(
+            parsed.window_active.is_empty(),
+            "window_active should default to empty vec"
+        );
     }
 
     #[test]

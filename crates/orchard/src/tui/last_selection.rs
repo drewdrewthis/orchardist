@@ -262,7 +262,8 @@ mod tests {
                     status: SessionStatus::Dead,
                 },
                 claude: None,
-                panes: vec![],
+                windows: vec![],
+            panes: vec![],
             },
             config: StandaloneConfig {
                 name: name.to_string(),

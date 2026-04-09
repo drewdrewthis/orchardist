@@ -255,6 +255,24 @@ pub fn capture_pane_content_at(
 
 /// Selects a specific pane within a tmux session.
 ///
+/// Switches to a specific window within a tmux session.
+///
+/// Runs `tmux select-window -t session:window_index` to switch
+/// the session's active window.
+pub fn select_window(session: &str, window_index: usize) -> Result<()> {
+    let target = format!("{}:{}", session, window_index);
+    let out = Command::new("tmux")
+        .args(["select-window", "-t", &target])
+        .output()
+        .context("tmux select-window")?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("tmux select-window failed: {}", stderr.trim());
+    }
+    Ok(())
+}
+
 /// Runs `tmux select-pane -t session:{pane_target}` where `pane_target` is
 /// a window.pane address like "0.1" (window 0, pane 1).
 pub fn select_pane(session: &str, pane_target: &str) -> Result<()> {

@@ -6,7 +6,8 @@
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
 use crate::session::{
-    ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo, build_pane_infos,
+    ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo,
+    WindowInfo, build_windows_and_panes,
 };
 
 /// Tuple type for per-repo cache data passed to [`derive_all_repos`].
@@ -245,10 +246,12 @@ fn enrich_session(
         status: SessionStatus::Running { attached: false },
     };
 
-    let panes = build_pane_infos(
+    let (windows, panes) = build_windows_and_panes(
         &session.pane_targets,
         &session.pane_commands,
         &session.pane_titles,
+        &session.window_names,
+        &session.window_active,
     );
 
     // Hook-first: check if a fresh state file exists for this session.
@@ -260,27 +263,24 @@ fn enrich_session(
             return EnrichedSession {
                 tmux,
                 claude,
+                windows,
                 panes,
             };
         }
     }
 
     // Fallback: terminal scraping.
-    enrich_session_from_scraping(session, tmux)
+    enrich_session_from_scraping(session, tmux, windows, panes)
 }
 
 /// Derives session info by scraping terminal output (fallback when no hook state).
 fn enrich_session_from_scraping(
     session: &CachedTmuxSession,
     tmux: TmuxSessionInfo,
+    windows: Vec<WindowInfo>,
+    panes: Vec<PaneInfo>,
 ) -> EnrichedSession {
     use crate::claude_state::ClaudeState;
-
-    let panes = build_pane_infos(
-        &session.pane_targets,
-        &session.pane_commands,
-        &session.pane_titles,
-    );
 
     let has_claude_active = session
         .pane_commands
@@ -341,6 +341,7 @@ fn enrich_session_from_scraping(
     EnrichedSession {
         tmux,
         claude,
+        windows,
         panes,
     }
 }
@@ -470,7 +471,14 @@ mod tests {
             name: session.name.clone(),
             status: SessionStatus::Running { attached: false },
         };
-        enrich_session_from_scraping(session, tmux)
+        let (windows, panes) = build_windows_and_panes(
+            &session.pane_targets,
+            &session.pane_commands,
+            &session.pane_titles,
+            &session.window_names,
+            &session.window_active,
+        );
+        enrich_session_from_scraping(session, tmux, windows, panes)
     }
 
     fn open_issue(number: u32) -> CachedIssue {
@@ -538,6 +546,8 @@ mod tests {
             pane_targets: targets,
             pane_titles: vec![],
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
+            window_names: vec![],
+            window_active: vec![],
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
@@ -1420,6 +1430,8 @@ mod tests {
             pane_targets: targets,
             pane_titles: pane_titles.into_iter().map(|s| s.to_string()).collect(),
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
+            window_names: vec![],
+            window_active: vec![],
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
@@ -1454,6 +1466,8 @@ mod tests {
             pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
+            window_names: vec![],
+            window_active: vec![],
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,

@@ -394,14 +394,87 @@ impl App {
     ///
     /// Returns `true` when the TUI should exit (to switch to a session).
     pub(crate) fn handle_enter_action(&mut self) -> bool {
+        use super::SubCursor;
         let standalone_count = self.standalone_sessions.len();
 
-        let pane_idx = self.selected_pane;
+        // Resolve pane target from SubCursor for Enter action.
+        let resolve_pane_target_from_sub_cursor =
+            |sub_cursor: &SubCursor, session: &crate::session::EnrichedSession| -> Option<String> {
+                match sub_cursor {
+                    SubCursor::Pane { window, pane } => {
+                        session
+                            .windows
+                            .iter()
+                            .find(|w| w.index == *window)
+                            .and_then(|w| w.panes.get(*pane))
+                            .map(|p| p.tmux_target.clone())
+                    }
+                    SubCursor::Window(_) => {
+                        // Enter on window → switch to that window (target is "session:window_index").
+                        // Return None; the window switch is handled above.
+                        None
+                    }
+                    SubCursor::None => None,
+                }
+            };
+
+        // Handle Enter on window sub-row: switch to that window.
+        if let SubCursor::Window(w) = &self.sub_cursor {
+            let window_idx = *w;
+            if cursor_is_standalone(self.cursor, standalone_count) {
+                if let Some(ss) = self.standalone_sessions.get(self.cursor) {
+                    let session_name = ss.session.tmux.name.clone();
+                    if tmux::session_exists(&session_name) {
+                        let _ = tmux::select_window(&session_name, window_idx);
+                        self.switch_target = Some(session_name);
+                        return true;
+                    }
+                }
+                return false;
+            } else {
+                let worktree_cursor = self.cursor - standalone_count;
+                let tasks = visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
+                if let Some(vt) = tasks.get(worktree_cursor) {
+                    if let Some(session) = vt.row.sessions.first() {
+                        let session_name = session.tmux.name.clone();
+                        let worktree_path = vt.row.worktree_path.clone();
+                        let branch = Some(vt.row.branch.clone());
+                        let host = match &session.tmux.host {
+                            crate::session::Host::Local => None,
+                            crate::session::Host::Remote(h) => Some(h.clone()),
+                        };
+                        drop(tasks);
+                        // Guard: refuse to join a session on a host not confirmed reachable.
+                        if let Some(ref h) = host
+                            && self.host_reachable.get(h.as_str()) != Some(&true)
+                        {
+                            let msg = if self.host_reachable.contains_key(h.as_str()) {
+                                format!("@{} is unreachable", h)
+                            } else {
+                                format!("@{} -- checking connectivity...", h)
+                            };
+                            self.warning = Some((msg, Instant::now()));
+                            return false;
+                        }
+                        self.join_or_create_session(
+                            &session_name,
+                            &worktree_path,
+                            branch.as_deref(),
+                            host.as_deref(),
+                            None,
+                        );
+                        let _ = tmux::select_window(&session_name, window_idx);
+                        return self.switch_target.is_some();
+                    }
+                }
+                return false;
+            }
+        }
+
+        let sub_cursor = self.sub_cursor.clone();
         let action = if cursor_is_standalone(self.cursor, standalone_count) {
             self.standalone_sessions.get(self.cursor).map(|ss| {
-                let pane_target = pane_idx
-                    .and_then(|i| ss.session.panes.get(i))
-                    .map(|p| p.tmux_target.clone());
+                let pane_target = resolve_pane_target_from_sub_cursor(&sub_cursor, &ss.session);
                 TaskEnterAction::JoinStandalone {
                     session_name: ss.session.tmux.name.clone(),
                     command: ss.config.command.clone(),
@@ -419,9 +492,7 @@ impl App {
                         crate::session::Host::Local => None,
                         crate::session::Host::Remote(h) => Some(h.clone()),
                     };
-                    let pane_target = pane_idx
-                        .and_then(|i| session.panes.get(i))
-                        .map(|p| p.tmux_target.clone());
+                    let pane_target = resolve_pane_target_from_sub_cursor(&sub_cursor, session);
                     TaskEnterAction::JoinSession {
                         session_name: session.tmux.name.clone(),
                         worktree_path: vt.row.worktree_path.clone(),
@@ -535,14 +606,31 @@ impl App {
         }
     }
 
-    /// Resolves the tmux pane target string for the selected sub-row pane.
+    /// Resolves the tmux pane target string for the current sub-cursor.
     ///
-    /// Looks up the `PaneInfo.tmux_target` from the session's pane list using
-    /// `self.selected_pane` as the sequential index.
-    fn resolve_pane_target(&self, panes: &[crate::session::PaneInfo]) -> Option<String> {
-        self.selected_pane
-            .and_then(|i| panes.get(i))
-            .map(|p| p.tmux_target.clone())
+    /// For `SubCursor::Pane`, looks up the pane in the matching window.
+    /// For `SubCursor::Window`, returns the active pane target of that window (first pane).
+    /// For `SubCursor::None`, returns `None` (default pane).
+    fn resolve_pane_target(&self, session: &crate::session::EnrichedSession) -> Option<String> {
+        use super::SubCursor;
+        match &self.sub_cursor {
+            SubCursor::Pane { window, pane } => session
+                .windows
+                .iter()
+                .find(|w| w.index == *window)
+                .and_then(|w| w.panes.get(*pane))
+                .map(|p| p.tmux_target.clone()),
+            SubCursor::Window(w) => {
+                // For window-level cursor, capture the active (first) pane of that window.
+                session
+                    .windows
+                    .iter()
+                    .find(|wi| wi.index == *w)
+                    .and_then(|wi| wi.panes.first())
+                    .map(|p| p.tmux_target.clone())
+            }
+            SubCursor::None => None,
+        }
     }
 
     /// Fetches pane content for the task at the current cursor position.
@@ -559,7 +647,7 @@ impl App {
             )
         {
             let session_name = ss.session.tmux.name.clone();
-            let pane_target = self.resolve_pane_target(&ss.session.panes);
+            let pane_target = self.resolve_pane_target(&ss.session);
             let tx = self.tx.clone();
             std::thread::spawn(move || {
                 let content = tmux::capture_pane_content_at(
@@ -590,7 +678,7 @@ impl App {
                     crate::session::Host::Local => None,
                     crate::session::Host::Remote(h) => Some(h.clone()),
                 };
-                let pane_target = self.resolve_pane_target(&session.panes);
+                let pane_target = self.resolve_pane_target(session);
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let content = if let Some(host) = remote_host {
@@ -1270,7 +1358,7 @@ impl App {
 
         // Render standalone session rows first.
         for (idx, ss) in self.standalone_sessions.iter().enumerate() {
-            let selected = idx == self.cursor && self.selected_pane.is_none();
+            let selected = idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
             if selected {
                 selected_visual_idx = Some(rows.len());
             }
@@ -1286,8 +1374,13 @@ impl App {
 
             // Expand/collapse indicator in CLAUDE cell.
             let pane_count = ss.session.panes.len();
+            let window_count = ss.session.windows.len();
             let is_expanded = self.expanded.contains(&ss.session.tmux.name);
-            let claude_display = expand_indicator(&claude_text, pane_count, is_expanded);
+            let claude_display = if window_count > 1 {
+                expand_indicator_windows(&claude_text, window_count, is_expanded)
+            } else {
+                expand_indicator(&claude_text, pane_count, is_expanded)
+            };
 
             let row_style = if selected {
                 Style::default()
@@ -1316,20 +1409,36 @@ impl App {
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
 
-            // Pane sub-rows for expanded standalone sessions.
+            // Sub-rows for expanded standalone sessions.
             if is_expanded {
-                self.push_pane_sub_rows(
-                    &ss.session.panes,
-                    idx,
-                    Color::DarkGray, // no repo color for standalone
-                    &SubRowContext {
-                        show_branch,
-                        has_remote,
-                        theme,
-                    },
-                    &mut rows,
-                    &mut row_heights,
-                );
+                let sub_ctx = SubRowContext {
+                    show_branch,
+                    has_remote,
+                    theme,
+                };
+                if ss.session.windows.len() > 1 {
+                    self.push_window_sub_rows(
+                        &ss.session,
+                        idx,
+                        Color::DarkGray,
+                        &sub_ctx,
+                        &mut rows,
+                        &mut row_heights,
+                    );
+                } else {
+                    // Single-window auto-flatten: render panes directly.
+                    let win_idx = ss.session.windows.first().map(|w| w.index).unwrap_or(0);
+                    self.push_pane_sub_rows(
+                        &ss.session.panes,
+                        idx,
+                        win_idx,
+                        Color::DarkGray,
+                        "",
+                        &sub_ctx,
+                        &mut rows,
+                        &mut row_heights,
+                    );
+                }
             }
 
             unified_num += 1;
@@ -1340,7 +1449,7 @@ impl App {
 
         for (flat_idx, vt) in tasks.iter().enumerate() {
             let cursor_idx = flat_idx + standalone_count;
-            let selected = cursor_idx == self.cursor && self.selected_pane.is_none();
+            let selected = cursor_idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
 
             // Section header when display group changes
             if last_group != Some(vt.group) {
@@ -1438,8 +1547,13 @@ impl App {
 
             // Expand/collapse indicator in CLAUDE cell.
             let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+            let window_count = vt.row.sessions.first().map(|s| s.windows.len()).unwrap_or(0);
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
-            let claude_display = expand_indicator(&claude_text, pane_count, is_expanded);
+            let claude_display = if window_count > 1 {
+                expand_indicator_windows(&claude_text, window_count, is_expanded)
+            } else {
+                expand_indicator(&claude_text, pane_count, is_expanded)
+            };
 
             // Build title cell with fuzzy highlights when a filter is active.
             // The TITLE field is issue_title (field index 3) or branch (field index 1).
@@ -1520,26 +1634,38 @@ impl App {
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
 
-            // Pane sub-rows for expanded worktree rows.
+            // Sub-rows for expanded worktree rows.
             if is_expanded {
-                let panes = vt
-                    .row
-                    .sessions
-                    .first()
-                    .map(|s| s.panes.as_slice())
-                    .unwrap_or(&[]);
-                self.push_pane_sub_rows(
-                    panes,
-                    cursor_idx,
-                    bar_color,
-                    &SubRowContext {
-                        show_branch,
-                        has_remote,
-                        theme,
-                    },
-                    &mut rows,
-                    &mut row_heights,
-                );
+                let sub_ctx = SubRowContext {
+                    show_branch,
+                    has_remote,
+                    theme,
+                };
+                if let Some(session) = vt.row.sessions.first() {
+                    if session.windows.len() > 1 {
+                        self.push_window_sub_rows(
+                            session,
+                            cursor_idx,
+                            bar_color,
+                            &sub_ctx,
+                            &mut rows,
+                            &mut row_heights,
+                        );
+                    } else {
+                        // Single-window auto-flatten: render panes directly.
+                        let win_idx = session.windows.first().map(|w| w.index).unwrap_or(0);
+                        self.push_pane_sub_rows(
+                            &session.panes,
+                            cursor_idx,
+                            win_idx,
+                            bar_color,
+                            "",
+                            &sub_ctx,
+                            &mut rows,
+                            &mut row_heights,
+                        );
+                    }
+                }
             }
 
             unified_num += 1;
@@ -1548,29 +1674,34 @@ impl App {
         (rows, row_heights, selected_visual_idx)
     }
 
-    /// Appends pane sub-rows for an expanded parent row.
+    /// Appends pane sub-rows for an expanded parent row (single-window auto-flatten).
     ///
     /// Each sub-row shows: tree connector in # cell, claude indicator, command in TITLE,
     /// and empty cells elsewhere. The BAR cell inherits the parent's repo color.
+    /// `window_index` is the tmux window index these panes belong to, used for SubCursor matching.
     fn push_pane_sub_rows(
         &self,
         panes: &[crate::session::PaneInfo],
         parent_cursor_idx: usize,
+        window_index: usize,
         bar_color: Color,
+        prefix: &str,
         ctx: &SubRowContext<'_>,
         rows: &mut Vec<Row<'static>>,
         row_heights: &mut Vec<u16>,
     ) {
+        use super::SubCursor;
         let pane_count = panes.len();
         for (pi, pane) in panes.iter().enumerate() {
             let is_last = pi == pane_count - 1;
-            let selected = self.cursor == parent_cursor_idx && self.selected_pane == Some(pi);
+            let selected = self.cursor == parent_cursor_idx
+                && self.sub_cursor == SubCursor::Pane { window: window_index, pane: pi };
 
             // Tree connector: ├─N for non-last, └─N for last pane.
             let connector = if is_last {
-                format!("\u{2514}\u{2500}{}", pane.index)
+                format!("{}\u{2514}\u{2500}{}", prefix, pane.index)
             } else {
-                format!("\u{251c}\u{2500}{}", pane.index)
+                format!("{}\u{251c}\u{2500}{}", prefix, pane.index)
             };
 
             // Claude indicator for this pane.
@@ -1610,6 +1741,100 @@ impl App {
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
+        }
+    }
+
+    /// Appends window and nested pane sub-rows for an expanded multi-window session.
+    ///
+    /// For each window, renders a window sub-row with tree connector. If the window
+    /// is expanded (in `window_expanded`), nested pane sub-rows are rendered beneath it.
+    fn push_window_sub_rows(
+        &self,
+        session: &crate::session::EnrichedSession,
+        parent_cursor_idx: usize,
+        bar_color: Color,
+        ctx: &SubRowContext<'_>,
+        rows: &mut Vec<Row<'static>>,
+        row_heights: &mut Vec<u16>,
+    ) {
+        use super::SubCursor;
+        let windows = &session.windows;
+        let window_count = windows.len();
+        let session_name = &session.tmux.name;
+
+        for (wi, window) in windows.iter().enumerate() {
+            let is_last_window = wi == window_count - 1;
+            let selected = self.cursor == parent_cursor_idx
+                && self.sub_cursor == SubCursor::Window(window.index);
+
+            // Tree connector for window row.
+            let connector = if is_last_window {
+                format!("\u{2514}\u{2500} win:{} {}", window.index, window.name)
+            } else {
+                format!("\u{251c}\u{2500} win:{} {}", window.index, window.name)
+            };
+
+            let is_window_expanded = self
+                .window_expanded
+                .contains(&super::App::window_expansion_key(session_name, window.index));
+
+            // Expand indicator for the window (in STATUS cell).
+            let status_text = if window.panes.len() > 1 {
+                let caret = if is_window_expanded {
+                    "\u{25bc}"
+                } else {
+                    "\u{25b6}"
+                };
+                format!("{}{}", caret, window.panes.len())
+            } else {
+                String::new()
+            };
+
+            let row_style = if selected {
+                Style::default()
+                    .fg(ctx.theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(ctx.theme.dimmed)
+            };
+
+            let mut cells = vec![
+                Cell::from("\u{25cf}").style(Style::default().fg(bar_color)),
+                Cell::from(connector),
+                Cell::from(""), // CLAUDE: empty for window row
+                Cell::from(""), // ISSUE: empty
+                Cell::from(""), // TITLE: empty (name is in # cell)
+            ];
+
+            if ctx.show_branch {
+                cells.push(Cell::from(""));
+            }
+            if ctx.has_remote {
+                cells.push(Cell::from(""));
+            }
+            cells.push(Cell::from(status_text));
+
+            rows.push(Row::new(cells).style(row_style));
+            row_heights.push(1);
+
+            // If window is expanded, render nested pane sub-rows.
+            if is_window_expanded {
+                let prefix = if is_last_window {
+                    "  " // no vertical line after last window
+                } else {
+                    "\u{2502} " // │ vertical line continuation
+                };
+                self.push_pane_sub_rows(
+                    &window.panes,
+                    parent_cursor_idx,
+                    window.index,
+                    bar_color,
+                    prefix,
+                    ctx,
+                    rows,
+                    row_heights,
+                );
+            }
         }
     }
 
@@ -1895,6 +2120,27 @@ pub(crate) fn expand_indicator(base_text: &str, pane_count: usize, expanded: boo
     format!("{} {}({})", caret, rest.trim_start(), pane_count)
 }
 
+/// Expand indicator for multi-window sessions, showing window count with "w" suffix.
+///
+/// For multi-window sessions (2+ windows), shows `▶Nw` or `▼Nw`.
+/// Returns the base text unchanged if window_count <= 1.
+pub(crate) fn expand_indicator_windows(
+    base_text: &str,
+    window_count: usize,
+    expanded: bool,
+) -> String {
+    if window_count <= 1 {
+        return base_text.to_string();
+    }
+    let caret = if expanded { "\u{25bc}" } else { "\u{25b6}" }; // ▼ / ▶
+    let rest = base_text
+        .char_indices()
+        .nth(1)
+        .map(|(i, _)| &base_text[i..])
+        .unwrap_or(base_text);
+    format!("{} {}({}w)", caret, rest.trim_start(), window_count)
+}
+
 /// Creates a section header row spanning all columns for a display group.
 ///
 /// `num_columns` is the total number of columns in the table (must match the data rows).
@@ -1987,6 +2233,7 @@ mod tests {
                 status: SessionStatus::Running { attached: false },
             },
             claude: None,
+            windows: vec![],
             panes: vec![],
         }
     }
@@ -2128,7 +2375,8 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
-                panes: vec![],
+                windows: vec![],
+            panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -2161,7 +2409,8 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
-                panes: vec![],
+                windows: vec![],
+            panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2318,6 +2567,7 @@ mod tests {
                 status: SessionStatus::Running { attached: false },
             },
             claude,
+            windows: vec![],
             panes: vec![],
         }
     }
@@ -2427,7 +2677,8 @@ mod tests {
                         context_window_pct: None,
                         model: None,
                     }),
-                    panes: vec![],
+                    windows: vec![],
+            panes: vec![],
                 },
                 EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -2441,7 +2692,8 @@ mod tests {
                         context_window_pct: Some(45.0),
                         model: None,
                     }),
-                    panes: vec![],
+                    windows: vec![],
+            panes: vec![],
                 },
             ],
             ..make_task_row(1, DisplayGroup::NeedsAttention)

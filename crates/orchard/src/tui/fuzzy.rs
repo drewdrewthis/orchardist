@@ -353,6 +353,7 @@ mod tests {
                 status: SessionStatus::Running { attached: false },
             },
             claude: None,
+            windows: vec![],
             panes: vec![],
         }
     }

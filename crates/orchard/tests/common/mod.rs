@@ -178,6 +178,8 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         pane_targets: targets,
         pane_titles: vec![],
         pane_commands: cmds,
+        window_names: vec![],
+        window_active: vec![],
         host: None,
         last_output_lines: vec![],
         claude_state_raw: None,

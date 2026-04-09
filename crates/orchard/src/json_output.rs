@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
 use crate::orchard_state::{
-    IssueInfo, OrchardState, PrState, RepoState, SessionState, WorktreeState,
+    IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState, WorktreeState,
 };
 use crate::session::StandaloneSessionRow;
 
@@ -109,7 +109,8 @@ pub struct JsonPr {
 
 /// Session information in JSON output using the EnrichedSession shape.
 ///
-/// Contains tmux session identity (name, host, status) and optional Claude enrichment.
+/// Contains tmux session identity (name, host, status), optional Claude enrichment,
+/// and the full window → pane hierarchy.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSession {
@@ -121,6 +122,42 @@ pub struct JsonSession {
     pub status: String,
     /// Claude enrichment data, or `null` when no Claude process is active.
     pub claude: Option<JsonClaudeInfo>,
+    /// Window hierarchy for this session (window → pane structure).
+    pub windows: Vec<JsonWindow>,
+}
+
+/// Window within a session in JSON output.
+///
+/// Contains window identity and its panes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonWindow {
+    /// Tmux's stable window index.
+    pub index: usize,
+    /// Window name from tmux.
+    pub name: String,
+    /// Whether this is the active window in the session.
+    pub is_active: bool,
+    /// Panes belonging to this window.
+    pub panes: Vec<JsonPane>,
+}
+
+/// Individual pane within a window in JSON output.
+///
+/// Contains pane identity, running command, title, and Claude detection flag.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonPane {
+    /// Zero-based sequential index in the flat pane list.
+    pub index: usize,
+    /// Tmux window.pane target address (e.g., "0.1").
+    pub tmux_target: String,
+    /// Command running in this pane.
+    pub command: String,
+    /// Tmux pane title.
+    pub title: String,
+    /// True when the pane is running a Claude process.
+    pub has_claude: bool,
 }
 
 /// Claude enrichment data in JSON output.
@@ -200,8 +237,26 @@ impl From<&PrState> for JsonPr {
     }
 }
 
+impl From<&WindowState> for JsonWindow {
+    /// Converts an internal `WindowState` to JSON output format with nested panes.
+    fn from(w: &WindowState) -> Self {
+        Self {
+            index: w.index,
+            name: w.name.clone(),
+            is_active: w.is_active,
+            panes: w.panes.iter().map(|p| JsonPane {
+                index: p.index,
+                tmux_target: p.tmux_target.clone(),
+                command: p.command.clone(),
+                title: p.title.clone(),
+                has_claude: p.has_claude,
+            }).collect(),
+        }
+    }
+}
+
 impl From<&SessionState> for JsonSession {
-    /// Converts an internal `SessionState` to JSON v3 format with nested `claude` field.
+    /// Converts an internal `SessionState` to JSON v4 format with nested `claude` and `windows` fields.
     fn from(s: &SessionState) -> Self {
         let host = match &s.host {
             Some(h) => h.clone(),
@@ -218,6 +273,7 @@ impl From<&SessionState> for JsonSession {
             host,
             status: "running".to_string(),
             claude,
+            windows: s.windows.iter().map(Into::into).collect(),
         }
     }
 }
@@ -264,17 +320,30 @@ impl From<&StandaloneSessionRow> for JsonSession {
             context_window_pct: c.context_window_pct,
             model: c.model.clone(),
         });
+        let windows = row.session.windows.iter().map(|w| JsonWindow {
+            index: w.index,
+            name: w.name.clone(),
+            is_active: w.is_active,
+            panes: w.panes.iter().map(|p| JsonPane {
+                index: p.index,
+                tmux_target: p.tmux_target.clone(),
+                command: p.command.clone(),
+                title: p.title.clone(),
+                has_claude: p.has_claude,
+            }).collect(),
+        }).collect();
         Self {
             name: row.session.tmux.name.clone(),
             host,
             status: status.to_string(),
             claude,
+            windows,
         }
     }
 }
 
 impl From<&OrchardState> for JsonOutput {
-    /// Converts the unified `OrchardState` to JSON output, setting version to 3.
+    /// Converts the unified `OrchardState` to JSON output, setting version to 4.
     fn from(state: &OrchardState) -> Self {
         let hosts = state
             .hosts
@@ -290,7 +359,7 @@ impl From<&OrchardState> for JsonOutput {
             .collect();
 
         Self {
-            version: 3,
+            version: 4,
             tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
@@ -323,9 +392,9 @@ mod tests {
     }
 
     #[test]
-    fn from_orchard_state_produces_version_3() {
+    fn from_orchard_state_produces_version_4() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 3);
+        assert_eq!(output.version, 4);
     }
 
     #[test]
@@ -431,6 +500,7 @@ mod tests {
                 context_window_pct: None,
                 model: None,
             }),
+            windows: vec![],
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.host, "local");
@@ -445,8 +515,108 @@ mod tests {
             name: "repo-main".to_string(),
             host: None,
             claude: None,
+            windows: vec![],
         };
         let js = JsonSession::from(&session);
         assert!(js.claude.is_none());
+    }
+
+    // -- Window hierarchy tests (section 9) ----------------------------------
+
+    use crate::orchard_state::{PaneState, WindowState};
+
+    fn make_session_with_windows() -> SessionState {
+        SessionState {
+            name: "test-session".to_string(),
+            host: None,
+            claude: None,
+            windows: vec![
+                WindowState {
+                    index: 0,
+                    name: "main".to_string(),
+                    is_active: true,
+                    panes: vec![
+                        PaneState {
+                            index: 0,
+                            tmux_target: "0.0".to_string(),
+                            command: "bash".to_string(),
+                            title: "bash".to_string(),
+                            has_claude: false,
+                        },
+                    ],
+                },
+                WindowState {
+                    index: 1,
+                    name: "editor".to_string(),
+                    is_active: false,
+                    panes: vec![
+                        PaneState {
+                            index: 1,
+                            tmux_target: "1.0".to_string(),
+                            command: "claude".to_string(),
+                            title: "claude".to_string(),
+                            has_claude: true,
+                        },
+                    ],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn json_version_is_4() {
+        let output = JsonOutput::from(&empty_state());
+        assert_eq!(output.version, 4);
+    }
+
+    #[test]
+    fn json_session_includes_windows_array() {
+        let session = make_session_with_windows();
+        let js = JsonSession::from(&session);
+        assert_eq!(js.windows.len(), 2);
+    }
+
+    #[test]
+    fn json_window_has_index_name_is_active_panes() {
+        let session = make_session_with_windows();
+        let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
+        let win0 = &value["windows"][0];
+        assert!(win0.get("index").is_some(), "expected 'index'");
+        assert!(win0.get("name").is_some(), "expected 'name'");
+        assert!(win0.get("isActive").is_some(), "expected camelCase 'isActive'");
+        assert!(win0.get("panes").is_some(), "expected 'panes'");
+        assert_eq!(win0["index"], 0);
+        assert_eq!(win0["name"], "main");
+        assert_eq!(win0["isActive"], true);
+    }
+
+    #[test]
+    fn json_pane_has_expected_camelcase_fields() {
+        let session = make_session_with_windows();
+        let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
+        let pane = &value["windows"][1]["panes"][0];
+        assert!(pane.get("index").is_some(), "expected 'index'");
+        assert!(pane.get("tmuxTarget").is_some(), "expected camelCase 'tmuxTarget'");
+        assert!(pane.get("command").is_some(), "expected 'command'");
+        assert!(pane.get("title").is_some(), "expected 'title'");
+        assert!(pane.get("hasClaude").is_some(), "expected camelCase 'hasClaude'");
+        assert_eq!(pane["hasClaude"], true);
+    }
+
+    #[test]
+    fn json_single_window_session_still_has_windows_array() {
+        let session = SessionState {
+            name: "single-window".to_string(),
+            host: None,
+            claude: None,
+            windows: vec![WindowState {
+                index: 0,
+                name: "main".to_string(),
+                is_active: true,
+                panes: vec![],
+            }],
+        };
+        let js = JsonSession::from(&session);
+        assert_eq!(js.windows.len(), 1);
     }
 }

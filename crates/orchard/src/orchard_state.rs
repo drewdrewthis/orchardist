@@ -135,6 +135,7 @@ pub struct PrState {
 ///
 /// Mirrors the `EnrichedSession` domain type from `session.rs`.
 /// The `claude` field is `None` when no Claude process is detected.
+/// The `windows` field contains the full session → window → pane hierarchy.
 #[derive(Debug, Clone)]
 pub struct SessionState {
     /// tmux session name.
@@ -143,6 +144,40 @@ pub struct SessionState {
     pub host: Option<String>,
     /// Claude enrichment data, if a Claude process is active.
     pub claude: Option<ClaudeEnrichment>,
+    /// Window hierarchy for this session (window → pane structure).
+    pub windows: Vec<WindowState>,
+}
+
+/// Window within a session, with nested panes.
+///
+/// Mirrors `WindowInfo` from `session.rs` for the state layer.
+#[derive(Debug, Clone)]
+pub struct WindowState {
+    /// Tmux's stable window index.
+    pub index: usize,
+    /// Window name from tmux.
+    pub name: String,
+    /// Whether this is the active window in the session.
+    pub is_active: bool,
+    /// Panes belonging to this window.
+    pub panes: Vec<PaneState>,
+}
+
+/// Individual pane within a window.
+///
+/// Mirrors `PaneInfo` from `session.rs` for the state layer.
+#[derive(Debug, Clone)]
+pub struct PaneState {
+    /// Zero-based sequential index in the flat pane list.
+    pub index: usize,
+    /// Tmux window.pane target address (e.g., "0.1").
+    pub tmux_target: String,
+    /// Command running in this pane.
+    pub command: String,
+    /// Tmux pane title.
+    pub title: String,
+    /// True when the pane is running a Claude process.
+    pub has_claude: bool,
 }
 
 /// Claude enrichment data within a `SessionState`.
@@ -197,10 +232,23 @@ impl From<&EnrichedSession> for SessionState {
             context_window_pct: c.context_window_pct,
             model: c.model.clone(),
         });
+        let windows = s.windows.iter().map(|w| WindowState {
+            index: w.index,
+            name: w.name.clone(),
+            is_active: w.is_active,
+            panes: w.panes.iter().map(|p| PaneState {
+                index: p.index,
+                tmux_target: p.tmux_target.clone(),
+                command: p.command.clone(),
+                title: p.title.clone(),
+                has_claude: p.has_claude,
+            }).collect(),
+        }).collect();
         Self {
             name: s.tmux.name.clone(),
             host,
             claude,
+            windows,
         }
     }
 }
@@ -391,5 +439,70 @@ mod tests {
         };
         let pr_state = PrState::from(&pr_info);
         assert!(pr_state.state.is_none());
+    }
+
+    // -- From<&EnrichedSession> for SessionState tests ----------------------
+
+    use crate::session::{
+        EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
+    };
+
+    fn make_enriched_session(windows: Vec<WindowInfo>) -> EnrichedSession {
+        let panes = windows.iter().flat_map(|w| w.panes.clone()).collect();
+        EnrichedSession {
+            tmux: TmuxSessionInfo {
+                host: Host::Local,
+                name: "test-session".to_string(),
+                status: SessionStatus::Running { attached: false },
+            },
+            claude: None,
+            windows,
+            panes,
+        }
+    }
+
+    #[test]
+    fn from_enriched_session_converts_windows_with_panes() {
+        let windows = vec![
+            WindowInfo {
+                index: 0,
+                name: "main".to_string(),
+                is_active: true,
+                panes: vec![
+                    PaneInfo::new(0, "0.0", "bash", "bash"),
+                    PaneInfo::new(1, "0.1", "nvim", "nvim"),
+                ],
+            },
+            WindowInfo {
+                index: 1,
+                name: "editor".to_string(),
+                is_active: false,
+                panes: vec![PaneInfo::new(2, "1.0", "claude", "claude")],
+            },
+        ];
+        let enriched = make_enriched_session(windows);
+        let state = SessionState::from(&enriched);
+
+        assert_eq!(state.name, "test-session");
+        assert!(state.host.is_none());
+        assert_eq!(state.windows.len(), 2);
+        assert_eq!(state.windows[0].index, 0);
+        assert_eq!(state.windows[0].name, "main");
+        assert!(state.windows[0].is_active);
+        assert_eq!(state.windows[0].panes.len(), 2);
+        assert_eq!(state.windows[0].panes[0].tmux_target, "0.0");
+        assert_eq!(state.windows[0].panes[1].tmux_target, "0.1");
+        assert_eq!(state.windows[1].index, 1);
+        assert_eq!(state.windows[1].name, "editor");
+        assert!(!state.windows[1].is_active);
+        assert_eq!(state.windows[1].panes.len(), 1);
+        assert!(state.windows[1].panes[0].has_claude);
+    }
+
+    #[test]
+    fn from_enriched_session_empty_windows_produces_empty_windows() {
+        let enriched = make_enriched_session(vec![]);
+        let state = SessionState::from(&enriched);
+        assert!(state.windows.is_empty());
     }
 }
