@@ -617,7 +617,9 @@ impl App {
                             terminal_app,
                         );
                     }
-                    crate::watch::EventKind::CiFailed { pr_number, label, .. } => {
+                    crate::watch::EventKind::CiFailed {
+                        pr_number, label, ..
+                    } => {
                         crate::notify::send_notification_with_session(
                             "CI Failed",
                             &format!("#{} {}", pr_number, label),
@@ -632,10 +634,7 @@ impl App {
                     } => {
                         crate::notify::send_notification_with_session(
                             "Review comments",
-                            &format!(
-                                "#{} has {} unresolved thread(s)",
-                                pr_number, thread_count
-                            ),
+                            &format!("#{} has {} unresolved thread(s)", pr_number, thread_count),
                             None,
                             terminal_app,
                         );

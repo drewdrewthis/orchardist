@@ -4,8 +4,8 @@
 //! `OrchardState`, fires threshold checks, delivers events to subscribers,
 //! and optionally sends desktop notifications for key events.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::build_state;
@@ -75,8 +75,7 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         }
 
         // Thresholds
-        let (threshold_events, new_ts) =
-            check_thresholds(&new_state, &config.watch, &threshold_ts);
+        let (threshold_events, new_ts) = check_thresholds(&new_state, &config.watch, &threshold_ts);
         events.extend(threshold_events);
         threshold_ts = new_ts;
 

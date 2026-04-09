@@ -14,7 +14,7 @@ use crate::watch::event::{EventKind, WatchEvent};
 // ---------------------------------------------------------------------------
 
 /// Builds a map of worktree path → `WorktreeState` reference.
-fn worktree_map<'a>(state: &'a OrchardState) -> HashMap<&'a str, &'a WorktreeState> {
+fn worktree_map(state: &OrchardState) -> HashMap<&str, &WorktreeState> {
     state
         .repos
         .iter()
@@ -37,9 +37,7 @@ fn claude_status(wt: &WorktreeState) -> ClaudeState {
         match status {
             ClaudeState::Working => return ClaudeState::Working,
             ClaudeState::Input if best != ClaudeState::Working => best = ClaudeState::Input,
-            ClaudeState::Idle
-                if best != ClaudeState::Working && best != ClaudeState::Input =>
-            {
+            ClaudeState::Idle if best != ClaudeState::Working && best != ClaudeState::Input => {
                 best = ClaudeState::Idle;
             }
             _ => {}
@@ -124,10 +122,7 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
                     label,
                 }));
             }
-            (
-                ClaudeState::Idle | ClaudeState::Input | ClaudeState::None,
-                ClaudeState::Working,
-            ) => {
+            (ClaudeState::Idle | ClaudeState::Input | ClaudeState::None, ClaudeState::Working) => {
                 events.push(WatchEvent::now(EventKind::ClaudeStarted {
                     worktree: path.to_string(),
                     session,
@@ -263,9 +258,7 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
 mod tests {
     use super::*;
     use crate::derive::DisplayGroup;
-    use crate::orchard_state::{
-        ClaudeEnrichment, PrState, RepoState, SessionState, WorktreeState,
-    };
+    use crate::orchard_state::{ClaudeEnrichment, PrState, RepoState, SessionState, WorktreeState};
 
     fn empty_state() -> OrchardState {
         OrchardState {
@@ -476,7 +469,10 @@ mod tests {
         assert_eq!(review_events.len(), 1);
         assert!(matches!(
             &review_events[0].kind,
-            EventKind::ReviewComments { thread_count: 2, .. }
+            EventKind::ReviewComments {
+                thread_count: 2,
+                ..
+            }
         ));
     }
 

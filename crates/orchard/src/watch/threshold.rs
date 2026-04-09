@@ -37,36 +37,36 @@ pub fn check_thresholds(
                 };
 
                 // Context window threshold
-                if let Some(pct) = claude.context_window_pct {
-                    if pct >= config.context_window_threshold {
-                        let key = format!("{}:context_window_pct", session.name);
-                        if should_fire(prev_ts, &key, now, config.threshold_cooldown_secs) {
-                            events.push(WatchEvent::now(EventKind::Threshold {
-                                worktree: wt.path.clone(),
-                                session: session.name.clone(),
-                                metric: "context_window_pct".to_string(),
-                                value: pct,
-                                threshold: config.context_window_threshold,
-                            }));
-                            new_ts.insert(key, now);
-                        }
+                if let Some(pct) = claude.context_window_pct
+                    && pct >= config.context_window_threshold
+                {
+                    let key = format!("{}:context_window_pct", session.name);
+                    if should_fire(prev_ts, &key, now, config.threshold_cooldown_secs) {
+                        events.push(WatchEvent::now(EventKind::Threshold {
+                            worktree: wt.path.clone(),
+                            session: session.name.clone(),
+                            metric: "context_window_pct".to_string(),
+                            value: pct,
+                            threshold: config.context_window_threshold,
+                        }));
+                        new_ts.insert(key, now);
                     }
                 }
 
                 // Cost threshold
-                if let Some(cost) = claude.cost_usd {
-                    if cost >= config.cost_threshold {
-                        let key = format!("{}:cost_usd", session.name);
-                        if should_fire(prev_ts, &key, now, config.threshold_cooldown_secs) {
-                            events.push(WatchEvent::now(EventKind::Threshold {
-                                worktree: wt.path.clone(),
-                                session: session.name.clone(),
-                                metric: "cost_usd".to_string(),
-                                value: cost,
-                                threshold: config.cost_threshold,
-                            }));
-                            new_ts.insert(key, now);
-                        }
+                if let Some(cost) = claude.cost_usd
+                    && cost >= config.cost_threshold
+                {
+                    let key = format!("{}:cost_usd", session.name);
+                    if should_fire(prev_ts, &key, now, config.threshold_cooldown_secs) {
+                        events.push(WatchEvent::now(EventKind::Threshold {
+                            worktree: wt.path.clone(),
+                            session: session.name.clone(),
+                            metric: "cost_usd".to_string(),
+                            value: cost,
+                            threshold: config.cost_threshold,
+                        }));
+                        new_ts.insert(key, now);
                     }
                 }
             }
@@ -78,7 +78,12 @@ pub fn check_thresholds(
 
 /// Returns `true` if the threshold should fire — i.e., no prior timestamp or
 /// enough time has elapsed since the last fire.
-fn should_fire(prev_ts: &ThresholdTimestamps, key: &str, now: DateTime<Utc>, cooldown_secs: u64) -> bool {
+fn should_fire(
+    prev_ts: &ThresholdTimestamps,
+    key: &str,
+    now: DateTime<Utc>,
+    cooldown_secs: u64,
+) -> bool {
     match prev_ts.get(key) {
         None => true,
         Some(&last) => {
@@ -97,9 +102,7 @@ mod tests {
     use super::*;
     use crate::claude_state::ClaudeState;
     use crate::derive::DisplayGroup;
-    use crate::orchard_state::{
-        ClaudeEnrichment, RepoState, SessionState, WorktreeState,
-    };
+    use crate::orchard_state::{ClaudeEnrichment, RepoState, SessionState, WorktreeState};
 
     fn make_config() -> WatchConfig {
         WatchConfig {
@@ -193,7 +196,10 @@ mod tests {
 
         // Second call with the just-updated timestamps — should be suppressed.
         let (events2, _) = check_thresholds(&state, &config, &new_ts);
-        assert!(events2.is_empty(), "cooldown should suppress repeated event");
+        assert!(
+            events2.is_empty(),
+            "cooldown should suppress repeated event"
+        );
     }
 
     #[test]

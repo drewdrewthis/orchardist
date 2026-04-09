@@ -84,10 +84,8 @@ pub fn write_subscriptions(subs: &SubscriptionFile) -> anyhow::Result<()> {
     }
     let json = serde_json::to_string_pretty(subs).context("serializing subscriptions")?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)
-        .with_context(|| format!("renaming to {}", path.display()))?;
+    std::fs::write(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("renaming to {}", path.display()))?;
     Ok(())
 }
 
@@ -107,7 +105,10 @@ pub fn write_subscriptions(subs: &SubscriptionFile) -> anyhow::Result<()> {
 fn validate_subscription_fields(id: &str, tmux_session: &str, pane: &str) -> anyhow::Result<()> {
     let id_re = Regex::new(r"^[A-Za-z0-9_\-]+$").expect("valid regex");
     if !id_re.is_match(id) {
-        anyhow::bail!("invalid subscription id {:?}: must match [A-Za-z0-9_\\-]+", id);
+        anyhow::bail!(
+            "invalid subscription id {:?}: must match [A-Za-z0-9_\\-]+",
+            id
+        );
     }
 
     let session_re = Regex::new(r"^[A-Za-z0-9_\-.]+$").expect("valid regex");
