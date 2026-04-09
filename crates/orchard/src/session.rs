@@ -48,7 +48,7 @@ pub enum SessionStatus {
 ///
 /// Represents the raw state of a tmux session as discovered from the cache.
 /// The `host` field indicates whether this is a local or remote session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TmuxSessionInfo {
     /// Where this session runs (local or remote).
     pub host: Host,
@@ -66,7 +66,7 @@ pub struct TmuxSessionInfo {
 ///
 /// Grouped separately from tmux data so that sessions without Claude
 /// activity carry no unnecessary fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClaudeSessionInfo {
     /// Structured Claude state (working, idle, input, none).
     pub status: ClaudeState,
@@ -165,7 +165,7 @@ pub fn build_pane_infos(
 /// This is the primary session type consumed by the TUI and JSON output.
 /// The `claude` field is `None` when no Claude process is detected.
 /// The `panes` field contains per-pane metadata for sub-row rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EnrichedSession {
     /// Pure tmux session data.
     pub tmux: TmuxSessionInfo,
@@ -199,7 +199,7 @@ impl ClaudeSessionInfo {
 /// Configuration for a standalone tmux session not tied to any worktree.
 ///
 /// Defined now for forward compatibility; constructed in Part 2.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StandaloneConfig {
     /// Display name and tmux session name.
     pub name: String,
@@ -215,7 +215,7 @@ pub struct StandaloneConfig {
 /// A standalone session row for the TUI, pairing runtime state with config.
 ///
 /// Defined now for forward compatibility; constructed in Part 2.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StandaloneSessionRow {
     /// The enriched session (tmux + optional Claude data).
     pub session: EnrichedSession,

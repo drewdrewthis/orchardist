@@ -15,7 +15,7 @@ use crate::session::{EnrichedSession, Host, StandaloneSessionRow};
 // ---------------------------------------------------------------------------
 
 /// The unified state model for Orchard. Contains all repos, standalone sessions, and host reachability.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OrchardState {
     /// All repositories known to Orchard.
     pub repos: Vec<RepoState>,
@@ -70,7 +70,7 @@ impl Default for OrchardState {
 // ---------------------------------------------------------------------------
 
 /// State for a single repository.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RepoState {
     /// Repository slug in `owner/repo` format.
     pub slug: String,
@@ -79,7 +79,7 @@ pub struct RepoState {
 }
 
 /// State for a single worktree, enriched with issue/PR/session metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorktreeState {
     /// Absolute path to the worktree on disk.
     pub path: String,
@@ -102,7 +102,7 @@ pub struct WorktreeState {
 }
 
 /// Lightweight issue summary attached to a worktree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IssueInfo {
     /// GitHub issue number.
     pub number: u32,
@@ -113,7 +113,7 @@ pub struct IssueInfo {
 }
 
 /// Lightweight PR summary attached to a worktree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PrState {
     /// GitHub PR number.
     pub number: u32,
@@ -135,7 +135,7 @@ pub struct PrState {
 ///
 /// Mirrors the `EnrichedSession` domain type from `session.rs`.
 /// The `claude` field is `None` when no Claude process is detected.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionState {
     /// tmux session name.
     pub name: String,
@@ -148,7 +148,7 @@ pub struct SessionState {
 /// Claude enrichment data within a `SessionState`.
 ///
 /// Mirrors `ClaudeSessionInfo` from `session.rs` for the state layer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClaudeEnrichment {
     /// Structured Claude state (working, idle, input, none).
     pub status: ClaudeState,
@@ -161,7 +161,7 @@ pub struct ClaudeEnrichment {
 }
 
 /// Reachability state for a remote host.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HostState {
     /// True when the SSH host responded to the last reachability check.
     pub reachable: bool,

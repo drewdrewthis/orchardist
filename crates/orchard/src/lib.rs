@@ -34,3 +34,4 @@ pub mod status;
 pub mod tmux;
 pub mod tui;
 pub mod types;
+pub mod watch;

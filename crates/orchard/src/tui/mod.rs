@@ -17,7 +17,7 @@ mod worktree_ops;
 pub use theme::Theme;
 
 use sessions::{check_standalone_collisions, ensure_main_sessions, ensure_standalone_sessions};
-use worktree_ops::{WorktreeSnapshot, delete_task_row, filter_stale};
+use worktree_ops::{delete_task_row, filter_stale};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
@@ -107,8 +107,8 @@ pub struct App {
     /// Throbber animation state — advanced each frame via `calc_next()`.
     throbber_state: throbber_widgets_tui::ThrobberState,
 
-    // Previous snapshots used to detect state transitions between cache refreshes.
-    previous_worktree_states: HashMap<String, WorktreeSnapshot>,
+    // Previous state snapshot used to detect transitions between cache refreshes.
+    previous_orchard_state: Option<crate::orchard_state::OrchardState>,
 
     // Mouse support
     /// Last rendered table body rect (excludes border + header row). Updated by render.
@@ -203,7 +203,7 @@ impl App {
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
             persist_selection,
-            previous_worktree_states: HashMap::new(),
+            previous_orchard_state: None,
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
             preview_area: Cell::new(Rect::default()),
@@ -436,10 +436,9 @@ impl App {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 AppMsg::CacheRefreshed => {
-                    let old_states = std::mem::take(&mut self.previous_worktree_states);
                     self.task_rows = crate::build_state::build_task_rows(&self.global_config);
                     let state = crate::build_state::build_state(&self.global_config);
-                    self.standalone_sessions = state.standalone_sessions;
+                    self.standalone_sessions = state.standalone_sessions.clone();
                     // Warn on refresh (not fatal) — a new worktree may have
                     // introduced a collision after boot. Don't crash the TUI.
                     if let Err(e) =
@@ -471,7 +470,7 @@ impl App {
                     // Fetch pane content for the current task selection.
                     self.fetch_task_pane_content();
 
-                    self.detect_and_notify(&old_states);
+                    self.detect_and_notify(&state);
 
                     // Write session manifest so resurrection knows which
                     // worktrees had active sessions at last refresh.
@@ -521,10 +520,9 @@ impl App {
                     }
                 }
                 AppMsg::LocalCacheRefreshed => {
-                    let old_states = std::mem::take(&mut self.previous_worktree_states);
                     self.task_rows = crate::build_state::build_task_rows(&self.global_config);
                     let state = crate::build_state::build_state(&self.global_config);
-                    self.standalone_sessions = state.standalone_sessions;
+                    self.standalone_sessions = state.standalone_sessions.clone();
                     if let Err(e) =
                         check_standalone_collisions(&self.standalone_sessions, &self.task_rows)
                     {
@@ -547,7 +545,7 @@ impl App {
                     }
                     self.prune_expansion_state();
                     self.fetch_task_pane_content();
-                    self.detect_and_notify(&old_states);
+                    self.detect_and_notify(&state);
                 }
                 AppMsg::DeleteDone => {
                     if let ViewState::ConfirmDelete(ref mut ds) = self.view {
@@ -591,101 +589,62 @@ impl App {
         }
     }
 
-    /// Detects state transitions between the previous and current worktree snapshots
+    /// Detects state transitions between the previous and current `OrchardState`
     /// and fires desktop notifications for significant changes (Claude needs input,
     /// Claude finished, CI failed, new review comments).
     ///
-    /// Also saves the current row states as snapshots for the next comparison.
-    fn detect_and_notify(&mut self, old_states: &HashMap<String, WorktreeSnapshot>) {
-        let terminal_app = self.global_config.terminal_app.as_str();
-        for row in &self.task_rows {
-            let key = row.worktree_path.clone();
-            let old = old_states.get(&key);
-            let label = row.issue_title.as_deref().unwrap_or(&row.branch);
-            let session = row.sessions.first().map(|s| s.tmux.name.as_str());
-            let notify = |title: &str, message: &str| {
-                crate::notify::send_notification_with_session(
-                    title,
-                    message,
-                    session,
-                    terminal_app,
-                );
-            };
-
-            // Claude was working, now needs input.
-            if row.sessions.iter().any(|s| {
-                s.claude
-                    .as_ref()
-                    .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
-            }) && old.map(|o| !o.claude_needs_input).unwrap_or(false)
-            {
-                notify(
-                    "Claude needs input",
-                    &format!("{} is waiting for you", label),
-                );
-            }
-
-            // Claude was working, now idle (finished).
-            if !row.sessions.iter().any(|s| {
-                s.claude
-                    .as_ref()
-                    .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)
-            }) && old.map(|o| o.claude_working).unwrap_or(false)
-            {
-                notify("Claude finished", label);
-            }
-
-            // CI transitioned to failing.
-            if let Some(ref pr) = row.pr {
-                if pr.checks_state.as_deref() == Some("failing")
-                    && old
-                        .map(|o| o.ci_status.as_deref() != Some("failing"))
-                        .unwrap_or(false)
-                {
-                    notify("CI Failed", &format!("#{} {}", pr.number, label));
-                }
-
-                // New unresolved review threads appeared.
-                if pr.unresolved_threads > 0
-                    && old.map(|o| !o.has_unresolved_threads).unwrap_or(false)
-                {
-                    notify(
-                        "Review comments",
-                        &format!(
-                            "#{} has {} unresolved thread(s)",
-                            pr.number, pr.unresolved_threads
-                        ),
-                    );
+    /// Delegates diffing to `crate::watch::diff::diff` and saves the current
+    /// state for the next comparison.
+    fn detect_and_notify(&mut self, new_state: &crate::orchard_state::OrchardState) {
+        if let Some(ref old_state) = self.previous_orchard_state {
+            let events = crate::watch::diff::diff(old_state, new_state);
+            let terminal_app = self.global_config.terminal_app.as_str();
+            for event in &events {
+                match &event.kind {
+                    crate::watch::EventKind::ClaudeNeedsInput { session, label, .. } => {
+                        crate::notify::send_notification_with_session(
+                            "Claude needs input",
+                            &format!("{} is waiting for you", label),
+                            Some(session.as_str()),
+                            terminal_app,
+                        );
+                    }
+                    crate::watch::EventKind::ClaudeFinished { session, label, .. } => {
+                        crate::notify::send_notification_with_session(
+                            "Claude finished",
+                            label,
+                            Some(session.as_str()),
+                            terminal_app,
+                        );
+                    }
+                    crate::watch::EventKind::CiFailed { pr_number, label, .. } => {
+                        crate::notify::send_notification_with_session(
+                            "CI Failed",
+                            &format!("#{} {}", pr_number, label),
+                            None,
+                            terminal_app,
+                        );
+                    }
+                    crate::watch::EventKind::ReviewComments {
+                        pr_number,
+                        thread_count,
+                        ..
+                    } => {
+                        crate::notify::send_notification_with_session(
+                            "Review comments",
+                            &format!(
+                                "#{} has {} unresolved thread(s)",
+                                pr_number, thread_count
+                            ),
+                            None,
+                            terminal_app,
+                        );
+                    }
+                    _ => {}
                 }
             }
         }
-
-        // Save current state as snapshots for the next comparison.
-        self.previous_worktree_states = self
-            .task_rows
-            .iter()
-            .map(|row| {
-                let snapshot = WorktreeSnapshot {
-                    claude_working: row.sessions.iter().any(|s| {
-                        s.claude
-                            .as_ref()
-                            .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Working)
-                    }),
-                    claude_needs_input: row.sessions.iter().any(|s| {
-                        s.claude
-                            .as_ref()
-                            .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
-                    }),
-                    ci_status: row.pr.as_ref().and_then(|p| p.checks_state.clone()),
-                    has_unresolved_threads: row
-                        .pr
-                        .as_ref()
-                        .map(|p| p.unresolved_threads > 0)
-                        .unwrap_or(false),
-                };
-                (row.worktree_path.clone(), snapshot)
-            })
-            .collect();
+        self.previous_orchard_state = Some(new_state.clone());
     }
 
     // -------------------------------------------------------------------
@@ -1665,7 +1624,7 @@ impl App {
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
             switch_target: None,
             persist_selection: true,
-            previous_worktree_states: HashMap::new(),
+            previous_orchard_state: None,
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
             preview_area: Cell::new(Rect::default()),
