@@ -471,6 +471,7 @@ impl App {
                 // Select specific pane after switching if a sub-row was active.
                 if let Some(ref target) = pane_target {
                     let _ = tmux::select_pane(&session_name, target);
+                    let _ = tmux::zoom_pane(&session_name, target);
                 }
                 self.switch_target.is_some()
             }
@@ -511,6 +512,7 @@ impl App {
                 if tmux::session_exists(&session_name) {
                     if let Some(ref target) = pane_target {
                         let _ = tmux::select_pane(&session_name, target);
+                        let _ = tmux::zoom_pane(&session_name, target);
                     }
                     self.switch_target = Some(session_name);
                     true
