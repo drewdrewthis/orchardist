@@ -1109,8 +1109,8 @@ impl App {
                 ok()
             }
             Message::Enter => {
-                self.filter_text.clear();
                 let quit = self.handle_enter_action();
+                self.filter_text.clear();
                 UpdateResult {
                     quit,
                     next_msg: None,
@@ -3986,6 +3986,29 @@ mod tests {
         app.filter_text = "feat".to_string();
         app.update(Message::Enter);
         assert_eq!(app.filter_text, "", "Enter should clear the filter");
+    }
+
+    #[test]
+    fn enter_activates_highlighted_row_with_active_filter() {
+        // Two rows with sessions: only row 2 matches the filter "issue-2".
+        let rows = vec![
+            make_task_row_with_session("feat/issue-1", "repo_issue-1"),
+            make_task_row_with_session("feat/issue-2", "repo_issue-2"),
+        ];
+        let mut app = App::new_test(rows);
+        app.filter_text = "issue-2".to_string();
+        // Cursor 0 points at the only visible row (issue-2) while filter is active.
+        app.cursor = 0;
+        app.update(Message::Enter);
+        assert_eq!(app.filter_text, "", "Enter should clear the filter");
+        // handle_enter_action resolves cursor 0 against filtered rows and sets
+        // switch_target to the matched session name. With the fix, the filter is
+        // still active during resolution so cursor 0 maps to issue-2.
+        let target = app.switch_target.as_deref().unwrap_or("");
+        assert!(
+            target.contains("issue-2"),
+            "Enter should activate the filtered row (issue-2), not issue-1; got switch_target: {target}"
+        );
     }
 
     #[test]
