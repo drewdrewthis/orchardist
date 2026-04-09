@@ -19,21 +19,28 @@ const CYAN: &str = "\x1b[36m";
 const RESET: &str = "\x1b[0m";
 
 /// Returns the orchard popup wrapper script content.
-pub fn get_wrapper_script() -> &'static str {
-    r#"#!/bin/sh
-errfile=$(mktemp "${TMPDIR:-/tmp}/orchard-err.XXXXXX")
-session=$(orchard "$@" 2>"$errfile")
+///
+/// The `orchard_bin` parameter is the absolute path to the orchard binary,
+/// embedded directly into the script so it works even when `~/.cargo/bin`
+/// is not in PATH.
+pub fn get_wrapper_script(orchard_bin: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+errfile=$(mktemp "${{TMPDIR:-/tmp}}/orchard-err.XXXXXX")
+session=$("{orchard_bin}" "$@" 2>"$errfile")
 rc=$?
 if [ $rc -ne 0 ]; then
   msg=$(head -1 "$errfile" 2>/dev/null)
   rm -f "$errfile"
-  tmux display-message "orchard: ${msg:-unknown error}"
+  tmux display-message "orchard: ${{msg:-unknown error}}"
 elif [ -n "$session" ]; then
   rm -f "$errfile"
   tmux switch-client -t "$session"
 else
   rm -f "$errfile"
-fi"#
+fi"#,
+        orchard_bin = orchard_bin
+    )
 }
 
 /// Returns the tmux.conf keybinding line for the popup, using the given key.
@@ -45,24 +52,31 @@ pub fn get_tmux_binding(key: &str) -> String {
 ///
 /// The script reads a single line from the user, passes it to `orchard chat
 /// --message`, and surfaces any errors via `tmux display-message`.
-pub fn get_chat_wrapper_script() -> &'static str {
-    r#"#!/bin/sh
+///
+/// The `orchard_bin` parameter is the absolute path to the orchard binary,
+/// embedded directly into the script so it works even when `~/.cargo/bin`
+/// is not in PATH.
+pub fn get_chat_wrapper_script(orchard_bin: &str) -> String {
+    format!(
+        r#"#!/bin/sh
 printf "> "
 read -r prompt
 if [ -z "$prompt" ]; then
   exit 0
 fi
-errfile=$(mktemp "${TMPDIR:-/tmp}/orchard-chat-err.XXXXXX")
+errfile=$(mktemp "${{TMPDIR:-/tmp}}/orchard-chat-err.XXXXXX")
 trap 'rm -f "$errfile"' EXIT
-orchard chat --message "$prompt" 2>"$errfile"
+"{orchard_bin}" chat --message "$prompt" 2>"$errfile"
 rc=$?
 if [ $rc -ne 0 ]; then
   msg=$(head -1 "$errfile" 2>/dev/null)
   rm -f "$errfile"
-  tmux display-message "orchard chat: ${msg:-unknown error}"
+  tmux display-message "orchard chat: ${{msg:-unknown error}}"
 else
   rm -f "$errfile"
-fi"#
+fi"#,
+        orchard_bin = orchard_bin
+    )
 }
 
 /// Returns the tmux.conf keybinding line for the chat popup, using the given key.
@@ -230,17 +244,30 @@ fn remove_marker_block(content: &str) -> String {
 /// popup) and makes both executable. Safe to run multiple times (idempotent).
 fn install_wrapper(home: &Path) -> Result<(), String> {
     eprintln!("{BOLD}{CYAN}[3/{TOTAL_STEPS}] Creating wrapper scripts{RESET}");
+
+    // Resolve the absolute path to the running orchard binary so the wrapper
+    // scripts work even when ~/.cargo/bin is not in PATH.
+    // Note: we intentionally skip canonicalize() to preserve symlink paths
+    // (e.g. ~/Library/pnpm/orchard -> target/release/orchard).
+    let orchard_bin = std::env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            eprintln!("  {YELLOW}Warning: could not resolve orchard binary path, using bare 'orchard'{RESET}");
+            "orchard".to_string()
+        });
+
     let bin_dir = home.join(".local/bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("creating ~/.local/bin: {e}"))?;
 
     // Install orchard-popup.
     let popup_path = bin_dir.join("orchard-popup");
-    std::fs::write(&popup_path, get_wrapper_script())
+    std::fs::write(&popup_path, get_wrapper_script(&orchard_bin))
         .map_err(|e| format!("writing {}: {e}", popup_path.display()))?;
 
     // Install orchard-chat.
     let chat_path = bin_dir.join("orchard-chat");
-    std::fs::write(&chat_path, get_chat_wrapper_script())
+    std::fs::write(&chat_path, get_chat_wrapper_script(&orchard_bin))
         .map_err(|e| format!("writing {}: {e}", chat_path.display()))?;
 
     #[cfg(unix)]
@@ -742,27 +769,30 @@ mod tests {
 
     #[test]
     fn wrapper_script_contains_git_orchard_call() {
-        assert!(get_wrapper_script().contains("orchard"));
+        assert!(get_wrapper_script("/usr/local/bin/orchard").contains("orchard"));
     }
 
     #[test]
     fn wrapper_script_captures_stdout_as_session() {
-        assert!(get_wrapper_script().contains("session=$(orchard"));
+        assert!(
+            get_wrapper_script("/usr/local/bin/orchard")
+                .contains("session=$(\"/usr/local/bin/orchard\"")
+        );
     }
 
     #[test]
     fn wrapper_script_forwards_arguments() {
-        assert!(get_wrapper_script().contains("\"$@\""));
+        assert!(get_wrapper_script("/usr/local/bin/orchard").contains("\"$@\""));
     }
 
     #[test]
     fn wrapper_script_calls_switch_client() {
-        assert!(get_wrapper_script().contains("tmux switch-client -t"));
+        assert!(get_wrapper_script("/usr/local/bin/orchard").contains("tmux switch-client -t"));
     }
 
     #[test]
     fn wrapper_script_shows_error_on_failure() {
-        assert!(get_wrapper_script().contains("tmux display-message"));
+        assert!(get_wrapper_script("/usr/local/bin/orchard").contains("tmux display-message"));
     }
 
     #[test]
@@ -1070,33 +1100,36 @@ mod tests {
 
     #[test]
     fn chat_wrapper_script_contains_orchard_chat_message() {
-        assert!(get_chat_wrapper_script().contains("orchard chat --message"));
+        assert!(
+            get_chat_wrapper_script("/usr/local/bin/orchard")
+                .contains("\"/usr/local/bin/orchard\" chat --message")
+        );
     }
 
     #[test]
     fn chat_wrapper_script_reads_input_from_user() {
-        assert!(get_chat_wrapper_script().contains("read -r prompt"));
+        assert!(get_chat_wrapper_script("/usr/local/bin/orchard").contains("read -r prompt"));
     }
 
     #[test]
     fn chat_wrapper_script_exits_on_empty_input() {
-        assert!(get_chat_wrapper_script().contains("exit 0"));
+        assert!(get_chat_wrapper_script("/usr/local/bin/orchard").contains("exit 0"));
     }
 
     #[test]
     fn chat_wrapper_script_shows_error_via_tmux_display_message() {
-        assert!(get_chat_wrapper_script().contains("tmux display-message"));
+        assert!(get_chat_wrapper_script("/usr/local/bin/orchard").contains("tmux display-message"));
     }
 
     #[test]
     fn chat_wrapper_script_cleans_up_tempfile_on_exit() {
         // The script must install a trap so the tempfile is removed on signal/exit.
         assert!(
-            get_chat_wrapper_script().contains("trap"),
+            get_chat_wrapper_script("/usr/local/bin/orchard").contains("trap"),
             "script must contain a trap to clean up errfile"
         );
         assert!(
-            get_chat_wrapper_script().contains("EXIT"),
+            get_chat_wrapper_script("/usr/local/bin/orchard").contains("EXIT"),
             "trap must fire on EXIT"
         );
     }
@@ -1129,5 +1162,17 @@ mod tests {
         let binding = get_chat_tmux_binding("O");
         assert!(binding.contains("60%"), "chat popup should be 60% wide");
         assert!(binding.contains("20%"), "chat popup should be 20% tall");
+    }
+
+    #[test]
+    fn wrapper_script_embeds_absolute_path() {
+        let script = get_wrapper_script("/custom/path/orchard");
+        assert!(script.contains("\"/custom/path/orchard\""));
+    }
+
+    #[test]
+    fn chat_wrapper_script_embeds_absolute_path() {
+        let script = get_chat_wrapper_script("/custom/path/orchard");
+        assert!(script.contains("\"/custom/path/orchard\""));
     }
 }
