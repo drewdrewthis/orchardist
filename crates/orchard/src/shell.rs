@@ -247,11 +247,15 @@ fn install_wrapper(home: &Path) -> Result<(), String> {
 
     // Resolve the absolute path to the running orchard binary so the wrapper
     // scripts work even when ~/.cargo/bin is not in PATH.
+    // Note: we intentionally skip canonicalize() to preserve symlink paths
+    // (e.g. ~/Library/pnpm/orchard -> target/release/orchard).
     let orchard_bin = std::env::current_exe()
         .ok()
-        .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "orchard".to_string());
+        .unwrap_or_else(|| {
+            eprintln!("  {YELLOW}Warning: could not resolve orchard binary path, using bare 'orchard'{RESET}");
+            "orchard".to_string()
+        });
 
     let bin_dir = home.join(".local/bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("creating ~/.local/bin: {e}"))?;
