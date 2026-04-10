@@ -695,6 +695,8 @@ impl App {
                 }
                 AppMsg::PaneContent(session_name, content) => {
                     // Accept pane content when session matches the current row (standalone or worktree).
+                    // Use the filtered visible list so repo-tab filtering doesn't cause a mismatch
+                    // between the fetched session and the acceptance check (Bug #99).
                     let standalone_count = self.standalone_sessions.len();
                     let matches = if self.cursor < standalone_count {
                         self.standalone_sessions
@@ -702,8 +704,13 @@ impl App {
                             .is_some_and(|ss| ss.session.tmux.name == session_name)
                     } else {
                         let wt_cursor = self.cursor - standalone_count;
-                        self.task_rows.get(wt_cursor).is_some_and(|row| {
-                            row.sessions.iter().any(|s| s.tmux.name == session_name)
+                        let visible = list::visible_tasks_filtered(
+                            &self.task_rows,
+                            &self.filter_text,
+                            self.active_repo_slug(),
+                        );
+                        visible.get(wt_cursor).is_some_and(|vt| {
+                            vt.row.sessions.iter().any(|s| s.tmux.name == session_name)
                         })
                     };
                     if matches {
@@ -1459,6 +1466,8 @@ impl App {
                 self.active_repo_index = self.active_repo_index.saturating_sub(1);
                 self.cursor = 0;
                 self.sub_cursor = SubCursor::None;
+                self.pane_content.clear();
+                self.fetch_task_pane_content();
                 ok()
             }
             Message::NextRepo => {
@@ -1466,6 +1475,8 @@ impl App {
                 self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
                 self.cursor = 0;
                 self.sub_cursor = SubCursor::None;
+                self.pane_content.clear();
+                self.fetch_task_pane_content();
                 ok()
             }
             Message::ExpandRow => {
@@ -1980,6 +1991,10 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     terminal.clear()?;
 
     let mut app = App::new(command);
+
+    // Expand all rows immediately using cached disk data, so the first frame
+    // renders with hierarchy visible instead of waiting for background refresh.
+    app.prune_expansion_state();
 
     // Guard: standalone session names must not collide with worktree-derived names.
     check_standalone_collisions(&app.standalone_sessions, &app.task_rows)?;
@@ -4325,6 +4340,205 @@ mod tests {
         assert_eq!(app.input_phase, InputPhase::Idle);
         let o_key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(o_key), Some(Message::OpenPR));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug #111: 'o' key must resolve to parent worktree row when on a sub-row
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn open_pr_resolves_parent_when_on_pane_sub_row() {
+        // Cursor stays at the parent row even when sub_cursor points at a pane.
+        // OpenPR must look up the parent row (where PR info lives), not the sub-row.
+        let row = WorktreeRow {
+            pr: Some(DPrInfo {
+                number: 42,
+                branch: "feat/issue-42".to_string(),
+                state: Some("open".to_string()),
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
+            }),
+            ..make_task_row_with_panes(42, 3)
+        };
+        let mut app = App::new_test(vec![row]);
+        app.expanded.insert("/workspace/repo-42".to_string());
+        // Navigate into a pane sub-row.
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
+        // OpenPR must not fail — cursor still points at the parent row.
+        // We verify by checking that the message dispatches to OpenPR (key mapping)
+        // and that calling update(OpenPR) completes without panic or warning.
+        let o_key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert_eq!(
+            app.handle_event(o_key),
+            Some(Message::OpenPR),
+            "'o' key on a pane sub-row must dispatch OpenPR"
+        );
+        // update must not set a warning (which guard_requires_worktree would do if
+        // it mistakenly treated the sub-row as a standalone row).
+        app.update(Message::OpenPR);
+        assert!(
+            app.warning.is_none(),
+            "OpenPR on a pane sub-row must not trigger the 'requires worktree' warning"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug #99: preview pane must accept pane content under an active repo filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pane_content_accepted_when_repo_filter_active() {
+        // Two rows from different repos. Cursor is on repo-b's row (filtered visible[0])
+        // while task_rows[0] is a repo-a row. The PaneContent handler must use the
+        // filtered list, not task_rows, so the session name matches correctly.
+        let row_a = WorktreeRow {
+            repo_slug: "acme/repo-a".to_string(),
+            worktree_path: "/workspace/repo-a-feat".to_string(),
+            branch: "feat/issue-1".to_string(),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "sess-repo-a".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+            }],
+            ..make_task_row(1, DisplayGroup::Normal)
+        };
+        let row_b = WorktreeRow {
+            repo_slug: "acme/repo-b".to_string(),
+            worktree_path: "/workspace/repo-b-feat".to_string(),
+            branch: "feat/issue-2".to_string(),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "sess-repo-b".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+            }],
+            ..make_task_row(2, DisplayGroup::Normal)
+        };
+
+        let mut app = App::new_test(vec![row_a, row_b]);
+        // Configure two repos so active_repo_index 2 = repos[1] = "acme/repo-b".
+        app.global_config.repos = vec![
+            global_config::RepoConfig {
+                slug: "acme/repo-a".to_string(),
+                path: "/workspace/repo-a".to_string(),
+                remotes: vec![],
+            },
+            global_config::RepoConfig {
+                slug: "acme/repo-b".to_string(),
+                path: "/workspace/repo-b".to_string(),
+                remotes: vec![],
+            },
+        ];
+        app.active_repo_index = 2; // repos[1] = "acme/repo-b"
+        app.cursor = 0; // visible[0] under repo-b filter = row_b
+
+        // Simulate the background thread delivering pane content for the repo-b session.
+        app.tx
+            .send(AppMsg::PaneContent(
+                "sess-repo-b".to_string(),
+                "repo-b pane output".to_string(),
+            ))
+            .unwrap();
+        app.check_updates();
+
+        assert_eq!(
+            app.pane_content, "repo-b pane output",
+            "pane content for the repo-b session must be accepted when repo-b filter is active"
+        );
+    }
+
+    #[test]
+    fn pane_content_rejected_for_stale_session_under_repo_filter() {
+        // Pane content for repo-a's session must be rejected when the filter shows only repo-b.
+        let row_a = WorktreeRow {
+            repo_slug: "acme/repo-a".to_string(),
+            worktree_path: "/workspace/repo-a-feat".to_string(),
+            branch: "feat/issue-1".to_string(),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "sess-repo-a".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+            }],
+            ..make_task_row(1, DisplayGroup::Normal)
+        };
+        let row_b = WorktreeRow {
+            repo_slug: "acme/repo-b".to_string(),
+            worktree_path: "/workspace/repo-b-feat".to_string(),
+            branch: "feat/issue-2".to_string(),
+            sessions: vec![],
+            ..make_task_row(2, DisplayGroup::Normal)
+        };
+
+        let mut app = App::new_test(vec![row_a, row_b]);
+        app.global_config.repos = vec![
+            global_config::RepoConfig {
+                slug: "acme/repo-a".to_string(),
+                path: "/workspace/repo-a".to_string(),
+                remotes: vec![],
+            },
+            global_config::RepoConfig {
+                slug: "acme/repo-b".to_string(),
+                path: "/workspace/repo-b".to_string(),
+                remotes: vec![],
+            },
+        ];
+        app.active_repo_index = 2; // repo-b tab
+        app.cursor = 0; // visible[0] under repo-b filter = row_b (no session)
+
+        // Stale content for repo-a's session arrives — must be rejected.
+        app.tx
+            .send(AppMsg::PaneContent(
+                "sess-repo-a".to_string(),
+                "stale repo-a output".to_string(),
+            ))
+            .unwrap();
+        app.check_updates();
+
+        assert!(
+            app.pane_content.is_empty(),
+            "stale pane content for a filtered-out repo must be rejected"
+        );
+    }
+
+    #[test]
+    fn switching_repo_tab_clears_pane_content() {
+        // Switching repo tabs must clear stale pane content from the previous tab.
+        let row = WorktreeRow {
+            repo_slug: "acme/repo-a".to_string(),
+            ..make_task_row(1, DisplayGroup::Normal)
+        };
+        let mut app = App::new_test(vec![row]);
+        app.pane_content = "old content".to_string();
+        app.global_config.repos = vec![global_config::RepoConfig {
+            slug: "acme/repo-a".to_string(),
+            path: "/workspace/repo-a".to_string(),
+            remotes: vec![],
+        }];
+
+        app.update(Message::NextRepo);
+        assert!(
+            app.pane_content.is_empty(),
+            "switching repo tabs must clear stale pane content"
+        );
     }
 
     #[test]
