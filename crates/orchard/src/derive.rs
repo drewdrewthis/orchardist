@@ -697,6 +697,68 @@ mod tests {
     }
 
     #[test]
+    fn session_does_not_match_worktree_with_longer_path_sharing_prefix() {
+        // Regression guard for bug #191: session at "/workspace/langwatch" must
+        // NOT match the worktree at "/workspace/langwatch-sdk". The paths must
+        // be equal, not merely prefix-sharing.
+        let worktrees = vec![
+            worktree("/workspace/langwatch-sdk", "main"),
+            worktree("/workspace/langwatch-sdk-feat", "feat/branch"),
+        ];
+        let sessions = vec![session("langwatch", "/workspace/langwatch", vec!["bash"])];
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+
+        assert_eq!(rows.len(), 2);
+        // Neither worktree should have the session attached — path is different.
+        assert!(
+            rows[0].sessions.is_empty(),
+            "langwatch-sdk must not receive the langwatch session"
+        );
+        assert!(
+            rows[1].sessions.is_empty(),
+            "langwatch-sdk-feat must not receive the langwatch session"
+        );
+    }
+
+    #[test]
+    fn session_does_not_match_worktree_when_path_is_substring() {
+        // "main" session must NOT match "/workspace/domain-main-service" worktree.
+        let worktrees = vec![worktree("/workspace/domain-main-service", "feat/branch")];
+        let sessions = vec![session("main", "/workspace/main", vec!["bash"])];
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].sessions.is_empty(),
+            "domain-main-service must not receive the main session"
+        );
+    }
+
+    #[test]
+    fn session_with_trailing_slash_joins_correct_worktree() {
+        // Tmux on some versions appends a trailing slash to #{session_path}.
+        // After normalization, it should still match exactly.
+        let worktrees = vec![worktree("/workspace/webapp-47", "feat/branch")];
+        // Trailing slash is stripped by normalize_path when building CachedTmuxSession,
+        // so the stored path is "/workspace/webapp-47" — we pass the normalized form here.
+        let normalized_sessions = vec![session("webapp_47", "/workspace/webapp-47", vec!["bash"])];
+
+        let rows = derive_worktree_rows(
+            &[],
+            &[],
+            &worktrees,
+            &normalized_sessions,
+            "owner/repo",
+            &[],
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sessions.len(), 1);
+    }
+
+    #[test]
     fn multiple_sessions_at_same_path_all_join() {
         let worktrees = vec![worktree("/workspace/webapp-47", "feat/task-centric")];
         let sessions = vec![

@@ -154,9 +154,11 @@ pub(crate) fn resolve_cursor(
 
 /// Resolves a `LastSelection` to an `active_repo_index`.
 ///
+/// Tab layout: 0 = ALL, 1 = ORCHARD, 2..N+1 = repos[0..N-1].
+///
 /// Resolution rules:
 /// - `active_repo_slug` is `None`: return 0 ("all repos").
-/// - Slug found at position `i` in `repos`: return `i + 1` (1-based, index 0 = all repos).
+/// - Slug found at position `i` in `repos`: return `i + 2` (repos start at index 2).
 /// - Slug not found (repo removed): return 0 ("all repos").
 pub(crate) fn resolve_active_repo_index(
     sel: &LastSelection,
@@ -167,7 +169,7 @@ pub(crate) fn resolve_active_repo_index(
         Some(slug) => repos
             .iter()
             .position(|r| &r.slug == slug)
-            .map(|i| i + 1)
+            .map(|i| i + 2)
             .unwrap_or(0),
     }
 }
@@ -425,8 +427,8 @@ mod tests {
             make_repo_config("acme/alpha"),
             make_repo_config("acme/beta"),
         ];
-        // "acme/beta" is at index 1 in repos, so active_repo_index = 2 (1-based).
-        assert_eq!(resolve_active_repo_index(&sel, &repos), 2);
+        // "acme/beta" is at repos[1], so active_repo_index = 3 (ALL=0, ORCHARD=1, repos start at 2).
+        assert_eq!(resolve_active_repo_index(&sel, &repos), 3);
     }
 
     #[test]

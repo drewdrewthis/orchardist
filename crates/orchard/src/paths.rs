@@ -7,6 +7,7 @@
 //! `normalize_path` strips trailing slashes for consistent path comparisons.
 //! `paths_match` performs exact path comparison with symlink resolution as a
 //! fallback, preventing both false positives and missed matches.
+
 /// Normalizes a filesystem path for comparison by stripping trailing slashes.
 ///
 /// Tmux reports `#{session_path}` with a trailing slash in some versions;

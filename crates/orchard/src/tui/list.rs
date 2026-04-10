@@ -418,7 +418,7 @@ impl App {
     /// Returns `true` when the TUI should exit (to switch to a session).
     pub(crate) fn handle_enter_action(&mut self) -> bool {
         use super::SubCursor;
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
 
         // Resolve pane target from SubCursor for Enter action.
         let resolve_pane_target_from_sub_cursor =
@@ -663,7 +663,7 @@ impl App {
         self.pane_content.clear();
 
         // Handle standalone sessions first.
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if cursor_is_standalone(self.cursor, standalone_count)
             && let Some(ss) = self.standalone_sessions.get(self.cursor)
             && matches!(
@@ -1020,8 +1020,12 @@ impl App {
 
         let hdr_height = header_height(area.height);
 
-        let tasks =
-            visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
+        // On the ORCHARD tab only standalone sessions are shown; suppress all worktree rows.
+        let tasks = if self.is_orchard_tab() {
+            vec![]
+        } else {
+            visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug())
+        };
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
         let has_remote = self.task_rows.iter().any(|r| {
@@ -1068,7 +1072,7 @@ impl App {
 
         // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         let (rows, row_heights, selected_visual_idx) = self.build_task_table_rows_with_standalone(
             &tasks,
             show_branch,
@@ -1162,9 +1166,13 @@ impl App {
         header_cells.push(Cell::from("STATUS"));
         let header_row = Row::new(header_cells).style(header_style);
 
-        let table_title = match self.active_repo_slug() {
-            Some(slug) => format!(" TASKS \u{2014} {} ", slug),
-            None => " TASKS ".to_string(),
+        let table_title = if self.is_orchard_tab() {
+            " ORCHARD \u{2014} orchestrator sessions ".to_string()
+        } else {
+            match self.active_repo_slug() {
+                Some(slug) => format!(" TASKS \u{2014} {} ", slug),
+                None => " TASKS ".to_string(),
+            }
         };
         let block = Block::default()
             .title(table_title)
@@ -1273,11 +1281,18 @@ impl App {
             active: bool,
         }
 
-        let mut tabs = vec![TabInfo {
-            label: "ALL".to_string(),
-            color: theme.accent,
-            active: self.active_repo_index == 0,
-        }];
+        let mut tabs = vec![
+            TabInfo {
+                label: "ALL".to_string(),
+                color: theme.accent,
+                active: self.active_repo_index == 0,
+            },
+            TabInfo {
+                label: "ORCHARD".to_string(),
+                color: theme.dimmed,
+                active: self.active_repo_index == 1,
+            },
+        ];
 
         for (i, repo) in self.global_config.repos.iter().enumerate() {
             let name = repo
@@ -1289,7 +1304,7 @@ impl App {
             tabs.push(TabInfo {
                 label: name,
                 color: repo_color(i),
-                active: self.active_repo_index == i + 1,
+                active: self.active_repo_index == i + 2,
             });
         }
 
@@ -1379,6 +1394,10 @@ impl App {
     /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], [TAGS], STATUS.
     /// Unified sequential numbering across standalone + worktree rows.
     /// Expanded rows get pane sub-rows inserted after the parent.
+    ///
+    /// Standalone sessions are rendered only on ALL (0) and ORCHARD (1) tabs, derived
+    /// from `self.effective_standalone_count()`. On repo tabs the count is 0 and
+    /// the loop body never executes.
     fn build_task_table_rows_with_standalone(
         &self,
         tasks: &[VisibleTask],
@@ -1392,13 +1411,14 @@ impl App {
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
         let mut selected_visual_idx: Option<usize> = None;
-        let standalone_count = self.standalone_sessions.len();
+        // On repo tabs (index >= 2) this is 0, so the standalone loop body never runs.
+        let standalone_count = self.effective_standalone_count();
 
         // Unified numbering counter (1-based, spans standalone + worktree).
         let mut unified_num = 1usize;
 
-        // Render standalone session rows first.
-        for (idx, ss) in self.standalone_sessions.iter().enumerate() {
+        // Render standalone session rows first (empty slice on repo tabs).
+        for (idx, ss) in self.standalone_sessions.iter().enumerate().take(standalone_count) {
             let selected = idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
             if selected {
                 selected_visual_idx = Some(rows.len());
@@ -2130,7 +2150,7 @@ impl App {
 
         // PR link hint — dim when standalone or selected task has no PR.
         let has_pr = !is_standalone && !self.task_rows.is_empty() && {
-            let standalone_count = self.standalone_sessions.len();
+            let standalone_count = self.effective_standalone_count();
             let worktree_cursor = self.cursor.saturating_sub(standalone_count);
             let visible =
                 visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
@@ -3174,7 +3194,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
-        // Simulate a repo selected.
+        // Simulate the ORCHARD tab selected (index 1).
         app.active_repo_index = 1;
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3347,9 +3367,10 @@ mod tests {
             path: "/workspace/alpha".to_string(),
             remotes: vec![],
         }];
+        // ORCHARD tab (index 1) is active; ALL tab must still render.
         let app = make_repo_app(repos, 1);
         let buf = render_tabs_to_buffer(&app);
-        // Inactive ALL: label on row 1 should have dimmed fg.
+        // Inactive ALL: label on row 1 should still appear.
         let all_cell = (0..buf.area.width)
             .map(|x| &buf[(x, 1)])
             .find(|c| c.symbol() == "A");
@@ -3385,17 +3406,17 @@ mod tests {
             path: "/workspace/beta".to_string(),
             remotes: vec![],
         }];
-        let app = make_repo_app(repos, 1);
+        // Repos start at index 2 (ALL=0, ORCHARD=1, repos start at 2).
+        let app = make_repo_app(repos, 2);
         let buf = render_tabs_to_buffer(&app);
-        // Active repo badge starts after ALL badge (width 7) + 1 gap = x=8.
-        // The border corner at row 0 should have repo_color(0) fg.
+        // The border corner ╭ of the active repo tab should have repo_color(0) fg.
         let expected_color = repo_color(0);
-        // Inactive ALL has no border, so the only ╭ is the active repo's.
+        // Only the active tab renders a border, so find any ╭ that has the repo color.
         let corner = (0..buf.area.width)
             .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "╭");
+            .find(|c| c.symbol() == "╭" && c.style().fg == Some(expected_color));
         assert!(
-            corner.is_some_and(|c| c.style().fg == Some(expected_color)),
+            corner.is_some(),
             "active repo tab border must use repo_color"
         );
     }
@@ -3415,7 +3436,9 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        let app = make_repo_app(repos, 2);
+        // Index 3 = repos[1] = "owner/beta" active; "owner/alpha" (ALPHA) is inactive.
+        // Tab layout: ALL=0, ORCHARD=1, owner/alpha=2, owner/beta=3.
+        let app = make_repo_app(repos, 3);
         let buf = render_tabs_to_buffer(&app);
         let text = buffer_to_string(&buf);
         assert!(

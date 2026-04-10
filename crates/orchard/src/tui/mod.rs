@@ -99,7 +99,7 @@ pub struct App {
     /// Standalone tmux sessions from global config, enriched with live state.
     standalone_sessions: Vec<StandaloneSessionRow>,
     global_config: global_config::GlobalConfig,
-    /// Index into `global_config.repos`: 0 = all repos, 1+ = specific repo.
+    /// Active tab index: 0 = ALL, 1 = ORCHARD, 2..N+1 = repos[0..N-1].
     active_repo_index: usize,
     show_branch_column: bool,
     /// Text accumulated by bare keystrokes — filters the visible task list in real time.
@@ -245,16 +245,37 @@ impl App {
     // Active repo filtering
     // -------------------------------------------------------------------
 
-    /// Returns the active repo slug when a specific repo is selected (index > 0).
+    /// Returns the active repo slug when a specific repo tab is selected.
     ///
-    /// Index 0 means "all repos" (returns `None`). Index N returns
-    /// `global_config.repos[N-1].slug`.
+    /// Index 0 = "ALL" (returns `None`).
+    /// Index 1 = "ORCHARD" (returns `None`).
+    /// Index 2..N+1 = repos[0..N-1] (returns the slug).
     pub(crate) fn active_repo_slug(&self) -> Option<&str> {
-        if self.active_repo_index == 0 {
-            return None;
+        if self.active_repo_index <= 1 {
+            return None; // ALL or ORCHARD — no repo filter
         }
-        let idx = self.active_repo_index.saturating_sub(1);
+        let idx = self.active_repo_index.saturating_sub(2);
         self.global_config.repos.get(idx).map(|r| r.slug.as_str())
+    }
+
+    /// Returns `true` when the ORCHARD tab (index 1) is active.
+    ///
+    /// The ORCHARD tab shows only standalone sessions; worktree rows are hidden.
+    pub(crate) fn is_orchard_tab(&self) -> bool {
+        self.active_repo_index == 1
+    }
+
+    /// Returns the effective standalone session count for cursor arithmetic.
+    ///
+    /// On repo tabs (index >= 2) standalone sessions are not rendered, so they
+    /// do not occupy cursor positions and the effective count is 0.
+    /// On ALL (0) and ORCHARD (1) tabs the full count is returned.
+    pub(crate) fn effective_standalone_count(&self) -> usize {
+        if self.active_repo_index >= 2 {
+            0
+        } else {
+            self.standalone_sessions.len()
+        }
     }
 
     // -------------------------------------------------------------------
@@ -266,7 +287,7 @@ impl App {
     /// For standalone sessions (idx < standalone_count), the key is the session name.
     /// For worktree rows, the key is the worktree path.
     fn expansion_key_at(&self, idx: usize) -> Option<String> {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -287,7 +308,7 @@ impl App {
     /// For standalone sessions: pane count from the session's panes vec.
     /// For worktree rows: pane count from the first session (if any).
     fn pane_count_at(&self, idx: usize) -> usize {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -449,7 +470,7 @@ impl App {
     /// For worktree rows, returns windows from the first session (if any).
     /// Returns an owned Vec because the worktree path requires a temporary lookup.
     fn windows_at(&self, idx: usize) -> Vec<WindowInfo> {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -493,7 +514,7 @@ impl App {
 
     /// Returns the session name for the row at cursor position `idx`.
     fn session_name_at(&self, idx: usize) -> Option<String> {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -697,7 +718,7 @@ impl App {
                     // Accept pane content when session matches the current row (standalone or worktree).
                     // Use the filtered visible list so repo-tab filtering doesn't cause a mismatch
                     // between the fetched session and the acceptance check (Bug #99).
-                    let standalone_count = self.standalone_sessions.len();
+                    let standalone_count = self.effective_standalone_count();
                     let matches = if self.cursor < standalone_count {
                         self.standalone_sessions
                             .get(self.cursor)
@@ -838,7 +859,7 @@ impl App {
 
         match &self.view {
             ViewState::List => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 let worktree_visible_count = list::visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_text,
@@ -1065,7 +1086,7 @@ impl App {
             }
         }
 
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
 
         // For worktree rows, account for group header rows and sub-rows.
         let tasks = list::visible_tasks_filtered(
@@ -1232,7 +1253,7 @@ impl App {
                         }
                     }
                     _ => {
-                        let standalone_count = self.standalone_sessions.len();
+                        let standalone_count = self.effective_standalone_count();
                         let worktree_visible_count = list::visible_tasks_filtered(
                             &self.task_rows,
                             &self.filter_text,
@@ -1390,7 +1411,7 @@ impl App {
                 ok()
             }
             Message::OpenPR => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
                 }
@@ -1409,7 +1430,7 @@ impl App {
                 ok()
             }
             Message::OpenIssue => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
                 }
@@ -1432,7 +1453,7 @@ impl App {
                 ok()
             }
             Message::Delete => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
                 }
@@ -1472,7 +1493,8 @@ impl App {
             }
             Message::NextRepo => {
                 let repo_count = self.global_config.repos.len();
-                self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
+                // Total tabs: ALL (0) + ORCHARD (1) + repos (2..repo_count+1).
+                self.active_repo_index = (self.active_repo_index + 1).min(repo_count + 1);
                 self.cursor = 0;
                 self.sub_cursor = SubCursor::None;
                 self.pane_content.clear();
@@ -4443,7 +4465,7 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        app.active_repo_index = 2; // repos[1] = "acme/repo-b"
+        app.active_repo_index = 3; // repos[1] = "acme/repo-b" (ALL=0, ORCHARD=1, repos start at 2)
         app.cursor = 0; // visible[0] under repo-b filter = row_b
 
         // Simulate the background thread delivering pane content for the repo-b session.
@@ -4501,7 +4523,7 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        app.active_repo_index = 2; // repo-b tab
+        app.active_repo_index = 3; // repo-b tab (ALL=0, ORCHARD=1, repo-a=2, repo-b=3)
         app.cursor = 0; // visible[0] under repo-b filter = row_b (no session)
 
         // Stale content for repo-a's session arrives — must be rejected.
@@ -4698,7 +4720,7 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        app.active_repo_index = 2; // index 2 = repos[1] = "acme/beta"
+        app.active_repo_index = 3; // index 3 = repos[1] = "acme/beta" (ALL=0, ORCHARD=1, repos start at 2)
         app.cursor = 0;
         let sel = current_selection(&app).unwrap();
         assert_eq!(sel.active_repo_slug, Some("acme/beta".to_string()));
