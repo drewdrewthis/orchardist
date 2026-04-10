@@ -1,27 +1,12 @@
 //! Worktree lifecycle operations for the TUI.
 //!
-//! Contains stale-filtering logic, worktree deletion (both local and remote),
-//! and the `WorktreeSnapshot` type used to detect state transitions between
-//! cache refresh cycles.
+//! Contains stale-filtering logic and worktree deletion (both local and remote).
 
 use crate::derive;
 use crate::git;
 use crate::global_config;
 use crate::remote;
 use crate::tmux;
-
-// ---------------------------------------------------------------------------
-// Notification snapshot
-// ---------------------------------------------------------------------------
-
-/// Captures the notification-relevant state of one worktree row so that
-/// transitions can be detected between cache refresh cycles.
-pub(super) struct WorktreeSnapshot {
-    pub(super) claude_working: bool,
-    pub(super) claude_needs_input: bool,
-    pub(super) ci_status: Option<String>,
-    pub(super) has_unresolved_threads: bool,
-}
 
 // ---------------------------------------------------------------------------
 // Stale worktree filter

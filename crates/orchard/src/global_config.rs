@@ -74,6 +74,61 @@ impl RepoConfig {
     }
 }
 
+/// Configuration for the `orchard watch` daemon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchConfig {
+    /// How often (seconds) to refresh local sources (worktrees, tmux sessions).
+    #[serde(default = "default_local_poll_secs")]
+    pub local_poll_secs: u64,
+    /// How often (seconds) to do a full refresh including GitHub API calls.
+    #[serde(default = "default_full_poll_secs")]
+    pub full_poll_secs: u64,
+    /// Context window percentage that triggers a threshold notification.
+    #[serde(default = "default_context_window_threshold")]
+    pub context_window_threshold: f64,
+    /// USD cost per session that triggers a threshold notification.
+    #[serde(default = "default_cost_threshold")]
+    pub cost_threshold: f64,
+    /// Minimum seconds between repeated threshold notifications for the same metric.
+    #[serde(default = "default_threshold_cooldown_secs")]
+    pub threshold_cooldown_secs: u64,
+    /// Whether to send desktop notifications for watch events.
+    #[serde(default = "default_notifications")]
+    pub notifications: bool,
+}
+
+fn default_local_poll_secs() -> u64 {
+    5
+}
+fn default_full_poll_secs() -> u64 {
+    60
+}
+fn default_context_window_threshold() -> f64 {
+    80.0
+}
+fn default_cost_threshold() -> f64 {
+    5.0
+}
+fn default_threshold_cooldown_secs() -> u64 {
+    300
+}
+fn default_notifications() -> bool {
+    true
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        WatchConfig {
+            local_poll_secs: default_local_poll_secs(),
+            full_poll_secs: default_full_poll_secs(),
+            context_window_threshold: default_context_window_threshold(),
+            cost_threshold: default_cost_threshold(),
+            threshold_cooldown_secs: default_threshold_cooldown_secs(),
+            notifications: default_notifications(),
+        }
+    }
+}
+
 /// Top-level global configuration for Orchard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalConfig {
@@ -102,6 +157,9 @@ pub struct GlobalConfig {
     /// falls back to the first entry in `tmux_sessions`.
     #[serde(default)]
     pub chat_target: Option<String>,
+    /// Configuration for the `orchard watch` daemon.
+    #[serde(default)]
+    pub watch: WatchConfig,
 }
 
 impl Default for GlobalConfig {
@@ -111,6 +169,7 @@ impl Default for GlobalConfig {
             terminal_app: default_terminal_app(),
             tmux_sessions: Vec::new(),
             chat_target: None,
+            watch: WatchConfig::default(),
         }
     }
 }
@@ -328,6 +387,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         tmux_sessions: Vec<StandaloneConfig>,
         #[serde(default)]
         chat_target: Option<String>,
+        #[serde(default)]
+        watch: WatchConfig,
     }
 
     let raw: RawGlobalConfig = match serde_json::from_slice(&data) {
@@ -397,6 +458,7 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         terminal_app: raw.terminal_app,
         tmux_sessions,
         chat_target: raw.chat_target,
+        watch: raw.watch,
     };
     LOG.info(&format!(
         "global_config: loaded {} repo(s), {} standalone session(s) from {}",
@@ -445,6 +507,7 @@ fn fallback_single_repo() -> GlobalConfig {
         terminal_app: default_terminal_app(),
         tmux_sessions: Vec::new(),
         chat_target: None,
+        watch: WatchConfig::default(),
     }
 }
 
@@ -784,6 +847,7 @@ mod tests {
             terminal_app: "dev.warp.Warp-Stable".to_string(),
             tmux_sessions: vec![],
             chat_target: None,
+            watch: WatchConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
 
@@ -817,6 +881,7 @@ mod tests {
             terminal_app: "org.alacritty".to_string(),
             tmux_sessions: vec![],
             chat_target: None,
+            watch: WatchConfig::default(),
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let mut f = std::fs::File::create(&path).unwrap();
@@ -957,6 +1022,7 @@ mod tests {
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
             chat_target: None,
+            watch: WatchConfig::default(),
         };
         // CWD is a sub-directory of the already-registered path.
         let mutated = append_repo_if_new(
@@ -980,6 +1046,7 @@ mod tests {
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
             chat_target: None,
+            watch: WatchConfig::default(),
         };
         let mutated =
             append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
@@ -1000,6 +1067,7 @@ mod tests {
             terminal_app: default_terminal_app(),
             tmux_sessions: vec![],
             chat_target: None,
+            watch: WatchConfig::default(),
         };
         let mutated = append_repo_if_new(
             &mut cfg,
@@ -1060,6 +1128,7 @@ mod tests {
             terminal_app: "com.apple.Terminal".to_string(),
             tmux_sessions: vec![],
             chat_target: Some("orchardist".to_string()),
+            watch: WatchConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains(r#""chat_target":"orchardist""#));
@@ -1078,5 +1147,48 @@ mod tests {
             ct.is_null() || ct == &serde_json::Value::Null,
             "chat_target None must serialize as null"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // WatchConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn watch_config_defaults_applied_when_absent_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path(), r#"{ "repos": [] }"#);
+        let cfg = load_from_path(&path);
+
+        assert_eq!(cfg.watch.local_poll_secs, 5);
+        assert_eq!(cfg.watch.full_poll_secs, 60);
+        assert!((cfg.watch.context_window_threshold - 80.0).abs() < f64::EPSILON);
+        assert!((cfg.watch.cost_threshold - 5.0).abs() < f64::EPSILON);
+        assert_eq!(cfg.watch.threshold_cooldown_secs, 300);
+        assert!(cfg.watch.notifications);
+    }
+
+    #[test]
+    fn watch_config_override_loads_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{
+            "repos": [],
+            "watch": {
+                "local_poll_secs": 10,
+                "full_poll_secs": 120,
+                "context_window_threshold": 90.0,
+                "cost_threshold": 2.5,
+                "threshold_cooldown_secs": 600,
+                "notifications": false
+            }
+        }"#;
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+
+        assert_eq!(cfg.watch.local_poll_secs, 10);
+        assert_eq!(cfg.watch.full_poll_secs, 120);
+        assert!((cfg.watch.context_window_threshold - 90.0).abs() < f64::EPSILON);
+        assert!((cfg.watch.cost_threshold - 2.5).abs() < f64::EPSILON);
+        assert_eq!(cfg.watch.threshold_cooldown_secs, 600);
+        assert!(!cfg.watch.notifications);
     }
 }

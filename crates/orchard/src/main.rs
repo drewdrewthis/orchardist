@@ -77,6 +77,7 @@ fn main() {
         "setup-remote" => handle_setup_remote(&args),
         "heal" => handle_heal(fix_flag, json_flag),
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
+        "watch" => handle_watch(&args),
         _ => {
             if json_flag {
                 handle_json();
@@ -329,6 +330,11 @@ fn print_usage() {
   orchard heal                   Audit and repair drifted state (dry run)
   orchard heal --fix             Apply all safe automatic repairs
   orchard heal --json            Output health check results as JSON
+  orchard watch                  Run event-driven watch daemon (Ctrl-C to stop)
+  orchard watch --subscribe --id <id> --session <session> [--pane <pane>]
+                                   Register a tmux subscriber for watch events
+  orchard watch --unsubscribe --id <id>
+                                   Unregister a tmux subscriber
 
 Options:
   --version, -V  Print version and exit
@@ -348,6 +354,84 @@ Keybindings (after orchard init --install):
   prefix + o   Open orchard TUI popup
   prefix + O   Quick-chat to orchardist"#
     );
+}
+
+/// Handles the `orchard watch` command.
+///
+/// Without flags: runs the event-driven daemon loop (Ctrl-C to stop).
+/// With `--subscribe`: registers a tmux subscriber.
+/// With `--unsubscribe`: removes a subscriber.
+fn handle_watch(args: &[String]) {
+    let config = global_config::load_global_config();
+
+    let mut subscribe = false;
+    let mut unsubscribe = false;
+    let mut id = String::new();
+    let mut session = String::new();
+    let mut pane = "0.0".to_string();
+    let mut skip_next = false;
+
+    for (i, arg) in args.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--subscribe" => subscribe = true,
+            "--unsubscribe" => unsubscribe = true,
+            "--id" => {
+                id = args.get(i + 1).cloned().unwrap_or_default();
+                skip_next = true;
+            }
+            "--session" => {
+                session = args.get(i + 1).cloned().unwrap_or_default();
+                skip_next = true;
+            }
+            "--pane" => {
+                pane = args.get(i + 1).cloned().unwrap_or_default();
+                skip_next = true;
+            }
+            _ => {}
+        }
+    }
+
+    if subscribe {
+        if id.is_empty() || session.is_empty() {
+            eprintln!(
+                "Usage: orchard watch --subscribe --id <id> --session <session> [--pane <pane>]"
+            );
+            std::process::exit(1);
+        }
+        match orchard::watch::subscription::register(&id, &session, &pane) {
+            Ok(()) => eprintln!("Subscribed: {id}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if unsubscribe {
+        if id.is_empty() {
+            eprintln!("Usage: orchard watch --unsubscribe --id <id>");
+            std::process::exit(1);
+        }
+        match orchard::watch::subscription::unregister(&id) {
+            Ok(()) => eprintln!("Unsubscribed: {id}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Default: run the daemon.
+    if let Err(e) = orchard::watch::daemon::run(&config) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]

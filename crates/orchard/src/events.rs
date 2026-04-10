@@ -219,6 +219,14 @@ pub fn log_error(message: &str, context: &str) {
     );
 }
 
+/// Logs a watch event to the events log.
+pub fn log_watch_event(event_type: &str, details: &str) {
+    log_event(
+        &format!("watch.{}", event_type),
+        &[("details", Value::String(details.to_string()))],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
