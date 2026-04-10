@@ -705,14 +705,22 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
                     "tmux",
                     &["list-panes", "-s", "-t", session_name, "-F", pane_fmt],
                 )
-                .unwrap_or_default(),
+                .unwrap_or_else(|e| {
+                    tracing::warn!("tmux pane list failed for session {session_name}: {e}");
+                    String::new()
+                }),
                 Some(h) => {
                     let cmd = format!(
                         "tmux list-panes -s -t {} -F '{}'",
                         remote::shell_escape(session_name),
                         pane_fmt
                     );
-                    remote::ssh_exec(h, &cmd).unwrap_or_default()
+                    remote::ssh_exec(h, &cmd).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "tmux pane list failed for session {session_name} on {h}: {e}"
+                        );
+                        String::new()
+                    })
                 }
             }
         },
@@ -722,13 +730,21 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
                     "tmux",
                     &["capture-pane", "-p", "-t", session_name, "-S", "-5"],
                 )
-                .unwrap_or_default(),
+                .unwrap_or_else(|e| {
+                    tracing::warn!("tmux capture-pane failed for session {session_name}: {e}");
+                    String::new()
+                }),
                 Some(h) => {
                     let cmd = format!(
                         "tmux capture-pane -p -t {} -S -5",
                         remote::shell_escape(session_name)
                     );
-                    remote::ssh_exec(h, &cmd).unwrap_or_default()
+                    remote::ssh_exec(h, &cmd).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "tmux capture-pane failed for session {session_name} on {h}: {e}"
+                        );
+                        String::new()
+                    })
                 }
             };
             raw.lines().map(|l| l.to_string()).collect()

@@ -2852,6 +2852,7 @@ dependencies = [
  "tempfile",
  "throbber-widgets-tui",
  "tokio",
+ "tracing",
  "tui-scrollview",
 ]
 

@@ -317,7 +317,13 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
     eprintln!("{BOLD}{CYAN}[4/{TOTAL_STEPS}] Configuring tmux keybinding{RESET}");
     let tmux_conf = detect_tmux_conf(home);
 
-    let existing = std::fs::read_to_string(&tmux_conf).unwrap_or_default();
+    let existing = std::fs::read_to_string(&tmux_conf).unwrap_or_else(|e| {
+        tracing::warn!(
+            "could not read tmux config at {}: {e}",
+            tmux_conf.display()
+        );
+        String::new()
+    });
 
     // Warn about existing bind-key o conflict (only if it's not our binding).
     if (existing.contains("bind-key o") || existing.contains("bind o "))
@@ -390,9 +396,12 @@ fn reload_tmux_config_step(home: &Path) {
     if std::env::var("TMUX").is_ok() {
         // Remove the old session-closed hook that would unbind 'o' when
         // the legacy orchard session dies.
-        let _ = std::process::Command::new("tmux")
+        if let Err(e) = std::process::Command::new("tmux")
             .args(["set-hook", "-gu", "session-closed[99]"])
-            .status();
+            .status()
+        {
+            tracing::warn!("tmux cleanup command failed: {e}");
+        }
 
         // Kill any legacy *_orchard sessions so they don't interfere.
         if let Ok(output) = std::process::Command::new("tmux")
@@ -403,9 +412,12 @@ fn reload_tmux_config_step(home: &Path) {
             for session in sessions.lines() {
                 if session.ends_with("_orchard") {
                     eprintln!("  Killing legacy session: {session}");
-                    let _ = std::process::Command::new("tmux")
+                    if let Err(e) = std::process::Command::new("tmux")
                         .args(["kill-session", "-t", session])
-                        .status();
+                        .status()
+                    {
+                        tracing::warn!("tmux cleanup command failed: {e}");
+                    }
                 }
             }
         }
@@ -413,9 +425,12 @@ fn reload_tmux_config_step(home: &Path) {
         // Unbind the old 'o' key first — runtime bindings from the old
         // orchard binary take precedence over config-file bindings, so
         // source-file alone won't override them.
-        let _ = std::process::Command::new("tmux")
+        if let Err(e) = std::process::Command::new("tmux")
             .args(["unbind-key", "o"])
-            .status();
+            .status()
+        {
+            tracing::warn!("tmux cleanup command failed: {e}");
+        }
 
         // Reload the tmux config to activate the new popup binding.
         let result = std::process::Command::new("tmux")
