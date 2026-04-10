@@ -88,44 +88,45 @@ pub fn row_haystack(row: &WorktreeRow) -> RowHaystack {
 
 /// Returns PR status text without a Theme dependency.
 ///
-/// Mirrors the logic of `pr_status_text` in `list.rs` but returns only
-/// the plain string so it can be included in the fuzzy haystack.
+/// Mirrors the logic of `pr_status_text` in `list.rs` exactly — including the
+/// same Unicode symbols — so that fuzzy match byte offsets align with the
+/// displayed text in each cell.
 fn pr_status_haystack(row: &WorktreeRow) -> String {
     let Some(ref pr) = row.pr else {
         if let Some(ref state) = row.issue_state
             && (state == "closed" || state == "completed")
         {
-            return format!("issue {}", state);
+            return format!("\u{2716} issue {}", state);
         }
         return "no PR".to_string();
     };
 
     let prefix = format!("#{} ", pr.number);
     if pr.state.as_deref() == Some("merged") {
-        return format!("{}merged", prefix);
+        return format!("{}\u{2713} merged", prefix);
     }
     if pr.state.as_deref() == Some("closed") {
-        return format!("{}closed", prefix);
+        return format!("{}\u{2716} closed", prefix);
     }
     if pr.review_decision.as_deref() == Some("approved") {
-        return format!("{}approved", prefix);
+        return format!("{}\u{2713} approved", prefix);
     }
     if pr.review_decision.as_deref() == Some("changes_requested") {
-        return format!("{}changes req", prefix);
+        return format!("{}\u{2716} changes req", prefix);
     }
     if pr.has_conflicts {
-        return format!("{}conflict", prefix);
+        return format!("{}\u{2716} conflict", prefix);
     }
     if pr.unresolved_threads > 0 {
-        return format!("{}unresolved {}", prefix, pr.unresolved_threads);
+        return format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads);
     }
     if pr.checks_state.as_deref() == Some("failing") {
-        return format!("{}failing", prefix);
+        return format!("{}\u{2716} failing", prefix);
     }
     if pr.checks_state.as_deref() == Some("pending") {
-        return format!("{}pending CI", prefix);
+        return format!("{}\u{25d0} pending CI", prefix);
     }
-    format!("{}needs review", prefix)
+    format!("{}\u{25cb} needs review", prefix)
 }
 
 /// Returns a session status text string for the haystack.
@@ -320,6 +321,72 @@ pub fn highlight_spans(
 }
 
 // ---------------------------------------------------------------------------
+// Span truncation
+// ---------------------------------------------------------------------------
+
+/// Truncates a `Vec<Span>` from the left to fit within `max_width` characters.
+///
+/// Mirrors the behavior of [`crate::paths::truncate_left`] but operates on
+/// styled spans so that highlight styles are preserved after truncation.
+///
+/// If the total character width of all spans is within `max_width`, the spans
+/// are returned unchanged. Otherwise, characters are removed from the left
+/// until the content (plus a leading "…" ellipsis) fits.
+///
+/// Multi-byte Unicode characters are counted by char, not byte.
+pub fn truncate_spans_left(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Span<'static>> {
+    let total_chars: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if total_chars <= max_width {
+        return spans;
+    }
+    if max_width <= 1 {
+        return vec![Span::raw("…".to_string())];
+    }
+
+    // We need to keep only the last (max_width - 1) chars, prefixed with "…".
+    let keep = max_width - 1;
+    let skip = total_chars - keep;
+
+    let mut result: Vec<Span<'static>> = Vec::new();
+    let mut skipped = 0usize;
+    let mut ellipsis_prepended = false;
+
+    for span in spans {
+        let span_chars: Vec<char> = span.content.chars().collect();
+        let span_len = span_chars.len();
+
+        if skipped + span_len <= skip {
+            // Skip this span entirely.
+            skipped += span_len;
+            continue;
+        }
+
+        // Partial or full inclusion of this span.
+        let chars_to_skip_in_span = skip.saturating_sub(skipped);
+        skipped += chars_to_skip_in_span;
+
+        let remaining: String = span_chars[chars_to_skip_in_span..].iter().collect();
+        if remaining.is_empty() {
+            continue;
+        }
+
+        if !ellipsis_prepended {
+            // Prepend "…" with the same style as the first kept span.
+            result.push(Span::styled(format!("…{}", remaining), span.style));
+            ellipsis_prepended = true;
+        } else {
+            result.push(Span::styled(remaining, span.style));
+        }
+    }
+
+    if result.is_empty() {
+        result.push(Span::raw("…".to_string()));
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -422,8 +489,30 @@ mod tests {
         };
         let haystack = row_haystack(&row);
         assert!(
-            haystack.text.contains("approved"),
-            "pr approved status missing from haystack: {}",
+            haystack.text.contains("\u{2713} approved"),
+            "pr approved status with symbol missing from haystack: {}",
+            haystack.text
+        );
+    }
+
+    #[test]
+    fn haystack_includes_pr_status_failing_with_symbol() {
+        let row = WorktreeRow {
+            pr: Some(PrInfo {
+                number: 12,
+                branch: "feat/issue-42".to_string(),
+                state: None,
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+            }),
+            ..base_row()
+        };
+        let haystack = row_haystack(&row);
+        assert!(
+            haystack.text.contains("\u{2716} failing"),
+            "pr failing status with symbol missing from haystack: {}",
             haystack.text
         );
     }
@@ -575,6 +664,68 @@ mod tests {
         );
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content.as_ref(), "hello");
+    }
+
+    // -------------------------------------------------------------------------
+    // truncate_spans_left
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn truncate_spans_left_within_width_returns_unchanged() {
+        let spans = vec![
+            Span::raw("hello".to_string()),
+            Span::styled(" world".to_string(), Style::default().add_modifier(Modifier::BOLD)),
+        ];
+        let result = truncate_spans_left(spans.clone(), 20);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content.as_ref(), "hello");
+        assert_eq!(result[1].content.as_ref(), " world");
+    }
+
+    #[test]
+    fn truncate_spans_left_exceeding_width_prepends_ellipsis_and_trims_left() {
+        // "hello world" = 11 chars; max_width = 7 → keep last 6 chars = "world" + 1 more
+        // skip 4 chars: "hell" → keep "o world" but only 6 chars after "…"
+        // Actually: keep = 6, skip = 5 ("hello"), result = "…world"
+        let spans = vec![Span::raw("hello world".to_string())];
+        let result = truncate_spans_left(spans, 7);
+        // total=11, keep=6, skip=5 → skip "hello", keep " world" (6 chars)
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content.as_ref(), "… world");
+    }
+
+    #[test]
+    fn truncate_spans_left_preserves_style_of_kept_span() {
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let spans = vec![
+            Span::raw("prefix".to_string()),
+            Span::styled("suffix".to_string(), bold),
+        ];
+        // total=12, max_width=8, keep=7, skip=5 → skip "prefi", keep "x" + "suffix"
+        // First kept span fragment: "x" from "prefix", styled as raw (no style)
+        // Then full "suffix" span with bold
+        let result = truncate_spans_left(spans, 8);
+        assert!(result.len() >= 2);
+        // Last span should retain bold style.
+        let last = result.last().unwrap();
+        assert_eq!(last.content.as_ref(), "suffix");
+        assert_eq!(last.style, bold);
+    }
+
+    #[test]
+    fn truncate_spans_left_zero_width_returns_ellipsis() {
+        let spans = vec![Span::raw("hello".to_string())];
+        let result = truncate_spans_left(spans, 0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content.as_ref(), "…");
+    }
+
+    #[test]
+    fn truncate_spans_left_width_one_returns_ellipsis() {
+        let spans = vec![Span::raw("hello".to_string())];
+        let result = truncate_spans_left(spans, 1);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content.as_ref(), "…");
     }
 
     // -------------------------------------------------------------------------
