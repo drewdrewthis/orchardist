@@ -6,9 +6,9 @@
 use std::process::Command;
 
 use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
-use crate::orchard_state::FailedCheck;
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
+use crate::orchard_state::FailedCheck;
 use crate::remote;
 
 // ---------------------------------------------------------------------------

@@ -668,12 +668,10 @@ mod tests {
     fn json_pr_includes_failing_checks_field() {
         use crate::orchard_state::FailedCheck;
         let pr = PrState {
-            failing_checks: vec![
-                FailedCheck {
-                    name: "e2e-tests".to_string(),
-                    conclusion: "FAILURE".to_string(),
-                },
-            ],
+            failing_checks: vec![FailedCheck {
+                name: "e2e-tests".to_string(),
+                conclusion: "FAILURE".to_string(),
+            }],
             ..make_pr_state()
         };
         let jp = JsonPr::from(&pr);

@@ -283,7 +283,11 @@ fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
                 .take(3)
                 .map(|c| c.name.as_str())
                 .collect();
-            format!(": {} +{} more", shown.join(", "), pr.failing_checks.len() - 3)
+            format!(
+                ": {} +{} more",
+                shown.join(", "),
+                pr.failing_checks.len() - 3
+            )
         };
         return (
             format!("{}\u{2716} failing{}", prefix, detail),
@@ -2600,10 +2604,22 @@ mod tests {
     fn pr_status_failing_ci_truncates_at_four_checks() {
         use crate::orchard_state::FailedCheck;
         let failing_checks = vec![
-            FailedCheck { name: "check-a".to_string(), conclusion: "FAILURE".to_string() },
-            FailedCheck { name: "check-b".to_string(), conclusion: "FAILURE".to_string() },
-            FailedCheck { name: "check-c".to_string(), conclusion: "FAILURE".to_string() },
-            FailedCheck { name: "check-d".to_string(), conclusion: "FAILURE".to_string() },
+            FailedCheck {
+                name: "check-a".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+            FailedCheck {
+                name: "check-b".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+            FailedCheck {
+                name: "check-c".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+            FailedCheck {
+                name: "check-d".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
         ];
         let row = WorktreeRow {
             pr: Some(PrInfo {
