@@ -1566,25 +1566,28 @@ impl App {
 
             // Build title cell with fuzzy highlights when a filter is active.
             // The TITLE field is issue_title (field index 3) or branch (field index 1).
+            // We highlight against `title_raw` (the untruncated source) because field
+            // offsets are computed from the original haystack text. After highlighting,
+            // we truncate the resulting spans to `title_width` chars.
             let title_cell = if !vt.match_indices.is_empty() && !fo.is_empty() {
-                let (field_idx, source_text) = if vt.row.is_main_worktree {
-                    // Main worktree: repo name shown, no highlighting needed.
-                    (usize::MAX, title_display.clone())
+                let field_idx = if vt.row.is_main_worktree {
+                    usize::MAX
                 } else {
                     match vt.row.issue_title.as_deref() {
-                        Some(t) if !t.is_empty() => (3, title_display.clone()),
-                        _ => (1, title_display.clone()),
+                        Some(t) if !t.is_empty() => 3,
+                        _ => 1,
                     }
                 };
                 if field_idx != usize::MAX && fo.len() > field_idx {
                     let spans = crate::tui::fuzzy::highlight_spans(
-                        &source_text,
+                        title_raw,
                         fo[field_idx],
                         &vt.match_indices,
                         Style::default(),
                         highlight_style,
                     );
-                    Cell::from(Line::from(spans))
+                    let truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_width);
+                    Cell::from(Line::from(truncated))
                 } else {
                     Cell::from(title_display)
                 }
@@ -1779,13 +1782,6 @@ impl App {
             let selected = self.cursor == parent_cursor_idx
                 && self.sub_cursor == SubCursor::Window(window.index);
 
-            // Tree connector for window row.
-            let connector = if is_last_window {
-                format!("\u{2514}\u{2500} win:{} {}", window.index, window.name)
-            } else {
-                format!("\u{251c}\u{2500} win:{} {}", window.index, window.name)
-            };
-
             let is_window_expanded =
                 self.window_expanded
                     .contains(&super::App::window_expansion_key(
@@ -1793,17 +1789,31 @@ impl App {
                         window.index,
                     ));
 
-            // Expand indicator for the window (in STATUS cell).
-            let status_text = if window.panes.len() > 1 {
+            // Connector cell: tree chars + window index + optional pane count indicator.
+            let connector_chars = if is_last_window {
+                "\u{2514}\u{2500}"
+            } else {
+                "\u{251c}\u{2500}"
+            };
+            let pane_indicator = if window.panes.len() > 1 {
                 let caret = if is_window_expanded {
                     "\u{25bc}"
                 } else {
                     "\u{25b6}"
                 };
-                format!("{}{}", caret, window.panes.len())
+                format!(
+                    "{} {} {}{}",
+                    connector_chars,
+                    window.index,
+                    caret,
+                    window.panes.len()
+                )
             } else {
-                String::new()
+                format!("{} {}", connector_chars, window.index)
             };
+
+            // Window name for TITLE column.
+            let window_title = format!("win:{} {}", window.index, window.name);
 
             let row_style = if selected {
                 Style::default()
@@ -1815,10 +1825,10 @@ impl App {
 
             let mut cells = vec![
                 Cell::from("\u{25cf}").style(Style::default().fg(bar_color)),
-                Cell::from(connector),
-                Cell::from(""), // CLAUDE: empty for window row
-                Cell::from(""), // ISSUE: empty
-                Cell::from(""), // TITLE: empty (name is in # cell)
+                Cell::from(pane_indicator), // # column: connector + pane count
+                Cell::from(""),             // CLAUDE: empty
+                Cell::from(""),             // ISSUE: empty
+                Cell::from(window_title),   // TITLE: window name
             ];
 
             if ctx.show_branch {
@@ -1827,7 +1837,7 @@ impl App {
             if ctx.has_remote {
                 cells.push(Cell::from(""));
             }
-            cells.push(Cell::from(status_text));
+            cells.push(Cell::from("")); // STATUS: empty
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
