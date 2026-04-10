@@ -51,7 +51,7 @@ pub enum DisplayGroup {
 }
 
 /// Lightweight PR summary attached to a worktree row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PrInfo {
     /// GitHub PR number.
     pub number: u32,
@@ -71,7 +71,7 @@ pub struct PrInfo {
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
 /// enriched with PR/issue metadata and tmux session info.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct WorktreeRow {
     /// Repository slug in `owner/repo` format.
     pub repo_slug: String,

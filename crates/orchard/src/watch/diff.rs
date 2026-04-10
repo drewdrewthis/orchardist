@@ -3,7 +3,7 @@
 //! Compares two `OrchardState` snapshots and returns the `WatchEvent`s
 //! that represent transitions between them. No I/O occurs here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::claude_state::ClaudeState;
 use crate::orchard_state::{OrchardState, WorktreeState};
@@ -52,6 +52,14 @@ fn first_session(wt: &WorktreeState) -> String {
         .first()
         .map(|s| s.name.clone())
         .unwrap_or_default()
+}
+
+/// Returns `true` when a PR is approved, CI is passing, no conflicts, and no unresolved threads.
+fn is_ready_to_merge(pr: &crate::orchard_state::PrState) -> bool {
+    pr.review_decision.as_deref() == Some("approved")
+        && pr.checks_state.as_deref() == Some("passing")
+        && !pr.has_conflicts
+        && pr.unresolved_threads == 0
 }
 
 /// Returns a human-readable label for a worktree: issue title if available, else branch.
@@ -182,14 +190,8 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
                 }
 
                 // PR ready to merge: approved + passing + wasn't already in that state
-                let new_ready = new_pr.review_decision.as_deref() == Some("approved")
-                    && new_pr.checks_state.as_deref() == Some("passing")
-                    && !new_pr.has_conflicts
-                    && new_pr.unresolved_threads == 0;
-                let old_ready = old_pr.review_decision.as_deref() == Some("approved")
-                    && old_pr.checks_state.as_deref() == Some("passing")
-                    && !old_pr.has_conflicts
-                    && old_pr.unresolved_threads == 0;
+                let new_ready = is_ready_to_merge(new_pr);
+                let old_ready = is_ready_to_merge(old_pr);
                 if new_ready && !old_ready {
                     events.push(WatchEvent::now(EventKind::PrReadyToMerge {
                         worktree: path.to_string(),
@@ -201,11 +203,7 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
             (None, Some(new_pr)) => {
                 // PR just appeared — check if it's already ready
                 let label = label_for(new_wt);
-                if new_pr.review_decision.as_deref() == Some("approved")
-                    && new_pr.checks_state.as_deref() == Some("passing")
-                    && !new_pr.has_conflicts
-                    && new_pr.unresolved_threads == 0
-                {
+                if is_ready_to_merge(new_pr) {
                     events.push(WatchEvent::now(EventKind::PrReadyToMerge {
                         worktree: path.to_string(),
                         pr_number: new_pr.number,
@@ -218,19 +216,19 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
     }
 
     // --- Standalone session transitions ---
-    let old_sessions: HashMap<&str, ()> = old
+    let old_sessions: HashSet<&str> = old
         .standalone_sessions
         .iter()
-        .map(|ss| (ss.session.tmux.name.as_str(), ()))
+        .map(|ss| ss.session.tmux.name.as_str())
         .collect();
-    let new_sessions: HashMap<&str, ()> = new
+    let new_sessions: HashSet<&str> = new
         .standalone_sessions
         .iter()
-        .map(|ss| (ss.session.tmux.name.as_str(), ()))
+        .map(|ss| ss.session.tmux.name.as_str())
         .collect();
 
-    for name in new_sessions.keys() {
-        if !old_sessions.contains_key(name) {
+    for name in &new_sessions {
+        if !old_sessions.contains(name) {
             events.push(WatchEvent::now(EventKind::SessionStarted {
                 session: name.to_string(),
                 worktree: None,
@@ -238,8 +236,8 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
         }
     }
 
-    for name in old_sessions.keys() {
-        if !new_sessions.contains_key(name) {
+    for name in &old_sessions {
+        if !new_sessions.contains(name) {
             events.push(WatchEvent::now(EventKind::SessionDied {
                 session: name.to_string(),
                 worktree: None,
@@ -495,6 +493,128 @@ mod tests {
             .filter(|e| matches!(&e.kind, EventKind::PrMerged { .. }))
             .collect();
         assert_eq!(merged_events.len(), 1);
+    }
+
+    #[test]
+    fn diff_detects_ci_transition_to_passing() {
+        let path = "/workspace/repo/feat-1";
+        let old_pr = PrState {
+            checks_state: Some("failing".to_string()),
+            ..make_pr(10)
+        };
+        let new_pr = PrState {
+            checks_state: Some("passing".to_string()),
+            ..make_pr(10)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+
+        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let ci_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::CiPassed { .. }))
+            .collect();
+        assert_eq!(ci_events.len(), 1);
+    }
+
+    #[test]
+    fn diff_detects_pr_ready_to_merge() {
+        let path = "/workspace/repo/feat-1";
+        let old_pr = make_pr(10);
+        let new_pr = PrState {
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            ..make_pr(10)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+
+        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let ready_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::PrReadyToMerge { .. }))
+            .collect();
+        assert_eq!(ready_events.len(), 1);
+    }
+
+    #[test]
+    fn diff_detects_standalone_session_started() {
+        use crate::session::{
+            EnrichedSession, Host, SessionStatus, StandaloneConfig, StandaloneSessionRow,
+            TmuxSessionInfo,
+        };
+
+        let old = empty_state();
+        let new = OrchardState {
+            repos: vec![],
+            standalone_sessions: vec![StandaloneSessionRow {
+                session: EnrichedSession {
+                    tmux: TmuxSessionInfo {
+                        host: Host::Local,
+                        name: "orchardist".to_string(),
+                        status: SessionStatus::Running { attached: false },
+                    },
+                    claude: None,
+                    panes: vec![],
+                },
+                config: StandaloneConfig {
+                    name: "orchardist".to_string(),
+                    command: "claude".to_string(),
+                    cwd: "/workspace".to_string(),
+                    start_on_launch: true,
+                },
+            }],
+            hosts: HashMap::new(),
+        };
+
+        let events = diff(&old, &new);
+        let started: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::SessionStarted { .. }))
+            .collect();
+        assert_eq!(started.len(), 1);
+    }
+
+    #[test]
+    fn diff_detects_standalone_session_died() {
+        use crate::session::{
+            EnrichedSession, Host, SessionStatus, StandaloneConfig, StandaloneSessionRow,
+            TmuxSessionInfo,
+        };
+
+        let old = OrchardState {
+            repos: vec![],
+            standalone_sessions: vec![StandaloneSessionRow {
+                session: EnrichedSession {
+                    tmux: TmuxSessionInfo {
+                        host: Host::Local,
+                        name: "orchardist".to_string(),
+                        status: SessionStatus::Running { attached: false },
+                    },
+                    claude: None,
+                    panes: vec![],
+                },
+                config: StandaloneConfig {
+                    name: "orchardist".to_string(),
+                    command: "claude".to_string(),
+                    cwd: "/workspace".to_string(),
+                    start_on_launch: true,
+                },
+            }],
+            hosts: HashMap::new(),
+        };
+        let new = empty_state();
+
+        let events = diff(&old, &new);
+        let died: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::SessionDied { .. }))
+            .collect();
+        assert_eq!(died.len(), 1);
     }
 
     #[test]

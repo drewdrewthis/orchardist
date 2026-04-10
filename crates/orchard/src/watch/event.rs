@@ -153,6 +153,38 @@ pub enum EventKind {
     },
 }
 
+impl EventKind {
+    /// Notification text for this event kind, if it warrants a desktop notification.
+    ///
+    /// Returns `(title, message, session_name)` for events that should trigger
+    /// a desktop notification. Returns `None` for event kinds that don't.
+    pub fn notification(&self) -> Option<(&str, String, Option<&str>)> {
+        match self {
+            EventKind::ClaudeNeedsInput { session, label, .. } => Some((
+                "Claude needs input",
+                format!("{} is waiting for you", label),
+                Some(session.as_str()),
+            )),
+            EventKind::ClaudeFinished { session, label, .. } => {
+                Some(("Claude finished", label.clone(), Some(session.as_str())))
+            }
+            EventKind::CiFailed {
+                pr_number, label, ..
+            } => Some(("CI Failed", format!("#{} {}", pr_number, label), None)),
+            EventKind::ReviewComments {
+                pr_number,
+                thread_count,
+                ..
+            } => Some((
+                "Review comments",
+                format!("#{} has {} unresolved thread(s)", pr_number, thread_count),
+                None,
+            )),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +248,29 @@ mod tests {
             let json2 = serde_json::to_string(&decoded).unwrap();
             assert_eq!(json, json2, "round-trip mismatch");
         }
+    }
+
+    #[test]
+    fn notification_returns_some_for_claude_needs_input() {
+        let kind = EventKind::ClaudeNeedsInput {
+            worktree: "/wt/a".to_string(),
+            session: "my_session".to_string(),
+            label: "Fix bug".to_string(),
+        };
+        let notif = kind.notification();
+        assert!(notif.is_some());
+        let (title, msg, session) = notif.unwrap();
+        assert_eq!(title, "Claude needs input");
+        assert!(msg.contains("Fix bug"));
+        assert_eq!(session, Some("my_session"));
+    }
+
+    #[test]
+    fn notification_returns_none_for_heartbeat() {
+        let kind = EventKind::Heartbeat {
+            worktree_count: 1,
+            session_count: 1,
+        };
+        assert!(kind.notification().is_none());
     }
 }

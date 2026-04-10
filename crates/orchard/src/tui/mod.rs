@@ -600,46 +600,13 @@ impl App {
             let events = crate::watch::diff::diff(old_state, new_state);
             let terminal_app = self.global_config.terminal_app.as_str();
             for event in &events {
-                match &event.kind {
-                    crate::watch::EventKind::ClaudeNeedsInput { session, label, .. } => {
-                        crate::notify::send_notification_with_session(
-                            "Claude needs input",
-                            &format!("{} is waiting for you", label),
-                            Some(session.as_str()),
-                            terminal_app,
-                        );
-                    }
-                    crate::watch::EventKind::ClaudeFinished { session, label, .. } => {
-                        crate::notify::send_notification_with_session(
-                            "Claude finished",
-                            label,
-                            Some(session.as_str()),
-                            terminal_app,
-                        );
-                    }
-                    crate::watch::EventKind::CiFailed {
-                        pr_number, label, ..
-                    } => {
-                        crate::notify::send_notification_with_session(
-                            "CI Failed",
-                            &format!("#{} {}", pr_number, label),
-                            None,
-                            terminal_app,
-                        );
-                    }
-                    crate::watch::EventKind::ReviewComments {
-                        pr_number,
-                        thread_count,
-                        ..
-                    } => {
-                        crate::notify::send_notification_with_session(
-                            "Review comments",
-                            &format!("#{} has {} unresolved thread(s)", pr_number, thread_count),
-                            None,
-                            terminal_app,
-                        );
-                    }
-                    _ => {}
+                if let Some((title, message, session)) = event.kind.notification() {
+                    crate::notify::send_notification_with_session(
+                        title,
+                        &message,
+                        session,
+                        terminal_app,
+                    );
                 }
             }
         }

@@ -115,7 +115,11 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         let subs_file = subscription::read_subscriptions();
         let pruned = subscription::prune_stale(&subs_file);
         // Persist the pruned list so dead sessions are removed on disk.
-        let _ = subscription::write_subscriptions(&pruned);
+        if let Err(e) = subscription::write_subscriptions(&pruned) {
+            crate::logger::LOG.warn(&format!(
+                "watch: failed to persist pruned subscriptions: {e}"
+            ));
+        }
         for sub in &pruned.subscriptions {
             if let Err(e) = subscription::deliver(sub, &events) {
                 crate::logger::LOG.warn(&format!("watch: delivery to {} failed: {e}", sub.id));
@@ -134,65 +138,39 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 /// Refreshes all sources: issues, PRs, worktrees, and tmux sessions for each repo.
 fn refresh_all_sources(config: &GlobalConfig) {
     for repo in &config.repos {
-        let _ = cache_sources::refresh_issues(repo);
-        let _ = cache_sources::refresh_prs(repo);
-        let _ = cache_sources::refresh_worktrees(repo);
+        if let Err(e) = cache_sources::refresh_issues(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh issues failed: {e}"));
+        }
+        if let Err(e) = cache_sources::refresh_prs(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh PRs failed: {e}"));
+        }
+        if let Err(e) = cache_sources::refresh_worktrees(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh worktrees failed: {e}"));
+        }
     }
-    let _ = cache_sources::refresh_tmux_sessions(None);
+    if let Err(e) = cache_sources::refresh_tmux_sessions(None) {
+        crate::logger::LOG.warn(&format!("watch: refresh tmux sessions failed: {e}"));
+    }
 }
 
 /// Refreshes only local (fast) sources: worktrees and tmux sessions.
 fn refresh_local_sources(config: &GlobalConfig) {
     for repo in &config.repos {
-        let _ = cache_sources::refresh_worktrees(repo);
+        if let Err(e) = cache_sources::refresh_worktrees(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh worktrees failed: {e}"));
+        }
     }
-    let _ = cache_sources::refresh_tmux_sessions(None);
+    if let Err(e) = cache_sources::refresh_tmux_sessions(None) {
+        crate::logger::LOG.warn(&format!("watch: refresh tmux sessions failed: {e}"));
+    }
 }
 
 /// Sends desktop notifications for key event kinds.
 pub fn fire_notifications(events: &[WatchEvent], config: &GlobalConfig) {
     let terminal_app = config.terminal_app.as_str();
     for event in events {
-        match &event.kind {
-            EventKind::ClaudeNeedsInput { session, label, .. } => {
-                crate::notify::send_notification_with_session(
-                    "Claude needs input",
-                    &format!("{} is waiting for you", label),
-                    Some(session.as_str()),
-                    terminal_app,
-                );
-            }
-            EventKind::ClaudeFinished { session, label, .. } => {
-                crate::notify::send_notification_with_session(
-                    "Claude finished",
-                    label,
-                    Some(session.as_str()),
-                    terminal_app,
-                );
-            }
-            EventKind::CiFailed {
-                pr_number, label, ..
-            } => {
-                crate::notify::send_notification_with_session(
-                    "CI Failed",
-                    &format!("#{} {}", pr_number, label),
-                    None,
-                    terminal_app,
-                );
-            }
-            EventKind::ReviewComments {
-                pr_number,
-                thread_count,
-                ..
-            } => {
-                crate::notify::send_notification_with_session(
-                    "Review comments",
-                    &format!("#{} has {} unresolved thread(s)", pr_number, thread_count),
-                    None,
-                    terminal_app,
-                );
-            }
-            _ => {}
+        if let Some((title, message, session)) = event.kind.notification() {
+            crate::notify::send_notification_with_session(title, &message, session, terminal_app);
         }
     }
 }

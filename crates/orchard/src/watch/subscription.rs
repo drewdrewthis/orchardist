@@ -103,27 +103,32 @@ pub fn write_subscriptions(subs: &SubscriptionFile) -> anyhow::Result<()> {
 /// - `tmux_session` must match `[A-Za-z0-9_\-.]+`
 /// - `pane` must match `[0-9]+\.[0-9]+`
 fn validate_subscription_fields(id: &str, tmux_session: &str, pane: &str) -> anyhow::Result<()> {
-    let id_re = Regex::new(r"^[A-Za-z0-9_\-]+$").expect("valid regex");
+    use std::sync::OnceLock;
+
+    static ID_RE: OnceLock<Regex> = OnceLock::new();
+    static SESSION_RE: OnceLock<Regex> = OnceLock::new();
+    static PANE_RE: OnceLock<Regex> = OnceLock::new();
+
+    let id_re = ID_RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9_\-]+$").expect("valid regex"));
+    let session_re =
+        SESSION_RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9_\-.]+$").expect("valid regex"));
+    let pane_re = PANE_RE.get_or_init(|| Regex::new(r"^[0-9]+\.[0-9]+$").expect("valid regex"));
+
     if !id_re.is_match(id) {
         anyhow::bail!(
             "invalid subscription id {:?}: must match [A-Za-z0-9_\\-]+",
             id
         );
     }
-
-    let session_re = Regex::new(r"^[A-Za-z0-9_\-.]+$").expect("valid regex");
     if !session_re.is_match(tmux_session) {
         anyhow::bail!(
             "invalid tmux_session {:?}: must match [A-Za-z0-9_\\-.]+",
             tmux_session
         );
     }
-
-    let pane_re = Regex::new(r"^[0-9]+\.[0-9]+$").expect("valid regex");
     if !pane_re.is_match(pane) {
         anyhow::bail!("invalid pane {:?}: must match [0-9]+\\.[0-9]+", pane);
     }
-
     Ok(())
 }
 
@@ -200,9 +205,10 @@ pub fn deliver(sub: &Subscription, events: &[WatchEvent]) -> anyhow::Result<()> 
             .status()
             .with_context(|| format!("tmux send-keys to {target}"))?;
         // Send Enter as a separate key press (not literal) to submit the line.
-        let _ = Command::new("tmux")
+        Command::new("tmux")
             .args(["send-keys", "-t", &target, "Enter"])
-            .status();
+            .status()
+            .with_context(|| format!("tmux send-keys Enter to {target}"))?;
     }
     Ok(())
 }
