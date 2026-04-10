@@ -245,11 +245,19 @@ pub fn build_state_with_hosts(
 pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
     // Refresh local sources first.
     for repo in &config.repos {
-        let _ = sources::worktrees::refresh_local(repo);
-        let _ = sources::github::refresh_issues(repo);
-        let _ = sources::github::refresh_prs(repo);
+        if let Err(e) = sources::worktrees::refresh_local(repo) {
+            tracing::warn!("refresh local worktrees failed for {}: {e}", repo.slug);
+        }
+        if let Err(e) = sources::github::refresh_issues(repo) {
+            tracing::warn!("refresh GitHub issues failed for {}: {e}", repo.slug);
+        }
+        if let Err(e) = sources::github::refresh_prs(repo) {
+            tracing::warn!("refresh GitHub PRs failed for {}: {e}", repo.slug);
+        }
     }
-    let _ = sources::tmux::refresh_local();
+    if let Err(e) = sources::tmux::refresh_local() {
+        tracing::warn!("refresh local tmux sessions failed: {e}");
+    }
 
     // Probe and refresh remote sources.
     let mut hosts: HashMap<String, HostState> = HashMap::new();
@@ -261,13 +269,30 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
                 let reachable = sources::hosts::probe_reachability(&remote.host);
                 hosts.insert(remote.host.clone(), HostState { reachable });
                 if reachable {
-                    let _ = sources::worktrees::refresh_remote(repo, remote);
-                    let _ = sources::tmux::refresh_remote(&remote.host);
+                    if let Err(e) = sources::worktrees::refresh_remote(repo, remote) {
+                        tracing::warn!(
+                            "refresh remote worktrees failed for {} on {}: {e}",
+                            repo.slug,
+                            remote.host
+                        );
+                    }
+                    if let Err(e) = sources::tmux::refresh_remote(&remote.host) {
+                        tracing::warn!(
+                            "refresh remote tmux sessions failed for {}: {e}",
+                            remote.host
+                        );
+                    }
                 }
             } else if let Some(state) = hosts.get(&remote.host) {
                 // Already probed — refresh worktrees for this repo if reachable.
-                if state.reachable {
-                    let _ = sources::worktrees::refresh_remote(repo, remote);
+                if state.reachable
+                    && let Err(e) = sources::worktrees::refresh_remote(repo, remote)
+                {
+                    tracing::warn!(
+                        "refresh remote worktrees failed for {} on {}: {e}",
+                        repo.slug,
+                        remote.host
+                    );
                 }
             }
         }
@@ -371,6 +396,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -501,6 +527,7 @@ mod tests {
             host: Some("ubuntu@10.0.0.1".to_string()),
             last_output_lines: vec![],
             claude_state_raw: Some(make_state_file(state, name, timestamp)),
+            last_activity: None,
         }
     }
 
@@ -582,6 +609,7 @@ mod tests {
             host: Some("ubuntu@10.0.0.1".to_string()),
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         };
         let states = extract_fresh_remote_states(&[session]);
         assert!(states.is_empty());

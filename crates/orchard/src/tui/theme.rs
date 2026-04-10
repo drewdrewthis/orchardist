@@ -152,11 +152,9 @@ impl Default for Theme {
 pub fn display_group_color(group: DisplayGroup, theme: &Theme) -> Color {
     match group {
         DisplayGroup::RepoMain => theme.orchardist,
-        DisplayGroup::Prioritized => theme.prioritized,
-        DisplayGroup::NeedsAttention => theme.error,
-        DisplayGroup::ClaudeWorking => theme.claude_active,
-        DisplayGroup::ReadyToMerge => theme.accent,
-        DisplayGroup::Other => theme.dimmed,
+        DisplayGroup::Active => theme.claude_active,
+        DisplayGroup::Normal => theme.dimmed,
+        DisplayGroup::Done => theme.dimmed,
     }
 }
 
@@ -288,46 +286,28 @@ mod tests {
     }
 
     #[test]
-    fn display_group_needs_attention_returns_theme_error() {
+    fn display_group_active_returns_theme_claude_active() {
         let theme = Theme::default();
         assert_eq!(
-            display_group_color(DisplayGroup::NeedsAttention, &theme),
-            theme.error
-        );
-    }
-
-    #[test]
-    fn display_group_claude_working_returns_theme_claude_active() {
-        let theme = Theme::default();
-        assert_eq!(
-            display_group_color(DisplayGroup::ClaudeWorking, &theme),
+            display_group_color(DisplayGroup::Active, &theme),
             theme.claude_active
         );
     }
 
     #[test]
-    fn display_group_ready_to_merge_returns_theme_accent() {
+    fn display_group_normal_returns_theme_dimmed() {
         let theme = Theme::default();
         assert_eq!(
-            display_group_color(DisplayGroup::ReadyToMerge, &theme),
-            theme.accent
+            display_group_color(DisplayGroup::Normal, &theme),
+            theme.dimmed
         );
     }
 
     #[test]
-    fn display_group_prioritized_returns_theme_prioritized() {
+    fn display_group_done_returns_theme_dimmed() {
         let theme = Theme::default();
         assert_eq!(
-            display_group_color(DisplayGroup::Prioritized, &theme),
-            theme.prioritized
-        );
-    }
-
-    #[test]
-    fn display_group_other_returns_theme_dimmed() {
-        let theme = Theme::default();
-        assert_eq!(
-            display_group_color(DisplayGroup::Other, &theme),
+            display_group_color(DisplayGroup::Done, &theme),
             theme.dimmed
         );
     }

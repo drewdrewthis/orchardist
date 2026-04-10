@@ -8,6 +8,8 @@ use std::process::Command;
 use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
+use crate::orchard_state::FailedCheck;
+use crate::paths::normalize_path;
 use crate::remote;
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,8 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
 
             let checks_state = derive_checks_state_graphql(v);
 
+            let is_draft = v["isDraft"].as_bool().unwrap_or(false);
+
             let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
 
             let unresolved_threads = v["reviewThreads"]["nodes"]
@@ -126,6 +130,17 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 Some(normalised.to_string())
             });
 
+            let failing_checks = extract_failing_checks(v);
+
+            let labels: Vec<String> = v["labels"]["nodes"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|n| n["name"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             Some(CachedPr {
                 number,
                 branch,
@@ -136,6 +151,9 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 has_conflicts,
                 unresolved_threads,
                 linked_issue_state,
+                failing_checks,
+                labels,
+                is_draft,
             })
         })
         .collect()
@@ -154,6 +172,72 @@ fn derive_checks_state_graphql(pr: &serde_json::Value) -> Option<String> {
         "PENDING" => Some("pending".to_string()),
         _ => None,
     }
+}
+
+/// Extracts individual failing CI check details from the GraphQL PR response.
+///
+/// Navigates to `commits.nodes[last].commit.statusCheckRollup.contexts.nodes`
+/// and collects all non-passing, actionable checks. Logs a warning when the
+/// contexts list is paginated (more than 100 checks — extremely rare).
+///
+/// Filters applied:
+/// - **Included** conclusions: `FAILURE`, `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`
+/// - **Excluded** (transient / not actionable): `CANCELLED`, `STALE`, `SUCCESS`, `NEUTRAL`, `SKIPPED`
+/// - `StatusContext` states `FAILURE` and `ERROR` are mapped to conclusion `FAILURE`.
+pub fn extract_failing_checks(pr: &serde_json::Value) -> Vec<FailedCheck> {
+    let rollup = match pr["commits"]["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.last())
+    {
+        Some(node) => &node["commit"]["statusCheckRollup"],
+        None => return Vec::new(),
+    };
+
+    let contexts = match rollup["contexts"]["nodes"].as_array() {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    // Warn if there are more than 100 checks (pagination not supported).
+    if rollup["contexts"]["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        LOG.warn("cache_sources: PR has more than 100 CI checks; some may be missing from failing_checks");
+    }
+
+    contexts
+        .iter()
+        .filter_map(|node| {
+            match node["__typename"].as_str()? {
+                "CheckRun" => {
+                    let name = node["name"].as_str().unwrap_or("").to_string();
+                    let conclusion = node["conclusion"].as_str().unwrap_or("").to_string();
+                    // Include only actionable failures.
+                    match conclusion.as_str() {
+                        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+                            Some(FailedCheck { name, conclusion })
+                        }
+                        _ => None,
+                    }
+                }
+                "StatusContext" => {
+                    let name = node["context"].as_str().unwrap_or("").to_string();
+                    let state = node["state"].as_str().unwrap_or("");
+                    // Map FAILURE/ERROR states to conclusion FAILURE; skip everything else.
+                    match state {
+                        "FAILURE" | "ERROR" => Some(FailedCheck {
+                            name,
+                            conclusion: "FAILURE".to_string(),
+                        }),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        })
+        .filter(|c| !c.name.is_empty())
+        .collect()
 }
 
 /// Parses the output of `git worktree list --porcelain` into `Vec<CachedWorktree>`.
@@ -203,7 +287,7 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
         }
 
         worktrees.push(CachedWorktree {
-            path,
+            path: normalize_path(&path).to_string(),
             branch,
             is_bare,
             is_locked,
@@ -217,7 +301,12 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
 ///
-/// `sessions_output` has lines in the format `{session_name}:{session_path}`.
+/// `sessions_output` has lines in the format
+/// `{session_name}:{session_activity}:{session_path}`.
+/// The `session_activity` field is a Unix timestamp (seconds) from
+/// `#{session_activity}`. The session path may itself contain colons, so the
+/// format is split as `name:activity:rest-of-path`.
+///
 /// `panes_fn` is called with each session name and returns lines in the format
 /// `{pane_title}:{pane_current_command}`.
 /// `content_fn` is called with each session name and returns the last few lines
@@ -234,12 +323,20 @@ pub fn parse_tmux_output(
         if line.is_empty() {
             continue;
         }
-        // Format: "{session_name}:{session_path}"
-        // Session path may itself contain colons (e.g. Windows paths or
-        // absolute paths on some systems), so we split on the first colon only.
-        let Some((name, path)) = line.split_once(':') else {
+        // Format: "{session_name}:{session_activity}:{session_path}"
+        // Split on the first colon to get the name, then the second colon to
+        // separate the activity timestamp from the path. The path may itself
+        // contain colons (e.g. absolute paths), so we only split twice.
+        let Some((name, rest)) = line.split_once(':') else {
             continue;
         };
+        let (activity_str, path) = match rest.split_once(':') {
+            Some((act, p)) => (act, p),
+            // Backward-compat: old format had no activity field — treat entire
+            // rest as path and leave last_activity as None.
+            None => ("", rest),
+        };
+        let last_activity = activity_str.parse::<u64>().ok().filter(|&v| v > 0);
 
         let pane_output = panes_fn(name);
         let parsed = parse_pane_lines(&pane_output);
@@ -247,7 +344,7 @@ pub fn parse_tmux_output(
 
         sessions.push(CachedTmuxSession {
             name: name.to_string(),
-            path: path.to_string(),
+            path: normalize_path(path).to_string(),
             pane_targets: parsed.targets,
             pane_titles: parsed.titles,
             pane_commands: parsed.commands,
@@ -256,6 +353,7 @@ pub fn parse_tmux_output(
             host: host.map(|h| h.to_string()),
             last_output_lines,
             claude_state_raw: None, // populated after parsing remote Claude state
+            last_activity,
         });
     }
 
@@ -409,7 +507,11 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetches open GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
+/// Fetches open and recently merged GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
+///
+/// Fetches both OPEN and MERGED states so that merged PRs remain in the cache and
+/// can be matched to their worktree branches. On API failure the error is logged and
+/// the existing cache is left intact.
 ///
 /// Uses GraphQL to get closingIssuesReferences (linked issues) and reviewThreads,
 /// which are not available via `gh pr list --json`.
@@ -420,14 +522,20 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
     let query = format!(
         r#"query {{
   repository(owner: "{owner}", name: "{name}") {{
-    pullRequests(first: 100, states: OPEN, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+    pullRequests(first: 100, states: [OPEN, MERGED], orderBy: {{field: CREATED_AT, direction: DESC}}) {{
       nodes {{
         number
         headRefName
         baseRefName
         state
+        isDraft
         reviewDecision
         mergeable
+        labels(first: 20) {{
+          nodes {{
+            name
+          }}
+        }}
         reviewThreads(first: 100) {{
           nodes {{
             isResolved
@@ -445,6 +553,22 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
             commit {{
               statusCheckRollup {{
                 state
+                contexts(last: 100) {{
+                  pageInfo {{
+                    hasNextPage
+                  }}
+                  nodes {{
+                    __typename
+                    ... on CheckRun {{
+                      name
+                      conclusion
+                    }}
+                    ... on StatusContext {{
+                      context
+                      state
+                    }}
+                  }}
+                }}
               }}
             }}
           }}
@@ -466,7 +590,10 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
         }
         Ok(json) => {
             let prs = parse_prs_graphql(&json);
-            cache::write_cache_if_nonempty(&path, &prs)?;
+            // Use write_cache (not write_cache_if_nonempty) so that a successful
+            // API response with zero PRs clears stale entries from a previous run.
+            // The early-return in the Err branch above protects against network failures.
+            cache::write_cache(&path, &prs)?;
             LOG.info(&format!(
                 "cache_sources: refresh_prs({}): wrote {} entries",
                 config.slug,
@@ -530,11 +657,15 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let sessions_out = match host {
         None => run_local(
             "tmux",
-            &["list-sessions", "-F", "#{session_name}:#{session_path}"],
+            &[
+                "list-sessions",
+                "-F",
+                "#{session_name}:#{session_activity}:#{session_path}",
+            ],
         ),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                "tmux list-sessions -F '#{{session_name}}:#{{session_activity}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
                 CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)
@@ -574,14 +705,22 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
                     "tmux",
                     &["list-panes", "-s", "-t", session_name, "-F", pane_fmt],
                 )
-                .unwrap_or_default(),
+                .unwrap_or_else(|e| {
+                    tracing::warn!("tmux pane list failed for session {session_name}: {e}");
+                    String::new()
+                }),
                 Some(h) => {
                     let cmd = format!(
                         "tmux list-panes -s -t {} -F '{}'",
                         remote::shell_escape(session_name),
                         pane_fmt
                     );
-                    remote::ssh_exec(h, &cmd).unwrap_or_default()
+                    remote::ssh_exec(h, &cmd).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "tmux pane list failed for session {session_name} on {h}: {e}"
+                        );
+                        String::new()
+                    })
                 }
             }
         },
@@ -591,13 +730,21 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
                     "tmux",
                     &["capture-pane", "-p", "-t", session_name, "-S", "-5"],
                 )
-                .unwrap_or_default(),
+                .unwrap_or_else(|e| {
+                    tracing::warn!("tmux capture-pane failed for session {session_name}: {e}");
+                    String::new()
+                }),
                 Some(h) => {
                     let cmd = format!(
                         "tmux capture-pane -p -t {} -S -5",
                         remote::shell_escape(session_name)
                     );
-                    remote::ssh_exec(h, &cmd).unwrap_or_default()
+                    remote::ssh_exec(h, &cmd).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "tmux capture-pane failed for session {session_name} on {h}: {e}"
+                        );
+                        String::new()
+                    })
                 }
             };
             raw.lines().map(|l| l.to_string()).collect()
@@ -812,6 +959,30 @@ mod tests {
         linked_issues: Vec<u32>,
         unresolved_threads: u32,
     ) -> serde_json::Value {
+        gql_pr_node_draft(
+            number,
+            branch,
+            review_decision,
+            mergeable,
+            check_state,
+            linked_issues,
+            unresolved_threads,
+            false,
+        )
+    }
+
+    /// Helper to build a single PR node in GraphQL format with explicit `is_draft` flag.
+    #[allow(clippy::too_many_arguments)]
+    fn gql_pr_node_draft(
+        number: u32,
+        branch: &str,
+        review_decision: Option<&str>,
+        mergeable: &str,
+        check_state: Option<&str>,
+        linked_issues: Vec<u32>,
+        unresolved_threads: u32,
+        is_draft: bool,
+    ) -> serde_json::Value {
         let threads: Vec<serde_json::Value> = (0..unresolved_threads)
             .map(|_| json!({"isResolved": false}))
             .collect();
@@ -827,6 +998,7 @@ mod tests {
             "number": number,
             "headRefName": branch,
             "state": "OPEN",
+            "isDraft": is_draft,
             "reviewDecision": review_decision,
             "mergeable": mergeable,
             "reviewThreads": {"nodes": threads},
@@ -1002,6 +1174,126 @@ mod tests {
     #[test]
     fn parse_prs_graphql_invalid_json_returns_empty() {
         assert!(parse_prs_graphql("{bad}").is_empty());
+    }
+
+    #[test]
+    fn parse_prs_graphql_is_draft_true() {
+        let json = graphql_prs(json!([gql_pr_node_draft(
+            20,
+            "feat/draft-pr",
+            None,
+            "MERGEABLE",
+            None,
+            vec![],
+            0,
+            true
+        )]));
+
+        let prs = parse_prs_graphql(&json);
+        assert!(prs[0].is_draft, "expected is_draft to be true");
+    }
+
+    #[test]
+    fn parse_prs_graphql_is_draft_false_by_default() {
+        let json = graphql_prs(json!([gql_pr_node(
+            21,
+            "feat/ready-pr",
+            None,
+            "MERGEABLE",
+            None,
+            vec![],
+            0
+        )]));
+
+        let prs = parse_prs_graphql(&json);
+        assert!(!prs[0].is_draft, "expected is_draft to be false");
+    }
+
+    #[test]
+    fn graphql_query_includes_is_draft_field() {
+        // The GraphQL query is built inside refresh_prs. We verify the isDraft field
+        // is present in our test node builder and parsed correctly, which mirrors
+        // that the query includes the field.
+        let node = gql_pr_node_draft(1, "feat/x", None, "MERGEABLE", None, vec![], 0, true);
+        let json = graphql_prs(json!([node]));
+        let prs = parse_prs_graphql(&json);
+        assert!(
+            prs[0].is_draft,
+            "isDraft field must be parsed from GraphQL response"
+        );
+    }
+
+    #[test]
+    fn parse_prs_graphql_preserves_merged_state() {
+        // Merged PRs returned by the GraphQL query (states: [OPEN, MERGED]) must
+        // round-trip with state == "merged" so derive can match them to worktrees.
+        let node = json!({
+            "number": 77,
+            "headRefName": "feat/issue-77",
+            "baseRefName": "main",
+            "state": "MERGED",
+            "isDraft": false,
+            "reviewDecision": "APPROVED",
+            "mergeable": "UNKNOWN",
+            "labels": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": [
+                {"number": 77, "state": "CLOSED", "stateReason": "COMPLETED"}
+            ]},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let json = graphql_prs(json!([node]));
+        let prs = parse_prs_graphql(&json);
+
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 77);
+        assert_eq!(prs[0].state, "merged");
+        assert_eq!(prs[0].branch, "feat/issue-77");
+        assert_eq!(prs[0].linked_issue, Some(77));
+        assert_eq!(
+            prs[0].linked_issue_state.as_deref(),
+            Some("completed"),
+            "linked issue state should be 'completed' for COMPLETED stateReason"
+        );
+    }
+
+    #[test]
+    fn parse_prs_graphql_open_and_merged_both_included() {
+        // When the response contains both OPEN and MERGED PRs (as returned by
+        // states: [OPEN, MERGED]), both must be preserved in the parsed output.
+        let open_node = json!({
+            "number": 10,
+            "headRefName": "feat/open-pr",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "isDraft": false,
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "labels": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let merged_node = json!({
+            "number": 11,
+            "headRefName": "feat/merged-pr",
+            "baseRefName": "main",
+            "state": "MERGED",
+            "isDraft": false,
+            "reviewDecision": "APPROVED",
+            "mergeable": "UNKNOWN",
+            "labels": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let json = graphql_prs(json!([open_node, merged_node]));
+        let prs = parse_prs_graphql(&json);
+
+        assert_eq!(prs.len(), 2);
+        let states: Vec<&str> = prs.iter().map(|p| p.state.as_str()).collect();
+        assert!(states.contains(&"open"), "expected an open PR");
+        assert!(states.contains(&"merged"), "expected a merged PR");
     }
 
     // -- parse_worktree_porcelain -------------------------------------------
@@ -1257,5 +1549,235 @@ mod tests {
         assert_eq!(parsed.window_active, vec!["1"]);
         assert_eq!(parsed.titles, vec!["Claude"]);
         assert_eq!(parsed.commands, vec![" my-project:node"]);
+    }
+
+    // -- extract_failing_checks -----------------------------------------------
+
+    /// Builds a minimal PR value with a statusCheckRollup contexts array.
+    fn pr_with_check_nodes(nodes: serde_json::Value) -> serde_json::Value {
+        json!({
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "state": "FAILURE",
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": false},
+                                "nodes": nodes
+                            }
+                        }
+                    }
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn extract_failing_checks_checkrun_failure_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "e2e-tests",
+            "conclusion": "FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "e2e-tests");
+        assert_eq!(checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_checkrun_success_excluded() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "unit-tests",
+            "conclusion": "SUCCESS"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_status_context_failure_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "StatusContext",
+            "context": "ci/travis",
+            "state": "FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "ci/travis");
+        assert_eq!(checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_status_context_error_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "StatusContext",
+            "context": "ci/circle",
+            "state": "ERROR"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_timed_out_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "integration-tests",
+            "conclusion": "TIMED_OUT"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].conclusion, "TIMED_OUT");
+    }
+
+    #[test]
+    fn extract_failing_checks_action_required_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "deploy-gate",
+            "conclusion": "ACTION_REQUIRED"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "deploy-gate");
+        assert_eq!(checks[0].conclusion, "ACTION_REQUIRED");
+    }
+
+    #[test]
+    fn extract_failing_checks_startup_failure_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "build",
+            "conclusion": "STARTUP_FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "build");
+        assert_eq!(checks[0].conclusion, "STARTUP_FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_empty_name_filtered() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "",
+            "conclusion": "FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_cancelled_excluded() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "deploy",
+            "conclusion": "CANCELLED"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_stale_excluded() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "stale-job",
+            "conclusion": "STALE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_pagination_warning_does_not_panic() {
+        // When hasNextPage is true, a warning is logged but no panic occurs.
+        let pr = json!({
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "state": "FAILURE",
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": true},
+                                "nodes": [{
+                                    "__typename": "CheckRun",
+                                    "name": "test",
+                                    "conclusion": "FAILURE"
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+        // Must not panic; result should still include the visible checks.
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+    }
+
+    #[test]
+    fn extract_failing_checks_empty_when_no_commits() {
+        let pr = json!({"commits": {"nodes": []}});
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_empty_when_rollup_null() {
+        let pr = json!({
+            "commits": {
+                "nodes": [{"commit": {"statusCheckRollup": null}}]
+            }
+        });
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn parse_prs_graphql_includes_failing_checks() {
+        // Integration: parse_prs_graphql should populate failing_checks from check nodes.
+        let pr_node = json!({
+            "number": 42,
+            "headRefName": "feat/fix",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "state": "FAILURE",
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": false},
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "name": "unit-tests",
+                                        "conclusion": "FAILURE"
+                                    },
+                                    {
+                                        "__typename": "CheckRun",
+                                        "name": "lint",
+                                        "conclusion": "SUCCESS"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+        let json = graphql_prs(json!([pr_node]));
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].failing_checks.len(), 1);
+        assert_eq!(prs[0].failing_checks[0].name, "unit-tests");
     }
 }

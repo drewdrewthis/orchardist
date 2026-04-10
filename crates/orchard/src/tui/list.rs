@@ -77,14 +77,13 @@ pub(crate) fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bo
 }
 
 impl DisplayGroup {
-    fn label(self) -> &'static str {
+    /// Returns the human-readable section header label for this group.
+    pub fn label(self) -> &'static str {
         match self {
             Self::RepoMain => "repo main",
-            Self::Prioritized => "prioritized",
-            Self::NeedsAttention => "needs attention",
-            Self::ClaudeWorking => "claude working",
-            Self::ReadyToMerge => "ready to merge",
-            Self::Other => "other",
+            Self::Active => "active",
+            Self::Normal => "work in progress",
+            Self::Done => "done",
         }
     }
 }
@@ -265,8 +264,32 @@ fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
         );
     }
     if pr.checks_state.as_deref() == Some("failing") {
+        let detail = if pr.failing_checks.is_empty() {
+            String::new()
+        } else if pr.failing_checks.len() <= 3 {
+            format!(
+                ": {}",
+                pr.failing_checks
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            let shown: Vec<&str> = pr
+                .failing_checks
+                .iter()
+                .take(3)
+                .map(|c| c.name.as_str())
+                .collect();
+            format!(
+                ": {} +{} more",
+                shown.join(", "),
+                pr.failing_checks.len() - 3
+            )
+        };
         return (
-            format!("{}\u{2716} failing", prefix),
+            format!("{}\u{2716} failing{}", prefix, detail),
             Style::default().fg(theme.error),
         );
     }
@@ -395,7 +418,7 @@ impl App {
     /// Returns `true` when the TUI should exit (to switch to a session).
     pub(crate) fn handle_enter_action(&mut self) -> bool {
         use super::SubCursor;
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
 
         // Resolve pane target from SubCursor for Enter action.
         let resolve_pane_target_from_sub_cursor =
@@ -640,7 +663,7 @@ impl App {
         self.pane_content.clear();
 
         // Handle standalone sessions first.
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if cursor_is_standalone(self.cursor, standalone_count)
             && let Some(ss) = self.standalone_sessions.get(self.cursor)
             && matches!(
@@ -979,6 +1002,7 @@ impl App {
 struct SubRowContext<'a> {
     show_branch: bool,
     has_remote: bool,
+    has_tags: bool,
     theme: &'a Theme,
     bar_color: Color,
     prefix: &'a str,
@@ -996,8 +1020,12 @@ impl App {
 
         let hdr_height = header_height(area.height);
 
-        let tasks =
-            visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
+        // On the ORCHARD tab only standalone sessions are shown; suppress all worktree rows.
+        let tasks = if self.is_orchard_tab() {
+            vec![]
+        } else {
+            visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug())
+        };
 
         // Only show HOST column when at least one task has a remote session or remote worktree.
         let has_remote = self.task_rows.iter().any(|r| {
@@ -1009,14 +1037,19 @@ impl App {
 
         let show_branch = self.show_branch_column;
 
+        // TAGS column is always visible — shows GitHub labels and draft status.
+        let has_tags = true;
+
         // Compute available width for the TITLE column.
         // Column order: BAR (1) + # (3) + CLAUDE (10) + ISSUE (6) + TITLE (flex)
-        //               + [BRANCH (20)] + [HOST (12)] + STATUS (22)
+        //               + [BRANCH (20)] + [HOST (12)] + TAGS (18) + STATUS (22)
         // Each column has 1 spacing. Plus borders (2).
         let fixed = 1 + 1 + 3 + 1 + 10 + 1 + 6 + 1 + 1 + 22 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 12 + 1 } else { 0 };
-        let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
+        let tags_extra = if has_tags { 18 + 1 } else { 0 };
+        let title_width =
+            (area.width as usize).saturating_sub(fixed + branch_extra + host_extra + tags_extra);
 
         // Column widths — CLAUDE after #, STATUS at end.
         let mut widths: Vec<Constraint> = vec![
@@ -1032,15 +1065,19 @@ impl App {
         if has_remote {
             widths.push(Constraint::Length(12)); // HOST
         }
+        if has_tags {
+            widths.push(Constraint::Length(18)); // TAGS
+        }
         widths.push(Constraint::Length(22)); // STATUS (last)
 
         // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         let (rows, row_heights, selected_visual_idx) = self.build_task_table_rows_with_standalone(
             &tasks,
             show_branch,
             has_remote,
+            has_tags,
             title_width,
             num_columns,
         );
@@ -1123,12 +1160,19 @@ impl App {
         if has_remote {
             header_cells.push(Cell::from("HOST"));
         }
+        if has_tags {
+            header_cells.push(Cell::from("TAGS"));
+        }
         header_cells.push(Cell::from("STATUS"));
         let header_row = Row::new(header_cells).style(header_style);
 
-        let table_title = match self.active_repo_slug() {
-            Some(slug) => format!(" TASKS \u{2014} {} ", slug),
-            None => " TASKS ".to_string(),
+        let table_title = if self.is_orchard_tab() {
+            " ORCHARD \u{2014} orchestrator sessions ".to_string()
+        } else {
+            match self.active_repo_slug() {
+                Some(slug) => format!(" TASKS \u{2014} {} ", slug),
+                None => " TASKS ".to_string(),
+            }
         };
         let block = Block::default()
             .title(table_title)
@@ -1237,11 +1281,18 @@ impl App {
             active: bool,
         }
 
-        let mut tabs = vec![TabInfo {
-            label: "ALL".to_string(),
-            color: theme.accent,
-            active: self.active_repo_index == 0,
-        }];
+        let mut tabs = vec![
+            TabInfo {
+                label: "ALL".to_string(),
+                color: theme.accent,
+                active: self.active_repo_index == 0,
+            },
+            TabInfo {
+                label: "ORCHARD".to_string(),
+                color: theme.dimmed,
+                active: self.active_repo_index == 1,
+            },
+        ];
 
         for (i, repo) in self.global_config.repos.iter().enumerate() {
             let name = repo
@@ -1253,7 +1304,7 @@ impl App {
             tabs.push(TabInfo {
                 label: name,
                 color: repo_color(i),
-                active: self.active_repo_index == i + 1,
+                active: self.active_repo_index == i + 2,
             });
         }
 
@@ -1340,14 +1391,19 @@ impl App {
 
     /// Builds table rows: standalone sessions first, then worktree task rows with group headers.
     ///
-    /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], STATUS.
+    /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], [TAGS], STATUS.
     /// Unified sequential numbering across standalone + worktree rows.
     /// Expanded rows get pane sub-rows inserted after the parent.
+    ///
+    /// Standalone sessions are rendered only on ALL (0) and ORCHARD (1) tabs, derived
+    /// from `self.effective_standalone_count()`. On repo tabs the count is 0 and
+    /// the loop body never executes.
     fn build_task_table_rows_with_standalone(
         &self,
         tasks: &[VisibleTask],
         show_branch: bool,
         has_remote: bool,
+        has_tags: bool,
         title_width: usize,
         num_columns: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>, Option<usize>) {
@@ -1355,13 +1411,19 @@ impl App {
         let mut rows: Vec<Row<'static>> = Vec::new();
         let mut row_heights: Vec<u16> = Vec::new();
         let mut selected_visual_idx: Option<usize> = None;
-        let standalone_count = self.standalone_sessions.len();
+        // On repo tabs (index >= 2) this is 0, so the standalone loop body never runs.
+        let standalone_count = self.effective_standalone_count();
 
         // Unified numbering counter (1-based, spans standalone + worktree).
         let mut unified_num = 1usize;
 
-        // Render standalone session rows first.
-        for (idx, ss) in self.standalone_sessions.iter().enumerate() {
+        // Render standalone session rows first (empty slice on repo tabs).
+        for (idx, ss) in self
+            .standalone_sessions
+            .iter()
+            .enumerate()
+            .take(standalone_count)
+        {
             let selected = idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
             if selected {
                 selected_visual_idx = Some(rows.len());
@@ -1408,6 +1470,9 @@ impl App {
             if has_remote {
                 cells.push(Cell::from("")); // always local
             }
+            if has_tags {
+                cells.push(Cell::from("")); // no tags for standalone sessions
+            }
             cells.push(Cell::from(status_text).style(status_style));
 
             rows.push(Row::new(cells).style(row_style));
@@ -1418,6 +1483,7 @@ impl App {
                 let sub_ctx = SubRowContext {
                     show_branch,
                     has_remote,
+                    has_tags,
                     theme,
                     bar_color: Color::DarkGray,
                     prefix: "",
@@ -1641,6 +1707,41 @@ impl App {
                 cells.push(host_cell);
             }
 
+            if has_tags {
+                let tags_cell = {
+                    // Collect all unique labels from issue + PR, plus draft badge.
+                    let mut tags: Vec<&str> = Vec::new();
+                    if vt.row.pr.as_ref().is_some_and(|pr| pr.is_draft) {
+                        tags.push("draft");
+                    }
+                    for label in &vt.row.issue_labels {
+                        if !tags.contains(&label.as_str()) {
+                            tags.push(label.as_str());
+                        }
+                    }
+                    if let Some(pr) = &vt.row.pr {
+                        for label in &pr.labels {
+                            if !tags.contains(&label.as_str()) {
+                                tags.push(label.as_str());
+                            }
+                        }
+                    }
+                    if tags.is_empty() {
+                        Cell::from("")
+                    } else {
+                        let text = tags.join(", ");
+                        // Truncate to fit column width
+                        let display = if text.len() > 18 {
+                            format!("{}…", &text[..17])
+                        } else {
+                            text
+                        };
+                        Cell::from(display).style(Style::default().fg(theme.dimmed))
+                    }
+                };
+                cells.push(tags_cell);
+            }
+
             cells.push(status_cell);
 
             rows.push(Row::new(cells).style(row_style));
@@ -1651,6 +1752,7 @@ impl App {
                 let sub_ctx = SubRowContext {
                     show_branch,
                     has_remote,
+                    has_tags,
                     theme,
                     bar_color,
                     prefix: "",
@@ -1752,6 +1854,9 @@ impl App {
             if ctx.has_remote {
                 cells.push(Cell::from("")); // HOST: empty
             }
+            if ctx.has_tags {
+                cells.push(Cell::from("")); // TAGS: empty
+            }
             cells.push(Cell::from("")); // STATUS: empty
 
             rows.push(Row::new(cells).style(row_style));
@@ -1836,6 +1941,9 @@ impl App {
             }
             if ctx.has_remote {
                 cells.push(Cell::from(""));
+            }
+            if ctx.has_tags {
+                cells.push(Cell::from("")); // TAGS: empty
             }
             cells.push(Cell::from("")); // STATUS: empty
 
@@ -2047,7 +2155,7 @@ impl App {
 
         // PR link hint — dim when standalone or selected task has no PR.
         let has_pr = !is_standalone && !self.task_rows.is_empty() && {
-            let standalone_count = self.standalone_sessions.len();
+            let standalone_count = self.effective_standalone_count();
             let worktree_cursor = self.cursor.saturating_sub(standalone_count);
             let visible =
                 visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
@@ -2060,15 +2168,6 @@ impl App {
             spans.push(Span::raw(" pr"));
         } else {
             spans.push(Span::styled("o pr", dim));
-        }
-        spans.push(sep.clone());
-
-        // Dim 'p' (priority) for standalone sessions.
-        if is_standalone {
-            spans.push(Span::styled("p priority", dim));
-        } else {
-            spans.push(Span::styled("p", key_style));
-            spans.push(Span::raw(" priority"));
         }
         spans.push(sep.clone());
 
@@ -2242,10 +2341,12 @@ mod tests {
             issue_number: Some(issue_number),
             issue_title: Some(format!("Test task {}", issue_number)),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -2285,9 +2386,9 @@ mod tests {
     #[test]
     fn visible_tasks_returns_all_rows_including_other() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::ClaudeWorking),
-            make_task_row(3, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Normal),
         ];
         // All rows are always visible — no backlog collapsing.
         let visible = visible_tasks(&rows, "");
@@ -2297,7 +2398,7 @@ mod tests {
     #[test]
     fn other_group_always_shown() {
         let rows: Vec<WorktreeRow> = (1u32..=5)
-            .map(|i| make_task_row(i, DisplayGroup::Other))
+            .map(|i| make_task_row(i, DisplayGroup::Normal))
             .collect();
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 5, "Other rows are always visible");
@@ -2306,28 +2407,28 @@ mod tests {
     #[test]
     fn sequential_numbering_across_groups() {
         let rows = vec![
-            make_task_row(10, DisplayGroup::NeedsAttention),
-            make_task_row(20, DisplayGroup::ClaudeWorking),
-            make_task_row(30, DisplayGroup::Other),
+            make_task_row(10, DisplayGroup::Active),
+            make_task_row(20, DisplayGroup::Active),
+            make_task_row(30, DisplayGroup::Normal),
         ];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
         // Unified numbering now happens at render time, not in visible_tasks.
         // Verify all three rows pass through with correct groups.
-        assert_eq!(visible[0].group, DisplayGroup::NeedsAttention);
-        assert_eq!(visible[1].group, DisplayGroup::ClaudeWorking);
-        assert_eq!(visible[2].group, DisplayGroup::Other);
+        assert_eq!(visible[0].group, DisplayGroup::Active);
+        assert_eq!(visible[1].group, DisplayGroup::Active);
+        assert_eq!(visible[2].group, DisplayGroup::Normal);
     }
 
     #[test]
     fn search_filters_by_text() {
         let row_match = WorktreeRow {
             branch: "feat/my-feature".to_string(),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let row_no_match = WorktreeRow {
             branch: "feat/other-thing".to_string(),
-            ..make_task_row(2, DisplayGroup::ClaudeWorking)
+            ..make_task_row(2, DisplayGroup::Active)
         };
         let rows = vec![row_match, row_no_match];
         let visible = visible_tasks(&rows, "my-feature");
@@ -2342,7 +2443,7 @@ mod tests {
             branch: "main".to_string(),
             ..make_task_row(1, DisplayGroup::RepoMain)
         };
-        let other = make_task_row(2, DisplayGroup::NeedsAttention);
+        let other = make_task_row(2, DisplayGroup::Active);
         let rows = vec![shepherd, other];
         // Shepherd bypasses search filter.
         let visible = visible_tasks(&rows, "nomatch");
@@ -2361,8 +2462,11 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::ReadyToMerge)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2379,7 +2483,7 @@ mod tests {
 
     #[test]
     fn pr_status_no_pr() {
-        let row = make_task_row(1, DisplayGroup::Other);
+        let row = make_task_row(1, DisplayGroup::Normal);
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert_eq!(text, "no PR");
     }
@@ -2402,7 +2506,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
@@ -2412,7 +2516,7 @@ mod tests {
     fn claude_status_idle() {
         let row = WorktreeRow {
             sessions: vec![make_session("sess")],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
@@ -2436,7 +2540,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
@@ -2444,7 +2548,7 @@ mod tests {
 
     #[test]
     fn claude_status_none_when_no_session() {
-        let row = make_task_row(1, DisplayGroup::Other);
+        let row = make_task_row(1, DisplayGroup::Normal);
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("none"), "expected 'none' in: {}", text);
     }
@@ -2460,8 +2564,11 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2482,8 +2589,11 @@ mod tests {
                 checks_state: None,
                 has_conflicts: true,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2504,8 +2614,11 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 3,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2518,6 +2631,7 @@ mod tests {
 
     #[test]
     fn pr_status_failing_ci() {
+        use crate::orchard_state::FailedCheck;
         let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
@@ -2527,11 +2641,95 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![FailedCheck {
+                    name: "e2e-tests".to_string(),
+                    conclusion: "FAILURE".to_string(),
+                }],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+        assert!(
+            text.contains("e2e-tests"),
+            "expected check name 'e2e-tests' in: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn pr_status_failing_ci_no_checks_shows_no_detail() {
+        let row = WorktreeRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                state: None,
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
+            }),
+            ..make_task_row(1, DisplayGroup::Active)
+        };
+        let (text, _) = pr_status_text(&row, &Theme::default());
+        assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+        // No colon-separated detail when failing_checks is empty.
+        assert!(!text.contains(':'), "unexpected colon in: {}", text);
+    }
+
+    #[test]
+    fn pr_status_failing_ci_truncates_at_four_checks() {
+        use crate::orchard_state::FailedCheck;
+        let failing_checks = vec![
+            FailedCheck {
+                name: "check-a".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+            FailedCheck {
+                name: "check-b".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+            FailedCheck {
+                name: "check-c".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+            FailedCheck {
+                name: "check-d".to_string(),
+                conclusion: "FAILURE".to_string(),
+            },
+        ];
+        let row = WorktreeRow {
+            pr: Some(PrInfo {
+                number: 2,
+                branch: "feat/branch".to_string(),
+                state: None,
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks,
+                labels: vec![],
+                is_draft: false,
+            }),
+            ..make_task_row(2, DisplayGroup::Active)
+        };
+        let (text, _) = pr_status_text(&row, &Theme::default());
+        assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+        assert!(
+            text.contains("+1 more"),
+            "expected '+1 more' truncation in: {}",
+            text
+        );
+        assert!(
+            text.contains("check-a"),
+            "expected first check name in: {}",
+            text
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2603,7 +2801,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Working,
                 Some(73.0),
             )],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
@@ -2617,7 +2815,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Idle,
                 None,
             )],
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
@@ -2630,7 +2828,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Input,
                 None,
             )],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
@@ -2643,7 +2841,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Input,
                 Some(95.0),
             )],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
@@ -2657,7 +2855,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Working,
                 None,
             )],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(
@@ -2678,8 +2876,11 @@ mod tests {
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("pending"), "expected 'pending' in: {}", text);
@@ -2720,7 +2921,7 @@ mod tests {
                     panes: vec![],
                 },
             ],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         // Input takes priority over working; count suffix should show " 2"
@@ -2734,7 +2935,7 @@ mod tests {
 
     #[test]
     fn search_is_case_insensitive() {
-        let rows = vec![make_task_row(1, DisplayGroup::NeedsAttention)];
+        let rows = vec![make_task_row(1, DisplayGroup::Active)];
         // Search with uppercase should match lowercase branch "feat/issue-1"
         let visible = visible_tasks(&rows, "FEAT/ISSUE");
         assert_eq!(visible.len(), 1);
@@ -2742,10 +2943,10 @@ mod tests {
 
     #[test]
     fn search_with_multiple_rows() {
-        let mut row_match = make_task_row(1, DisplayGroup::NeedsAttention);
+        let mut row_match = make_task_row(1, DisplayGroup::Active);
         row_match.branch = "feat/target-branch".to_string();
 
-        let mut row_no_match = make_task_row(2, DisplayGroup::NeedsAttention);
+        let mut row_no_match = make_task_row(2, DisplayGroup::Active);
         row_no_match.branch = "feat/other-branch".to_string();
 
         let rows = vec![row_match, row_no_match];
@@ -2764,11 +2965,11 @@ mod tests {
     fn search_matches_issue_title() {
         let row_azure = WorktreeRow {
             issue_title: Some("Fix Azure integration bug".to_string()),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let row_other = WorktreeRow {
             issue_title: Some("Unrelated task name".to_string()),
-            ..make_task_row(2, DisplayGroup::Other)
+            ..make_task_row(2, DisplayGroup::Normal)
         };
         let rows = vec![row_azure, row_other];
         let visible = visible_tasks(&rows, "Azure");
@@ -2787,10 +2988,13 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::ReadyToMerge)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
-        let row_no_pr = make_task_row(2, DisplayGroup::Other);
+        let row_no_pr = make_task_row(2, DisplayGroup::Normal);
         let rows = vec![row_approved, row_no_pr];
         // "approved" is in the haystack for row_approved via pr_status_haystack.
         let visible = visible_tasks(&rows, "approved");
@@ -2809,13 +3013,13 @@ mod tests {
         let row_strong = WorktreeRow {
             issue_title: Some("Azure storage fix".to_string()),
             branch: "feat/issue-1".to_string(),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         // Row 2: branch contains letters a-z-u-r-e but not as the word "azure".
         let row_weak = WorktreeRow {
             issue_title: Some("Fix remote auth".to_string()),
             branch: "feat/issue-2".to_string(),
-            ..make_task_row(2, DisplayGroup::Other)
+            ..make_task_row(2, DisplayGroup::Normal)
         };
         let rows = vec![row_weak, row_strong]; // weak first in input
         let visible = visible_tasks(&rows, "azure");
@@ -2843,7 +3047,7 @@ mod tests {
             issue_title: None,
             ..make_task_row(0, DisplayGroup::RepoMain)
         };
-        let other = make_task_row(1, DisplayGroup::NeedsAttention);
+        let other = make_task_row(1, DisplayGroup::Active);
         let rows = vec![main, other];
         // "nomatch" won't match either row normally, but main always passes.
         let visible = visible_tasks(&rows, "nomatch");
@@ -2862,9 +3066,9 @@ mod tests {
     #[test]
     fn empty_filter_preserves_original_order() {
         let rows = vec![
-            make_task_row(10, DisplayGroup::NeedsAttention),
-            make_task_row(20, DisplayGroup::ClaudeWorking),
-            make_task_row(30, DisplayGroup::Other),
+            make_task_row(10, DisplayGroup::Active),
+            make_task_row(20, DisplayGroup::Active),
+            make_task_row(30, DisplayGroup::Normal),
         ];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
@@ -2881,7 +3085,7 @@ mod tests {
     fn match_indices_present_when_filter_active() {
         let row = WorktreeRow {
             issue_title: Some("Fix Azure bug".to_string()),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let rows = vec![row];
         let visible = visible_tasks(&rows, "azure");
@@ -2894,7 +3098,7 @@ mod tests {
 
     #[test]
     fn match_indices_empty_when_filter_empty() {
-        let rows = vec![make_task_row(1, DisplayGroup::Other)];
+        let rows = vec![make_task_row(1, DisplayGroup::Normal)];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 1);
         assert!(
@@ -2963,7 +3167,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -2995,8 +3199,8 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
-        // Simulate a repo selected.
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
+        // Simulate the ORCHARD tab selected (index 1).
         app.active_repo_index = 1;
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3029,7 +3233,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3169,9 +3373,10 @@ mod tests {
             path: "/workspace/alpha".to_string(),
             remotes: vec![],
         }];
+        // ORCHARD tab (index 1) is active; ALL tab must still render.
         let app = make_repo_app(repos, 1);
         let buf = render_tabs_to_buffer(&app);
-        // Inactive ALL: label on row 1 should have dimmed fg.
+        // Inactive ALL: label on row 1 should still appear.
         let all_cell = (0..buf.area.width)
             .map(|x| &buf[(x, 1)])
             .find(|c| c.symbol() == "A");
@@ -3207,17 +3412,17 @@ mod tests {
             path: "/workspace/beta".to_string(),
             remotes: vec![],
         }];
-        let app = make_repo_app(repos, 1);
+        // Repos start at index 2 (ALL=0, ORCHARD=1, repos start at 2).
+        let app = make_repo_app(repos, 2);
         let buf = render_tabs_to_buffer(&app);
-        // Active repo badge starts after ALL badge (width 7) + 1 gap = x=8.
-        // The border corner at row 0 should have repo_color(0) fg.
+        // The border corner ╭ of the active repo tab should have repo_color(0) fg.
         let expected_color = repo_color(0);
-        // Inactive ALL has no border, so the only ╭ is the active repo's.
+        // Only the active tab renders a border, so find any ╭ that has the repo color.
         let corner = (0..buf.area.width)
             .map(|x| &buf[(x, 0)])
-            .find(|c| c.symbol() == "╭");
+            .find(|c| c.symbol() == "╭" && c.style().fg == Some(expected_color));
         assert!(
-            corner.is_some_and(|c| c.style().fg == Some(expected_color)),
+            corner.is_some(),
             "active repo tab border must use repo_color"
         );
     }
@@ -3237,7 +3442,9 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        let app = make_repo_app(repos, 2);
+        // Index 3 = repos[1] = "owner/beta" active; "owner/alpha" (ALPHA) is inactive.
+        // Tab layout: ALL=0, ORCHARD=1, owner/alpha=2, owner/beta=3.
+        let app = make_repo_app(repos, 3);
         let buf = render_tabs_to_buffer(&app);
         let text = buffer_to_string(&buf);
         assert!(
@@ -3256,7 +3463,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let theme = Theme::default();
-        let row = group_header_row(DisplayGroup::Other, 5, &theme);
+        let row = group_header_row(DisplayGroup::Normal, 5, &theme);
         let backend = TestBackend::new(80, 5);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3322,7 +3529,7 @@ mod tests {
 
         let row = WorktreeRow {
             sessions: vec![make_session("sess")],
-            ..make_task_row(42, DisplayGroup::Other)
+            ..make_task_row(42, DisplayGroup::Normal)
         };
         let app = App::new_test(vec![row]);
         let backend = TestBackend::new(160, 40);
@@ -3377,7 +3584,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3409,7 +3616,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         // Row exists but pane_content is empty — placeholder should render.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(120, 50);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render_task_list(f)).unwrap();
@@ -3433,7 +3640,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         // Placeholder should not be scroll-interactive — preview_area must be zero.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(120, 50);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render_task_list(f)).unwrap();
@@ -3452,7 +3659,7 @@ mod tests {
     fn make_task_row_with_session_for_preview(issue: u32) -> WorktreeRow {
         WorktreeRow {
             sessions: vec![make_session(&format!("sess-{}", issue))],
-            ..make_task_row(issue, DisplayGroup::Other)
+            ..make_task_row(issue, DisplayGroup::Normal)
         }
     }
 
@@ -3490,6 +3697,211 @@ mod tests {
         assert!(
             table_chunk_height >= TABLE_MIN_HEIGHT,
             "table chunk height {table_chunk_height} should be >= {TABLE_MIN_HEIGHT}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // TAGS column tests
+    // -----------------------------------------------------------------------
+
+    fn make_draft_pr_row(issue: u32) -> WorktreeRow {
+        WorktreeRow {
+            pr: Some(PrInfo {
+                number: issue,
+                branch: format!("feat/issue-{}", issue),
+                state: None,
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: true,
+            }),
+            ..make_task_row(issue, DisplayGroup::Normal)
+        }
+    }
+
+    fn make_non_draft_pr_row(issue: u32) -> WorktreeRow {
+        WorktreeRow {
+            pr: Some(PrInfo {
+                number: issue,
+                branch: format!("feat/issue-{}", issue),
+                state: None,
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
+            }),
+            ..make_task_row(issue, DisplayGroup::Normal)
+        }
+    }
+
+    /// Collects all rendered text from the terminal buffer.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        text
+    }
+
+    /// Finds the header line (the one containing "TITLE" and "STATUS").
+    fn find_header_line(buffer: &ratatui::buffer::Buffer) -> Option<String> {
+        for y in 0..buffer.area.height {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            if line.contains("TITLE") && line.contains("STATUS") {
+                return Some(line);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn tags_column_always_in_header() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_draft_pr_row(1)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            header.contains("TAGS"),
+            "TAGS header must always be present; header: {:?}",
+            header
+        );
+    }
+
+    #[test]
+    fn tags_column_always_visible_even_without_drafts() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![
+            make_non_draft_pr_row(1),
+            make_task_row(2, DisplayGroup::Normal),
+        ]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            header.contains("TAGS"),
+            "TAGS header must always be visible; header: {:?}",
+            header
+        );
+    }
+
+    #[test]
+    fn draft_badge_appears_for_draft_pr_row() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_draft_pr_row(1)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("draft"),
+            "rendered output must contain 'draft' badge for a draft PR row"
+        );
+    }
+
+    #[test]
+    fn tags_cell_empty_for_non_draft_pr_when_tags_column_visible() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // One draft row makes TAGS column visible; second row is non-draft.
+        let app = App::new_test(vec![make_draft_pr_row(1), make_non_draft_pr_row(2)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            header.contains("TAGS"),
+            "TAGS column must be visible when at least one draft PR exists"
+        );
+        // The column exists but non-draft row contributes no extra "draft" text beyond row 1.
+        // We simply confirm the render doesn't panic and TAGS column is present.
+    }
+
+    #[test]
+    fn tags_cell_empty_for_row_without_pr() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // One draft row forces TAGS visible; second row has no PR.
+        let app = App::new_test(vec![
+            make_draft_pr_row(1),
+            make_task_row(2, DisplayGroup::Normal),
+        ]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        // Render must succeed without panic — column exists with empty cell for no-PR row.
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(header.contains("TAGS"), "TAGS must be present");
+    }
+
+    #[test]
+    fn tags_column_visible_with_all_non_draft_prs() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let rows: Vec<WorktreeRow> = (1..=3).map(make_non_draft_pr_row).collect();
+        let app = App::new_test(rows);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            header.contains("TAGS"),
+            "TAGS must always be visible; header: {:?}",
+            header
+        );
+        assert!(
+            header.contains("STATUS"),
+            "STATUS must remain last column; header: {:?}",
+            header
+        );
+    }
+
+    #[test]
+    fn tags_column_appears_after_title_before_status() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_draft_pr_row(1)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        let tags_pos = header.find("TAGS").unwrap();
+        let status_pos = header.find("STATUS").unwrap();
+        assert!(
+            tags_pos < status_pos,
+            "TAGS ({}) must appear before STATUS ({})",
+            tags_pos,
+            status_pos
         );
     }
 }

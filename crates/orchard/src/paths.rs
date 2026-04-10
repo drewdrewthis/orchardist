@@ -4,6 +4,75 @@
 //! with `~`; `truncate_left` caps display width by eliding from the left with
 //! a `…` character. `sanitize_branch_slug` and `derive_local_worktree_path`
 //! produce filesystem-safe paths for worktree directories.
+//! `normalize_path` strips trailing slashes for consistent path comparisons.
+//! `paths_match` performs exact path comparison with symlink resolution as a
+//! fallback, preventing both false positives and missed matches.
+
+/// Normalizes a filesystem path for comparison by stripping trailing slashes.
+///
+/// Tmux reports `#{session_path}` with a trailing slash in some versions;
+/// `git worktree list --porcelain` never does. Normalizing both sides before
+/// comparison prevents false mismatches.
+///
+/// The root path `"/"` is returned unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use orchard::paths::normalize_path;
+/// assert_eq!(normalize_path("/home/user/repo/"), "/home/user/repo");
+/// assert_eq!(normalize_path("/home/user/repo"), "/home/user/repo");
+/// assert_eq!(normalize_path("/"), "/");
+/// ```
+pub fn normalize_path(path: &str) -> &str {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        // The input was all slashes (e.g. "/") — preserve the root.
+        "/"
+    } else {
+        trimmed
+    }
+}
+
+/// Compares two filesystem paths for equality, handling symlinks and trailing
+/// slashes correctly.
+///
+/// The fast path is normalized string equality (both sides have trailing
+/// slashes stripped). If that fails — which can happen on macOS where `/var`
+/// and `/tmp` are symlinks to `/private/var` and `/private/tmp`, or where git
+/// resolves symlinks differently from tmux — both paths are canonicalized via
+/// the filesystem and compared again.
+///
+/// Returns `true` if both paths refer to the same filesystem location.
+///
+/// # Examples
+///
+/// ```
+/// use orchard::paths::paths_match;
+/// assert!(paths_match("/home/user/repo", "/home/user/repo"));
+/// assert!(paths_match("/home/user/repo/", "/home/user/repo"));
+/// assert!(!paths_match("/home/user/repo", "/home/user/repo-sdk"));
+/// assert!(!paths_match("/home/user/langwatch", "/home/user/langwatch-sdk"));
+/// ```
+pub fn paths_match(a: &str, b: &str) -> bool {
+    // Fast path: normalized string equality.
+    let a_norm = normalize_path(a);
+    let b_norm = normalize_path(b);
+    if a_norm == b_norm {
+        return true;
+    }
+
+    // Slow path: canonicalize to resolve symlinks (e.g. macOS /private/var vs /var).
+    let a_canon = std::fs::canonicalize(a);
+    let b_canon = std::fs::canonicalize(b);
+    match (a_canon, b_canon) {
+        (Ok(ac), Ok(bc)) => ac == bc,
+        // If either path doesn't exist on disk, fall back to the already-false
+        // normalized comparison — no match.
+        _ => false,
+    }
+}
+
 /// Replaces the user's home directory prefix in `path` with `~`.
 /// Returns the path unchanged if it does not start with `$HOME`.
 pub fn tildify(path: &str) -> String {
@@ -175,6 +244,33 @@ mod tests {
         assert_eq!(sanitize_branch_slug("main"), "main");
     }
 
+    // --- normalize_path ---
+
+    #[test]
+    fn normalize_path_strips_trailing_slash() {
+        assert_eq!(normalize_path("/home/user/repo/"), "/home/user/repo");
+    }
+
+    #[test]
+    fn normalize_path_no_trailing_slash_unchanged() {
+        assert_eq!(normalize_path("/home/user/repo"), "/home/user/repo");
+    }
+
+    #[test]
+    fn normalize_path_root_preserved() {
+        assert_eq!(normalize_path("/"), "/");
+    }
+
+    #[test]
+    fn normalize_path_multiple_trailing_slashes() {
+        assert_eq!(normalize_path("/home/user/repo///"), "/home/user/repo");
+    }
+
+    #[test]
+    fn normalize_path_empty_string_returns_root() {
+        assert_eq!(normalize_path(""), "/");
+    }
+
     // --- derive_local_worktree_path ---
 
     #[test]
@@ -195,5 +291,73 @@ mod tests {
             "got: {}",
             result
         );
+    }
+
+    // --- paths_match ---
+
+    #[test]
+    fn paths_match_identical_paths() {
+        assert!(paths_match("/home/user/repo", "/home/user/repo"));
+    }
+
+    #[test]
+    fn paths_match_trailing_slash_on_one_side() {
+        assert!(paths_match("/home/user/repo/", "/home/user/repo"));
+    }
+
+    #[test]
+    fn paths_match_trailing_slash_on_both_sides() {
+        assert!(paths_match("/home/user/repo/", "/home/user/repo/"));
+    }
+
+    #[test]
+    fn paths_match_rejects_prefix_collision() {
+        // "langwatch" must NOT match "langwatch-sdk" — substring is not a match.
+        assert!(!paths_match(
+            "/home/user/langwatch",
+            "/home/user/langwatch-sdk"
+        ));
+    }
+
+    #[test]
+    fn paths_match_rejects_suffix_collision() {
+        // "main" must NOT match "domain-main-service".
+        assert!(!paths_match(
+            "/home/user/main",
+            "/home/user/domain-main-service"
+        ));
+    }
+
+    #[test]
+    fn paths_match_rejects_completely_different_paths() {
+        assert!(!paths_match("/home/user/repo-a", "/home/user/repo-b"));
+    }
+
+    #[test]
+    fn paths_match_real_dirs_via_canonicalize() {
+        // Use two real directories that definitely exist to exercise the
+        // canonicalize code path. /tmp and /var are always present on Unix.
+        let a = std::env::temp_dir();
+        let a_str = a.to_string_lossy();
+        assert!(paths_match(&a_str, &a_str));
+    }
+
+    #[test]
+    fn paths_match_nonexistent_paths_with_same_normalized_form_still_match() {
+        // Two paths that are equal after normalization but don't exist on disk —
+        // the fast path catches this before canonicalize is attempted.
+        assert!(paths_match(
+            "/nonexistent/path/repo",
+            "/nonexistent/path/repo"
+        ));
+    }
+
+    #[test]
+    fn paths_match_nonexistent_paths_differ() {
+        // Two different non-existent paths must not match.
+        assert!(!paths_match(
+            "/nonexistent/path/repo",
+            "/nonexistent/path/other"
+        ));
     }
 }

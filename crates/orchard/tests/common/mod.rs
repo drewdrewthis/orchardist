@@ -141,6 +141,9 @@ pub fn make_pr(number: u32, branch: &str) -> CachedPr {
         has_conflicts: false,
         unresolved_threads: 0,
         linked_issue_state: None,
+        failing_checks: vec![],
+        labels: vec![],
+        is_draft: false,
     }
 }
 
@@ -183,6 +186,7 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         host: None,
         last_output_lines: vec![],
         claude_state_raw: None,
+        last_activity: None,
     }
 }
 

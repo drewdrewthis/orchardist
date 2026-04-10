@@ -121,7 +121,11 @@ fn pr_status_haystack(row: &WorktreeRow) -> String {
         return format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads);
     }
     if pr.checks_state.as_deref() == Some("failing") {
-        return format!("{}\u{2716} failing", prefix);
+        let names: Vec<&str> = pr.failing_checks.iter().map(|c| c.name.as_str()).collect();
+        if names.is_empty() {
+            return format!("{}\u{2716} failing", prefix);
+        }
+        return format!("{}\u{2716} failing {}", prefix, names.join(" "));
     }
     if pr.checks_state.as_deref() == Some("pending") {
         return format!("{}\u{25d0} pending CI", prefix);
@@ -149,11 +153,9 @@ fn session_status_haystack(row: &WorktreeRow) -> String {
 fn display_group_label(group: DisplayGroup) -> String {
     match group {
         DisplayGroup::RepoMain => "repo main".to_string(),
-        DisplayGroup::Prioritized => "prioritized".to_string(),
-        DisplayGroup::NeedsAttention => "needs attention".to_string(),
-        DisplayGroup::ClaudeWorking => "claude working".to_string(),
-        DisplayGroup::ReadyToMerge => "ready to merge".to_string(),
-        DisplayGroup::Other => "other".to_string(),
+        DisplayGroup::Active => "active".to_string(),
+        DisplayGroup::Normal => "work in progress".to_string(),
+        DisplayGroup::Done => "done".to_string(),
     }
 }
 
@@ -405,10 +407,12 @@ mod tests {
             issue_number: Some(42),
             issue_title: Some("Fix Azure integration bug".to_string()),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
-            display_group: DisplayGroup::NeedsAttention,
+            display_group: DisplayGroup::Normal,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -484,6 +488,9 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
             ..base_row()
         };
@@ -506,6 +513,9 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
             ..base_row()
         };
@@ -539,6 +549,9 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
             ..base_row()
         };
@@ -566,10 +579,10 @@ mod tests {
 
     #[test]
     fn haystack_includes_display_group_label() {
-        let row = base_row(); // NeedsAttention
+        let row = base_row(); // Normal
         let haystack = row_haystack(&row);
         assert!(
-            haystack.text.contains("needs attention"),
+            haystack.text.contains("work in progress"),
             "display group label missing from haystack: {}",
             haystack.text
         );

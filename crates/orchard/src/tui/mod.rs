@@ -99,7 +99,7 @@ pub struct App {
     /// Standalone tmux sessions from global config, enriched with live state.
     standalone_sessions: Vec<StandaloneSessionRow>,
     global_config: global_config::GlobalConfig,
-    /// Index into `global_config.repos`: 0 = all repos, 1+ = specific repo.
+    /// Active tab index: 0 = ALL, 1 = ORCHARD, 2..N+1 = repos[0..N-1].
     active_repo_index: usize,
     show_branch_column: bool,
     /// Text accumulated by bare keystrokes — filters the visible task list in real time.
@@ -245,16 +245,37 @@ impl App {
     // Active repo filtering
     // -------------------------------------------------------------------
 
-    /// Returns the active repo slug when a specific repo is selected (index > 0).
+    /// Returns the active repo slug when a specific repo tab is selected.
     ///
-    /// Index 0 means "all repos" (returns `None`). Index N returns
-    /// `global_config.repos[N-1].slug`.
+    /// Index 0 = "ALL" (returns `None`).
+    /// Index 1 = "ORCHARD" (returns `None`).
+    /// Index 2..N+1 = repos[0..N-1] (returns the slug).
     pub(crate) fn active_repo_slug(&self) -> Option<&str> {
-        if self.active_repo_index == 0 {
-            return None;
+        if self.active_repo_index <= 1 {
+            return None; // ALL or ORCHARD — no repo filter
         }
-        let idx = self.active_repo_index.saturating_sub(1);
+        let idx = self.active_repo_index.saturating_sub(2);
         self.global_config.repos.get(idx).map(|r| r.slug.as_str())
+    }
+
+    /// Returns `true` when the ORCHARD tab (index 1) is active.
+    ///
+    /// The ORCHARD tab shows only standalone sessions; worktree rows are hidden.
+    pub(crate) fn is_orchard_tab(&self) -> bool {
+        self.active_repo_index == 1
+    }
+
+    /// Returns the effective standalone session count for cursor arithmetic.
+    ///
+    /// On repo tabs (index >= 2) standalone sessions are not rendered, so they
+    /// do not occupy cursor positions and the effective count is 0.
+    /// On ALL (0) and ORCHARD (1) tabs the full count is returned.
+    pub(crate) fn effective_standalone_count(&self) -> usize {
+        if self.active_repo_index >= 2 {
+            0
+        } else {
+            self.standalone_sessions.len()
+        }
     }
 
     // -------------------------------------------------------------------
@@ -266,7 +287,7 @@ impl App {
     /// For standalone sessions (idx < standalone_count), the key is the session name.
     /// For worktree rows, the key is the worktree path.
     fn expansion_key_at(&self, idx: usize) -> Option<String> {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -287,7 +308,7 @@ impl App {
     /// For standalone sessions: pane count from the session's panes vec.
     /// For worktree rows: pane count from the first session (if any).
     fn pane_count_at(&self, idx: usize) -> usize {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -449,7 +470,7 @@ impl App {
     /// For worktree rows, returns windows from the first session (if any).
     /// Returns an owned Vec because the worktree path requires a temporary lookup.
     fn windows_at(&self, idx: usize) -> Vec<WindowInfo> {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -493,7 +514,7 @@ impl App {
 
     /// Returns the session name for the row at cursor position `idx`.
     fn session_name_at(&self, idx: usize) -> Option<String> {
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
         if idx < standalone_count {
             self.standalone_sessions
                 .get(idx)
@@ -695,15 +716,22 @@ impl App {
                 }
                 AppMsg::PaneContent(session_name, content) => {
                     // Accept pane content when session matches the current row (standalone or worktree).
-                    let standalone_count = self.standalone_sessions.len();
+                    // Use the filtered visible list so repo-tab filtering doesn't cause a mismatch
+                    // between the fetched session and the acceptance check (Bug #99).
+                    let standalone_count = self.effective_standalone_count();
                     let matches = if self.cursor < standalone_count {
                         self.standalone_sessions
                             .get(self.cursor)
                             .is_some_and(|ss| ss.session.tmux.name == session_name)
                     } else {
                         let wt_cursor = self.cursor - standalone_count;
-                        self.task_rows.get(wt_cursor).is_some_and(|row| {
-                            row.sessions.iter().any(|s| s.tmux.name == session_name)
+                        let visible = list::visible_tasks_filtered(
+                            &self.task_rows,
+                            &self.filter_text,
+                            self.active_repo_slug(),
+                        );
+                        visible.get(wt_cursor).is_some_and(|vt| {
+                            vt.row.sessions.iter().any(|s| s.tmux.name == session_name)
                         })
                     };
                     if matches {
@@ -831,7 +859,7 @@ impl App {
 
         match &self.view {
             ViewState::List => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 let worktree_visible_count = list::visible_tasks_filtered(
                     &self.task_rows,
                     &self.filter_text,
@@ -848,7 +876,6 @@ impl App {
                             KeyCode::Char('i') => Some(Message::OpenIssue),
                             KeyCode::Char('B') => Some(Message::ToggleBranchColumn),
                             KeyCode::Char('d') => Some(Message::Delete),
-                            KeyCode::Char('p') => Some(Message::TogglePriority),
                             KeyCode::Char('n') => Some(Message::NewSession),
                             KeyCode::Char('w') => Some(Message::NewWorktree),
                             KeyCode::Char('c') => Some(Message::Cleanup),
@@ -1059,7 +1086,7 @@ impl App {
             }
         }
 
-        let standalone_count = self.standalone_sessions.len();
+        let standalone_count = self.effective_standalone_count();
 
         // For worktree rows, account for group header rows and sub-rows.
         let tasks = list::visible_tasks_filtered(
@@ -1226,7 +1253,7 @@ impl App {
                         }
                     }
                     _ => {
-                        let standalone_count = self.standalone_sessions.len();
+                        let standalone_count = self.effective_standalone_count();
                         let worktree_visible_count = list::visible_tasks_filtered(
                             &self.task_rows,
                             &self.filter_text,
@@ -1384,7 +1411,7 @@ impl App {
                 ok()
             }
             Message::OpenPR => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
                 }
@@ -1403,7 +1430,7 @@ impl App {
                 ok()
             }
             Message::OpenIssue => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
                 }
@@ -1426,7 +1453,7 @@ impl App {
                 ok()
             }
             Message::Delete => {
-                let standalone_count = self.standalone_sessions.len();
+                let standalone_count = self.effective_standalone_count();
                 if self.guard_requires_worktree(standalone_count) {
                     return ok();
                 }
@@ -1437,34 +1464,11 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
-                    self.view = ViewState::ConfirmDelete(state::DeleteState {
+                    self.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
                         target: vt.row.clone(),
                         phase: Phase::Confirm,
                         error: None,
-                    });
-                }
-                ok()
-            }
-            Message::TogglePriority => {
-                let standalone_count = self.standalone_sessions.len();
-                if self.guard_requires_worktree(standalone_count) {
-                    return ok();
-                }
-                let worktree_cursor = self.cursor - standalone_count;
-                let visible = list::visible_tasks_filtered(
-                    &self.task_rows,
-                    &self.filter_text,
-                    self.active_repo_slug(),
-                );
-                if let Some(vt) = visible.get(worktree_cursor) {
-                    let path = vt.row.worktree_path.clone();
-                    drop(visible);
-                    crate::priority::toggle_priority(&path);
-                    self.task_rows = crate::build_state::build_task_rows(&self.global_config);
-                    let total = standalone_count + self.task_rows.len();
-                    if total > 0 && self.cursor >= total {
-                        self.cursor = total - 1;
-                    }
+                    }));
                 }
                 ok()
             }
@@ -1483,13 +1487,18 @@ impl App {
                 self.active_repo_index = self.active_repo_index.saturating_sub(1);
                 self.cursor = 0;
                 self.sub_cursor = SubCursor::None;
+                self.pane_content.clear();
+                self.fetch_task_pane_content();
                 ok()
             }
             Message::NextRepo => {
                 let repo_count = self.global_config.repos.len();
-                self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
+                // Total tabs: ALL (0) + ORCHARD (1) + repos (2..repo_count+1).
+                self.active_repo_index = (self.active_repo_index + 1).min(repo_count + 1);
                 self.cursor = 0;
                 self.sub_cursor = SubCursor::None;
+                self.pane_content.clear();
+                self.fetch_task_pane_content();
                 ok()
             }
             Message::ExpandRow => {
@@ -2005,6 +2014,10 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
 
     let mut app = App::new(command);
 
+    // Expand all rows immediately using cached disk data, so the first frame
+    // renders with hierarchy visible instead of waiting for background refresh.
+    app.prune_expansion_state();
+
     // Guard: standalone session names must not collide with worktree-derived names.
     check_standalone_collisions(&app.standalone_sessions, &app.task_rows)?;
 
@@ -2150,10 +2163,12 @@ mod tests {
             issue_number: Some(issue_number),
             issue_title: Some(format!("Test task {}", issue_number)),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -2278,10 +2293,13 @@ mod tests {
                     checks_state: None,
                     has_conflicts: false,
                     unresolved_threads: 0,
+                    failing_checks: vec![],
+                    labels: vec![],
+                    is_draft: false,
                 }),
-                ..make_task_row(1, DisplayGroup::Other)
+                ..make_task_row(1, DisplayGroup::Normal)
             },
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Normal),
         ];
         let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
@@ -2291,7 +2309,7 @@ mod tests {
     fn filter_stale_closed_issue() {
         let rows = vec![WorktreeRow {
             issue_state: Some("closed".to_string()),
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         }];
         let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
@@ -2308,8 +2326,11 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         }];
         let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
@@ -2319,7 +2340,7 @@ mod tests {
     fn filter_stale_completed_issue() {
         let rows = vec![WorktreeRow {
             issue_state: Some("completed".to_string()),
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         }];
         let stale = filter_stale(&rows);
         assert_eq!(stale.len(), 1);
@@ -2337,8 +2358,11 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         }];
         let stale = filter_stale(&rows);
         assert!(stale.is_empty());
@@ -2469,14 +2493,14 @@ mod tests {
         let rows = vec![make_task_row_with_title(
             42,
             "Fix login bug",
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         )];
         let mut app = App::new_test(rows);
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("Fix login bug"), "expected title in output");
         assert!(output.contains("#42"), "expected issue number in output");
         assert!(
-            output.contains("other"),
+            output.contains("work in progress"),
             "expected section header in output"
         );
     }
@@ -2541,8 +2565,8 @@ mod tests {
     #[test]
     fn j_advances_cursor_in_task_view() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::ClaudeWorking),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
         ];
         let mut app = App::new_test(rows);
         assert_eq!(app.cursor, 0);
@@ -2554,8 +2578,8 @@ mod tests {
     #[test]
     fn k_moves_cursor_up_in_task_view() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::ClaudeWorking),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
         ];
         let mut app = App::new_test(rows);
         app.cursor = 1;
@@ -2575,8 +2599,11 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row(42, DisplayGroup::ReadyToMerge)
+            ..make_task_row(42, DisplayGroup::Normal)
         };
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
@@ -2598,7 +2625,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let mut app = App::new_test(vec![row]);
         app.host_reachable.insert("gpu1".to_string(), false);
@@ -2651,7 +2678,7 @@ mod tests {
     fn enter_on_worktree_without_session_creates_session() {
         // In the worktree-first model, every row has a worktree, so Enter
         // creates a session rather than showing a dialog.
-        let rows = vec![make_task_row(42, DisplayGroup::NeedsAttention)];
+        let rows = vec![make_task_row(42, DisplayGroup::Active)];
         let mut app = App::new_test(rows);
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         send_key(&mut app, key);
@@ -2672,10 +2699,12 @@ mod tests {
             issue_number: None,
             issue_title: None,
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -2690,20 +2719,20 @@ mod tests {
             display_group: DisplayGroup::RepoMain,
             ..make_worktree_row("main", DisplayGroup::RepoMain)
         };
-        let other = make_worktree_row("feat/something", DisplayGroup::Other);
-        let mut app = App::new_test(vec![main_wt, other]);
+        let normal_wt = make_worktree_row("feat/something", DisplayGroup::Normal);
+        let mut app = App::new_test(vec![main_wt, normal_wt]);
         let output = render_to_string(&mut app, 120, 40);
 
-        // "repo main" section header must appear before "other"
+        // "repo main" section header must appear before "work in progress"
         let repo_main_pos = output
             .find("repo main")
             .expect("expected 'repo main' section header");
-        let other_pos = output
-            .find("other")
-            .expect("expected 'other' section header");
+        let wip_pos = output
+            .find("work in progress")
+            .expect("expected 'work in progress' section header");
         assert!(
-            repo_main_pos < other_pos,
-            "repo main section must appear before other section"
+            repo_main_pos < wip_pos,
+            "repo main section must appear before work in progress section"
         );
 
         // The main worktree row must be visible (shows repo name in TITLE column).
@@ -2714,8 +2743,8 @@ mod tests {
     }
 
     #[test]
-    fn worktree_without_pr_renders_in_other_section() {
-        let row = make_worktree_row("experimental", DisplayGroup::Other);
+    fn worktree_without_pr_renders_in_normal_section() {
+        let row = make_worktree_row("experimental", DisplayGroup::Normal);
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
@@ -2724,26 +2753,14 @@ mod tests {
             "expected branch name in output"
         );
         assert!(
-            output.contains("other"),
-            "expected 'other' section header in output"
+            output.contains("work in progress"),
+            "expected 'work in progress' section header in output"
         );
     }
 
     #[test]
     fn display_groups_render_in_correct_order() {
-        let needs_attention = WorktreeRow {
-            pr: Some(DPrInfo {
-                number: 10,
-                branch: "feat/needs-attn".to_string(),
-                state: None,
-                review_decision: None,
-                checks_state: Some("failing".to_string()),
-                has_conflicts: false,
-                unresolved_threads: 0,
-            }),
-            ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
-        };
-        let claude_working = WorktreeRow {
+        let active_row = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
                     host: Host::Local,
@@ -2759,50 +2776,29 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
+            ..make_worktree_row("feat/claude-active", DisplayGroup::Active)
         };
-        let ready_to_merge = WorktreeRow {
-            pr: Some(DPrInfo {
-                number: 20,
-                branch: "feat/approved".to_string(),
-                state: None,
-                review_decision: Some("approved".to_string()),
-                checks_state: Some("passing".to_string()),
-                has_conflicts: false,
-                unresolved_threads: 0,
-            }),
-            ..make_worktree_row("feat/approved", DisplayGroup::ReadyToMerge)
-        };
-        let other = make_worktree_row("feat/plain", DisplayGroup::Other);
+        let normal_row = make_worktree_row("feat/plain", DisplayGroup::Normal);
 
-        // Pre-sort to match expected display order (as derive::derive_all_repos would produce)
-        let mut app = App::new_test(vec![needs_attention, claude_working, ready_to_merge, other]);
+        // Active group renders before Normal group.
+        let mut app = App::new_test(vec![active_row, normal_row]);
         let output = render_to_string(&mut app, 120, 40);
 
-        let pos_na = output
-            .find("needs attention")
-            .expect("expected 'needs attention'");
-        let pos_cw = output
-            .find("claude working")
-            .expect("expected 'claude working'");
-        let pos_rtm = output
-            .find("ready to merge")
-            .expect("expected 'ready to merge'");
-        let pos_other = output.find("other").expect("expected 'other'");
+        let pos_active = output
+            .find("active")
+            .expect("expected 'active' section header");
+        let pos_wip = output
+            .find("work in progress")
+            .expect("expected 'work in progress' section header");
 
         assert!(
-            pos_na < pos_cw,
-            "needs attention must come before claude working"
+            pos_active < pos_wip,
+            "active must come before work in progress"
         );
-        assert!(
-            pos_cw < pos_rtm,
-            "claude working must come before ready to merge"
-        );
-        assert!(pos_rtm < pos_other, "ready to merge must come before other");
     }
 
     #[test]
-    fn claude_needs_input_indicator_renders_and_row_in_needs_attention() {
+    fn claude_needs_input_indicator_renders_and_row_in_active() {
         let row = WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -2819,7 +2815,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
+            ..make_worktree_row("feat/waiting", DisplayGroup::Active)
         };
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
@@ -2829,8 +2825,8 @@ mod tests {
             "expected 'input' claude status indicator"
         );
         assert!(
-            output.contains("needs attention"),
-            "expected NeedsAttention section header"
+            output.contains("active"),
+            "expected 'active' section header"
         );
     }
 
@@ -2845,8 +2841,11 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_worktree_row("feat/branch", DisplayGroup::NeedsAttention)
+            ..make_worktree_row("feat/branch", DisplayGroup::Active)
         };
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
@@ -2862,7 +2861,7 @@ mod tests {
     fn remote_host_indicator_renders_for_remote_worktree() {
         let row = WorktreeRow {
             worktree_host: Some("gpu1".to_string()),
-            ..make_worktree_row("feat/remote", DisplayGroup::Other)
+            ..make_worktree_row("feat/remote", DisplayGroup::Normal)
         };
         let mut app = App::new_test(vec![row]);
         app.host_reachable.insert("gpu1".to_string(), true);
@@ -2889,7 +2888,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_worktree_row("feat/remote", DisplayGroup::Other)
+            ..make_worktree_row("feat/remote", DisplayGroup::Normal)
         };
         let mut app = App::new_test(vec![row]);
         app.host_reachable.insert("gpu1".to_string(), false);
@@ -2907,7 +2906,7 @@ mod tests {
         let row = WorktreeRow {
             issue_number: Some(2478),
             issue_title: Some("Support workflow agents".to_string()),
-            ..make_worktree_row("webapp-2478", DisplayGroup::Other)
+            ..make_worktree_row("webapp-2478", DisplayGroup::Normal)
         };
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
@@ -2943,9 +2942,9 @@ mod tests {
     #[test]
     fn j_moves_cursor_down_in_worktree_first_view() {
         let rows = vec![
-            make_worktree_row("feat/one", DisplayGroup::NeedsAttention),
-            make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
-            make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
+            make_worktree_row("feat/one", DisplayGroup::Active),
+            make_worktree_row("feat/two", DisplayGroup::Active),
+            make_worktree_row("feat/three", DisplayGroup::Normal),
         ];
         let mut app = App::new_test(rows);
         assert_eq!(app.cursor, 0);
@@ -2958,9 +2957,9 @@ mod tests {
     #[test]
     fn k_moves_cursor_up_in_worktree_first_view() {
         let rows = vec![
-            make_worktree_row("feat/one", DisplayGroup::NeedsAttention),
-            make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
-            make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
+            make_worktree_row("feat/one", DisplayGroup::Active),
+            make_worktree_row("feat/two", DisplayGroup::Active),
+            make_worktree_row("feat/three", DisplayGroup::Normal),
         ];
         let mut app = App::new_test(rows);
         app.cursor = 1;
@@ -2973,9 +2972,9 @@ mod tests {
     #[test]
     fn q_returns_true_in_worktree_first_view() {
         let rows = vec![
-            make_worktree_row("feat/one", DisplayGroup::NeedsAttention),
-            make_worktree_row("feat/two", DisplayGroup::ClaudeWorking),
-            make_worktree_row("feat/three", DisplayGroup::ReadyToMerge),
+            make_worktree_row("feat/one", DisplayGroup::Active),
+            make_worktree_row("feat/two", DisplayGroup::Active),
+            make_worktree_row("feat/three", DisplayGroup::Normal),
         ];
         let mut app = App::new_test(rows);
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
@@ -3043,9 +3042,9 @@ mod tests {
     fn handle_event_digit_in_searching_goes_to_filter() {
         // Digits are printable chars — in Searching phase they feed the filter.
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::ClaudeWorking),
-            make_task_row(3, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Normal),
         ];
         let mut app = App::new_test(rows);
         app.input_phase = InputPhase::Searching;
@@ -3057,9 +3056,9 @@ mod tests {
     fn handle_event_digit_in_idle_returns_cursor_to() {
         // Digits dispatch CursorTo directly in Idle phase.
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::ClaudeWorking),
-            make_task_row(3, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Normal),
         ];
         let app = App::new_test(rows);
         let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
@@ -3069,11 +3068,11 @@ mod tests {
     #[test]
     fn handle_event_delete_confirm_y() {
         let mut app = App::new_test(vec![]);
-        app.view = ViewState::ConfirmDelete(state::DeleteState {
-            target: make_task_row(1, DisplayGroup::Other),
+        app.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
+            target: make_task_row(1, DisplayGroup::Normal),
             phase: Phase::Confirm,
             error: None,
-        });
+        }));
         let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::ConfirmYes));
     }
@@ -3094,18 +3093,11 @@ mod tests {
     }
 
     #[test]
-    fn handle_event_p_maps_to_toggle_priority() {
-        // 'p' dispatches TogglePriority directly in Idle phase.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+    fn handle_event_p_is_unbound() {
+        // 'p' is no longer bound — TogglePriority has been removed.
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE);
-        assert_eq!(app.handle_event(key), Some(Message::TogglePriority));
-    }
-
-    #[test]
-    fn toggle_priority_update_does_not_quit() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
-        let result = app.update(Message::TogglePriority);
-        assert!(!result.quit);
+        assert_eq!(app.handle_event(key), None);
     }
 
     // -----------------------------------------------------------------------
@@ -3134,6 +3126,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -3302,6 +3295,9 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 2,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3318,7 +3314,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row_with_title(53, "TEA pattern refactor", DisplayGroup::NeedsAttention)
+            ..make_task_row_with_title(53, "TEA pattern refactor", DisplayGroup::Active)
         };
         let working = WorktreeRow {
             pr: Some(DPrInfo {
@@ -3329,6 +3325,9 @@ mod tests {
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3345,11 +3344,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row_with_title(
-                47,
-                "Shepherd persistent session",
-                DisplayGroup::ClaudeWorking,
-            )
+            ..make_task_row_with_title(47, "Shepherd persistent session", DisplayGroup::Active)
         };
         let ready = WorktreeRow {
             pr: Some(DPrInfo {
@@ -3360,10 +3355,13 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
             }),
-            ..make_task_row_with_title(54, "Add Theme struct", DisplayGroup::ReadyToMerge)
+            ..make_task_row_with_title(54, "Add Theme struct", DisplayGroup::Normal)
         };
-        let other = make_task_row_with_title(16, "Orchard heal command", DisplayGroup::Other);
+        let other = make_task_row_with_title(16, "Orchard heal command", DisplayGroup::Normal);
 
         let mut app = App::new_test(vec![shepherd, needs_attn, working, ready, other]);
         let ansi = render_to_ansi(&mut app, 120, 30);
@@ -3419,21 +3417,21 @@ mod tests {
 
     #[test]
     fn mouse_scroll_down_in_table_returns_cursor_down() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 7);
         assert_eq!(app.handle_mouse_event(event), Some(Message::CursorDown));
     }
 
     #[test]
     fn mouse_scroll_up_in_table_returns_cursor_up() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::ScrollUp, 10, 7);
         assert_eq!(app.handle_mouse_event(event), Some(Message::CursorUp));
     }
 
     #[test]
     fn mouse_scroll_outside_table_returns_none() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         // y=2 is above the table body (starts at y=5).
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 2);
         assert_eq!(app.handle_mouse_event(event), None);
@@ -3442,9 +3440,9 @@ mod tests {
     #[test]
     fn mouse_click_selects_row() {
         let mut app = app_with_table_area(vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::NeedsAttention),
-            make_task_row(3, DisplayGroup::NeedsAttention),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Active),
         ]);
         // All in same group, so group header at visual row 0, data rows at 1, 2, 3.
         // Click on visual row 2 (y=5+2=7) -> task index 1 -> cursor 1.
@@ -3454,7 +3452,7 @@ mod tests {
 
     #[test]
     fn mouse_click_on_group_header_returns_none() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         // Group header is at visual row 0 (y=5).
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 5);
         assert_eq!(app.handle_mouse_event(event), None);
@@ -3462,7 +3460,7 @@ mod tests {
 
     #[test]
     fn mouse_click_below_last_row_returns_none() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         // One group header + one data row = 2 visual rows. Click at visual row 5 is out of range.
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 10);
         assert_eq!(app.handle_mouse_event(event), None);
@@ -3470,7 +3468,7 @@ mod tests {
 
     #[test]
     fn mouse_click_outside_table_x_returns_none() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         // x=90 is outside the table (width=80).
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 90, 7);
         assert_eq!(app.handle_mouse_event(event), None);
@@ -3479,8 +3477,8 @@ mod tests {
     #[test]
     fn mouse_double_click_returns_activate_row() {
         let mut app = app_with_table_area(vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::NeedsAttention),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
         ]);
         // First click: visual row 1 (y=6) -> cursor 0.
         let event1 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
@@ -3499,9 +3497,9 @@ mod tests {
     #[test]
     fn mouse_clicks_on_different_rows_not_double_click() {
         let mut app = app_with_table_area(vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::NeedsAttention),
-            make_task_row(3, DisplayGroup::NeedsAttention),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Active),
         ]);
         // Click on row 0 (visual row 1, y=6).
         let event1 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
@@ -3516,8 +3514,8 @@ mod tests {
     fn mouse_events_work_during_filtering() {
         // Mouse events are processed in List view regardless of filter state.
         let mut app = app_with_table_area(vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::NeedsAttention),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
         ]);
         app.filter_text = "some-filter".to_string();
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 7);
@@ -3526,7 +3524,7 @@ mod tests {
 
     #[test]
     fn mouse_events_ignored_in_help_view() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         app.view = ViewState::Help;
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
         assert_eq!(app.handle_mouse_event(event), None);
@@ -3535,11 +3533,11 @@ mod tests {
     #[test]
     fn mouse_events_ignored_in_confirm_delete_view() {
         let mut app = app_with_table_area(vec![]);
-        app.view = ViewState::ConfirmDelete(state::DeleteState {
-            target: make_task_row(1, DisplayGroup::Other),
+        app.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
+            target: make_task_row(1, DisplayGroup::Normal),
             phase: Phase::Confirm,
             error: None,
-        });
+        }));
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
         assert_eq!(app.handle_mouse_event(event), None);
     }
@@ -3552,7 +3550,7 @@ mod tests {
 
     #[test]
     fn last_click_stored_after_single_click() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
         app.handle_mouse_event(event);
         assert!(app.last_click.is_some());
@@ -3562,7 +3560,7 @@ mod tests {
 
     #[test]
     fn last_click_reset_after_double_click() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
         app.handle_mouse_event(event);
         assert!(app.last_click.is_some());
@@ -3588,7 +3586,7 @@ mod tests {
 
     #[test]
     fn visual_row_to_cursor_standalone_sessions() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         // Add a standalone session.
         app.standalone_sessions
             .push(crate::session::StandaloneSessionRow {
@@ -3612,7 +3610,7 @@ mod tests {
 
         // Visual row 0 = standalone session -> cursor 0.
         assert_eq!(app.visual_row_to_cursor(0), Some(0));
-        // Visual row 1 = group header for NeedsAttention -> None.
+        // Visual row 1 = group header for Active -> None.
         assert_eq!(app.visual_row_to_cursor(1), None);
         // Visual row 2 = first task row -> cursor 1 (standalone_count=1 + task_idx=0).
         assert_eq!(app.visual_row_to_cursor(2), Some(1));
@@ -3621,15 +3619,15 @@ mod tests {
     #[test]
     fn visual_row_to_cursor_multiple_groups() {
         let app = App::new_test(vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::NeedsAttention),
-            make_task_row(3, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Normal),
         ]);
         // No standalone sessions. Layout:
-        // Row 0: NeedsAttention group header -> None
+        // Row 0: Active group header -> None
         // Row 1: task 0 -> cursor 0
         // Row 2: task 1 -> cursor 1
-        // Row 3: Other group header -> None
+        // Row 3: Normal group header -> None
         // Row 4: task 2 -> cursor 2
         assert_eq!(app.visual_row_to_cursor(0), None);
         assert_eq!(app.visual_row_to_cursor(1), Some(0));
@@ -3674,8 +3672,8 @@ mod tests {
     #[test]
     fn mouse_double_click_expired_returns_cursor_to() {
         let mut app = app_with_table_area(vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::NeedsAttention),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
         ]);
         // First click on row 0.
         let event1 = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 6);
@@ -3691,7 +3689,7 @@ mod tests {
 
     #[test]
     fn mouse_right_click_on_table_returns_none() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Right), 10, 6);
         assert_eq!(app.handle_mouse_event(event), None);
     }
@@ -3701,7 +3699,7 @@ mod tests {
 
     #[test]
     fn handle_event_page_up_returns_preview_scroll() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         let key = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::PreviewPageUp));
@@ -3709,7 +3707,7 @@ mod tests {
 
     #[test]
     fn handle_event_page_down_returns_preview_scroll() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         let key = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::PreviewPageDown));
@@ -3717,7 +3715,7 @@ mod tests {
 
     #[test]
     fn preview_page_down_advances_scroll_state() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         let initial = app.preview_scroll_state.get();
         app.update(Message::PreviewPageDown);
         let after = app.preview_scroll_state.get();
@@ -3730,7 +3728,7 @@ mod tests {
 
     #[test]
     fn preview_page_up_decrements_scroll_state() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         // First scroll down, then back up.
         app.update(Message::PreviewPageDown);
         app.update(Message::PreviewPageDown);
@@ -3761,7 +3759,7 @@ mod tests {
 
     #[test]
     fn mouse_scroll_down_in_preview_returns_preview_scroll_down() {
-        let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 22);
         assert_eq!(
             app.handle_mouse_event(event),
@@ -3771,7 +3769,7 @@ mod tests {
 
     #[test]
     fn mouse_scroll_up_in_preview_returns_preview_scroll_up() {
-        let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_preview_area(vec![make_task_row(1, DisplayGroup::Active)]);
         let event = make_mouse_event(MouseEventKind::ScrollUp, 10, 22);
         assert_eq!(
             app.handle_mouse_event(event),
@@ -3781,7 +3779,7 @@ mod tests {
 
     #[test]
     fn mouse_scroll_in_preview_with_zero_rect_returns_none() {
-        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = app_with_table_area(vec![make_task_row(1, DisplayGroup::Active)]);
         // preview_area defaults to Rect::default() (width=0), so no hit.
         let event = make_mouse_event(MouseEventKind::ScrollDown, 10, 22);
         assert_eq!(app.handle_mouse_event(event), None);
@@ -3789,7 +3787,7 @@ mod tests {
 
     #[test]
     fn preview_scroll_down_advances_state_by_three_lines() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         let initial = app.preview_scroll_state.get();
         app.update(Message::PreviewScrollDown);
         let after = app.preview_scroll_state.get();
@@ -3802,7 +3800,7 @@ mod tests {
 
     #[test]
     fn preview_scroll_up_decreases_state_by_three_lines() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         // Scroll down first so we have room to scroll up.
         app.update(Message::PreviewScrollDown);
         app.update(Message::PreviewScrollDown);
@@ -3818,7 +3816,7 @@ mod tests {
 
     #[test]
     fn ascii_art_renders_in_tall_terminal() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         app.repo_name = "orchard".to_string();
         let output = render_to_string(&mut app, 120, 40);
         // The ASCII art logo should always appear in tall terminals.
@@ -3830,7 +3828,7 @@ mod tests {
 
     #[test]
     fn compact_header_on_short_terminal() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::NeedsAttention)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Active)]);
         app.repo_name = "orchard".to_string();
         // Short terminal: 20 rows, well below FULL_HEADER_MIN_HEIGHT.
         let output = render_to_string(&mut app, 120, 20);
@@ -3875,6 +3873,7 @@ mod tests {
             issue_number: None,
             issue_title: None,
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3886,8 +3885,9 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            display_group: DisplayGroup::Other,
+            display_group: DisplayGroup::Normal,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -3934,7 +3934,7 @@ mod tests {
     #[test]
     fn h_key_maps_to_collapse_behind_leader() {
         // 'h' dispatches CollapseRow directly in Idle phase.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::CollapseRow));
@@ -3942,7 +3942,7 @@ mod tests {
 
     #[test]
     fn left_arrow_maps_to_collapse() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::CollapseRow));
@@ -3950,7 +3950,7 @@ mod tests {
 
     #[test]
     fn right_arrow_maps_to_expand() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::ExpandRow));
@@ -3959,7 +3959,7 @@ mod tests {
     #[test]
     fn l_key_maps_to_expand_behind_leader() {
         // 'l' dispatches ExpandRow directly in Idle phase.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::ExpandRow));
@@ -3967,7 +3967,7 @@ mod tests {
 
     #[test]
     fn tab_maps_to_next_repo() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::NextRepo));
@@ -3975,7 +3975,7 @@ mod tests {
 
     #[test]
     fn backtab_maps_to_prev_repo() {
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::PrevRepo));
@@ -3984,7 +3984,7 @@ mod tests {
     #[test]
     fn e_key_maps_to_toggle_expand_all_behind_leader() {
         // 'E' dispatches ToggleExpandAll directly in Idle phase.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let key = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
         let msg = app.handle_event(key);
         assert_eq!(msg, Some(Message::ToggleExpandAll));
@@ -4021,7 +4021,7 @@ mod tests {
                 windows,
                 panes,
             }],
-            ..make_task_row(issue, DisplayGroup::Other)
+            ..make_task_row(issue, DisplayGroup::Normal)
         }
     }
 
@@ -4062,7 +4062,7 @@ mod tests {
                 windows,
                 panes: all_panes,
             }],
-            ..make_task_row(issue, DisplayGroup::Other)
+            ..make_task_row(issue, DisplayGroup::Normal)
         }
     }
 
@@ -4321,8 +4321,8 @@ mod tests {
     #[test]
     fn filter_char_appends_and_resets_cursor() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Normal),
         ];
         let mut app = App::new_test(rows);
         app.cursor = 1;
@@ -4336,7 +4336,7 @@ mod tests {
 
     #[test]
     fn filter_backspace_removes_last_char() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         app.filter_text = "abc".to_string();
         app.update(Message::FilterBackspace);
         assert_eq!(app.filter_text, "ab");
@@ -4366,6 +4366,205 @@ mod tests {
         assert_eq!(app.handle_event(o_key), Some(Message::OpenPR));
     }
 
+    // -----------------------------------------------------------------------
+    // Bug #111: 'o' key must resolve to parent worktree row when on a sub-row
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn open_pr_resolves_parent_when_on_pane_sub_row() {
+        // Cursor stays at the parent row even when sub_cursor points at a pane.
+        // OpenPR must look up the parent row (where PR info lives), not the sub-row.
+        let row = WorktreeRow {
+            pr: Some(DPrInfo {
+                number: 42,
+                branch: "feat/issue-42".to_string(),
+                state: Some("open".to_string()),
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+                is_draft: false,
+            }),
+            ..make_task_row_with_panes(42, 3)
+        };
+        let mut app = App::new_test(vec![row]);
+        app.expanded.insert("/workspace/repo-42".to_string());
+        // Navigate into a pane sub-row.
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
+        // OpenPR must not fail — cursor still points at the parent row.
+        // We verify by checking that the message dispatches to OpenPR (key mapping)
+        // and that calling update(OpenPR) completes without panic or warning.
+        let o_key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert_eq!(
+            app.handle_event(o_key),
+            Some(Message::OpenPR),
+            "'o' key on a pane sub-row must dispatch OpenPR"
+        );
+        // update must not set a warning (which guard_requires_worktree would do if
+        // it mistakenly treated the sub-row as a standalone row).
+        app.update(Message::OpenPR);
+        assert!(
+            app.warning.is_none(),
+            "OpenPR on a pane sub-row must not trigger the 'requires worktree' warning"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug #99: preview pane must accept pane content under an active repo filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pane_content_accepted_when_repo_filter_active() {
+        // Two rows from different repos. Cursor is on repo-b's row (filtered visible[0])
+        // while task_rows[0] is a repo-a row. The PaneContent handler must use the
+        // filtered list, not task_rows, so the session name matches correctly.
+        let row_a = WorktreeRow {
+            repo_slug: "acme/repo-a".to_string(),
+            worktree_path: "/workspace/repo-a-feat".to_string(),
+            branch: "feat/issue-1".to_string(),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "sess-repo-a".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+            }],
+            ..make_task_row(1, DisplayGroup::Normal)
+        };
+        let row_b = WorktreeRow {
+            repo_slug: "acme/repo-b".to_string(),
+            worktree_path: "/workspace/repo-b-feat".to_string(),
+            branch: "feat/issue-2".to_string(),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "sess-repo-b".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+            }],
+            ..make_task_row(2, DisplayGroup::Normal)
+        };
+
+        let mut app = App::new_test(vec![row_a, row_b]);
+        // Configure two repos so active_repo_index 2 = repos[1] = "acme/repo-b".
+        app.global_config.repos = vec![
+            global_config::RepoConfig {
+                slug: "acme/repo-a".to_string(),
+                path: "/workspace/repo-a".to_string(),
+                remotes: vec![],
+            },
+            global_config::RepoConfig {
+                slug: "acme/repo-b".to_string(),
+                path: "/workspace/repo-b".to_string(),
+                remotes: vec![],
+            },
+        ];
+        app.active_repo_index = 3; // repos[1] = "acme/repo-b" (ALL=0, ORCHARD=1, repos start at 2)
+        app.cursor = 0; // visible[0] under repo-b filter = row_b
+
+        // Simulate the background thread delivering pane content for the repo-b session.
+        app.tx
+            .send(AppMsg::PaneContent(
+                "sess-repo-b".to_string(),
+                "repo-b pane output".to_string(),
+            ))
+            .unwrap();
+        app.check_updates();
+
+        assert_eq!(
+            app.pane_content, "repo-b pane output",
+            "pane content for the repo-b session must be accepted when repo-b filter is active"
+        );
+    }
+
+    #[test]
+    fn pane_content_rejected_for_stale_session_under_repo_filter() {
+        // Pane content for repo-a's session must be rejected when the filter shows only repo-b.
+        let row_a = WorktreeRow {
+            repo_slug: "acme/repo-a".to_string(),
+            worktree_path: "/workspace/repo-a-feat".to_string(),
+            branch: "feat/issue-1".to_string(),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    name: "sess-repo-a".to_string(),
+                    host: Host::Local,
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+            }],
+            ..make_task_row(1, DisplayGroup::Normal)
+        };
+        let row_b = WorktreeRow {
+            repo_slug: "acme/repo-b".to_string(),
+            worktree_path: "/workspace/repo-b-feat".to_string(),
+            branch: "feat/issue-2".to_string(),
+            sessions: vec![],
+            ..make_task_row(2, DisplayGroup::Normal)
+        };
+
+        let mut app = App::new_test(vec![row_a, row_b]);
+        app.global_config.repos = vec![
+            global_config::RepoConfig {
+                slug: "acme/repo-a".to_string(),
+                path: "/workspace/repo-a".to_string(),
+                remotes: vec![],
+            },
+            global_config::RepoConfig {
+                slug: "acme/repo-b".to_string(),
+                path: "/workspace/repo-b".to_string(),
+                remotes: vec![],
+            },
+        ];
+        app.active_repo_index = 3; // repo-b tab (ALL=0, ORCHARD=1, repo-a=2, repo-b=3)
+        app.cursor = 0; // visible[0] under repo-b filter = row_b (no session)
+
+        // Stale content for repo-a's session arrives — must be rejected.
+        app.tx
+            .send(AppMsg::PaneContent(
+                "sess-repo-a".to_string(),
+                "stale repo-a output".to_string(),
+            ))
+            .unwrap();
+        app.check_updates();
+
+        assert!(
+            app.pane_content.is_empty(),
+            "stale pane content for a filtered-out repo must be rejected"
+        );
+    }
+
+    #[test]
+    fn switching_repo_tab_clears_pane_content() {
+        // Switching repo tabs must clear stale pane content from the previous tab.
+        let row = WorktreeRow {
+            repo_slug: "acme/repo-a".to_string(),
+            ..make_task_row(1, DisplayGroup::Normal)
+        };
+        let mut app = App::new_test(vec![row]);
+        app.pane_content = "old content".to_string();
+        app.global_config.repos = vec![global_config::RepoConfig {
+            slug: "acme/repo-a".to_string(),
+            path: "/workspace/repo-a".to_string(),
+            remotes: vec![],
+        }];
+
+        app.update(Message::NextRepo);
+        assert!(
+            app.pane_content.is_empty(),
+            "switching repo tabs must clear stale pane content"
+        );
+    }
+
     #[test]
     fn close_search_resets_phase_to_idle() {
         let mut app = App::new_test(vec![]);
@@ -4376,7 +4575,7 @@ mod tests {
 
     #[test]
     fn enter_clears_filter() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         app.filter_text = "feat".to_string();
         app.update(Message::Enter);
         assert_eq!(app.filter_text, "", "Enter should clear the filter");
@@ -4409,8 +4608,8 @@ mod tests {
     fn arrow_keys_work_without_leader_in_idle() {
         // Up/Down arrow keys dispatch directly in Idle phase.
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Normal),
         ];
         let mut app = App::new_test(rows);
         app.cursor = 1;
@@ -4424,7 +4623,7 @@ mod tests {
     #[test]
     fn printable_chars_go_to_filter_in_searching_not_actions() {
         // In Searching phase, 'o' becomes FilterChar('o'), not OpenPR.
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         app.input_phase = InputPhase::Searching;
         let key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::FilterChar('o')));
@@ -4439,7 +4638,7 @@ mod tests {
 
     #[test]
     fn searching_phase_persists_through_action_messages() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         app.input_phase = InputPhase::Searching;
         app.update(Message::CursorDown);
         assert_eq!(app.input_phase, InputPhase::Searching);
@@ -4477,8 +4676,8 @@ mod tests {
     #[test]
     fn current_selection_for_worktree_row() {
         let mut app = App::new_test(vec![
-            make_task_row(1, DisplayGroup::Other),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Normal),
+            make_task_row(2, DisplayGroup::Normal),
         ]);
         app.cursor = 1;
         let sel = current_selection(&app).unwrap();
@@ -4488,7 +4687,7 @@ mod tests {
 
     #[test]
     fn current_selection_for_standalone_row() {
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         app.standalone_sessions = vec![make_standalone_session("my-standalone")];
         app.cursor = 0;
         let sel = current_selection(&app).unwrap();
@@ -4506,9 +4705,9 @@ mod tests {
     #[test]
     fn current_selection_includes_active_repo_slug() {
         let mut app = App::new_test(vec![
-            make_task_row(1, DisplayGroup::Other),
-            make_task_row(2, DisplayGroup::Other),
-            make_task_row(3, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Normal),
+            make_task_row(2, DisplayGroup::Normal),
+            make_task_row(3, DisplayGroup::Normal),
         ]);
         // Populate two repos in global_config so index 2 maps to "acme/beta".
         app.global_config.repos = vec![
@@ -4523,7 +4722,7 @@ mod tests {
                 remotes: vec![],
             },
         ];
-        app.active_repo_index = 2; // index 2 = repos[1] = "acme/beta"
+        app.active_repo_index = 3; // index 3 = repos[1] = "acme/beta" (ALL=0, ORCHARD=1, repos start at 2)
         app.cursor = 0;
         let sel = current_selection(&app).unwrap();
         assert_eq!(sel.active_repo_slug, Some("acme/beta".to_string()));

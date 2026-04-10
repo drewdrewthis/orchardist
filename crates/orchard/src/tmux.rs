@@ -8,6 +8,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::logger::LOG;
+use crate::paths::normalize_path;
 use crate::types::{SwitchToSessionOptions, TmuxSession};
 
 /// Lists all active tmux sessions. Returns an empty vec when tmux is not running.
@@ -38,7 +39,7 @@ pub fn list_tmux_sessions() -> Vec<TmuxSession> {
         }
         sessions.push(TmuxSession {
             name: parts[0].to_string(),
-            path: parts[1].to_string(),
+            path: normalize_path(parts[1]).to_string(),
             attached: parts[2] == "1",
             pane_title: None,
         });

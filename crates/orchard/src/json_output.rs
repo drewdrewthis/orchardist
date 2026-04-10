@@ -11,7 +11,8 @@ use serde::Serialize;
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
 use crate::orchard_state::{
-    IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState, WorktreeState,
+    FailedCheck, IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState,
+    WorktreeState,
 };
 use crate::session::StandaloneSessionRow;
 
@@ -73,7 +74,7 @@ pub struct JsonWorktree {
 
 /// Issue information in JSON output.
 ///
-/// Subset of GitHub issue data: number, title, and state (open/closed).
+/// Subset of GitHub issue data: number, title, state (open/closed), and labels.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonIssue {
@@ -83,11 +84,14 @@ pub struct JsonIssue {
     pub title: String,
     /// Issue state: "open", "closed", or "completed".
     pub state: String,
+    /// Labels applied to this issue.
+    pub labels: Vec<String>,
 }
 
 /// Pull request information in JSON output.
 ///
-/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts, and unresolved review threads.
+/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts,
+/// unresolved review threads, failing check details, and draft status.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
@@ -105,6 +109,12 @@ pub struct JsonPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Individual failing CI checks (name + conclusion).
+    pub failing_checks: Vec<FailedCheck>,
+    /// Labels applied to this PR.
+    pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// Session information in JSON output using the EnrichedSession shape.
@@ -190,11 +200,9 @@ pub struct JsonHostState {
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
         DisplayGroup::RepoMain => "repo_main",
-        DisplayGroup::Prioritized => "prioritized",
-        DisplayGroup::NeedsAttention => "needs_attention",
-        DisplayGroup::ClaudeWorking => "claude_working",
-        DisplayGroup::ReadyToMerge => "ready_to_merge",
-        DisplayGroup::Other => "other",
+        DisplayGroup::Active => "active",
+        DisplayGroup::Normal => "normal",
+        DisplayGroup::Done => "done",
     }
 }
 
@@ -218,6 +226,7 @@ impl From<&IssueInfo> for JsonIssue {
             number: i.number,
             title: i.title.clone(),
             state: i.state.clone(),
+            labels: i.labels.clone(),
         }
     }
 }
@@ -233,6 +242,9 @@ impl From<&PrState> for JsonPr {
             checks_state: pr.checks_state.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            failing_checks: pr.failing_checks.clone(),
+            labels: pr.labels.clone(),
+            is_draft: pr.is_draft,
         }
     }
 }
@@ -356,7 +368,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
 }
 
 impl From<&OrchardState> for JsonOutput {
-    /// Converts the unified `OrchardState` to JSON output, setting version to 4.
+    /// Converts the unified `OrchardState` to JSON output, setting version to 5.
     fn from(state: &OrchardState) -> Self {
         let hosts = state
             .hosts
@@ -372,7 +384,7 @@ impl From<&OrchardState> for JsonOutput {
             .collect();
 
         Self {
-            version: 4,
+            version: 5,
             tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
@@ -405,9 +417,9 @@ mod tests {
     }
 
     #[test]
-    fn from_orchard_state_produces_version_4() {
+    fn from_orchard_state_produces_version_5() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 4);
+        assert_eq!(output.version, 5);
     }
 
     #[test]
@@ -425,31 +437,24 @@ mod tests {
     }
 
     #[test]
-    fn display_group_needs_attention_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::NeedsAttention);
+    fn display_group_active_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Active);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "needs_attention");
+        assert_eq!(jw.display_group, "active");
     }
 
     #[test]
-    fn display_group_claude_working_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::ClaudeWorking);
+    fn display_group_normal_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Normal);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "claude_working");
+        assert_eq!(jw.display_group, "normal");
     }
 
     #[test]
-    fn display_group_ready_to_merge_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::ReadyToMerge);
+    fn display_group_done_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Done);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "ready_to_merge");
-    }
-
-    #[test]
-    fn display_group_other_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::Other);
-        let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "other");
+        assert_eq!(jw.display_group, "done");
     }
 
     #[test]
@@ -573,9 +578,9 @@ mod tests {
     }
 
     #[test]
-    fn json_version_is_4() {
+    fn json_version_is_5() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 4);
+        assert_eq!(output.version, 5);
     }
 
     #[test]
@@ -636,5 +641,101 @@ mod tests {
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.windows.len(), 1);
+    }
+
+    // -- JsonPr failing_checks and labels tests -------------------------------
+
+    fn make_pr_state() -> PrState {
+        PrState {
+            number: 99,
+            branch: "feat/test".to_string(),
+            state: Some("OPEN".to_string()),
+            review_decision: None,
+            checks_state: Some("failing".to_string()),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
+        }
+    }
+
+    #[test]
+    fn json_pr_includes_failing_checks_field() {
+        use crate::orchard_state::FailedCheck;
+        let pr = PrState {
+            failing_checks: vec![FailedCheck {
+                name: "e2e-tests".to_string(),
+                conclusion: "FAILURE".to_string(),
+            }],
+            ..make_pr_state()
+        };
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.failing_checks.len(), 1);
+        assert_eq!(jp.failing_checks[0].name, "e2e-tests");
+        assert_eq!(jp.failing_checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn json_pr_failing_checks_empty_by_default() {
+        let pr = make_pr_state();
+        let jp = JsonPr::from(&pr);
+        assert!(jp.failing_checks.is_empty());
+    }
+
+    #[test]
+    fn json_pr_failing_checks_serializes_to_camelcase() {
+        use crate::orchard_state::FailedCheck;
+        let pr = PrState {
+            failing_checks: vec![FailedCheck {
+                name: "unit-tests".to_string(),
+                conclusion: "TIMED_OUT".to_string(),
+            }],
+            ..make_pr_state()
+        };
+        let value = serde_json::to_value(JsonPr::from(&pr)).unwrap();
+        assert!(
+            value.get("failingChecks").is_some(),
+            "expected camelCase 'failingChecks'"
+        );
+        let checks = &value["failingChecks"];
+        assert_eq!(checks[0]["name"], "unit-tests");
+        assert_eq!(checks[0]["conclusion"], "TIMED_OUT");
+    }
+
+    #[test]
+    fn json_pr_includes_labels_field() {
+        let pr = PrState {
+            labels: vec!["bug".to_string(), "priority:high".to_string()],
+            ..make_pr_state()
+        };
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.labels, vec!["bug", "priority:high"]);
+    }
+
+    // -- JsonIssue labels test ------------------------------------------------
+
+    #[test]
+    fn json_issue_includes_labels_field() {
+        let issue = IssueInfo {
+            number: 1,
+            title: "Test issue".to_string(),
+            state: "open".to_string(),
+            labels: vec!["enhancement".to_string()],
+        };
+        let ji = JsonIssue::from(&issue);
+        assert_eq!(ji.labels, vec!["enhancement"]);
+    }
+
+    #[test]
+    fn json_issue_labels_empty_by_default() {
+        let issue = IssueInfo {
+            number: 2,
+            title: "Another issue".to_string(),
+            state: "open".to_string(),
+            labels: vec![],
+        };
+        let ji = JsonIssue::from(&issue);
+        assert!(ji.labels.is_empty());
     }
 }

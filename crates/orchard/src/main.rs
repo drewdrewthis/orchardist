@@ -248,13 +248,18 @@ fn handle_json() {
 /// Runs the TUI. If inside tmux and run directly (not via popup wrapper),
 /// re-launches itself as a tmux popup using the wrapper script so that
 /// session switching works correctly after the popup closes.
+///
+/// Set `ORCHARD_NO_POPUP=1` to skip the popup re-launch and run the TUI
+/// directly in the current pane. Useful when tmux popups are broken or
+/// rendering incorrectly in your terminal.
 fn handle_tui(command: &str) {
     let inside_tmux = env::var("TMUX").is_ok();
     let is_tty = std::io::stdout().is_terminal();
+    let no_popup = env::var("ORCHARD_NO_POPUP").is_ok();
 
     // If inside tmux and stdout is a TTY, we were run directly (not via popup).
-    // Re-launch as a popup through the wrapper script.
-    if inside_tmux && is_tty {
+    // Re-launch as a popup through the wrapper script (unless ORCHARD_NO_POPUP is set).
+    if inside_tmux && is_tty && !no_popup {
         let wrapper = dirs::home_dir()
             .map(|h| h.join(".local/bin/orchard-popup"))
             .unwrap_or_else(|| std::path::PathBuf::from("orchard-popup"));

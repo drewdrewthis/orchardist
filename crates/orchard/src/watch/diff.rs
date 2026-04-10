@@ -154,6 +154,7 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
                         worktree: path.to_string(),
                         pr_number,
                         label: label.clone(),
+                        failing_checks: new_pr.failing_checks.clone(),
                     }));
                 }
 
@@ -275,7 +276,7 @@ mod tests {
             issue: None,
             pr: None,
             sessions: vec![],
-            display_group: DisplayGroup::Other,
+            display_group: DisplayGroup::Normal,
             is_main_worktree: false,
         }
     }
@@ -320,6 +321,9 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
         }
     }
 
@@ -421,6 +425,38 @@ mod tests {
             .filter(|e| matches!(&e.kind, EventKind::CiFailed { .. }))
             .collect();
         assert_eq!(ci_events.len(), 1);
+    }
+
+    #[test]
+    fn diff_ci_failed_event_carries_failing_checks() {
+        use crate::orchard_state::FailedCheck;
+        let path = "/workspace/repo/feat-1";
+        let old_pr = make_pr(10);
+        let new_pr = PrState {
+            checks_state: Some("failing".to_string()),
+            failing_checks: vec![FailedCheck {
+                name: "e2e-tests".to_string(),
+                conclusion: "FAILURE".to_string(),
+            }],
+            ..make_pr(10)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+
+        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+
+        let ci_event = events
+            .iter()
+            .find(|e| matches!(&e.kind, EventKind::CiFailed { .. }))
+            .expect("expected a CiFailed event");
+
+        if let EventKind::CiFailed { failing_checks, .. } = &ci_event.kind {
+            assert_eq!(failing_checks.len(), 1);
+            assert_eq!(failing_checks[0].name, "e2e-tests");
+        } else {
+            panic!("unexpected event kind");
+        }
     }
 
     #[test]

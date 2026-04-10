@@ -64,6 +64,8 @@ pub enum EventKind {
         pr_number: u32,
         /// Human-readable label (issue title or branch name).
         label: String,
+        /// Individual failing CI checks (name + conclusion).
+        failing_checks: Vec<crate::orchard_state::FailedCheck>,
     },
     /// CI checks transitioned to passing for a PR.
     CiPassed {
@@ -232,6 +234,7 @@ mod tests {
                 worktree: "/wt/c".to_string(),
                 pr_number: 42,
                 label: "Branch".to_string(),
+                failing_checks: vec![],
             },
             EventKind::Heartbeat {
                 worktree_count: 5,
@@ -272,5 +275,44 @@ mod tests {
             session_count: 1,
         };
         assert!(kind.notification().is_none());
+    }
+
+    #[test]
+    fn ci_failed_event_includes_failing_checks_in_roundtrip() {
+        use crate::orchard_state::FailedCheck;
+        let kind = EventKind::CiFailed {
+            worktree: "/wt/x".to_string(),
+            pr_number: 10,
+            label: "Fix CI".to_string(),
+            failing_checks: vec![FailedCheck {
+                name: "e2e-tests".to_string(),
+                conclusion: "FAILURE".to_string(),
+            }],
+        };
+        let event = WatchEvent::now(kind);
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: WatchEvent = serde_json::from_str(&json).unwrap();
+        let json2 = serde_json::to_string(&decoded).unwrap();
+        assert_eq!(json, json2, "CiFailed with failing_checks must round-trip");
+        assert!(
+            json.contains("e2e-tests"),
+            "failing_checks must appear in serialized output"
+        );
+    }
+
+    #[test]
+    fn ci_failed_notification_returns_pr_label() {
+        let kind = EventKind::CiFailed {
+            worktree: "/wt/x".to_string(),
+            pr_number: 42,
+            label: "My Feature".to_string(),
+            failing_checks: vec![],
+        };
+        let notif = kind.notification();
+        assert!(notif.is_some());
+        let (title, msg, _) = notif.unwrap();
+        assert_eq!(title, "CI Failed");
+        assert!(msg.contains("42"));
+        assert!(msg.contains("My Feature"));
     }
 }

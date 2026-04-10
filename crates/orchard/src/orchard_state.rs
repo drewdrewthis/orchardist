@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
 use crate::session::{EnrichedSession, Host, StandaloneSessionRow};
@@ -110,6 +112,17 @@ pub struct IssueInfo {
     pub title: String,
     /// Issue state: "open", "closed", or "completed".
     pub state: String,
+    /// Labels applied to this issue.
+    pub labels: Vec<String>,
+}
+
+/// A single non-passing CI check.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FailedCheck {
+    /// Check name (e.g. "e2e-tests", "ci/travis").
+    pub name: String,
+    /// GitHub conclusion string (e.g. "FAILURE", "TIMED_OUT").
+    pub conclusion: String,
 }
 
 /// Lightweight PR summary attached to a worktree.
@@ -129,6 +142,12 @@ pub struct PrState {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Individual failing CI checks (filtered: excludes non-blocking checks).
+    pub failing_checks: Vec<FailedCheck>,
+    /// Labels applied to this PR.
+    pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
@@ -206,8 +225,17 @@ pub struct HostState {
 // From conversions from derive types
 // ---------------------------------------------------------------------------
 
+/// CI checks that are informational-only and should not surface as actionable failures.
+const NON_BLOCKING_CHECKS: &[&str] = &["check-approval-or-label"];
+
 impl From<&crate::derive::PrInfo> for PrState {
     fn from(pr: &crate::derive::PrInfo) -> Self {
+        let failing_checks = pr
+            .failing_checks
+            .iter()
+            .filter(|c| !NON_BLOCKING_CHECKS.contains(&c.name.as_str()))
+            .cloned()
+            .collect();
         Self {
             number: pr.number,
             branch: pr.branch.clone(),
@@ -216,6 +244,9 @@ impl From<&crate::derive::PrInfo> for PrState {
             checks_state: pr.checks_state.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            failing_checks,
+            labels: pr.labels.clone(),
+            is_draft: pr.is_draft,
         }
     }
 }
@@ -270,6 +301,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
                 .issue_state
                 .clone()
                 .unwrap_or_else(|| "open".to_string()),
+            labels: row.issue_labels.clone(),
         });
 
         Self {
@@ -306,10 +338,12 @@ mod tests {
             issue_number,
             issue_title: issue_number.map(|n| format!("Issue {}", n)),
             issue_state: issue_state.map(|s| s.to_string()),
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -341,31 +375,31 @@ mod tests {
                 "feat/issue-5",
                 Some(5),
                 None,
-                DisplayGroup::Other,
+                DisplayGroup::Normal,
             ),
             make_row(
                 "owner/repo",
                 "feat/issue-2",
                 Some(2),
                 None,
-                DisplayGroup::NeedsAttention,
+                DisplayGroup::Active,
             ),
             make_row(
                 "owner/repo",
                 "feat/issue-1",
                 Some(1),
                 None,
-                DisplayGroup::NeedsAttention,
+                DisplayGroup::Active,
             ),
         ];
         let state = make_state_with_rows(rows);
         let all = state.all_worktrees();
         assert_eq!(all.len(), 3);
-        // NeedsAttention sorts before Other
-        assert_eq!(all[0].display_group, DisplayGroup::NeedsAttention);
-        assert_eq!(all[1].display_group, DisplayGroup::NeedsAttention);
-        assert_eq!(all[2].display_group, DisplayGroup::Other);
-        // Within NeedsAttention, issue 1 sorts before issue 2
+        // Active sorts before Normal
+        assert_eq!(all[0].display_group, DisplayGroup::Active);
+        assert_eq!(all[1].display_group, DisplayGroup::Active);
+        assert_eq!(all[2].display_group, DisplayGroup::Normal);
+        // Within Active, issue 1 sorts before issue 2
         assert_eq!(all[0].issue.as_ref().unwrap().number, 1);
         assert_eq!(all[1].issue.as_ref().unwrap().number, 2);
     }
@@ -387,7 +421,7 @@ mod tests {
             "feat/issue-10",
             Some(10),
             Some("open"),
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "open");
@@ -400,7 +434,7 @@ mod tests {
             "feat/issue-10",
             Some(10),
             Some("closed"),
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "closed");
@@ -413,7 +447,7 @@ mod tests {
             "feat/issue-10",
             Some(10),
             None,
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "open");
@@ -429,6 +463,9 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.state, Some("open".to_string()));
@@ -444,9 +481,84 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert!(pr_state.state.is_none());
+    }
+
+    #[test]
+    fn from_pr_info_filters_non_blocking_check() {
+        let pr_info = PrInfo {
+            number: 1,
+            branch: "feat/branch".to_string(),
+            state: None,
+            review_decision: None,
+            checks_state: Some("failing".to_string()),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            failing_checks: vec![
+                FailedCheck {
+                    name: "check-approval-or-label".to_string(),
+                    conclusion: "FAILURE".to_string(),
+                },
+                FailedCheck {
+                    name: "e2e-tests".to_string(),
+                    conclusion: "FAILURE".to_string(),
+                },
+            ],
+            labels: vec![],
+            is_draft: false,
+        };
+        let pr_state = PrState::from(&pr_info);
+        assert_eq!(pr_state.failing_checks.len(), 1);
+        assert_eq!(pr_state.failing_checks[0].name, "e2e-tests");
+    }
+
+    #[test]
+    fn from_pr_info_passes_through_failing_checks() {
+        let pr_info = PrInfo {
+            number: 1,
+            branch: "feat/branch".to_string(),
+            state: None,
+            review_decision: None,
+            checks_state: Some("failing".to_string()),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            failing_checks: vec![FailedCheck {
+                name: "unit-tests".to_string(),
+                conclusion: "TIMED_OUT".to_string(),
+            }],
+            labels: vec![],
+            is_draft: false,
+        };
+        let pr_state = PrState::from(&pr_info);
+        assert_eq!(pr_state.failing_checks.len(), 1);
+        assert_eq!(pr_state.failing_checks[0].name, "unit-tests");
+        assert_eq!(pr_state.failing_checks[0].conclusion, "TIMED_OUT");
+    }
+
+    #[test]
+    fn from_pr_info_propagates_is_draft_true() {
+        let pr_info = PrInfo {
+            number: 42,
+            branch: "feat/draft".to_string(),
+            state: Some("open".to_string()),
+            review_decision: None,
+            checks_state: None,
+            has_conflicts: false,
+            unresolved_threads: 0,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: true,
+        };
+        let pr_state = PrState::from(&pr_info);
+        assert!(
+            pr_state.is_draft,
+            "is_draft must propagate from PrInfo to PrState"
+        );
     }
 
     // -- From<&EnrichedSession> for SessionState tests ----------------------

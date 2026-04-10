@@ -52,7 +52,22 @@ pub struct CachedPr {
     /// the GraphQL `closingIssuesReferences` nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_issue_state: Option<String>,
+    /// Individual non-passing CI checks (ALL non-passing, before exclusion filtering).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing_checks: Vec<crate::orchard_state::FailedCheck>,
+    /// Labels applied to this PR.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    ///
+    /// Uses `serde(default)` so existing cache files without this field
+    /// deserialize with `false` rather than failing.
+    #[serde(default)]
+    pub is_draft: bool,
 }
+
+// Re-export FailedCheck for convenience in tests and other modules.
+pub use crate::orchard_state::FailedCheck;
 
 /// A git worktree entry as stored in the worktrees cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -107,6 +122,13 @@ pub struct CachedTmuxSession {
     /// Only populated for remote sessions. `None` means no state file was found
     /// on the remote host for this session at the time of the last SSH refresh.
     pub claude_state_raw: Option<ClaudeStateFile>,
+    /// Unix timestamp (seconds) of the last activity in this tmux session,
+    /// as reported by `#{session_activity}`.
+    ///
+    /// Uses `serde(default)` so old cache files without this field deserialize
+    /// to `None` rather than failing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +333,9 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
         }
     }
 
@@ -336,6 +361,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -558,6 +584,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         let parsed: CachedTmuxSession = serde_json::from_str(&json).unwrap();
@@ -635,5 +662,84 @@ mod tests {
         // Also verify the JSON on disk contains the field name.
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"last_refreshed\""));
+    }
+
+    // -- CachedPr backward compat -------------------------------------------
+
+    #[test]
+    fn cached_pr_missing_failing_checks_defaults_to_empty() {
+        // Old cache format without failing_checks field.
+        let json = r#"{
+            "number": 7,
+            "branch": "feat/my-branch",
+            "linked_issue": 42,
+            "state": "open",
+            "review_decision": "approved",
+            "checks_state": "passing",
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+        let parsed: CachedPr = serde_json::from_str(json).unwrap();
+        assert!(
+            parsed.failing_checks.is_empty(),
+            "failing_checks should default to empty vec when missing from JSON"
+        );
+    }
+
+    // -- CachedPr is_draft default -------------------------------------------
+
+    #[test]
+    fn cached_pr_is_draft_defaults_to_false_for_legacy_json() {
+        // Simulates a legacy cache entry without the is_draft field.
+        let json = r#"{
+            "number": 7,
+            "branch": "feat/my-branch",
+            "linked_issue": 42,
+            "state": "open",
+            "review_decision": "approved",
+            "checks_state": "passing",
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+        let pr: CachedPr = serde_json::from_str(json).unwrap();
+        assert!(
+            !pr.is_draft,
+            "is_draft should default to false for legacy cache entries without the field"
+        );
+    }
+
+    #[test]
+    fn cached_pr_failing_checks_roundtrip() {
+        let pr = CachedPr {
+            failing_checks: vec![FailedCheck {
+                name: "e2e-tests".to_string(),
+                conclusion: "FAILURE".to_string(),
+            }],
+            ..make_pr()
+        };
+        let json = serde_json::to_string(&pr).unwrap();
+        let parsed: CachedPr = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.failing_checks.len(), 1);
+        assert_eq!(parsed.failing_checks[0].name, "e2e-tests");
+        assert_eq!(parsed.failing_checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn cached_pr_empty_failing_checks_not_serialized() {
+        let pr = make_pr(); // failing_checks: vec![]
+        let json = serde_json::to_string(&pr).unwrap();
+        assert!(
+            !json.contains("failing_checks"),
+            "empty failing_checks should be omitted from JSON"
+        );
+    }
+
+    #[test]
+    fn cached_pr_is_draft_true_when_set() {
+        let mut pr = make_pr();
+        pr.is_draft = true;
+        let json = serde_json::to_string(&pr).unwrap();
+        let parsed: CachedPr = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_draft, "is_draft should roundtrip as true");
     }
 }

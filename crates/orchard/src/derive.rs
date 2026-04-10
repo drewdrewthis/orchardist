@@ -5,6 +5,7 @@
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
+use crate::paths::paths_match;
 use crate::session::{
     ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
     build_windows_and_panes,
@@ -33,22 +34,18 @@ const HOOK_STATE_STALENESS_SECS: u64 = 300;
 // ---------------------------------------------------------------------------
 
 /// Rendering order for worktree rows. Variants are ordered so that `Ord` gives
-/// the correct sort order (RepoMain first, Other last).
+/// the correct sort order (RepoMain first, Done last).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayGroup {
     /// Always first — the repo's main worktree.
     RepoMain,
-    /// User-flagged as priority work.
-    Prioritized,
-    /// Requires human action (blocked, conflicts, review requested).
-    NeedsAttention,
-    /// A Claude session is actively working in this worktree.
-    ClaudeWorking,
-    /// PR is approved and checks pass — ready to merge.
-    ReadyToMerge,
-    /// Worktrees without PRs or other misc work.
-    Other,
+    /// Has any running tmux session (Claude working, input needed, etc.).
+    Active,
+    /// Everything else that's still open/in-progress.
+    Normal,
+    /// Issue is closed AND PR is merged/closed, or issue closed with no PR.
+    Done,
 }
 
 /// Lightweight PR summary attached to a worktree row.
@@ -68,6 +65,12 @@ pub struct PrInfo {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Individual non-passing CI checks, before non-blocking exclusion filtering.
+    pub failing_checks: Vec<crate::orchard_state::FailedCheck>,
+    /// Labels applied to this PR.
+    pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -89,6 +92,8 @@ pub struct WorktreeRow {
     /// State of the linked issue ("open", "closed", "completed"), if any.
     /// Used to detect stale worktrees whose issue has been resolved without a PR.
     pub issue_state: Option<String>,
+    /// Labels applied to the linked issue, if any.
+    pub issue_labels: Vec<String>,
     /// Linked pull request, if one exists for this branch.
     pub pr: Option<PrInfo>,
     /// Active tmux sessions associated with this worktree path.
@@ -97,6 +102,13 @@ pub struct WorktreeRow {
     pub display_group: DisplayGroup,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+    /// Unix timestamp (seconds) of the most recent tmux activity across all
+    /// sessions attached to this worktree. `None` when no sessions are
+    /// attached or none reported activity.
+    ///
+    /// Used as a sort tiebreaker within a display group: rows with more recent
+    /// activity sort before those with older or no activity.
+    pub last_activity: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -134,9 +146,18 @@ pub fn derive_worktree_rows(
         };
         let pr_info = pr.map(pr_info_from);
 
-        let session_infos: Vec<EnrichedSession> = sessions
+        let matched_sessions: Vec<&CachedTmuxSession> = sessions
             .iter()
-            .filter(|s| s.path == wt.path)
+            .filter(|s| paths_match(&s.path, &wt.path))
+            .collect();
+
+        let last_activity = matched_sessions
+            .iter()
+            .filter_map(|s| s.last_activity)
+            .max();
+
+        let session_infos: Vec<EnrichedSession> = matched_sessions
+            .iter()
             .map(|s| enrich_session(s, claude_states))
             .collect();
 
@@ -148,14 +169,13 @@ pub fn derive_worktree_rows(
         let linked_issue = issue_number.and_then(|num| issues.iter().find(|i| i.number == num));
         let issue_title = linked_issue.map(|i| i.title.clone());
         let issue_state = linked_issue.map(|i| i.state.clone());
+        let issue_labels = linked_issue.map(|i| i.labels.clone()).unwrap_or_default();
 
         let is_main_worktree =
             is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));
 
         let display_group = if is_main_worktree {
             DisplayGroup::RepoMain
-        } else if crate::priority::is_prioritized(&wt.path) {
-            DisplayGroup::Prioritized
         } else {
             derive_display_group(pr_info.as_ref(), &session_infos, issue_state.as_deref())
         };
@@ -168,10 +188,12 @@ pub fn derive_worktree_rows(
             issue_number,
             issue_title,
             issue_state,
+            issue_labels,
             pr: pr_info,
             sessions: session_infos,
             display_group,
             is_main_worktree,
+            last_activity,
         });
 
         is_first_non_bare = false;
@@ -201,14 +223,36 @@ pub fn derive_all_repos(
         .collect();
 
     rows.sort_by(|a, b| {
-        a.display_group
-            .cmp(&b.display_group)
-            .then_with(|| match (a.issue_number, b.issue_number) {
-                (Some(a_num), Some(b_num)) => a_num.cmp(&b_num),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.branch.cmp(&b.branch),
-            })
+        // Primary: group order (RepoMain < Active < Normal < Done)
+        let group_ord = a.display_group.cmp(&b.display_group);
+        if group_ord != std::cmp::Ordering::Equal {
+            return group_ord;
+        }
+        // Secondary: focus score — "what needs human attention most?"
+        let a_focus = focus_score(a);
+        let b_focus = focus_score(b);
+        let focus_ord = a_focus.cmp(&b_focus);
+        if focus_ord != std::cmp::Ordering::Equal {
+            return focus_ord;
+        }
+        // Tertiary: last tmux activity — more recent activity sorts first.
+        // Rows with no activity sort after rows with activity.
+        let activity_ord = match (a.last_activity, b.last_activity) {
+            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts), // reverse: higher timestamp first
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        if activity_ord != std::cmp::Ordering::Equal {
+            return activity_ord;
+        }
+        // Quaternary: issue number ascending
+        match (a.issue_number, b.issue_number) {
+            (Some(a_num), Some(b_num)) => a_num.cmp(&b_num),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.branch.cmp(&b.branch),
+        }
     });
 
     rows
@@ -227,6 +271,9 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         checks_state: pr.checks_state.clone(),
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
+        failing_checks: pr.failing_checks.clone(),
+        labels: pr.labels.clone(),
+        is_draft: pr.is_draft,
     }
 }
 
@@ -365,8 +412,7 @@ pub fn is_state_stale(timestamp: &str, max_age_secs: u64) -> bool {
     }
 }
 
-/// Derives the display group for a worktree row. Priority order:
-/// NeedsAttention > ClaudeWorking > ReadyToMerge > Other.
+/// Derives the display group for a worktree row.
 ///
 /// Never returns `RepoMain` — that is set separately based on `is_main_worktree`.
 fn derive_display_group(
@@ -374,76 +420,125 @@ fn derive_display_group(
     sessions: &[EnrichedSession],
     issue_state: Option<&str>,
 ) -> DisplayGroup {
+    // Done: closed issue with merged/closed PR, or closed issue with no PR.
+    let issue_closed = issue_state.is_some_and(|s| s == "closed" || s == "completed");
+    let pr_done = pr.is_some_and(|p| {
+        p.state.as_deref() == Some("merged")
+            || p.state.as_deref() == Some("closed")
+            || p.state.as_deref() == Some("MERGED")
+            || p.state.as_deref() == Some("CLOSED")
+    });
+    if issue_closed && (pr_done || pr.is_none()) {
+        return DisplayGroup::Done;
+    }
+
+    // Active: any running tmux session with a Claude process.
+    if sessions.iter().any(|s| s.claude.is_some()) {
+        return DisplayGroup::Active;
+    }
+
+    // Everything else is Normal.
+    DisplayGroup::Normal
+}
+
+/// Returns a focus score for sorting within a display group. Lower = needs
+/// human attention more urgently.
+///
+/// The score answers: "what needs a human to do something right now?"
+/// - Tier 0-9: Blocked on human action (Claude waiting, changes requested, conflicts)
+/// - Tier 10-19: Needs attention soon (CI failing, unresolved threads, ready to merge)
+/// - Tier 20-29: In progress, no action needed (Claude working, waiting on review)
+/// - Tier 30+: No urgency signals
+///
+/// Within a tier, priority labels (P0/P1) serve as tiebreakers.
+fn focus_score(row: &WorktreeRow) -> u32 {
     use crate::claude_state::ClaudeState;
 
-    // Claude waiting for input = needs your attention (highest priority, before PR state).
-    if sessions.iter().any(|s| {
+    // Check Claude session states
+    let has_input_needed = row.sessions.iter().any(|s| {
         s.claude
             .as_ref()
             .is_some_and(|c| c.status == ClaudeState::Input)
-    }) {
-        return DisplayGroup::NeedsAttention;
-    }
+    });
+    let has_claude_working = row.sessions.iter().any(|s| {
+        s.claude
+            .as_ref()
+            .is_some_and(|c| c.status == ClaudeState::Working)
+    });
 
-    // Closed/completed issue with no PR = stale worktree, needs cleanup.
-    if pr.is_none()
-        && let Some(state) = issue_state
-        && (state == "closed" || state == "completed")
-    {
-        return DisplayGroup::NeedsAttention;
-    }
+    // Check PR states
+    let changes_requested = row
+        .pr
+        .as_ref()
+        .is_some_and(|p| p.review_decision.as_deref() == Some("CHANGES_REQUESTED"));
+    let has_conflicts = row.pr.as_ref().is_some_and(|p| p.has_conflicts);
+    let ci_failing = row
+        .pr
+        .as_ref()
+        .is_some_and(|p| p.checks_state.as_deref() == Some("FAILURE"));
+    let has_unresolved = row.pr.as_ref().is_some_and(|p| p.unresolved_threads > 0);
+    let ready_to_merge = row.pr.as_ref().is_some_and(|p| {
+        p.review_decision.as_deref() == Some("APPROVED")
+            && !p.has_conflicts
+            && p.checks_state.as_deref() == Some("SUCCESS")
+    });
+    let pr_waiting_review = row.pr.as_ref().is_some_and(|p| {
+        p.review_decision.as_deref() == Some("REVIEW_REQUIRED") || p.review_decision.is_none()
+    });
+    let has_pr = row.pr.is_some();
 
-    if let Some(pr) = pr {
-        // Merged/closed PR = stale worktree.
-        if pr.state.as_deref() == Some("merged") || pr.state.as_deref() == Some("closed") {
-            return DisplayGroup::NeedsAttention;
-        }
-
-        if is_needs_attention(pr) {
-            return DisplayGroup::NeedsAttention;
-        }
-
-        if sessions.iter().any(|s| {
-            s.claude
-                .as_ref()
-                .is_some_and(|c| c.status == ClaudeState::Working)
-        }) {
-            return DisplayGroup::ClaudeWorking;
-        }
-
-        if is_ready_to_merge(pr) {
-            return DisplayGroup::ReadyToMerge;
-        }
+    // Compute base score by urgency tier
+    let base = if has_input_needed {
+        0 // Claude is blocked on you — act now
+    } else if changes_requested {
+        1 // Reviewer is waiting on you
+    } else if has_conflicts {
+        2 // Blocking progress, needs resolution
+    } else if ci_failing {
+        10 // Something broke, needs investigation
+    } else if has_unresolved {
+        11 // Active conversation, needs response
+    } else if ready_to_merge {
+        12 // Quick win — one click to merge
+    } else if has_claude_working {
+        20 // In progress, no action needed
+    } else if pr_waiting_review {
+        21 // Waiting on others, nothing to do
+    } else if has_pr {
+        22 // PR exists but unclear state
     } else {
-        // No PR — check if Claude is actively working in sessions.
-        if sessions.iter().any(|s| {
-            s.claude
-                .as_ref()
-                .is_some_and(|c| c.status == ClaudeState::Working)
-        }) {
-            return DisplayGroup::ClaudeWorking;
-        }
-    }
+        30 // No PR, no sessions — lowest urgency
+    };
 
-    DisplayGroup::Other
+    // Tiebreaker: priority labels shift within the tier (max shift of 4)
+    let label_bonus = label_priority_weight(&row.issue_labels, row.pr.as_ref().map(|p| &p.labels));
+    // label_bonus is 0-3 for P0-P3, 100 for no label. Clamp to 0-4 range.
+    let tiebreak = if label_bonus <= 3 { label_bonus } else { 4 };
+
+    base * 10 + tiebreak
+}
+
+/// Returns a priority weight from labels. Lower = higher priority.
+/// Used as a tiebreaker within focus score tiers.
+fn label_priority_weight(issue_labels: &[String], pr_labels: Option<&Vec<String>>) -> u32 {
+    let all_labels = issue_labels.iter().chain(pr_labels.into_iter().flatten());
+    let mut best = 100u32;
+    for label in all_labels {
+        let lower = label.to_lowercase();
+        let weight = match lower.as_str() {
+            "p0" | "critical" | "urgent" => 0,
+            "p1" | "high" => 1,
+            "p2" | "medium" => 2,
+            "p3" | "low" => 3,
+            _ => continue,
+        };
+        best = best.min(weight);
+    }
+    best
 }
 
 fn is_default_branch(branch: &str) -> bool {
     matches!(branch, "main" | "master" | "develop" | "dev")
-}
-
-fn is_needs_attention(pr: &PrInfo) -> bool {
-    pr.review_decision.as_deref() == Some("changes_requested")
-        || pr.has_conflicts
-        || pr.checks_state.as_deref() == Some("failing")
-        || pr.unresolved_threads > 0
-}
-
-fn is_ready_to_merge(pr: &PrInfo) -> bool {
-    pr.review_decision.as_deref() == Some("approved")
-        && pr.checks_state.as_deref() == Some("passing")
-        && !pr.has_conflicts
-        && pr.unresolved_threads == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +596,9 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
         }
     }
 
@@ -515,6 +613,9 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: false,
         }
     }
 
@@ -551,6 +652,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -617,6 +719,68 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sessions.len(), 1);
         assert_eq!(rows[0].sessions[0].tmux.name, "webapp_47");
+    }
+
+    #[test]
+    fn session_does_not_match_worktree_with_longer_path_sharing_prefix() {
+        // Regression guard for bug #191: session at "/workspace/langwatch" must
+        // NOT match the worktree at "/workspace/langwatch-sdk". The paths must
+        // be equal, not merely prefix-sharing.
+        let worktrees = vec![
+            worktree("/workspace/langwatch-sdk", "main"),
+            worktree("/workspace/langwatch-sdk-feat", "feat/branch"),
+        ];
+        let sessions = vec![session("langwatch", "/workspace/langwatch", vec!["bash"])];
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+
+        assert_eq!(rows.len(), 2);
+        // Neither worktree should have the session attached — path is different.
+        assert!(
+            rows[0].sessions.is_empty(),
+            "langwatch-sdk must not receive the langwatch session"
+        );
+        assert!(
+            rows[1].sessions.is_empty(),
+            "langwatch-sdk-feat must not receive the langwatch session"
+        );
+    }
+
+    #[test]
+    fn session_does_not_match_worktree_when_path_is_substring() {
+        // "main" session must NOT match "/workspace/domain-main-service" worktree.
+        let worktrees = vec![worktree("/workspace/domain-main-service", "feat/branch")];
+        let sessions = vec![session("main", "/workspace/main", vec!["bash"])];
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
+
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].sessions.is_empty(),
+            "domain-main-service must not receive the main session"
+        );
+    }
+
+    #[test]
+    fn session_with_trailing_slash_joins_correct_worktree() {
+        // Tmux on some versions appends a trailing slash to #{session_path}.
+        // After normalization, it should still match exactly.
+        let worktrees = vec![worktree("/workspace/webapp-47", "feat/branch")];
+        // Trailing slash is stripped by normalize_path when building CachedTmuxSession,
+        // so the stored path is "/workspace/webapp-47" — we pass the normalized form here.
+        let normalized_sessions = vec![session("webapp_47", "/workspace/webapp-47", vec!["bash"])];
+
+        let rows = derive_worktree_rows(
+            &[],
+            &[],
+            &worktrees,
+            &normalized_sessions,
+            "owner/repo",
+            &[],
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sessions.len(), 1);
     }
 
     #[test]
@@ -789,7 +953,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn display_group_needs_attention_changes_requested() {
+    fn display_group_normal_changes_requested_no_session() {
+        // Without an active session, changes_requested PR → Normal
         let prs = vec![CachedPr {
             review_decision: Some("changes_requested".to_string()),
             ..pr_for_branch(55, "feat/branch")
@@ -800,11 +965,11 @@ mod tests {
         let all_wts = vec![worktree("/workspace/repo", "main"), worktrees[0].clone()];
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
     }
 
     #[test]
-    fn display_group_needs_attention_conflicts() {
+    fn display_group_normal_conflicts_no_session() {
         let prs = vec![CachedPr {
             has_conflicts: true,
             ..pr_for_branch(55, "feat/branch")
@@ -815,11 +980,11 @@ mod tests {
         ];
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
     }
 
     #[test]
-    fn display_group_needs_attention_failing_ci() {
+    fn display_group_normal_failing_ci_no_session() {
         let prs = vec![CachedPr {
             checks_state: Some("failing".to_string()),
             ..pr_for_branch(55, "feat/branch")
@@ -830,11 +995,11 @@ mod tests {
         ];
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
     }
 
     #[test]
-    fn display_group_needs_attention_unresolved_threads() {
+    fn display_group_normal_unresolved_threads_no_session() {
         let prs = vec![CachedPr {
             unresolved_threads: 2,
             ..pr_for_branch(55, "feat/branch")
@@ -845,11 +1010,11 @@ mod tests {
         ];
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
     }
 
     #[test]
-    fn display_group_claude_working_with_pr() {
+    fn display_group_active_claude_working_with_pr() {
         let prs = vec![pr_for_branch(55, "feat/branch")];
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
@@ -862,11 +1027,11 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &sessions, "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     #[test]
-    fn display_group_claude_working_without_pr() {
+    fn display_group_active_claude_working_without_pr() {
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-47", "feat/branch"),
@@ -878,11 +1043,12 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     #[test]
-    fn display_group_ready_to_merge() {
+    fn display_group_normal_ready_to_merge_no_session() {
+        // Ready-to-merge with no active session → Normal
         let prs = vec![approved_passing_pr_for_branch(55, "feat/branch")];
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
@@ -890,26 +1056,124 @@ mod tests {
         ];
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
     }
 
     #[test]
-    fn display_group_other_no_pr() {
+    fn display_group_normal_no_pr() {
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-feat", "feat/branch"),
         ];
         let rows = derive_worktree_rows(&[], &[], &all_wts, &[], "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::Other);
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
+    }
+
+    #[test]
+    fn display_group_done_closed_issue_no_pr() {
+        let issues = vec![CachedIssue {
+            number: 47,
+            title: "done issue".to_string(),
+            state: "closed".to_string(),
+            labels: vec![],
+        }];
+        let all_wts = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-47", "feat/issue-47"),
+        ];
+        let rows = derive_worktree_rows(&issues, &[], &all_wts, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[1].display_group, DisplayGroup::Done);
+    }
+
+    #[test]
+    fn display_group_done_closed_issue_with_merged_pr() {
+        let issues = vec![CachedIssue {
+            number: 47,
+            title: "done issue".to_string(),
+            state: "closed".to_string(),
+            labels: vec![],
+        }];
+        let prs = vec![CachedPr {
+            state: "merged".to_string(),
+            ..pr_for_branch(55, "feat/issue-47")
+        }];
+        let all_wts = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-47", "feat/issue-47"),
+        ];
+        let rows = derive_worktree_rows(&issues, &prs, &all_wts, &[], "owner/repo", &[]);
+
+        assert_eq!(rows[1].display_group, DisplayGroup::Done);
+    }
+
+    #[test]
+    fn merged_pr_in_cache_links_to_worktree_branch() {
+        // Regression: merged PRs must be matched to their worktree by branch name
+        // so that `orchard --json` shows the PR on the worktree row. This requires
+        // the PR cache to contain merged PRs (fixed in refresh_prs: states: [OPEN, MERGED]).
+        let prs = vec![CachedPr {
+            state: "merged".to_string(),
+            ..pr_for_branch(99, "feat/issue-99")
+        }];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-99", "feat/issue-99"),
+        ];
+
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+
+        let feat_row = rows
+            .iter()
+            .find(|r| r.branch == "feat/issue-99")
+            .expect("worktree row for feat/issue-99 must exist");
+        let pr = feat_row
+            .pr
+            .as_ref()
+            .expect("merged PR must be linked to the worktree");
+        assert_eq!(pr.number, 99);
+        assert_eq!(pr.state.as_deref(), Some("merged"));
+    }
+
+    #[test]
+    fn merged_pr_with_closed_issue_is_done() {
+        // When a merged PR is in the cache (bug #95 fixed), and its linked issue
+        // is closed, the worktree row must derive DisplayGroup::Done (bug #152).
+        let issues = vec![CachedIssue {
+            number: 99,
+            title: "completed feature".to_string(),
+            state: "closed".to_string(),
+            labels: vec![],
+        }];
+        let prs = vec![CachedPr {
+            linked_issue: Some(99),
+            state: "merged".to_string(),
+            ..pr_for_branch(55, "feat/issue-99")
+        }];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-99", "feat/issue-99"),
+        ];
+
+        let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
+
+        let feat_row = rows
+            .iter()
+            .find(|r| r.branch == "feat/issue-99")
+            .expect("worktree row for feat/issue-99 must exist");
+        assert_eq!(
+            feat_row.display_group,
+            DisplayGroup::Done,
+            "merged PR + closed issue must derive DisplayGroup::Done"
+        );
     }
 
     #[test]
     fn display_group_ordering() {
-        assert!(DisplayGroup::RepoMain < DisplayGroup::NeedsAttention);
-        assert!(DisplayGroup::NeedsAttention < DisplayGroup::ClaudeWorking);
-        assert!(DisplayGroup::ClaudeWorking < DisplayGroup::ReadyToMerge);
-        assert!(DisplayGroup::ReadyToMerge < DisplayGroup::Other);
+        assert!(DisplayGroup::RepoMain < DisplayGroup::Active);
+        assert!(DisplayGroup::Active < DisplayGroup::Normal);
+        assert!(DisplayGroup::Normal < DisplayGroup::Done);
     }
 
     #[test]
@@ -994,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn display_group_needs_attention_when_claude_needs_input() {
+    fn display_group_active_when_claude_needs_input() {
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-47", "feat/branch"),
@@ -1007,11 +1271,11 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     #[test]
-    fn claude_needs_input_takes_priority_over_claude_working() {
+    fn active_when_claude_needs_input_with_pr() {
         let prs = vec![pr_for_branch(55, "feat/branch")];
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
@@ -1025,11 +1289,12 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &sessions, "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     #[test]
-    fn needs_attention_takes_priority_over_claude_working() {
+    fn active_when_claude_session_present_despite_pr_issues() {
+        // Session presence trumps PR state — any active Claude session = Active
         let prs = vec![CachedPr {
             review_decision: Some("changes_requested".to_string()),
             ..pr_for_branch(55, "feat/branch")
@@ -1042,7 +1307,7 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &prs, &all_wts, &sessions, "owner/repo", &[]);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     // -----------------------------------------------------------------------
@@ -1066,7 +1331,8 @@ mod tests {
 
         assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
         assert!(rows[0].is_main_worktree);
-        assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+        // Ready-to-merge with no session → Normal
+        assert_eq!(rows[1].display_group, DisplayGroup::Normal);
     }
 
     #[test]
@@ -1097,29 +1363,33 @@ mod tests {
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
-        // RepoMain first (sorted by issue number / branch)
+        // RepoMain rows come first
         let shepherd_rows: Vec<&WorktreeRow> = rows
             .iter()
             .filter(|r| r.display_group == DisplayGroup::RepoMain)
             .collect();
         assert_eq!(shepherd_rows.len(), 2);
 
-        // ReadyToMerge before Other
+        // All non-main rows are Normal (no sessions, no closed issues)
         let non_shepherd: Vec<&WorktreeRow> = rows
             .iter()
             .filter(|r| r.display_group != DisplayGroup::RepoMain)
             .collect();
-        assert_eq!(non_shepherd[0].display_group, DisplayGroup::ReadyToMerge);
-        assert_eq!(non_shepherd[0].issue_number, Some(100));
+        assert!(
+            non_shepherd
+                .iter()
+                .all(|r| r.display_group == DisplayGroup::Normal)
+        );
 
-        // Other rows sorted by issue number
-        let other_rows: Vec<&WorktreeRow> = rows
+        // Normal rows sorted by issue number
+        let normal_rows: Vec<&WorktreeRow> = rows
             .iter()
-            .filter(|r| r.display_group == DisplayGroup::Other)
+            .filter(|r| r.display_group == DisplayGroup::Normal)
             .collect();
-        assert_eq!(other_rows.len(), 2);
-        assert_eq!(other_rows[0].issue_number, Some(300));
-        assert_eq!(other_rows[1].issue_number, Some(500));
+        assert_eq!(normal_rows.len(), 3);
+        assert_eq!(normal_rows[0].issue_number, Some(100));
+        assert_eq!(normal_rows[1].issue_number, Some(300));
+        assert_eq!(normal_rows[2].issue_number, Some(500));
     }
 
     #[test]
@@ -1138,13 +1408,82 @@ mod tests {
 
         let rows = derive_all_repos(&repo_caches, &[]);
 
-        let other_rows: Vec<&WorktreeRow> = rows
+        let normal_rows: Vec<&WorktreeRow> = rows
             .iter()
-            .filter(|r| r.display_group == DisplayGroup::Other)
+            .filter(|r| r.display_group == DisplayGroup::Normal)
             .collect();
-        assert_eq!(other_rows.len(), 2);
-        assert_eq!(other_rows[0].branch, "a-feature");
-        assert_eq!(other_rows[1].branch, "z-feature");
+        assert_eq!(normal_rows.len(), 2);
+        assert_eq!(normal_rows[0].branch, "a-feature");
+        assert_eq!(normal_rows[1].branch, "z-feature");
+    }
+
+    #[test]
+    fn label_priority_weight_p0_is_lowest() {
+        assert_eq!(label_priority_weight(&["p0".to_string()], None), 0);
+    }
+
+    #[test]
+    fn label_priority_weight_p1_is_1() {
+        assert_eq!(label_priority_weight(&["p1".to_string()], None), 1);
+    }
+
+    #[test]
+    fn label_priority_weight_no_label_is_100() {
+        assert_eq!(label_priority_weight(&["bugfix".to_string()], None), 100);
+    }
+
+    #[test]
+    fn label_priority_weight_pr_labels_checked() {
+        assert_eq!(
+            label_priority_weight(&[], Some(&vec!["critical".to_string()])),
+            0
+        );
+    }
+
+    #[test]
+    fn label_priority_weight_best_wins() {
+        assert_eq!(
+            label_priority_weight(&["p3".to_string(), "p1".to_string()], None),
+            1
+        );
+    }
+
+    #[test]
+    fn derive_all_repos_sorts_by_label_weight_within_group() {
+        let repo_caches = vec![(
+            "owner/repo".to_string(),
+            vec![
+                CachedIssue {
+                    number: 1,
+                    title: "low priority".to_string(),
+                    state: "open".to_string(),
+                    labels: vec!["p3".to_string()],
+                },
+                CachedIssue {
+                    number: 2,
+                    title: "critical".to_string(),
+                    state: "open".to_string(),
+                    labels: vec!["p0".to_string()],
+                },
+            ],
+            vec![],
+            vec![
+                worktree("/workspace/repo", "main"),
+                worktree("/workspace/repo-1", "feat/issue-1"),
+                worktree("/workspace/repo-2", "feat/issue-2"),
+            ],
+            vec![],
+        )];
+
+        let rows = derive_all_repos(&repo_caches, &[]);
+
+        let normal_rows: Vec<&WorktreeRow> = rows
+            .iter()
+            .filter(|r| r.display_group == DisplayGroup::Normal)
+            .collect();
+        // p0 (issue 2) should sort before p3 (issue 1) despite higher issue number
+        assert_eq!(normal_rows[0].issue_number, Some(2));
+        assert_eq!(normal_rows[1].issue_number, Some(1));
     }
 
     // -----------------------------------------------------------------------
@@ -1256,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn hook_state_display_group_input_becomes_needs_attention() {
+    fn hook_state_display_group_input_becomes_active() {
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-47", "feat/branch"),
@@ -1266,11 +1605,11 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &states);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     #[test]
-    fn hook_state_display_group_working_becomes_claude_working() {
+    fn hook_state_display_group_working_becomes_active() {
         let all_wts = vec![
             worktree("/workspace/repo", "main"),
             worktree("/workspace/repo-47", "feat/branch"),
@@ -1280,7 +1619,7 @@ mod tests {
 
         let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &states);
 
-        assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
+        assert_eq!(rows[1].display_group, DisplayGroup::Active);
     }
 
     #[test]
@@ -1435,6 +1774,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -1471,6 +1811,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         };
         let enriched = enrich_session_from_scraping_for_test(&sess);
         assert!(enriched.panes.is_empty());
