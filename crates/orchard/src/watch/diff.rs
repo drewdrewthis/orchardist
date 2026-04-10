@@ -323,6 +323,7 @@ mod tests {
             unresolved_threads: 0,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         }
     }
 

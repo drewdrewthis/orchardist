@@ -72,6 +72,8 @@ pub struct PrInfo {
     pub failing_checks: Vec<crate::orchard_state::FailedCheck>,
     /// Labels applied to this PR.
     pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -237,6 +239,7 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         unresolved_threads: pr.unresolved_threads,
         failing_checks: pr.failing_checks.clone(),
         labels: pr.labels.clone(),
+        is_draft: pr.is_draft,
     }
 }
 
@@ -513,6 +516,7 @@ mod tests {
             linked_issue_state: None,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         }
     }
 
@@ -529,6 +533,7 @@ mod tests {
             linked_issue_state: None,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         }
     }
 

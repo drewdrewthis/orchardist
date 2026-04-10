@@ -90,7 +90,8 @@ pub struct JsonIssue {
 
 /// Pull request information in JSON output.
 ///
-/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts, unresolved review threads, and failing check details.
+/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts,
+/// unresolved review threads, failing check details, and draft status.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
@@ -112,6 +113,8 @@ pub struct JsonPr {
     pub failing_checks: Vec<FailedCheck>,
     /// Labels applied to this PR.
     pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// Session information in JSON output using the EnrichedSession shape.
@@ -243,6 +246,7 @@ impl From<&PrState> for JsonPr {
             unresolved_threads: pr.unresolved_threads,
             failing_checks: pr.failing_checks.clone(),
             labels: pr.labels.clone(),
+            is_draft: pr.is_draft,
         }
     }
 }
@@ -661,6 +665,7 @@ mod tests {
             unresolved_threads: 0,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         }
     }
 

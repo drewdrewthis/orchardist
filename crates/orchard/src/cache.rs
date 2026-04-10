@@ -58,6 +58,12 @@ pub struct CachedPr {
     /// Labels applied to this PR.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    ///
+    /// Uses `serde(default)` so existing cache files without this field
+    /// deserialize with `false` rather than failing.
+    #[serde(default)]
+    pub is_draft: bool,
 }
 
 // Re-export FailedCheck for convenience in tests and other modules.
@@ -322,6 +328,7 @@ mod tests {
             linked_issue_state: None,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         }
     }
 
@@ -670,6 +677,28 @@ mod tests {
         );
     }
 
+    // -- CachedPr is_draft default -------------------------------------------
+
+    #[test]
+    fn cached_pr_is_draft_defaults_to_false_for_legacy_json() {
+        // Simulates a legacy cache entry without the is_draft field.
+        let json = r#"{
+            "number": 7,
+            "branch": "feat/my-branch",
+            "linked_issue": 42,
+            "state": "open",
+            "review_decision": "approved",
+            "checks_state": "passing",
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+        let pr: CachedPr = serde_json::from_str(json).unwrap();
+        assert!(
+            !pr.is_draft,
+            "is_draft should default to false for legacy cache entries without the field"
+        );
+    }
+
     #[test]
     fn cached_pr_failing_checks_roundtrip() {
         let pr = CachedPr {
@@ -694,5 +723,14 @@ mod tests {
             !json.contains("failing_checks"),
             "empty failing_checks should be omitted from JSON"
         );
+    }
+
+    #[test]
+    fn cached_pr_is_draft_true_when_set() {
+        let mut pr = make_pr();
+        pr.is_draft = true;
+        let json = serde_json::to_string(&pr).unwrap();
+        let parsed: CachedPr = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_draft, "is_draft should roundtrip as true");
     }
 }

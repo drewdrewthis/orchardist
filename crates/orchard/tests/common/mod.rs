@@ -143,6 +143,7 @@ pub fn make_pr(number: u32, branch: &str) -> CachedPr {
         linked_issue_state: None,
         failing_checks: vec![],
         labels: vec![],
+        is_draft: false,
     }
 }
 

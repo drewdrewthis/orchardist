@@ -146,6 +146,8 @@ pub struct PrState {
     pub failing_checks: Vec<FailedCheck>,
     /// Labels applied to this PR.
     pub labels: Vec<String>,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
@@ -244,6 +246,7 @@ impl From<&crate::derive::PrInfo> for PrState {
             unresolved_threads: pr.unresolved_threads,
             failing_checks,
             labels: pr.labels.clone(),
+            is_draft: pr.is_draft,
         }
     }
 }
@@ -461,6 +464,7 @@ mod tests {
             unresolved_threads: 0,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.state, Some("open".to_string()));
@@ -478,6 +482,7 @@ mod tests {
             unresolved_threads: 0,
             failing_checks: vec![],
             labels: vec![],
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert!(pr_state.state.is_none());
@@ -504,6 +509,7 @@ mod tests {
                 },
             ],
             labels: vec![],
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.failing_checks.len(), 1);
@@ -525,11 +531,33 @@ mod tests {
                 conclusion: "TIMED_OUT".to_string(),
             }],
             labels: vec![],
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.failing_checks.len(), 1);
         assert_eq!(pr_state.failing_checks[0].name, "unit-tests");
         assert_eq!(pr_state.failing_checks[0].conclusion, "TIMED_OUT");
+    }
+
+    #[test]
+    fn from_pr_info_propagates_is_draft_true() {
+        let pr_info = PrInfo {
+            number: 42,
+            branch: "feat/draft".to_string(),
+            state: Some("open".to_string()),
+            review_decision: None,
+            checks_state: None,
+            has_conflicts: false,
+            unresolved_threads: 0,
+            failing_checks: vec![],
+            labels: vec![],
+            is_draft: true,
+        };
+        let pr_state = PrState::from(&pr_info);
+        assert!(
+            pr_state.is_draft,
+            "is_draft must propagate from PrInfo to PrState"
+        );
     }
 
     // -- From<&EnrichedSession> for SessionState tests ----------------------
