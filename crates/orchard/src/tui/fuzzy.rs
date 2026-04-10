@@ -674,7 +674,10 @@ mod tests {
     fn truncate_spans_left_within_width_returns_unchanged() {
         let spans = vec![
             Span::raw("hello".to_string()),
-            Span::styled(" world".to_string(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " world".to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
         ];
         let result = truncate_spans_left(spans.clone(), 20);
         assert_eq!(result.len(), 2);

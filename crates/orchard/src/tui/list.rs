@@ -1586,8 +1586,7 @@ impl App {
                         Style::default(),
                         highlight_style,
                     );
-                    let truncated =
-                        crate::tui::fuzzy::truncate_spans_left(spans, title_width);
+                    let truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_width);
                     Cell::from(Line::from(truncated))
                 } else {
                     Cell::from(title_display)
@@ -1791,10 +1790,24 @@ impl App {
                     ));
 
             // Connector cell: tree chars + window index + optional pane count indicator.
-            let connector_chars = if is_last_window { "\u{2514}\u{2500}" } else { "\u{251c}\u{2500}" };
+            let connector_chars = if is_last_window {
+                "\u{2514}\u{2500}"
+            } else {
+                "\u{251c}\u{2500}"
+            };
             let pane_indicator = if window.panes.len() > 1 {
-                let caret = if is_window_expanded { "\u{25bc}" } else { "\u{25b6}" };
-                format!("{} {} {}{}", connector_chars, window.index, caret, window.panes.len())
+                let caret = if is_window_expanded {
+                    "\u{25bc}"
+                } else {
+                    "\u{25b6}"
+                };
+                format!(
+                    "{} {} {}{}",
+                    connector_chars,
+                    window.index,
+                    caret,
+                    window.panes.len()
+                )
             } else {
                 format!("{} {}", connector_chars, window.index)
             };
