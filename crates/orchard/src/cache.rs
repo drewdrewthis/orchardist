@@ -52,6 +52,12 @@ pub struct CachedPr {
     /// the GraphQL `closingIssuesReferences` nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_issue_state: Option<String>,
+    /// Whether the PR is a draft (not ready for review).
+    ///
+    /// Uses `serde(default)` so existing cache files without this field
+    /// deserialize with `false` rather than failing.
+    #[serde(default)]
+    pub is_draft: bool,
 }
 
 /// A git worktree entry as stored in the worktrees cache file.
@@ -311,6 +317,7 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            is_draft: false,
         }
     }
 
@@ -635,5 +642,36 @@ mod tests {
         // Also verify the JSON on disk contains the field name.
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"last_refreshed\""));
+    }
+
+    // -- CachedPr is_draft default -------------------------------------------
+
+    #[test]
+    fn cached_pr_is_draft_defaults_to_false_for_legacy_json() {
+        // Simulates a legacy cache entry without the is_draft field.
+        let json = r#"{
+            "number": 7,
+            "branch": "feat/my-branch",
+            "linked_issue": 42,
+            "state": "open",
+            "review_decision": "approved",
+            "checks_state": "passing",
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+        let pr: CachedPr = serde_json::from_str(json).unwrap();
+        assert!(
+            !pr.is_draft,
+            "is_draft should default to false for legacy cache entries without the field"
+        );
+    }
+
+    #[test]
+    fn cached_pr_is_draft_true_when_set() {
+        let mut pr = make_pr();
+        pr.is_draft = true;
+        let json = serde_json::to_string(&pr).unwrap();
+        let parsed: CachedPr = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_draft, "is_draft should roundtrip as true");
     }
 }

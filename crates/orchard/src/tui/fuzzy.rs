@@ -484,6 +484,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..base_row()
         };
@@ -506,6 +507,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..base_row()
         };
@@ -539,6 +541,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..base_row()
         };

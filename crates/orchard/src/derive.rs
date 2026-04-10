@@ -68,6 +68,8 @@ pub struct PrInfo {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -227,6 +229,7 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         checks_state: pr.checks_state.clone(),
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
+        is_draft: pr.is_draft,
     }
 }
 
@@ -501,6 +504,7 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            is_draft: false,
         }
     }
 
@@ -515,6 +519,7 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            is_draft: false,
         }
     }
 

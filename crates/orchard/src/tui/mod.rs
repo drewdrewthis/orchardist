@@ -2278,6 +2278,7 @@ mod tests {
                     checks_state: None,
                     has_conflicts: false,
                     unresolved_threads: 0,
+                    is_draft: false,
                 }),
                 ..make_task_row(1, DisplayGroup::Other)
             },
@@ -2308,6 +2309,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -2337,6 +2339,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -2575,6 +2578,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(42, DisplayGroup::ReadyToMerge)
         };
@@ -2740,6 +2744,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
         };
@@ -2770,6 +2775,7 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_worktree_row("feat/approved", DisplayGroup::ReadyToMerge)
         };
@@ -2845,6 +2851,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_worktree_row("feat/branch", DisplayGroup::NeedsAttention)
         };
@@ -3302,6 +3309,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 2,
+                is_draft: false,
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3329,6 +3337,7 @@ mod tests {
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3360,6 +3369,7 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row_with_title(54, "Add Theme struct", DisplayGroup::ReadyToMerge)
         };

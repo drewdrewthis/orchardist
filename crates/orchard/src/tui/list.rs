@@ -2361,6 +2361,7 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
@@ -2460,6 +2461,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2482,6 +2484,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: true,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2504,6 +2507,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 3,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2527,6 +2531,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2678,6 +2683,7 @@ mod tests {
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::Other)
         };
@@ -2787,6 +2793,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                is_draft: false,
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };

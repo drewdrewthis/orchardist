@@ -129,6 +129,8 @@ pub struct PrState {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
@@ -216,6 +218,7 @@ impl From<&crate::derive::PrInfo> for PrState {
             checks_state: pr.checks_state.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            is_draft: pr.is_draft,
         }
     }
 }
@@ -429,6 +432,7 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.state, Some("open".to_string()));
@@ -444,9 +448,26 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            is_draft: false,
         };
         let pr_state = PrState::from(&pr_info);
         assert!(pr_state.state.is_none());
+    }
+
+    #[test]
+    fn from_pr_info_propagates_is_draft_true() {
+        let pr_info = PrInfo {
+            number: 42,
+            branch: "feat/draft".to_string(),
+            state: Some("open".to_string()),
+            review_decision: None,
+            checks_state: None,
+            has_conflicts: false,
+            unresolved_threads: 0,
+            is_draft: true,
+        };
+        let pr_state = PrState::from(&pr_info);
+        assert!(pr_state.is_draft, "is_draft must propagate from PrInfo to PrState");
     }
 
     // -- From<&EnrichedSession> for SessionState tests ----------------------

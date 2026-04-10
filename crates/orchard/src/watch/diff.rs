@@ -320,6 +320,7 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            is_draft: false,
         }
     }
 

@@ -87,7 +87,7 @@ pub struct JsonIssue {
 
 /// Pull request information in JSON output.
 ///
-/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts, and unresolved review threads.
+/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts, unresolved review threads, and draft status.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
@@ -105,6 +105,8 @@ pub struct JsonPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Whether the PR is a draft (not ready for review).
+    pub is_draft: bool,
 }
 
 /// Session information in JSON output using the EnrichedSession shape.
@@ -233,6 +235,7 @@ impl From<&PrState> for JsonPr {
             checks_state: pr.checks_state.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            is_draft: pr.is_draft,
         }
     }
 }
