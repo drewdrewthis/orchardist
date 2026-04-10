@@ -485,6 +485,7 @@ mod tests {
                 sessions: vec![],
                 display_group: crate::derive::DisplayGroup::Normal,
                 is_main_worktree: false,
+                last_activity: None,
             },
             phase: Phase::InProgress,
             error: None,

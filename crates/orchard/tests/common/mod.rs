@@ -186,6 +186,7 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         host: None,
         last_output_lines: vec![],
         claude_state_raw: None,
+        last_activity: None,
     }
 }
 

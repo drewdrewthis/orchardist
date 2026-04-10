@@ -301,7 +301,12 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
 ///
-/// `sessions_output` has lines in the format `{session_name}:{session_path}`.
+/// `sessions_output` has lines in the format
+/// `{session_name}:{session_activity}:{session_path}`.
+/// The `session_activity` field is a Unix timestamp (seconds) from
+/// `#{session_activity}`. The session path may itself contain colons, so the
+/// format is split as `name:activity:rest-of-path`.
+///
 /// `panes_fn` is called with each session name and returns lines in the format
 /// `{pane_title}:{pane_current_command}`.
 /// `content_fn` is called with each session name and returns the last few lines
@@ -318,12 +323,20 @@ pub fn parse_tmux_output(
         if line.is_empty() {
             continue;
         }
-        // Format: "{session_name}:{session_path}"
-        // Session path may itself contain colons (e.g. Windows paths or
-        // absolute paths on some systems), so we split on the first colon only.
-        let Some((name, path)) = line.split_once(':') else {
+        // Format: "{session_name}:{session_activity}:{session_path}"
+        // Split on the first colon to get the name, then the second colon to
+        // separate the activity timestamp from the path. The path may itself
+        // contain colons (e.g. absolute paths), so we only split twice.
+        let Some((name, rest)) = line.split_once(':') else {
             continue;
         };
+        let (activity_str, path) = match rest.split_once(':') {
+            Some((act, p)) => (act, p),
+            // Backward-compat: old format had no activity field — treat entire
+            // rest as path and leave last_activity as None.
+            None => ("", rest),
+        };
+        let last_activity = activity_str.parse::<u64>().ok().filter(|&v| v > 0);
 
         let pane_output = panes_fn(name);
         let parsed = parse_pane_lines(&pane_output);
@@ -340,6 +353,7 @@ pub fn parse_tmux_output(
             host: host.map(|h| h.to_string()),
             last_output_lines,
             claude_state_raw: None, // populated after parsing remote Claude state
+            last_activity,
         });
     }
 
@@ -643,11 +657,15 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let sessions_out = match host {
         None => run_local(
             "tmux",
-            &["list-sessions", "-F", "#{session_name}:#{session_path}"],
+            &[
+                "list-sessions",
+                "-F",
+                "#{session_name}:#{session_activity}:#{session_path}",
+            ],
         ),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                "tmux list-sessions -F '#{{session_name}}:#{{session_activity}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
                 CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)

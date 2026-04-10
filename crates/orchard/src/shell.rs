@@ -299,6 +299,18 @@ fn install_wrapper(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns the recommended `tmux set -g status-right` line for orchard.
+///
+/// The `state_dir` parameter should be the path to `~/.local/state/orchard`.
+/// The returned string is suitable for pasting directly into `tmux.conf` or
+/// running via `tmux source-file`.
+pub fn get_tmux_status_line(state_dir: &Path) -> String {
+    format!(
+        "set -g status-right \"#(cat {}/status.txt) | %H:%M\"",
+        state_dir.display()
+    )
+}
+
 /// Steps 4 & 5: Prompt for key, inject tmux binding (and optionally status bar) into tmux.conf.
 /// Returns the key chosen by the user.
 fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<String, String> {
@@ -318,13 +330,10 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
 
     // Step 5: Optionally add status bar segment.
     eprintln!("{BOLD}{CYAN}[5/{TOTAL_STEPS}] Status bar{RESET}");
-    let add_status = prompt_yn("  Add orchard status to tmux status bar? [Y/n]", true);
-
     let state_dir = home.join(".local/state/orchard");
-    let status_line = format!(
-        "set -g status-right \"#(cat {}/status.txt) | %H:%M\"",
-        state_dir.display()
-    );
+    let status_line = get_tmux_status_line(&state_dir);
+
+    let add_status = prompt_yn("  Add orchard status to tmux status bar? [Y/n]", true);
 
     // Warn about conflict between the main popup key and chat key.
     // Then prompt the user for the chat key (default O).
@@ -354,6 +363,11 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
     eprintln!("  Added keybinding to {}", tmux_conf.display());
     if add_status {
         eprintln!("  Added status bar segment");
+    } else {
+        eprintln!(
+            "  To configure the tmux status bar later, add this to your tmux.conf:"
+        );
+        eprintln!("    {status_line}");
     }
 
     Ok(key)
@@ -1174,5 +1188,61 @@ mod tests {
     fn chat_wrapper_script_embeds_absolute_path() {
         let script = get_chat_wrapper_script("/custom/path/orchard");
         assert!(script.contains("\"/custom/path/orchard\""));
+    }
+
+    // -----------------------------------------------------------------------
+    // get_tmux_status_line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tmux_status_line_contains_set_status_right() {
+        let state_dir = std::path::Path::new("/home/user/.local/state/orchard");
+        let line = get_tmux_status_line(state_dir);
+        assert!(line.contains("set -g status-right"), "must be a status-right directive");
+    }
+
+    #[test]
+    fn tmux_status_line_references_status_txt() {
+        let state_dir = std::path::Path::new("/home/user/.local/state/orchard");
+        let line = get_tmux_status_line(state_dir);
+        assert!(line.contains("status.txt"), "must reference the status.txt file");
+    }
+
+    #[test]
+    fn tmux_status_line_embeds_state_dir_path() {
+        let state_dir = std::path::Path::new("/home/user/.local/state/orchard");
+        let line = get_tmux_status_line(state_dir);
+        assert!(
+            line.contains("/home/user/.local/state/orchard"),
+            "must embed the provided state directory path"
+        );
+    }
+
+    #[test]
+    fn block_without_status_does_not_contain_status_right() {
+        // When the user declines the status bar, the injected block must not
+        // set status-right and thereby clobber the user's existing config.
+        let binding = get_tmux_binding("o");
+        let chat_binding = get_chat_tmux_binding("O");
+        let block_content = format!("{binding}\n{chat_binding}");
+        let result = inject_config_block("", &block_content);
+        assert!(
+            !result.contains("status-right"),
+            "block without status must not contain status-right"
+        );
+    }
+
+    #[test]
+    fn block_with_status_contains_status_right() {
+        let state_dir = std::path::Path::new("/home/user/.local/state/orchard");
+        let binding = get_tmux_binding("o");
+        let chat_binding = get_chat_tmux_binding("O");
+        let status_line = get_tmux_status_line(state_dir);
+        let block_content = format!("{binding}\n{chat_binding}\n{status_line}");
+        let result = inject_config_block("", &block_content);
+        assert!(
+            result.contains("status-right"),
+            "block with status must contain status-right"
+        );
     }
 }

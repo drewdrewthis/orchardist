@@ -412,6 +412,7 @@ mod tests {
             sessions: vec![],
             display_group: DisplayGroup::Normal,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 

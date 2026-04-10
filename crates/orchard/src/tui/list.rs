@@ -2341,6 +2341,7 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 

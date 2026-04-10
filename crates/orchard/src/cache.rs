@@ -122,6 +122,13 @@ pub struct CachedTmuxSession {
     /// Only populated for remote sessions. `None` means no state file was found
     /// on the remote host for this session at the time of the last SSH refresh.
     pub claude_state_raw: Option<ClaudeStateFile>,
+    /// Unix timestamp (seconds) of the last activity in this tmux session,
+    /// as reported by `#{session_activity}`.
+    ///
+    /// Uses `serde(default)` so old cache files without this field deserialize
+    /// to `None` rather than failing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +361,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -576,6 +584,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         let parsed: CachedTmuxSession = serde_json::from_str(&json).unwrap();

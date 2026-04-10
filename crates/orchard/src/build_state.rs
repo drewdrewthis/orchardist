@@ -371,6 +371,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -501,6 +502,7 @@ mod tests {
             host: Some("ubuntu@10.0.0.1".to_string()),
             last_output_lines: vec![],
             claude_state_raw: Some(make_state_file(state, name, timestamp)),
+            last_activity: None,
         }
     }
 
@@ -582,6 +584,7 @@ mod tests {
             host: Some("ubuntu@10.0.0.1".to_string()),
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         };
         let states = extract_fresh_remote_states(&[session]);
         assert!(states.is_empty());

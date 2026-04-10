@@ -2168,6 +2168,7 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -2703,6 +2704,7 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 
@@ -3122,6 +3124,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -3886,6 +3889,7 @@ mod tests {
             }],
             display_group: DisplayGroup::Normal,
             is_main_worktree: false,
+            last_activity: None,
         }
     }
 

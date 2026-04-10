@@ -102,6 +102,13 @@ pub struct WorktreeRow {
     pub display_group: DisplayGroup,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+    /// Unix timestamp (seconds) of the most recent tmux activity across all
+    /// sessions attached to this worktree. `None` when no sessions are
+    /// attached or none reported activity.
+    ///
+    /// Used as a sort tiebreaker within a display group: rows with more recent
+    /// activity sort before those with older or no activity.
+    pub last_activity: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,9 +146,18 @@ pub fn derive_worktree_rows(
         };
         let pr_info = pr.map(pr_info_from);
 
-        let session_infos: Vec<EnrichedSession> = sessions
+        let matched_sessions: Vec<&CachedTmuxSession> = sessions
             .iter()
             .filter(|s| paths_match(&s.path, &wt.path))
+            .collect();
+
+        let last_activity = matched_sessions
+            .iter()
+            .filter_map(|s| s.last_activity)
+            .max();
+
+        let session_infos: Vec<EnrichedSession> = matched_sessions
+            .iter()
             .map(|s| enrich_session(s, claude_states))
             .collect();
 
@@ -177,6 +193,7 @@ pub fn derive_worktree_rows(
             sessions: session_infos,
             display_group,
             is_main_worktree,
+            last_activity,
         });
 
         is_first_non_bare = false;
@@ -218,7 +235,18 @@ pub fn derive_all_repos(
         if focus_ord != std::cmp::Ordering::Equal {
             return focus_ord;
         }
-        // Tertiary: issue number ascending
+        // Tertiary: last tmux activity — more recent activity sorts first.
+        // Rows with no activity sort after rows with activity.
+        let activity_ord = match (a.last_activity, b.last_activity) {
+            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts), // reverse: higher timestamp first
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        if activity_ord != std::cmp::Ordering::Equal {
+            return activity_ord;
+        }
+        // Quaternary: issue number ascending
         match (a.issue_number, b.issue_number) {
             (Some(a_num), Some(b_num)) => a_num.cmp(&b_num),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -628,6 +656,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -1747,6 +1776,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         }
     }
 
@@ -1783,6 +1813,7 @@ mod tests {
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
+            last_activity: None,
         };
         let enriched = enrich_session_from_scraping_for_test(&sess);
         assert!(enriched.panes.is_empty());
