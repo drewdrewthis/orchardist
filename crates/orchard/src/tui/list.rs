@@ -1033,19 +1033,17 @@ impl App {
 
         let show_branch = self.show_branch_column;
 
-        // TAGS column is visible when any worktree row has a draft PR.
-        let has_tags = tasks
-            .iter()
-            .any(|vt| vt.row.pr.as_ref().is_some_and(|pr| pr.is_draft));
+        // TAGS column is always visible — shows GitHub labels and draft status.
+        let has_tags = true;
 
         // Compute available width for the TITLE column.
         // Column order: BAR (1) + # (3) + CLAUDE (10) + ISSUE (6) + TITLE (flex)
-        //               + [BRANCH (20)] + [HOST (12)] + [TAGS (7)] + STATUS (22)
+        //               + [BRANCH (20)] + [HOST (12)] + TAGS (18) + STATUS (22)
         // Each column has 1 spacing. Plus borders (2).
         let fixed = 1 + 1 + 3 + 1 + 10 + 1 + 6 + 1 + 1 + 22 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 12 + 1 } else { 0 };
-        let tags_extra = if has_tags { 7 + 1 } else { 0 };
+        let tags_extra = if has_tags { 18 + 1 } else { 0 };
         let title_width =
             (area.width as usize).saturating_sub(fixed + branch_extra + host_extra + tags_extra);
 
@@ -1064,7 +1062,7 @@ impl App {
             widths.push(Constraint::Length(12)); // HOST
         }
         if has_tags {
-            widths.push(Constraint::Length(7)); // TAGS
+            widths.push(Constraint::Length(18)); // TAGS
         }
         widths.push(Constraint::Length(22)); // STATUS (last)
 
@@ -1685,10 +1683,36 @@ impl App {
             }
 
             if has_tags {
-                let tags_cell = if vt.row.pr.as_ref().is_some_and(|pr| pr.is_draft) {
-                    Cell::from(" draft").style(Style::default().fg(theme.dimmed))
-                } else {
-                    Cell::from("")
+                let tags_cell = {
+                    // Collect all unique labels from issue + PR, plus draft badge.
+                    let mut tags: Vec<&str> = Vec::new();
+                    if vt.row.pr.as_ref().is_some_and(|pr| pr.is_draft) {
+                        tags.push("draft");
+                    }
+                    for label in &vt.row.issue_labels {
+                        if !tags.contains(&label.as_str()) {
+                            tags.push(label.as_str());
+                        }
+                    }
+                    if let Some(pr) = &vt.row.pr {
+                        for label in &pr.labels {
+                            if !tags.contains(&label.as_str()) {
+                                tags.push(label.as_str());
+                            }
+                        }
+                    }
+                    if tags.is_empty() {
+                        Cell::from("")
+                    } else {
+                        let text = tags.join(", ");
+                        // Truncate to fit column width
+                        let display = if text.len() > 18 {
+                            format!("{}…", &text[..17])
+                        } else {
+                            text
+                        };
+                        Cell::from(display).style(Style::default().fg(theme.dimmed))
+                    }
                 };
                 cells.push(tags_cell);
             }
@@ -3713,7 +3737,7 @@ mod tests {
     }
 
     #[test]
-    fn tags_column_appears_in_header_when_any_row_has_draft_pr() {
+    fn tags_column_always_in_header() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3725,13 +3749,13 @@ mod tests {
         let header = find_header_line(terminal.backend().buffer()).unwrap();
         assert!(
             header.contains("TAGS"),
-            "TAGS header must appear when a draft PR exists; header: {:?}",
+            "TAGS header must always be present; header: {:?}",
             header
         );
     }
 
     #[test]
-    fn tags_column_hidden_when_no_rows_have_draft_prs() {
+    fn tags_column_always_visible_even_without_drafts() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3745,8 +3769,8 @@ mod tests {
 
         let header = find_header_line(terminal.backend().buffer()).unwrap();
         assert!(
-            !header.contains("TAGS"),
-            "TAGS header must be absent when no draft PRs exist; header: {:?}",
+            header.contains("TAGS"),
+            "TAGS header must always be visible; header: {:?}",
             header
         );
     }
@@ -3808,7 +3832,7 @@ mod tests {
     }
 
     #[test]
-    fn tags_column_not_present_with_all_non_draft_prs() {
+    fn tags_column_visible_with_all_non_draft_prs() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3820,8 +3844,8 @@ mod tests {
 
         let header = find_header_line(terminal.backend().buffer()).unwrap();
         assert!(
-            !header.contains("TAGS"),
-            "TAGS must not appear when all PRs are non-draft; header: {:?}",
+            header.contains("TAGS"),
+            "TAGS must always be visible; header: {:?}",
             header
         );
         assert!(

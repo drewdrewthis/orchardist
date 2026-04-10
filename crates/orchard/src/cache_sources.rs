@@ -9,6 +9,7 @@ use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktre
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
 use crate::orchard_state::FailedCheck;
+use crate::paths::normalize_path;
 use crate::remote;
 
 // ---------------------------------------------------------------------------
@@ -286,7 +287,7 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
         }
 
         worktrees.push(CachedWorktree {
-            path,
+            path: normalize_path(&path).to_string(),
             branch,
             is_bare,
             is_locked,
@@ -330,7 +331,7 @@ pub fn parse_tmux_output(
 
         sessions.push(CachedTmuxSession {
             name: name.to_string(),
-            path: path.to_string(),
+            path: normalize_path(path).to_string(),
             pane_targets: parsed.targets,
             pane_titles: parsed.titles,
             pane_commands: parsed.commands,
@@ -492,7 +493,11 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetches open GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
+/// Fetches open and recently merged GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
+///
+/// Fetches both OPEN and MERGED states so that merged PRs remain in the cache and
+/// can be matched to their worktree branches. On API failure the error is logged and
+/// the existing cache is left intact.
 ///
 /// Uses GraphQL to get closingIssuesReferences (linked issues) and reviewThreads,
 /// which are not available via `gh pr list --json`.
@@ -503,7 +508,7 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
     let query = format!(
         r#"query {{
   repository(owner: "{owner}", name: "{name}") {{
-    pullRequests(first: 100, states: OPEN, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+    pullRequests(first: 100, states: [OPEN, MERGED], orderBy: {{field: CREATED_AT, direction: DESC}}) {{
       nodes {{
         number
         headRefName
@@ -571,7 +576,10 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
         }
         Ok(json) => {
             let prs = parse_prs_graphql(&json);
-            cache::write_cache_if_nonempty(&path, &prs)?;
+            // Use write_cache (not write_cache_if_nonempty) so that a successful
+            // API response with zero PRs clears stale entries from a previous run.
+            // The early-return in the Err branch above protects against network failures.
+            cache::write_cache(&path, &prs)?;
             LOG.info(&format!(
                 "cache_sources: refresh_prs({}): wrote {} entries",
                 config.slug,
@@ -1179,6 +1187,79 @@ mod tests {
             prs[0].is_draft,
             "isDraft field must be parsed from GraphQL response"
         );
+    }
+
+    #[test]
+    fn parse_prs_graphql_preserves_merged_state() {
+        // Merged PRs returned by the GraphQL query (states: [OPEN, MERGED]) must
+        // round-trip with state == "merged" so derive can match them to worktrees.
+        let node = json!({
+            "number": 77,
+            "headRefName": "feat/issue-77",
+            "baseRefName": "main",
+            "state": "MERGED",
+            "isDraft": false,
+            "reviewDecision": "APPROVED",
+            "mergeable": "UNKNOWN",
+            "labels": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": [
+                {"number": 77, "state": "CLOSED", "stateReason": "COMPLETED"}
+            ]},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let json = graphql_prs(json!([node]));
+        let prs = parse_prs_graphql(&json);
+
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 77);
+        assert_eq!(prs[0].state, "merged");
+        assert_eq!(prs[0].branch, "feat/issue-77");
+        assert_eq!(prs[0].linked_issue, Some(77));
+        assert_eq!(
+            prs[0].linked_issue_state.as_deref(),
+            Some("completed"),
+            "linked issue state should be 'completed' for COMPLETED stateReason"
+        );
+    }
+
+    #[test]
+    fn parse_prs_graphql_open_and_merged_both_included() {
+        // When the response contains both OPEN and MERGED PRs (as returned by
+        // states: [OPEN, MERGED]), both must be preserved in the parsed output.
+        let open_node = json!({
+            "number": 10,
+            "headRefName": "feat/open-pr",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "isDraft": false,
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "labels": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let merged_node = json!({
+            "number": 11,
+            "headRefName": "feat/merged-pr",
+            "baseRefName": "main",
+            "state": "MERGED",
+            "isDraft": false,
+            "reviewDecision": "APPROVED",
+            "mergeable": "UNKNOWN",
+            "labels": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        });
+        let json = graphql_prs(json!([open_node, merged_node]));
+        let prs = parse_prs_graphql(&json);
+
+        assert_eq!(prs.len(), 2);
+        let states: Vec<&str> = prs.iter().map(|p| p.state.as_str()).collect();
+        assert!(states.contains(&"open"), "expected an open PR");
+        assert!(states.contains(&"merged"), "expected a merged PR");
     }
 
     // -- parse_worktree_porcelain -------------------------------------------

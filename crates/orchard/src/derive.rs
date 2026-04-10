@@ -5,6 +5,7 @@
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::github;
+use crate::paths::paths_match;
 use crate::session::{
     ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
     build_windows_and_panes,
@@ -140,7 +141,7 @@ pub fn derive_worktree_rows(
 
         let session_infos: Vec<EnrichedSession> = sessions
             .iter()
-            .filter(|s| s.path == wt.path)
+            .filter(|s| paths_match(&s.path, &wt.path))
             .map(|s| enrich_session(s, claude_states))
             .collect();
 
@@ -1018,6 +1019,67 @@ mod tests {
         let rows = derive_worktree_rows(&issues, &prs, &all_wts, &[], "owner/repo", &[]);
 
         assert_eq!(rows[1].display_group, DisplayGroup::Done);
+    }
+
+    #[test]
+    fn merged_pr_in_cache_links_to_worktree_branch() {
+        // Regression: merged PRs must be matched to their worktree by branch name
+        // so that `orchard --json` shows the PR on the worktree row. This requires
+        // the PR cache to contain merged PRs (fixed in refresh_prs: states: [OPEN, MERGED]).
+        let prs = vec![CachedPr {
+            state: "merged".to_string(),
+            ..pr_for_branch(99, "feat/issue-99")
+        }];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-99", "feat/issue-99"),
+        ];
+
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+
+        let feat_row = rows
+            .iter()
+            .find(|r| r.branch == "feat/issue-99")
+            .expect("worktree row for feat/issue-99 must exist");
+        let pr = feat_row
+            .pr
+            .as_ref()
+            .expect("merged PR must be linked to the worktree");
+        assert_eq!(pr.number, 99);
+        assert_eq!(pr.state.as_deref(), Some("merged"));
+    }
+
+    #[test]
+    fn merged_pr_with_closed_issue_is_done() {
+        // When a merged PR is in the cache (bug #95 fixed), and its linked issue
+        // is closed, the worktree row must derive DisplayGroup::Done (bug #152).
+        let issues = vec![CachedIssue {
+            number: 99,
+            title: "completed feature".to_string(),
+            state: "closed".to_string(),
+            labels: vec![],
+        }];
+        let prs = vec![CachedPr {
+            linked_issue: Some(99),
+            state: "merged".to_string(),
+            ..pr_for_branch(55, "feat/issue-99")
+        }];
+        let worktrees = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-99", "feat/issue-99"),
+        ];
+
+        let rows = derive_worktree_rows(&issues, &prs, &worktrees, &[], "owner/repo", &[]);
+
+        let feat_row = rows
+            .iter()
+            .find(|r| r.branch == "feat/issue-99")
+            .expect("worktree row for feat/issue-99 must exist");
+        assert_eq!(
+            feat_row.display_group,
+            DisplayGroup::Done,
+            "merged PR + closed issue must derive DisplayGroup::Done"
+        );
     }
 
     #[test]
