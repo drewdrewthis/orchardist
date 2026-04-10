@@ -290,6 +290,7 @@ mod tests {
                 context_window_pct: None,
                 model: None,
             }),
+            windows: vec![],
         }];
         wt
     }
@@ -559,6 +560,7 @@ mod tests {
                         status: SessionStatus::Running { attached: false },
                     },
                     claude: None,
+                    windows: vec![],
                     panes: vec![],
                 },
                 config: StandaloneConfig {
@@ -596,6 +598,7 @@ mod tests {
                         status: SessionStatus::Running { attached: false },
                     },
                     claude: None,
+                    windows: vec![],
                     panes: vec![],
                 },
                 config: StandaloneConfig {

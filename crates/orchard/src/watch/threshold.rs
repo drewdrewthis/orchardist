@@ -130,6 +130,7 @@ mod tests {
                 context_window_pct: context_pct,
                 model: None,
             }),
+            windows: vec![],
         };
         let wt = WorktreeState {
             path: path.to_string(),

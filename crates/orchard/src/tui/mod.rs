@@ -384,6 +384,11 @@ impl App {
 
         self.expanded.retain(|k| valid_keys.contains(k));
 
+        // Auto-expand all expandable rows so hierarchy is visible by default.
+        for key in &valid_keys {
+            self.expanded.insert(key.clone());
+        }
+
         // Also prune window_expanded: remove entries for sessions that are no longer expanded.
         let expanded_ref = &self.expanded;
 
@@ -411,6 +416,28 @@ impl App {
                 false
             }
         });
+
+        // Auto-expand windows for sessions with >1 window.
+        for ss in &self.standalone_sessions {
+            if self.expanded.contains(&ss.session.tmux.name) && ss.session.windows.len() > 1 {
+                for (i, _) in ss.session.windows.iter().enumerate() {
+                    self.window_expanded
+                        .insert(Self::window_expansion_key(&ss.session.tmux.name, i));
+                }
+            }
+        }
+        for vt in tasks.iter() {
+            if self.expanded.contains(&vt.row.worktree_path) {
+                if let Some(s) = vt.row.sessions.first() {
+                    if s.windows.len() > 1 {
+                        for (i, _) in s.windows.iter().enumerate() {
+                            self.window_expanded
+                                .insert(Self::window_expansion_key(&s.tmux.name, i));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -4263,6 +4290,28 @@ mod tests {
         assert!(
             app.expanded.contains("/workspace/repo-1"),
             "multi-pane row should remain in expanded set"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_auto_expands_new_multi_pane_rows() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        // expanded starts empty
+        assert!(app.expanded.is_empty());
+        app.prune_expansion_state();
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "multi-pane row should be auto-expanded after prune"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_does_not_expand_single_pane_rows() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 1)]);
+        app.prune_expansion_state();
+        assert!(
+            app.expanded.is_empty(),
+            "single-pane row should not be auto-expanded"
         );
     }
 
