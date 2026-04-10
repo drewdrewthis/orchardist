@@ -64,13 +64,13 @@ fn repo_with_no_cache_shows_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// Display group: NeedsAttention when PR has changes_requested
+// Display group: Normal when PR has changes_requested (no running session)
 // ---------------------------------------------------------------------------
 
 /// A non-shepherd worktree whose PR has `review_decision = "changes_requested"`
-/// must derive `NeedsAttention`.
+/// and no running session must derive `Normal`.
 #[test]
-fn display_group_needs_attention_changes_requested() {
+fn display_group_normal_for_changes_requested_no_session() {
     let worktrees = vec![
         make_worktree("/workspace/repo", "main"),
         make_worktree("/workspace/repo-feat", "feat/branch"),
@@ -80,17 +80,17 @@ fn display_group_needs_attention_changes_requested() {
     let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[1].display_group, DisplayGroup::NeedsAttention);
+    assert_eq!(rows[1].display_group, DisplayGroup::Normal);
 }
 
 // ---------------------------------------------------------------------------
-// Display group: ClaudeWorking when session has "claude" in pane_commands
+// Display group: Active when session has "claude" in pane_commands
 // ---------------------------------------------------------------------------
 
 /// A worktree with a tmux session running `claude` as a pane command must
-/// derive `ClaudeWorking`.
+/// derive `Active`.
 #[test]
-fn display_group_claude_working_when_agent_active() {
+fn display_group_active_when_agent_active() {
     let worktrees = vec![
         make_worktree("/workspace/repo", "main"),
         make_worktree("/workspace/repo-feat", "feat/branch"),
@@ -99,17 +99,17 @@ fn display_group_claude_working_when_agent_active() {
 
     let rows = derive_worktree_rows(&[], &[], &worktrees, &sessions, "owner/repo", &[]);
 
-    assert_eq!(rows[1].display_group, DisplayGroup::ClaudeWorking);
+    assert_eq!(rows[1].display_group, DisplayGroup::Active);
 }
 
 // ---------------------------------------------------------------------------
-// Display group: ReadyToMerge when PR is approved + passing + no conflicts
+// Display group: Normal when PR is approved + passing + no conflicts (no session)
 // ---------------------------------------------------------------------------
 
-/// A worktree whose PR is approved, passing CI, and has no conflicts must
-/// derive `ReadyToMerge`.
+/// A worktree whose PR is approved, passing CI, and has no conflicts but no
+/// running session must derive `Normal`.
 #[test]
-fn display_group_ready_to_merge() {
+fn display_group_normal_for_approved_pr_no_session() {
     let worktrees = vec![
         make_worktree("/workspace/repo", "main"),
         make_worktree("/workspace/repo-feat", "feat/branch"),
@@ -118,17 +118,17 @@ fn display_group_ready_to_merge() {
 
     let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
 
-    assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+    assert_eq!(rows[1].display_group, DisplayGroup::Normal);
 }
 
 // ---------------------------------------------------------------------------
-// Display group: Other when there is no PR
+// Display group: Normal when there is no PR
 // ---------------------------------------------------------------------------
 
 /// A non-shepherd worktree with no matching PR and no tmux session must
-/// derive `Other`.
+/// derive `Normal`.
 #[test]
-fn display_group_other_for_no_pr() {
+fn display_group_normal_for_no_pr() {
     let worktrees = vec![
         make_worktree("/workspace/repo", "main"),
         make_worktree("/workspace/repo-feat", "feat/branch"),
@@ -136,7 +136,7 @@ fn display_group_other_for_no_pr() {
 
     let rows = derive_worktree_rows(&[], &[], &worktrees, &[], "owner/repo", &[]);
 
-    assert_eq!(rows[1].display_group, DisplayGroup::Other);
+    assert_eq!(rows[1].display_group, DisplayGroup::Normal);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,13 +144,12 @@ fn display_group_other_for_no_pr() {
 // ---------------------------------------------------------------------------
 
 /// The `Ord` derivation on `DisplayGroup` must produce the documented order:
-/// Shepherd < NeedsAttention < ClaudeWorking < ReadyToMerge < Other.
+/// RepoMain < Active < Normal < Done.
 #[test]
 fn display_groups_ordered_for_rendering() {
-    assert!(DisplayGroup::RepoMain < DisplayGroup::NeedsAttention);
-    assert!(DisplayGroup::NeedsAttention < DisplayGroup::ClaudeWorking);
-    assert!(DisplayGroup::ClaudeWorking < DisplayGroup::ReadyToMerge);
-    assert!(DisplayGroup::ReadyToMerge < DisplayGroup::Other);
+    assert!(DisplayGroup::RepoMain < DisplayGroup::Active);
+    assert!(DisplayGroup::Active < DisplayGroup::Normal);
+    assert!(DisplayGroup::Normal < DisplayGroup::Done);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,5 +269,5 @@ fn cache_file_roundtrip_feeds_into_derive_pipeline() {
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
-    assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+    assert_eq!(rows[1].display_group, DisplayGroup::Normal);
 }

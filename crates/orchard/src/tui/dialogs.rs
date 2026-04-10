@@ -483,7 +483,7 @@ mod tests {
                 issue_labels: vec![],
                 pr: None,
                 sessions: vec![],
-                display_group: crate::derive::DisplayGroup::Other,
+                display_group: crate::derive::DisplayGroup::Normal,
                 is_main_worktree: false,
             },
             phase: Phase::InProgress,

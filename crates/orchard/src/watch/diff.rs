@@ -276,7 +276,7 @@ mod tests {
             issue: None,
             pr: None,
             sessions: vec![],
-            display_group: DisplayGroup::Other,
+            display_group: DisplayGroup::Normal,
             is_main_worktree: false,
         }
     }

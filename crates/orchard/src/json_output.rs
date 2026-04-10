@@ -200,11 +200,9 @@ pub struct JsonHostState {
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
         DisplayGroup::RepoMain => "repo_main",
-        DisplayGroup::Prioritized => "prioritized",
-        DisplayGroup::NeedsAttention => "needs_attention",
-        DisplayGroup::ClaudeWorking => "claude_working",
-        DisplayGroup::ReadyToMerge => "ready_to_merge",
-        DisplayGroup::Other => "other",
+        DisplayGroup::Active => "active",
+        DisplayGroup::Normal => "normal",
+        DisplayGroup::Done => "done",
     }
 }
 
@@ -439,31 +437,24 @@ mod tests {
     }
 
     #[test]
-    fn display_group_needs_attention_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::NeedsAttention);
+    fn display_group_active_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Active);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "needs_attention");
+        assert_eq!(jw.display_group, "active");
     }
 
     #[test]
-    fn display_group_claude_working_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::ClaudeWorking);
+    fn display_group_normal_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Normal);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "claude_working");
+        assert_eq!(jw.display_group, "normal");
     }
 
     #[test]
-    fn display_group_ready_to_merge_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::ReadyToMerge);
+    fn display_group_done_serializes_to_snake_case() {
+        let wt = make_worktree(DisplayGroup::Done);
         let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "ready_to_merge");
-    }
-
-    #[test]
-    fn display_group_other_serializes_to_snake_case() {
-        let wt = make_worktree(DisplayGroup::Other);
-        let jw = JsonWorktree::from(&wt);
-        assert_eq!(jw.display_group, "other");
+        assert_eq!(jw.display_group, "done");
     }
 
     #[test]

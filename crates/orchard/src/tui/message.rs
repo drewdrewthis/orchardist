@@ -36,8 +36,6 @@ pub enum Message {
     ToggleBranchColumn,
     /// Open the delete-worktree confirmation dialog.
     Delete,
-    /// Toggle the priority flag for the selected worktree.
-    TogglePriority,
     /// Open the new-session name-entry dialog.
     NewSession,
     /// Open the stale-worktree cleanup dialog.

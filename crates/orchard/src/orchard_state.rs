@@ -374,31 +374,31 @@ mod tests {
                 "feat/issue-5",
                 Some(5),
                 None,
-                DisplayGroup::Other,
+                DisplayGroup::Normal,
             ),
             make_row(
                 "owner/repo",
                 "feat/issue-2",
                 Some(2),
                 None,
-                DisplayGroup::NeedsAttention,
+                DisplayGroup::Active,
             ),
             make_row(
                 "owner/repo",
                 "feat/issue-1",
                 Some(1),
                 None,
-                DisplayGroup::NeedsAttention,
+                DisplayGroup::Active,
             ),
         ];
         let state = make_state_with_rows(rows);
         let all = state.all_worktrees();
         assert_eq!(all.len(), 3);
-        // NeedsAttention sorts before Other
-        assert_eq!(all[0].display_group, DisplayGroup::NeedsAttention);
-        assert_eq!(all[1].display_group, DisplayGroup::NeedsAttention);
-        assert_eq!(all[2].display_group, DisplayGroup::Other);
-        // Within NeedsAttention, issue 1 sorts before issue 2
+        // Active sorts before Normal
+        assert_eq!(all[0].display_group, DisplayGroup::Active);
+        assert_eq!(all[1].display_group, DisplayGroup::Active);
+        assert_eq!(all[2].display_group, DisplayGroup::Normal);
+        // Within Active, issue 1 sorts before issue 2
         assert_eq!(all[0].issue.as_ref().unwrap().number, 1);
         assert_eq!(all[1].issue.as_ref().unwrap().number, 2);
     }
@@ -420,7 +420,7 @@ mod tests {
             "feat/issue-10",
             Some(10),
             Some("open"),
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "open");
@@ -433,7 +433,7 @@ mod tests {
             "feat/issue-10",
             Some(10),
             Some("closed"),
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "closed");
@@ -446,7 +446,7 @@ mod tests {
             "feat/issue-10",
             Some(10),
             None,
-            DisplayGroup::Other,
+            DisplayGroup::Normal,
         );
         let ws = WorktreeState::from(&row);
         assert_eq!(ws.issue.unwrap().state, "open");

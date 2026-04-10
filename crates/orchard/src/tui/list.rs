@@ -77,14 +77,13 @@ pub(crate) fn cursor_is_standalone(cursor: usize, standalone_count: usize) -> bo
 }
 
 impl DisplayGroup {
-    fn label(self) -> &'static str {
+    /// Returns the human-readable section header label for this group.
+    pub fn label(self) -> &'static str {
         match self {
             Self::RepoMain => "repo main",
-            Self::Prioritized => "prioritized",
-            Self::NeedsAttention => "needs attention",
-            Self::ClaudeWorking => "claude working",
-            Self::ReadyToMerge => "ready to merge",
-            Self::Other => "other",
+            Self::Active => "active",
+            Self::Normal => "work in progress",
+            Self::Done => "done",
         }
     }
 }
@@ -2123,15 +2122,6 @@ impl App {
         }
         spans.push(sep.clone());
 
-        // Dim 'p' (priority) for standalone sessions.
-        if is_standalone {
-            spans.push(Span::styled("p priority", dim));
-        } else {
-            spans.push(Span::styled("p", key_style));
-            spans.push(Span::raw(" priority"));
-        }
-        spans.push(sep.clone());
-
         spans.push(Span::styled("B", key_style));
         spans.push(Span::raw(" branch"));
         spans.push(sep.clone());
@@ -2346,9 +2336,9 @@ mod tests {
     #[test]
     fn visible_tasks_returns_all_rows_including_other() {
         let rows = vec![
-            make_task_row(1, DisplayGroup::NeedsAttention),
-            make_task_row(2, DisplayGroup::ClaudeWorking),
-            make_task_row(3, DisplayGroup::Other),
+            make_task_row(1, DisplayGroup::Active),
+            make_task_row(2, DisplayGroup::Active),
+            make_task_row(3, DisplayGroup::Normal),
         ];
         // All rows are always visible — no backlog collapsing.
         let visible = visible_tasks(&rows, "");
@@ -2358,7 +2348,7 @@ mod tests {
     #[test]
     fn other_group_always_shown() {
         let rows: Vec<WorktreeRow> = (1u32..=5)
-            .map(|i| make_task_row(i, DisplayGroup::Other))
+            .map(|i| make_task_row(i, DisplayGroup::Normal))
             .collect();
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 5, "Other rows are always visible");
@@ -2367,28 +2357,28 @@ mod tests {
     #[test]
     fn sequential_numbering_across_groups() {
         let rows = vec![
-            make_task_row(10, DisplayGroup::NeedsAttention),
-            make_task_row(20, DisplayGroup::ClaudeWorking),
-            make_task_row(30, DisplayGroup::Other),
+            make_task_row(10, DisplayGroup::Active),
+            make_task_row(20, DisplayGroup::Active),
+            make_task_row(30, DisplayGroup::Normal),
         ];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
         // Unified numbering now happens at render time, not in visible_tasks.
         // Verify all three rows pass through with correct groups.
-        assert_eq!(visible[0].group, DisplayGroup::NeedsAttention);
-        assert_eq!(visible[1].group, DisplayGroup::ClaudeWorking);
-        assert_eq!(visible[2].group, DisplayGroup::Other);
+        assert_eq!(visible[0].group, DisplayGroup::Active);
+        assert_eq!(visible[1].group, DisplayGroup::Active);
+        assert_eq!(visible[2].group, DisplayGroup::Normal);
     }
 
     #[test]
     fn search_filters_by_text() {
         let row_match = WorktreeRow {
             branch: "feat/my-feature".to_string(),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let row_no_match = WorktreeRow {
             branch: "feat/other-thing".to_string(),
-            ..make_task_row(2, DisplayGroup::ClaudeWorking)
+            ..make_task_row(2, DisplayGroup::Active)
         };
         let rows = vec![row_match, row_no_match];
         let visible = visible_tasks(&rows, "my-feature");
@@ -2403,7 +2393,7 @@ mod tests {
             branch: "main".to_string(),
             ..make_task_row(1, DisplayGroup::RepoMain)
         };
-        let other = make_task_row(2, DisplayGroup::NeedsAttention);
+        let other = make_task_row(2, DisplayGroup::Active);
         let rows = vec![shepherd, other];
         // Shepherd bypasses search filter.
         let visible = visible_tasks(&rows, "nomatch");
@@ -2426,7 +2416,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::ReadyToMerge)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2443,7 +2433,7 @@ mod tests {
 
     #[test]
     fn pr_status_no_pr() {
-        let row = make_task_row(1, DisplayGroup::Other);
+        let row = make_task_row(1, DisplayGroup::Normal);
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert_eq!(text, "no PR");
     }
@@ -2466,7 +2456,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
@@ -2476,7 +2466,7 @@ mod tests {
     fn claude_status_idle() {
         let row = WorktreeRow {
             sessions: vec![make_session("sess")],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
@@ -2500,7 +2490,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
@@ -2508,7 +2498,7 @@ mod tests {
 
     #[test]
     fn claude_status_none_when_no_session() {
-        let row = make_task_row(1, DisplayGroup::Other);
+        let row = make_task_row(1, DisplayGroup::Normal);
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("none"), "expected 'none' in: {}", text);
     }
@@ -2528,7 +2518,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2553,7 +2543,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2578,7 +2568,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(
@@ -2608,7 +2598,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
@@ -2634,7 +2624,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
@@ -2676,7 +2666,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(2, DisplayGroup::NeedsAttention)
+            ..make_task_row(2, DisplayGroup::Active)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
@@ -2761,7 +2751,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Working,
                 Some(73.0),
             )],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
@@ -2775,7 +2765,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Idle,
                 None,
             )],
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("idle"), "expected 'idle' in: {}", text);
@@ -2788,7 +2778,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Input,
                 None,
             )],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
@@ -2801,7 +2791,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Input,
                 Some(95.0),
             )],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("input"), "expected 'input' in: {}", text);
@@ -2815,7 +2805,7 @@ mod tests {
                 crate::claude_state::ClaudeState::Working,
                 None,
             )],
-            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(
@@ -2840,7 +2830,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::Other)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("pending"), "expected 'pending' in: {}", text);
@@ -2881,7 +2871,7 @@ mod tests {
                     panes: vec![],
                 },
             ],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         // Input takes priority over working; count suffix should show " 2"
@@ -2895,7 +2885,7 @@ mod tests {
 
     #[test]
     fn search_is_case_insensitive() {
-        let rows = vec![make_task_row(1, DisplayGroup::NeedsAttention)];
+        let rows = vec![make_task_row(1, DisplayGroup::Active)];
         // Search with uppercase should match lowercase branch "feat/issue-1"
         let visible = visible_tasks(&rows, "FEAT/ISSUE");
         assert_eq!(visible.len(), 1);
@@ -2903,10 +2893,10 @@ mod tests {
 
     #[test]
     fn search_with_multiple_rows() {
-        let mut row_match = make_task_row(1, DisplayGroup::NeedsAttention);
+        let mut row_match = make_task_row(1, DisplayGroup::Active);
         row_match.branch = "feat/target-branch".to_string();
 
-        let mut row_no_match = make_task_row(2, DisplayGroup::NeedsAttention);
+        let mut row_no_match = make_task_row(2, DisplayGroup::Active);
         row_no_match.branch = "feat/other-branch".to_string();
 
         let rows = vec![row_match, row_no_match];
@@ -2925,11 +2915,11 @@ mod tests {
     fn search_matches_issue_title() {
         let row_azure = WorktreeRow {
             issue_title: Some("Fix Azure integration bug".to_string()),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let row_other = WorktreeRow {
             issue_title: Some("Unrelated task name".to_string()),
-            ..make_task_row(2, DisplayGroup::Other)
+            ..make_task_row(2, DisplayGroup::Normal)
         };
         let rows = vec![row_azure, row_other];
         let visible = visible_tasks(&rows, "Azure");
@@ -2952,9 +2942,9 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(1, DisplayGroup::ReadyToMerge)
+            ..make_task_row(1, DisplayGroup::Normal)
         };
-        let row_no_pr = make_task_row(2, DisplayGroup::Other);
+        let row_no_pr = make_task_row(2, DisplayGroup::Normal);
         let rows = vec![row_approved, row_no_pr];
         // "approved" is in the haystack for row_approved via pr_status_haystack.
         let visible = visible_tasks(&rows, "approved");
@@ -2973,13 +2963,13 @@ mod tests {
         let row_strong = WorktreeRow {
             issue_title: Some("Azure storage fix".to_string()),
             branch: "feat/issue-1".to_string(),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         // Row 2: branch contains letters a-z-u-r-e but not as the word "azure".
         let row_weak = WorktreeRow {
             issue_title: Some("Fix remote auth".to_string()),
             branch: "feat/issue-2".to_string(),
-            ..make_task_row(2, DisplayGroup::Other)
+            ..make_task_row(2, DisplayGroup::Normal)
         };
         let rows = vec![row_weak, row_strong]; // weak first in input
         let visible = visible_tasks(&rows, "azure");
@@ -3007,7 +2997,7 @@ mod tests {
             issue_title: None,
             ..make_task_row(0, DisplayGroup::RepoMain)
         };
-        let other = make_task_row(1, DisplayGroup::NeedsAttention);
+        let other = make_task_row(1, DisplayGroup::Active);
         let rows = vec![main, other];
         // "nomatch" won't match either row normally, but main always passes.
         let visible = visible_tasks(&rows, "nomatch");
@@ -3026,9 +3016,9 @@ mod tests {
     #[test]
     fn empty_filter_preserves_original_order() {
         let rows = vec![
-            make_task_row(10, DisplayGroup::NeedsAttention),
-            make_task_row(20, DisplayGroup::ClaudeWorking),
-            make_task_row(30, DisplayGroup::Other),
+            make_task_row(10, DisplayGroup::Active),
+            make_task_row(20, DisplayGroup::Active),
+            make_task_row(30, DisplayGroup::Normal),
         ];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 3);
@@ -3045,7 +3035,7 @@ mod tests {
     fn match_indices_present_when_filter_active() {
         let row = WorktreeRow {
             issue_title: Some("Fix Azure bug".to_string()),
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
+            ..make_task_row(1, DisplayGroup::Active)
         };
         let rows = vec![row];
         let visible = visible_tasks(&rows, "azure");
@@ -3058,7 +3048,7 @@ mod tests {
 
     #[test]
     fn match_indices_empty_when_filter_empty() {
-        let rows = vec![make_task_row(1, DisplayGroup::Other)];
+        let rows = vec![make_task_row(1, DisplayGroup::Normal)];
         let visible = visible_tasks(&rows, "");
         assert_eq!(visible.len(), 1);
         assert!(
@@ -3127,7 +3117,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3159,7 +3149,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let mut app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         // Simulate a repo selected.
         app.active_repo_index = 1;
         let backend = TestBackend::new(200, 40);
@@ -3193,7 +3183,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3420,7 +3410,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let theme = Theme::default();
-        let row = group_header_row(DisplayGroup::Other, 5, &theme);
+        let row = group_header_row(DisplayGroup::Normal, 5, &theme);
         let backend = TestBackend::new(80, 5);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3486,7 +3476,7 @@ mod tests {
 
         let row = WorktreeRow {
             sessions: vec![make_session("sess")],
-            ..make_task_row(42, DisplayGroup::Other)
+            ..make_task_row(42, DisplayGroup::Normal)
         };
         let app = App::new_test(vec![row]);
         let backend = TestBackend::new(160, 40);
@@ -3541,7 +3531,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3573,7 +3563,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         // Row exists but pane_content is empty — placeholder should render.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(120, 50);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render_task_list(f)).unwrap();
@@ -3597,7 +3587,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         // Placeholder should not be scroll-interactive — preview_area must be zero.
-        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Other)]);
+        let app = App::new_test(vec![make_task_row(1, DisplayGroup::Normal)]);
         let backend = TestBackend::new(120, 50);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render_task_list(f)).unwrap();
@@ -3616,7 +3606,7 @@ mod tests {
     fn make_task_row_with_session_for_preview(issue: u32) -> WorktreeRow {
         WorktreeRow {
             sessions: vec![make_session(&format!("sess-{}", issue))],
-            ..make_task_row(issue, DisplayGroup::Other)
+            ..make_task_row(issue, DisplayGroup::Normal)
         }
     }
 
@@ -3675,7 +3665,7 @@ mod tests {
                 labels: vec![],
                 is_draft: true,
             }),
-            ..make_task_row(issue, DisplayGroup::Other)
+            ..make_task_row(issue, DisplayGroup::Normal)
         }
     }
 
@@ -3693,7 +3683,7 @@ mod tests {
                 labels: vec![],
                 is_draft: false,
             }),
-            ..make_task_row(issue, DisplayGroup::Other)
+            ..make_task_row(issue, DisplayGroup::Normal)
         }
     }
 
@@ -3747,7 +3737,7 @@ mod tests {
 
         let app = App::new_test(vec![
             make_non_draft_pr_row(1),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Normal),
         ]);
         let backend = TestBackend::new(160, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3806,7 +3796,7 @@ mod tests {
         // One draft row forces TAGS visible; second row has no PR.
         let app = App::new_test(vec![
             make_draft_pr_row(1),
-            make_task_row(2, DisplayGroup::Other),
+            make_task_row(2, DisplayGroup::Normal),
         ]);
         let backend = TestBackend::new(160, 40);
         let mut terminal = Terminal::new(backend).unwrap();
