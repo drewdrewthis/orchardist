@@ -1418,7 +1418,12 @@ impl App {
         let mut unified_num = 1usize;
 
         // Render standalone session rows first (empty slice on repo tabs).
-        for (idx, ss) in self.standalone_sessions.iter().enumerate().take(standalone_count) {
+        for (idx, ss) in self
+            .standalone_sessions
+            .iter()
+            .enumerate()
+            .take(standalone_count)
+        {
             let selected = idx == self.cursor && matches!(self.sub_cursor, super::SubCursor::None);
             if selected {
                 selected_visual_idx = Some(rows.len());

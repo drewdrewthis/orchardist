@@ -318,10 +318,7 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
     let tmux_conf = detect_tmux_conf(home);
 
     let existing = std::fs::read_to_string(&tmux_conf).unwrap_or_else(|e| {
-        tracing::warn!(
-            "could not read tmux config at {}: {e}",
-            tmux_conf.display()
-        );
+        tracing::warn!("could not read tmux config at {}: {e}", tmux_conf.display());
         String::new()
     });
 
@@ -370,9 +367,7 @@ fn configure_tmux_binding_step(home: &Path, _tmux_version: &str) -> Result<Strin
     if add_status {
         eprintln!("  Added status bar segment");
     } else {
-        eprintln!(
-            "  To configure the tmux status bar later, add this to your tmux.conf:"
-        );
+        eprintln!("  To configure the tmux status bar later, add this to your tmux.conf:");
         eprintln!("    {status_line}");
     }
 
@@ -1213,14 +1208,20 @@ mod tests {
     fn tmux_status_line_contains_set_status_right() {
         let state_dir = std::path::Path::new("/home/user/.local/state/orchard");
         let line = get_tmux_status_line(state_dir);
-        assert!(line.contains("set -g status-right"), "must be a status-right directive");
+        assert!(
+            line.contains("set -g status-right"),
+            "must be a status-right directive"
+        );
     }
 
     #[test]
     fn tmux_status_line_references_status_txt() {
         let state_dir = std::path::Path::new("/home/user/.local/state/orchard");
         let line = get_tmux_status_line(state_dir);
-        assert!(line.contains("status.txt"), "must reference the status.txt file");
+        assert!(
+            line.contains("status.txt"),
+            "must reference the status.txt file"
+        );
     }
 
     #[test]

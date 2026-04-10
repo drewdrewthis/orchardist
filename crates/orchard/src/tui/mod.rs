@@ -2784,7 +2784,9 @@ mod tests {
         let mut app = App::new_test(vec![active_row, normal_row]);
         let output = render_to_string(&mut app, 120, 40);
 
-        let pos_active = output.find("active").expect("expected 'active' section header");
+        let pos_active = output
+            .find("active")
+            .expect("expected 'active' section header");
         let pos_wip = output
             .find("work in progress")
             .expect("expected 'work in progress' section header");
@@ -3342,11 +3344,7 @@ mod tests {
                 windows: vec![],
                 panes: vec![],
             }],
-            ..make_task_row_with_title(
-                47,
-                "Shepherd persistent session",
-                DisplayGroup::Active,
-            )
+            ..make_task_row_with_title(47, "Shepherd persistent session", DisplayGroup::Active)
         };
         let ready = WorktreeRow {
             pr: Some(DPrInfo {

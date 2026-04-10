@@ -483,8 +483,7 @@ fn focus_score(row: &WorktreeRow) -> u32 {
             && p.checks_state.as_deref() == Some("SUCCESS")
     });
     let pr_waiting_review = row.pr.as_ref().is_some_and(|p| {
-        p.review_decision.as_deref() == Some("REVIEW_REQUIRED")
-            || p.review_decision.is_none()
+        p.review_decision.as_deref() == Some("REVIEW_REQUIRED") || p.review_decision.is_none()
     });
     let has_pr = row.pr.is_some();
 
@@ -512,10 +511,7 @@ fn focus_score(row: &WorktreeRow) -> u32 {
     };
 
     // Tiebreaker: priority labels shift within the tier (max shift of 4)
-    let label_bonus = label_priority_weight(
-        &row.issue_labels,
-        row.pr.as_ref().map(|p| &p.labels),
-    );
+    let label_bonus = label_priority_weight(&row.issue_labels, row.pr.as_ref().map(|p| &p.labels));
     // label_bonus is 0-3 for P0-P3, 100 for no label. Clamp to 0-4 range.
     let tiebreak = if label_bonus <= 3 { label_bonus } else { 4 };
 
@@ -1379,9 +1375,11 @@ mod tests {
             .iter()
             .filter(|r| r.display_group != DisplayGroup::RepoMain)
             .collect();
-        assert!(non_shepherd
-            .iter()
-            .all(|r| r.display_group == DisplayGroup::Normal));
+        assert!(
+            non_shepherd
+                .iter()
+                .all(|r| r.display_group == DisplayGroup::Normal)
+        );
 
         // Normal rows sorted by issue number
         let normal_rows: Vec<&WorktreeRow> = rows
