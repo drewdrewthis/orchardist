@@ -121,7 +121,11 @@ fn pr_status_haystack(row: &WorktreeRow) -> String {
         return format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads);
     }
     if pr.checks_state.as_deref() == Some("failing") {
-        return format!("{}\u{2716} failing", prefix);
+        let names: Vec<&str> = pr.failing_checks.iter().map(|c| c.name.as_str()).collect();
+        if names.is_empty() {
+            return format!("{}\u{2716} failing", prefix);
+        }
+        return format!("{}\u{2716} failing {}", prefix, names.join(" "));
     }
     if pr.checks_state.as_deref() == Some("pending") {
         return format!("{}\u{25d0} pending CI", prefix);
@@ -509,6 +513,8 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..base_row()
         };

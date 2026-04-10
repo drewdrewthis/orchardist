@@ -232,6 +232,7 @@ pub fn extract_failing_checks(pr: &serde_json::Value) -> Vec<FailedCheck> {
                 _ => None,
             }
         })
+        .filter(|c| !c.name.is_empty())
         .collect()
 }
 
@@ -1439,6 +1440,43 @@ mod tests {
         let checks = extract_failing_checks(&pr);
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].conclusion, "TIMED_OUT");
+    }
+
+    #[test]
+    fn extract_failing_checks_action_required_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "deploy-gate",
+            "conclusion": "ACTION_REQUIRED"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "deploy-gate");
+        assert_eq!(checks[0].conclusion, "ACTION_REQUIRED");
+    }
+
+    #[test]
+    fn extract_failing_checks_startup_failure_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "build",
+            "conclusion": "STARTUP_FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "build");
+        assert_eq!(checks[0].conclusion, "STARTUP_FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_empty_name_filtered() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "",
+            "conclusion": "FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
     }
 
     #[test]
