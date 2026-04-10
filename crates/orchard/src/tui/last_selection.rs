@@ -262,6 +262,7 @@ mod tests {
                     status: SessionStatus::Dead,
                 },
                 claude: None,
+                windows: vec![],
                 panes: vec![],
             },
             config: StandaloneConfig {

@@ -33,8 +33,28 @@ use crate::derive;
 use crate::git;
 use crate::global_config;
 use crate::navigation;
-use crate::session::StandaloneSessionRow;
+use crate::session::{StandaloneSessionRow, WindowInfo};
 use crate::tmux;
+
+// ---------------------------------------------------------------------------
+// SubCursor
+// ---------------------------------------------------------------------------
+
+/// Two-level sub-cursor within an expanded session row.
+///
+/// Replaces the old `selected_pane: Option<usize>` with support for
+/// both window-level and pane-level selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubCursor {
+    /// Parent row is selected (no sub-row focus).
+    None,
+    /// A window sub-row is selected (for multi-window sessions).
+    /// Value is the tmux window index.
+    Window(usize),
+    /// A pane sub-row is selected.
+    /// `window` is the tmux window index, `pane` is the vec index within that window.
+    Pane { window: usize, pane: usize },
+}
 
 use message::{Message, UpdateResult};
 use state::{AppMsg, CleanupState, InputPhase, Phase, ViewState};
@@ -133,11 +153,17 @@ pub struct App {
     /// Entries are silently removed on refresh when the row's pane count drops to <= 1.
     expanded: HashSet<String>,
 
-    /// Currently selected pane sub-row within the focused parent row.
+    /// Two-level sub-cursor within an expanded session row.
     ///
-    /// `None` means the parent row itself is selected. `Some(n)` means
-    /// pane sub-row `n` is selected. This does NOT affect `self.cursor`.
-    selected_pane: Option<usize>,
+    /// `SubCursor::None` means the parent row is selected. `SubCursor::Window(w)`
+    /// means a window sub-row is focused. `SubCursor::Pane { window, pane }` means
+    /// a pane within a window is focused. Does NOT affect `self.cursor`.
+    sub_cursor: SubCursor,
+
+    /// Expanded windows keyed by `"session_name:window_index"`.
+    ///
+    /// When a key is present, the window's pane sub-rows are rendered below it.
+    window_expanded: HashSet<String>,
 }
 
 impl App {
@@ -210,7 +236,8 @@ impl App {
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
             expanded: HashSet::new(),
-            selected_pane: None,
+            sub_cursor: SubCursor::None,
+            window_expanded: HashSet::new(),
         }
     }
 
@@ -283,11 +310,26 @@ impl App {
 
     /// Returns the pane index to use for preview capture.
     ///
-    /// When the cursor is on a sub-row, returns `Some(pane_index)`.
+    /// When the cursor is on a pane sub-row, returns `Some(pane_flat_index)`.
+    /// When on a window sub-row, returns `None` (active pane of that window).
     /// When on a parent row, returns `None` (default pane 0).
     #[cfg(test)]
     pub(crate) fn preview_pane_index(&self) -> Option<usize> {
-        self.selected_pane
+        match &self.sub_cursor {
+            SubCursor::Pane { window, pane } => {
+                // Find the flat pane index by summing panes in prior windows.
+                let windows = self.windows_at(self.cursor);
+                let mut flat = 0;
+                for w in windows {
+                    if w.index == *window {
+                        return Some(flat + pane);
+                    }
+                    flat += w.panes.len();
+                }
+                Some(*pane)
+            }
+            _ => None,
+        }
     }
 
     /// Returns true if the row at cursor `idx` is currently expanded.
@@ -341,6 +383,134 @@ impl App {
         }
 
         self.expanded.retain(|k| valid_keys.contains(k));
+
+        // Also prune window_expanded: remove entries for sessions that are no longer expanded.
+        let expanded_ref = &self.expanded;
+
+        // Collect session names for currently expanded rows.
+        let mut expanded_session_names: HashSet<String> = HashSet::new();
+        for ss in &self.standalone_sessions {
+            if expanded_ref.contains(&ss.session.tmux.name) {
+                expanded_session_names.insert(ss.session.tmux.name.clone());
+            }
+        }
+        for vt in tasks.iter() {
+            if expanded_ref.contains(&vt.row.worktree_path)
+                && let Some(s) = vt.row.sessions.first()
+            {
+                expanded_session_names.insert(s.tmux.name.clone());
+            }
+        }
+
+        self.window_expanded.retain(|k| {
+            // Key format: "session_name:window_index"
+            if let Some(colon_pos) = k.rfind(':') {
+                let session_name = &k[..colon_pos];
+                expanded_session_names.contains(session_name)
+            } else {
+                false
+            }
+        });
+    }
+
+    // -------------------------------------------------------------------
+    // Window hierarchy helpers
+    // -------------------------------------------------------------------
+
+    /// Returns the windows for the session at cursor position `idx` (cloned).
+    ///
+    /// For standalone sessions, returns the session's windows.
+    /// For worktree rows, returns windows from the first session (if any).
+    /// Returns an owned Vec because the worktree path requires a temporary lookup.
+    fn windows_at(&self, idx: usize) -> Vec<WindowInfo> {
+        let standalone_count = self.standalone_sessions.len();
+        if idx < standalone_count {
+            self.standalone_sessions
+                .get(idx)
+                .map(|ss| ss.session.windows.clone())
+                .unwrap_or_default()
+        } else {
+            let wt_idx = idx - standalone_count;
+            let tasks = list::visible_tasks_filtered(
+                &self.task_rows,
+                &self.filter_text,
+                self.active_repo_slug(),
+            );
+            tasks
+                .get(wt_idx)
+                .and_then(|vt| vt.row.sessions.first())
+                .map(|s| s.windows.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// Returns the number of windows for the session at cursor position `idx`.
+    fn window_count_at(&self, idx: usize) -> usize {
+        self.windows_at(idx).len()
+    }
+
+    /// Returns true when the session at cursor `idx` has exactly 1 window.
+    fn is_single_window_session(&self, idx: usize) -> bool {
+        self.window_count_at(idx) == 1
+    }
+
+    /// Returns the expansion key for a window within a session.
+    fn window_expansion_key(session_name: &str, window_index: usize) -> String {
+        format!("{}:{}", session_name, window_index)
+    }
+
+    /// Returns true if the given window is expanded.
+    fn is_window_expanded(&self, session_name: &str, window_index: usize) -> bool {
+        self.window_expanded
+            .contains(&Self::window_expansion_key(session_name, window_index))
+    }
+
+    /// Returns the session name for the row at cursor position `idx`.
+    fn session_name_at(&self, idx: usize) -> Option<String> {
+        let standalone_count = self.standalone_sessions.len();
+        if idx < standalone_count {
+            self.standalone_sessions
+                .get(idx)
+                .map(|ss| ss.session.tmux.name.clone())
+        } else {
+            let wt_idx = idx - standalone_count;
+            let tasks = list::visible_tasks_filtered(
+                &self.task_rows,
+                &self.filter_text,
+                self.active_repo_slug(),
+            );
+            tasks
+                .get(wt_idx)
+                .and_then(|vt| vt.row.sessions.first())
+                .map(|s| s.tmux.name.clone())
+        }
+    }
+
+    /// Clears window expansion state for all windows of a given session.
+    fn clear_window_expansion_for_session(&mut self, session_name: &str) {
+        let prefix = format!("{}:", session_name);
+        self.window_expanded.retain(|k| !k.starts_with(&prefix));
+    }
+
+    /// Total sub-row count for the session at `idx`, considering window and pane expansion.
+    ///
+    /// For single-window sessions (auto-flattened): returns pane count (same as before).
+    /// For multi-window sessions: returns window count + expanded pane counts.
+    fn sub_row_count_at(&self, idx: usize) -> usize {
+        let windows = self.windows_at(idx);
+        if windows.len() <= 1 {
+            // Auto-flatten: sub-rows are panes directly.
+            self.pane_count_at(idx)
+        } else {
+            let session_name = self.session_name_at(idx).unwrap_or_default();
+            let mut count = windows.len();
+            for w in windows {
+                if self.is_window_expanded(&session_name, w.index) {
+                    count += w.panes.len();
+                }
+            }
+            count
+        }
     }
 
     // -------------------------------------------------------------------
@@ -930,7 +1100,7 @@ impl App {
             table_row += 1;
             // Skip sub-rows if expanded.
             if self.expanded.contains(&ss.session.tmux.name) {
-                let sub_count = ss.session.panes.len();
+                let sub_count = self.sub_row_count_at(idx);
                 if visual_row < table_row + sub_count {
                     return None; // clicked on a sub-row
                 }
@@ -950,6 +1120,7 @@ impl App {
         let mut last_group: Option<crate::derive::DisplayGroup> = None;
 
         for (task_idx, vt) in tasks.iter().enumerate() {
+            let cursor_idx = task_idx + standalone_count;
             // Group header inserted when display group changes.
             if last_group != Some(vt.group) {
                 if table_row == visual_row {
@@ -960,13 +1131,13 @@ impl App {
             }
 
             if table_row == visual_row {
-                return Some(task_idx + standalone_count);
+                return Some(cursor_idx);
             }
             table_row += 1;
 
             // Skip sub-rows if expanded.
             if self.expanded.contains(&vt.row.worktree_path) {
-                let sub_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+                let sub_count = self.sub_row_count_at(cursor_idx);
                 if visual_row < table_row + sub_count {
                     return None; // clicked on a sub-row
                 }
@@ -1007,25 +1178,90 @@ impl App {
                         }
                     }
                     _ => {
-                        if let Some(pane) = self.selected_pane {
-                            if pane > 0 {
-                                // Move up within sub-rows.
-                                self.selected_pane = Some(pane - 1);
-                            } else {
-                                // First sub-row → back to parent.
-                                self.selected_pane = None;
+                        match self.sub_cursor.clone() {
+                            SubCursor::Pane { window, pane } => {
+                                if pane > 0 {
+                                    self.sub_cursor = SubCursor::Pane {
+                                        window,
+                                        pane: pane - 1,
+                                    };
+                                } else if self.is_single_window_session(self.cursor) {
+                                    // Single-window: up from first pane → parent row.
+                                    self.sub_cursor = SubCursor::None;
+                                } else {
+                                    // Multi-window: up from first pane → window row.
+                                    self.sub_cursor = SubCursor::Window(window);
+                                }
+                                self.fetch_task_pane_content();
                             }
-                            self.fetch_task_pane_content();
-                        } else if self.cursor > 0 {
-                            self.cursor -= 1;
-                            // If moving up onto an expanded row, select the last sub-row.
-                            if self.is_row_expanded(self.cursor) {
-                                let count = self.pane_count_at(self.cursor);
-                                if count > 0 {
-                                    self.selected_pane = Some(count - 1);
+                            SubCursor::Window(w) => {
+                                let windows = self.windows_at(self.cursor);
+                                // Find this window's position in the list.
+                                let pos = windows.iter().position(|wi| wi.index == w);
+                                if let Some(p) = pos {
+                                    if p == 0 {
+                                        // First window → parent row.
+                                        self.sub_cursor = SubCursor::None;
+                                    } else {
+                                        // Previous window. If it's expanded, go to its last pane.
+                                        let prev_win = &windows[p - 1];
+                                        let session_name =
+                                            self.session_name_at(self.cursor).unwrap_or_default();
+                                        if self.is_window_expanded(&session_name, prev_win.index)
+                                            && !prev_win.panes.is_empty()
+                                        {
+                                            self.sub_cursor = SubCursor::Pane {
+                                                window: prev_win.index,
+                                                pane: prev_win.panes.len() - 1,
+                                            };
+                                        } else {
+                                            self.sub_cursor = SubCursor::Window(prev_win.index);
+                                        }
+                                    }
+                                } else {
+                                    self.sub_cursor = SubCursor::None;
+                                }
+                                self.fetch_task_pane_content();
+                            }
+                            SubCursor::None => {
+                                if self.cursor > 0 {
+                                    self.cursor -= 1;
+                                    // If moving up onto an expanded row, select the last sub-row.
+                                    if self.is_row_expanded(self.cursor) {
+                                        let windows = self.windows_at(self.cursor);
+                                        if windows.len() <= 1 {
+                                            // Single-window auto-flatten: last pane.
+                                            let count = self.pane_count_at(self.cursor);
+                                            if count > 0 {
+                                                let win_idx =
+                                                    windows.first().map(|w| w.index).unwrap_or(0);
+                                                self.sub_cursor = SubCursor::Pane {
+                                                    window: win_idx,
+                                                    pane: count - 1,
+                                                };
+                                            }
+                                        } else {
+                                            // Multi-window: land on last window (or last pane if expanded).
+                                            let last_win = &windows[windows.len() - 1];
+                                            let session_name = self
+                                                .session_name_at(self.cursor)
+                                                .unwrap_or_default();
+                                            if self
+                                                .is_window_expanded(&session_name, last_win.index)
+                                                && !last_win.panes.is_empty()
+                                            {
+                                                self.sub_cursor = SubCursor::Pane {
+                                                    window: last_win.index,
+                                                    pane: last_win.panes.len() - 1,
+                                                };
+                                            } else {
+                                                self.sub_cursor = SubCursor::Window(last_win.index);
+                                            }
+                                        }
+                                    }
+                                    self.fetch_task_pane_content();
                                 }
                             }
-                            self.fetch_task_pane_content();
                         }
                     }
                 }
@@ -1048,26 +1284,94 @@ impl App {
                         .len();
                         let visible_count = standalone_count + worktree_visible_count;
 
-                        if let Some(pane) = self.selected_pane {
-                            let count = self.pane_count_at(self.cursor);
-                            if pane + 1 < count {
-                                // Move down within sub-rows.
-                                self.selected_pane = Some(pane + 1);
-                            } else {
-                                // Last sub-row → next parent row.
-                                self.selected_pane = None;
-                                if visible_count > 0 && self.cursor < visible_count - 1 {
+                        match self.sub_cursor.clone() {
+                            SubCursor::Pane { window, pane } => {
+                                // Check if there's a next pane in this window.
+                                let windows = self.windows_at(self.cursor);
+                                let win = windows.iter().find(|w| w.index == window);
+                                let pane_count = win.map(|w| w.panes.len()).unwrap_or(0);
+                                if pane + 1 < pane_count {
+                                    self.sub_cursor = SubCursor::Pane {
+                                        window,
+                                        pane: pane + 1,
+                                    };
+                                } else if windows.len() <= 1 {
+                                    // Single-window: last pane → next parent row.
+                                    self.sub_cursor = SubCursor::None;
+                                    if visible_count > 0 && self.cursor < visible_count - 1 {
+                                        self.cursor += 1;
+                                    }
+                                } else {
+                                    // Multi-window: find next window after current.
+                                    let pos = windows.iter().position(|w| w.index == window);
+                                    if let Some(p) = pos {
+                                        if p + 1 < windows.len() {
+                                            self.sub_cursor =
+                                                SubCursor::Window(windows[p + 1].index);
+                                        } else {
+                                            // Last window's last pane → next parent row.
+                                            self.sub_cursor = SubCursor::None;
+                                            if visible_count > 0 && self.cursor < visible_count - 1
+                                            {
+                                                self.cursor += 1;
+                                            }
+                                        }
+                                    } else {
+                                        self.sub_cursor = SubCursor::None;
+                                    }
+                                }
+                                self.fetch_task_pane_content();
+                            }
+                            SubCursor::Window(w) => {
+                                // If window is expanded, enter first pane.
+                                let session_name =
+                                    self.session_name_at(self.cursor).unwrap_or_default();
+                                let windows = self.windows_at(self.cursor);
+                                let win = windows.iter().find(|wi| wi.index == w);
+                                if self.is_window_expanded(&session_name, w)
+                                    && let Some(win) = win
+                                    && !win.panes.is_empty()
+                                {
+                                    self.sub_cursor = SubCursor::Pane { window: w, pane: 0 };
+                                    self.fetch_task_pane_content();
+                                    return ok();
+                                }
+                                // Window collapsed: go to next window or next parent.
+                                let pos = windows.iter().position(|wi| wi.index == w);
+                                if let Some(p) = pos {
+                                    if p + 1 < windows.len() {
+                                        self.sub_cursor = SubCursor::Window(windows[p + 1].index);
+                                    } else {
+                                        self.sub_cursor = SubCursor::None;
+                                        if visible_count > 0 && self.cursor < visible_count - 1 {
+                                            self.cursor += 1;
+                                        }
+                                    }
+                                } else {
+                                    self.sub_cursor = SubCursor::None;
+                                }
+                                self.fetch_task_pane_content();
+                            }
+                            SubCursor::None => {
+                                if self.is_row_expanded(self.cursor) {
+                                    let windows = self.windows_at(self.cursor);
+                                    if windows.len() <= 1 {
+                                        // Single-window auto-flatten: enter first pane.
+                                        let win_idx = windows.first().map(|w| w.index).unwrap_or(0);
+                                        self.sub_cursor = SubCursor::Pane {
+                                            window: win_idx,
+                                            pane: 0,
+                                        };
+                                    } else {
+                                        // Multi-window: enter first window.
+                                        self.sub_cursor = SubCursor::Window(windows[0].index);
+                                    }
+                                    self.fetch_task_pane_content();
+                                } else if visible_count > 0 && self.cursor < visible_count - 1 {
                                     self.cursor += 1;
+                                    self.fetch_task_pane_content();
                                 }
                             }
-                            self.fetch_task_pane_content();
-                        } else if self.is_row_expanded(self.cursor) {
-                            // Parent of expanded row → enter first sub-row.
-                            self.selected_pane = Some(0);
-                            self.fetch_task_pane_content();
-                        } else if visible_count > 0 && self.cursor < visible_count - 1 {
-                            self.cursor += 1;
-                            self.fetch_task_pane_content();
                         }
                     }
                 }
@@ -1075,7 +1379,7 @@ impl App {
             }
             Message::CursorTo(idx) => {
                 self.cursor = idx;
-                self.selected_pane = None;
+                self.sub_cursor = SubCursor::None;
                 self.fetch_task_pane_content();
                 ok()
             }
@@ -1227,34 +1531,74 @@ impl App {
             Message::PrevRepo => {
                 self.active_repo_index = self.active_repo_index.saturating_sub(1);
                 self.cursor = 0;
-                self.selected_pane = None;
+                self.sub_cursor = SubCursor::None;
                 ok()
             }
             Message::NextRepo => {
                 let repo_count = self.global_config.repos.len();
                 self.active_repo_index = (self.active_repo_index + 1).min(repo_count);
                 self.cursor = 0;
-                self.selected_pane = None;
+                self.sub_cursor = SubCursor::None;
                 ok()
             }
             Message::ExpandRow => {
-                let pane_count = self.pane_count_at(self.cursor);
-                if pane_count > 1
-                    && let Some(key) = self.expansion_key_at(self.cursor)
-                {
-                    self.expanded.insert(key);
+                match &self.sub_cursor {
+                    SubCursor::Window(w) => {
+                        // Expand window: add to window_expanded.
+                        if let Some(session_name) = self.session_name_at(self.cursor) {
+                            let windows = self.windows_at(self.cursor);
+                            let win = windows.iter().find(|wi| wi.index == *w);
+                            if let Some(win) = win
+                                && win.panes.len() > 1
+                            {
+                                let key = Self::window_expansion_key(&session_name, *w);
+                                self.window_expanded.insert(key);
+                            }
+                        }
+                    }
+                    _ => {
+                        // Expand session row.
+                        let pane_count = self.pane_count_at(self.cursor);
+                        if pane_count > 1
+                            && let Some(key) = self.expansion_key_at(self.cursor)
+                        {
+                            self.expanded.insert(key);
+                        }
+                    }
                 }
                 ok()
             }
             Message::CollapseRow => {
-                if self.selected_pane.is_some() {
-                    // On a sub-row: collapse parent + clear selected_pane.
-                    if let Some(key) = self.expansion_key_at(self.cursor) {
-                        self.expanded.remove(&key);
+                match &self.sub_cursor {
+                    SubCursor::Pane { window, .. } => {
+                        let w = *window;
+                        if self.is_single_window_session(self.cursor) {
+                            // Single-window: collapse session entirely.
+                            if let Some(key) = self.expansion_key_at(self.cursor) {
+                                self.expanded.remove(&key);
+                            }
+                            self.sub_cursor = SubCursor::None;
+                        } else {
+                            // Multi-window: collapse window, go to window row.
+                            if let Some(session_name) = self.session_name_at(self.cursor) {
+                                let key = Self::window_expansion_key(&session_name, w);
+                                self.window_expanded.remove(&key);
+                            }
+                            self.sub_cursor = SubCursor::Window(w);
+                        }
                     }
-                    self.selected_pane = None;
-                } else if let Some(key) = self.expansion_key_at(self.cursor) {
-                    self.expanded.remove(&key);
+                    SubCursor::Window(_) => {
+                        // Left on window row is no-op (must navigate to session row).
+                    }
+                    SubCursor::None => {
+                        if let Some(key) = self.expansion_key_at(self.cursor) {
+                            self.expanded.remove(&key);
+                            // Clear window expansion state for this session.
+                            if let Some(session_name) = self.session_name_at(self.cursor) {
+                                self.clear_window_expansion_for_session(&session_name);
+                            }
+                        }
+                    }
                 }
                 ok()
             }
@@ -1274,7 +1618,7 @@ impl App {
                         self.expanded.insert(key);
                     }
                 }
-                // Don't clear selected_pane — persists for re-expansion.
+                // Don't clear sub_cursor — persists for re-expansion.
                 ok()
             }
             Message::Refresh => {
@@ -1672,7 +2016,8 @@ impl App {
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
             expanded: HashSet::new(),
-            selected_pane: None,
+            sub_cursor: SubCursor::None,
+            window_expanded: HashSet::new(),
         }
     }
 }
@@ -2299,6 +2644,7 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
@@ -2459,6 +2805,7 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
@@ -2518,6 +2865,7 @@ mod tests {
                     context_window_pct: None,
                     model: None,
                 }),
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
@@ -2587,6 +2935,7 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
@@ -2829,6 +3178,8 @@ mod tests {
             pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
+            window_names: vec![],
+            window_active: vec![],
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
@@ -2986,6 +3337,7 @@ mod tests {
                     context_window_pct: Some(23.0),
                     model: Some("opus".to_string()),
                 }),
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_worktree_row("main", DisplayGroup::RepoMain)
@@ -3012,6 +3364,7 @@ mod tests {
                     context_window_pct: Some(67.0),
                     model: Some("sonnet".to_string()),
                 }),
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_task_row_with_title(53, "TEA pattern refactor", DisplayGroup::NeedsAttention)
@@ -3038,6 +3391,7 @@ mod tests {
                     context_window_pct: Some(19.0),
                     model: Some("opus".to_string()),
                 }),
+                windows: vec![],
                 panes: vec![],
             }],
             ..make_task_row_with_title(
@@ -3300,6 +3654,7 @@ mod tests {
                         status: SessionStatus::Dead,
                     },
                     claude: None,
+                    windows: vec![],
                     panes: vec![],
                 },
             });
@@ -3554,6 +3909,7 @@ mod tests {
                     status: SessionStatus::Dead,
                 },
                 claude: None,
+                windows: vec![],
                 panes: vec![],
             },
         }
@@ -3576,6 +3932,7 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                windows: vec![],
                 panes: vec![],
             }],
             display_group: DisplayGroup::Other,
@@ -3696,6 +4053,12 @@ mod tests {
                 has_claude: i == 0, // first pane has claude
             })
             .collect();
+        let windows = vec![crate::session::WindowInfo {
+            index: 0,
+            name: "main".to_string(),
+            is_active: true,
+            panes: panes.clone(),
+        }];
         WorktreeRow {
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3704,7 +4067,49 @@ mod tests {
                     status: SessionStatus::Running { attached: false },
                 },
                 claude: None,
+                windows,
                 panes,
+            }],
+            ..make_task_row(issue, DisplayGroup::Other)
+        }
+    }
+
+    /// Creates a worktree row with multiple windows for testing multi-window navigation.
+    fn make_task_row_with_windows(issue: u32, window_pane_counts: &[(usize, &str)]) -> WorktreeRow {
+        let mut all_panes = Vec::new();
+        let mut windows = Vec::new();
+        let mut flat_idx = 0;
+        for (wi, (pane_count, name)) in window_pane_counts.iter().enumerate() {
+            let mut win_panes = Vec::new();
+            for pi in 0..*pane_count {
+                let pane = crate::session::PaneInfo {
+                    index: flat_idx,
+                    tmux_target: format!("{wi}.{pi}"),
+                    command: format!("cmd{flat_idx}"),
+                    title: format!("pane{flat_idx}"),
+                    has_claude: flat_idx == 0,
+                };
+                win_panes.push(pane.clone());
+                all_panes.push(pane);
+                flat_idx += 1;
+            }
+            windows.push(crate::session::WindowInfo {
+                index: wi,
+                name: name.to_string(),
+                is_active: wi == 0,
+                panes: win_panes,
+            });
+        }
+        WorktreeRow {
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: format!("sess-{}", issue),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows,
+                panes: all_panes,
             }],
             ..make_task_row(issue, DisplayGroup::Other)
         }
@@ -3766,24 +4171,28 @@ mod tests {
         app.cursor = 1;
         app.update(Message::ToggleExpandAll);
         assert_eq!(app.cursor, 1, "cursor should stay on same logical row");
-        assert_eq!(app.selected_pane, None, "selected_pane should remain None");
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::None,
+            "sub_cursor should remain None"
+        );
     }
 
     #[test]
-    fn collapse_all_preserves_selected_pane() {
+    fn collapse_all_preserves_sub_cursor() {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
         app.expanded.insert("/workspace/repo-1".to_string());
-        app.selected_pane = Some(1);
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
         app.update(Message::ToggleExpandAll);
         assert_eq!(
-            app.selected_pane,
-            Some(1),
-            "selected_pane should persist across collapse-all"
+            app.sub_cursor,
+            SubCursor::Pane { window: 0, pane: 1 },
+            "sub_cursor should persist across collapse-all"
         );
     }
 
     // -----------------------------------------------------------------------
-    // Navigation with sub-rows
+    // Navigation with sub-rows (single-window auto-flatten)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -3792,7 +4201,11 @@ mod tests {
         app.expanded.insert("/workspace/repo-1".to_string());
         app.update(Message::CursorDown);
         assert_eq!(app.cursor, 0, "cursor stays on parent row");
-        assert_eq!(app.selected_pane, Some(0), "enters first sub-row");
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::Pane { window: 0, pane: 0 },
+            "enters first sub-row (single-window auto-flatten)"
+        );
     }
 
     #[test]
@@ -3802,50 +4215,54 @@ mod tests {
             make_task_row_with_panes(2, 2),
         ]);
         app.expanded.insert("/workspace/repo-1".to_string());
-        app.selected_pane = Some(2); // last sub-row of row 0
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 2 }; // last sub-row of row 0
         app.update(Message::CursorDown);
         assert_eq!(app.cursor, 1, "cursor moves to next parent");
-        assert_eq!(app.selected_pane, None, "selected_pane cleared");
+        assert_eq!(app.sub_cursor, SubCursor::None, "sub_cursor cleared");
     }
 
     #[test]
     fn up_on_first_sub_row_returns_to_parent() {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
         app.expanded.insert("/workspace/repo-1".to_string());
-        app.selected_pane = Some(0);
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 0 };
         app.update(Message::CursorUp);
         assert_eq!(app.cursor, 0);
-        assert_eq!(app.selected_pane, None, "back to parent row");
+        assert_eq!(app.sub_cursor, SubCursor::None, "back to parent row");
     }
 
     #[test]
     fn up_on_middle_sub_row_moves_up_within_sub_rows() {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
         app.expanded.insert("/workspace/repo-1".to_string());
-        app.selected_pane = Some(2);
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 2 };
         app.update(Message::CursorUp);
-        assert_eq!(app.selected_pane, Some(1));
+        assert_eq!(app.sub_cursor, SubCursor::Pane { window: 0, pane: 1 });
     }
 
     #[test]
-    fn cursor_to_clears_selected_pane() {
+    fn cursor_to_clears_sub_cursor() {
         let mut app = App::new_test(vec![
             make_task_row_with_panes(1, 3),
             make_task_row_with_panes(2, 2),
         ]);
-        app.selected_pane = Some(1);
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
         app.update(Message::CursorTo(1));
         assert_eq!(app.cursor, 1);
-        assert_eq!(app.selected_pane, None, "digit-jump clears selected_pane");
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::None,
+            "digit-jump clears sub_cursor"
+        );
     }
 
     #[test]
-    fn collapse_from_sub_row_clears_selected_pane() {
+    fn collapse_from_sub_row_clears_sub_cursor() {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
         app.expanded.insert("/workspace/repo-1".to_string());
-        app.selected_pane = Some(1);
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
         app.update(Message::CollapseRow);
-        assert_eq!(app.selected_pane, None);
+        assert_eq!(app.sub_cursor, SubCursor::None);
         assert!(!app.expanded.contains("/workspace/repo-1"));
     }
 
@@ -3873,7 +4290,7 @@ mod tests {
     #[test]
     fn preview_pane_index_some_for_sub_row() {
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
-        app.selected_pane = Some(1);
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
         assert_eq!(app.preview_pane_index(), Some(1));
     }
 
@@ -3891,7 +4308,11 @@ mod tests {
         app.cursor = 1; // on row 2
         app.update(Message::CursorUp);
         assert_eq!(app.cursor, 0, "cursor moves to expanded row");
-        assert_eq!(app.selected_pane, Some(2), "selects last sub-row");
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::Pane { window: 0, pane: 2 },
+            "selects last sub-row"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4068,6 +4489,7 @@ mod tests {
                     status: SessionStatus::Dead,
                 },
                 claude: None,
+                windows: vec![],
                 panes: vec![],
             },
             config: StandaloneConfig {
@@ -4132,5 +4554,203 @@ mod tests {
         app.cursor = 0;
         let sel = current_selection(&app).unwrap();
         assert_eq!(sel.active_repo_slug, Some("acme/beta".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // SubCursor multi-window navigation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn multi_window_down_from_session_enters_first_window() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.update(Message::CursorDown);
+        assert_eq!(app.cursor, 0);
+        assert_eq!(app.sub_cursor, SubCursor::Window(0), "enters first window");
+    }
+
+    #[test]
+    fn multi_window_down_from_collapsed_window_goes_to_next() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.sub_cursor = SubCursor::Window(0);
+        app.update(Message::CursorDown);
+        assert_eq!(app.sub_cursor, SubCursor::Window(1));
+    }
+
+    #[test]
+    fn multi_window_down_from_expanded_window_enters_first_pane() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.window_expanded.insert("sess-1:0".to_string());
+        app.sub_cursor = SubCursor::Window(0);
+        app.update(Message::CursorDown);
+        assert_eq!(app.sub_cursor, SubCursor::Pane { window: 0, pane: 0 });
+    }
+
+    #[test]
+    fn multi_window_down_from_last_pane_goes_to_next_window() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.window_expanded.insert("sess-1:0".to_string());
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
+        app.update(Message::CursorDown);
+        assert_eq!(app.sub_cursor, SubCursor::Window(1));
+    }
+
+    #[test]
+    fn multi_window_up_from_first_window_returns_to_session() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.sub_cursor = SubCursor::Window(0);
+        app.update(Message::CursorUp);
+        assert_eq!(app.sub_cursor, SubCursor::None);
+    }
+
+    #[test]
+    fn multi_window_up_from_first_pane_returns_to_window() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.window_expanded.insert("sess-1:0".to_string());
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 0 };
+        app.update(Message::CursorUp);
+        assert_eq!(app.sub_cursor, SubCursor::Window(0));
+    }
+
+    #[test]
+    fn multi_window_left_from_pane_collapses_window() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.window_expanded.insert("sess-1:1".to_string());
+        app.sub_cursor = SubCursor::Pane { window: 1, pane: 0 };
+        app.update(Message::CollapseRow);
+        assert_eq!(app.sub_cursor, SubCursor::Window(1));
+        assert!(!app.window_expanded.contains("sess-1:1"));
+    }
+
+    #[test]
+    fn multi_window_left_from_window_is_noop() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.sub_cursor = SubCursor::Window(0);
+        app.update(Message::CollapseRow);
+        // Left on window row is no-op.
+        assert_eq!(app.sub_cursor, SubCursor::Window(0));
+        assert!(app.expanded.contains("/workspace/repo-1"));
+    }
+
+    #[test]
+    fn multi_window_right_expands_window() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.sub_cursor = SubCursor::Window(0);
+        app.update(Message::ExpandRow);
+        assert!(app.window_expanded.contains("sess-1:0"));
+    }
+
+    #[test]
+    fn collapse_session_clears_window_expansion() {
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "main"), (2, "editor")],
+        )]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.window_expanded.insert("sess-1:0".to_string());
+        app.window_expanded.insert("sess-1:1".to_string());
+        app.sub_cursor = SubCursor::None;
+        app.update(Message::CollapseRow);
+        assert!(!app.expanded.contains("/workspace/repo-1"));
+        assert!(!app.window_expanded.contains("sess-1:0"));
+        assert!(!app.window_expanded.contains("sess-1:1"));
+    }
+
+    #[test]
+    fn window_expansion_key_uses_tmux_window_index() {
+        assert_eq!(App::window_expansion_key("my-session", 5), "my-session:5");
+    }
+
+    #[test]
+    fn single_window_down_skips_window_level() {
+        // Single-window session: Down goes directly to pane, not window.
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.update(Message::CursorDown);
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::Pane { window: 0, pane: 0 },
+            "single-window skips to pane"
+        );
+    }
+
+    #[test]
+    fn single_window_left_from_pane_collapses_session() {
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.sub_cursor = SubCursor::Pane { window: 0, pane: 1 };
+        app.update(Message::CollapseRow);
+        assert_eq!(app.sub_cursor, SubCursor::None);
+        assert!(!app.expanded.contains("/workspace/repo-1"));
+    }
+
+    #[test]
+    fn multi_window_up_onto_expanded_row_selects_last_window() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_windows(1, &[(2, "main"), (2, "editor")]),
+            make_task_row_with_panes(2, 2),
+        ]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.cursor = 1;
+        app.update(Message::CursorUp);
+        assert_eq!(app.cursor, 0);
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::Window(1),
+            "lands on last window of multi-window session"
+        );
+    }
+
+    #[test]
+    fn multi_window_up_onto_expanded_row_with_expanded_last_window() {
+        let mut app = App::new_test(vec![
+            make_task_row_with_windows(1, &[(2, "main"), (2, "editor")]),
+            make_task_row_with_panes(2, 2),
+        ]);
+        app.expanded.insert("/workspace/repo-1".to_string());
+        app.window_expanded.insert("sess-1:1".to_string());
+        app.cursor = 1;
+        app.update(Message::CursorUp);
+        assert_eq!(app.cursor, 0);
+        assert_eq!(
+            app.sub_cursor,
+            SubCursor::Pane { window: 1, pane: 1 },
+            "lands on last pane of expanded last window"
+        );
     }
 }

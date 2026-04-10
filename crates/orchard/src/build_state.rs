@@ -13,6 +13,7 @@ use crate::global_config::GlobalConfig;
 use crate::orchard_state::{HostState, OrchardState, RepoState, WorktreeState};
 use crate::session::{
     ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, StandaloneSessionRow, TmuxSessionInfo,
+    build_windows_and_panes,
 };
 use crate::sources;
 
@@ -136,12 +137,14 @@ fn build_standalone_sessions(
                 .filter(|cs| !crate::derive::is_state_stale_default(&cs.timestamp))
                 .and_then(ClaudeSessionInfo::from_state_file);
 
-            let panes = live
+            let (windows, panes) = live
                 .map(|s| {
-                    crate::session::build_pane_infos(
+                    build_windows_and_panes(
                         &s.pane_targets,
                         &s.pane_commands,
                         &s.pane_titles,
+                        &s.window_names,
+                        &s.window_active,
                     )
                 })
                 .unwrap_or_default();
@@ -154,6 +157,7 @@ fn build_standalone_sessions(
                         status,
                     },
                     claude,
+                    windows,
                     panes,
                 },
                 config: cfg.clone(),
@@ -362,6 +366,8 @@ mod tests {
             pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
+            window_names: vec![],
+            window_active: vec![],
             host: None,
             last_output_lines: vec![],
             claude_state_raw: None,
@@ -490,6 +496,8 @@ mod tests {
             pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
+            window_names: vec![],
+            window_active: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
             last_output_lines: vec![],
             claude_state_raw: Some(make_state_file(state, name, timestamp)),
@@ -569,6 +577,8 @@ mod tests {
             pane_targets: vec![],
             pane_titles: vec![],
             pane_commands: vec![],
+            window_names: vec![],
+            window_active: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
             last_output_lines: vec![],
             claude_state_raw: None,

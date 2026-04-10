@@ -242,15 +242,17 @@ pub fn parse_tmux_output(
         };
 
         let pane_output = panes_fn(name);
-        let (pane_targets, pane_titles, pane_commands) = parse_pane_lines(&pane_output);
+        let parsed = parse_pane_lines(&pane_output);
         let last_output_lines = content_fn(name);
 
         sessions.push(CachedTmuxSession {
             name: name.to_string(),
             path: path.to_string(),
-            pane_targets,
-            pane_titles,
-            pane_commands,
+            pane_targets: parsed.targets,
+            pane_titles: parsed.titles,
+            pane_commands: parsed.commands,
+            window_names: parsed.window_names,
+            window_active: parsed.window_active,
             host: host.map(|h| h.to_string()),
             last_output_lines,
             claude_state_raw: None, // populated after parsing remote Claude state
@@ -260,12 +262,32 @@ pub fn parse_tmux_output(
     sessions
 }
 
-/// Parses pane info lines in the format `{window}.{pane}\t{pane_title}:{pane_current_command}`.
+/// Structured output of `parse_pane_lines`.
+struct ParsedPaneData {
+    /// Tmux window.pane addresses (e.g. "0.1").
+    targets: Vec<String>,
+    /// Window names per pane row.
+    window_names: Vec<String>,
+    /// Window active flags per pane row ("1" or "0").
+    window_active: Vec<String>,
+    /// Pane titles per pane row.
+    titles: Vec<String>,
+    /// Commands running in each pane.
+    commands: Vec<String>,
+}
+
+/// Parses pane info lines into structured pane data.
 ///
-/// Returns `(targets, titles, commands)` where `targets` contains tmux
-/// window.pane addresses (e.g., "0.1") for each pane.
-fn parse_pane_lines(output: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+/// New format: `{window}.{pane}\t{window_name}\t{window_active}\t{pane_title}:{pane_current_command}`
+///
+/// Old format (backward compat): `{window}.{pane}\t{pane_title}:{pane_current_command}`
+///
+/// Old-format lines (only one tab field after the target) are handled gracefully:
+/// `window_name` is set to empty string and `window_active` to "0".
+fn parse_pane_lines(output: &str) -> ParsedPaneData {
     let mut targets = Vec::new();
+    let mut window_names = Vec::new();
+    let mut window_active = Vec::new();
     let mut titles = Vec::new();
     let mut commands = Vec::new();
 
@@ -273,22 +295,48 @@ fn parse_pane_lines(output: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
         if line.is_empty() {
             continue;
         }
-        // Format: "{window_index}.{pane_index}\t{pane_title}:{pane_current_command}"
-        // Split on tab first to separate target from title:command.
-        if let Some((target, rest)) = line.split_once('\t') {
-            targets.push(target.to_string());
-            // Split rest on first colon; title may contain colons.
-            if let Some((title, cmd)) = rest.split_once(':') {
-                titles.push(title.to_string());
-                commands.push(cmd.to_string());
-            } else {
-                titles.push(rest.to_string());
-                commands.push(String::new());
+        // Split on tabs; new format has 4 fields, old format has 2.
+        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        match parts.as_slice() {
+            [target, win_name, win_active, rest] => {
+                // New format: target, window_name, window_active, title:command
+                targets.push(target.to_string());
+                window_names.push(win_name.to_string());
+                window_active.push(win_active.to_string());
+                if let Some((title, cmd)) = rest.split_once(':') {
+                    titles.push(title.to_string());
+                    commands.push(cmd.to_string());
+                } else {
+                    titles.push(rest.to_string());
+                    commands.push(String::new());
+                }
+            }
+            [target, rest] => {
+                // Old format: target, title:command
+                targets.push(target.to_string());
+                window_names.push(String::new());
+                window_active.push("0".to_string());
+                if let Some((title, cmd)) = rest.split_once(':') {
+                    titles.push(title.to_string());
+                    commands.push(cmd.to_string());
+                } else {
+                    titles.push(rest.to_string());
+                    commands.push(String::new());
+                }
+            }
+            _ => {
+                // Malformed line — skip.
             }
         }
     }
 
-    (targets, titles, commands)
+    ParsedPaneData {
+        targets,
+        window_names,
+        window_active,
+        titles,
+        commands,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +568,7 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         |session_name| {
             // -s lists panes across ALL windows in the session.
             // Format: "window.pane\ttitle:command" for parse_pane_lines.
-            let pane_fmt = "#{window_index}.#{pane_index}\t#{pane_title}:#{pane_current_command}";
+            let pane_fmt = "#{window_index}.#{pane_index}\t#{window_name}\t#{window_active}\t#{pane_title}:#{pane_current_command}";
             match host {
                 None => run_local(
                     "tmux",
@@ -1166,37 +1214,48 @@ mod tests {
     // -- parse_pane_lines ---------------------------------------------------
 
     #[test]
-    fn parse_pane_lines_single_window() {
-        let output = "0.0\tbash:bash\n0.1\tvim:vim\n";
-        let (targets, titles, commands) = parse_pane_lines(output);
-        assert_eq!(targets, vec!["0.0", "0.1"]);
-        assert_eq!(titles, vec!["bash", "vim"]);
-        assert_eq!(commands, vec!["bash", "vim"]);
+    fn parse_pane_lines_new_format_extracts_window_metadata() {
+        let output =
+            "0.0\tmain\t1\tbash:bash\n0.1\tmain\t1\tclaude:claude\n1.0\teditor\t0\tnvim:nvim\n";
+        let parsed = parse_pane_lines(output);
+        assert_eq!(parsed.targets, vec!["0.0", "0.1", "1.0"]);
+        assert_eq!(parsed.window_names, vec!["main", "main", "editor"]);
+        assert_eq!(parsed.window_active, vec!["1", "1", "0"]);
+        assert_eq!(parsed.titles, vec!["bash", "claude", "nvim"]);
+        assert_eq!(parsed.commands, vec!["bash", "claude", "nvim"]);
     }
 
     #[test]
-    fn parse_pane_lines_multi_window() {
-        let output = "0.0\tbash:bash\n0.1\tclaude:claude\n1.0\tnvim:nvim\n";
-        let (targets, titles, commands) = parse_pane_lines(output);
-        assert_eq!(targets, vec!["0.0", "0.1", "1.0"]);
-        assert_eq!(titles, vec!["bash", "claude", "nvim"]);
-        assert_eq!(commands, vec!["bash", "claude", "nvim"]);
+    fn parse_pane_lines_old_format_backward_compat() {
+        // Old format: only two tab-separated fields — target and title:command.
+        let output = "0.0\tbash:bash\n0.1\tvim:vim\n";
+        let parsed = parse_pane_lines(output);
+        assert_eq!(parsed.targets, vec!["0.0", "0.1"]);
+        // Old format: window_names empty, window_active defaults to "0".
+        assert_eq!(parsed.window_names, vec!["", ""]);
+        assert_eq!(parsed.window_active, vec!["0", "0"]);
+        assert_eq!(parsed.titles, vec!["bash", "vim"]);
+        assert_eq!(parsed.commands, vec!["bash", "vim"]);
     }
 
     #[test]
     fn parse_pane_lines_empty_input() {
-        let (targets, titles, commands) = parse_pane_lines("");
-        assert!(targets.is_empty());
-        assert!(titles.is_empty());
-        assert!(commands.is_empty());
+        let parsed = parse_pane_lines("");
+        assert!(parsed.targets.is_empty());
+        assert!(parsed.window_names.is_empty());
+        assert!(parsed.window_active.is_empty());
+        assert!(parsed.titles.is_empty());
+        assert!(parsed.commands.is_empty());
     }
 
     #[test]
-    fn parse_pane_lines_title_with_colon() {
-        let output = "0.0\tClaude: my-project:node\n";
-        let (targets, titles, commands) = parse_pane_lines(output);
-        assert_eq!(targets, vec!["0.0"]);
-        assert_eq!(titles, vec!["Claude"]);
-        assert_eq!(commands, vec![" my-project:node"]);
+    fn parse_pane_lines_title_with_colon_new_format() {
+        let output = "0.0\tmain\t1\tClaude: my-project:node\n";
+        let parsed = parse_pane_lines(output);
+        assert_eq!(parsed.targets, vec!["0.0"]);
+        assert_eq!(parsed.window_names, vec!["main"]);
+        assert_eq!(parsed.window_active, vec!["1"]);
+        assert_eq!(parsed.titles, vec!["Claude"]);
+        assert_eq!(parsed.commands, vec![" my-project:node"]);
     }
 }

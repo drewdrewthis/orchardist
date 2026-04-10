@@ -31,7 +31,7 @@ pub enum Host {
 /// Whether a tmux session is alive and, if so, whether it is attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionStatus {
-    /// The session is running. `attached` is true when a client is connected.
+    /// The session is running. `attached` is true when a terminal client is connected.
     Running {
         /// True when a terminal client is attached to this session.
         attached: bool,
@@ -157,6 +157,146 @@ pub fn build_pane_infos(
 }
 
 // ---------------------------------------------------------------------------
+// WindowInfo
+// ---------------------------------------------------------------------------
+
+/// Per-window metadata for a tmux session, containing the panes in that window.
+///
+/// Windows group panes in tmux. The `index` field uses tmux's stable window
+/// index (not sequential 0..N), so closing a window doesn't shift indices
+/// for remaining windows and expansion state keys remain stable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowInfo {
+    /// Tmux's stable window index (not sequential — survives window closes).
+    pub index: usize,
+    /// Window name from tmux (e.g., "main", "editor").
+    pub name: String,
+    /// Whether this is the active window in the session.
+    pub is_active: bool,
+    /// Panes belonging to this window.
+    pub panes: Vec<PaneInfo>,
+}
+
+/// Parses the window index from a tmux pane target like "1.2" → 1.
+///
+/// Returns 0 if the target is malformed.
+fn parse_window_index(target: &str) -> usize {
+    target
+        .split_once('.')
+        .and_then(|(w, _)| w.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Builds a `Vec<WindowInfo>` by grouping panes by window index.
+///
+/// - `pane_targets`: tmux window.pane addresses, e.g. `["0.0", "0.1", "1.0"]`
+/// - `pane_commands`: command running in each pane (parallel to targets)
+/// - `pane_titles`: pane title for each pane (parallel to targets)
+/// - `window_names`: window name per pane row (parallel to targets). When empty,
+///   synthetic names like `"window:0"` are derived from the window index.
+/// - `window_active`: "1" means active window, anything else means inactive
+///   (parallel to targets). When empty, all windows are marked inactive.
+///
+/// Windows are returned sorted by their tmux window index. Within each window,
+/// panes appear in the order they were encountered in `pane_targets`.
+pub fn build_windows(
+    pane_targets: &[String],
+    pane_commands: &[String],
+    pane_titles: &[String],
+    window_names: &[String],
+    window_active: &[String],
+) -> Vec<WindowInfo> {
+    if pane_targets.is_empty() {
+        return Vec::new();
+    }
+
+    // Use an ordered vec of (window_index, WindowInfo) to preserve insertion order.
+    // We'll sort by index at the end.
+    let mut window_order: Vec<usize> = Vec::new();
+    let mut window_map: std::collections::HashMap<usize, WindowInfo> =
+        std::collections::HashMap::new();
+
+    let empty = String::new();
+
+    for (flat_idx, target) in pane_targets.iter().enumerate() {
+        let win_idx = parse_window_index(target);
+        let cmd = pane_commands.get(flat_idx).unwrap_or(&empty);
+        let title = pane_titles.get(flat_idx).unwrap_or(&empty);
+
+        let pane = PaneInfo::new(flat_idx, target, cmd, title);
+
+        if let Some(window) = window_map.get_mut(&win_idx) {
+            window.panes.push(pane);
+        } else {
+            // Derive window name: use provided name or synthesize.
+            let name = if window_names.is_empty() {
+                format!("window:{win_idx}")
+            } else {
+                window_names
+                    .get(flat_idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("window:{win_idx}"))
+            };
+
+            // Active flag: "1" means active.
+            let is_active = window_active
+                .get(flat_idx)
+                .map(|s| s == "1")
+                .unwrap_or(false);
+
+            window_order.push(win_idx);
+            window_map.insert(
+                win_idx,
+                WindowInfo {
+                    index: win_idx,
+                    name,
+                    is_active,
+                    panes: vec![pane],
+                },
+            );
+        }
+    }
+
+    // Return windows sorted by tmux window index.
+    window_order.sort_unstable();
+    window_order.dedup();
+    window_order
+        .into_iter()
+        .filter_map(|idx| window_map.remove(&idx))
+        .collect()
+}
+
+/// Builds both the structured window hierarchy and the denormalized flat pane list.
+///
+/// The flat `panes` vec is kept on `EnrichedSession` for backward compatibility —
+/// it's all panes in window order, concatenated. The 28+ call sites that use
+/// `session.panes` continue working without changes.
+///
+/// # Arguments
+/// - `pane_targets`: tmux window.pane addresses (e.g. "0.0", "1.2")
+/// - `pane_commands`: command running in each pane
+/// - `pane_titles`: title for each pane
+/// - `window_names`: window name per pane row; empty → synthetic names
+/// - `window_active`: "1" or "0" per pane row; empty → all inactive
+pub fn build_windows_and_panes(
+    pane_targets: &[String],
+    pane_commands: &[String],
+    pane_titles: &[String],
+    window_names: &[String],
+    window_active: &[String],
+) -> (Vec<WindowInfo>, Vec<PaneInfo>) {
+    let windows = build_windows(
+        pane_targets,
+        pane_commands,
+        pane_titles,
+        window_names,
+        window_active,
+    );
+    let panes = windows.iter().flat_map(|w| w.panes.clone()).collect();
+    (windows, panes)
+}
+
+// ---------------------------------------------------------------------------
 // EnrichedSession
 // ---------------------------------------------------------------------------
 
@@ -164,14 +304,21 @@ pub fn build_pane_infos(
 ///
 /// This is the primary session type consumed by the TUI and JSON output.
 /// The `claude` field is `None` when no Claude process is detected.
-/// The `panes` field contains per-pane metadata for sub-row rendering.
+/// The `windows` field contains the structured session → window → pane hierarchy.
+/// The `panes` field is a denormalized flat list derived from `windows`, kept
+/// for backward compatibility with the 28+ call sites that access it directly.
 #[derive(Debug, Clone)]
 pub struct EnrichedSession {
     /// Pure tmux session data.
     pub tmux: TmuxSessionInfo,
     /// Claude-specific enrichment, if a Claude process is active.
     pub claude: Option<ClaudeSessionInfo>,
-    /// Per-pane metadata for all panes in this session.
+    /// Structured window hierarchy for this session.
+    pub windows: Vec<WindowInfo>,
+    /// Per-pane metadata for all panes in this session (denormalized flat list).
+    ///
+    /// Derived from `windows` — all panes in window order concatenated.
+    /// Preserved for backward compatibility; use `windows` for hierarchy-aware code.
     pub panes: Vec<PaneInfo>,
 }
 
@@ -316,6 +463,116 @@ mod tests {
         assert_eq!(panes.len(), 2);
         assert_eq!(panes[0].tmux_target, "0.0");
         assert_eq!(panes[1].tmux_target, "0.1");
+    }
+
+    // -- WindowInfo / build_windows tests -----------------------------------
+
+    fn svec(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn build_windows_groups_panes_by_window_index() {
+        let targets = svec(&["0.0", "0.1", "1.0", "1.1"]);
+        let cmds = svec(&["bash", "vim", "nvim", "cargo"]);
+        let titles = svec(&["bash", "vim", "nvim", "cargo"]);
+        let names = svec(&["main", "main", "editor", "editor"]);
+        let active = svec(&["1", "1", "0", "0"]);
+
+        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].index, 0);
+        assert_eq!(windows[0].name, "main");
+        assert!(windows[0].is_active);
+        assert_eq!(windows[0].panes.len(), 2);
+        assert_eq!(windows[1].index, 1);
+        assert_eq!(windows[1].name, "editor");
+        assert!(!windows[1].is_active);
+        assert_eq!(windows[1].panes.len(), 2);
+    }
+
+    #[test]
+    fn build_windows_contains_correct_pane_references() {
+        let targets = svec(&["0.0", "0.1", "1.0"]);
+        let cmds = svec(&["bash", "vim", "nvim"]);
+        let titles = svec(&["bash", "vim", "nvim"]);
+        let names = svec(&["shell", "shell", "code"]);
+        let active = svec(&["1", "1", "0"]);
+
+        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+
+        assert_eq!(windows[0].panes[0].tmux_target, "0.0");
+        assert_eq!(windows[0].panes[1].tmux_target, "0.1");
+        assert_eq!(windows[1].panes[0].tmux_target, "1.0");
+    }
+
+    #[test]
+    fn build_windows_single_window_produces_one_entry() {
+        let targets = svec(&["0.0", "0.1"]);
+        let cmds = svec(&["bash", "vim"]);
+        let titles = svec(&["bash", "vim"]);
+        let names = svec(&["main", "main"]);
+        let active = svec(&["1", "1"]);
+
+        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].panes.len(), 2);
+    }
+
+    #[test]
+    fn build_windows_empty_input_returns_empty() {
+        let windows = build_windows(&[], &[], &[], &[], &[]);
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn build_windows_missing_window_names_synthesizes_fallback() {
+        let targets = svec(&["0.0", "0.1", "1.0"]);
+        let cmds = svec(&["bash", "vim", "nvim"]);
+        let titles = svec(&["bash", "vim", "nvim"]);
+
+        // Pass empty window_names and window_active
+        let windows = build_windows(&targets, &cmds, &titles, &[], &[]);
+
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].name, "window:0");
+        assert_eq!(windows[1].name, "window:1");
+        assert!(!windows[0].is_active);
+        assert!(!windows[1].is_active);
+    }
+
+    #[test]
+    fn build_windows_discontinuous_indices() {
+        let targets = svec(&["0.0", "2.0", "5.0"]);
+        let cmds = svec(&["bash", "vim", "nvim"]);
+        let titles = svec(&["bash", "vim", "nvim"]);
+        let names = svec(&["main", "editor", "logs"]);
+        let active = svec(&["0", "1", "0"]);
+
+        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].index, 0);
+        assert_eq!(windows[1].index, 2);
+        assert_eq!(windows[2].index, 5);
+    }
+
+    #[test]
+    fn build_windows_and_panes_denormalized_matches_flattened() {
+        let targets = svec(&["0.0", "0.1", "1.0"]);
+        let cmds = svec(&["bash", "vim", "nvim"]);
+        let titles = svec(&["bash", "vim", "nvim"]);
+        let names = svec(&["main", "main", "editor"]);
+        let active = svec(&["1", "1", "0"]);
+
+        let (windows, panes) = build_windows_and_panes(&targets, &cmds, &titles, &names, &active);
+
+        let expected: Vec<PaneInfo> = windows.iter().flat_map(|w| w.panes.clone()).collect();
+
+        assert_eq!(panes, expected);
+        assert_eq!(panes.len(), 3);
     }
 }
 
