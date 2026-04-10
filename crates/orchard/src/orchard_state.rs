@@ -467,7 +467,10 @@ mod tests {
             is_draft: true,
         };
         let pr_state = PrState::from(&pr_info);
-        assert!(pr_state.is_draft, "is_draft must propagate from PrInfo to PrState");
+        assert!(
+            pr_state.is_draft,
+            "is_draft must propagate from PrInfo to PrState"
+        );
     }
 
     // -- From<&EnrichedSession> for SessionState tests ----------------------

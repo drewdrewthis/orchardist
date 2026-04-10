@@ -979,6 +979,7 @@ impl App {
 struct SubRowContext<'a> {
     show_branch: bool,
     has_remote: bool,
+    has_tags: bool,
     theme: &'a Theme,
     bar_color: Color,
     prefix: &'a str,
@@ -1009,14 +1010,21 @@ impl App {
 
         let show_branch = self.show_branch_column;
 
+        // TAGS column is visible when any worktree row has a draft PR.
+        let has_tags = tasks
+            .iter()
+            .any(|vt| vt.row.pr.as_ref().is_some_and(|pr| pr.is_draft));
+
         // Compute available width for the TITLE column.
         // Column order: BAR (1) + # (3) + CLAUDE (10) + ISSUE (6) + TITLE (flex)
-        //               + [BRANCH (20)] + [HOST (12)] + STATUS (22)
+        //               + [BRANCH (20)] + [HOST (12)] + [TAGS (7)] + STATUS (22)
         // Each column has 1 spacing. Plus borders (2).
         let fixed = 1 + 1 + 3 + 1 + 10 + 1 + 6 + 1 + 1 + 22 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 12 + 1 } else { 0 };
-        let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
+        let tags_extra = if has_tags { 7 + 1 } else { 0 };
+        let title_width =
+            (area.width as usize).saturating_sub(fixed + branch_extra + host_extra + tags_extra);
 
         // Column widths — CLAUDE after #, STATUS at end.
         let mut widths: Vec<Constraint> = vec![
@@ -1032,6 +1040,9 @@ impl App {
         if has_remote {
             widths.push(Constraint::Length(12)); // HOST
         }
+        if has_tags {
+            widths.push(Constraint::Length(7)); // TAGS
+        }
         widths.push(Constraint::Length(22)); // STATUS (last)
 
         // Build rows for the table, including standalone sessions and section header rows.
@@ -1041,6 +1052,7 @@ impl App {
             &tasks,
             show_branch,
             has_remote,
+            has_tags,
             title_width,
             num_columns,
         );
@@ -1122,6 +1134,9 @@ impl App {
         }
         if has_remote {
             header_cells.push(Cell::from("HOST"));
+        }
+        if has_tags {
+            header_cells.push(Cell::from("TAGS"));
         }
         header_cells.push(Cell::from("STATUS"));
         let header_row = Row::new(header_cells).style(header_style);
@@ -1340,7 +1355,7 @@ impl App {
 
     /// Builds table rows: standalone sessions first, then worktree task rows with group headers.
     ///
-    /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], STATUS.
+    /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], [TAGS], STATUS.
     /// Unified sequential numbering across standalone + worktree rows.
     /// Expanded rows get pane sub-rows inserted after the parent.
     fn build_task_table_rows_with_standalone(
@@ -1348,6 +1363,7 @@ impl App {
         tasks: &[VisibleTask],
         show_branch: bool,
         has_remote: bool,
+        has_tags: bool,
         title_width: usize,
         num_columns: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>, Option<usize>) {
@@ -1408,6 +1424,9 @@ impl App {
             if has_remote {
                 cells.push(Cell::from("")); // always local
             }
+            if has_tags {
+                cells.push(Cell::from("")); // no tags for standalone sessions
+            }
             cells.push(Cell::from(status_text).style(status_style));
 
             rows.push(Row::new(cells).style(row_style));
@@ -1418,6 +1437,7 @@ impl App {
                 let sub_ctx = SubRowContext {
                     show_branch,
                     has_remote,
+                    has_tags,
                     theme,
                     bar_color: Color::DarkGray,
                     prefix: "",
@@ -1641,6 +1661,15 @@ impl App {
                 cells.push(host_cell);
             }
 
+            if has_tags {
+                let tags_cell = if vt.row.pr.as_ref().is_some_and(|pr| pr.is_draft) {
+                    Cell::from(" draft").style(Style::default().fg(theme.dimmed))
+                } else {
+                    Cell::from("")
+                };
+                cells.push(tags_cell);
+            }
+
             cells.push(status_cell);
 
             rows.push(Row::new(cells).style(row_style));
@@ -1651,6 +1680,7 @@ impl App {
                 let sub_ctx = SubRowContext {
                     show_branch,
                     has_remote,
+                    has_tags,
                     theme,
                     bar_color,
                     prefix: "",
@@ -1752,6 +1782,9 @@ impl App {
             if ctx.has_remote {
                 cells.push(Cell::from("")); // HOST: empty
             }
+            if ctx.has_tags {
+                cells.push(Cell::from("")); // TAGS: empty
+            }
             cells.push(Cell::from("")); // STATUS: empty
 
             rows.push(Row::new(cells).style(row_style));
@@ -1836,6 +1869,9 @@ impl App {
             }
             if ctx.has_remote {
                 cells.push(Cell::from(""));
+            }
+            if ctx.has_tags {
+                cells.push(Cell::from("")); // TAGS: empty
             }
             cells.push(Cell::from("")); // STATUS: empty
 
@@ -3497,6 +3533,207 @@ mod tests {
         assert!(
             table_chunk_height >= TABLE_MIN_HEIGHT,
             "table chunk height {table_chunk_height} should be >= {TABLE_MIN_HEIGHT}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // TAGS column tests
+    // -----------------------------------------------------------------------
+
+    fn make_draft_pr_row(issue: u32) -> WorktreeRow {
+        WorktreeRow {
+            pr: Some(PrInfo {
+                number: issue,
+                branch: format!("feat/issue-{}", issue),
+                state: None,
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+                is_draft: true,
+            }),
+            ..make_task_row(issue, DisplayGroup::Other)
+        }
+    }
+
+    fn make_non_draft_pr_row(issue: u32) -> WorktreeRow {
+        WorktreeRow {
+            pr: Some(PrInfo {
+                number: issue,
+                branch: format!("feat/issue-{}", issue),
+                state: None,
+                review_decision: None,
+                checks_state: None,
+                has_conflicts: false,
+                unresolved_threads: 0,
+                is_draft: false,
+            }),
+            ..make_task_row(issue, DisplayGroup::Other)
+        }
+    }
+
+    /// Collects all rendered text from the terminal buffer.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        text
+    }
+
+    /// Finds the header line (the one containing "TITLE" and "STATUS").
+    fn find_header_line(buffer: &ratatui::buffer::Buffer) -> Option<String> {
+        for y in 0..buffer.area.height {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            if line.contains("TITLE") && line.contains("STATUS") {
+                return Some(line);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn tags_column_appears_in_header_when_any_row_has_draft_pr() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_draft_pr_row(1)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            header.contains("TAGS"),
+            "TAGS header must appear when a draft PR exists; header: {:?}",
+            header
+        );
+    }
+
+    #[test]
+    fn tags_column_hidden_when_no_rows_have_draft_prs() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![
+            make_non_draft_pr_row(1),
+            make_task_row(2, DisplayGroup::Other),
+        ]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            !header.contains("TAGS"),
+            "TAGS header must be absent when no draft PRs exist; header: {:?}",
+            header
+        );
+    }
+
+    #[test]
+    fn draft_badge_appears_for_draft_pr_row() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_draft_pr_row(1)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("draft"),
+            "rendered output must contain 'draft' badge for a draft PR row"
+        );
+    }
+
+    #[test]
+    fn tags_cell_empty_for_non_draft_pr_when_tags_column_visible() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // One draft row makes TAGS column visible; second row is non-draft.
+        let app = App::new_test(vec![make_draft_pr_row(1), make_non_draft_pr_row(2)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            header.contains("TAGS"),
+            "TAGS column must be visible when at least one draft PR exists"
+        );
+        // The column exists but non-draft row contributes no extra "draft" text beyond row 1.
+        // We simply confirm the render doesn't panic and TAGS column is present.
+    }
+
+    #[test]
+    fn tags_cell_empty_for_row_without_pr() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // One draft row forces TAGS visible; second row has no PR.
+        let app = App::new_test(vec![
+            make_draft_pr_row(1),
+            make_task_row(2, DisplayGroup::Other),
+        ]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        // Render must succeed without panic — column exists with empty cell for no-PR row.
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(header.contains("TAGS"), "TAGS must be present");
+    }
+
+    #[test]
+    fn tags_column_not_present_with_all_non_draft_prs() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let rows: Vec<WorktreeRow> = (1..=3).map(make_non_draft_pr_row).collect();
+        let app = App::new_test(rows);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        assert!(
+            !header.contains("TAGS"),
+            "TAGS must not appear when all PRs are non-draft; header: {:?}",
+            header
+        );
+        assert!(
+            header.contains("STATUS"),
+            "STATUS must remain last column; header: {:?}",
+            header
+        );
+    }
+
+    #[test]
+    fn tags_column_appears_after_title_before_status() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = App::new_test(vec![make_draft_pr_row(1)]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render_task_list(f)).unwrap();
+
+        let header = find_header_line(terminal.backend().buffer()).unwrap();
+        let tags_pos = header.find("TAGS").unwrap();
+        let status_pos = header.find("STATUS").unwrap();
+        assert!(
+            tags_pos < status_pos,
+            "TAGS ({}) must appear before STATUS ({})",
+            tags_pos,
+            status_pos
         );
     }
 }

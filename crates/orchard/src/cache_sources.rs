@@ -829,6 +829,7 @@ mod tests {
     }
 
     /// Helper to build a single PR node in GraphQL format with explicit `is_draft` flag.
+    #[allow(clippy::too_many_arguments)]
     fn gql_pr_node_draft(
         number: u32,
         branch: &str,
@@ -1073,7 +1074,10 @@ mod tests {
         let node = gql_pr_node_draft(1, "feat/x", None, "MERGEABLE", None, vec![], 0, true);
         let json = graphql_prs(json!([node]));
         let prs = parse_prs_graphql(&json);
-        assert!(prs[0].is_draft, "isDraft field must be parsed from GraphQL response");
+        assert!(
+            prs[0].is_draft,
+            "isDraft field must be parsed from GraphQL response"
+        );
     }
 
     // -- parse_worktree_porcelain -------------------------------------------
