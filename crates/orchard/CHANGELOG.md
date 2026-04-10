@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.5.0...orchard-v0.6.0) (2026-04-10)
+
+
+### Features
+
+* **gui:** GUI v0 prototype — workspace refactor + Tauri scaffold + Rust commands ([#161](https://github.com/drewdrewthis/git-orchard-rs/issues/161)) ([#172](https://github.com/drewdrewthis/git-orchard-rs/issues/172)) ([50816aa](https://github.com/drewdrewthis/git-orchard-rs/commit/50816aabf6713061a8705e321eecf3bfe08b7823))
+* **tui:** auto-zoom pane on Enter ([#182](https://github.com/drewdrewthis/git-orchard-rs/issues/182)) ([#185](https://github.com/drewdrewthis/git-orchard-rs/issues/185)) ([9bbf360](https://github.com/drewdrewthis/git-orchard-rs/commit/9bbf360ff683cf4b0df874cf390a2f203c60f9a5))
+* **tui:** expand all session rows by default ([#199](https://github.com/drewdrewthis/git-orchard-rs/issues/199)) ([898d691](https://github.com/drewdrewthis/git-orchard-rs/commit/898d691c19822f6a79e98311cb2cee8fe1f586dd))
+* **tui:** full tmux session/window/pane hierarchy ([#189](https://github.com/drewdrewthis/git-orchard-rs/issues/189)) ([2072504](https://github.com/drewdrewthis/git-orchard-rs/commit/20725047c39ecf4c9c213fb6f472eeec24659a15))
+* **tui:** replace space-leader with dedicated search bar ([#183](https://github.com/drewdrewthis/git-orchard-rs/issues/183)) ([#187](https://github.com/drewdrewthis/git-orchard-rs/issues/187)) ([edf9aa6](https://github.com/drewdrewthis/git-orchard-rs/commit/edf9aa669f9385f8ef015d828e99d5aa079c3af6))
+* **watch:** event-driven watch system with subscription model ([#194](https://github.com/drewdrewthis/git-orchard-rs/issues/194)) ([955b542](https://github.com/drewdrewthis/git-orchard-rs/commit/955b542f597e33f1c9a8922cebf606f5bdc6d93f))
+
+
+### Bug Fixes
+
+* **init:** embed absolute orchard path in wrapper scripts ([#186](https://github.com/drewdrewthis/git-orchard-rs/issues/186)) ([f024a56](https://github.com/drewdrewthis/git-orchard-rs/commit/f024a56ae002f29059a96461362ffabc0b31a3a6))
+* **tui:** align fuzzy highlight offsets and fix window sub-row layout ([#200](https://github.com/drewdrewthis/git-orchard-rs/issues/200)) ([72910ff](https://github.com/drewdrewthis/git-orchard-rs/commit/72910ffdb0b43a10d7365dab8147af9732c2c593))
+* **tui:** Enter activates highlighted row even with active filter ([#188](https://github.com/drewdrewthis/git-orchard-rs/issues/188)) ([85222b0](https://github.com/drewdrewthis/git-orchard-rs/commit/85222b0a4aa64627d16f63065f201ad4a90ade01)), closes [#163](https://github.com/drewdrewthis/git-orchard-rs/issues/163)
+
 ## [0.5.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.4.0...orchard-v0.5.0) (2026-04-08)
 
 
