@@ -427,14 +427,13 @@ impl App {
             }
         }
         for vt in tasks.iter() {
-            if self.expanded.contains(&vt.row.worktree_path) {
-                if let Some(s) = vt.row.sessions.first() {
-                    if s.windows.len() > 1 {
-                        for (i, _) in s.windows.iter().enumerate() {
-                            self.window_expanded
-                                .insert(Self::window_expansion_key(&s.tmux.name, i));
-                        }
-                    }
+            if self.expanded.contains(&vt.row.worktree_path)
+                && let Some(s) = vt.row.sessions.first()
+                && s.windows.len() > 1
+            {
+                for (i, _) in s.windows.iter().enumerate() {
+                    self.window_expanded
+                        .insert(Self::window_expansion_key(&s.tmux.name, i));
                 }
             }
         }
