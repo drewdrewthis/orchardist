@@ -265,8 +265,28 @@ fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
         );
     }
     if pr.checks_state.as_deref() == Some("failing") {
+        let detail = if pr.failing_checks.is_empty() {
+            String::new()
+        } else if pr.failing_checks.len() <= 3 {
+            format!(
+                ": {}",
+                pr.failing_checks
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            let shown: Vec<&str> = pr
+                .failing_checks
+                .iter()
+                .take(3)
+                .map(|c| c.name.as_str())
+                .collect();
+            format!(": {} +{} more", shown.join(", "), pr.failing_checks.len() - 3)
+        };
         return (
-            format!("{}\u{2716} failing", prefix),
+            format!("{}\u{2716} failing{}", prefix, detail),
             Style::default().fg(theme.error),
         );
     }
@@ -2242,6 +2262,7 @@ mod tests {
             issue_number: Some(issue_number),
             issue_title: Some(format!("Test task {}", issue_number)),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: group,
@@ -2361,6 +2382,8 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
@@ -2460,6 +2483,8 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2482,6 +2507,8 @@ mod tests {
                 checks_state: None,
                 has_conflicts: true,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2504,6 +2531,8 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 3,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2518,6 +2547,7 @@ mod tests {
 
     #[test]
     fn pr_status_failing_ci() {
+        use crate::orchard_state::FailedCheck;
         let row = WorktreeRow {
             pr: Some(PrInfo {
                 number: 1,
@@ -2527,11 +2557,80 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![FailedCheck {
+                    name: "e2e-tests".to_string(),
+                    conclusion: "FAILURE".to_string(),
+                }],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
         let (text, _) = pr_status_text(&row, &Theme::default());
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+        assert!(
+            text.contains("e2e-tests"),
+            "expected check name 'e2e-tests' in: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn pr_status_failing_ci_no_checks_shows_no_detail() {
+        let row = WorktreeRow {
+            pr: Some(PrInfo {
+                number: 1,
+                branch: "feat/branch".to_string(),
+                state: None,
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
+            }),
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = pr_status_text(&row, &Theme::default());
+        assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+        // No colon-separated detail when failing_checks is empty.
+        assert!(!text.contains(':'), "unexpected colon in: {}", text);
+    }
+
+    #[test]
+    fn pr_status_failing_ci_truncates_at_four_checks() {
+        use crate::orchard_state::FailedCheck;
+        let failing_checks = vec![
+            FailedCheck { name: "check-a".to_string(), conclusion: "FAILURE".to_string() },
+            FailedCheck { name: "check-b".to_string(), conclusion: "FAILURE".to_string() },
+            FailedCheck { name: "check-c".to_string(), conclusion: "FAILURE".to_string() },
+            FailedCheck { name: "check-d".to_string(), conclusion: "FAILURE".to_string() },
+        ];
+        let row = WorktreeRow {
+            pr: Some(PrInfo {
+                number: 2,
+                branch: "feat/branch".to_string(),
+                state: None,
+                review_decision: None,
+                checks_state: Some("failing".to_string()),
+                has_conflicts: false,
+                unresolved_threads: 0,
+                failing_checks,
+                labels: vec![],
+            }),
+            ..make_task_row(2, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = pr_status_text(&row, &Theme::default());
+        assert!(text.contains("failing"), "expected 'failing' in: {}", text);
+        assert!(
+            text.contains("+1 more"),
+            "expected '+1 more' truncation in: {}",
+            text
+        );
+        assert!(
+            text.contains("check-a"),
+            "expected first check name in: {}",
+            text
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2678,6 +2777,8 @@ mod tests {
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::Other)
         };
@@ -2787,6 +2888,8 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };

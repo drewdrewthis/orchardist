@@ -405,6 +405,7 @@ mod tests {
             issue_number: Some(42),
             issue_title: Some("Fix Azure integration bug".to_string()),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: DisplayGroup::NeedsAttention,
@@ -484,6 +485,8 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..base_row()
         };
@@ -539,6 +542,8 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                failing_checks: vec![],
+                labels: vec![],
             }),
             ..base_row()
         };

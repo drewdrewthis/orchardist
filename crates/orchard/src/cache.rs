@@ -52,7 +52,16 @@ pub struct CachedPr {
     /// the GraphQL `closingIssuesReferences` nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_issue_state: Option<String>,
+    /// Individual non-passing CI checks (ALL non-passing, before exclusion filtering).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing_checks: Vec<crate::orchard_state::FailedCheck>,
+    /// Labels applied to this PR.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
+
+// Re-export FailedCheck for convenience in tests and other modules.
+pub use crate::orchard_state::FailedCheck;
 
 /// A git worktree entry as stored in the worktrees cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -311,6 +320,8 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            failing_checks: vec![],
+            labels: vec![],
         }
     }
 
@@ -635,5 +646,53 @@ mod tests {
         // Also verify the JSON on disk contains the field name.
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"last_refreshed\""));
+    }
+
+    // -- CachedPr backward compat -------------------------------------------
+
+    #[test]
+    fn cached_pr_missing_failing_checks_defaults_to_empty() {
+        // Old cache format without failing_checks field.
+        let json = r#"{
+            "number": 7,
+            "branch": "feat/my-branch",
+            "linked_issue": 42,
+            "state": "open",
+            "review_decision": "approved",
+            "checks_state": "passing",
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+        let parsed: CachedPr = serde_json::from_str(json).unwrap();
+        assert!(
+            parsed.failing_checks.is_empty(),
+            "failing_checks should default to empty vec when missing from JSON"
+        );
+    }
+
+    #[test]
+    fn cached_pr_failing_checks_roundtrip() {
+        let pr = CachedPr {
+            failing_checks: vec![FailedCheck {
+                name: "e2e-tests".to_string(),
+                conclusion: "FAILURE".to_string(),
+            }],
+            ..make_pr()
+        };
+        let json = serde_json::to_string(&pr).unwrap();
+        let parsed: CachedPr = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.failing_checks.len(), 1);
+        assert_eq!(parsed.failing_checks[0].name, "e2e-tests");
+        assert_eq!(parsed.failing_checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn cached_pr_empty_failing_checks_not_serialized() {
+        let pr = make_pr(); // failing_checks: vec![]
+        let json = serde_json::to_string(&pr).unwrap();
+        assert!(
+            !json.contains("failing_checks"),
+            "empty failing_checks should be omitted from JSON"
+        );
     }
 }

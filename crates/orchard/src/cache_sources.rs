@@ -6,6 +6,7 @@
 use std::process::Command;
 
 use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
+use crate::orchard_state::FailedCheck;
 use crate::global_config::RepoConfig;
 use crate::logger::LOG;
 use crate::remote;
@@ -126,6 +127,17 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 Some(normalised.to_string())
             });
 
+            let failing_checks = extract_failing_checks(v);
+
+            let labels: Vec<String> = v["labels"]["nodes"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|n| n["name"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             Some(CachedPr {
                 number,
                 branch,
@@ -136,6 +148,8 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 has_conflicts,
                 unresolved_threads,
                 linked_issue_state,
+                failing_checks,
+                labels,
             })
         })
         .collect()
@@ -154,6 +168,71 @@ fn derive_checks_state_graphql(pr: &serde_json::Value) -> Option<String> {
         "PENDING" => Some("pending".to_string()),
         _ => None,
     }
+}
+
+/// Extracts individual failing CI check details from the GraphQL PR response.
+///
+/// Navigates to `commits.nodes[last].commit.statusCheckRollup.contexts.nodes`
+/// and collects all non-passing, actionable checks. Logs a warning when the
+/// contexts list is paginated (more than 100 checks — extremely rare).
+///
+/// Filters applied:
+/// - **Included** conclusions: `FAILURE`, `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`
+/// - **Excluded** (transient / not actionable): `CANCELLED`, `STALE`, `SUCCESS`, `NEUTRAL`, `SKIPPED`
+/// - `StatusContext` states `FAILURE` and `ERROR` are mapped to conclusion `FAILURE`.
+pub fn extract_failing_checks(pr: &serde_json::Value) -> Vec<FailedCheck> {
+    let rollup = match pr["commits"]["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.last())
+    {
+        Some(node) => &node["commit"]["statusCheckRollup"],
+        None => return Vec::new(),
+    };
+
+    let contexts = match rollup["contexts"]["nodes"].as_array() {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    // Warn if there are more than 100 checks (pagination not supported).
+    if rollup["contexts"]["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        LOG.warn("cache_sources: PR has more than 100 CI checks; some may be missing from failing_checks");
+    }
+
+    contexts
+        .iter()
+        .filter_map(|node| {
+            match node["__typename"].as_str()? {
+                "CheckRun" => {
+                    let name = node["name"].as_str().unwrap_or("").to_string();
+                    let conclusion = node["conclusion"].as_str().unwrap_or("").to_string();
+                    // Include only actionable failures.
+                    match conclusion.as_str() {
+                        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+                            Some(FailedCheck { name, conclusion })
+                        }
+                        _ => None,
+                    }
+                }
+                "StatusContext" => {
+                    let name = node["context"].as_str().unwrap_or("").to_string();
+                    let state = node["state"].as_str().unwrap_or("");
+                    // Map FAILURE/ERROR states to conclusion FAILURE; skip everything else.
+                    match state {
+                        "FAILURE" | "ERROR" => Some(FailedCheck {
+                            name,
+                            conclusion: "FAILURE".to_string(),
+                        }),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// Parses the output of `git worktree list --porcelain` into `Vec<CachedWorktree>`.
@@ -428,6 +507,11 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
         state
         reviewDecision
         mergeable
+        labels(first: 20) {{
+          nodes {{
+            name
+          }}
+        }}
         reviewThreads(first: 100) {{
           nodes {{
             isResolved
@@ -445,6 +529,22 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
             commit {{
               statusCheckRollup {{
                 state
+                contexts(last: 100) {{
+                  pageInfo {{
+                    hasNextPage
+                  }}
+                  nodes {{
+                    __typename
+                    ... on CheckRun {{
+                      name
+                      conclusion
+                    }}
+                    ... on StatusContext {{
+                      context
+                      state
+                    }}
+                  }}
+                }}
               }}
             }}
           }}
@@ -1257,5 +1357,198 @@ mod tests {
         assert_eq!(parsed.window_active, vec!["1"]);
         assert_eq!(parsed.titles, vec!["Claude"]);
         assert_eq!(parsed.commands, vec![" my-project:node"]);
+    }
+
+    // -- extract_failing_checks -----------------------------------------------
+
+    /// Builds a minimal PR value with a statusCheckRollup contexts array.
+    fn pr_with_check_nodes(nodes: serde_json::Value) -> serde_json::Value {
+        json!({
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "state": "FAILURE",
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": false},
+                                "nodes": nodes
+                            }
+                        }
+                    }
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn extract_failing_checks_checkrun_failure_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "e2e-tests",
+            "conclusion": "FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "e2e-tests");
+        assert_eq!(checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_checkrun_success_excluded() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "unit-tests",
+            "conclusion": "SUCCESS"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_status_context_failure_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "StatusContext",
+            "context": "ci/travis",
+            "state": "FAILURE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "ci/travis");
+        assert_eq!(checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_status_context_error_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "StatusContext",
+            "context": "ci/circle",
+            "state": "ERROR"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].conclusion, "FAILURE");
+    }
+
+    #[test]
+    fn extract_failing_checks_timed_out_included() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "integration-tests",
+            "conclusion": "TIMED_OUT"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].conclusion, "TIMED_OUT");
+    }
+
+    #[test]
+    fn extract_failing_checks_cancelled_excluded() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "deploy",
+            "conclusion": "CANCELLED"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_stale_excluded() {
+        let pr = pr_with_check_nodes(json!([{
+            "__typename": "CheckRun",
+            "name": "stale-job",
+            "conclusion": "STALE"
+        }]));
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_pagination_warning_does_not_panic() {
+        // When hasNextPage is true, a warning is logged but no panic occurs.
+        let pr = json!({
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "state": "FAILURE",
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": true},
+                                "nodes": [{
+                                    "__typename": "CheckRun",
+                                    "name": "test",
+                                    "conclusion": "FAILURE"
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+        // Must not panic; result should still include the visible checks.
+        let checks = extract_failing_checks(&pr);
+        assert_eq!(checks.len(), 1);
+    }
+
+    #[test]
+    fn extract_failing_checks_empty_when_no_commits() {
+        let pr = json!({"commits": {"nodes": []}});
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn extract_failing_checks_empty_when_rollup_null() {
+        let pr = json!({
+            "commits": {
+                "nodes": [{"commit": {"statusCheckRollup": null}}]
+            }
+        });
+        let checks = extract_failing_checks(&pr);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn parse_prs_graphql_includes_failing_checks() {
+        // Integration: parse_prs_graphql should populate failing_checks from check nodes.
+        let pr_node = json!({
+            "number": 42,
+            "headRefName": "feat/fix",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {"nodes": []},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "state": "FAILURE",
+                            "contexts": {
+                                "pageInfo": {"hasNextPage": false},
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "name": "unit-tests",
+                                        "conclusion": "FAILURE"
+                                    },
+                                    {
+                                        "__typename": "CheckRun",
+                                        "name": "lint",
+                                        "conclusion": "SUCCESS"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+        let json = graphql_prs(json!([pr_node]));
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].failing_checks.len(), 1);
+        assert_eq!(prs[0].failing_checks[0].name, "unit-tests");
     }
 }

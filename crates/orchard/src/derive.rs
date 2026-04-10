@@ -68,6 +68,10 @@ pub struct PrInfo {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Individual non-passing CI checks, before non-blocking exclusion filtering.
+    pub failing_checks: Vec<crate::orchard_state::FailedCheck>,
+    /// Labels applied to this PR.
+    pub labels: Vec<String>,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -89,6 +93,8 @@ pub struct WorktreeRow {
     /// State of the linked issue ("open", "closed", "completed"), if any.
     /// Used to detect stale worktrees whose issue has been resolved without a PR.
     pub issue_state: Option<String>,
+    /// Labels applied to the linked issue, if any.
+    pub issue_labels: Vec<String>,
     /// Linked pull request, if one exists for this branch.
     pub pr: Option<PrInfo>,
     /// Active tmux sessions associated with this worktree path.
@@ -148,6 +154,9 @@ pub fn derive_worktree_rows(
         let linked_issue = issue_number.and_then(|num| issues.iter().find(|i| i.number == num));
         let issue_title = linked_issue.map(|i| i.title.clone());
         let issue_state = linked_issue.map(|i| i.state.clone());
+        let issue_labels = linked_issue
+            .map(|i| i.labels.clone())
+            .unwrap_or_default();
 
         let is_main_worktree =
             is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));
@@ -168,6 +177,7 @@ pub fn derive_worktree_rows(
             issue_number,
             issue_title,
             issue_state,
+            issue_labels,
             pr: pr_info,
             sessions: session_infos,
             display_group,
@@ -227,6 +237,8 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         checks_state: pr.checks_state.clone(),
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
+        failing_checks: pr.failing_checks.clone(),
+        labels: pr.labels.clone(),
     }
 }
 
@@ -501,6 +513,8 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            failing_checks: vec![],
+            labels: vec![],
         }
     }
 
@@ -515,6 +529,8 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            failing_checks: vec![],
+            labels: vec![],
         }
     }
 
