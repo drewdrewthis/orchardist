@@ -14,7 +14,7 @@ Feature: Phase field on PRs and issues in orchard --json
       | in-ai-review  |
       | pr-ready      |
       | blocked       |
-    And these labels are mirrored in a hardcoded `PHASE_LABELS` constant in `crates/orchard/src/derive.rs`
+    And these labels are mirrored in a hardcoded `PHASE_PRIORITY` constant in `crates/orchard/src/derive.rs` that also encodes the priority order
     And `phase` is computed from the `labels` array by a pure function `phase_from_labels`
     And when multiple phase labels are present, resolution follows a priority order:
       | rank | label         |

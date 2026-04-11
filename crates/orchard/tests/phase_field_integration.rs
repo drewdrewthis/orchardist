@@ -25,7 +25,7 @@
 mod common;
 
 use assert_cmd::Command;
-use common::{TestCacheDir, make_issue, make_pr, make_worktree};
+use common::{TestCacheDir, make_issue, make_pr};
 use orchard::cache::CachedPr;
 use serde_json::Value;
 
@@ -131,7 +131,15 @@ impl PhaseFixture {
             .unwrap();
 
         if !output.status.success() {
-            // Acceptable in CI environments without `gh` CLI.
+            // Acceptable in CI environments without `gh` CLI. Log the skip so
+            // it surfaces in test output — a silent skip would let a regression
+            // hide as a pass.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "SKIP phase_field_integration: orchard --json exited with {:?}. stderr: {}",
+                output.status.code(),
+                stderr.trim()
+            );
             return None;
         }
 

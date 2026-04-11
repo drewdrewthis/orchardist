@@ -28,23 +28,14 @@ type RepoCacheEntry = (
 /// Maximum age (in seconds) before a Claude hook state file is considered stale.
 const HOOK_STATE_STALENESS_SECS: u64 = 300;
 
-/// Phase labels applied by the `/gh-tag` skill. Source of truth:
-/// `~/.claude/skills/gh-tag/tag.sh`. Keep in sync manually.
-pub const PHASE_LABELS: &[&str] = &[
-    "investigating",
-    "needs-plan",
-    "needs-repro",
-    "planned",
-    "in-progress",
-    "in-ai-review",
-    "pr-ready",
-    "blocked",
-];
-
-/// Priority order for resolving multiple phase labels on the same issue/PR.
-/// Highest priority first. `blocked` wins over everything else — we never want
-/// a blocked PR to silently vanish from filters.
-const PHASE_PRIORITY: &[&str] = &[
+/// Workflow phase labels applied by the `/gh-tag` skill, in priority order.
+///
+/// Highest-priority first: `blocked` wins over everything so a blocked PR never
+/// silently vanishes from filters when multiple phase labels coexist.
+///
+/// Source of truth for the label set: `~/.claude/skills/gh-tag/tag.sh`.
+/// Keep in sync manually when new phase labels are added to that skill.
+pub const PHASE_PRIORITY: &[&str] = &[
     "blocked",
     "in-ai-review",
     "pr-ready",
