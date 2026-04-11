@@ -228,22 +228,60 @@ fn compute_session_age_sec(session_start_ts: Option<u64>) -> Option<u64> {
     now.checked_sub(start)
 }
 
-/// Constructs a `JsonClaudeInfo` from a `ClaudeEnrichment`.
+/// Constructs a `JsonClaudeInfo` from the raw fields shared by both enrichment types.
 ///
 /// `session_age_sec` is computed at call time so it always reflects real elapsed
 /// time rather than the time of the last hook write.
-fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> JsonClaudeInfo {
+fn build_claude_info(
+    status: ClaudeState,
+    model: Option<String>,
+    last_tool: Option<String>,
+    current_task: Option<String>,
+    session_start_ts: Option<u64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+) -> JsonClaudeInfo {
     JsonClaudeInfo {
-        status: claude_state_str(c.status).to_string(),
-        model: c.model.clone(),
-        last_tool: c.last_tool.clone(),
-        current_task: c.current_task.clone(),
-        session_age_sec: compute_session_age_sec(c.session_start_ts),
-        input_tokens: c.input_tokens,
-        output_tokens: c.output_tokens,
-        cache_creation_input_tokens: c.cache_creation_input_tokens,
-        cache_read_input_tokens: c.cache_read_input_tokens,
+        status: claude_state_str(status).to_string(),
+        model,
+        last_tool,
+        current_task,
+        session_age_sec: compute_session_age_sec(session_start_ts),
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
     }
+}
+
+fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> JsonClaudeInfo {
+    build_claude_info(
+        c.status,
+        c.model.clone(),
+        c.last_tool.clone(),
+        c.current_task.clone(),
+        c.session_start_ts,
+        c.input_tokens,
+        c.output_tokens,
+        c.cache_creation_input_tokens,
+        c.cache_read_input_tokens,
+    )
+}
+
+fn claude_info_from_session(c: &crate::session::ClaudeSessionInfo) -> JsonClaudeInfo {
+    build_claude_info(
+        c.status,
+        c.model.clone(),
+        c.last_tool.clone(),
+        c.current_task.clone(),
+        c.session_start_ts,
+        c.input_tokens,
+        c.output_tokens,
+        c.cache_creation_input_tokens,
+        c.cache_read_input_tokens,
+    )
 }
 
 fn display_group_str(g: DisplayGroup) -> &'static str {
@@ -374,7 +412,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
             crate::session::SessionStatus::Running { .. } => "running",
             crate::session::SessionStatus::Dead => "dead",
         };
-        let claude = row.session.claude.as_ref().map(claude_info_from_enrichment);
+        let claude = row.session.claude.as_ref().map(claude_info_from_session);
         let windows = row
             .session
             .windows
@@ -1075,5 +1113,25 @@ mod tests {
         assert!(info.model.is_none());
         assert!(info.last_tool.is_none());
         assert!(info.input_tokens.is_none());
+    }
+
+    /// `compute_session_age_sec` returns `None` when `session_start_ts` is ahead of now.
+    ///
+    /// Clock skew (NTP adjustment, VM resume, etc.) can cause the recorded start time
+    /// to be slightly in the future relative to the current clock. `checked_sub` handles
+    /// this cleanly — we must never return a wrapped negative value as a large u64.
+    #[test]
+    fn session_age_sec_returns_none_when_start_is_ahead_of_now() {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Set start 1000 seconds in the future.
+        let future_ts = now_secs + 1000;
+        let result = compute_session_age_sec(Some(future_ts));
+        assert!(
+            result.is_none(),
+            "session_age_sec must be None when start_ts is ahead of now (clock skew); got {result:?}"
+        );
     }
 }

@@ -75,8 +75,11 @@ pub fn run(transcript_path: &str) {
     if enrichment.is_empty() {
         println!("{{}}");
     } else {
-        // Unwrap is safe: Enrichment is always serializable.
-        println!("{}", serde_json::to_string(&enrichment).unwrap_or_else(|_| "{}".to_string()));
+        println!(
+            "{}",
+            serde_json::to_string(&enrichment)
+                .expect("Enrichment serialization is infallible — all fields are Option<primitive>")
+        );
     }
 }
 
@@ -123,19 +126,13 @@ fn parse_enrichment(data: &[u8]) -> Enrichment {
         Err(_) => return Enrichment::default(),
     };
 
-    let mut best: Option<Enrichment> = None;
-
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(e) = try_parse_line(line) {
-            best = Some(e);
-        }
-    }
-
-    best.unwrap_or_default()
+    // Scan newest-first: the last line is the most recent message, so reversing
+    // lets us return on the first hit — O(k) where k is lines from the tail
+    // to the last usable message, rather than O(n) for the whole buffer.
+    text.lines()
+        .rev()
+        .find_map(|line| try_parse_line(line.trim()))
+        .unwrap_or_default()
 }
 
 /// Attempts to parse one JSONL line as a usable assistant message.
