@@ -151,6 +151,17 @@ pub struct GlobalConfig {
     /// Configuration for the `orchard watch` daemon.
     #[serde(default)]
     pub watch: WatchConfig,
+    /// Glob patterns for gate checks (process/policy checks, not code CI).
+    ///
+    /// A check whose name matches any of these patterns is classified as a
+    /// *gate* check with its own `ci_gate_state` rollup, separate from the
+    /// `ci_code_state` rollup for ordinary CI checks.
+    ///
+    /// Patterns are case-insensitive. A single `*` does not cross `/`;
+    /// use `**` for recursive matching. Defaults to the three standard gate
+    /// checks shipped with Orchard.
+    #[serde(default = "default_ci_gate_patterns")]
+    pub ci_gate_patterns: Vec<String>,
 }
 
 impl Default for GlobalConfig {
@@ -161,8 +172,21 @@ impl Default for GlobalConfig {
             tmux_sessions: Vec::new(),
             chat_target: None,
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         }
     }
+}
+
+/// Returns the default set of gate check patterns.
+///
+/// Includes the GitHub Apps approval check, Mintlify docs deployment, and
+/// the `license/*` family of CLA checks.
+fn default_ci_gate_patterns() -> Vec<String> {
+    vec![
+        "check-approval-or-label".to_string(),
+        "Mintlify Deployment".to_string(),
+        "license/*".to_string(),
+    ]
 }
 
 fn default_terminal_app() -> String {
@@ -380,6 +404,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         chat_target: Option<String>,
         #[serde(default)]
         watch: WatchConfig,
+        #[serde(default = "default_ci_gate_patterns")]
+        ci_gate_patterns: Vec<String>,
     }
 
     let raw: RawGlobalConfig = match serde_json::from_slice(&data) {
@@ -450,6 +476,7 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         tmux_sessions,
         chat_target: raw.chat_target,
         watch: raw.watch,
+        ci_gate_patterns: raw.ci_gate_patterns,
     };
     LOG.info(&format!(
         "global_config: loaded {} repo(s), {} standalone session(s) from {}",
@@ -499,6 +526,7 @@ fn fallback_single_repo() -> GlobalConfig {
         tmux_sessions: Vec::new(),
         chat_target: None,
         watch: WatchConfig::default(),
+        ci_gate_patterns: default_ci_gate_patterns(),
     }
 }
 
@@ -839,6 +867,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: None,
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
 
@@ -873,6 +902,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: None,
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let mut f = std::fs::File::create(&path).unwrap();
@@ -1014,6 +1044,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: None,
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         };
         // CWD is a sub-directory of the already-registered path.
         let mutated = append_repo_if_new(
@@ -1038,6 +1069,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: None,
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         };
         let mutated =
             append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
@@ -1059,6 +1091,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: None,
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         };
         let mutated = append_repo_if_new(
             &mut cfg,
@@ -1120,6 +1153,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: Some("orchardist".to_string()),
             watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains(r#""chat_target":"orchardist""#));
@@ -1175,5 +1209,66 @@ mod tests {
         assert_eq!(cfg.watch.full_poll_secs, 120);
         assert_eq!(cfg.watch.threshold_cooldown_secs, 600);
         assert!(!cfg.watch.notifications);
+    }
+
+    // -----------------------------------------------------------------------
+    // ci_gate_patterns tests (tasks #20, #21, #22)
+    // -----------------------------------------------------------------------
+
+    /// Task #20: missing ci_gate_patterns field in config → defaults load.
+    #[test]
+    fn ci_gate_patterns_defaults_when_field_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path(), r#"{ "repos": [] }"#);
+        let cfg = load_from_path(&path);
+        assert_eq!(
+            cfg.ci_gate_patterns,
+            vec![
+                "check-approval-or-label".to_string(),
+                "Mintlify Deployment".to_string(),
+                "license/*".to_string(),
+            ]
+        );
+    }
+
+    /// Task #21: ci_gate_patterns serializes in snake_case on disk.
+    #[test]
+    fn ci_gate_patterns_serializes_in_snake_case() {
+        let cfg = GlobalConfig {
+            repos: vec![],
+            terminal_app: default_terminal_app(),
+            tmux_sessions: vec![],
+            chat_target: None,
+            watch: WatchConfig::default(),
+            ci_gate_patterns: vec!["custom-gate".to_string()],
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains(r#""ci_gate_patterns""#),
+            "key must be snake_case ci_gate_patterns, got: {json}"
+        );
+    }
+
+    /// Task #22: custom pattern from GlobalConfig is used by classify_check.
+    #[test]
+    fn custom_gate_pattern_via_global_config_classifies_check() {
+        use crate::ci_state::{CheckBucket, GateMatcher, classify_check};
+
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{
+            "repos": [],
+            "ci_gate_patterns": [
+                "check-approval-or-label",
+                "Mintlify Deployment",
+                "license/*",
+                "security-review"
+            ]
+        }"#;
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+
+        let matcher = GateMatcher::new(&cfg.ci_gate_patterns);
+        assert_eq!(classify_check("security-review", &matcher), CheckBucket::Gate);
+        assert_eq!(classify_check("test-unit", &matcher), CheckBucket::Code);
     }
 }

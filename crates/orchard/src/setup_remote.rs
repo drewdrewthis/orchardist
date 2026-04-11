@@ -363,6 +363,7 @@ mod tests {
             tmux_sessions: vec![],
             chat_target: None,
             watch: global_config::WatchConfig::default(),
+            ci_gate_patterns: vec![],
         }
     }
 

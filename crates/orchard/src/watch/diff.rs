@@ -56,6 +56,10 @@ fn first_session(wt: &WorktreeState) -> String {
 }
 
 /// Returns `true` when a PR is approved, CI is passing, no conflicts, and no unresolved threads.
+///
+/// Reads the legacy `checks_state` field for one release per issue #218; a
+/// follow-up will migrate this to `ci_code_state`.
+#[allow(deprecated)]
 fn is_ready_to_merge(pr: &crate::orchard_state::PrState) -> bool {
     pr.review_decision.as_deref() == Some("approved")
         && pr.checks_state.as_deref() == Some("passing")
@@ -154,26 +158,32 @@ pub fn diff(
                 let label = label_for(new_wt);
                 let pr_number = new_pr.number;
 
-                // CI failing transition
-                if new_pr.checks_state.as_deref() == Some("failing")
-                    && old_pr.checks_state.as_deref() != Some("failing")
+                // CI transitions — reads legacy `checks_state` for one release
+                // per issue #218; a follow-up will migrate these to fire on
+                // `ci_code_state` and `ci_gate_state` separately.
+                #[allow(deprecated)]
                 {
-                    events.push(WatchEvent::now(EventKind::CiFailed {
-                        worktree: path.to_string(),
-                        pr_number,
-                        label: label.clone(),
-                    }));
-                }
+                    // CI failing transition
+                    if new_pr.checks_state.as_deref() == Some("failing")
+                        && old_pr.checks_state.as_deref() != Some("failing")
+                    {
+                        events.push(WatchEvent::now(EventKind::CiFailed {
+                            worktree: path.to_string(),
+                            pr_number,
+                            label: label.clone(),
+                        }));
+                    }
 
-                // CI passing transition
-                if new_pr.checks_state.as_deref() == Some("passing")
-                    && old_pr.checks_state.as_deref() != Some("passing")
-                {
-                    events.push(WatchEvent::now(EventKind::CiPassed {
-                        worktree: path.to_string(),
-                        pr_number,
-                        label: label.clone(),
-                    }));
+                    // CI passing transition
+                    if new_pr.checks_state.as_deref() == Some("passing")
+                        && old_pr.checks_state.as_deref() != Some("passing")
+                    {
+                        events.push(WatchEvent::now(EventKind::CiPassed {
+                            worktree: path.to_string(),
+                            pr_number,
+                            label: label.clone(),
+                        }));
+                    }
                 }
 
                 // New unresolved review threads
@@ -264,8 +274,10 @@ pub fn diff(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
+    use crate::ci_state::CiChecks;
     use crate::derive::DisplayGroup;
     use crate::orchard_state::{ClaudeEnrichment, PrState, RepoState, SessionState, WorktreeState};
     use crate::watch::debounce::ClaudeDebounceState;
@@ -335,6 +347,9 @@ mod tests {
             state: Some("OPEN".to_string()),
             review_decision: None,
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             labels: vec![],

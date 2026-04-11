@@ -106,8 +106,15 @@ pub struct PrInfo {
     pub state: Option<String>,
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
-    /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
+    /// Aggregate CI checks state (legacy union field).
+    ///
+    /// Deprecated in favour of [`PrInfo::ci_code_state`]. Retained for one release
+    /// so downstream consumers are not broken. Will be removed in a future version.
     pub checks_state: Option<String>,
+    /// Rollup state for code CI checks only: "passing", "failing", "pending", or None.
+    pub ci_code_state: Option<String>,
+    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or None.
+    pub ci_gate_state: Option<String>,
     /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
@@ -276,6 +283,8 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         state: Some(pr.state.clone()),
         review_decision: pr.review_decision.clone(),
         checks_state: pr.checks_state.clone(),
+        ci_code_state: None,
+        ci_gate_state: None,
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
         labels: pr.labels.clone(),

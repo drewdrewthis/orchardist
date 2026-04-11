@@ -7,6 +7,7 @@
 
 mod browser;
 pub mod build_state;
+pub mod ci_state;
 pub mod cache;
 pub mod cache_sources;
 pub mod chat;

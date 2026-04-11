@@ -292,6 +292,7 @@ impl From<&IssueInfo> for JsonIssue {
     }
 }
 
+#[allow(deprecated)]
 impl From<&PrState> for JsonPr {
     /// Converts an internal `PrState` to JSON output format.
     fn from(pr: &PrState) -> Self {
