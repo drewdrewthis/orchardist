@@ -503,17 +503,48 @@ fn is_default_branch(branch: &str) -> bool {
 }
 
 fn is_needs_attention(pr: &PrInfo) -> bool {
-    pr.review_decision.as_deref() == Some("changes_requested")
+    if pr.review_decision.as_deref() == Some("changes_requested")
         || pr.has_conflicts
-        || pr.checks_state.as_deref() == Some("failing")
         || pr.unresolved_threads > 0
+    {
+        return true;
+    }
+
+    // Prefer ci_code_state when present: only code failures require session action.
+    // A blocked gate check means a human must approve, not that code is broken —
+    // do NOT fire NeedsAttention on gate-blocked alone (issue #218).
+    if let Some(code_state) = pr.ci_code_state.as_deref() {
+        return code_state == "failing";
+    }
+
+    // Fallback for cache files predating split CI state (ci_code_state absent).
+    #[allow(deprecated)] // checks_state: retained for one release per issue #218
+    {
+        pr.checks_state.as_deref() == Some("failing")
+    }
 }
 
 fn is_ready_to_merge(pr: &PrInfo) -> bool {
-    pr.review_decision.as_deref() == Some("approved")
-        && pr.checks_state.as_deref() == Some("passing")
-        && !pr.has_conflicts
-        && pr.unresolved_threads == 0
+    if pr.review_decision.as_deref() != Some("approved")
+        || pr.has_conflicts
+        || pr.unresolved_threads > 0
+    {
+        return false;
+    }
+
+    // Prefer ci_code_state + ci_gate_state when present.
+    // Both code must be passing AND gate must not be blocked/pending.
+    if let Some(code_state) = pr.ci_code_state.as_deref() {
+        return code_state == "passing"
+            && pr.ci_gate_state.as_deref() != Some("blocked")
+            && pr.ci_gate_state.as_deref() != Some("pending");
+    }
+
+    // Fallback for cache files predating split CI state.
+    #[allow(deprecated)] // checks_state: retained for one release per issue #218
+    {
+        pr.checks_state.as_deref() == Some("passing")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1791,6 +1822,92 @@ mod tests {
             pr_info.checks_state.as_deref(),
             Some("passing"),
             "legacy checks_state must mirror ci_code_state (not union)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Display-group helpers: split CI state (issue #218, slice 3, tasks #16-19)
+    // -----------------------------------------------------------------------
+
+    /// Builds a non-main worktree row with the given CachedPr at branch "feat/test-218".
+    fn row_with_pr(pr: CachedPr) -> WorktreeRow {
+        let wts = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-feat", "feat/test-218"),
+        ];
+        let prs = vec![pr];
+        let mut rows = derive_worktree_rows(&[], &prs, &wts, &[], "owner/repo", &[]);
+        // Second row is the feature worktree.
+        rows.remove(1)
+    }
+
+    /// Task #16: is_needs_attention does NOT fire when code is green and only the gate is blocked.
+    /// A code-green gate-blocked PR must NOT cascade into NeedsAttention.
+    #[test]
+    fn display_group_not_needs_attention_when_code_green_gate_blocked() {
+        let pr = CachedPr {
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()), // legacy mirrors ci_code_state
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("blocked".to_string()),
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_ne!(
+            row.display_group,
+            DisplayGroup::NeedsAttention,
+            "code-green gate-blocked PR must not be NeedsAttention"
+        );
+        // Also not ReadyToMerge because the gate is blocked.
+        assert_ne!(
+            row.display_group,
+            DisplayGroup::ReadyToMerge,
+            "gate-blocked PR must not be ReadyToMerge"
+        );
+    }
+
+    /// Task #17: is_ready_to_merge fires when code is green and gate is cleared.
+    #[test]
+    fn display_group_ready_to_merge_when_code_green_gate_cleared() {
+        let pr = CachedPr {
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("cleared".to_string()),
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_eq!(row.display_group, DisplayGroup::ReadyToMerge);
+    }
+
+    /// Task #18: is_needs_attention still fires when code is failing.
+    #[test]
+    fn display_group_needs_attention_when_code_failing() {
+        let pr = CachedPr {
+            checks_state: Some("failing".to_string()),
+            ci_code_state: Some("failing".to_string()),
+            ci_gate_state: Some("cleared".to_string()),
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_eq!(row.display_group, DisplayGroup::NeedsAttention);
+    }
+
+    /// Task #19: a docs-only PR with null/null CI is NOT NeedsAttention.
+    #[test]
+    fn display_group_not_needs_attention_for_docs_only_pr_with_no_ci() {
+        let pr = CachedPr {
+            review_decision: Some("approved".to_string()),
+            checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_ne!(
+            row.display_group,
+            DisplayGroup::NeedsAttention,
+            "docs-only PR with no CI checks must not be NeedsAttention"
         );
     }
 }

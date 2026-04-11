@@ -61,6 +61,19 @@ pub struct PrInfo {
     pub checks_status: ChecksStatus,
     /// Whether the PR branch has merge conflicts with its base.
     pub has_conflicts: bool,
+    /// Rollup state for code CI checks only: "passing", "failing", "pending", or None.
+    ///
+    /// When `Some`, `resolve_pr_status` prefers this over `checks_status`.
+    /// None means either the PR has no code CI checks, or the data comes from
+    /// an older cache file that predates split CI state (slice 2 of issue #218).
+    #[serde(default)]
+    pub ci_code_state: Option<String>,
+    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or None.
+    ///
+    /// A "blocked" gate check means a human action is required, not that code is broken.
+    /// `resolve_pr_status` does NOT treat a blocked gate as `Failing`.
+    #[serde(default)]
+    pub ci_gate_state: Option<String>,
 }
 
 /// Derived single-value status for a PR, used to drive display and sorting.
@@ -141,6 +154,15 @@ pub struct StatusDisplay {
 /// Derives the canonical `PrStatus` from a `PrInfo` by applying a priority-ordered
 /// set of rules (merged > closed > conflict > unresolved > changes requested > failing
 /// > review needed > pending CI > approved).
+///
+/// When `ci_code_state` is `Some`, it is preferred over the legacy `checks_status`
+/// for the failing/pending branches. A `ci_gate_state` of `"blocked"` or `"pending"`
+/// is deliberately NOT mapped to `Failing` — a blocked gate check means a human
+/// action is required, not that code is broken (issue #218).
+///
+/// When `ci_code_state` is `None` (old cache files or data predating split CI state),
+/// the function falls back to the legacy `checks_status` field so existing consumers
+/// continue to work correctly.
 pub fn resolve_pr_status(pr: &PrInfo) -> PrStatus {
     if pr.state == "merged" {
         return PrStatus::Merged;
@@ -157,13 +179,28 @@ pub fn resolve_pr_status(pr: &PrInfo) -> PrStatus {
     if pr.review_decision == ReviewDecision::ChangesRequested {
         return PrStatus::ChangesRequested;
     }
-    if pr.checks_status == ChecksStatus::Fail {
+
+    // Prefer ci_code_state when present; fall back to legacy checks_status.
+    // A blocked/pending gate is NOT treated as Failing — it is a human-action
+    // signal, not a broken-code signal.
+    let is_code_failing = pr.ci_code_state.as_deref() == Some("failing")
+        || (pr.ci_code_state.is_none() && pr.checks_status == ChecksStatus::Fail);
+    let is_code_pending = pr.ci_code_state.as_deref() == Some("pending")
+        || (pr.ci_code_state.is_none() && pr.checks_status == ChecksStatus::Pending);
+    // A pending gate (but code passing) should surface as PendingCi rather than
+    // Failing. We reuse PendingCi to avoid a cascade of enum-variant changes
+    // across every match on PrStatus (icons, labels, TUI rendering).
+    let is_gate_pending = pr.ci_gate_state.as_deref() == Some("pending")
+        && !is_code_failing
+        && !is_code_pending;
+
+    if is_code_failing {
         return PrStatus::Failing;
     }
     if pr.review_decision == ReviewDecision::ReviewRequired {
         return PrStatus::ReviewNeeded;
     }
-    if pr.checks_status == ChecksStatus::Pending {
+    if is_code_pending || is_gate_pending {
         return PrStatus::PendingCi;
     }
     if pr.review_decision == ReviewDecision::Approved || pr.review_decision == ReviewDecision::None
@@ -275,17 +312,28 @@ pub struct SwitchToSessionOptions {
 mod tests {
     use super::*;
 
-    #[test]
-    fn conflict_beats_failing_when_open() {
-        let pr = PrInfo {
+    /// Helper to build a baseline open PrInfo with no conflicts, no threads, and no CI data.
+    fn open_pr() -> PrInfo {
+        PrInfo {
             number: 1,
             state: "open".into(),
             title: String::new(),
             url: String::new(),
             review_decision: ReviewDecision::None,
             unresolved_threads: 0,
+            checks_status: ChecksStatus::None,
+            has_conflicts: false,
+            ci_code_state: None,
+            ci_gate_state: None,
+        }
+    }
+
+    #[test]
+    fn conflict_beats_failing_when_open() {
+        let pr = PrInfo {
             checks_status: ChecksStatus::Fail,
             has_conflicts: true,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Conflict);
     }
@@ -293,14 +341,10 @@ mod tests {
     #[test]
     fn merged_beats_conflicts_and_failing_ci() {
         let pr = PrInfo {
-            number: 1,
             state: "merged".into(),
-            title: String::new(),
-            url: String::new(),
-            review_decision: ReviewDecision::None,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Fail,
             has_conflicts: true,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Merged);
     }
@@ -308,14 +352,8 @@ mod tests {
     #[test]
     fn failing_ci() {
         let pr = PrInfo {
-            number: 1,
-            state: "open".into(),
-            title: String::new(),
-            url: String::new(),
-            review_decision: ReviewDecision::None,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Fail,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Failing);
     }
@@ -323,14 +361,9 @@ mod tests {
     #[test]
     fn approved() {
         let pr = PrInfo {
-            number: 1,
-            state: "open".into(),
-            title: String::new(),
-            url: String::new(),
             review_decision: ReviewDecision::Approved,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Pass,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Approved);
     }
@@ -338,14 +371,10 @@ mod tests {
     #[test]
     fn merged() {
         let pr = PrInfo {
-            number: 1,
             state: "merged".into(),
-            title: String::new(),
-            url: String::new(),
             review_decision: ReviewDecision::Approved,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Pass,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Merged);
     }
@@ -353,14 +382,9 @@ mod tests {
     #[test]
     fn pending_ci() {
         let pr = PrInfo {
-            number: 1,
-            state: "open".into(),
-            title: String::new(),
-            url: String::new(),
             review_decision: ReviewDecision::Approved,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Pending,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::PendingCi);
     }
@@ -368,14 +392,8 @@ mod tests {
     #[test]
     fn no_review_required_with_passing_ci_is_approved() {
         let pr = PrInfo {
-            number: 1,
-            state: "open".into(),
-            title: String::new(),
-            url: String::new(),
-            review_decision: ReviewDecision::None,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Pass,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::Approved);
     }
@@ -383,14 +401,8 @@ mod tests {
     #[test]
     fn no_review_required_with_pending_ci_is_pending() {
         let pr = PrInfo {
-            number: 1,
-            state: "open".into(),
-            title: String::new(),
-            url: String::new(),
-            review_decision: ReviewDecision::None,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Pending,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::PendingCi);
     }
@@ -398,16 +410,69 @@ mod tests {
     #[test]
     fn review_required_is_review_needed() {
         let pr = PrInfo {
-            number: 1,
-            state: "open".into(),
-            title: String::new(),
-            url: String::new(),
             review_decision: ReviewDecision::ReviewRequired,
-            unresolved_threads: 0,
             checks_status: ChecksStatus::Pass,
-            has_conflicts: false,
+            ..open_pr()
         };
         assert_eq!(resolve_pr_status(&pr), PrStatus::ReviewNeeded);
+    }
+
+    // -----------------------------------------------------------------------
+    // Split CI state tests (issue #218, slice 3)
+    // -----------------------------------------------------------------------
+
+    /// Task #16: code-green gate-blocked approved PR must NOT be Failing.
+    #[test]
+    fn resolve_pr_status_prefers_ci_code_state_over_legacy_gate_blocked() {
+        // ci_code_state=passing, ci_gate_state=blocked, legacy checks_status=Fail.
+        // resolve_pr_status must NOT return Failing — the gate being blocked is
+        // not a code problem, it is waiting on a human action.
+        let pr = PrInfo {
+            review_decision: ReviewDecision::Approved,
+            checks_status: ChecksStatus::Fail, // legacy would say failing
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("blocked".to_string()),
+            ..open_pr()
+        };
+        let status = resolve_pr_status(&pr);
+        assert_ne!(
+            status,
+            PrStatus::Failing,
+            "code-green gate-blocked PR must not resolve to Failing"
+        );
+        // Approved + code passing + gate blocked = Approved (waiting on gate, but
+        // code is fine and review is approved).
+        assert_eq!(status, PrStatus::Approved);
+    }
+
+    /// Task #16 (part 2): resolve_pr_status does NOT return Failing for gate-blocked
+    /// PR even when legacy checks_status would imply failure.
+    #[test]
+    fn resolve_pr_status_gate_pending_resolves_to_pending_ci_not_failing() {
+        // ci_code_state=passing, ci_gate_state=pending, legacy=None.
+        // Should surface as PendingCi (reused) not Failing.
+        let pr = PrInfo {
+            review_decision: ReviewDecision::Approved,
+            checks_status: ChecksStatus::None,
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("pending".to_string()),
+            ..open_pr()
+        };
+        let status = resolve_pr_status(&pr);
+        assert_ne!(status, PrStatus::Failing);
+        assert_eq!(status, PrStatus::PendingCi);
+    }
+
+    /// Legacy fallback: when ci_code_state is None, checks_status still drives the result.
+    #[test]
+    fn resolve_pr_status_falls_back_to_legacy_when_ci_code_state_none() {
+        let pr = PrInfo {
+            checks_status: ChecksStatus::Fail,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ..open_pr()
+        };
+        assert_eq!(resolve_pr_status(&pr), PrStatus::Failing);
     }
 
     #[test]
