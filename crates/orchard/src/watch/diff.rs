@@ -298,9 +298,14 @@ mod tests {
             host: None,
             claude: Some(ClaudeEnrichment {
                 status,
-                cost_usd: None,
-                context_window_pct: None,
                 model: None,
+                last_tool: None,
+                current_task: None,
+                session_start_ts: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
             }),
             windows: vec![],
         }];

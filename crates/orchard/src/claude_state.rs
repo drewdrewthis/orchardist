@@ -22,15 +22,30 @@ pub struct ClaudeStateFile {
     pub event: String,
     /// ISO 8601 timestamp of the last state write.
     pub timestamp: String,
-    /// Context window utilization percentage (0–100), if available from the statusline.
-    #[serde(default)]
-    pub context_window_pct: Option<f64>,
-    /// Cumulative cost in USD for this session, if available from the statusline.
-    #[serde(default)]
-    pub cost_usd: Option<f64>,
-    /// Model identifier in use (e.g. `"opus"`, `"sonnet"`), if available from the statusline.
+    /// Model identifier in use (e.g. `"claude-opus-4-6"`), written by `SessionStart`.
     #[serde(default)]
     pub model: Option<String>,
+    /// Last tool invoked, written by `PreToolUse` (cleared on `Stop`).
+    #[serde(default)]
+    pub last_tool: Option<String>,
+    /// First line of the last user prompt, truncated to 80 chars. Written by `UserPromptSubmit`.
+    #[serde(default)]
+    pub current_task: Option<String>,
+    /// Unix epoch seconds when the session started. Written by `SessionStart`.
+    #[serde(default)]
+    pub session_start_ts: Option<u64>,
+    /// Total input tokens from the most recent assistant message.
+    #[serde(default)]
+    pub input_tokens: Option<u64>,
+    /// Total output tokens from the most recent assistant message.
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+    /// Cache creation input tokens from the most recent assistant message.
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Cache read input tokens from the most recent assistant message.
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
     /// The `stop_reason` field from the `Stop` hook event payload.
     ///
     /// Present only on state files written by a `Stop` event. Values: `"end_turn"`,
@@ -180,9 +195,14 @@ mod tests {
             cwd: "/workspace/repo".to_string(),
             event: "Stop".to_string(),
             timestamp: "2026-03-25T10:00:00Z".to_string(),
-            context_window_pct: None,
-            cost_usd: None,
             model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
         }
@@ -250,15 +270,21 @@ mod tests {
             "cwd": "/workspace",
             "event": "PreToolUse",
             "timestamp": "2026-03-25T10:00:00Z",
-            "context_window_pct": 73.0,
-            "cost_usd": 0.42,
-            "model": "opus"
+            "model": "claude-opus-4-6",
+            "last_tool": "Bash",
+            "current_task": "fix the bug",
+            "session_start_ts": 1700000000,
+            "input_tokens": 1000,
+            "output_tokens": 50
         }"#;
         let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
         assert_eq!(sf.state, "working");
-        assert_eq!(sf.context_window_pct, Some(73.0));
-        assert_eq!(sf.cost_usd, Some(0.42));
-        assert_eq!(sf.model.as_deref(), Some("opus"));
+        assert_eq!(sf.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(sf.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(sf.current_task.as_deref(), Some("fix the bug"));
+        assert_eq!(sf.session_start_ts, Some(1700000000));
+        assert_eq!(sf.input_tokens, Some(1000));
+        assert_eq!(sf.output_tokens, Some(50));
     }
 
     // -- parse_remote_state_output -------------------------------------------
@@ -371,9 +397,11 @@ mod tests {
         }"#;
         let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
         assert_eq!(sf.state, "idle");
-        assert!(sf.context_window_pct.is_none());
-        assert!(sf.cost_usd.is_none());
         assert!(sf.model.is_none());
+        assert!(sf.last_tool.is_none());
+        assert!(sf.current_task.is_none());
+        assert!(sf.session_start_ts.is_none());
+        assert!(sf.input_tokens.is_none());
     }
 
     #[test]

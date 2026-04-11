@@ -70,12 +70,22 @@ pub struct TmuxSessionInfo {
 pub struct ClaudeSessionInfo {
     /// Structured Claude state (working, idle, input, none).
     pub status: ClaudeState,
-    /// Cumulative session cost in USD, if available.
-    pub cost_usd: Option<f64>,
-    /// Context window usage percentage (0-100), if available.
-    pub context_window_pct: Option<f64>,
-    /// Model name (e.g., "opus", "sonnet"), if available.
+    /// Model name (e.g., `"claude-opus-4-6"`), if available.
     pub model: Option<String>,
+    /// Last tool invoked (cleared on Stop), if available.
+    pub last_tool: Option<String>,
+    /// First line of the last user prompt (≤80 chars), if available.
+    pub current_task: Option<String>,
+    /// Unix epoch seconds when the session started, if available.
+    pub session_start_ts: Option<u64>,
+    /// Total input tokens from the most recent assistant message.
+    pub input_tokens: Option<u64>,
+    /// Total output tokens from the most recent assistant message.
+    pub output_tokens: Option<u64>,
+    /// Cache creation input tokens from the most recent assistant message.
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Cache read input tokens from the most recent assistant message.
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -332,9 +342,14 @@ impl ClaudeSessionInfo {
         }
         Some(ClaudeSessionInfo {
             status: state,
-            cost_usd: sf.cost_usd,
-            context_window_pct: sf.context_window_pct,
             model: sf.model.clone(),
+            last_tool: sf.last_tool.clone(),
+            current_task: sf.current_task.clone(),
+            session_start_ts: sf.session_start_ts,
+            input_tokens: sf.input_tokens,
+            output_tokens: sf.output_tokens,
+            cache_creation_input_tokens: sf.cache_creation_input_tokens,
+            cache_read_input_tokens: sf.cache_read_input_tokens,
         })
     }
 }
