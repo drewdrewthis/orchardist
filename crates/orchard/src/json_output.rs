@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::claude_state::ClaudeState;
-use crate::derive::DisplayGroup;
+use crate::derive::{DisplayGroup, phase_from_labels};
 use crate::orchard_state::{
     IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState, WorktreeState,
 };
@@ -73,7 +73,7 @@ pub struct JsonWorktree {
 
 /// Issue information in JSON output.
 ///
-/// Subset of GitHub issue data: number, title, and state (open/closed).
+/// Subset of GitHub issue data: number, title, state, and computed workflow phase.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonIssue {
@@ -83,11 +83,15 @@ pub struct JsonIssue {
     pub title: String,
     /// Issue state: "open", "closed", or "completed".
     pub state: String,
+    /// Workflow phase derived from labels (e.g. `"in-progress"`, `"blocked"`).
+    /// Always present: `null` when no phase label is set.
+    pub phase: Option<&'static str>,
 }
 
 /// Pull request information in JSON output.
 ///
-/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts, and unresolved review threads.
+/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts,
+/// unresolved review threads, and computed workflow phase.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
@@ -105,6 +109,9 @@ pub struct JsonPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Workflow phase derived from labels (e.g. `"pr-ready"`, `"blocked"`).
+    /// Always present: `null` when no phase label is set.
+    pub phase: Option<&'static str>,
 }
 
 /// Session information in JSON output using the EnrichedSession shape.
@@ -218,6 +225,7 @@ impl From<&IssueInfo> for JsonIssue {
             number: i.number,
             title: i.title.clone(),
             state: i.state.clone(),
+            phase: phase_from_labels(&i.labels),
         }
     }
 }
@@ -233,6 +241,7 @@ impl From<&PrState> for JsonPr {
             checks_state: pr.checks_state.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            phase: phase_from_labels(&pr.labels),
         }
     }
 }
@@ -636,5 +645,113 @@ mod tests {
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.windows.len(), 1);
+    }
+
+    // -- phase field tests ---------------------------------------------------
+
+    fn make_issue_info(number: u32, title: &str, state: &str, labels: Vec<&str>) -> IssueInfo {
+        IssueInfo {
+            number,
+            title: title.to_string(),
+            state: state.to_string(),
+            labels: labels.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn make_pr_state(number: u32, branch: &str, labels: Vec<&str>) -> PrState {
+        PrState {
+            number,
+            branch: branch.to_string(),
+            state: Some("open".to_string()),
+            review_decision: None,
+            checks_state: None,
+            has_conflicts: false,
+            unresolved_threads: 0,
+            labels: labels.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn json_issue_phase_null_when_no_phase_label() {
+        let issue = make_issue_info(1, "fix bug", "open", vec!["bug"]);
+        let ji = JsonIssue::from(&issue);
+        assert!(ji.phase.is_none());
+        let v = serde_json::to_value(&ji).unwrap();
+        assert_eq!(v["phase"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_issue_phase_serializes_matched_label() {
+        let issue = make_issue_info(2, "work item", "open", vec!["in-progress", "bug"]);
+        let ji = JsonIssue::from(&issue);
+        assert_eq!(ji.phase, Some("in-progress"));
+        let v = serde_json::to_value(&ji).unwrap();
+        assert_eq!(v["phase"], "in-progress");
+    }
+
+    #[test]
+    fn json_pr_phase_null_when_no_phase_label() {
+        let pr = make_pr_state(10, "feat/branch", vec!["enhancement"]);
+        let jp = JsonPr::from(&pr);
+        assert!(jp.phase.is_none());
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(v["phase"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_pr_phase_serializes_matched_label() {
+        let pr = make_pr_state(10, "feat/branch", vec!["pr-ready"]);
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.phase, Some("pr-ready"));
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(v["phase"], "pr-ready");
+    }
+
+    #[test]
+    fn json_pr_phase_resolves_multi_label_by_priority() {
+        let pr = make_pr_state(10, "feat/branch", vec!["in-progress", "blocked"]);
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.phase, Some("blocked"));
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(v["phase"], "blocked");
+    }
+
+    #[test]
+    fn json_issue_phase_key_always_present_when_null() {
+        let issue = make_issue_info(3, "empty labels", "open", vec![]);
+        let v = serde_json::to_value(JsonIssue::from(&issue)).unwrap();
+        assert!(v.get("phase").is_some(), "phase key must always be present");
+        assert_eq!(v["phase"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_pr_phase_key_always_present_when_null() {
+        let pr = make_pr_state(11, "feat/empty", vec![]);
+        let v = serde_json::to_value(JsonPr::from(&pr)).unwrap();
+        assert!(v.get("phase").is_some(), "phase key must always be present");
+        assert_eq!(v["phase"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_issue_preserves_existing_fields_when_phase_added() {
+        let issue = make_issue_info(219, "phase field", "open", vec!["planned"]);
+        let v = serde_json::to_value(JsonIssue::from(&issue)).unwrap();
+        assert_eq!(v["phase"], "planned");
+        assert_eq!(v["number"], 219);
+        assert_eq!(v["title"], "phase field");
+        assert_eq!(v["state"], "open");
+    }
+
+    #[test]
+    fn json_pr_preserves_existing_fields_when_phase_added() {
+        let pr = make_pr_state(220, "issue219/phase-field", vec!["in-ai-review"]);
+        let v = serde_json::to_value(JsonPr::from(&pr)).unwrap();
+        assert_eq!(v["phase"], "in-ai-review");
+        assert_eq!(v["number"], 220);
+        assert_eq!(v["branch"], "issue219/phase-field");
+        assert!(v.get("reviewDecision").is_some(), "reviewDecision key must be present");
+        assert!(v.get("checksState").is_some(), "checksState key must be present");
+        assert!(v.get("hasConflicts").is_some(), "hasConflicts key must be present");
+        assert!(v.get("unresolvedThreads").is_some(), "unresolvedThreads key must be present");
     }
 }
