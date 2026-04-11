@@ -228,6 +228,24 @@ fn compute_session_age_sec(session_start_ts: Option<u64>) -> Option<u64> {
     now.checked_sub(start)
 }
 
+/// Constructs a `JsonClaudeInfo` from a `ClaudeEnrichment`.
+///
+/// `session_age_sec` is computed at call time so it always reflects real elapsed
+/// time rather than the time of the last hook write.
+fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> JsonClaudeInfo {
+    JsonClaudeInfo {
+        status: claude_state_str(c.status).to_string(),
+        model: c.model.clone(),
+        last_tool: c.last_tool.clone(),
+        current_task: c.current_task.clone(),
+        session_age_sec: compute_session_age_sec(c.session_start_ts),
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        cache_creation_input_tokens: c.cache_creation_input_tokens,
+        cache_read_input_tokens: c.cache_read_input_tokens,
+    }
+}
+
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
         DisplayGroup::RepoMain => "repo_main",
@@ -309,20 +327,7 @@ impl From<&SessionState> for JsonSession {
             Some(h) => h.clone(),
             None => "local".to_string(),
         };
-        let claude = s.claude.as_ref().map(|c| {
-            let session_age_sec = compute_session_age_sec(c.session_start_ts);
-            JsonClaudeInfo {
-                status: claude_state_str(c.status).to_string(),
-                model: c.model.clone(),
-                last_tool: c.last_tool.clone(),
-                current_task: c.current_task.clone(),
-                session_age_sec,
-                input_tokens: c.input_tokens,
-                output_tokens: c.output_tokens,
-                cache_creation_input_tokens: c.cache_creation_input_tokens,
-                cache_read_input_tokens: c.cache_read_input_tokens,
-            }
-        });
+        let claude = s.claude.as_ref().map(claude_info_from_enrichment);
         Self {
             name: s.name.clone(),
             host,
@@ -369,20 +374,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
             crate::session::SessionStatus::Running { .. } => "running",
             crate::session::SessionStatus::Dead => "dead",
         };
-        let claude = row.session.claude.as_ref().map(|c| {
-            let session_age_sec = compute_session_age_sec(c.session_start_ts);
-            JsonClaudeInfo {
-                status: claude_state_str(c.status).to_string(),
-                model: c.model.clone(),
-                last_tool: c.last_tool.clone(),
-                current_task: c.current_task.clone(),
-                session_age_sec,
-                input_tokens: c.input_tokens,
-                output_tokens: c.output_tokens,
-                cache_creation_input_tokens: c.cache_creation_input_tokens,
-                cache_read_input_tokens: c.cache_read_input_tokens,
-            }
-        });
+        let claude = row.session.claude.as_ref().map(claude_info_from_enrichment);
         let windows = row
             .session
             .windows

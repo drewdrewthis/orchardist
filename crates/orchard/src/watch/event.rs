@@ -138,19 +138,6 @@ pub enum EventKind {
         /// Total number of active tmux sessions.
         session_count: usize,
     },
-    /// A monitored metric crossed its configured threshold.
-    Threshold {
-        /// Worktree path.
-        worktree: String,
-        /// tmux session name.
-        session: String,
-        /// Metric name (e.g. "context_window_pct", "cost_usd").
-        metric: String,
-        /// Current metric value.
-        value: f64,
-        /// Configured threshold that was exceeded.
-        threshold: f64,
-    },
 }
 
 impl EventKind {
