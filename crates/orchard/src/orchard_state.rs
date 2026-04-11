@@ -110,6 +110,8 @@ pub struct IssueInfo {
     pub title: String,
     /// Issue state: "open", "closed", or "completed".
     pub state: String,
+    /// Labels applied to the issue.
+    pub labels: Vec<String>,
 }
 
 /// Lightweight PR summary attached to a worktree.
@@ -129,6 +131,8 @@ pub struct PrState {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Labels applied to the PR.
+    pub labels: Vec<String>,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
@@ -216,6 +220,7 @@ impl From<&crate::derive::PrInfo> for PrState {
             checks_state: pr.checks_state.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            labels: pr.labels.clone(),
         }
     }
 }
@@ -270,6 +275,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
                 .issue_state
                 .clone()
                 .unwrap_or_else(|| "open".to_string()),
+            labels: row.issue_labels.clone(),
         });
 
         Self {
@@ -306,6 +312,7 @@ mod tests {
             issue_number,
             issue_title: issue_number.map(|n| format!("Issue {}", n)),
             issue_state: issue_state.map(|s| s.to_string()),
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group,
@@ -429,6 +436,7 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            labels: vec![],
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.state, Some("open".to_string()));
@@ -444,6 +452,7 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            labels: vec![],
         };
         let pr_state = PrState::from(&pr_info);
         assert!(pr_state.state.is_none());

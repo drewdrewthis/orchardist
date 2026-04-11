@@ -592,4 +592,109 @@ mod tests {
         // This test documents the constant value.
         assert_eq!(REMOTE_HOOK_STATE_STALENESS_SECS, 30);
     }
+
+    // -----------------------------------------------------------------------
+    // Label threading: PR labels reach PrState; issue labels reach IssueInfo
+    //
+    // These tests use `derive_worktree_rows` (the pure functional core) instead
+    // of `build_state` (which reads from real cache files on disk). The
+    // build_state→derive pipeline is a direct pass-through — these tests
+    // verify the same field threading without requiring I/O.
+    // -----------------------------------------------------------------------
+
+    use crate::cache::{CachedIssue, CachedPr, CachedWorktree};
+    use crate::derive::derive_worktree_rows;
+    use crate::orchard_state::WorktreeState;
+
+    fn make_worktree_for_labels(path: &str, branch: &str) -> CachedWorktree {
+        CachedWorktree {
+            path: path.to_string(),
+            branch: branch.to_string(),
+            is_bare: false,
+            is_locked: false,
+            host: None,
+        }
+    }
+
+    fn make_pr_with_labels(number: u32, branch: &str, labels: Vec<&str>) -> CachedPr {
+        CachedPr {
+            number,
+            branch: branch.to_string(),
+            linked_issue: None,
+            state: "open".to_string(),
+            review_decision: None,
+            checks_state: None,
+            has_conflicts: false,
+            unresolved_threads: 0,
+            linked_issue_state: None,
+            labels: labels.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn make_issue_with_labels(number: u32, labels: Vec<&str>) -> CachedIssue {
+        CachedIssue {
+            number,
+            title: format!("Issue #{number}"),
+            state: "open".to_string(),
+            labels: labels.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn build_state_threads_pr_labels_into_pr_state() {
+        let branch = "issue55/my-feature";
+        let worktrees = vec![
+            make_worktree_for_labels("/workspace/repo", "main"),
+            make_worktree_for_labels("/workspace/repo-55", branch),
+        ];
+        let prs = vec![make_pr_with_labels(55, branch, vec!["planned"])];
+
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+        let row = rows.iter().find(|r| r.branch == branch).unwrap();
+        let pr = row.pr.as_ref().expect("PR should be present");
+        assert_eq!(pr.labels, vec!["planned"]);
+
+        // Verify it reaches PrState too
+        let state = WorktreeState::from(row);
+        let pr_state = state.pr.as_ref().unwrap();
+        assert_eq!(pr_state.labels, vec!["planned"]);
+    }
+
+    #[test]
+    fn build_state_threads_issue_labels_into_issue_info() {
+        let branch = "issue47/my-feature";
+        let worktrees = vec![
+            make_worktree_for_labels("/workspace/repo", "main"),
+            make_worktree_for_labels("/workspace/repo-47", branch),
+        ];
+        let issues = vec![make_issue_with_labels(47, vec!["in-progress", "enhancement"])];
+
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+        let row = rows.iter().find(|r| r.branch == branch).unwrap();
+        assert_eq!(row.issue_labels, vec!["in-progress", "enhancement"]);
+
+        // Verify it reaches IssueInfo too
+        let state = WorktreeState::from(row);
+        let issue = state.issue.as_ref().unwrap();
+        assert_eq!(issue.labels, vec!["in-progress", "enhancement"]);
+    }
+
+    #[test]
+    fn build_state_emits_empty_labels_when_pr_has_no_labels() {
+        let branch = "issue99/my-feature";
+        let worktrees = vec![
+            make_worktree_for_labels("/workspace/repo", "main"),
+            make_worktree_for_labels("/workspace/repo-99", branch),
+        ];
+        let prs = vec![make_pr_with_labels(99, branch, vec![])];
+
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+        let row = rows.iter().find(|r| r.branch == branch).unwrap();
+        let pr = row.pr.as_ref().expect("PR should be present");
+        assert!(pr.labels.is_empty());
+
+        let state = WorktreeState::from(row);
+        let pr_state = state.pr.as_ref().unwrap();
+        assert_eq!(pr_state.labels, Vec::<String>::new());
+    }
 }
