@@ -10,4 +10,4 @@ pub mod normalize;
 pub mod port;
 pub mod server;
 pub mod signature;
-// tailer comes in pass 3
+pub mod tailer;

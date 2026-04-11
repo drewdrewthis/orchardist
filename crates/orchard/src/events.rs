@@ -27,7 +27,10 @@ pub struct Event {
 }
 
 /// Returns the path to the events.jsonl file.
-fn default_events_path() -> PathBuf {
+///
+/// Used by the watch daemon tailer to know which file to tail, and by
+/// the events module internally for all writes.
+pub fn events_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(".local")
@@ -97,7 +100,7 @@ fn rotated_path(base: &Path, n: u32) -> PathBuf {
 /// Appends an event to `~/.local/state/git-orchard/events.jsonl`.
 /// Creates the file/dir if needed. Rotates at 50 MB. Never returns an error.
 pub fn log_event(event_type: &str, fields: &[(&str, Value)]) {
-    append_event(&default_events_path(), event_type, fields);
+    append_event(&events_path(), event_type, fields);
 }
 
 /// Logs a `task.created` event.
@@ -219,7 +222,7 @@ pub fn log_watch_event(event_type: &str, details: &str) {
 /// Both writers go through the same `OpenOptions::append` + 50MB rotation
 /// path so writes are atomic and rotation applies uniformly.
 pub fn log_webhook_event(event: &crate::webhook::normalize::NormalizedEvent) {
-    let path = default_events_path();
+    let path = events_path();
     let line = match serde_json::to_string(event) {
         Ok(s) => s,
         Err(_) => return,
