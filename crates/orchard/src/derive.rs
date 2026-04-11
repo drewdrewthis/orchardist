@@ -4,6 +4,7 @@
 //! into `WorktreeRow` values with computed `DisplayGroup` sort keys. No I/O occurs
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
+use crate::ci_state::CiChecks;
 use crate::github;
 use crate::session::{
     ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
@@ -115,6 +116,8 @@ pub struct PrInfo {
     pub ci_code_state: Option<String>,
     /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or None.
     pub ci_gate_state: Option<String>,
+    /// Per-check breakdown classified into code and gate buckets.
+    pub ci_checks: CiChecks,
     /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
@@ -283,8 +286,9 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         state: Some(pr.state.clone()),
         review_decision: pr.review_decision.clone(),
         checks_state: pr.checks_state.clone(),
-        ci_code_state: None,
-        ci_gate_state: None,
+        ci_code_state: pr.ci_code_state.clone(),
+        ci_gate_state: pr.ci_gate_state.clone(),
+        ci_checks: pr.ci_checks.clone(),
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
         labels: pr.labels.clone(),
@@ -565,6 +569,9 @@ mod tests {
             review_decision: None,
             labels: vec![],
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
@@ -579,6 +586,9 @@ mod tests {
             state: "open".to_string(),
             review_decision: Some("approved".to_string()),
             checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
@@ -1712,5 +1722,75 @@ mod tests {
     #[test]
     fn phase_from_labels_case_sensitive_no_match_for_uppercase() {
         assert_eq!(phase_from_labels(&ls(&["In-Progress"])), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task #24: build_state propagates ci_code_state, ci_gate_state, ci_checks
+    // -----------------------------------------------------------------------
+
+    /// Scenario: build_state copies ci_code_state, ci_gate_state, and ci_checks
+    /// from CachedPr into PrInfo.
+    ///
+    /// Verifies that pr_info_from (the join site) propagates all three new split-CI
+    /// fields from CachedPr into PrInfo, which is then consumed by build_state.
+    #[test]
+    fn pr_info_from_propagates_split_ci_state_fields() {
+        use crate::ci_state::CheckInfo;
+
+        let gate_check = CheckInfo {
+            name: "check-approval-or-label".to_string(),
+            state: "failing".to_string(),
+        };
+        let code_check = CheckInfo {
+            name: "test-unit".to_string(),
+            state: "passing".to_string(),
+        };
+
+        let cached_pr = CachedPr {
+            number: 99,
+            branch: "feat/issue-99".to_string(),
+            linked_issue: None,
+            state: "open".to_string(),
+            review_decision: None,
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("blocked".to_string()),
+            ci_checks: CiChecks {
+                code: vec![code_check.clone()],
+                gate: vec![gate_check.clone()],
+            },
+            has_conflicts: false,
+            unresolved_threads: 0,
+            linked_issue_state: None,
+        };
+
+        let pr_info = pr_info_from(&cached_pr);
+
+        assert_eq!(
+            pr_info.ci_code_state.as_deref(),
+            Some("passing"),
+            "ci_code_state must be propagated from CachedPr"
+        );
+        assert_eq!(
+            pr_info.ci_gate_state.as_deref(),
+            Some("blocked"),
+            "ci_gate_state must be propagated from CachedPr"
+        );
+        assert_eq!(
+            pr_info.ci_checks.code,
+            vec![code_check],
+            "ci_checks.code must be propagated from CachedPr"
+        );
+        assert_eq!(
+            pr_info.ci_checks.gate,
+            vec![gate_check],
+            "ci_checks.gate must be propagated from CachedPr"
+        );
+        // Legacy checks_state mirrors ci_code_state, not union semantics.
+        assert_eq!(
+            pr_info.checks_state.as_deref(),
+            Some("passing"),
+            "legacy checks_state must mirror ci_code_state (not union)"
+        );
     }
 }
