@@ -126,6 +126,15 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 Some(normalised.to_string())
             });
 
+            let labels = v["labels"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             Some(CachedPr {
                 number,
                 branch,
@@ -136,6 +145,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 has_conflicts,
                 unresolved_threads,
                 linked_issue_state,
+                labels,
             })
         })
         .collect()
@@ -428,6 +438,11 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
         state
         reviewDecision
         mergeable
+        labels(first: 100) {{
+          nodes {{
+            name
+          }}
+        }}
         reviewThreads(first: 100) {{
           nodes {{
             isResolved
