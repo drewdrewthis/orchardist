@@ -72,8 +72,8 @@ run_hook_enrich() {
 }
 
 # Writes the main state file atomically.
-# Reads inflight count from sidecar. Preserves session_start_ts and merges
-# enrichment from the transcript.
+# Reads inflight count from sidecar. Preserves session_start_ts, model,
+# last_tool, and current_task across events; extra fields passed in $2 override.
 write_state() {
     local state="$1"
     local inflight_count
@@ -87,6 +87,14 @@ write_state() {
     local existing_model
     existing_model=$(read_state_field "model")
 
+    # Preserve last_tool across events — caller overwrites via extra when needed.
+    local existing_last_tool
+    existing_last_tool=$(read_state_field "last_tool")
+
+    # Preserve current_task across events — caller overwrites via extra when needed.
+    local existing_current_task
+    existing_current_task=$(read_state_field "current_task")
+
     # Merge transcript enrichment.
     local enrichment
     enrichment=$(run_hook_enrich)
@@ -99,7 +107,8 @@ write_state() {
 
     local tmp="${state_file}.tmp.$$"
 
-    # Build base object, then merge extra fields, then merge enrichment.
+    # Build base object, preserve existing fields, then merge extra (overrides),
+    # then merge enrichment. Order: existing → extra override → enrichment override.
     jq -n \
         --arg state "$state" \
         --arg session_id "$session_id" \
@@ -110,6 +119,8 @@ write_state() {
         --argjson inflight_tool_count "$inflight_count" \
         --argjson session_start_ts_val "$([ -n "$session_start_ts" ] && echo "$session_start_ts" || echo "null")" \
         --arg existing_model "$existing_model" \
+        --arg existing_last_tool "$existing_last_tool" \
+        --arg existing_current_task "$existing_current_task" \
         --argjson enrichment "$enrichment" \
         --argjson extra "$extra" \
         '
@@ -126,6 +137,10 @@ write_state() {
         | if $session_start_ts_val != null then . + {session_start_ts: $session_start_ts_val} else . end
         # Preserve existing model unless enrichment or extra supplies a new one.
         | if $existing_model != "" then . + {model: $existing_model} else . end
+        # Preserve last_tool across events (PreToolUse extra will overwrite when needed).
+        | if $existing_last_tool != "" then . + {last_tool: $existing_last_tool} else . end
+        # Preserve current_task across events (UserPromptSubmit extra will overwrite when needed).
+        | if $existing_current_task != "" then . + {current_task: $existing_current_task} else . end
         # Merge enrichment fields from transcript (model, inputTokens, etc.),
         # converting camelCase to snake_case for the state file.
         | if $enrichment | has("model") then . + {model: $enrichment.model} else . end
@@ -133,7 +148,7 @@ write_state() {
         | if $enrichment | has("outputTokens") then . + {output_tokens: $enrichment.outputTokens} else . end
         | if $enrichment | has("cacheCreationInputTokens") then . + {cache_creation_input_tokens: $enrichment.cacheCreationInputTokens} else . end
         | if $enrichment | has("cacheReadInputTokens") then . + {cache_read_input_tokens: $enrichment.cacheReadInputTokens} else . end
-        # Merge event-specific extra fields (last_tool, current_task, etc.).
+        # Merge event-specific extra fields last — these override preserved values.
         | . + $extra
         ' \
         > "$tmp" && mv "$tmp" "$state_file"

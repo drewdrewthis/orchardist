@@ -596,6 +596,78 @@ fn hook_integration_session_start_populates_ts_and_model() {
     assert_eq!(state["model"], "claude-opus-4-6");
 }
 
+// ---------------------------------------------------------------------------
+// Fix #1 regression tests — last_tool and current_task survive PostToolUse
+// ---------------------------------------------------------------------------
+
+/// Regression: `last_tool` set by PreToolUse must survive the PostToolUse that follows.
+///
+/// Before the fix, write_state on PostToolUse rebuilt the object without preserving
+/// last_tool, so the field disappeared immediately after the tool completed.
+#[test]
+fn pre_tool_use_followed_by_post_tool_use_preserves_last_tool() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    // SessionStart sets session_start_ts and model.
+    let start_payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "model": "claude-opus-4-6"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &start_payload);
+
+    // PreToolUse sets last_tool = "Bash".
+    let pre_payload = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Bash","tool_use_id":"tool-bash-1"}"#;
+    run_hook(tmpdir.path(), &bin_dir, pre_payload);
+
+    let after_pre = read_state_file(tmpdir.path());
+    assert_eq!(after_pre["last_tool"], "Bash", "last_tool must be set after PreToolUse");
+
+    // PostToolUse — no extra fields, must preserve last_tool.
+    let post_payload = r#"{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Bash","tool_use_id":"tool-bash-1"}"#;
+    run_hook(tmpdir.path(), &bin_dir, post_payload);
+
+    let after_post = read_state_file(tmpdir.path());
+    assert_eq!(
+        after_post["last_tool"], "Bash",
+        "last_tool must survive PostToolUse — was dropped before fix"
+    );
+}
+
+/// Regression: `current_task` set by UserPromptSubmit must survive a subsequent PreToolUse.
+///
+/// Before the fix, write_state on PreToolUse did not preserve current_task, so the
+/// task description disappeared as soon as Claude called its first tool.
+#[test]
+fn user_prompt_submit_followed_by_pre_tool_use_preserves_current_task() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    // UserPromptSubmit sets current_task = "foo".
+    let prompt_payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "prompt": "foo"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &prompt_payload);
+
+    let after_prompt = read_state_file(tmpdir.path());
+    assert_eq!(after_prompt["current_task"], "foo", "current_task must be set after UserPromptSubmit");
+
+    // PreToolUse — sets last_tool but must preserve current_task.
+    let pre_payload = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Read","tool_use_id":"tool-read-1"}"#;
+    run_hook(tmpdir.path(), &bin_dir, pre_payload);
+
+    let after_pre = read_state_file(tmpdir.path());
+    assert_eq!(
+        after_pre["current_task"], "foo",
+        "current_task must survive PreToolUse — was dropped before fix"
+    );
+}
+
 /// AC8: Hook still writes state when transcript_path points at a missing file.
 #[test]
 fn hook_integration_missing_transcript_still_writes_state() {
