@@ -307,3 +307,318 @@ fn session_start_clears_inflight() {
         "inflight array must be empty after SessionStart"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Helpers for enrichment tests
+// ---------------------------------------------------------------------------
+
+/// Creates a test environment with both a fake `tmux` and a fake `orchard`
+/// binary that supports `hook-enrich --transcript <path>`.
+///
+/// The fake `orchard` script reads the transcript path and returns a
+/// hard-coded enrichment JSON so tests are independent of the real binary.
+fn setup_test_env_with_orchard(
+    enrichment_json: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let (tmpdir, bin_dir) = setup_test_env();
+
+    let ej = enrichment_json.to_string();
+    let fake_orchard_script = format!(
+        "#!/usr/bin/env bash\n\
+        # Fake orchard for integration tests\n\
+        if [ \"$1\" = \"hook-enrich\" ]; then\n\
+            echo '{ej}'\n\
+        fi\n"
+    );
+    let fake_orchard = bin_dir.join("orchard");
+    fs::write(&fake_orchard, fake_orchard_script).unwrap();
+    let mut perms = fs::metadata(&fake_orchard).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_orchard, perms).unwrap();
+
+    (tmpdir, bin_dir)
+}
+
+/// Creates a JSONL transcript file with one assistant message in the given dir.
+fn write_mock_transcript(dir: &Path) -> std::path::PathBuf {
+    let path = dir.join("transcript.jsonl");
+    let line = r#"{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-6","usage":{"input_tokens":1234,"output_tokens":56,"cache_creation_input_tokens":100,"cache_read_input_tokens":200}}}"#;
+    fs::write(&path, format!("{line}\n")).unwrap();
+    path
+}
+
+// ---------------------------------------------------------------------------
+// AC3: Hook records last_tool on PreToolUse
+// ---------------------------------------------------------------------------
+
+/// AC3: Hook records `last_tool` field on PreToolUse event.
+#[test]
+fn pre_tool_use_records_last_tool() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Edit","tool_use_id":"tool-edit-1"}"#;
+    run_hook(tmpdir.path(), &bin_dir, payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(
+        state["last_tool"], "Edit",
+        "last_tool must be 'Edit' after PreToolUse with tool_name=Edit"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC3: Hook records current_task on UserPromptSubmit
+// ---------------------------------------------------------------------------
+
+/// AC3: Hook records `current_task` on UserPromptSubmit.
+#[test]
+fn user_prompt_submit_records_current_task() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "prompt": "refactor the cache module to support tagging"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(
+        state["current_task"],
+        "refactor the cache module to support tagging",
+        "current_task must match prompt"
+    );
+}
+
+/// AC3: `current_task` is truncated to 80 characters.
+#[test]
+fn user_prompt_submit_truncates_current_task_to_80_chars() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let long_prompt = "a".repeat(200);
+    let payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "prompt": long_prompt
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    let task = state["current_task"].as_str().unwrap();
+    assert_eq!(task.len(), 80, "current_task must be exactly 80 chars: got {}", task.len());
+}
+
+/// AC3: `current_task` keeps only the first line of a multiline prompt.
+#[test]
+fn user_prompt_submit_keeps_first_line_only() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "prompt": "fix the bug\n\nbackground: the hook swallows errors"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(
+        state["current_task"],
+        "fix the bug",
+        "current_task must be only the first line"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC3: Hook records session_start_ts and model on SessionStart
+// ---------------------------------------------------------------------------
+
+/// AC3: Hook records `session_start_ts` and `model` on SessionStart.
+#[test]
+fn session_start_records_start_ts_and_model() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "model": "claude-opus-4-6"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert!(
+        state["session_start_ts"].is_number(),
+        "session_start_ts must be a number"
+    );
+    assert_eq!(
+        state["model"],
+        "claude-opus-4-6",
+        "model must be 'claude-opus-4-6'"
+    );
+}
+
+/// AC3: `session_start_ts` is preserved across subsequent events.
+#[test]
+fn session_start_ts_preserved_across_subsequent_events() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    // First: SessionStart
+    let start_payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "model": "claude-opus-4-6"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &start_payload);
+
+    let state_after_start = read_state_file(tmpdir.path());
+    let original_ts = state_after_start["session_start_ts"]
+        .as_u64()
+        .expect("session_start_ts must be present after SessionStart");
+
+    // Second: PreToolUse
+    let tool_payload = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Bash","tool_use_id":"tool-1"}"#;
+    run_hook(tmpdir.path(), &bin_dir, tool_payload);
+
+    let state_after_tool = read_state_file(tmpdir.path());
+    let preserved_ts = state_after_tool["session_start_ts"]
+        .as_u64()
+        .expect("session_start_ts must still be present after PreToolUse");
+
+    assert_eq!(
+        original_ts,
+        preserved_ts,
+        "session_start_ts must not change across events"
+    );
+}
+
+/// AC3: `last_tool` is cleared on Stop (non-tool_use stop_reason).
+#[test]
+fn stop_clears_last_tool() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    // Seed a state file with last_tool set.
+    let state_path = tmpdir.path().join("orchard-claude-test_session.json");
+    fs::write(
+        &state_path,
+        r#"{"state":"working","session_id":"s1","tmux_session":"test_session","cwd":"/workspace","event":"PreToolUse","timestamp":"2026-01-01T00:00:00Z","inflight_tool_count":0,"last_tool":"Bash"}"#,
+    )
+    .unwrap();
+
+    let payload = r#"{"hook_event_name":"Stop","session_id":"s1","cwd":"/workspace","stop_reason":"end_turn"}"#;
+    run_hook(tmpdir.path(), &bin_dir, payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(state["state"], "idle", "Stop(end_turn) must write idle");
+    assert!(
+        state.get("last_tool").is_none() || state["last_tool"].is_null(),
+        "last_tool must be absent after Stop(end_turn)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC8: Hook integration writes new fields end-to-end
+// ---------------------------------------------------------------------------
+
+/// AC8: Hook writes all enrichment fields when transcript is present.
+#[test]
+fn hook_integration_writes_all_enrichment_fields() {
+    // Fake orchard returns enrichment with all token fields.
+    let enrichment = r#"{"model":"claude-opus-4-6","inputTokens":1234,"outputTokens":56,"cacheCreationInputTokens":100,"cacheReadInputTokens":200}"#;
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard(enrichment);
+
+    let transcript = write_mock_transcript(tmpdir.path());
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "tool_name": "Bash",
+        "tool_use_id": "tool-abc",
+        "transcript_path": transcript.to_string_lossy()
+    })
+    .to_string();
+
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(state["state"], "working");
+    assert!(state["last_tool"].is_string(), "last_tool must be present");
+    assert_eq!(state["model"], "claude-opus-4-6");
+    assert_eq!(state["input_tokens"], 1234);
+    assert_eq!(state["output_tokens"], 56);
+    assert_eq!(state["cache_read_input_tokens"], 200);
+    assert_eq!(state["cache_creation_input_tokens"], 100);
+}
+
+/// AC8: UserPromptSubmit integration populates current_task.
+#[test]
+fn hook_integration_user_prompt_populates_current_task() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "prompt": "draft the release notes"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(state["current_task"], "draft the release notes");
+}
+
+/// AC8: SessionStart integration populates session_start_ts and model.
+#[test]
+fn hook_integration_session_start_populates_ts_and_model() {
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "model": "claude-opus-4-6"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    let ts = state["session_start_ts"].as_u64().expect("session_start_ts must be present");
+    assert!(ts > 1_700_000_000, "session_start_ts must be a recent unix timestamp");
+    assert_eq!(state["model"], "claude-opus-4-6");
+}
+
+/// AC8: Hook still writes state when transcript_path points at a missing file.
+#[test]
+fn hook_integration_missing_transcript_still_writes_state() {
+    // Fake orchard returns {} for missing file (same as real binary).
+    let (tmpdir, bin_dir) = setup_test_env_with_orchard("{}");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "s1",
+        "cwd": "/workspace",
+        "tool_name": "Bash",
+        "tool_use_id": "tool-abc",
+        "transcript_path": "/nonexistent/path/transcript.jsonl"
+    })
+    .to_string();
+    run_hook(tmpdir.path(), &bin_dir, &payload);
+
+    let state = read_state_file(tmpdir.path());
+    assert_eq!(state["state"], "working", "state must be written even with missing transcript");
+    assert!(state["last_tool"].is_string(), "last_tool must still be written");
+    // Token fields must not be present (no enrichment).
+    assert!(
+        state.get("input_tokens").is_none() || state["input_tokens"].is_null(),
+        "input_tokens must not be present when transcript is missing"
+    );
+}
