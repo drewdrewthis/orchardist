@@ -706,9 +706,18 @@ mod tests {
         let path = "/workspace/repo/feat-1";
         let mut debounce = ClaudeDebounceState::new();
 
-        let s1 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Working)]);
-        let s2 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Input)]);
-        let s3 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Working)]);
+        let s1 = make_state(vec![with_claude(
+            make_worktree(path, "b"),
+            ClaudeState::Working,
+        )]);
+        let s2 = make_state(vec![with_claude(
+            make_worktree(path, "b"),
+            ClaudeState::Input,
+        )]);
+        let s3 = make_state(vec![with_claude(
+            make_worktree(path, "b"),
+            ClaudeState::Working,
+        )]);
 
         // Prime the debouncer: first diff call observes Working and confirms it.
         let _ = diff(&s1, &s1, &mut debounce);
@@ -738,9 +747,18 @@ mod tests {
         let path = "/workspace/repo/feat-1";
         let mut debounce = ClaudeDebounceState::new();
 
-        let s1 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Working)]);
-        let s2 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Input)]);
-        let s3 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Input)]);
+        let s1 = make_state(vec![with_claude(
+            make_worktree(path, "b"),
+            ClaudeState::Working,
+        )]);
+        let s2 = make_state(vec![with_claude(
+            make_worktree(path, "b"),
+            ClaudeState::Input,
+        )]);
+        let s3 = make_state(vec![with_claude(
+            make_worktree(path, "b"),
+            ClaudeState::Input,
+        )]);
 
         let _ = diff(&s1, &s1, &mut debounce);
         let events_1_to_2 = diff(&s1, &s2, &mut debounce);
@@ -755,7 +773,10 @@ mod tests {
             .filter(|e| matches!(&e.kind, EventKind::ClaudeNeedsInput { .. }))
             .collect();
 
-        assert!(input_events_1.is_empty(), "no event on first sighting of Input");
+        assert!(
+            input_events_1.is_empty(),
+            "no event on first sighting of Input"
+        );
         assert_eq!(
             input_events_2.len(),
             1,

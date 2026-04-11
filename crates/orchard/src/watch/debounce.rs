@@ -108,7 +108,11 @@ mod tests {
         let mut d = ClaudeDebounceState::new();
         let (prior, new) = d.observe("/workspace/repo/feat-1", ClaudeState::Working);
         assert_eq!(prior, ClaudeState::None, "no prior on first observation");
-        assert_eq!(new, ClaudeState::Working, "first observation confirms Working");
+        assert_eq!(
+            new,
+            ClaudeState::Working,
+            "first observation confirms Working"
+        );
     }
 
     #[test]
@@ -127,7 +131,11 @@ mod tests {
 
         // Cycle 1: Working confirmed immediately (first observation)
         let (_, r1) = d.observe(path, ClaudeState::Working);
-        assert_eq!(r1, ClaudeState::Working, "first observation confirms Working");
+        assert_eq!(
+            r1,
+            ClaudeState::Working,
+            "first observation confirms Working"
+        );
 
         // Cycle 2: Input observed — first sighting, returns old confirmed
         let (_, r2) = d.observe(path, ClaudeState::Input);
@@ -150,7 +158,11 @@ mod tests {
 
         // Cycle 2: Input first sighting — returns old confirmed
         let (_, r2) = d.observe(path, ClaudeState::Input);
-        assert_eq!(r2, ClaudeState::Working, "first sighting of Input: still Working");
+        assert_eq!(
+            r2,
+            ClaudeState::Working,
+            "first sighting of Input: still Working"
+        );
 
         // Cycle 3: Input again — pending matches observed, promote to confirmed
         let (_, r3) = d.observe(path, ClaudeState::Input);
@@ -194,7 +206,11 @@ mod tests {
 
         // Confirm Input for path_a
         let (_, a2) = d.observe(path_a, ClaudeState::Input);
-        assert_eq!(a2, ClaudeState::Input, "path_a transitions after second cycle");
+        assert_eq!(
+            a2,
+            ClaudeState::Input,
+            "path_a transitions after second cycle"
+        );
 
         // path_b still Working
         let (_, b2) = d.observe(path_b, ClaudeState::Working);
@@ -235,7 +251,15 @@ mod tests {
 
         // And observe behaves as if the path is brand-new (first-observation rule).
         let (prior, new) = d.observe(drop_path, ClaudeState::Idle);
-        assert_eq!(prior, ClaudeState::None, "dropped entry should return None as prior");
-        assert_eq!(new, ClaudeState::Idle, "dropped entry should first-observe fresh");
+        assert_eq!(
+            prior,
+            ClaudeState::None,
+            "dropped entry should return None as prior"
+        );
+        assert_eq!(
+            new,
+            ClaudeState::Idle,
+            "dropped entry should first-observe fresh"
+        );
     }
 }
