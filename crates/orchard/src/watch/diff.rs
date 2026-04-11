@@ -118,8 +118,7 @@ pub fn diff(
         };
 
         let new_raw = claude_status(new_wt);
-        let old_effective = debounce.confirmed(path);
-        let new_effective = debounce.observe(path, new_raw);
+        let (old_effective, new_effective) = debounce.observe(path, new_raw);
         let label = label_for(new_wt);
         let session = first_session(new_wt);
 
@@ -336,13 +335,16 @@ mod tests {
         }
     }
 
-    /// Creates a debounce state pre-seeded with the confirmed statuses from `state`.
-    ///
-    /// Calling `diff(state, state, &mut debounce)` primes the debouncer so that the
-    /// next diff call treats `state`'s statuses as the established baseline.
+    /// Creates a debounce state where each worktree's current claude status is
+    /// already confirmed. Used by tests that want to start from a known baseline
+    /// so the next `diff` call exercises a single transition.
     fn seeded_debounce(state: &OrchardState) -> ClaudeDebounceState {
         let mut d = ClaudeDebounceState::new();
-        let _ = diff(state, state, &mut d);
+        for repo in &state.repos {
+            for wt in &repo.worktrees {
+                d.observe(&wt.path, claude_status(wt));
+            }
+        }
         d
     }
 

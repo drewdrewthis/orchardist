@@ -44,20 +44,23 @@ impl ClaudeDebounceState {
             .unwrap_or(ClaudeState::None)
     }
 
-    /// Advances debounce state based on the observed raw status for a worktree.
-    /// Returns the effective (confirmed) status after this observation.
+    /// Advances debounce state and returns `(old_effective, new_effective)` — the
+    /// confirmed status before and after this observation. This is the only way
+    /// to safely read the pre-observation state: a separate `confirmed()` call
+    /// followed by `observe()` creates a temporal-coupling trap.
     ///
     /// Rules:
-    /// - First observation: the status becomes immediately confirmed (no prior
-    ///   baseline to debounce against).
-    /// - Observed == confirmed: clear any pending, return confirmed.
-    /// - Observed != confirmed and pending is None: record pending, return confirmed
-    ///   (suppress transition — this is the first sighting).
-    /// - Observed != confirmed and pending == observed: promote pending → confirmed,
-    ///   return the new confirmed (transition now visible).
-    /// - Observed != confirmed and pending != observed: replace pending with observed,
-    ///   return confirmed (a different new value resets the debounce window).
-    pub fn observe(&mut self, path: &str, observed: ClaudeState) -> ClaudeState {
+    /// - First observation: prior = `None`, new = observed. Insert entry with
+    ///   `confirmed = observed`, `pending = None`. Return `(None, observed)`.
+    /// - Observed == confirmed: prior = confirmed, new = confirmed. Clear pending.
+    ///   Return `(confirmed, confirmed)`.
+    /// - Observed != confirmed and pending == observed: prior = confirmed, new =
+    ///   observed (promoted). Update confirmed, clear pending.
+    ///   Return `(old_confirmed, observed)`.
+    /// - Observed != confirmed and pending != observed: prior = confirmed, new =
+    ///   confirmed (suppressed). Record pending.
+    ///   Return `(confirmed, confirmed)`.
+    pub fn observe(&mut self, path: &str, observed: ClaudeState) -> (ClaudeState, ClaudeState) {
         match self.entries.get_mut(path) {
             None => {
                 self.entries.insert(
@@ -67,19 +70,20 @@ impl ClaudeDebounceState {
                         pending: None,
                     },
                 );
-                observed
+                (ClaudeState::None, observed)
             }
             Some(entry) => {
+                let prior = entry.confirmed;
                 if observed == entry.confirmed {
                     entry.pending = None;
-                    entry.confirmed
+                    (prior, prior)
                 } else if entry.pending == Some(observed) {
                     entry.confirmed = observed;
                     entry.pending = None;
-                    entry.confirmed
+                    (prior, observed)
                 } else {
                     entry.pending = Some(observed);
-                    entry.confirmed
+                    (prior, prior)
                 }
             }
         }
@@ -102,8 +106,9 @@ mod tests {
     #[test]
     fn observe_first_time_confirms_immediately() {
         let mut d = ClaudeDebounceState::new();
-        let result = d.observe("/workspace/repo/feat-1", ClaudeState::Working);
-        assert_eq!(result, ClaudeState::Working);
+        let (prior, new) = d.observe("/workspace/repo/feat-1", ClaudeState::Working);
+        assert_eq!(prior, ClaudeState::None, "no prior on first observation");
+        assert_eq!(new, ClaudeState::Working, "first observation confirms Working");
     }
 
     #[test]
@@ -111,8 +116,8 @@ mod tests {
         let mut d = ClaudeDebounceState::new();
         let path = "/workspace/repo/feat-1";
         d.observe(path, ClaudeState::Working);
-        let result = d.observe(path, ClaudeState::Working);
-        assert_eq!(result, ClaudeState::Working);
+        let (_, new) = d.observe(path, ClaudeState::Working);
+        assert_eq!(new, ClaudeState::Working);
     }
 
     #[test]
@@ -121,16 +126,16 @@ mod tests {
         let path = "/workspace/repo/feat-1";
 
         // Cycle 1: Working confirmed immediately (first observation)
-        let r1 = d.observe(path, ClaudeState::Working);
+        let (_, r1) = d.observe(path, ClaudeState::Working);
         assert_eq!(r1, ClaudeState::Working, "first observation confirms Working");
 
         // Cycle 2: Input observed — first sighting, returns old confirmed
-        let r2 = d.observe(path, ClaudeState::Input);
+        let (_, r2) = d.observe(path, ClaudeState::Input);
         assert_eq!(r2, ClaudeState::Working, "single Input blip: still Working");
 
         // Cycle 3: Working again — pending (Input) doesn't match observed (Working),
         // so pending is replaced; confirmed stays Working
-        let r3 = d.observe(path, ClaudeState::Working);
+        let (_, r3) = d.observe(path, ClaudeState::Working);
         assert_eq!(r3, ClaudeState::Working, "return to Working: still Working");
     }
 
@@ -140,15 +145,15 @@ mod tests {
         let path = "/workspace/repo/feat-1";
 
         // Cycle 1: Working confirmed
-        let r1 = d.observe(path, ClaudeState::Working);
+        let (_, r1) = d.observe(path, ClaudeState::Working);
         assert_eq!(r1, ClaudeState::Working);
 
         // Cycle 2: Input first sighting — returns old confirmed
-        let r2 = d.observe(path, ClaudeState::Input);
+        let (_, r2) = d.observe(path, ClaudeState::Input);
         assert_eq!(r2, ClaudeState::Working, "first sighting of Input: still Working");
 
         // Cycle 3: Input again — pending matches observed, promote to confirmed
-        let r3 = d.observe(path, ClaudeState::Input);
+        let (_, r3) = d.observe(path, ClaudeState::Input);
         assert_eq!(r3, ClaudeState::Input, "Input confirmed after two cycles");
     }
 
@@ -161,11 +166,11 @@ mod tests {
         d.observe(path, ClaudeState::Working);
 
         // Cycle 2: Input pending
-        let r2 = d.observe(path, ClaudeState::Input);
+        let (_, r2) = d.observe(path, ClaudeState::Input);
         assert_eq!(r2, ClaudeState::Working);
 
         // Cycle 3: Idle (different from pending Input) — resets window
-        let r3 = d.observe(path, ClaudeState::Idle);
+        let (_, r3) = d.observe(path, ClaudeState::Idle);
         assert_eq!(r3, ClaudeState::Working, "different pending resets window");
     }
 
@@ -180,19 +185,19 @@ mod tests {
         d.observe(path_b, ClaudeState::Working);
 
         // Transition path_a to Input (first sighting)
-        let a = d.observe(path_a, ClaudeState::Input);
+        let (_, a) = d.observe(path_a, ClaudeState::Input);
         // path_b stays unchanged
-        let b = d.observe(path_b, ClaudeState::Working);
+        let (_, b) = d.observe(path_b, ClaudeState::Working);
 
         assert_eq!(a, ClaudeState::Working, "path_a blip suppressed");
         assert_eq!(b, ClaudeState::Working, "path_b unaffected");
 
         // Confirm Input for path_a
-        let a2 = d.observe(path_a, ClaudeState::Input);
+        let (_, a2) = d.observe(path_a, ClaudeState::Input);
         assert_eq!(a2, ClaudeState::Input, "path_a transitions after second cycle");
 
         // path_b still Working
-        let b2 = d.observe(path_b, ClaudeState::Working);
+        let (_, b2) = d.observe(path_b, ClaudeState::Working);
         assert_eq!(b2, ClaudeState::Working, "path_b still Working");
     }
 
@@ -211,5 +216,26 @@ mod tests {
         assert_eq!(d.confirmed(keep), ClaudeState::Working);
         // dropped path returns None
         assert_eq!(d.confirmed(drop), ClaudeState::None);
+    }
+
+    #[test]
+    fn retain_paths_fully_removes_entry_including_pending() {
+        let mut d = ClaudeDebounceState::new();
+        let drop_path = "/workspace/repo/feat-gone";
+
+        // Set up an entry with both confirmed and pending populated.
+        d.observe(drop_path, ClaudeState::Working); // confirmed = Working
+        d.observe(drop_path, ClaudeState::Input); // pending = Some(Input)
+
+        // Drop.
+        d.retain_paths(|p| p != drop_path);
+
+        // After drop, the entry is gone: confirmed reports None.
+        assert_eq!(d.confirmed(drop_path), ClaudeState::None);
+
+        // And observe behaves as if the path is brand-new (first-observation rule).
+        let (prior, new) = d.observe(drop_path, ClaudeState::Idle);
+        assert_eq!(prior, ClaudeState::None, "dropped entry should return None as prior");
+        assert_eq!(new, ClaudeState::Idle, "dropped entry should first-observe fresh");
     }
 }
