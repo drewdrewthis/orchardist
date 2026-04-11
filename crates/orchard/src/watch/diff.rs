@@ -488,6 +488,44 @@ mod tests {
         assert_eq!(ci_events.len(), 1);
     }
 
+    /// Issue #218: when a PR's `ci_code_state` transitions from passing to
+    /// failing, the watch layer fires a `CiFailed` event.
+    ///
+    /// Slice 2 of the split-ci-state feature keeps the legacy `checks_state`
+    /// field mirrored with `ci_code_state`, so the existing diff logic (which
+    /// reads `checks_state` for one release) continues to detect the
+    /// transition. A follow-up issue will migrate this reader to fire on
+    /// `ci_code_state` and `ci_gate_state` separately.
+    #[test]
+    fn diff_detects_ci_code_state_transition_to_failing() {
+        let path = "/workspace/repo/feat-1";
+        let old_pr = PrState {
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ..make_pr(10)
+        };
+        let new_pr = PrState {
+            checks_state: Some("failing".to_string()),
+            ci_code_state: Some("failing".to_string()),
+            ..make_pr(10)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+
+        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+
+        let ci_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::CiFailed { .. }))
+            .collect();
+        assert_eq!(
+            ci_events.len(),
+            1,
+            "diff must emit CiFailed when ci_code_state transitions from passing to failing"
+        );
+    }
+
     #[test]
     fn diff_ignores_ci_staying_at_failing() {
         let path = "/workspace/repo/feat-1";

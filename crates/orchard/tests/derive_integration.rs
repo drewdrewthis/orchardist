@@ -10,7 +10,10 @@ use common::{
     make_pr, make_session, make_worktree,
 };
 use orchard::cache::{CachedPr, CachedWorktree, read_cache};
+use orchard::ci_state::{CheckInfo, CiChecks};
 use orchard::derive::{DisplayGroup, derive_all_repos, derive_worktree_rows};
+use orchard::json_output::JsonPr;
+use orchard::orchard_state::PrState;
 
 // ---------------------------------------------------------------------------
 // Multi-repo: tasks from all repos appear in the result
@@ -271,4 +274,179 @@ fn cache_file_roundtrip_feeds_into_derive_pipeline() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
     assert_eq!(rows[1].display_group, DisplayGroup::ReadyToMerge);
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end: split CI state surfaces through the JSON output pipeline
+// ---------------------------------------------------------------------------
+
+/// Helper: build a `CachedPr` that mirrors what `parse_prs_graphql` would
+/// produce for a PR whose code CI is passing and whose `check-approval-or-label`
+/// gate is failing. Used by the two e2e scenarios below.
+fn make_code_green_gate_blocked_pr(number: u32, branch: &str) -> CachedPr {
+    CachedPr {
+        number,
+        branch: branch.to_string(),
+        linked_issue: None,
+        state: "open".to_string(),
+        review_decision: Some("approved".to_string()),
+        // Legacy field mirrors ci_code_state — this is what slice 2 produces in
+        // `derive_ci_state_graphql`. A code-green gate-blocked PR stays
+        // `"passing"` at the legacy field so old consumers keep working.
+        checks_state: Some("passing".to_string()),
+        ci_code_state: Some("passing".to_string()),
+        ci_gate_state: Some("blocked".to_string()),
+        ci_checks: CiChecks {
+            code: vec![
+                CheckInfo {
+                    name: "test-unit".to_string(),
+                    state: "passing".to_string(),
+                },
+                CheckInfo {
+                    name: "test-integration".to_string(),
+                    state: "passing".to_string(),
+                },
+                CheckInfo {
+                    name: "lint".to_string(),
+                    state: "passing".to_string(),
+                },
+            ],
+            gate: vec![CheckInfo {
+                name: "check-approval-or-label".to_string(),
+                state: "failing".to_string(),
+            }],
+        },
+        has_conflicts: false,
+        unresolved_threads: 0,
+        linked_issue_state: None,
+    }
+}
+
+/// @e2e — task #6: a PR that is code-green but has a failing gate check must:
+/// 1. not be classified as `NeedsAttention` (the regression this feature fixes),
+/// 2. expose `ciCodeState` / `ciGateState` / `ciChecks` in the JSON output
+///    so the orchardist's `jq` filter (`ciCodeState == "passing" and
+///    ciGateState == "blocked"`) finds it.
+#[test]
+fn e2e_code_green_gate_blocked_pr_surfaces_in_json_output() {
+    let worktrees = vec![
+        make_worktree("/workspace/repo", "main"),
+        make_worktree("/workspace/repo-feat", "feat/branch"),
+    ];
+    let prs = vec![make_code_green_gate_blocked_pr(42, "feat/branch")];
+
+    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+
+    // (1) Display group is NOT NeedsAttention — the code path that would have
+    // caused the regression. It is also NOT ReadyToMerge because the gate is
+    // blocked. So the feat row falls through to `Other`.
+    assert_eq!(
+        rows[1].display_group,
+        DisplayGroup::Other,
+        "code-green gate-blocked PR must not cascade into NeedsAttention"
+    );
+    assert_ne!(rows[1].display_group, DisplayGroup::NeedsAttention);
+
+    // (2) Serialize the PR through the full JsonPr pipeline and verify the new
+    // fields appear with camelCase keys alongside the legacy field, and the
+    // orchardist's triage filter matches.
+    let pr_info = rows[1].pr.as_ref().expect("row should have a PR");
+    let pr_state = PrState::from(pr_info);
+    let json_pr = JsonPr::from(&pr_state);
+    let json_value = serde_json::to_value(&json_pr).expect("serialize JsonPr");
+
+    assert_eq!(json_value["ciCodeState"], "passing");
+    assert_eq!(json_value["ciGateState"], "blocked");
+    // checksState (legacy) mirrors ci_code_state — code-green stays "passing".
+    assert_eq!(json_value["checksState"], "passing");
+
+    // ciChecks carries the per-check breakdown with code and gate buckets.
+    let code_names: Vec<&str> = json_value["ciChecks"]["code"]
+        .as_array()
+        .expect("code is array")
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert!(code_names.contains(&"test-unit"));
+    assert!(code_names.contains(&"test-integration"));
+    assert!(code_names.contains(&"lint"));
+
+    let gate_names: Vec<&str> = json_value["ciChecks"]["gate"]
+        .as_array()
+        .expect("gate is array")
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(gate_names, vec!["check-approval-or-label"]);
+
+    // The JSON must not carry an `ignored` bucket in v1 (explicitly scoped out).
+    assert!(json_value["ciChecks"].get("ignored").is_none());
+
+    // The orchardist's `jq` filter for "ready for Slack review request":
+    //   .pr | select(.ciCodeState == "passing" and .ciGateState == "blocked")
+    // matches this PR.
+    let matches_triage_filter = json_value["ciCodeState"] == "passing"
+        && json_value["ciGateState"] == "blocked";
+    assert!(
+        matches_triage_filter,
+        "triage filter must surface this PR"
+    );
+}
+
+/// @e2e — task #7: a PR whose only gate check is still running (pending) must
+/// resolve to `ciGateState == "pending"`, not `"blocked"`, so the
+/// orchardist's triage filter (blocked only) does NOT surface it. This
+/// distinguishes a mid-flight Mintlify preview from a hard
+/// `check-approval-or-label` failure.
+#[test]
+fn e2e_pending_gate_is_not_surfaced_by_blocked_filter() {
+    let worktrees = vec![
+        make_worktree("/workspace/repo", "main"),
+        make_worktree("/workspace/repo-feat", "feat/branch"),
+    ];
+    let prs = vec![CachedPr {
+        number: 43,
+        branch: "feat/branch".to_string(),
+        linked_issue: None,
+        state: "open".to_string(),
+        review_decision: Some("approved".to_string()),
+        checks_state: Some("passing".to_string()),
+        ci_code_state: Some("passing".to_string()),
+        ci_gate_state: Some("pending".to_string()),
+        ci_checks: CiChecks {
+            code: vec![CheckInfo {
+                name: "test-unit".to_string(),
+                state: "passing".to_string(),
+            }],
+            gate: vec![CheckInfo {
+                name: "Mintlify Deployment".to_string(),
+                state: "pending".to_string(),
+            }],
+        },
+        has_conflicts: false,
+        unresolved_threads: 0,
+        linked_issue_state: None,
+    }];
+
+    let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+
+    let pr_info = rows[1].pr.as_ref().expect("row should have a PR");
+    let pr_state = PrState::from(pr_info);
+    let json_pr = JsonPr::from(&pr_state);
+    let json_value = serde_json::to_value(&json_pr).expect("serialize JsonPr");
+
+    assert_eq!(json_value["ciCodeState"], "passing");
+    assert_eq!(
+        json_value["ciGateState"], "pending",
+        "mid-flight gate checks must be distinguishable from hard failures"
+    );
+
+    // The orchardist's triage filter requires `ciGateState == "blocked"` — this
+    // PR must NOT match, because the gate is still running.
+    let matches_triage_filter = json_value["ciCodeState"] == "passing"
+        && json_value["ciGateState"] == "blocked";
+    assert!(
+        !matches_triage_filter,
+        "a pending-gate PR must not be surfaced by the blocked filter"
+    );
 }
