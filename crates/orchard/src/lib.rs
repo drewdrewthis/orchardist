@@ -36,3 +36,4 @@ pub mod tmux;
 pub mod tui;
 pub mod types;
 pub mod watch;
+pub mod webhook;
