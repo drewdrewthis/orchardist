@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::claude_state::ClaudeState;
 use crate::orchard_state::{OrchardState, WorktreeState};
+use crate::watch::debounce::ClaudeDebounceState;
 use crate::watch::event::{EventKind, WatchEvent};
 
 // ---------------------------------------------------------------------------
@@ -76,8 +77,15 @@ fn label_for(wt: &WorktreeState) -> String {
 
 /// Diffs two `OrchardState` snapshots and returns all detected `WatchEvent`s.
 ///
-/// This is a pure function: it performs no I/O and has no side effects.
-pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
+/// The `debounce` parameter is mutated to suppress single-poll Claude status
+/// flicker: a new status must be observed in two consecutive diff cycles before
+/// a transition event is emitted. The TUI displays raw status; only the event
+/// stream is debounced.
+pub fn diff(
+    old: &OrchardState,
+    new: &OrchardState,
+    debounce: &mut ClaudeDebounceState,
+) -> Vec<WatchEvent> {
     let mut events = Vec::new();
 
     let old_map = worktree_map(old);
@@ -109,13 +117,14 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
             continue;
         };
 
-        let old_claude = claude_status(old_wt);
-        let new_claude = claude_status(new_wt);
+        let new_raw = claude_status(new_wt);
+        let old_effective = debounce.confirmed(path);
+        let new_effective = debounce.observe(path, new_raw);
         let label = label_for(new_wt);
         let session = first_session(new_wt);
 
-        // Claude state transitions
-        match (old_claude, new_claude) {
+        // Claude state transitions (debounced: new status must persist two cycles)
+        match (old_effective, new_effective) {
             (ClaudeState::Working, ClaudeState::Input) => {
                 events.push(WatchEvent::now(EventKind::ClaudeNeedsInput {
                     worktree: path.to_string(),
@@ -215,6 +224,9 @@ pub fn diff(old: &OrchardState, new: &OrchardState) -> Vec<WatchEvent> {
         }
     }
 
+    // Drop debounce state for worktrees that no longer exist.
+    debounce.retain_paths(|p| new_map.contains_key(p));
+
     // --- Standalone session transitions ---
     let old_sessions: HashSet<&str> = old
         .standalone_sessions
@@ -257,6 +269,7 @@ mod tests {
     use super::*;
     use crate::derive::DisplayGroup;
     use crate::orchard_state::{ClaudeEnrichment, PrState, RepoState, SessionState, WorktreeState};
+    use crate::watch::debounce::ClaudeDebounceState;
 
     fn empty_state() -> OrchardState {
         OrchardState {
@@ -323,9 +336,20 @@ mod tests {
         }
     }
 
+    /// Creates a debounce state pre-seeded with the confirmed statuses from `state`.
+    ///
+    /// Calling `diff(state, state, &mut debounce)` primes the debouncer so that the
+    /// next diff call treats `state`'s statuses as the established baseline.
+    fn seeded_debounce(state: &OrchardState) -> ClaudeDebounceState {
+        let mut d = ClaudeDebounceState::new();
+        let _ = diff(state, state, &mut d);
+        d
+    }
+
     #[test]
     fn diff_empty_states_returns_no_events() {
-        let events = diff(&empty_state(), &empty_state());
+        let mut d = ClaudeDebounceState::new();
+        let events = diff(&empty_state(), &empty_state(), &mut d);
         assert!(events.is_empty());
     }
 
@@ -335,7 +359,8 @@ mod tests {
         let wt = make_worktree("/workspace/repo/feat-1", "feat/issue-1");
         let new = make_state(vec![wt]);
 
-        let events = diff(&old, &new);
+        let mut d = seeded_debounce(&old);
+        let events = diff(&old, &new, &mut d);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0].kind,
@@ -349,7 +374,8 @@ mod tests {
         let old = make_state(vec![wt]);
         let new = empty_state();
 
-        let events = diff(&old, &new);
+        let mut d = seeded_debounce(&old);
+        let events = diff(&old, &new, &mut d);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0].kind,
@@ -362,8 +388,13 @@ mod tests {
         let path = "/workspace/repo/feat-1";
         let old_wt = with_claude(make_worktree(path, "feat/issue-1"), ClaudeState::Working);
         let new_wt = with_claude(make_worktree(path, "feat/issue-1"), ClaudeState::Input);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        // Prime debouncer with Working, then observe Input twice (required by 2-cycle rule).
+        let mut d = seeded_debounce(&old_state);
+        let _ = diff(&old_state, &new_state, &mut d); // first sighting of Input — suppressed
+        let events = diff(&old_state, &new_state, &mut d); // second sighting — confirmed
 
         let input_events: Vec<_> = events
             .iter()
@@ -377,8 +408,12 @@ mod tests {
         let path = "/workspace/repo/feat-1";
         let old_wt = with_claude(make_worktree(path, "feat/issue-1"), ClaudeState::Working);
         let new_wt = with_claude(make_worktree(path, "feat/issue-1"), ClaudeState::Idle);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let _ = diff(&old_state, &new_state, &mut d); // first sighting
+        let events = diff(&old_state, &new_state, &mut d); // second sighting — confirmed
 
         let finished_events: Vec<_> = events
             .iter()
@@ -392,8 +427,12 @@ mod tests {
         let path = "/workspace/repo/feat-1";
         let old_wt = with_claude(make_worktree(path, "feat/issue-1"), ClaudeState::Idle);
         let new_wt = with_claude(make_worktree(path, "feat/issue-1"), ClaudeState::Working);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let _ = diff(&old_state, &new_state, &mut d); // first sighting
+        let events = diff(&old_state, &new_state, &mut d); // second sighting — confirmed
 
         let started_events: Vec<_> = events
             .iter()
@@ -413,8 +452,11 @@ mod tests {
 
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
 
         let ci_events: Vec<_> = events
             .iter()
@@ -437,8 +479,11 @@ mod tests {
 
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
 
         let ci_events: Vec<_> = events
             .iter()
@@ -458,8 +503,11 @@ mod tests {
 
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
 
         let review_events: Vec<_> = events
             .iter()
@@ -486,8 +534,11 @@ mod tests {
 
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
 
         let merged_events: Vec<_> = events
             .iter()
@@ -510,8 +561,11 @@ mod tests {
 
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
         let ci_events: Vec<_> = events
             .iter()
             .filter(|e| matches!(&e.kind, EventKind::CiPassed { .. }))
@@ -533,8 +587,11 @@ mod tests {
 
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
         let ready_events: Vec<_> = events
             .iter()
             .filter(|e| matches!(&e.kind, EventKind::PrReadyToMerge { .. }))
@@ -573,7 +630,8 @@ mod tests {
             hosts: HashMap::new(),
         };
 
-        let events = diff(&old, &new);
+        let mut d = seeded_debounce(&old);
+        let events = diff(&old, &new, &mut d);
         let started: Vec<_> = events
             .iter()
             .filter(|e| matches!(&e.kind, EventKind::SessionStarted { .. }))
@@ -612,7 +670,8 @@ mod tests {
         };
         let new = empty_state();
 
-        let events = diff(&old, &new);
+        let mut d = seeded_debounce(&old);
+        let events = diff(&old, &new, &mut d);
         let died: Vec<_> = events
             .iter()
             .filter(|e| matches!(&e.kind, EventKind::SessionDied { .. }))
@@ -629,7 +688,76 @@ mod tests {
         );
 
         let state = make_state(vec![wt]);
-        let events = diff(&state, &state);
+        let mut d = seeded_debounce(&state);
+        let events = diff(&state, &state, &mut d);
         assert!(events.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Debounce regression tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diff_debounces_single_poll_claude_flicker() {
+        // Sequence: Working → Input → Working across three diff cycles.
+        // Expect: zero ClaudeNeedsInput events emitted.
+        let path = "/workspace/repo/feat-1";
+        let mut debounce = ClaudeDebounceState::new();
+
+        let s1 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Working)]);
+        let s2 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Input)]);
+        let s3 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Working)]);
+
+        // Prime the debouncer: first diff call observes Working and confirms it.
+        let _ = diff(&s1, &s1, &mut debounce);
+
+        let events_1_to_2 = diff(&s1, &s2, &mut debounce);
+        let events_2_to_3 = diff(&s2, &s3, &mut debounce);
+
+        let flicker_events: Vec<_> = events_1_to_2
+            .iter()
+            .chain(events_2_to_3.iter())
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ClaudeNeedsInput { .. } | EventKind::ClaudeFinished { .. }
+                )
+            })
+            .collect();
+        assert!(
+            flicker_events.is_empty(),
+            "single-poll flicker should not emit transition events, got {flicker_events:?}"
+        );
+    }
+
+    #[test]
+    fn diff_emits_transition_when_status_persists_two_cycles() {
+        // Sequence: Working → Input → Input. Expect: one ClaudeNeedsInput after the second Input.
+        let path = "/workspace/repo/feat-1";
+        let mut debounce = ClaudeDebounceState::new();
+
+        let s1 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Working)]);
+        let s2 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Input)]);
+        let s3 = make_state(vec![with_claude(make_worktree(path, "b"), ClaudeState::Input)]);
+
+        let _ = diff(&s1, &s1, &mut debounce);
+        let events_1_to_2 = diff(&s1, &s2, &mut debounce);
+        let events_2_to_3 = diff(&s2, &s3, &mut debounce);
+
+        let input_events_1: Vec<_> = events_1_to_2
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::ClaudeNeedsInput { .. }))
+            .collect();
+        let input_events_2: Vec<_> = events_2_to_3
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::ClaudeNeedsInput { .. }))
+            .collect();
+
+        assert!(input_events_1.is_empty(), "no event on first sighting of Input");
+        assert_eq!(
+            input_events_2.len(),
+            1,
+            "event fires when Input persists for a second cycle"
+        );
     }
 }
