@@ -4,6 +4,7 @@
 //! emits `WatchEvent`s, and delivers them to all registered subscribers.
 
 pub mod daemon;
+pub mod debounce;
 pub mod diff;
 pub mod event;
 pub mod subscription;

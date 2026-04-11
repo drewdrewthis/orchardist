@@ -40,6 +40,7 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
     );
 
     let mut threshold_ts = ThresholdTimestamps::new();
+    let mut claude_debounce = crate::watch::debounce::ClaudeDebounceState::new();
     let mut last_local = Instant::now();
     let mut last_full = Instant::now();
 
@@ -71,7 +72,7 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         // Diff
         let mut events: Vec<WatchEvent> = Vec::new();
         if let Some(ref old) = previous_state {
-            events.extend(diff::diff(old, &new_state));
+            events.extend(diff::diff(old, &new_state, &mut claude_debounce));
         }
 
         // Thresholds

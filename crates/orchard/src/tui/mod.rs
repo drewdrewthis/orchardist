@@ -129,6 +129,8 @@ pub struct App {
 
     // Previous state snapshot used to detect transitions between cache refreshes.
     previous_orchard_state: Option<crate::orchard_state::OrchardState>,
+    // Debounce state for claude status transitions — suppresses single-poll flicker.
+    claude_debounce: crate::watch::debounce::ClaudeDebounceState,
 
     // Mouse support
     /// Last rendered table body rect (excludes border + header row). Updated by render.
@@ -230,6 +232,7 @@ impl App {
             switch_target: None,
             persist_selection,
             previous_orchard_state: None,
+            claude_debounce: crate::watch::debounce::ClaudeDebounceState::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
             preview_area: Cell::new(Rect::default()),
@@ -793,7 +796,7 @@ impl App {
     /// state for the next comparison.
     fn detect_and_notify(&mut self, new_state: &crate::orchard_state::OrchardState) {
         if let Some(ref old_state) = self.previous_orchard_state {
-            let events = crate::watch::diff::diff(old_state, new_state);
+            let events = crate::watch::diff::diff(old_state, new_state, &mut self.claude_debounce);
             let terminal_app = self.global_config.terminal_app.as_str();
             for event in &events {
                 if let Some((title, message, session)) = event.kind.notification() {
@@ -1961,6 +1964,7 @@ impl App {
             switch_target: None,
             persist_selection: true,
             previous_orchard_state: None,
+            claude_debounce: crate::watch::debounce::ClaudeDebounceState::new(),
             table_area: Cell::new(Rect::default()),
             url_area: Cell::new(Rect::default()),
             preview_area: Cell::new(Rect::default()),
