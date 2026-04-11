@@ -55,25 +55,7 @@ fn append_event(path: &Path, event_type: &str, fields: &[(&str, Value)]) {
         Err(_) => return,
     };
 
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    // Rotate before writing if the existing file is over the size limit.
-    if let Ok(meta) = fs::metadata(path)
-        && meta.len() >= MAX_SIZE_BYTES
-    {
-        rotate(path);
-    }
-
-    let mut file = match OpenOptions::new().create(true).append(true).open(path) {
-        Ok(f) => f,
-        Err(_) => return,
-    };
-
-    let _ = file.write_all(line.as_bytes());
-    let _ = file.write_all(b"\n");
-    let _ = file.flush();
+    append_line(path, &line);
 }
 
 /// Rotates the events file:
@@ -225,6 +207,47 @@ pub fn log_watch_event(event_type: &str, details: &str) {
         &format!("watch.{}", event_type),
         &[("details", Value::String(details.to_string()))],
     );
+}
+
+/// Appends a webhook-sourced event line to events.jsonl using the #215 schema:
+/// `{ts, source:"webhook", kind, repo?, pr?, issue?, actor?, data}`.
+///
+/// This lives in the same file as the existing `log_event` but writes a
+/// DIFFERENT JSON shape. Consumers (the watch tailer) distinguish webhook
+/// lines from task/session lines by the presence of the `source` field.
+///
+/// Both writers go through the same `OpenOptions::append` + 50MB rotation
+/// path so writes are atomic and rotation applies uniformly.
+pub fn log_webhook_event(event: &crate::webhook::normalize::NormalizedEvent) {
+    let path = default_events_path();
+    let line = match serde_json::to_string(event) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    append_line(&path, &line);
+}
+
+/// Appends a single JSON line to `path`, creating the file and its parent
+/// directories as needed. Rotates if the file exceeds 50 MB before writing.
+fn append_line(path: &Path, line: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    if let Ok(meta) = fs::metadata(path)
+        && meta.len() >= MAX_SIZE_BYTES
+    {
+        rotate(path);
+    }
+
+    let mut file = match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+
+    let _ = file.write_all(line.as_bytes());
+    let _ = file.write_all(b"\n");
+    let _ = file.flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -484,5 +507,41 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn webhook_event_line_has_source_and_kind_fields() {
+        use crate::webhook::normalize::build_event;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        let event = build_event(
+            "pull_request.opened".to_string(),
+            Some("acme/webapp".to_string()),
+            Some(42),
+            None,
+            Some("some-actor".to_string()),
+            &serde_json::json!({"action": "opened"}),
+        );
+
+        let line = serde_json::to_string(&event).expect("must serialize");
+        append_line(&path, &line);
+
+        let lines = read_lines(&path);
+        assert_eq!(lines.len(), 1, "expected exactly one line");
+
+        let parsed: serde_json::Map<String, Value> =
+            serde_json::from_str(&lines[0]).expect("line must be valid JSON");
+        assert_eq!(
+            parsed.get("source").and_then(Value::as_str),
+            Some("webhook"),
+            "source field must be 'webhook'"
+        );
+        assert!(parsed.contains_key("kind"), "kind field must be present");
+        assert_eq!(
+            parsed.get("kind").and_then(Value::as_str),
+            Some("pull_request.opened"),
+        );
     }
 }

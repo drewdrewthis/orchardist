@@ -89,6 +89,10 @@ pub struct WatchConfig {
     /// Whether to send desktop notifications for watch events.
     #[serde(default = "default_notifications")]
     pub notifications: bool,
+    /// Optional override for the webhook server's bound port.
+    /// Precedence: CLI --port > ORCHARD_WEBHOOK_PORT env > this field > 8477 default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_port: Option<u16>,
 }
 
 fn default_local_poll_secs() -> u64 {
@@ -111,6 +115,7 @@ impl Default for WatchConfig {
             full_poll_secs: default_full_poll_secs(),
             threshold_cooldown_secs: default_threshold_cooldown_secs(),
             notifications: default_notifications(),
+            webhook_port: None,
         }
     }
 }

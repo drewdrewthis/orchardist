@@ -35,8 +35,9 @@ throbber-widgets-tui = "0.11.0"
 tui-scrollview = "0.6.2"
 nucleo-matcher = "0.3.1"
 ctrlc = "3"
+http = "1"
 hyper = { version = "1", features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1"] }
 http-body-util = "0.1"
 hmac = "0.12"
 sha2 = "0.10"
