@@ -597,6 +597,11 @@ mod tests {
             title: format!("Issue #{number}"),
             state: "open".to_string(),
             labels: vec![],
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 
@@ -1443,6 +1448,11 @@ mod tests {
             title: format!("Issue #{number}"),
             state: "closed".to_string(),
             labels: vec![],
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 
@@ -1452,6 +1462,11 @@ mod tests {
             title: format!("Issue #{number}"),
             state: "completed".to_string(),
             labels: vec![],
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 

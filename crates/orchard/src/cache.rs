@@ -17,6 +17,17 @@ use crate::claude_state::ClaudeStateFile;
 // Entry types
 // ---------------------------------------------------------------------------
 
+/// A child issue from GitHub's sub-issues API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CachedSubIssue {
+    /// GitHub issue number of the sub-issue.
+    pub number: u32,
+    /// Sub-issue title.
+    pub title: String,
+    /// Sub-issue state string (e.g. `"open"`, `"closed"`).
+    pub state: String,
+}
+
 /// A GitHub issue entry as stored in the issues cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedIssue {
@@ -28,6 +39,21 @@ pub struct CachedIssue {
     pub state: String,
     /// Labels applied to the issue.
     pub labels: Vec<String>,
+    /// GitHub logins of assignees.
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    /// ISO 8601 timestamp when the issue was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Issue numbers that block this issue (from body text regex + sub-issues API).
+    #[serde(default)]
+    pub blocked_by: Vec<u32>,
+    /// Child issues from GitHub sub-issues API.
+    #[serde(default)]
+    pub sub_issues: Vec<CachedSubIssue>,
+    /// Parent issue number from GitHub sub-issues API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
 }
 
 /// A single review submitted on a pull request.
@@ -360,6 +386,11 @@ mod tests {
             title: "Fix the thing".to_string(),
             state: "open".to_string(),
             labels: vec!["bug".to_string()],
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 

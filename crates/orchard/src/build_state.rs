@@ -661,6 +661,11 @@ mod tests {
             title: format!("Issue #{number}"),
             state: "open".to_string(),
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 

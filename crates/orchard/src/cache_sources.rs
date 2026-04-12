@@ -5,7 +5,9 @@
 //! cache files consumed by `sources::*` and `derive`.
 use std::process::Command;
 
-use crate::cache::{self, CachedIssue, CachedPr, CachedReview, CachedTmuxSession, CachedWorktree};
+use crate::cache::{
+    self, CachedIssue, CachedPr, CachedReview, CachedSubIssue, CachedTmuxSession, CachedWorktree,
+};
 use crate::ci_state::{
     CheckInfo, CiChecks, GateMatcher, classify_check, map_check_run_conclusion,
     map_status_context_state, rollup_code_state, rollup_gate_state,
@@ -48,9 +50,179 @@ pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
                 title,
                 state,
                 labels,
+                assignees: vec![],
+                created_at: None,
+                blocked_by: vec![],
+                sub_issues: vec![],
+                parent: None,
             })
         })
         .collect()
+}
+
+/// Builds a per-issue GraphQL query using aliased `repository.issue(number:N)` fields.
+///
+/// Uses a `IssueFields` fragment to avoid repeating the field set for each alias.
+/// The `subIssues` and `parent` fields require the `GraphQL-Features: sub_issues`
+/// header to be passed to `gh api graphql`.
+///
+/// If `issue_numbers` is empty, returns a minimal stub query that only fetches
+/// the repository name (no issue aliases).
+pub fn issue_graphql_query(owner: &str, name: &str, issue_numbers: &[u32]) -> String {
+    if issue_numbers.is_empty() {
+        return format!(
+            r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#
+        );
+    }
+
+    let aliases: Vec<String> = issue_numbers
+        .iter()
+        .map(|n| format!(r#"    i_{n}: issue(number: {n}) {{ ...IssueFields }}"#))
+        .collect();
+
+    format!(
+        r#"query {{
+  repository(owner: "{owner}", name: "{name}") {{
+{aliases}
+  }}
+}}
+
+fragment IssueFields on Issue {{
+  number
+  title
+  state
+  labels(first: 100) {{ nodes {{ name }} }}
+  assignees(first: 20) {{ nodes {{ login }} }}
+  createdAt
+  body
+  subIssues(first: 50) {{ nodes {{ number title state }} }}
+  parent {{ number }}
+}}"#,
+        aliases = aliases.join("\n")
+    )
+}
+
+/// Extracts issue numbers that block `body` text using the blocking-reference regex.
+///
+/// Matches: "blocked by #N", "depends on #N", "waiting on #N" (case-insensitive).
+/// Does NOT match: "fixes #N", "closes #N", or bare "#N".
+fn extract_blocked_by(body: &str) -> Vec<u32> {
+    // Compiled once per parse call — acceptable since bodies are short.
+    // Pattern anchored to word boundaries to avoid partial matches.
+    let re = regex::Regex::new(
+        r"(?i)(?:blocked\s+by|depends\s+on|waiting\s+on)\s+#(\d+)",
+    )
+    .expect("blocking regex is valid");
+
+    re.captures_iter(body)
+        .filter_map(|caps| caps[1].parse::<u32>().ok())
+        .collect()
+}
+
+/// Parses a per-issue aliased GraphQL response into `Vec<CachedIssue>`.
+///
+/// Expects shape: `{"data":{"repository":{"i_42":{...}, "i_99":{...}, ...}}}`.
+/// Iterates over all keys in `data.repository` that start with `i_`, maps each
+/// to a `CachedIssue` with enriched fields including sub-issues, parent, assignees,
+/// createdAt, and blocking references parsed from the body.
+///
+/// GraphQL returns state in uppercase (`OPEN`/`CLOSED`); this function normalizes
+/// to lowercase.
+pub fn parse_issues_graphql(json: &str) -> Vec<CachedIssue> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: failed to parse issues GraphQL JSON: {e}"
+            ));
+            return Vec::new();
+        }
+    };
+
+    let repo = match root["data"]["repository"].as_object() {
+        Some(obj) => obj,
+        None => {
+            LOG.warn("cache_sources: issues GraphQL response missing data.repository");
+            return Vec::new();
+        }
+    };
+
+    let mut issues = Vec::new();
+
+    for (key, val) in repo {
+        if !key.starts_with("i_") {
+            continue;
+        }
+
+        // A null value means the issue doesn't exist (deleted / wrong number).
+        if val.is_null() {
+            continue;
+        }
+
+        let Some(number) = val["number"].as_u64().map(|n| n as u32) else {
+            continue;
+        };
+
+        let title = val["title"].as_str().unwrap_or("").to_string();
+        let state = val["state"].as_str().unwrap_or("OPEN").to_lowercase();
+
+        let labels = val["labels"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let assignees = val["assignees"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a["login"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let created_at = val["createdAt"].as_str().map(|s| s.to_string());
+
+        let body = val["body"].as_str().unwrap_or("");
+        let blocked_by = extract_blocked_by(body);
+
+        let sub_issues = val["subIssues"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        let sub_number = s["number"].as_u64()? as u32;
+                        let sub_title = s["title"].as_str().unwrap_or("").to_string();
+                        let sub_state = s["state"].as_str().unwrap_or("OPEN").to_lowercase();
+                        Some(CachedSubIssue {
+                            number: sub_number,
+                            title: sub_title,
+                            state: sub_state,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let parent = val["parent"]["number"].as_u64().map(|n| n as u32);
+
+        issues.push(CachedIssue {
+            number,
+            title,
+            state,
+            labels,
+            assignees,
+            created_at,
+            blocked_by,
+            sub_issues,
+            parent,
+        });
+    }
+
+    issues
 }
 
 /// Parses GraphQL PR response JSON into a `Vec<CachedPr>`.
@@ -477,25 +649,62 @@ fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<Strin
 // Public refresh functions
 // ---------------------------------------------------------------------------
 
-/// Fetches all GitHub issues for `config.slug` and writes to the issues cache.
+/// Fetches GitHub issues linked to known worktree branches for `config.slug` and
+/// writes to the issues cache.
+///
+/// Extracts issue numbers from:
+/// 1. `linked_issue` fields in the PRs cache (from `closingIssuesReferences`)
+/// 2. Branch names in the worktrees cache via `extract_issue_number()`
+///
+/// Then queries only those issues via a per-issue GraphQL query with the
+/// `GraphQL-Features: sub_issues` header to populate sub-issues and parent fields.
 ///
 /// On API failure the error is logged and the existing cache is left intact.
 pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "issues");
 
+    // Collect issue numbers from PRs cache (closingIssuesReferences).
+    let prs_path = cache::cache_path(config.owner(), config.repo_name(), "prs");
+    let prs: Vec<CachedPr> = cache::read_cache::<CachedPr>(&prs_path).entries;
+    let mut issue_numbers: std::collections::HashSet<u32> = prs
+        .iter()
+        .filter_map(|pr| pr.linked_issue)
+        .collect();
+
+    // Also collect from worktree branch names.
+    let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
+    let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
+    for wt in &worktrees {
+        if !wt.is_bare {
+            if let Some(n) = crate::github::extract_issue_number(&wt.branch) {
+                issue_numbers.insert(n);
+            }
+        }
+    }
+
+    if issue_numbers.is_empty() {
+        LOG.info(&format!(
+            "cache_sources: refresh_issues({}): no linked issues found, skipping",
+            config.slug
+        ));
+        cache::write_cache_if_nonempty(&path, &Vec::<CachedIssue>::new())?;
+        return Ok(());
+    }
+
+    let mut numbers: Vec<u32> = issue_numbers.into_iter().collect();
+    numbers.sort_unstable();
+
+    let query = issue_graphql_query(config.owner(), config.repo_name(), &numbers);
+
     let out = run_local(
         "gh",
         &[
-            "issue",
-            "list",
-            "--repo",
-            &config.slug,
-            "--state",
-            "all",
-            "--limit",
-            "100",
-            "--json",
-            "number,title,state,labels",
+            "api",
+            "graphql",
+            "-H",
+            "GraphQL-Features: sub_issues",
+            "-f",
+            &format!("query={query}"),
         ],
     );
 
@@ -508,7 +717,7 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(json) => {
-            let issues = parse_issues_json(&json);
+            let issues = parse_issues_graphql(&json);
             cache::write_cache_if_nonempty(&path, &issues)?;
             LOG.info(&format!(
                 "cache_sources: refresh_issues({}): wrote {} entries",
@@ -1992,5 +2201,307 @@ mod tests {
         assert_eq!(parsed.window_active, vec!["1"]);
         assert_eq!(parsed.titles, vec!["Claude"]);
         assert_eq!(parsed.commands, vec![" my-project:node"]);
+    }
+
+    // -- issue_graphql_query ---------------------------------------------------
+
+    #[test]
+    fn issue_graphql_query_empty_returns_stub() {
+        let q = issue_graphql_query("acme", "myrepo", &[]);
+        assert!(q.contains("repository(owner: \"acme\", name: \"myrepo\")"));
+        assert!(!q.contains("i_"), "empty query must have no issue aliases");
+    }
+
+    #[test]
+    fn issue_graphql_query_generates_aliases_and_fragment() {
+        let q = issue_graphql_query("acme", "myrepo", &[42, 99]);
+
+        // Each issue gets an alias.
+        assert!(q.contains("i_42: issue(number: 42)"), "missing i_42 alias");
+        assert!(q.contains("i_99: issue(number: 99)"), "missing i_99 alias");
+
+        // Fragment is defined and referenced.
+        assert!(
+            q.contains("...IssueFields"),
+            "aliases must use ...IssueFields spread"
+        );
+        assert!(
+            q.contains("fragment IssueFields on Issue"),
+            "IssueFields fragment must be defined"
+        );
+
+        // Fragment contains required fields.
+        assert!(q.contains("subIssues(first: 50)"), "fragment must select subIssues");
+        assert!(q.contains("parent { number }"), "fragment must select parent.number");
+        assert!(q.contains("assignees(first: 20)"), "fragment must select assignees");
+        assert!(q.contains("createdAt"), "fragment must select createdAt");
+        assert!(q.contains("body"), "fragment must select body");
+        assert!(
+            q.contains("labels(first: 100)"),
+            "fragment must select labels(first: 100)"
+        );
+    }
+
+    #[test]
+    fn issue_graphql_query_single_issue() {
+        let q = issue_graphql_query("owner", "repo", &[1]);
+        assert!(q.contains("i_1: issue(number: 1)"));
+    }
+
+    // -- extract_blocked_by (blocking regex) ------------------------------------
+
+    #[test]
+    fn blocking_regex_matches_blocked_by() {
+        let result = extract_blocked_by("This is blocked by #42");
+        assert_eq!(result, vec![42]);
+    }
+
+    #[test]
+    fn blocking_regex_matches_depends_on() {
+        let result = extract_blocked_by("Depends on #99");
+        assert_eq!(result, vec![99]);
+    }
+
+    #[test]
+    fn blocking_regex_matches_waiting_on() {
+        let result = extract_blocked_by("waiting on #7");
+        assert_eq!(result, vec![7]);
+    }
+
+    #[test]
+    fn blocking_regex_case_insensitive() {
+        let result = extract_blocked_by("BLOCKED BY #100 and Depends On #200");
+        assert!(result.contains(&100), "should match BLOCKED BY #100");
+        assert!(result.contains(&200), "should match Depends On #200");
+    }
+
+    #[test]
+    fn blocking_regex_does_not_match_fixes() {
+        let result = extract_blocked_by("fixes #42");
+        assert!(result.is_empty(), "should not match 'fixes #N'");
+    }
+
+    #[test]
+    fn blocking_regex_does_not_match_closes() {
+        let result = extract_blocked_by("closes #42");
+        assert!(result.is_empty(), "should not match 'closes #N'");
+    }
+
+    #[test]
+    fn blocking_regex_does_not_match_bare_hash() {
+        let result = extract_blocked_by("see #42 for context");
+        assert!(result.is_empty(), "should not match bare '#N'");
+    }
+
+    #[test]
+    fn blocking_regex_multiple_blockers() {
+        let result = extract_blocked_by("blocked by #10\ndepends on #20\nwaiting on #30");
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&10));
+        assert!(result.contains(&20));
+        assert!(result.contains(&30));
+    }
+
+    // -- parse_issues_graphql --------------------------------------------------
+
+    fn graphql_issues_response(aliases: serde_json::Value) -> String {
+        serde_json::to_string(&json!({
+            "data": {
+                "repository": aliases
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn parse_issues_graphql_basic_fields() {
+        let json = graphql_issues_response(json!({
+            "i_42": {
+                "number": 42,
+                "title": "Fix the thing",
+                "state": "OPEN",
+                "labels": { "nodes": [{"name": "bug"}] },
+                "assignees": { "nodes": [{"login": "alice"}] },
+                "createdAt": "2026-01-15T10:00:00Z",
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1);
+        let issue = &issues[0];
+        assert_eq!(issue.number, 42);
+        assert_eq!(issue.title, "Fix the thing");
+        assert_eq!(issue.state, "open", "state should be lowercased");
+        assert_eq!(issue.labels, vec!["bug"]);
+        assert_eq!(issue.assignees, vec!["alice"]);
+        assert_eq!(issue.created_at.as_deref(), Some("2026-01-15T10:00:00Z"));
+        assert!(issue.blocked_by.is_empty());
+        assert!(issue.sub_issues.is_empty());
+        assert!(issue.parent.is_none());
+    }
+
+    #[test]
+    fn parse_issues_graphql_closed_state_normalized() {
+        let json = graphql_issues_response(json!({
+            "i_10": {
+                "number": 10,
+                "title": "Old issue",
+                "state": "CLOSED",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues[0].state, "closed");
+    }
+
+    #[test]
+    fn parse_issues_graphql_sub_issues_and_parent() {
+        let json = graphql_issues_response(json!({
+            "i_5": {
+                "number": 5,
+                "title": "Parent issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": {
+                    "nodes": [
+                        {"number": 6, "title": "Child one", "state": "OPEN"},
+                        {"number": 7, "title": "Child two", "state": "CLOSED"}
+                    ]
+                },
+                "parent": null
+            },
+            "i_6": {
+                "number": 6,
+                "title": "Child one",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": {"number": 5}
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        let parent = issues.iter().find(|i| i.number == 5).unwrap();
+        assert_eq!(parent.sub_issues.len(), 2);
+        assert_eq!(parent.sub_issues[0].number, 6);
+        assert_eq!(parent.sub_issues[0].title, "Child one");
+        assert_eq!(parent.sub_issues[0].state, "open");
+        assert_eq!(parent.sub_issues[1].number, 7);
+        assert_eq!(parent.sub_issues[1].state, "closed");
+        assert!(parent.parent.is_none());
+
+        let child = issues.iter().find(|i| i.number == 6).unwrap();
+        assert_eq!(child.parent, Some(5));
+        assert!(child.sub_issues.is_empty());
+    }
+
+    #[test]
+    fn parse_issues_graphql_blocking_references_from_body() {
+        let json = graphql_issues_response(json!({
+            "i_20": {
+                "number": 20,
+                "title": "Blocked issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "This issue is blocked by #18 and depends on #19",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1);
+        let issue = &issues[0];
+        assert!(issue.blocked_by.contains(&18), "should contain 18");
+        assert!(issue.blocked_by.contains(&19), "should contain 19");
+    }
+
+    #[test]
+    fn parse_issues_graphql_skips_non_i_prefixed_keys() {
+        // 'name' key from the stub query must not be parsed as an issue.
+        let json = graphql_issues_response(json!({
+            "name": "myrepo",
+            "i_1": {
+                "number": 1,
+                "title": "Real issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].number, 1);
+    }
+
+    #[test]
+    fn parse_issues_graphql_null_issue_skipped() {
+        // GitHub returns null for an issue alias if the issue doesn't exist.
+        let json = graphql_issues_response(json!({
+            "i_999": null,
+            "i_1": {
+                "number": 1,
+                "title": "Exists",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1, "null issue alias must be skipped");
+        assert_eq!(issues[0].number, 1);
+    }
+
+    #[test]
+    fn parse_issues_graphql_invalid_json_returns_empty() {
+        let issues = parse_issues_graphql("not json");
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn parse_issues_graphql_multiple_assignees() {
+        let json = graphql_issues_response(json!({
+            "i_3": {
+                "number": 3,
+                "title": "Team issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [{"login": "alice"}, {"login": "bob"}] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues[0].assignees, vec!["alice", "bob"]);
     }
 }

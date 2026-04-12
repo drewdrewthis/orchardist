@@ -127,6 +127,11 @@ pub fn make_issue(number: u32, title: &str) -> CachedIssue {
         title: title.to_string(),
         state: "open".to_string(),
         labels: vec![],
+        assignees: vec![],
+        created_at: None,
+        blocked_by: vec![],
+        sub_issues: vec![],
+        parent: None,
     }
 }
 
