@@ -1437,11 +1437,11 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
-                    self.view = ViewState::ConfirmDelete(state::DeleteState {
+                    self.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
                         target: vt.row.clone(),
                         phase: Phase::Confirm,
                         error: None,
-                    });
+                    }));
                 }
                 ok()
             }
@@ -3078,11 +3078,11 @@ mod tests {
     #[test]
     fn handle_event_delete_confirm_y() {
         let mut app = App::new_test(vec![]);
-        app.view = ViewState::ConfirmDelete(state::DeleteState {
+        app.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
             target: make_task_row(1, DisplayGroup::Other),
             phase: Phase::Confirm,
             error: None,
-        });
+        }));
         let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::ConfirmYes));
     }
@@ -3547,11 +3547,11 @@ mod tests {
     #[test]
     fn mouse_events_ignored_in_confirm_delete_view() {
         let mut app = app_with_table_area(vec![]);
-        app.view = ViewState::ConfirmDelete(state::DeleteState {
+        app.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
             target: make_task_row(1, DisplayGroup::Other),
             phase: Phase::Confirm,
             error: None,
-        });
+        }));
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
         assert_eq!(app.handle_mouse_event(event), None);
     }
