@@ -667,7 +667,10 @@ mod tests {
             make_worktree_for_labels("/workspace/repo", "main"),
             make_worktree_for_labels("/workspace/repo-47", branch),
         ];
-        let issues = vec![make_issue_with_labels(47, vec!["in-progress", "enhancement"])];
+        let issues = vec![make_issue_with_labels(
+            47,
+            vec!["in-progress", "enhancement"],
+        )];
 
         let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();

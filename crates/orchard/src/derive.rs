@@ -197,9 +197,7 @@ pub fn derive_worktree_rows(
         let linked_issue = issue_number.and_then(|num| issues.iter().find(|i| i.number == num));
         let issue_title = linked_issue.map(|i| i.title.clone());
         let issue_state = linked_issue.map(|i| i.state.clone());
-        let issue_labels = linked_issue
-            .map(|i| i.labels.clone())
-            .unwrap_or_default();
+        let issue_labels = linked_issue.map(|i| i.labels.clone()).unwrap_or_default();
 
         let is_main_worktree =
             is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));

@@ -749,9 +749,21 @@ mod tests {
         assert_eq!(v["phase"], "in-ai-review");
         assert_eq!(v["number"], 220);
         assert_eq!(v["branch"], "issue219/phase-field");
-        assert!(v.get("reviewDecision").is_some(), "reviewDecision key must be present");
-        assert!(v.get("checksState").is_some(), "checksState key must be present");
-        assert!(v.get("hasConflicts").is_some(), "hasConflicts key must be present");
-        assert!(v.get("unresolvedThreads").is_some(), "unresolvedThreads key must be present");
+        assert!(
+            v.get("reviewDecision").is_some(),
+            "reviewDecision key must be present"
+        );
+        assert!(
+            v.get("checksState").is_some(),
+            "checksState key must be present"
+        );
+        assert!(
+            v.get("hasConflicts").is_some(),
+            "hasConflicts key must be present"
+        );
+        assert!(
+            v.get("unresolvedThreads").is_some(),
+            "unresolvedThreads key must be present"
+        );
     }
 }

@@ -79,8 +79,7 @@ impl PhaseFixture {
             r#"{{"repos":[{{"slug":"{SLUG}","path":"{}"}}]}}"#,
             repo.path().display()
         );
-        std::fs::write(config_dir.join("config.json"), &config_json)
-            .expect("write config.json");
+        std::fs::write(config_dir.join("config.json"), &config_json).expect("write config.json");
 
         // Create the cache dir under HOME.
         let home_cache = home.path().join(".cache").join("orchard");
@@ -153,7 +152,7 @@ impl PhaseFixture {
 // ---------------------------------------------------------------------------
 
 /// Searches all repos' worktrees for one matching the predicate.
-fn find_worktree<'a, F>(output: &'a Value, predicate: F) -> Option<&'a Value>
+fn find_worktree<F>(output: &Value, predicate: F) -> Option<&Value>
 where
     F: Fn(&Value) -> bool,
 {
@@ -212,8 +211,14 @@ fn json_exposes_phase_on_issue_with_single_phase_label() {
         "issue.phase should be 'in-progress'"
     );
     // issue.state and issue.title must still be present.
-    assert!(!wt["issue"]["state"].is_null(), "issue.state must be present");
-    assert!(!wt["issue"]["title"].is_null(), "issue.title must be present");
+    assert!(
+        !wt["issue"]["state"].is_null(),
+        "issue.state must be present"
+    );
+    assert!(
+        !wt["issue"]["title"].is_null(),
+        "issue.title must be present"
+    );
 }
 
 // ---------------------------------------------------------------------------
