@@ -73,10 +73,16 @@ pub fn derive_worktree_rows(
         let issue_title = linked_issue.map(|i| i.title.clone());
         let issue_state = linked_issue.map(|i| i.state.clone());
         let issue_labels = linked_issue.map(|i| i.labels.clone()).unwrap_or_default();
-        let issue_assignees = linked_issue.map(|i| i.assignees.clone()).unwrap_or_default();
+        let issue_assignees = linked_issue
+            .map(|i| i.assignees.clone())
+            .unwrap_or_default();
         let issue_created_at = linked_issue.and_then(|i| i.created_at.clone());
-        let issue_blocked_by = linked_issue.map(|i| i.blocked_by.clone()).unwrap_or_default();
-        let issue_sub_issues = linked_issue.map(|i| i.sub_issues.clone()).unwrap_or_default();
+        let issue_blocked_by = linked_issue
+            .map(|i| i.blocked_by.clone())
+            .unwrap_or_default();
+        let issue_sub_issues = linked_issue
+            .map(|i| i.sub_issues.clone())
+            .unwrap_or_default();
         let issue_parent = linked_issue.and_then(|i| i.parent);
 
         let is_main_worktree =

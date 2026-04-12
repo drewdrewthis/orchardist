@@ -700,7 +700,10 @@ mod tests {
         let result = ClaudeSessionInfo::from_state_file(&sf);
         assert!(result.is_some());
         let info = result.unwrap();
-        assert!(matches!(info.status, crate::claude_state::ClaudeState::Idle));
+        assert!(matches!(
+            info.status,
+            crate::claude_state::ClaudeState::Idle
+        ));
         assert_eq!(info.model.as_deref(), Some("claude-opus-4-6"));
         assert!(info.context_window_pct.is_none());
         assert!(info.cost_usd.is_none());

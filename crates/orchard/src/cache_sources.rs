@@ -72,9 +72,7 @@ pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
 /// the repository name (no issue aliases).
 pub fn issue_graphql_query(owner: &str, name: &str, issue_numbers: &[u32]) -> String {
     if issue_numbers.is_empty() {
-        return format!(
-            r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#
-        );
+        return format!(r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#);
     }
 
     let aliases: Vec<String> = issue_numbers
@@ -684,16 +682,16 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     // Collect issue numbers from PRs cache (closingIssuesReferences).
     let prs_path = cache::cache_path(config.owner(), config.repo_name(), "prs");
     let prs: Vec<CachedPr> = cache::read_cache::<CachedPr>(&prs_path).entries;
-    let mut issue_numbers: std::collections::HashSet<u32> = prs
-        .iter()
-        .filter_map(|pr| pr.linked_issue)
-        .collect();
+    let mut issue_numbers: std::collections::HashSet<u32> =
+        prs.iter().filter_map(|pr| pr.linked_issue).collect();
 
     // Also collect from worktree branch names.
     let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
     let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
     for wt in &worktrees {
-        if !wt.is_bare && let Some(n) = crate::github::extract_issue_number(&wt.branch) {
+        if !wt.is_bare
+            && let Some(n) = crate::github::extract_issue_number(&wt.branch)
+        {
             issue_numbers.insert(n);
         }
     }
@@ -834,9 +832,7 @@ fn sanitize_branch_alias(branch: &str) -> String {
 /// Returns the complete query string ready for `gh api graphql -f query=...`.
 pub fn pr_graphql_query_per_branch(owner: &str, name: &str, branches: &[String]) -> String {
     if branches.is_empty() {
-        return format!(
-            r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#
-        );
+        return format!(r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#);
     }
 
     let aliases: Vec<String> = branches
@@ -1014,8 +1010,7 @@ pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<Ca
             .and_then(|n| n["commit"]["pushedDate"].as_str())
             .map(|s| s.to_string());
 
-        let (ci_code_state, ci_gate_state, ci_checks) =
-            derive_ci_state_graphql(v, number, matcher);
+        let (ci_code_state, ci_gate_state, ci_checks) = derive_ci_state_graphql(v, number, matcher);
         let checks_state = ci_code_state.clone();
 
         let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
@@ -1113,9 +1108,7 @@ pub fn parse_repo_meta_from_pr_response(json: &str) -> CachedRepoMeta {
         return CachedRepoMeta::default();
     }
 
-    let default_branch = default_branch_ref["name"]
-        .as_str()
-        .map(|s| s.to_string());
+    let default_branch = default_branch_ref["name"].as_str().map(|s| s.to_string());
 
     let main_ci_state = default_branch_ref["target"]["statusCheckRollup"]["state"]
         .as_str()
@@ -2433,9 +2426,18 @@ mod tests {
         );
 
         // Fragment contains required fields.
-        assert!(q.contains("subIssues(first: 50)"), "fragment must select subIssues");
-        assert!(q.contains("parent { number }"), "fragment must select parent.number");
-        assert!(q.contains("assignees(first: 20)"), "fragment must select assignees");
+        assert!(
+            q.contains("subIssues(first: 50)"),
+            "fragment must select subIssues"
+        );
+        assert!(
+            q.contains("parent { number }"),
+            "fragment must select parent.number"
+        );
+        assert!(
+            q.contains("assignees(first: 20)"),
+            "fragment must select assignees"
+        );
         assert!(q.contains("createdAt"), "fragment must select createdAt");
         assert!(q.contains("body"), "fragment must select body");
         assert!(
@@ -2718,7 +2720,8 @@ mod tests {
 
     #[test]
     fn ahead_behind_branch_ahead_only() {
-        let output = "  feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit\n";
+        let output =
+            "  feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit\n";
         let map = parse_git_ahead_behind(output);
         assert_eq!(map.get("feat/new-thing"), Some(&(2, 0)));
     }

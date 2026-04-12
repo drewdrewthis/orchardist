@@ -124,10 +124,9 @@ pub(crate) fn is_ready_to_merge(pr: &PrInfo) -> bool {
 #[cfg(test)]
 #[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
-    use super::*;
     use crate::cache::{CachedPr, CachedTmuxSession, CachedWorktree};
     use crate::ci_state::CiChecks;
-    use crate::derive::{derive_worktree_rows, DisplayGroup};
+    use crate::derive::{DisplayGroup, derive_worktree_rows};
 
     fn pr_for_branch(pr_number: u32, branch: &str) -> CachedPr {
         CachedPr {

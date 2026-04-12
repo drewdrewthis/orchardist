@@ -540,10 +540,9 @@ impl From<&SessionState> for JsonSession {
 impl From<&WorktreeState> for JsonWorktree {
     /// Converts an internal `WorktreeState` to JSON output format, serializing the display group to a string.
     fn from(ws: &WorktreeState) -> Self {
-        let ahead_behind = ws.ahead_behind.map(|(ahead, behind)| JsonAheadBehind {
-            ahead,
-            behind,
-        });
+        let ahead_behind = ws
+            .ahead_behind
+            .map(|(ahead, behind)| JsonAheadBehind { ahead, behind });
         Self {
             path: ws.path.clone(),
             branch: ws.branch.clone(),
