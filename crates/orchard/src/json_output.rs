@@ -103,8 +103,27 @@ pub struct JsonPr {
     pub state: Option<String>,
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
-    /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
+    /// Deprecated: use ci_code_state; retained for one release (issue #218).
+    ///
+    /// Mirrors `ci_code_state` only — a code-green gate-blocked PR serializes as
+    /// `checksState: "passing"` so legacy consumers that filter on `checksState ==
+    /// "failing"` are not broken by the gate-blocked case.
     pub checks_state: Option<String>,
+    /// Rollup state for code CI checks only: "passing", "failing", "pending", or null.
+    ///
+    /// Null means the PR has no code CI checks (e.g. docs-only PR).
+    pub ci_code_state: Option<String>,
+    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or null.
+    ///
+    /// Null means no gate patterns matched any check on this PR.
+    /// "blocked" means a gate check failed — typically waiting on human approval,
+    /// not a broken-code signal.
+    pub ci_gate_state: Option<String>,
+    /// Per-check breakdown classified into code and gate buckets.
+    ///
+    /// Each entry in `code` and `gate` is an object with `"name"` and `"state"` keys.
+    /// There is no `ignored` bucket in v1 (reserved for a follow-up issue).
+    pub ci_checks: crate::ci_state::CiChecks,
     /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
@@ -292,8 +311,14 @@ impl From<&IssueInfo> for JsonIssue {
     }
 }
 
+#[allow(deprecated)] // reads pr.checks_state: retained for one release per issue #218
 impl From<&PrState> for JsonPr {
     /// Converts an internal `PrState` to JSON output format.
+    ///
+    /// The legacy `checks_state` field is populated from `pr.checks_state`, which
+    /// the cache layer (slice 2, `cache_sources.rs`) already sets to mirror
+    /// `ci_code_state` only — so a code-green gate-blocked PR correctly serializes
+    /// as `checksState: "passing"` without any coercion here.
     fn from(pr: &PrState) -> Self {
         Self {
             number: pr.number,
@@ -301,6 +326,9 @@ impl From<&PrState> for JsonPr {
             state: pr.state.clone(),
             review_decision: pr.review_decision.clone(),
             checks_state: pr.checks_state.clone(),
+            ci_code_state: pr.ci_code_state.clone(),
+            ci_gate_state: pr.ci_gate_state.clone(),
+            ci_checks: pr.ci_checks.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
             phase: phase_from_labels(&pr.labels),
@@ -715,13 +743,18 @@ mod tests {
         }
     }
 
-    fn make_pr_state(number: u32, branch: &str, labels: Vec<&str>) -> PrState {
+    #[allow(deprecated)]
+    fn make_pr_state_with_labels(number: u32, branch: &str, labels: Vec<&str>) -> PrState {
+        use crate::ci_state::CiChecks;
         PrState {
             number,
             branch: branch.to_string(),
             state: Some("open".to_string()),
             review_decision: None,
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
@@ -748,7 +781,7 @@ mod tests {
 
     #[test]
     fn json_pr_phase_null_when_no_phase_label() {
-        let pr = make_pr_state(10, "feat/branch", vec!["enhancement"]);
+        let pr = make_pr_state_with_labels(10, "feat/branch", vec!["enhancement"]);
         let jp = JsonPr::from(&pr);
         assert!(jp.phase.is_none());
         let v = serde_json::to_value(&jp).unwrap();
@@ -757,7 +790,7 @@ mod tests {
 
     #[test]
     fn json_pr_phase_serializes_matched_label() {
-        let pr = make_pr_state(10, "feat/branch", vec!["pr-ready"]);
+        let pr = make_pr_state_with_labels(10, "feat/branch", vec!["pr-ready"]);
         let jp = JsonPr::from(&pr);
         assert_eq!(jp.phase, Some("pr-ready"));
         let v = serde_json::to_value(&jp).unwrap();
@@ -766,7 +799,7 @@ mod tests {
 
     #[test]
     fn json_pr_phase_resolves_multi_label_by_priority() {
-        let pr = make_pr_state(10, "feat/branch", vec!["in-progress", "blocked"]);
+        let pr = make_pr_state_with_labels(10, "feat/branch", vec!["in-progress", "blocked"]);
         let jp = JsonPr::from(&pr);
         assert_eq!(jp.phase, Some("blocked"));
         let v = serde_json::to_value(&jp).unwrap();
@@ -783,7 +816,7 @@ mod tests {
 
     #[test]
     fn json_pr_phase_key_always_present_when_null() {
-        let pr = make_pr_state(11, "feat/empty", vec![]);
+        let pr = make_pr_state_with_labels(11, "feat/empty", vec![]);
         let v = serde_json::to_value(JsonPr::from(&pr)).unwrap();
         assert!(v.get("phase").is_some(), "phase key must always be present");
         assert_eq!(v["phase"], serde_json::Value::Null);
@@ -801,7 +834,7 @@ mod tests {
 
     #[test]
     fn json_pr_preserves_existing_fields_when_phase_added() {
-        let pr = make_pr_state(220, "issue219/phase-field", vec!["in-ai-review"]);
+        let pr = make_pr_state_with_labels(220, "issue219/phase-field", vec!["in-ai-review"]);
         let v = serde_json::to_value(JsonPr::from(&pr)).unwrap();
         assert_eq!(v["phase"], "in-ai-review");
         assert_eq!(v["number"], 220);
@@ -1154,6 +1187,152 @@ mod tests {
         assert!(
             result.is_none(),
             "session_age_sec must be None when start_ts is ahead of now (clock skew); got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // JsonPr split CI state tests (issue #218, slice 3, tasks #11-15)
+    // -----------------------------------------------------------------------
+
+    /// Helper: builds a minimal PrState with the given CI fields.
+    #[allow(deprecated)]
+    fn make_pr_state_with_ci(
+        ci_code_state: Option<&str>,
+        ci_gate_state: Option<&str>,
+        checks_state: Option<&str>,
+    ) -> PrState {
+        use crate::ci_state::{CheckInfo, CiChecks};
+        let ci_checks = if ci_gate_state == Some("blocked") {
+            CiChecks {
+                code: vec![CheckInfo {
+                    name: "test-unit".to_string(),
+                    state: "passing".to_string(),
+                }],
+                gate: vec![CheckInfo {
+                    name: "check-approval-or-label".to_string(),
+                    state: "failing".to_string(),
+                }],
+            }
+        } else {
+            CiChecks::default()
+        };
+        PrState {
+            number: 1,
+            branch: "feat/branch".to_string(),
+            state: Some("OPEN".to_string()),
+            review_decision: None,
+            checks_state: checks_state.map(|s| s.to_string()),
+            ci_code_state: ci_code_state.map(|s| s.to_string()),
+            ci_gate_state: ci_gate_state.map(|s| s.to_string()),
+            ci_checks,
+            has_conflicts: false,
+            unresolved_threads: 0,
+            labels: vec![],
+        }
+    }
+
+    /// Task #11: JsonPr struct declares ciCodeState, ciGateState, ciChecks, checksState with
+    /// camelCase serialization. ciChecks has "code" and "gate" keys but NOT "ignored".
+    #[test]
+    fn json_pr_emits_split_ci_fields_with_camel_case() {
+        let pr_state = make_pr_state_with_ci(Some("passing"), Some("blocked"), Some("passing"));
+        let json_pr = JsonPr::from(&pr_state);
+        let json = serde_json::to_string_pretty(&json_pr).unwrap();
+
+        assert!(
+            json.contains("\"ciCodeState\""),
+            "expected ciCodeState key in: {}",
+            json
+        );
+        assert!(
+            json.contains("\"ciGateState\""),
+            "expected ciGateState key in: {}",
+            json
+        );
+        assert!(
+            json.contains("\"ciChecks\""),
+            "expected ciChecks key in: {}",
+            json
+        );
+        assert!(
+            json.contains("\"checksState\""),
+            "expected checksState key in: {}",
+            json
+        );
+
+        // ciChecks must have "code" and "gate" sub-keys
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let ci_checks = &value["ciChecks"];
+        assert!(
+            ci_checks.get("code").is_some(),
+            "ciChecks must have 'code' key"
+        );
+        assert!(
+            ci_checks.get("gate").is_some(),
+            "ciChecks must have 'gate' key"
+        );
+
+        // Must NOT emit "ignored" (reserved for follow-up issue)
+        assert!(
+            ci_checks.get("ignored").is_none(),
+            "ciChecks must NOT emit 'ignored' field in v1"
+        );
+    }
+
+    /// Task #12: checksState is "passing" when ciCodeState=passing and ciGateState=cleared.
+    #[test]
+    fn json_pr_legacy_checks_state_passing_when_code_passing_gate_cleared() {
+        let pr_state = make_pr_state_with_ci(Some("passing"), Some("cleared"), Some("passing"));
+        let json_pr = JsonPr::from(&pr_state);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert_eq!(
+            value["checksState"],
+            serde_json::Value::String("passing".to_string())
+        );
+    }
+
+    /// Task #13: checksState is "failing" when ciCodeState=failing.
+    #[test]
+    fn json_pr_legacy_checks_state_failing_when_code_failing() {
+        let pr_state = make_pr_state_with_ci(Some("failing"), Some("cleared"), Some("failing"));
+        let json_pr = JsonPr::from(&pr_state);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert_eq!(
+            value["checksState"],
+            serde_json::Value::String("failing".to_string())
+        );
+    }
+
+    /// Task #14: checksState is "passing" (NOT "failing") when only the gate is blocked.
+    /// This is the core regression the feature prevents: legacy consumers must not
+    /// see a code-green gate-blocked PR as broken.
+    #[test]
+    fn json_pr_legacy_checks_state_not_failing_when_code_green_gate_blocked() {
+        let pr_state = make_pr_state_with_ci(Some("passing"), Some("blocked"), Some("passing"));
+        let json_pr = JsonPr::from(&pr_state);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert_eq!(
+            value["checksState"],
+            serde_json::Value::String("passing".to_string()),
+            "checksState must be 'passing' (not 'failing') when only gate is blocked"
+        );
+        assert_ne!(
+            value["checksState"],
+            serde_json::Value::String("failing".to_string()),
+            "checksState must NOT be 'failing' for code-green gate-blocked PR"
+        );
+    }
+
+    /// Task #15: checksState is null when the PR has zero checks in either bucket.
+    #[test]
+    fn json_pr_legacy_checks_state_null_when_no_ci_checks() {
+        let pr_state = make_pr_state_with_ci(None, None, None);
+        let json_pr = JsonPr::from(&pr_state);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert_eq!(
+            value["checksState"],
+            serde_json::Value::Null,
+            "checksState must be null when PR has no CI checks"
         );
     }
 }

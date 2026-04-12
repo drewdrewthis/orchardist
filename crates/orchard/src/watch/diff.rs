@@ -56,6 +56,10 @@ fn first_session(wt: &WorktreeState) -> String {
 }
 
 /// Returns `true` when a PR is approved, CI is passing, no conflicts, and no unresolved threads.
+///
+/// Reads the legacy `checks_state` field for one release per issue #218; a
+/// follow-up will migrate this to `ci_code_state`.
+#[allow(deprecated)]
 fn is_ready_to_merge(pr: &crate::orchard_state::PrState) -> bool {
     pr.review_decision.as_deref() == Some("approved")
         && pr.checks_state.as_deref() == Some("passing")
@@ -154,26 +158,32 @@ pub fn diff(
                 let label = label_for(new_wt);
                 let pr_number = new_pr.number;
 
-                // CI failing transition
-                if new_pr.checks_state.as_deref() == Some("failing")
-                    && old_pr.checks_state.as_deref() != Some("failing")
+                // CI transitions — reads legacy `checks_state` for one release
+                // per issue #218; a follow-up will migrate these to fire on
+                // `ci_code_state` and `ci_gate_state` separately.
+                #[allow(deprecated)]
                 {
-                    events.push(WatchEvent::now(EventKind::CiFailed {
-                        worktree: path.to_string(),
-                        pr_number,
-                        label: label.clone(),
-                    }));
-                }
+                    // CI failing transition
+                    if new_pr.checks_state.as_deref() == Some("failing")
+                        && old_pr.checks_state.as_deref() != Some("failing")
+                    {
+                        events.push(WatchEvent::now(EventKind::CiFailed {
+                            worktree: path.to_string(),
+                            pr_number,
+                            label: label.clone(),
+                        }));
+                    }
 
-                // CI passing transition
-                if new_pr.checks_state.as_deref() == Some("passing")
-                    && old_pr.checks_state.as_deref() != Some("passing")
-                {
-                    events.push(WatchEvent::now(EventKind::CiPassed {
-                        worktree: path.to_string(),
-                        pr_number,
-                        label: label.clone(),
-                    }));
+                    // CI passing transition
+                    if new_pr.checks_state.as_deref() == Some("passing")
+                        && old_pr.checks_state.as_deref() != Some("passing")
+                    {
+                        events.push(WatchEvent::now(EventKind::CiPassed {
+                            worktree: path.to_string(),
+                            pr_number,
+                            label: label.clone(),
+                        }));
+                    }
                 }
 
                 // New unresolved review threads
@@ -264,8 +274,10 @@ pub fn diff(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
+    use crate::ci_state::CiChecks;
     use crate::derive::DisplayGroup;
     use crate::orchard_state::{ClaudeEnrichment, PrState, RepoState, SessionState, WorktreeState};
     use crate::watch::debounce::ClaudeDebounceState;
@@ -335,6 +347,9 @@ mod tests {
             state: Some("OPEN".to_string()),
             review_decision: None,
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             labels: vec![],
@@ -471,6 +486,46 @@ mod tests {
             .filter(|e| matches!(&e.kind, EventKind::CiFailed { .. }))
             .collect();
         assert_eq!(ci_events.len(), 1);
+    }
+
+    /// Issue #218: verifies the legacy `checks_state` mirror keeps firing
+    /// `CiFailed` when a PR's code CI transitions from passing to failing.
+    ///
+    /// The diff reader currently inspects `checks_state` (the legacy union
+    /// field) for one release. Slice 2 populates `checks_state` as a mirror of
+    /// `ci_code_state`, so when code CI flips, both fields change in lockstep
+    /// and the event still fires. A follow-up issue will migrate the diff
+    /// reader to inspect `ci_code_state`/`ci_gate_state` directly and add new
+    /// `GateBlocked`/`GateCleared` event variants.
+    #[test]
+    fn diff_fires_ci_failed_via_legacy_mirror_when_code_state_transitions() {
+        let path = "/workspace/repo/feat-1";
+        let old_pr = PrState {
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ..make_pr(10)
+        };
+        let new_pr = PrState {
+            checks_state: Some("failing".to_string()),
+            ci_code_state: Some("failing".to_string()),
+            ..make_pr(10)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+
+        let mut d = ClaudeDebounceState::default();
+        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]), &mut d);
+
+        let ci_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::CiFailed { .. }))
+            .collect();
+        assert_eq!(
+            ci_events.len(),
+            1,
+            "diff must emit CiFailed when ci_code_state transitions from passing to failing"
+        );
     }
 
     #[test]

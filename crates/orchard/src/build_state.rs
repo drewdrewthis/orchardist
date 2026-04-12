@@ -627,6 +627,7 @@ mod tests {
     }
 
     fn make_pr_with_labels(number: u32, branch: &str, labels: Vec<&str>) -> CachedPr {
+        use crate::ci_state::CiChecks;
         CachedPr {
             number,
             branch: branch.to_string(),
@@ -634,6 +635,9 @@ mod tests {
             state: "open".to_string(),
             review_decision: None,
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,

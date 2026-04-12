@@ -125,6 +125,8 @@ mod tests {
                 unresolved_threads: 0,
                 checks_status: ChecksStatus::Fail,
                 has_conflicts: false,
+                ci_code_state: None,
+                ci_gate_state: None,
             }),
             ..Default::default()
         }

@@ -10,6 +10,7 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::ci_state::CiChecks;
 use crate::claude_state::ClaudeStateFile;
 
 // ---------------------------------------------------------------------------
@@ -42,8 +43,22 @@ pub struct CachedPr {
     pub state: String,
     /// Aggregated review decision string from GitHub (e.g. `"APPROVED"`).
     pub review_decision: Option<String>,
-    /// Aggregated CI checks state string (e.g. `"pass"`, `"fail"`, `"pending"`).
+    /// Aggregated CI checks state — legacy union field, mirrors `ci_code_state` only.
+    ///
+    /// Deprecated in favour of [`CachedPr::ci_code_state`]. Retained for one
+    /// release so existing cache files deserialize without a migration step.
+    /// A code-green gate-blocked PR stays "passing" here (backward-compat).
+    #[serde(default)]
     pub checks_state: Option<String>,
+    /// Rollup state for code CI checks: "passing", "failing", "pending", or None.
+    #[serde(default)]
+    pub ci_code_state: Option<String>,
+    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or None.
+    #[serde(default)]
+    pub ci_gate_state: Option<String>,
+    /// Per-check breakdown classified into code and gate buckets.
+    #[serde(default)]
+    pub ci_checks: CiChecks,
     /// Whether the PR has merge conflicts with its base branch.
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
@@ -314,6 +329,9 @@ mod tests {
             state: "open".to_string(),
             review_decision: Some("approved".to_string()),
             checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
@@ -618,6 +636,45 @@ mod tests {
 
         assert!(path.exists());
         assert!(!tmp_path.exists());
+    }
+
+    // -- CachedPr serde defaults (Task #23) ------------------------------------
+
+    /// Old cache files written by orchard 0.6.0 do not contain ci_code_state,
+    /// ci_gate_state, or ci_checks. This test verifies they deserialize
+    /// successfully with serde defaults (None / CiChecks::default()).
+    #[test]
+    fn cached_pr_old_format_deserializes_with_defaults() {
+        // JSON matching the 0.6.0 CachedPr format — no new CI fields.
+        let json = r#"{
+            "number": 42,
+            "branch": "feat/old-format",
+            "linked_issue": null,
+            "state": "open",
+            "review_decision": null,
+            "checks_state": "passing",
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+
+        let pr: CachedPr =
+            serde_json::from_str(json).expect("old CachedPr format must deserialize without error");
+
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.checks_state.as_deref(), Some("passing"));
+        assert!(
+            pr.ci_code_state.is_none(),
+            "ci_code_state should default to None"
+        );
+        assert!(
+            pr.ci_gate_state.is_none(),
+            "ci_gate_state should default to None"
+        );
+        assert_eq!(
+            pr.ci_checks,
+            CiChecks::default(),
+            "ci_checks should default to empty CiChecks"
+        );
     }
 
     // -- last_refreshed ------------------------------------------------------

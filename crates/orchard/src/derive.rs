@@ -4,6 +4,7 @@
 //! into `WorktreeRow` values with computed `DisplayGroup` sort keys. No I/O occurs
 //! here — all input comes from the cache layer, making this fully testable.
 use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
+use crate::ci_state::CiChecks;
 use crate::github;
 use crate::session::{
     ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
@@ -106,8 +107,18 @@ pub struct PrInfo {
     pub state: Option<String>,
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
-    /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
+    /// Aggregate CI checks state (legacy union field).
+    ///
+    /// Deprecated in favour of [`PrInfo::ci_code_state`]. Retained for one release
+    /// so downstream consumers are not broken. Will be removed in a future version.
+    #[deprecated(note = "Use ci_code_state; this field is retained for one release")]
     pub checks_state: Option<String>,
+    /// Rollup state for code CI checks only: "passing", "failing", "pending", or None.
+    pub ci_code_state: Option<String>,
+    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or None.
+    pub ci_gate_state: Option<String>,
+    /// Per-check breakdown classified into code and gate buckets.
+    pub ci_checks: CiChecks,
     /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
@@ -270,12 +281,18 @@ pub fn derive_all_repos(
 // ---------------------------------------------------------------------------
 
 fn pr_info_from(pr: &CachedPr) -> PrInfo {
+    // Writing the deprecated legacy `checks_state` field is the intended
+    // backcompat bridge for one release — suppressed here with a local allow.
+    #[allow(deprecated)]
     PrInfo {
         number: pr.number,
         branch: pr.branch.clone(),
         state: Some(pr.state.clone()),
         review_decision: pr.review_decision.clone(),
         checks_state: pr.checks_state.clone(),
+        ci_code_state: pr.ci_code_state.clone(),
+        ci_gate_state: pr.ci_gate_state.clone(),
+        ci_checks: pr.ci_checks.clone(),
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
         labels: pr.labels.clone(),
@@ -490,17 +507,48 @@ fn is_default_branch(branch: &str) -> bool {
 }
 
 fn is_needs_attention(pr: &PrInfo) -> bool {
-    pr.review_decision.as_deref() == Some("changes_requested")
+    if pr.review_decision.as_deref() == Some("changes_requested")
         || pr.has_conflicts
-        || pr.checks_state.as_deref() == Some("failing")
         || pr.unresolved_threads > 0
+    {
+        return true;
+    }
+
+    // Prefer ci_code_state when present: only code failures require session action.
+    // A blocked gate check means a human must approve, not that code is broken —
+    // do NOT fire NeedsAttention on gate-blocked alone (issue #218).
+    if let Some(code_state) = pr.ci_code_state.as_deref() {
+        return code_state == "failing";
+    }
+
+    // Fallback for cache files predating split CI state (ci_code_state absent).
+    #[allow(deprecated)] // checks_state: retained for one release per issue #218
+    {
+        pr.checks_state.as_deref() == Some("failing")
+    }
 }
 
 fn is_ready_to_merge(pr: &PrInfo) -> bool {
-    pr.review_decision.as_deref() == Some("approved")
-        && pr.checks_state.as_deref() == Some("passing")
-        && !pr.has_conflicts
-        && pr.unresolved_threads == 0
+    if pr.review_decision.as_deref() != Some("approved")
+        || pr.has_conflicts
+        || pr.unresolved_threads > 0
+    {
+        return false;
+    }
+
+    // Prefer ci_code_state + ci_gate_state when present.
+    // Both code must be passing AND gate must not be blocked/pending.
+    if let Some(code_state) = pr.ci_code_state.as_deref() {
+        return code_state == "passing"
+            && pr.ci_gate_state.as_deref() != Some("blocked")
+            && pr.ci_gate_state.as_deref() != Some("pending");
+    }
+
+    // Fallback for cache files predating split CI state.
+    #[allow(deprecated)] // checks_state: retained for one release per issue #218
+    {
+        pr.checks_state.as_deref() == Some("passing")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +556,7 @@ fn is_ready_to_merge(pr: &PrInfo) -> bool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
@@ -556,6 +605,9 @@ mod tests {
             review_decision: None,
             labels: vec![],
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
@@ -570,6 +622,9 @@ mod tests {
             state: "open".to_string(),
             review_decision: Some("approved".to_string()),
             checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
@@ -1703,5 +1758,162 @@ mod tests {
     #[test]
     fn phase_from_labels_case_sensitive_no_match_for_uppercase() {
         assert_eq!(phase_from_labels(&ls(&["In-Progress"])), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task #24: build_state propagates ci_code_state, ci_gate_state, ci_checks
+    // -----------------------------------------------------------------------
+
+    /// Scenario: build_state copies ci_code_state, ci_gate_state, and ci_checks
+    /// from CachedPr into PrInfo.
+    ///
+    /// Verifies that pr_info_from (the join site) propagates all three new split-CI
+    /// fields from CachedPr into PrInfo, which is then consumed by build_state.
+    #[test]
+    fn pr_info_from_propagates_split_ci_state_fields() {
+        use crate::ci_state::CheckInfo;
+
+        let gate_check = CheckInfo {
+            name: "check-approval-or-label".to_string(),
+            state: "failing".to_string(),
+        };
+        let code_check = CheckInfo {
+            name: "test-unit".to_string(),
+            state: "passing".to_string(),
+        };
+
+        let cached_pr = CachedPr {
+            number: 99,
+            branch: "feat/issue-99".to_string(),
+            linked_issue: None,
+            state: "open".to_string(),
+            review_decision: None,
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("blocked".to_string()),
+            ci_checks: CiChecks {
+                code: vec![code_check.clone()],
+                gate: vec![gate_check.clone()],
+            },
+            has_conflicts: false,
+            unresolved_threads: 0,
+            linked_issue_state: None,
+            labels: vec![],
+        };
+
+        let pr_info = pr_info_from(&cached_pr);
+
+        assert_eq!(
+            pr_info.ci_code_state.as_deref(),
+            Some("passing"),
+            "ci_code_state must be propagated from CachedPr"
+        );
+        assert_eq!(
+            pr_info.ci_gate_state.as_deref(),
+            Some("blocked"),
+            "ci_gate_state must be propagated from CachedPr"
+        );
+        assert_eq!(
+            pr_info.ci_checks.code,
+            vec![code_check],
+            "ci_checks.code must be propagated from CachedPr"
+        );
+        assert_eq!(
+            pr_info.ci_checks.gate,
+            vec![gate_check],
+            "ci_checks.gate must be propagated from CachedPr"
+        );
+        // Legacy checks_state mirrors ci_code_state, not union semantics.
+        assert_eq!(
+            pr_info.checks_state.as_deref(),
+            Some("passing"),
+            "legacy checks_state must mirror ci_code_state (not union)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Display-group helpers: split CI state (issue #218, slice 3, tasks #16-19)
+    // -----------------------------------------------------------------------
+
+    /// Builds a non-main worktree row with the given CachedPr at branch "feat/test-218".
+    fn row_with_pr(pr: CachedPr) -> WorktreeRow {
+        let wts = vec![
+            worktree("/workspace/repo", "main"),
+            worktree("/workspace/repo-feat", "feat/test-218"),
+        ];
+        let prs = vec![pr];
+        let mut rows = derive_worktree_rows(&[], &prs, &wts, &[], "owner/repo", &[]);
+        // Second row is the feature worktree.
+        rows.remove(1)
+    }
+
+    /// Task #16: is_needs_attention does NOT fire when code is green and only the gate is blocked.
+    /// A code-green gate-blocked PR must NOT cascade into NeedsAttention.
+    #[test]
+    fn display_group_not_needs_attention_when_code_green_gate_blocked() {
+        let pr = CachedPr {
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()), // legacy mirrors ci_code_state
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("blocked".to_string()),
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_ne!(
+            row.display_group,
+            DisplayGroup::NeedsAttention,
+            "code-green gate-blocked PR must not be NeedsAttention"
+        );
+        // Also not ReadyToMerge because the gate is blocked.
+        assert_ne!(
+            row.display_group,
+            DisplayGroup::ReadyToMerge,
+            "gate-blocked PR must not be ReadyToMerge"
+        );
+    }
+
+    /// Task #17: is_ready_to_merge fires when code is green and gate is cleared.
+    #[test]
+    fn display_group_ready_to_merge_when_code_green_gate_cleared() {
+        let pr = CachedPr {
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            ci_gate_state: Some("cleared".to_string()),
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_eq!(row.display_group, DisplayGroup::ReadyToMerge);
+    }
+
+    /// Task #18: is_needs_attention still fires when code is failing.
+    #[test]
+    fn display_group_needs_attention_when_code_failing() {
+        let pr = CachedPr {
+            checks_state: Some("failing".to_string()),
+            ci_code_state: Some("failing".to_string()),
+            ci_gate_state: Some("cleared".to_string()),
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_eq!(row.display_group, DisplayGroup::NeedsAttention);
+    }
+
+    /// Task #19: a docs-only PR with null/null CI is NOT NeedsAttention.
+    #[test]
+    fn display_group_not_needs_attention_for_docs_only_pr_with_no_ci() {
+        let pr = CachedPr {
+            review_decision: Some("approved".to_string()),
+            checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ..pr_for_branch(218, "feat/test-218")
+        };
+        let row = row_with_pr(pr);
+        assert_ne!(
+            row.display_group,
+            DisplayGroup::NeedsAttention,
+            "docs-only PR with no CI checks must not be NeedsAttention"
+        );
     }
 }

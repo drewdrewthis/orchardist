@@ -264,13 +264,17 @@ fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
             Style::default().fg(theme.warning),
         );
     }
-    if pr.checks_state.as_deref() == Some("failing") {
+    // Prefer the split `ci_code_state` introduced in #218. A code-green
+    // gate-blocked PR (e.g. waiting on `check-approval-or-label`) intentionally
+    // does NOT surface as "failing" here — that's the regression this
+    // feature fixes. A future PR will add a dedicated "gate blocked" label.
+    if pr.ci_code_state.as_deref() == Some("failing") {
         return (
             format!("{}\u{2716} failing", prefix),
             Style::default().fg(theme.error),
         );
     }
-    if pr.checks_state.as_deref() == Some("pending") {
+    if pr.ci_code_state.as_deref() == Some("pending") {
         return (
             format!("{}\u{25d0} pending CI", prefix),
             Style::default().fg(theme.warning),
@@ -2216,6 +2220,7 @@ pub(crate) fn header_height(terminal_height: u16) -> u16 {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
@@ -2350,6 +2355,9 @@ mod tests {
                 state: None,
                 review_decision: Some("approved".to_string()),
                 checks_state: Some("passing".to_string()),
+                ci_code_state: None,
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
@@ -2460,6 +2468,9 @@ mod tests {
                 state: None,
                 review_decision: Some("changes_requested".to_string()),
                 checks_state: None,
+                ci_code_state: None,
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
@@ -2483,6 +2494,9 @@ mod tests {
                 state: None,
                 review_decision: None,
                 checks_state: None,
+                ci_code_state: None,
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: true,
                 unresolved_threads: 0,
                 labels: vec![],
@@ -2506,6 +2520,9 @@ mod tests {
                 state: None,
                 review_decision: None,
                 checks_state: None,
+                ci_code_state: None,
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,
                 unresolved_threads: 3,
                 labels: vec![],
@@ -2530,6 +2547,9 @@ mod tests {
                 state: None,
                 review_decision: None,
                 checks_state: Some("failing".to_string()),
+                ci_code_state: Some("failing".to_string()),
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
@@ -2661,6 +2681,9 @@ mod tests {
                 state: None,
                 review_decision: None,
                 checks_state: Some("pending".to_string()),
+                ci_code_state: Some("pending".to_string()),
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
@@ -2781,6 +2804,9 @@ mod tests {
                 state: None,
                 review_decision: Some("approved".to_string()),
                 checks_state: None,
+                ci_code_state: None,
+                ci_gate_state: None,
+                ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],

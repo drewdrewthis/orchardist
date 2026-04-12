@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::ci_state::CiChecks;
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
 use crate::session::{EnrichedSession, Host, StandaloneSessionRow};
@@ -126,7 +127,21 @@ pub struct PrState {
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
     /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
+    ///
+    /// Deprecated in favour of [`PrState::ci_code_state`]. Retained for one release
+    /// so downstream consumers are not broken. Will be removed in a future version.
+    #[deprecated(note = "Use ci_code_state; this field is retained for one release")]
     pub checks_state: Option<String>,
+    /// Rollup state for code CI checks only: "passing", "failing", "pending", or None.
+    ///
+    /// None means the PR has no code CI checks.
+    pub ci_code_state: Option<String>,
+    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or None.
+    ///
+    /// None means the PR has no gate checks configured.
+    pub ci_gate_state: Option<String>,
+    /// Per-check breakdown classified into code and gate buckets.
+    pub ci_checks: CiChecks,
     /// True when the PR has merge conflicts.
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
@@ -221,6 +236,7 @@ pub struct HostState {
 // ---------------------------------------------------------------------------
 
 impl From<&crate::derive::PrInfo> for PrState {
+    #[allow(deprecated)]
     fn from(pr: &crate::derive::PrInfo) -> Self {
         Self {
             number: pr.number,
@@ -228,6 +244,9 @@ impl From<&crate::derive::PrInfo> for PrState {
             state: pr.state.clone(),
             review_decision: pr.review_decision.clone(),
             checks_state: pr.checks_state.clone(),
+            ci_code_state: pr.ci_code_state.clone(),
+            ci_gate_state: pr.ci_gate_state.clone(),
+            ci_checks: pr.ci_checks.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
             labels: pr.labels.clone(),
@@ -308,6 +327,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
@@ -449,6 +469,9 @@ mod tests {
             state: Some("open".to_string()),
             review_decision: None,
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: crate::ci_state::CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             labels: vec![],
@@ -465,6 +488,9 @@ mod tests {
             state: None,
             review_decision: None,
             checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: crate::ci_state::CiChecks::default(),
             has_conflicts: false,
             unresolved_threads: 0,
             labels: vec![],
