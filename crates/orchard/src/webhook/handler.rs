@@ -123,10 +123,7 @@ mod tests {
 
     fn headers_with_sig(body: &[u8], secret: &[u8], event: &str) -> HashMap<String, String> {
         let mut h = HashMap::new();
-        h.insert(
-            "x-hub-signature-256".to_string(),
-            make_sig(body, secret),
-        );
+        h.insert("x-hub-signature-256".to_string(), make_sig(body, secret));
         h.insert("x-github-event".to_string(), event.to_string());
         h
     }

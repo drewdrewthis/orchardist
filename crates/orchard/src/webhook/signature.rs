@@ -62,10 +62,10 @@ pub fn verify_signature(header: &str, body: &[u8], secret: &[u8]) -> Result<(), 
 
     let expected = hex::decode(hex_digest).map_err(|_| SignatureError::InvalidHex)?;
 
-    let mut mac =
-        HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
     mac.update(body);
-    mac.verify_slice(&expected).map_err(|_| SignatureError::Mismatch)
+    mac.verify_slice(&expected)
+        .map_err(|_| SignatureError::Mismatch)
 }
 
 #[cfg(test)]

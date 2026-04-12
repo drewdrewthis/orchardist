@@ -87,8 +87,7 @@ impl Tailer {
         // Decide whether to read: size grew OR mtime changed (but only if
         // we have a prior mtime — avoids spurious read on first cold-start
         // where mtime=None).
-        let should_read = size > self.offset
-            || (new_mtime != self.mtime && self.mtime.is_some());
+        let should_read = size > self.offset || (new_mtime != self.mtime && self.mtime.is_some());
 
         if !should_read {
             return Vec::new();

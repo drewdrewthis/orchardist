@@ -3,9 +3,9 @@
 //! Covers all scenarios from `specs/features/webhook-event-stream.feature`
 //! lines 121–227 (criterion tasks #16–#24).
 
-use super::{normalize, NormalizeResult, NormalizedEvent};
+use super::{NormalizeResult, NormalizedEvent, normalize};
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,7 +49,11 @@ fn pull_request_opened_has_all_fields() {
     assert_eq!(event.repo.as_deref(), Some("acme/webapp"));
     assert_eq!(event.pr, Some(42));
     assert_eq!(event.actor.as_deref(), Some("octocat"));
-    let ts_str = serde_json::to_value(event.ts).unwrap().as_str().unwrap().to_string();
+    let ts_str = serde_json::to_value(event.ts)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
     ts_str.parse::<DateTime<Utc>>().expect("ts is ISO 8601 UTC");
     assert_eq!(event.data, payload);
 }
@@ -60,31 +64,46 @@ fn pull_request_opened_has_all_fields() {
 
 #[test]
 fn pull_request_closed_not_merged() {
-    let event = assert_event(normalize("pull_request", &pr_payload("closed", false, 1, "a/b", "x")));
+    let event = assert_event(normalize(
+        "pull_request",
+        &pr_payload("closed", false, 1, "a/b", "x"),
+    ));
     assert_eq!(event.kind, "pull_request.closed");
 }
 
 #[test]
 fn pull_request_closed_and_merged() {
-    let event = assert_event(normalize("pull_request", &pr_payload("closed", true, 1, "a/b", "x")));
+    let event = assert_event(normalize(
+        "pull_request",
+        &pr_payload("closed", true, 1, "a/b", "x"),
+    ));
     assert_eq!(event.kind, "pull_request.merged");
 }
 
 #[test]
 fn pull_request_reopened() {
-    let event = assert_event(normalize("pull_request", &pr_payload("reopened", false, 1, "a/b", "x")));
+    let event = assert_event(normalize(
+        "pull_request",
+        &pr_payload("reopened", false, 1, "a/b", "x"),
+    ));
     assert_eq!(event.kind, "pull_request.reopened");
 }
 
 #[test]
 fn pull_request_ready_for_review() {
-    let event = assert_event(normalize("pull_request", &pr_payload("ready_for_review", false, 1, "a/b", "x")));
+    let event = assert_event(normalize(
+        "pull_request",
+        &pr_payload("ready_for_review", false, 1, "a/b", "x"),
+    ));
     assert_eq!(event.kind, "pull_request.ready_for_review");
 }
 
 #[test]
 fn pull_request_converted_to_draft() {
-    let event = assert_event(normalize("pull_request", &pr_payload("converted_to_draft", false, 1, "a/b", "x")));
+    let event = assert_event(normalize(
+        "pull_request",
+        &pr_payload("converted_to_draft", false, 1, "a/b", "x"),
+    ));
     assert_eq!(event.kind, "pull_request.converted_to_draft");
 }
 
@@ -180,17 +199,26 @@ fn issues_opened() {
 
 #[test]
 fn issues_closed() {
-    assert_eq!(assert_event(normalize("issues", &issues_payload("closed"))).kind, "issues.closed");
+    assert_eq!(
+        assert_event(normalize("issues", &issues_payload("closed"))).kind,
+        "issues.closed"
+    );
 }
 
 #[test]
 fn issues_labeled() {
-    assert_eq!(assert_event(normalize("issues", &issues_payload("labeled"))).kind, "issues.labeled");
+    assert_eq!(
+        assert_event(normalize("issues", &issues_payload("labeled"))).kind,
+        "issues.labeled"
+    );
 }
 
 #[test]
 fn issues_unlabeled() {
-    assert_eq!(assert_event(normalize("issues", &issues_payload("unlabeled"))).kind, "issues.unlabeled");
+    assert_eq!(
+        assert_event(normalize("issues", &issues_payload("unlabeled"))).kind,
+        "issues.unlabeled"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +280,10 @@ fn workflow_run_completed() {
 
 #[test]
 fn pull_request_assigned_is_unsupported() {
-    assert_unsupported(normalize("pull_request", &pr_payload("assigned", false, 1, "a/b", "x")));
+    assert_unsupported(normalize(
+        "pull_request",
+        &pr_payload("assigned", false, 1, "a/b", "x"),
+    ));
 }
 
 #[test]

@@ -62,8 +62,8 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         // intervals. Multiple lines arriving between iterations collapse to
         // one refresh (AC #36 debounce).
         let webhook_fired = webhook_triggered_refresh(&mut tailer);
-        let do_full = webhook_fired
-            || now.duration_since(last_full).as_secs() >= config.watch.full_poll_secs;
+        let do_full =
+            webhook_fired || now.duration_since(last_full).as_secs() >= config.watch.full_poll_secs;
         let do_local = now.duration_since(last_local).as_secs() >= config.watch.local_poll_secs;
 
         if do_full {
@@ -267,8 +267,7 @@ mod tests {
     /// poll-only intervals.
     #[test]
     fn fallback_when_events_file_missing() {
-        let path = std::env::temp_dir()
-            .join("orchard_daemon_test_missing_events.jsonl");
+        let path = std::env::temp_dir().join("orchard_daemon_test_missing_events.jsonl");
         let _ = std::fs::remove_file(&path);
 
         let mut tailer = Tailer::new(path.clone());

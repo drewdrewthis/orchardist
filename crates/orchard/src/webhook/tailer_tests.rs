@@ -113,7 +113,10 @@ fn truncation_resets_offset_to_zero() {
     f.flush().unwrap();
 
     let mut tailer = Tailer::new(f.path().to_path_buf());
-    assert!(tailer.offset > 20, "offset should be large after cold start");
+    assert!(
+        tailer.offset > 20,
+        "offset should be large after cold start"
+    );
 
     // Truncate and write fresh content.
     let path = f.path().to_path_buf();
@@ -127,7 +130,10 @@ fn truncation_resets_offset_to_zero() {
 
     let results = tailer.poll();
     assert_eq!(results.len(), 1, "new line after truncation");
-    assert!(tailer.offset <= 200, "offset reset and advanced past new content");
+    assert!(
+        tailer.offset <= 200,
+        "offset reset and advanced past new content"
+    );
 }
 
 /// AC #37: polling a path that never existed returns empty silently (no panic,

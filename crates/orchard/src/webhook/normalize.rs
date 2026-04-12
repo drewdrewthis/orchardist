@@ -114,7 +114,14 @@ fn normalize_pull_request(
     };
 
     let pr = u64_field(payload, &["pull_request", "number"]);
-    NormalizeResult::Event(build_event(kind.to_string(), repo, pr, None, actor, payload))
+    NormalizeResult::Event(build_event(
+        kind.to_string(),
+        repo,
+        pr,
+        None,
+        actor,
+        payload,
+    ))
 }
 
 fn normalize_pull_request_review(
