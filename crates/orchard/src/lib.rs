@@ -7,7 +7,6 @@
 
 mod browser;
 pub mod build_state;
-pub mod hook_enrich;
 pub mod cache;
 pub mod cache_sources;
 pub mod chat;
@@ -19,6 +18,7 @@ pub mod git;
 pub mod github;
 pub mod global_config;
 pub mod heal;
+pub mod hook_enrich;
 pub mod json_output;
 pub mod logger;
 mod navigation;

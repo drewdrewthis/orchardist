@@ -2649,11 +2649,7 @@ mod tests {
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
-        assert!(
-            !text.contains('%'),
-            "expected no % in: {}",
-            text
-        );
+        assert!(!text.contains('%'), "expected no % in: {}", text);
     }
 
     #[test]

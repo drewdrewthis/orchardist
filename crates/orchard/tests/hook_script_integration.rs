@@ -317,9 +317,7 @@ fn session_start_clears_inflight() {
 ///
 /// The fake `orchard` script reads the transcript path and returns a
 /// hard-coded enrichment JSON so tests are independent of the real binary.
-fn setup_test_env_with_orchard(
-    enrichment_json: &str,
-) -> (tempfile::TempDir, std::path::PathBuf) {
+fn setup_test_env_with_orchard(enrichment_json: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let (tmpdir, bin_dir) = setup_test_env();
 
     let ej = enrichment_json.to_string();
@@ -386,8 +384,7 @@ fn user_prompt_submit_records_current_task() {
 
     let state = read_state_file(tmpdir.path());
     assert_eq!(
-        state["current_task"],
-        "refactor the cache module to support tagging",
+        state["current_task"], "refactor the cache module to support tagging",
         "current_task must match prompt"
     );
 }
@@ -409,7 +406,12 @@ fn user_prompt_submit_truncates_current_task_to_80_chars() {
 
     let state = read_state_file(tmpdir.path());
     let task = state["current_task"].as_str().unwrap();
-    assert_eq!(task.len(), 80, "current_task must be exactly 80 chars: got {}", task.len());
+    assert_eq!(
+        task.len(),
+        80,
+        "current_task must be exactly 80 chars: got {}",
+        task.len()
+    );
 }
 
 /// AC3: `current_task` keeps only the first line of a multiline prompt.
@@ -428,8 +430,7 @@ fn user_prompt_submit_keeps_first_line_only() {
 
     let state = read_state_file(tmpdir.path());
     assert_eq!(
-        state["current_task"],
-        "fix the bug",
+        state["current_task"], "fix the bug",
         "current_task must be only the first line"
     );
 }
@@ -458,8 +459,7 @@ fn session_start_records_start_ts_and_model() {
         "session_start_ts must be a number"
     );
     assert_eq!(
-        state["model"],
-        "claude-opus-4-6",
+        state["model"], "claude-opus-4-6",
         "model must be 'claude-opus-4-6'"
     );
 }
@@ -494,8 +494,7 @@ fn session_start_ts_preserved_across_subsequent_events() {
         .expect("session_start_ts must still be present after PreToolUse");
 
     assert_eq!(
-        original_ts,
-        preserved_ts,
+        original_ts, preserved_ts,
         "session_start_ts must not change across events"
     );
 }
@@ -591,8 +590,13 @@ fn hook_integration_session_start_populates_ts_and_model() {
     run_hook(tmpdir.path(), &bin_dir, &payload);
 
     let state = read_state_file(tmpdir.path());
-    let ts = state["session_start_ts"].as_u64().expect("session_start_ts must be present");
-    assert!(ts > 1_700_000_000, "session_start_ts must be a recent unix timestamp");
+    let ts = state["session_start_ts"]
+        .as_u64()
+        .expect("session_start_ts must be present");
+    assert!(
+        ts > 1_700_000_000,
+        "session_start_ts must be a recent unix timestamp"
+    );
     assert_eq!(state["model"], "claude-opus-4-6");
 }
 
@@ -623,7 +627,10 @@ fn pre_tool_use_followed_by_post_tool_use_preserves_last_tool() {
     run_hook(tmpdir.path(), &bin_dir, pre_payload);
 
     let after_pre = read_state_file(tmpdir.path());
-    assert_eq!(after_pre["last_tool"], "Bash", "last_tool must be set after PreToolUse");
+    assert_eq!(
+        after_pre["last_tool"], "Bash",
+        "last_tool must be set after PreToolUse"
+    );
 
     // PostToolUse — no extra fields, must preserve last_tool.
     let post_payload = r#"{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Bash","tool_use_id":"tool-bash-1"}"#;
@@ -655,7 +662,10 @@ fn user_prompt_submit_followed_by_pre_tool_use_preserves_current_task() {
     run_hook(tmpdir.path(), &bin_dir, &prompt_payload);
 
     let after_prompt = read_state_file(tmpdir.path());
-    assert_eq!(after_prompt["current_task"], "foo", "current_task must be set after UserPromptSubmit");
+    assert_eq!(
+        after_prompt["current_task"], "foo",
+        "current_task must be set after UserPromptSubmit"
+    );
 
     // PreToolUse — sets last_tool but must preserve current_task.
     let pre_payload = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/workspace","tool_name":"Read","tool_use_id":"tool-read-1"}"#;
@@ -686,8 +696,14 @@ fn hook_integration_missing_transcript_still_writes_state() {
     run_hook(tmpdir.path(), &bin_dir, &payload);
 
     let state = read_state_file(tmpdir.path());
-    assert_eq!(state["state"], "working", "state must be written even with missing transcript");
-    assert!(state["last_tool"].is_string(), "last_tool must still be written");
+    assert_eq!(
+        state["state"], "working",
+        "state must be written even with missing transcript"
+    );
+    assert!(
+        state["last_tool"].is_string(),
+        "last_tool must still be written"
+    );
     // Token fields must not be present (no enrichment).
     assert!(
         state.get("input_tokens").is_none() || state["input_tokens"].is_null(),
