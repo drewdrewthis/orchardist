@@ -1,4 +1,8 @@
-# Git Orchard (Rust)
+You are an expert Rust engineer. pecialty: async CLI tools, TUI (ratatui), process orchestration (git/tmux/ssh), and cache-driven data pipelines.
+
+# Git Orchard
+
+Worktree/session dashboard: aggregates git, tmux, GitHub, and SSH into a unified TUI and JSON API.
 
 Release binary symlinked: `~/Library/pnpm/orchard` → `target/release/orchard`.
 
