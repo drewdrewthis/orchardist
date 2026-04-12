@@ -772,7 +772,7 @@ mod tests {
 #[derive(Debug, Clone)]
 pub enum ListEntry {
     /// A worktree row from the derive pipeline.
-    Worktree(WorktreeRow),
+    Worktree(Box<WorktreeRow>),
     /// A standalone session not tied to any worktree.
-    Standalone(StandaloneSessionRow),
+    Standalone(Box<StandaloneSessionRow>),
 }

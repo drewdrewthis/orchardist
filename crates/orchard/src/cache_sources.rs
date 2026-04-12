@@ -694,10 +694,8 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
     let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
     for wt in &worktrees {
-        if !wt.is_bare {
-            if let Some(n) = crate::github::extract_issue_number(&wt.branch) {
-                issue_numbers.insert(n);
-            }
+        if !wt.is_bare && let Some(n) = crate::github::extract_issue_number(&wt.branch) {
+            issue_numbers.insert(n);
         }
     }
 
