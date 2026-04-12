@@ -60,10 +60,7 @@ impl Enrichment {
 ///
 /// Returns an empty `Enrichment` on any I/O or parse error.
 pub fn enrich_from_transcript(path: &Path) -> Enrichment {
-    match read_and_parse(path) {
-        Ok(e) => e,
-        Err(_) => Enrichment::default(),
-    }
+    read_and_parse(path).unwrap_or_default()
 }
 
 /// Runs the `hook-enrich` subcommand: reads transcript, prints JSON to stdout.
@@ -77,8 +74,9 @@ pub fn run(transcript_path: &str) {
     } else {
         println!(
             "{}",
-            serde_json::to_string(&enrichment)
-                .expect("Enrichment serialization is infallible — all fields are Option<primitive>")
+            serde_json::to_string(&enrichment).expect(
+                "Enrichment serialization is infallible — all fields are Option<primitive>"
+            )
         );
     }
 }
@@ -147,7 +145,10 @@ fn try_parse_line(line: &str) -> Option<Enrichment> {
     }
 
     // Skip sidechain messages.
-    if v.get("isSidechain").and_then(|b| b.as_bool()).unwrap_or(false) {
+    if v.get("isSidechain")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+    {
         return None;
     }
 
@@ -155,12 +156,8 @@ fn try_parse_line(line: &str) -> Option<Enrichment> {
     let model = msg.get("model")?.as_str()?;
     let usage = msg.get("usage")?;
 
-    let input_tokens = usage
-        .get("input_tokens")
-        .and_then(|v| v.as_u64());
-    let output_tokens = usage
-        .get("output_tokens")
-        .and_then(|v| v.as_u64());
+    let input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64());
+    let output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64());
     let cache_creation = usage
         .get("cache_creation_input_tokens")
         .and_then(|v| v.as_u64());

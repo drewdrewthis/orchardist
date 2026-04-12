@@ -228,60 +228,32 @@ fn compute_session_age_sec(session_start_ts: Option<u64>) -> Option<u64> {
     now.checked_sub(start)
 }
 
-/// Constructs a `JsonClaudeInfo` from the raw fields shared by both enrichment types.
-///
-/// `session_age_sec` is computed at call time so it always reflects real elapsed
-/// time rather than the time of the last hook write.
-fn build_claude_info(
-    status: ClaudeState,
-    model: Option<String>,
-    last_tool: Option<String>,
-    current_task: Option<String>,
-    session_start_ts: Option<u64>,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    cache_creation_input_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
-) -> JsonClaudeInfo {
+fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> JsonClaudeInfo {
     JsonClaudeInfo {
-        status: claude_state_str(status).to_string(),
-        model,
-        last_tool,
-        current_task,
-        session_age_sec: compute_session_age_sec(session_start_ts),
-        input_tokens,
-        output_tokens,
-        cache_creation_input_tokens,
-        cache_read_input_tokens,
+        status: claude_state_str(c.status).to_string(),
+        model: c.model.clone(),
+        last_tool: c.last_tool.clone(),
+        current_task: c.current_task.clone(),
+        session_age_sec: compute_session_age_sec(c.session_start_ts),
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        cache_creation_input_tokens: c.cache_creation_input_tokens,
+        cache_read_input_tokens: c.cache_read_input_tokens,
     }
 }
 
-fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> JsonClaudeInfo {
-    build_claude_info(
-        c.status,
-        c.model.clone(),
-        c.last_tool.clone(),
-        c.current_task.clone(),
-        c.session_start_ts,
-        c.input_tokens,
-        c.output_tokens,
-        c.cache_creation_input_tokens,
-        c.cache_read_input_tokens,
-    )
-}
-
 fn claude_info_from_session(c: &crate::session::ClaudeSessionInfo) -> JsonClaudeInfo {
-    build_claude_info(
-        c.status,
-        c.model.clone(),
-        c.last_tool.clone(),
-        c.current_task.clone(),
-        c.session_start_ts,
-        c.input_tokens,
-        c.output_tokens,
-        c.cache_creation_input_tokens,
-        c.cache_read_input_tokens,
-    )
+    JsonClaudeInfo {
+        status: claude_state_str(c.status).to_string(),
+        model: c.model.clone(),
+        last_tool: c.last_tool.clone(),
+        current_task: c.current_task.clone(),
+        session_age_sec: compute_session_age_sec(c.session_start_ts),
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        cache_creation_input_tokens: c.cache_creation_input_tokens,
+        cache_read_input_tokens: c.cache_read_input_tokens,
+    }
 }
 
 fn display_group_str(g: DisplayGroup) -> &'static str {
@@ -896,7 +868,10 @@ mod tests {
         assert_eq!(claude.model.as_deref(), Some("claude-opus-4-6"));
         assert_eq!(claude.last_tool.as_deref(), Some("Bash"));
         assert_eq!(claude.current_task.as_deref(), Some("fix flaky hook test"));
-        assert!(claude.session_age_sec.is_some(), "sessionAgeSec must be present");
+        assert!(
+            claude.session_age_sec.is_some(),
+            "sessionAgeSec must be present"
+        );
         assert_eq!(claude.input_tokens, Some(50000));
         assert_eq!(claude.output_tokens, Some(800));
         assert_eq!(claude.cache_creation_input_tokens, Some(10000));
@@ -931,12 +906,30 @@ mod tests {
         // Optional fields must be absent (not null) when not set.
         assert!(claude.get("model").is_none(), "model must be absent");
         assert!(claude.get("lastTool").is_none(), "lastTool must be absent");
-        assert!(claude.get("currentTask").is_none(), "currentTask must be absent");
-        assert!(claude.get("sessionAgeSec").is_none(), "sessionAgeSec must be absent");
-        assert!(claude.get("inputTokens").is_none(), "inputTokens must be absent");
-        assert!(claude.get("outputTokens").is_none(), "outputTokens must be absent");
-        assert!(claude.get("cacheCreationInputTokens").is_none(), "cacheCreationInputTokens must be absent");
-        assert!(claude.get("cacheReadInputTokens").is_none(), "cacheReadInputTokens must be absent");
+        assert!(
+            claude.get("currentTask").is_none(),
+            "currentTask must be absent"
+        );
+        assert!(
+            claude.get("sessionAgeSec").is_none(),
+            "sessionAgeSec must be absent"
+        );
+        assert!(
+            claude.get("inputTokens").is_none(),
+            "inputTokens must be absent"
+        );
+        assert!(
+            claude.get("outputTokens").is_none(),
+            "outputTokens must be absent"
+        );
+        assert!(
+            claude.get("cacheCreationInputTokens").is_none(),
+            "cacheCreationInputTokens must be absent"
+        );
+        assert!(
+            claude.get("cacheReadInputTokens").is_none(),
+            "cacheReadInputTokens must be absent"
+        );
     }
 
     /// AC5: session_age_sec is computed at read time from session_start_ts.
@@ -958,7 +951,10 @@ mod tests {
         let js = JsonSession::from(&session);
         let age = js.claude.unwrap().session_age_sec.unwrap();
         // The session is very old — age must be very large (> 1 billion seconds since 1970).
-        assert!(age > 1_000_000_000, "session_age_sec must reflect elapsed time: got {age}");
+        assert!(
+            age > 1_000_000_000,
+            "session_age_sec must reflect elapsed time: got {age}"
+        );
     }
 
     /// AC5: session_age_sec absent when session_start_ts is None.
@@ -1004,7 +1000,10 @@ mod tests {
         });
         let js = JsonSession::from(&session);
         let age = js.claude.unwrap().session_age_sec.unwrap();
-        assert!(age >= 60, "session_age_sec must be >= 60 when session started 60s ago: got {age}");
+        assert!(
+            age >= 60,
+            "session_age_sec must be >= 60 when session started 60s ago: got {age}"
+        );
     }
 
     /// AC6: sessions without a Claude process omit the claude object entirely.
@@ -1017,10 +1016,15 @@ mod tests {
             windows: vec![],
         };
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
-        assert!(value.get("claude").is_none() || value["claude"].is_null(),
-            "sessions without Claude must not have claude key");
+        assert!(
+            value.get("claude").is_none() || value["claude"].is_null(),
+            "sessions without Claude must not have claude key"
+        );
         let js = JsonSession::from(&session);
-        assert!(js.claude.is_none(), "claude must be None for non-Claude sessions");
+        assert!(
+            js.claude.is_none(),
+            "claude must be None for non-Claude sessions"
+        );
     }
 
     /// AC7 (fresh session): only status present; other fields absent.
@@ -1040,10 +1044,22 @@ mod tests {
         let js = JsonSession::from(&session);
         let claude = js.claude.unwrap();
         assert!(claude.model.is_some(), "model must be present");
-        assert!(claude.session_age_sec.is_some(), "sessionAgeSec must be present");
-        assert!(claude.last_tool.is_none(), "lastTool must be absent for fresh session");
-        assert!(claude.current_task.is_none(), "currentTask must be absent for fresh session");
-        assert!(claude.input_tokens.is_none(), "inputTokens must be absent for fresh session");
+        assert!(
+            claude.session_age_sec.is_some(),
+            "sessionAgeSec must be present"
+        );
+        assert!(
+            claude.last_tool.is_none(),
+            "lastTool must be absent for fresh session"
+        );
+        assert!(
+            claude.current_task.is_none(),
+            "currentTask must be absent for fresh session"
+        );
+        assert!(
+            claude.input_tokens.is_none(),
+            "inputTokens must be absent for fresh session"
+        );
     }
 
     /// AC7 (heavy working): all fields populated.
@@ -1081,7 +1097,10 @@ mod tests {
         let claude = js.claude.unwrap();
         assert_eq!(claude.status, "idle");
         assert!(claude.session_age_sec.is_some());
-        assert!(claude.last_tool.is_none(), "lastTool must be absent after Stop");
+        assert!(
+            claude.last_tool.is_none(),
+            "lastTool must be absent after Stop"
+        );
         assert_eq!(claude.input_tokens, Some(50000));
         assert_eq!(claude.output_tokens, Some(800));
     }
@@ -1109,7 +1128,10 @@ mod tests {
         let enrichment = crate::session::ClaudeSessionInfo::from_state_file(&sf);
         // idle state => Some(ClaudeSessionInfo) with all new fields None
         let info = enrichment.unwrap();
-        assert!(matches!(info.status, crate::claude_state::ClaudeState::Idle));
+        assert!(matches!(
+            info.status,
+            crate::claude_state::ClaudeState::Idle
+        ));
         assert!(info.model.is_none());
         assert!(info.last_tool.is_none());
         assert!(info.input_tokens.is_none());
