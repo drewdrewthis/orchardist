@@ -204,6 +204,55 @@ time from `pr.state` and `issue.state`.
 6. **Derive display group**: from the joined data (shepherd, needs attention,
    claude working, ready to merge, other).
 
+## Event-Driven Watch (Hybrid Poll + Webhook)
+
+The watch daemon uses a hybrid model: periodic polling as the baseline with
+webhook-triggered refreshes for near-instant reactivity.
+
+### How it works
+
+1. **`orchard webhook-serve`** is a separate process that receives GitHub
+   webhooks via HTTP, validates HMAC-SHA256 signatures, and appends normalized
+   JSONL lines to `~/.local/state/git-orchard/events.jsonl`.
+
+2. **`orchard watch`** (the daemon) tails `events.jsonl` between poll
+   iterations. When new webhook lines appear, the daemon triggers an immediate
+   full refresh — bypassing the 60-second poll interval.
+
+3. Both processes share **only the local `events.jsonl` file**. There is no IPC
+   socket, no shared memory, no coordination protocol. The file is the queue.
+
+### Why file-as-queue over unix-socket IPC
+
+- **Persistence**: events survive daemon restarts. A daemon starting fresh
+  skips historical lines (tail-from-end), but if needed, the full log is there.
+- **Multi-consumer**: multiple processes can tail the same file independently,
+  each tracking their own offset.
+- **Simpler operational model**: `cat`, `tail -f`, `jq` all work. No protocol
+  to debug.
+
+### Two-shape coexistence
+
+`events.jsonl` contains two kinds of lines:
+
+| Shape | Discriminator | Writer |
+|-------|--------------|--------|
+| Webhook events | `"source": "webhook"` + `"kind"` field | `webhook-serve` |
+| Task/session events | `"event"` field (e.g. `"task.created"`) | watch daemon, task logger |
+
+Consumers distinguish webhook lines by the presence of `"source": "webhook"`.
+
+### Tailer behaviour
+
+The tailer tracks its read offset by file size (not mtime — mtime resolution
+is 1 second on macOS/NFS, which would miss sub-second writes). It:
+
+- Starts from end-of-file on cold start (no historical replay)
+- Advances offset only past complete newline-terminated lines
+- Resets to offset 0 when the file shrinks (rotation detected)
+- Skips non-webhook and malformed lines without losing progress
+- Falls back to poll-only when `events.jsonl` is missing or unreadable
+
 ## Caching
 
 Per ADR-001: each source writes its own cache file. Cache files are JSON with

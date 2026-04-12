@@ -85,6 +85,7 @@ fn main() {
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         "watch" => handle_watch(&args),
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
+        "webhook-serve" => handle_webhook_serve(&args),
         _ => {
             if json_flag {
                 handle_json();
@@ -353,6 +354,9 @@ fn print_usage() {
                                    Register a tmux subscriber for watch events
   orchard watch --unsubscribe --id <id>
                                    Unregister a tmux subscriber
+  orchard webhook-serve [--port <n>]
+                                   Receive GitHub webhooks and append to events.jsonl
+                                   Requires ORCHARD_WEBHOOK_SECRET env var
 
 Options:
   --version, -V  Print version and exit
@@ -447,6 +451,59 @@ fn handle_watch(args: &[String]) {
 
     // Default: run the daemon.
     if let Err(e) = orchard::watch::daemon::run(&config) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+}
+
+/// Handles the `orchard webhook-serve` command.
+///
+/// Parses `--port <n>`, resolves the final port via
+/// `webhook::port::resolve_port(flag, env, config)`, validates
+/// ORCHARD_WEBHOOK_SECRET is set and non-empty, and runs the hyper server.
+fn handle_webhook_serve(args: &[String]) {
+    // 1. Parse --port flag from args.
+    let mut port_flag: Option<u16> = None;
+    let mut skip_next = false;
+    for (i, arg) in args.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--port"
+            && let Some(v) = args.get(i + 1)
+        {
+            port_flag = v.parse::<u16>().ok();
+            skip_next = true;
+        }
+    }
+
+    // 2. Read ORCHARD_WEBHOOK_PORT env var.
+    let port_env: Option<u16> = env::var("ORCHARD_WEBHOOK_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok());
+
+    // 3. Load global config, read config.watch.webhook_port.
+    let config = global_config::load_global_config();
+    let port_config: Option<u16> = config.watch.webhook_port;
+
+    // 4. Resolve port.
+    let port = orchard::webhook::port::resolve_port(port_flag, port_env, port_config);
+
+    // 5. Read ORCHARD_WEBHOOK_SECRET env var.
+    let secret = match env::var("ORCHARD_WEBHOOK_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            eprintln!(
+                "webhook-serve: ORCHARD_WEBHOOK_SECRET is not set. \
+                 Set it to your GitHub webhook secret."
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // 6. Run the server.
+    if let Err(e) = orchard::webhook::server::run(port, secret.into_bytes()) {
         eprintln!("{e}");
         std::process::exit(1);
     }

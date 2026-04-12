@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 
 use crate::build_state;
 use crate::cache_sources;
+use crate::events::events_path;
 use crate::global_config::GlobalConfig;
 use crate::orchard_state::OrchardState;
 use crate::watch::diff;
 use crate::watch::event::{EventKind, WatchEvent};
 use crate::watch::subscription;
+use crate::webhook::tailer::Tailer;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -42,6 +44,11 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
     let mut last_local = Instant::now();
     let mut last_full = Instant::now();
 
+    // Tailer tracks new webhook lines in events.jsonl and forces an immediate
+    // full refresh when any arrive. The 1s sleep + tailer check guarantees
+    // webhook-triggered refreshes happen within ~2s of the append (AC #35).
+    let mut tailer = Tailer::new(events_path());
+
     // Force a full refresh on startup.
     refresh_all_sources(config);
     let initial = build_state::build_state(config);
@@ -51,7 +58,12 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_secs(1));
 
         let now = Instant::now();
-        let do_full = now.duration_since(last_full).as_secs() >= config.watch.full_poll_secs;
+        // Webhook lines force an immediate full refresh regardless of poll
+        // intervals. Multiple lines arriving between iterations collapse to
+        // one refresh (AC #36 debounce).
+        let webhook_fired = webhook_triggered_refresh(&mut tailer);
+        let do_full =
+            webhook_fired || now.duration_since(last_full).as_secs() >= config.watch.full_poll_secs;
         let do_local = now.duration_since(last_local).as_secs() >= config.watch.local_poll_secs;
 
         if do_full {
@@ -169,6 +181,16 @@ pub fn fire_notifications(events: &[WatchEvent], config: &GlobalConfig) {
     }
 }
 
+/// Returns true if the tailer found new webhook lines that should force an
+/// immediate full refresh. Always returns false when the tailer sees nothing.
+///
+/// Multiple webhook lines arriving between iterations all collapse into a
+/// single `true` return (AC #36 debounce): we call `tailer.poll()` once,
+/// collect all new lines, and return `!lines.is_empty()`.
+fn webhook_triggered_refresh(tailer: &mut Tailer) -> bool {
+    !tailer.poll().is_empty()
+}
+
 /// Logs a watch event to the structured event log.
 ///
 /// Extracts the `type` field from the serialized tagged enum instead of
@@ -180,4 +202,82 @@ fn log_watch_event(event: &WatchEvent) {
         .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)))
         .unwrap_or_else(|| "unknown".to_string());
     crate::events::log_watch_event(&event_type, &details);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn webhook_line(kind: &str) -> String {
+        format!(
+            r#"{{"source":"webhook","kind":"{}","ts":"2024-01-01T00:00:00Z","data":{{}}}}"#,
+            kind
+        )
+    }
+
+    /// AC #35: webhook helper returns true when a new webhook line is present.
+    /// The daemon loop wires this into do_full=true, so a refresh happens within
+    /// the next 1s sleep iteration — well within the 2s guarantee.
+    #[test]
+    fn webhook_triggered_refresh_returns_true_when_line_present() {
+        let mut f = NamedTempFile::new().unwrap();
+        let mut tailer = Tailer::new(f.path().to_path_buf());
+
+        writeln!(f, "{}", webhook_line("pull_request.opened")).unwrap();
+        f.flush().unwrap();
+
+        assert!(
+            webhook_triggered_refresh(&mut tailer),
+            "helper returns true when webhook line appended"
+        );
+    }
+
+    /// AC #36: multiple webhook lines between iterations debounce to one refresh.
+    /// `webhook_triggered_refresh` drains all new lines in one poll call and
+    /// returns a single bool — the daemon only calls refresh_all_sources once.
+    #[test]
+    fn webhook_triggered_refresh_debounces_multiple_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        let mut tailer = Tailer::new(f.path().to_path_buf());
+
+        for _ in 0..5 {
+            writeln!(f, "{}", webhook_line("push")).unwrap();
+        }
+        f.flush().unwrap();
+
+        // All 5 lines consumed in one call; helper returns true (not 5 trues).
+        assert!(
+            webhook_triggered_refresh(&mut tailer),
+            "5 lines still one true"
+        );
+        // Subsequent poll finds nothing — offset advanced past all 5.
+        assert!(
+            !webhook_triggered_refresh(&mut tailer),
+            "offset advanced past all lines"
+        );
+    }
+
+    /// AC #37: missing events.jsonl → helper returns false, daemon falls back to
+    /// poll-only intervals.
+    #[test]
+    fn fallback_when_events_file_missing() {
+        let path = std::env::temp_dir().join("orchard_daemon_test_missing_events.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let mut tailer = Tailer::new(path.clone());
+        assert!(
+            !webhook_triggered_refresh(&mut tailer),
+            "missing file → false, no panic"
+        );
+        assert!(
+            !webhook_triggered_refresh(&mut tailer),
+            "still false on repeat"
+        );
+    }
 }
