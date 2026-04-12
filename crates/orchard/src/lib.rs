@@ -18,6 +18,7 @@ pub mod git;
 pub mod github;
 pub mod global_config;
 pub mod heal;
+pub mod hook_enrich;
 pub mod json_output;
 pub mod logger;
 mod navigation;

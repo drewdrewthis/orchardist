@@ -382,9 +382,14 @@ fn enrich_session_from_scraping(
     let claude = if claude_state != ClaudeState::None {
         Some(ClaudeSessionInfo {
             status: claude_state,
-            cost_usd: None,
-            context_window_pct: None,
             model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         })
     } else {
         None
@@ -1213,9 +1218,14 @@ mod tests {
             cwd: "/workspace/repo".to_string(),
             event: "PreToolUse".to_string(),
             timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            context_window_pct: None,
-            cost_usd: None,
             model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
         }
@@ -1231,9 +1241,14 @@ mod tests {
             cwd: "/workspace/repo".to_string(),
             event: "Stop".to_string(),
             timestamp: old_ts.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            context_window_pct: None,
-            cost_usd: None,
             model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
         }
@@ -1270,14 +1285,18 @@ mod tests {
     fn hook_state_enrichment_fields_propagate() {
         let s = session("repo_47", "/path", vec![]);
         let mut state = fresh_state_file("repo_47", "working");
-        state.context_window_pct = Some(73.0);
-        state.cost_usd = Some(0.42);
-        state.model = Some("opus".to_string());
+        state.model = Some("claude-opus-4-6".to_string());
+        state.last_tool = Some("Bash".to_string());
+        state.current_task = Some("fix the bug".to_string());
+        state.input_tokens = Some(1000);
+        state.output_tokens = Some(50);
         let info = enrich_session(&s, &[state]);
         let claude = info.claude.as_ref().unwrap();
-        assert_eq!(claude.context_window_pct, Some(73.0));
-        assert_eq!(claude.cost_usd, Some(0.42));
-        assert_eq!(claude.model.as_deref(), Some("opus"));
+        assert_eq!(claude.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(claude.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(claude.current_task.as_deref(), Some("fix the bug"));
+        assert_eq!(claude.input_tokens, Some(1000));
+        assert_eq!(claude.output_tokens, Some(50));
     }
 
     #[test]
@@ -1306,7 +1325,7 @@ mod tests {
         let info = enrich_session(&s, &[]);
         let claude = info.claude.as_ref().unwrap();
         assert_eq!(claude.status, crate::claude_state::ClaudeState::Input);
-        assert_eq!(claude.context_window_pct, None);
+        assert!(claude.input_tokens.is_none());
     }
 
     #[test]

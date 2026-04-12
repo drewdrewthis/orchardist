@@ -423,18 +423,23 @@ mod tests {
             cwd: "/tmp".to_string(),
             event: "Stop".to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
-            context_window_pct: Some(42.0),
-            cost_usd: Some(1.23),
-            model: Some("opus".to_string()),
+            model: Some("claude-opus-4-6".to_string()),
+            last_tool: Some("Bash".to_string()),
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: Some(1000),
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
         }];
         let rows = build_standalone_sessions(&config, &[], &claude_states);
         let claude = rows[0].session.claude.as_ref().unwrap();
         assert_eq!(claude.status, ClaudeState::Working);
-        assert_eq!(claude.cost_usd, Some(1.23));
-        assert_eq!(claude.context_window_pct, Some(42.0));
-        assert_eq!(claude.model.as_deref(), Some("opus"));
+        assert_eq!(claude.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(claude.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(claude.input_tokens, Some(1000));
     }
 
     #[test]
@@ -477,9 +482,14 @@ mod tests {
             cwd: "/workspace".to_string(),
             event: "Stop".to_string(),
             timestamp: timestamp.to_string(),
-            context_window_pct: None,
-            cost_usd: None,
             model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
         }

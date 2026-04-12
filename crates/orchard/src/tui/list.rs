@@ -314,12 +314,6 @@ fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
             .as_ref()
             .is_some_and(|c| c.status == ClaudeState::Working)
     });
-    // Get context % from any session that has it.
-    let ctx_pct = row
-        .sessions
-        .iter()
-        .find_map(|s| s.claude.as_ref().and_then(|c| c.context_window_pct));
-
     let state = if has_input {
         ClaudeState::Input
     } else if has_working {
@@ -328,31 +322,27 @@ fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
         ClaudeState::Idle
     };
 
-    format_claude_state(state, ctx_pct, &count_suffix, theme)
+    format_claude_state(state, &count_suffix, theme)
 }
 
-/// Formats a single Claude state + context % into display text and style.
+/// Formats a single Claude state into display text and style.
 fn format_claude_state(
     state: crate::claude_state::ClaudeState,
-    ctx_pct: Option<f64>,
     suffix: &str,
     theme: &Theme,
 ) -> (String, Style) {
     use crate::claude_state::ClaudeState;
-    let ctx_suffix = ctx_pct
-        .map(|p| format!(" {}%", p as u32))
-        .unwrap_or_default();
     match state {
         ClaudeState::Input => (
-            format!("\u{26a1} input{}{}", suffix, ctx_suffix),
+            format!("\u{26a1} input{}", suffix),
             Style::default().fg(theme.claude_needs_input),
         ),
         ClaudeState::Working => (
-            format!("\u{26a1} active{}{}", suffix, ctx_suffix),
+            format!("\u{26a1} active{}", suffix),
             Style::default().fg(theme.claude_active),
         ),
         ClaudeState::Idle => (
-            format!("\u{25cf} idle{}{}", suffix, ctx_suffix),
+            format!("\u{25cf} idle{}", suffix),
             Style::default().fg(theme.warning),
         ),
         ClaudeState::None => (
@@ -373,7 +363,7 @@ fn standalone_claude_status(
             Style::default().fg(theme.claude_idle),
         );
     };
-    format_claude_state(claude.status, claude.context_window_pct, "", theme)
+    format_claude_state(claude.status, "", theme)
 }
 
 impl App {
@@ -2397,9 +2387,14 @@ mod tests {
                 },
                 claude: Some(ClaudeSessionInfo {
                     status: crate::claude_state::ClaudeState::Working,
-                    cost_usd: None,
-                    context_window_pct: None,
                     model: None,
+                    last_tool: None,
+                    current_task: None,
+                    session_start_ts: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
                 }),
                 windows: vec![],
                 panes: vec![],
@@ -2431,9 +2426,14 @@ mod tests {
                 },
                 claude: Some(ClaudeSessionInfo {
                     status: crate::claude_state::ClaudeState::Input,
-                    cost_usd: None,
-                    context_window_pct: None,
                     model: None,
+                    last_tool: None,
+                    current_task: None,
+                    session_start_ts: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
                 }),
                 windows: vec![],
                 panes: vec![],
@@ -2576,16 +2576,18 @@ mod tests {
     // claude_status_text with hook state
     // -----------------------------------------------------------------------
 
-    fn session_with_hook_state(
-        state: crate::claude_state::ClaudeState,
-        ctx_pct: Option<f64>,
-    ) -> EnrichedSession {
+    fn session_with_hook_state(state: crate::claude_state::ClaudeState) -> EnrichedSession {
         let claude = if state != crate::claude_state::ClaudeState::None {
             Some(ClaudeSessionInfo {
                 status: state,
-                cost_usd: None,
-                context_window_pct: ctx_pct,
                 model: None,
+                last_tool: None,
+                current_task: None,
+                session_start_ts: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
             })
         } else {
             None
@@ -2603,17 +2605,15 @@ mod tests {
     }
 
     #[test]
-    fn claude_status_working_with_context_shows_percentage() {
+    fn claude_status_working_shows_active() {
         let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Working,
-                Some(73.0),
             )],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
         assert!(text.contains("active"), "expected 'active' in: {}", text);
-        assert!(text.contains("73%"), "expected '73%' in: {}", text);
     }
 
     #[test]
@@ -2621,7 +2621,6 @@ mod tests {
         let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Idle,
-                None,
             )],
             ..make_task_row(1, DisplayGroup::Other)
         };
@@ -2634,7 +2633,6 @@ mod tests {
         let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Input,
-                None,
             )],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2643,34 +2641,15 @@ mod tests {
     }
 
     #[test]
-    fn claude_status_input_with_context_shows_percentage() {
-        let row = WorktreeRow {
-            sessions: vec![session_with_hook_state(
-                crate::claude_state::ClaudeState::Input,
-                Some(95.0),
-            )],
-            ..make_task_row(1, DisplayGroup::NeedsAttention)
-        };
-        let (text, _) = claude_status_text(&row, &Theme::default());
-        assert!(text.contains("input"), "expected 'input' in: {}", text);
-        assert!(text.contains("95%"), "expected '95%' in: {}", text);
-    }
-
-    #[test]
-    fn claude_status_no_context_pct_when_none() {
+    fn claude_status_no_context_pct_without_percentage_sign() {
         let row = WorktreeRow {
             sessions: vec![session_with_hook_state(
                 crate::claude_state::ClaudeState::Working,
-                None,
             )],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
         let (text, _) = claude_status_text(&row, &Theme::default());
-        assert!(
-            !text.contains('%'),
-            "expected no % when context_window_pct is None: {}",
-            text
-        );
+        assert!(!text.contains('%'), "expected no % in: {}", text);
     }
 
     #[test]
@@ -2704,9 +2683,14 @@ mod tests {
                     },
                     claude: Some(ClaudeSessionInfo {
                         status: crate::claude_state::ClaudeState::Working,
-                        cost_usd: None,
-                        context_window_pct: None,
                         model: None,
+                        last_tool: None,
+                        current_task: None,
+                        session_start_ts: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        cache_creation_input_tokens: None,
+                        cache_read_input_tokens: None,
                     }),
                     windows: vec![],
                     panes: vec![],
@@ -2719,9 +2703,14 @@ mod tests {
                     },
                     claude: Some(ClaudeSessionInfo {
                         status: crate::claude_state::ClaudeState::Input,
-                        cost_usd: None,
-                        context_window_pct: Some(45.0),
                         model: None,
+                        last_tool: None,
+                        current_task: None,
+                        session_start_ts: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        cache_creation_input_tokens: None,
+                        cache_read_input_tokens: None,
                     }),
                     windows: vec![],
                     panes: vec![],

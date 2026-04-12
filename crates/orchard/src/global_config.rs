@@ -83,12 +83,6 @@ pub struct WatchConfig {
     /// How often (seconds) to do a full refresh including GitHub API calls.
     #[serde(default = "default_full_poll_secs")]
     pub full_poll_secs: u64,
-    /// Context window percentage that triggers a threshold notification.
-    #[serde(default = "default_context_window_threshold")]
-    pub context_window_threshold: f64,
-    /// USD cost per session that triggers a threshold notification.
-    #[serde(default = "default_cost_threshold")]
-    pub cost_threshold: f64,
     /// Minimum seconds between repeated threshold notifications for the same metric.
     #[serde(default = "default_threshold_cooldown_secs")]
     pub threshold_cooldown_secs: u64,
@@ -103,12 +97,6 @@ fn default_local_poll_secs() -> u64 {
 fn default_full_poll_secs() -> u64 {
     60
 }
-fn default_context_window_threshold() -> f64 {
-    80.0
-}
-fn default_cost_threshold() -> f64 {
-    5.0
-}
 fn default_threshold_cooldown_secs() -> u64 {
     300
 }
@@ -121,8 +109,6 @@ impl Default for WatchConfig {
         WatchConfig {
             local_poll_secs: default_local_poll_secs(),
             full_poll_secs: default_full_poll_secs(),
-            context_window_threshold: default_context_window_threshold(),
-            cost_threshold: default_cost_threshold(),
             threshold_cooldown_secs: default_threshold_cooldown_secs(),
             notifications: default_notifications(),
         }
@@ -1161,8 +1147,6 @@ mod tests {
 
         assert_eq!(cfg.watch.local_poll_secs, 5);
         assert_eq!(cfg.watch.full_poll_secs, 60);
-        assert!((cfg.watch.context_window_threshold - 80.0).abs() < f64::EPSILON);
-        assert!((cfg.watch.cost_threshold - 5.0).abs() < f64::EPSILON);
         assert_eq!(cfg.watch.threshold_cooldown_secs, 300);
         assert!(cfg.watch.notifications);
     }
@@ -1175,8 +1159,6 @@ mod tests {
             "watch": {
                 "local_poll_secs": 10,
                 "full_poll_secs": 120,
-                "context_window_threshold": 90.0,
-                "cost_threshold": 2.5,
                 "threshold_cooldown_secs": 600,
                 "notifications": false
             }
@@ -1186,8 +1168,6 @@ mod tests {
 
         assert_eq!(cfg.watch.local_poll_secs, 10);
         assert_eq!(cfg.watch.full_poll_secs, 120);
-        assert!((cfg.watch.context_window_threshold - 90.0).abs() < f64::EPSILON);
-        assert!((cfg.watch.cost_threshold - 2.5).abs() < f64::EPSILON);
         assert_eq!(cfg.watch.threshold_cooldown_secs, 600);
         assert!(!cfg.watch.notifications);
     }

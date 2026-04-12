@@ -8,6 +8,5 @@ pub mod debounce;
 pub mod diff;
 pub mod event;
 pub mod subscription;
-pub mod threshold;
 
 pub use event::{EventKind, WatchEvent};

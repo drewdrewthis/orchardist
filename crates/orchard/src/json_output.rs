@@ -168,17 +168,39 @@ pub struct JsonPane {
 }
 
 /// Claude enrichment data in JSON output.
+///
+/// `sessionAgeSec` is computed at serialization time from `session_start_ts`
+/// so it always reflects real elapsed time, not the time of the last hook write.
+/// All fields except `status` are optional and omitted when absent.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonClaudeInfo {
     /// Claude state as a string: "working", "idle", "input", or "none".
     pub status: String,
-    /// Cumulative session cost in USD, if available.
-    pub cost_usd: Option<f64>,
-    /// Context window usage percentage, if available.
-    pub context_window_pct: Option<f64>,
-    /// Model name (e.g., "opus", "sonnet"), if available.
+    /// Model name (e.g., `"claude-opus-4-6"`), if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Last tool invoked, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// First line of the last user prompt (≤80 chars), if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_task: Option<String>,
+    /// Elapsed seconds since the session started, computed at read time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_age_sec: Option<u64>,
+    /// Total input tokens from the most recent assistant message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// Total output tokens from the most recent assistant message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// Cache creation input tokens from the most recent assistant message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Cache read input tokens from the most recent assistant message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 /// Host reachability information in JSON output.
@@ -193,6 +215,46 @@ pub struct JsonHostState {
 // ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
+
+/// Computes elapsed seconds since `session_start_ts` (unix epoch seconds) at
+/// the time of the call. Returns `None` when `session_start_ts` is absent or
+/// the clock goes backwards.
+fn compute_session_age_sec(session_start_ts: Option<u64>) -> Option<u64> {
+    let start = session_start_ts?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    now.checked_sub(start)
+}
+
+fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> JsonClaudeInfo {
+    JsonClaudeInfo {
+        status: claude_state_str(c.status).to_string(),
+        model: c.model.clone(),
+        last_tool: c.last_tool.clone(),
+        current_task: c.current_task.clone(),
+        session_age_sec: compute_session_age_sec(c.session_start_ts),
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        cache_creation_input_tokens: c.cache_creation_input_tokens,
+        cache_read_input_tokens: c.cache_read_input_tokens,
+    }
+}
+
+fn claude_info_from_session(c: &crate::session::ClaudeSessionInfo) -> JsonClaudeInfo {
+    JsonClaudeInfo {
+        status: claude_state_str(c.status).to_string(),
+        model: c.model.clone(),
+        last_tool: c.last_tool.clone(),
+        current_task: c.current_task.clone(),
+        session_age_sec: compute_session_age_sec(c.session_start_ts),
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        cache_creation_input_tokens: c.cache_creation_input_tokens,
+        cache_read_input_tokens: c.cache_read_input_tokens,
+    }
+}
 
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
@@ -275,12 +337,7 @@ impl From<&SessionState> for JsonSession {
             Some(h) => h.clone(),
             None => "local".to_string(),
         };
-        let claude = s.claude.as_ref().map(|c| JsonClaudeInfo {
-            status: claude_state_str(c.status).to_string(),
-            cost_usd: c.cost_usd,
-            context_window_pct: c.context_window_pct,
-            model: c.model.clone(),
-        });
+        let claude = s.claude.as_ref().map(claude_info_from_enrichment);
         Self {
             name: s.name.clone(),
             host,
@@ -327,12 +384,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
             crate::session::SessionStatus::Running { .. } => "running",
             crate::session::SessionStatus::Dead => "dead",
         };
-        let claude = row.session.claude.as_ref().map(|c| JsonClaudeInfo {
-            status: claude_state_str(c.status).to_string(),
-            cost_usd: c.cost_usd,
-            context_window_pct: c.context_window_pct,
-            model: c.model.clone(),
-        });
+        let claude = row.session.claude.as_ref().map(claude_info_from_session);
         let windows = row
             .session
             .windows
@@ -518,9 +570,14 @@ mod tests {
             host: None,
             claude: Some(ClaudeEnrichment {
                 status: crate::claude_state::ClaudeState::Working,
-                cost_usd: None,
-                context_window_pct: None,
                 model: None,
+                last_tool: None,
+                current_task: None,
+                session_start_ts: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
             }),
             windows: vec![],
         };
@@ -764,6 +821,339 @@ mod tests {
         assert!(
             v.get("unresolvedThreads").is_some(),
             "unresolvedThreads key must be present"
+        );
+    }
+
+    // -- AC1 / AC2: telemetry fields in JSON output --------------------------
+
+    fn make_enriched_session(enrichment: ClaudeEnrichment) -> SessionState {
+        SessionState {
+            name: "repo-claude".to_string(),
+            host: None,
+            claude: Some(enrichment),
+            windows: vec![],
+        }
+    }
+
+    fn full_enrichment() -> ClaudeEnrichment {
+        ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Working,
+            model: Some("claude-opus-4-6".to_string()),
+            last_tool: Some("Bash".to_string()),
+            current_task: Some("fix flaky hook test".to_string()),
+            session_start_ts: Some(1700000000),
+            input_tokens: Some(50000),
+            output_tokens: Some(800),
+            cache_creation_input_tokens: Some(10000),
+            cache_read_input_tokens: Some(40000),
+        }
+    }
+
+    /// AC2: ClaudeState values round-trip correctly as strings.
+    #[test]
+    fn claude_state_values_are_restricted_to_four_strings() {
+        use crate::claude_state::ClaudeState;
+        assert_eq!(claude_state_str(ClaudeState::Working), "working");
+        assert_eq!(claude_state_str(ClaudeState::Idle), "idle");
+        assert_eq!(claude_state_str(ClaudeState::Input), "input");
+        assert_eq!(claude_state_str(ClaudeState::None), "none");
+    }
+
+    /// AC1: all new telemetry fields are present when enrichment is populated.
+    #[test]
+    fn all_new_telemetry_fields_present_when_populated() {
+        let session = make_enriched_session(full_enrichment());
+        let js = JsonSession::from(&session);
+        let claude = js.claude.unwrap();
+        assert_eq!(claude.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(claude.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(claude.current_task.as_deref(), Some("fix flaky hook test"));
+        assert!(
+            claude.session_age_sec.is_some(),
+            "sessionAgeSec must be present"
+        );
+        assert_eq!(claude.input_tokens, Some(50000));
+        assert_eq!(claude.output_tokens, Some(800));
+        assert_eq!(claude.cache_creation_input_tokens, Some(10000));
+        assert_eq!(claude.cache_read_input_tokens, Some(40000));
+    }
+
+    /// AC1: status field is always present.
+    #[test]
+    fn status_field_always_present() {
+        let session = make_enriched_session(full_enrichment());
+        let js = JsonSession::from(&session);
+        assert_eq!(js.claude.unwrap().status, "working");
+    }
+
+    /// AC1: new fields are absent (not null) when enrichment has no data.
+    #[test]
+    fn missing_telemetry_fields_are_absent_not_null() {
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Idle,
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        });
+        let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
+        let claude = &value["claude"];
+        assert_eq!(claude["status"], "idle");
+        // Optional fields must be absent (not null) when not set.
+        assert!(claude.get("model").is_none(), "model must be absent");
+        assert!(claude.get("lastTool").is_none(), "lastTool must be absent");
+        assert!(
+            claude.get("currentTask").is_none(),
+            "currentTask must be absent"
+        );
+        assert!(
+            claude.get("sessionAgeSec").is_none(),
+            "sessionAgeSec must be absent"
+        );
+        assert!(
+            claude.get("inputTokens").is_none(),
+            "inputTokens must be absent"
+        );
+        assert!(
+            claude.get("outputTokens").is_none(),
+            "outputTokens must be absent"
+        );
+        assert!(
+            claude.get("cacheCreationInputTokens").is_none(),
+            "cacheCreationInputTokens must be absent"
+        );
+        assert!(
+            claude.get("cacheReadInputTokens").is_none(),
+            "cacheReadInputTokens must be absent"
+        );
+    }
+
+    /// AC5: session_age_sec is computed at read time from session_start_ts.
+    #[test]
+    fn session_age_sec_computed_at_read_time() {
+        // Use a fixed start time well in the past (unix epoch 1 — 1970).
+        let past_ts: u64 = 1;
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Working,
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: Some(past_ts),
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        });
+        let js = JsonSession::from(&session);
+        let age = js.claude.unwrap().session_age_sec.unwrap();
+        // The session is very old — age must be very large (> 1 billion seconds since 1970).
+        assert!(
+            age > 1_000_000_000,
+            "session_age_sec must reflect elapsed time: got {age}"
+        );
+    }
+
+    /// AC5: session_age_sec absent when session_start_ts is None.
+    #[test]
+    fn session_age_sec_absent_when_no_start_ts() {
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Idle,
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        });
+        let js = JsonSession::from(&session);
+        assert!(
+            js.claude.unwrap().session_age_sec.is_none(),
+            "sessionAgeSec must be absent when session_start_ts is None"
+        );
+    }
+
+    /// AC5: session_age_sec is computed fresh — not stale from state file.
+    #[test]
+    fn session_age_sec_stays_fresh() {
+        // If session_start_ts is 10 seconds ago and now advances, age grows.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let start_ts = now_secs - 60; // 60 seconds ago
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Working,
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: Some(start_ts),
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        });
+        let js = JsonSession::from(&session);
+        let age = js.claude.unwrap().session_age_sec.unwrap();
+        assert!(
+            age >= 60,
+            "session_age_sec must be >= 60 when session started 60s ago: got {age}"
+        );
+    }
+
+    /// AC6: sessions without a Claude process omit the claude object entirely.
+    #[test]
+    fn no_claude_process_omits_claude_key() {
+        let session = SessionState {
+            name: "zsh-session".to_string(),
+            host: None,
+            claude: None,
+            windows: vec![],
+        };
+        let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
+        assert!(
+            value.get("claude").is_none() || value["claude"].is_null(),
+            "sessions without Claude must not have claude key"
+        );
+        let js = JsonSession::from(&session);
+        assert!(
+            js.claude.is_none(),
+            "claude must be None for non-Claude sessions"
+        );
+    }
+
+    /// AC7 (fresh session): only status present; other fields absent.
+    #[test]
+    fn fresh_session_only_model_and_status_present() {
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Idle,
+            model: Some("claude-opus-4-6".to_string()),
+            last_tool: None,
+            current_task: None,
+            session_start_ts: Some(1700000000),
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        });
+        let js = JsonSession::from(&session);
+        let claude = js.claude.unwrap();
+        assert!(claude.model.is_some(), "model must be present");
+        assert!(
+            claude.session_age_sec.is_some(),
+            "sessionAgeSec must be present"
+        );
+        assert!(
+            claude.last_tool.is_none(),
+            "lastTool must be absent for fresh session"
+        );
+        assert!(
+            claude.current_task.is_none(),
+            "currentTask must be absent for fresh session"
+        );
+        assert!(
+            claude.input_tokens.is_none(),
+            "inputTokens must be absent for fresh session"
+        );
+    }
+
+    /// AC7 (heavy working): all fields populated.
+    #[test]
+    fn heavy_working_all_fields_populated() {
+        let session = make_enriched_session(full_enrichment());
+        let js = JsonSession::from(&session);
+        let claude = js.claude.unwrap();
+        assert_eq!(claude.status, "working");
+        assert!(claude.model.is_some());
+        assert!(claude.session_age_sec.is_some());
+        assert!(claude.input_tokens.is_some());
+        assert!(claude.output_tokens.is_some());
+        assert!(claude.cache_read_input_tokens.is_some());
+        assert!(claude.cache_creation_input_tokens.is_some());
+        assert!(claude.last_tool.is_some());
+        assert!(claude.current_task.is_some());
+    }
+
+    /// AC7 (idle after Stop): lastTool absent, tokens present, sessionAge present.
+    #[test]
+    fn idle_after_stop_last_tool_absent_tokens_present() {
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Idle,
+            model: Some("claude-opus-4-6".to_string()),
+            last_tool: None, // cleared by Stop
+            current_task: None,
+            session_start_ts: Some(1700000000),
+            input_tokens: Some(50000),
+            output_tokens: Some(800),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        });
+        let js = JsonSession::from(&session);
+        let claude = js.claude.unwrap();
+        assert_eq!(claude.status, "idle");
+        assert!(claude.session_age_sec.is_some());
+        assert!(
+            claude.last_tool.is_none(),
+            "lastTool must be absent after Stop"
+        );
+        assert_eq!(claude.input_tokens, Some(50000));
+        assert_eq!(claude.output_tokens, Some(800));
+    }
+
+    /// AC9: legacy state files (no new fields) deserialize cleanly.
+    #[test]
+    fn legacy_state_file_deserializes_cleanly() {
+        use crate::claude_state::ClaudeStateFile;
+        let json = r#"{
+            "state": "idle",
+            "session_id": "abc",
+            "tmux_session": "repo_47",
+            "cwd": "/workspace",
+            "event": "Stop",
+            "timestamp": "2026-03-25T10:00:00Z"
+        }"#;
+        let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
+        assert_eq!(sf.state, "idle");
+        assert!(sf.model.is_none());
+        assert!(sf.last_tool.is_none());
+        assert!(sf.current_task.is_none());
+        assert!(sf.session_start_ts.is_none());
+        assert!(sf.input_tokens.is_none());
+        // Derive the session info from a legacy state file
+        let enrichment = crate::session::ClaudeSessionInfo::from_state_file(&sf);
+        // idle state => Some(ClaudeSessionInfo) with all new fields None
+        let info = enrichment.unwrap();
+        assert!(matches!(
+            info.status,
+            crate::claude_state::ClaudeState::Idle
+        ));
+        assert!(info.model.is_none());
+        assert!(info.last_tool.is_none());
+        assert!(info.input_tokens.is_none());
+    }
+
+    /// `compute_session_age_sec` returns `None` when `session_start_ts` is ahead of now.
+    ///
+    /// Clock skew (NTP adjustment, VM resume, etc.) can cause the recorded start time
+    /// to be slightly in the future relative to the current clock. `checked_sub` handles
+    /// this cleanly — we must never return a wrapped negative value as a large u64.
+    #[test]
+    fn session_age_sec_returns_none_when_start_is_ahead_of_now() {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Set start 1000 seconds in the future.
+        let future_ts = now_secs + 1000;
+        let result = compute_session_age_sec(Some(future_ts));
+        assert!(
+            result.is_none(),
+            "session_age_sec must be None when start_ts is ahead of now (clock skew); got {result:?}"
         );
     }
 }

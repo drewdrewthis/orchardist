@@ -1,8 +1,8 @@
 //! Watch daemon loop.
 //!
 //! Polls local and full sources on configured intervals, diffs the resulting
-//! `OrchardState`, fires threshold checks, delivers events to subscribers,
-//! and optionally sends desktop notifications for key events.
+//! `OrchardState`, delivers events to subscribers, and optionally sends
+//! desktop notifications for key events.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +15,6 @@ use crate::orchard_state::OrchardState;
 use crate::watch::diff;
 use crate::watch::event::{EventKind, WatchEvent};
 use crate::watch::subscription;
-use crate::watch::threshold::{ThresholdTimestamps, check_thresholds};
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -25,8 +24,8 @@ use crate::watch::threshold::{ThresholdTimestamps, check_thresholds};
 ///
 /// Polls local sources every `config.watch.local_poll_secs` seconds and full
 /// sources every `config.watch.full_poll_secs` seconds. On each cycle it diffs
-/// the state, fires threshold checks, delivers events to subscribers, and
-/// optionally sends desktop notifications.
+/// the state, delivers events to subscribers, and optionally sends desktop
+/// notifications.
 pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -39,7 +38,6 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         config.watch.local_poll_secs, config.watch.full_poll_secs
     );
 
-    let mut threshold_ts = ThresholdTimestamps::new();
     let mut claude_debounce = crate::watch::debounce::ClaudeDebounceState::new();
     let mut last_local = Instant::now();
     let mut last_full = Instant::now();
@@ -74,11 +72,6 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         if let Some(ref old) = previous_state {
             events.extend(diff::diff(old, &new_state, &mut claude_debounce));
         }
-
-        // Thresholds
-        let (threshold_events, new_ts) = check_thresholds(&new_state, &config.watch, &threshold_ts);
-        events.extend(threshold_events);
-        threshold_ts = new_ts;
 
         previous_state = Some(new_state.clone());
 

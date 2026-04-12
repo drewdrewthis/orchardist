@@ -14,6 +14,7 @@ use orchard::build_state;
 use orchard::chat;
 use orchard::global_config;
 use orchard::heal;
+use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::setup_remote;
@@ -31,6 +32,7 @@ fn main() {
 
     let mut chat_target: Option<String> = None;
     let mut chat_message: Option<String> = None;
+    let mut transcript_path: Option<String> = None;
     let mut skip_next = false;
 
     for (i, arg) in args[1..].iter().enumerate() {
@@ -57,6 +59,10 @@ fn main() {
                 chat_message = args.get(i + 2).cloned();
                 skip_next = true;
             }
+            "--transcript" => {
+                transcript_path = args.get(i + 2).cloned();
+                skip_next = true;
+            }
             _ if !arg.starts_with('-') && command.is_empty() => command = arg.clone(),
             _ => {}
         }
@@ -78,6 +84,7 @@ fn main() {
         "heal" => handle_heal(fix_flag, json_flag),
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         "watch" => handle_watch(&args),
+        "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         _ => {
             if json_flag {
                 handle_json();
@@ -315,6 +322,17 @@ fn install_panic_hooks() {
         let _ = crossterm::execute!(std::io::stderr(), cursor::Show);
         eprintln!("{}", panic_hook.panic_report(info));
     }));
+}
+
+/// Handles `orchard hook-enrich --transcript <path>`.
+///
+/// Reads the JSONL transcript and prints a JSON enrichment object to stdout.
+/// Prints `{}` and exits 0 on any error (missing path, missing file, etc.).
+fn handle_hook_enrich(transcript: Option<&str>) {
+    match transcript {
+        Some(path) => hook_enrich::run(path),
+        None => println!("{{}}"),
+    }
 }
 
 fn print_usage() {

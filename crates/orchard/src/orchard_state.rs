@@ -191,12 +191,22 @@ pub struct PaneState {
 pub struct ClaudeEnrichment {
     /// Structured Claude state (working, idle, input, none).
     pub status: ClaudeState,
-    /// Cumulative session cost in USD, if available.
-    pub cost_usd: Option<f64>,
-    /// Context window usage percentage (0-100), if available.
-    pub context_window_pct: Option<f64>,
-    /// Model name (e.g., "opus", "sonnet"), if available.
+    /// Model name (e.g., `"claude-opus-4-6"`), if available.
     pub model: Option<String>,
+    /// Last tool invoked, if available.
+    pub last_tool: Option<String>,
+    /// First line of the last user prompt (≤80 chars), if available.
+    pub current_task: Option<String>,
+    /// Unix epoch seconds when the session started, if available.
+    pub session_start_ts: Option<u64>,
+    /// Total input tokens from the most recent assistant message.
+    pub input_tokens: Option<u64>,
+    /// Total output tokens from the most recent assistant message.
+    pub output_tokens: Option<u64>,
+    /// Cache creation input tokens from the most recent assistant message.
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Cache read input tokens from the most recent assistant message.
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 /// Reachability state for a remote host.
@@ -233,9 +243,14 @@ impl From<&EnrichedSession> for SessionState {
         };
         let claude = s.claude.as_ref().map(|c| ClaudeEnrichment {
             status: c.status,
-            cost_usd: c.cost_usd,
-            context_window_pct: c.context_window_pct,
             model: c.model.clone(),
+            last_tool: c.last_tool.clone(),
+            current_task: c.current_task.clone(),
+            session_start_ts: c.session_start_ts,
+            input_tokens: c.input_tokens,
+            output_tokens: c.output_tokens,
+            cache_creation_input_tokens: c.cache_creation_input_tokens,
+            cache_read_input_tokens: c.cache_read_input_tokens,
         });
         let windows = s
             .windows
