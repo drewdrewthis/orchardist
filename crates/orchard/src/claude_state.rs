@@ -61,7 +61,7 @@ pub struct ClaudeStateFile {
 }
 
 /// Parsed Claude state for use in derive logic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeState {
     /// Claude is actively executing a tool or generating a response.

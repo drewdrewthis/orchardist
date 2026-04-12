@@ -22,6 +22,7 @@ pub mod heal;
 pub mod hook_enrich;
 pub mod json_output;
 pub mod logger;
+pub mod models;
 mod navigation;
 pub mod notify;
 pub mod orchard_state;
