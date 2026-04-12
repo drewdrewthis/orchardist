@@ -65,7 +65,9 @@ pub fn phase_from_labels(labels: &[String]) -> Option<&'static str> {
 
 /// Rendering order for worktree rows. Variants are ordered so that `Ord` gives
 /// the correct sort order (RepoMain first, Other last).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayGroup {
     /// Always first — the repo's main worktree.
@@ -79,6 +81,7 @@ pub enum DisplayGroup {
     /// PR is approved and checks pass — ready to merge.
     ReadyToMerge,
     /// Worktrees without PRs or other misc work.
+    #[default]
     Other,
 }
 

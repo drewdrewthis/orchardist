@@ -132,7 +132,15 @@ pub fn derive_all_repos(
     let mut rows: Vec<WorktreeRow> = repo_caches
         .iter()
         .flat_map(|(slug, issues, prs, worktrees, sessions)| {
-            derive_worktree_rows(issues, prs, worktrees, sessions, slug, claude_states, statusline_files)
+            derive_worktree_rows(
+                issues,
+                prs,
+                worktrees,
+                sessions,
+                slug,
+                claude_states,
+                statusline_files,
+            )
         })
         .collect();
 

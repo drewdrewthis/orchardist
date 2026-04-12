@@ -109,13 +109,12 @@ fragment IssueFields on Issue {{
 /// Matches: "blocked by #N", "depends on #N", "waiting on #N" (case-insensitive).
 /// Does NOT match: "fixes #N", "closes #N", or bare "#N".
 fn extract_blocked_by(body: &str) -> Vec<u32> {
-    // Compiled once per parse call — acceptable since bodies are short.
-    // Pattern anchored to word boundaries to avoid partial matches.
-    let re = regex::Regex::new(
-        r"(?i)(?:blocked\s+by|depends\s+on|waiting\s+on)\s+#(\d+)",
-    )
-    .expect("blocking regex is valid");
-
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)(?:blocked\s+by|depends\s+on|waiting\s+on)\s+#(\d+)")
+            .expect("blocking regex is valid")
+    });
     re.captures_iter(body)
         .filter_map(|caps| caps[1].parse::<u32>().ok())
         .collect()
@@ -2917,6 +2916,68 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         assert!(
             query.contains("statusCheckRollup"),
             "query must select statusCheckRollup on defaultBranchRef target"
+        );
+    }
+
+    #[test]
+    fn per_branch_parser_populates_details_url_on_check_info() {
+        let json = r#"{
+            "data": {
+                "repository": {
+                    "defaultBranchRef": null,
+                    "b_feat_branch": {
+                        "nodes": [{
+                            "number": 1,
+                            "headRefName": "feat/branch",
+                            "baseRefName": "main",
+                            "title": "Test",
+                            "state": "OPEN",
+                            "isDraft": false,
+                            "author": { "login": "dev" },
+                            "reviewDecision": null,
+                            "mergeable": "MERGEABLE",
+                            "labels": { "nodes": [] },
+                            "reviewRequests": { "nodes": [] },
+                            "reviews": { "nodes": [] },
+                            "reviewThreads": { "nodes": [] },
+                            "closingIssuesReferences": { "nodes": [] },
+                            "additions": 10,
+                            "deletions": 5,
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "updatedAt": "2026-01-02T00:00:00Z",
+                            "commits": {
+                                "nodes": [{
+                                    "commit": {
+                                        "pushedDate": "2026-01-01T12:00:00Z",
+                                        "statusCheckRollup": {
+                                            "state": "SUCCESS",
+                                            "contexts": {
+                                                "totalCount": 1,
+                                                "nodes": [{
+                                                    "__typename": "CheckRun",
+                                                    "name": "test-unit",
+                                                    "conclusion": "SUCCESS",
+                                                    "status": "COMPLETED",
+                                                    "detailsUrl": "https://github.com/owner/repo/actions/runs/123"
+                                                }]
+                                            }
+                                        }
+                                    }
+                                }]
+                            }
+                        }]
+                    }
+                }
+            }
+        }"#;
+
+        let matcher = GateMatcher::new(&[]);
+        let prs = parse_prs_graphql_per_branch(json, &matcher);
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].ci_checks.code.len(), 1);
+        assert_eq!(
+            prs[0].ci_checks.code[0].details_url.as_deref(),
+            Some("https://github.com/owner/repo/actions/runs/123")
         );
     }
 }
