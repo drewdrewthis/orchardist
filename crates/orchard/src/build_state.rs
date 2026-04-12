@@ -369,6 +369,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: None,
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         }
@@ -509,6 +511,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: Some(make_state_file(state, name, timestamp)),
         }
@@ -590,6 +594,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         };
@@ -623,6 +629,9 @@ mod tests {
             is_bare: false,
             is_locked: false,
             host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
         }
     }
 

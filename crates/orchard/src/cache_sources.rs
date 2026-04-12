@@ -3,10 +3,12 @@
 //! Fetches issues, PRs, worktrees, and tmux sessions from their respective
 //! sources (GitHub CLI, git, SSH remotes) and writes the results to the
 //! cache files consumed by `sources::*` and `derive`.
+use std::collections::HashMap;
 use std::process::Command;
 
 use crate::cache::{
-    self, CachedIssue, CachedPr, CachedReview, CachedSubIssue, CachedTmuxSession, CachedWorktree,
+    self, CachedIssue, CachedPr, CachedRepoMeta, CachedReview, CachedSubIssue, CachedTmuxSession,
+    CachedWorktree,
 };
 use crate::ci_state::{
     CheckInfo, CiChecks, GateMatcher, classify_check, map_check_run_conclusion,
@@ -492,6 +494,9 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
             is_bare,
             is_locked,
             host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
         });
     }
 
@@ -501,7 +506,12 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
 ///
-/// `sessions_output` has lines in the format `{session_name}:{session_path}`.
+/// `sessions_output` has lines in the format
+/// `{session_name}:{session_path}|{session_created}|{session_activity}`.
+/// Session path is everything between the first `:` and the first `|`;
+/// `session_created` and `session_activity` are Unix timestamps (integers)
+/// appended with `|` separators and omitted when the format string does not
+/// include them (backward-compatible: lines without `|` produce `None` for both).
 /// `panes_fn` is called with each session name and returns lines in the format
 /// `{pane_title}:{pane_current_command}`.
 /// `content_fn` is called with each session name and returns the last few lines
@@ -518,12 +528,19 @@ pub fn parse_tmux_output(
         if line.is_empty() {
             continue;
         }
-        // Format: "{session_name}:{session_path}"
+        // Format: "{session_name}:{session_path}|{session_created}|{session_activity}"
         // Session path may itself contain colons (e.g. Windows paths or
-        // absolute paths on some systems), so we split on the first colon only.
-        let Some((name, path)) = line.split_once(':') else {
+        // absolute paths on some systems), so we split on the first colon only
+        // to get name; then the remainder may contain pipe-separated timestamps.
+        let Some((name, rest)) = line.split_once(':') else {
             continue;
         };
+
+        // Split `rest` on `|` to separate path from optional timestamps.
+        let parts: Vec<&str> = rest.splitn(3, '|').collect();
+        let path = parts[0];
+        let created_at: Option<u64> = parts.get(1).and_then(|s| s.parse().ok());
+        let last_activity_at: Option<u64> = parts.get(2).and_then(|s| s.parse().ok());
 
         let pane_output = panes_fn(name);
         let parsed = parse_pane_lines(&pane_output);
@@ -538,6 +555,8 @@ pub fn parse_tmux_output(
             window_names: parsed.window_names,
             window_active: parsed.window_active,
             host: host.map(|h| h.to_string()),
+            created_at,
+            last_activity_at,
             last_output_lines,
             claude_state_raw: None, // populated after parsing remote Claude state
         });
@@ -838,6 +857,16 @@ pub fn pr_graphql_query_per_branch(owner: &str, name: &str, branches: &[String])
     format!(
         r#"query {{
   repository(owner: "{owner}", name: "{name}") {{
+    defaultBranchRef {{
+      name
+      target {{
+        ... on Commit {{
+          statusCheckRollup {{
+            state
+          }}
+        }}
+      }}
+    }}
 {aliases}
   }}
 }}
@@ -1061,6 +1090,139 @@ pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<Ca
     prs
 }
 
+/// Extracts repo-level metadata from a per-branch PR GraphQL response.
+///
+/// Reads the `repository.defaultBranchRef` field that is included by
+/// [`pr_graphql_query_per_branch`] alongside the branch aliases. Returns a
+/// [`CachedRepoMeta`] with the default branch name and the CI rollup state of
+/// its HEAD commit.
+///
+/// The same JSON is passed to both this function and
+/// [`parse_prs_graphql_per_branch`] so that only one API call is needed for
+/// both datasets.
+pub fn parse_repo_meta_from_pr_response(json: &str) -> CachedRepoMeta {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: failed to parse repo meta from PR response: {e}"
+            ));
+            return CachedRepoMeta::default();
+        }
+    };
+
+    let default_branch_ref = &root["data"]["repository"]["defaultBranchRef"];
+    if default_branch_ref.is_null() {
+        return CachedRepoMeta::default();
+    }
+
+    let default_branch = default_branch_ref["name"]
+        .as_str()
+        .map(|s| s.to_string());
+
+    let main_ci_state = default_branch_ref["target"]["statusCheckRollup"]["state"]
+        .as_str()
+        .map(|s| s.to_string());
+
+    CachedRepoMeta {
+        default_branch,
+        main_ci_state,
+    }
+}
+
+/// Parses output of `git branch -vv` to extract ahead/behind counts per branch.
+///
+/// Returns a map of branch name → `(ahead, behind)`. Branches without a
+/// tracking remote, or tracking remotes with no divergence count, return
+/// `(0, 0)`.
+///
+/// Input format:
+/// ```text
+/// * main                abc1234 [origin/main] Latest commit
+///   issue42/fix-bug     def5678 [origin/issue42/fix-bug: ahead 3, behind 1] Some commit
+///   feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit
+/// ```
+pub fn parse_git_ahead_behind(output: &str) -> HashMap<String, (u32, u32)> {
+    let mut result = HashMap::new();
+
+    for line in output.lines() {
+        // Strip the leading "* " or "  " marker and trim.
+        let stripped = if line.starts_with("* ") || line.starts_with("  ") {
+            &line[2..]
+        } else {
+            line
+        };
+
+        // Branch name is the first whitespace-separated token.
+        let mut parts = stripped.splitn(2, ' ');
+        let branch = match parts.next() {
+            Some(b) if !b.is_empty() => b.to_string(),
+            _ => continue,
+        };
+        let rest = parts.next().unwrap_or("").trim();
+
+        // Extract the "[origin/...: ahead N, behind M]" section if present.
+        let (ahead, behind) = if let Some(bracket_start) = rest.find('[') {
+            if let Some(bracket_end) = rest.find(']') {
+                let bracket_content = &rest[bracket_start + 1..bracket_end];
+                let ahead = bracket_content
+                    .split("ahead ")
+                    .nth(1)
+                    .and_then(|s| s.split([',', ']']).next())
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                let behind = bracket_content
+                    .split("behind ")
+                    .nth(1)
+                    .and_then(|s| s.split([',', ']']).next())
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                (ahead, behind)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        result.insert(branch, (ahead, behind));
+    }
+
+    result
+}
+
+/// Parses output of `git for-each-ref --format='%(refname:short) %(committerdate:iso-strict)' refs/heads/`
+/// to extract the last commit timestamp per branch.
+///
+/// Returns a map of branch name → ISO 8601 date string.
+///
+/// Input format:
+/// ```text
+/// main 2026-04-10T10:00:00-07:00
+/// issue42/fix-bug 2026-04-12T14:30:00-07:00
+/// ```
+pub fn parse_git_last_commit_dates(output: &str) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Split on the LAST space: branch names may contain slashes but not spaces,
+        // and the date is always the last token.
+        if let Some(pos) = trimmed.rfind(' ') {
+            let branch = trimmed[..pos].trim().to_string();
+            let date = trimmed[pos + 1..].trim().to_string();
+            if !branch.is_empty() && !date.is_empty() {
+                result.insert(branch, date);
+            }
+        }
+    }
+
+    result
+}
+
 /// Fetches open GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
 ///
 /// Uses GraphQL to get closingIssuesReferences (linked issues), reviewThreads,
@@ -1110,6 +1272,12 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
                 config.slug,
                 prs.len()
             ));
+
+            // Parse repo-level meta (default branch, main CI state) from the
+            // same response and write to its own cache file.
+            let repo_meta = parse_repo_meta_from_pr_response(&json);
+            let meta_path = cache::cache_path(config.owner(), config.repo_name(), "repo_meta");
+            cache::write_cache(&meta_path, &[repo_meta])?;
         }
     }
 
@@ -1117,6 +1285,10 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
 }
 
 /// Fetches git worktrees for `config.path` and writes to the worktrees cache.
+///
+/// After parsing the worktree list, also runs `git branch -vv` and
+/// `git for-each-ref` to populate `ahead`, `behind`, and `last_commit_at`
+/// fields on each non-bare worktree entry.
 ///
 /// On failure the error is logged and the existing cache is left intact.
 pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
@@ -1133,7 +1305,36 @@ pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(porcelain) => {
-            let worktrees = parse_worktree_porcelain(&porcelain);
+            let mut worktrees = parse_worktree_porcelain(&porcelain);
+
+            // Enrich with ahead/behind counts from `git branch -vv`.
+            let ahead_behind = run_local_in("git", &["branch", "-vv"], &config.path)
+                .map(|out| parse_git_ahead_behind(&out))
+                .unwrap_or_default();
+
+            // Enrich with last commit timestamps from `git for-each-ref`.
+            let commit_dates = run_local_in(
+                "git",
+                &[
+                    "for-each-ref",
+                    "--format=%(refname:short) %(committerdate:iso-strict)",
+                    "refs/heads/",
+                ],
+                &config.path,
+            )
+            .map(|out| parse_git_last_commit_dates(&out))
+            .unwrap_or_default();
+
+            for wt in &mut worktrees {
+                if !wt.is_bare {
+                    if let Some(&(a, b)) = ahead_behind.get(&wt.branch) {
+                        wt.ahead = if a > 0 { Some(a) } else { None };
+                        wt.behind = if b > 0 { Some(b) } else { None };
+                    }
+                    wt.last_commit_at = commit_dates.get(&wt.branch).cloned();
+                }
+            }
+
             cache::write_cache_if_nonempty(&path, &worktrees)?;
             LOG.info(&format!(
                 "cache_sources: refresh_worktrees({}): wrote {} entries",
@@ -1168,11 +1369,15 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let sessions_out = match host {
         None => run_local(
             "tmux",
-            &["list-sessions", "-F", "#{session_name}:#{session_path}"],
+            &[
+                "list-sessions",
+                "-F",
+                "#{session_name}:#{session_path}|#{session_created}|#{session_activity}",
+            ],
         ),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}|#{{session_created}}|#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
                 CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)
@@ -2503,5 +2708,217 @@ mod tests {
 
         let issues = parse_issues_graphql(&json);
         assert_eq!(issues[0].assignees, vec!["alice", "bob"]);
+    }
+
+    // -- parse_git_ahead_behind -----------------------------------------------
+
+    #[test]
+    fn ahead_behind_branch_with_both() {
+        let output = "  issue42/fix-bug     def5678 [origin/issue42/fix-bug: ahead 3, behind 1] Some commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("issue42/fix-bug"), Some(&(3, 1)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_ahead_only() {
+        let output = "  feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("feat/new-thing"), Some(&(2, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_behind_only() {
+        let output = "  stale/branch        abc1234 [origin/stale/branch: behind 5] Old commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("stale/branch"), Some(&(0, 5)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_no_divergence() {
+        // Tracking remote but no ahead/behind counts — branch is in sync.
+        let output = "* main                abc1234 [origin/main] Latest commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("main"), Some(&(0, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_no_tracking() {
+        // No bracket section — untracked local branch.
+        let output = "  local-only          abc1234 Untracked commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("local-only"), Some(&(0, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_multiple_branches() {
+        let output = "\
+* main                abc1234 [origin/main] Latest commit
+  issue42/fix-bug     def5678 [origin/issue42/fix-bug: ahead 3, behind 1] Some commit
+  feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit
+";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get("main"), Some(&(0, 0)));
+        assert_eq!(map.get("issue42/fix-bug"), Some(&(3, 1)));
+        assert_eq!(map.get("feat/new-thing"), Some(&(2, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_empty_output() {
+        let map = parse_git_ahead_behind("");
+        assert!(map.is_empty());
+    }
+
+    // -- parse_git_last_commit_dates ------------------------------------------
+
+    #[test]
+    fn commit_dates_multiple_branches() {
+        let output = "\
+main 2026-04-10T10:00:00-07:00
+issue42/fix-bug 2026-04-12T14:30:00-07:00
+";
+        let map = parse_git_last_commit_dates(output);
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get("main"),
+            Some(&"2026-04-10T10:00:00-07:00".to_string())
+        );
+        assert_eq!(
+            map.get("issue42/fix-bug"),
+            Some(&"2026-04-12T14:30:00-07:00".to_string())
+        );
+    }
+
+    #[test]
+    fn commit_dates_empty_output() {
+        let map = parse_git_last_commit_dates("");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn commit_dates_single_branch() {
+        let output = "feat/my-feature 2026-03-01T09:00:00+00:00\n";
+        let map = parse_git_last_commit_dates(output);
+        assert_eq!(
+            map.get("feat/my-feature"),
+            Some(&"2026-03-01T09:00:00+00:00".to_string())
+        );
+    }
+
+    // -- parse_tmux_output with session timestamps ----------------------------
+
+    #[test]
+    fn parse_tmux_output_with_session_timestamps() {
+        let sessions = "my-session:/home/user/repo|1700000000|1700001000\n";
+        let result = parse_tmux_output(sessions, None, |_| "".to_string(), |_| vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "my-session");
+        assert_eq!(result[0].path, "/home/user/repo");
+        assert_eq!(result[0].created_at, Some(1700000000u64));
+        assert_eq!(result[0].last_activity_at, Some(1700001000u64));
+    }
+
+    #[test]
+    fn parse_tmux_output_without_timestamps_defaults_to_none() {
+        // Old format without timestamps — backward-compatible.
+        let sessions = "my-session:/home/user/repo\n";
+        let result = parse_tmux_output(sessions, None, |_| "".to_string(), |_| vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].created_at, None);
+        assert_eq!(result[0].last_activity_at, None);
+    }
+
+    #[test]
+    fn parse_tmux_output_with_only_created_timestamp() {
+        let sessions = "my-session:/home/user/repo|1700000000\n";
+        let result = parse_tmux_output(sessions, None, |_| "".to_string(), |_| vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].created_at, Some(1700000000u64));
+        assert_eq!(result[0].last_activity_at, None);
+    }
+
+    // -- parse_repo_meta_from_pr_response -------------------------------------
+
+    #[test]
+    fn parse_repo_meta_extracts_default_branch_and_ci_state() {
+        let json = serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {
+                            "statusCheckRollup": {
+                                "state": "SUCCESS"
+                            }
+                        }
+                    },
+                    "b_feat_branch": {
+                        "nodes": []
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let meta = parse_repo_meta_from_pr_response(&json);
+        assert_eq!(meta.default_branch.as_deref(), Some("main"));
+        assert_eq!(meta.main_ci_state.as_deref(), Some("SUCCESS"));
+    }
+
+    #[test]
+    fn parse_repo_meta_null_default_branch_returns_default() {
+        let json = serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "defaultBranchRef": null
+                }
+            }
+        }))
+        .unwrap();
+
+        let meta = parse_repo_meta_from_pr_response(&json);
+        assert!(meta.default_branch.is_none());
+        assert!(meta.main_ci_state.is_none());
+    }
+
+    #[test]
+    fn parse_repo_meta_missing_ci_state_returns_none() {
+        let json = serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {}
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let meta = parse_repo_meta_from_pr_response(&json);
+        assert_eq!(meta.default_branch.as_deref(), Some("main"));
+        assert!(meta.main_ci_state.is_none());
+    }
+
+    #[test]
+    fn parse_repo_meta_invalid_json_returns_default() {
+        let meta = parse_repo_meta_from_pr_response("not json");
+        assert!(meta.default_branch.is_none());
+        assert!(meta.main_ci_state.is_none());
+    }
+
+    // -- pr_graphql_query_per_branch includes defaultBranchRef ----------------
+
+    #[test]
+    fn per_branch_query_includes_default_branch_ref() {
+        let query = pr_graphql_query_per_branch("acme", "my-project", &["feat/branch".to_string()]);
+        assert!(
+            query.contains("defaultBranchRef"),
+            "query must select defaultBranchRef"
+        );
+        assert!(
+            query.contains("statusCheckRollup"),
+            "query must select statusCheckRollup on defaultBranchRef target"
+        );
     }
 }

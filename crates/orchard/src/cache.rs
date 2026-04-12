@@ -143,6 +143,17 @@ pub struct CachedPr {
     pub last_commit_pushed_at: Option<String>,
 }
 
+/// Repo-level metadata extracted from the per-branch PR GraphQL response.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CachedRepoMeta {
+    /// Name of the default branch (e.g. "main").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    /// CI state of the default branch HEAD: "SUCCESS", "FAILURE", "PENDING", etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_ci_state: Option<String>,
+}
+
 /// A git worktree entry as stored in the worktrees cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedWorktree {
@@ -154,9 +165,18 @@ pub struct CachedWorktree {
     pub is_bare: bool,
     /// Whether the worktree is locked (cannot be pruned by git).
     pub is_locked: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Remote host identifier if this worktree lives on a remote machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Commits ahead of upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    /// Commits behind upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind: Option<u32>,
+    /// ISO 8601 timestamp of the last commit on this branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_commit_at: Option<String>,
 }
 
 /// A tmux session entry as stored in the tmux sessions cache file.
@@ -187,6 +207,12 @@ pub struct CachedTmuxSession {
     pub window_active: Vec<String>,
     /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
+    /// Unix timestamp when the tmux session was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
+    /// Unix timestamp of the last activity in this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<u64>,
     #[serde(default)]
     /// Recent output lines from the session's active pane.
     pub last_output_lines: Vec<String>,
@@ -429,6 +455,9 @@ mod tests {
             is_bare: false,
             is_locked: false,
             host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
         }
     }
 
@@ -442,6 +471,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: None,
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         }
@@ -664,6 +695,8 @@ mod tests {
             window_names: vec!["main".to_string(), "editor".to_string()],
             window_active: vec!["1".to_string(), "0".to_string()],
             host: None,
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         };

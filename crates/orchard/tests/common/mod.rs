@@ -185,6 +185,9 @@ pub fn make_worktree(path: &str, branch: &str) -> CachedWorktree {
         is_bare: false,
         is_locked: false,
         host: None,
+        ahead: None,
+        behind: None,
+        last_commit_at: None,
     }
 }
 
@@ -200,6 +203,8 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         window_names: vec![],
         window_active: vec![],
         host: None,
+        created_at: None,
+        last_activity_at: None,
         last_output_lines: vec![],
         claude_state_raw: None,
     }
