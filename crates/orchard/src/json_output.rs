@@ -220,6 +220,21 @@ pub struct JsonClaudeInfo {
     /// Cache read input tokens from the most recent assistant message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
+    /// Context window usage percentage from status line telemetry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_pct: Option<f64>,
+    /// Total cost in USD from status line telemetry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Total session duration in milliseconds from status line telemetry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_duration_ms: Option<u64>,
+    /// Stop reason from the last Stop event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    /// Number of assistant turns in the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_count: Option<u32>,
 }
 
 /// Host reachability information in JSON output.
@@ -258,6 +273,11 @@ fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> Js
         output_tokens: c.output_tokens,
         cache_creation_input_tokens: c.cache_creation_input_tokens,
         cache_read_input_tokens: c.cache_read_input_tokens,
+        context_window_pct: c.context_window_pct,
+        cost_usd: c.cost_usd,
+        total_duration_ms: c.total_duration_ms,
+        stop_reason: c.stop_reason.clone(),
+        turn_count: c.turn_count,
     }
 }
 
@@ -272,6 +292,11 @@ fn claude_info_from_session(c: &crate::session::ClaudeSessionInfo) -> JsonClaude
         output_tokens: c.output_tokens,
         cache_creation_input_tokens: c.cache_creation_input_tokens,
         cache_read_input_tokens: c.cache_read_input_tokens,
+        context_window_pct: c.context_window_pct,
+        cost_usd: c.cost_usd,
+        total_duration_ms: c.total_duration_ms,
+        stop_reason: c.stop_reason.clone(),
+        turn_count: c.turn_count,
     }
 }
 
@@ -606,6 +631,12 @@ mod tests {
                 output_tokens: None,
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
+                context_window_pct: None,
+                cost_usd: None,
+                total_duration_ms: None,
+                rate_limits: None,
+                stop_reason: None,
+                turn_count: None,
             }),
             windows: vec![],
         };
@@ -879,6 +910,12 @@ mod tests {
             output_tokens: Some(800),
             cache_creation_input_tokens: Some(10000),
             cache_read_input_tokens: Some(40000),
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         }
     }
 
@@ -932,6 +969,12 @@ mod tests {
             output_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         });
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
         let claude = &value["claude"];
@@ -980,6 +1023,12 @@ mod tests {
             output_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         });
         let js = JsonSession::from(&session);
         let age = js.claude.unwrap().session_age_sec.unwrap();
@@ -1003,6 +1052,12 @@ mod tests {
             output_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         });
         let js = JsonSession::from(&session);
         assert!(
@@ -1030,6 +1085,12 @@ mod tests {
             output_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         });
         let js = JsonSession::from(&session);
         let age = js.claude.unwrap().session_age_sec.unwrap();
@@ -1073,6 +1134,12 @@ mod tests {
             output_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         });
         let js = JsonSession::from(&session);
         let claude = js.claude.unwrap();
@@ -1125,6 +1192,12 @@ mod tests {
             output_tokens: Some(800),
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
         });
         let js = JsonSession::from(&session);
         let claude = js.claude.unwrap();

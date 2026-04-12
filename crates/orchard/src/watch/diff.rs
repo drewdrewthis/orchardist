@@ -318,6 +318,12 @@ mod tests {
                 output_tokens: None,
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
+                context_window_pct: None,
+                cost_usd: None,
+                total_duration_ms: None,
+                rate_limits: None,
+                stop_reason: None,
+                turn_count: None,
             }),
             windows: vec![],
         }];

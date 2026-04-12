@@ -189,7 +189,7 @@ pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
     let mut claude_states = sources::claude::read_state_files();
     claude_states.extend(remote_claude_states);
-    crate::derive::derive_all_repos(&repo_caches, &claude_states)
+    crate::derive::derive_all_repos(&repo_caches, &claude_states, &[])
 }
 
 /// Builds an `OrchardState` by reading all caches, with known host reachability.
@@ -205,7 +205,7 @@ pub fn build_state_with_hosts(
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
     let mut claude_states = sources::claude::read_state_files();
     claude_states.extend(remote_claude_states);
-    let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states);
+    let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states, &[]);
 
     // Group WorktreeRows back by repo_slug into RepoStates.
     let mut repo_map: HashMap<String, Vec<WorktreeState>> = HashMap::new();
@@ -687,7 +687,7 @@ mod tests {
         ];
         let prs = vec![make_pr_with_labels(55, branch, vec!["planned"])];
 
-        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();
         let pr = row.pr.as_ref().expect("PR should be present");
         assert_eq!(pr.labels, vec!["planned"]);
@@ -710,7 +710,7 @@ mod tests {
             vec!["in-progress", "enhancement"],
         )];
 
-        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[], &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();
         assert_eq!(row.issue_labels, vec!["in-progress", "enhancement"]);
 
@@ -729,7 +729,7 @@ mod tests {
         ];
         let prs = vec![make_pr_with_labels(99, branch, vec![])];
 
-        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();
         let pr = row.pr.as_ref().expect("PR should be present");
         assert!(pr.labels.is_empty());

@@ -222,6 +222,18 @@ pub struct ClaudeEnrichment {
     pub cache_creation_input_tokens: Option<u64>,
     /// Cache read input tokens from the most recent assistant message.
     pub cache_read_input_tokens: Option<u64>,
+    /// Context window usage percentage from status line telemetry.
+    pub context_window_pct: Option<f64>,
+    /// Total cost in USD from status line telemetry.
+    pub cost_usd: Option<f64>,
+    /// Total session duration in milliseconds from status line telemetry.
+    pub total_duration_ms: Option<u64>,
+    /// Rate limit data from status line telemetry.
+    pub rate_limits: Option<crate::session::ClaudeRateLimits>,
+    /// Stop reason from the last Stop event.
+    pub stop_reason: Option<String>,
+    /// Number of assistant turns in the conversation.
+    pub turn_count: Option<u32>,
 }
 
 /// Reachability state for a remote host.
@@ -270,6 +282,12 @@ impl From<&EnrichedSession> for SessionState {
             output_tokens: c.output_tokens,
             cache_creation_input_tokens: c.cache_creation_input_tokens,
             cache_read_input_tokens: c.cache_read_input_tokens,
+            context_window_pct: c.context_window_pct,
+            cost_usd: c.cost_usd,
+            total_duration_ms: c.total_duration_ms,
+            rate_limits: c.rate_limits.clone(),
+            stop_reason: c.stop_reason.clone(),
+            turn_count: c.turn_count,
         });
         let windows = s
             .windows
