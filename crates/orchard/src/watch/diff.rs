@@ -514,7 +514,8 @@ mod tests {
         let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
         let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
 
-        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]));
+        let mut d = ClaudeDebounceState::default();
+        let events = diff(&make_state(vec![old_wt]), &make_state(vec![new_wt]), &mut d);
 
         let ci_events: Vec<_> = events
             .iter()

@@ -1401,7 +1401,7 @@ mod tests {
             55,
             &["in-progress", "bug"],
         )]));
-        let prs = parse_prs_graphql(&json);
+        let prs = parse_prs_graphql(&json, &GateMatcher::new(&[]));
         assert_eq!(prs[0].labels, vec!["in-progress", "bug"]);
     }
 
@@ -1417,14 +1417,14 @@ mod tests {
             vec![],
             0,
         )]));
-        let prs = parse_prs_graphql(&json);
+        let prs = parse_prs_graphql(&json, &GateMatcher::new(&[]));
         assert!(prs[0].labels.is_empty());
     }
 
     #[test]
     fn parse_prs_graphql_labels_empty_when_nodes_array_is_empty() {
         let json = graphql_prs(json!([gql_pr_node_with_labels(55, &[])]));
-        let prs = parse_prs_graphql(&json);
+        let prs = parse_prs_graphql(&json, &GateMatcher::new(&[]));
         assert!(prs[0].labels.is_empty());
     }
 
@@ -1441,7 +1441,7 @@ mod tests {
             ]
         });
         let json = graphql_prs(json!([node]));
-        let prs = parse_prs_graphql(&json);
+        let prs = parse_prs_graphql(&json, &GateMatcher::new(&[]));
         assert_eq!(prs[0].labels, vec!["keep-me", "also-keep"]);
     }
 

@@ -319,6 +319,7 @@ fn make_code_green_gate_blocked_pr(number: u32, branch: &str) -> CachedPr {
         has_conflicts: false,
         unresolved_threads: 0,
         linked_issue_state: None,
+        labels: vec![],
     }
 }
 
@@ -423,6 +424,7 @@ fn e2e_pending_gate_is_not_surfaced_by_blocked_filter() {
         has_conflicts: false,
         unresolved_threads: 0,
         linked_issue_state: None,
+        labels: vec![],
     }];
 
     let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);

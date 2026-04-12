@@ -1798,6 +1798,7 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            labels: vec![],
         };
 
         let pr_info = pr_info_from(&cached_pr);
