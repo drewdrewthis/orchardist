@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
 use crate::ci_state::{
-    CiChecks, CheckInfo, GateMatcher, classify_check, map_check_run_conclusion,
+    CheckInfo, CiChecks, GateMatcher, classify_check, map_check_run_conclusion,
     map_status_context_state, rollup_code_state, rollup_gate_state,
 };
 use crate::global_config::RepoConfig;
@@ -186,30 +186,26 @@ fn derive_ci_state_graphql(
     let rollup = pr["commits"]["nodes"]
         .as_array()
         .and_then(|nodes| nodes.last())
-        .map(|n| &n["commit"]["statusCheckRollup"]);
+        .map(|n| &n["commit"]["statusCheckRollup"])
+        .filter(|r| r.is_object());
 
-    let contexts_node = rollup.and_then(|r| r.as_object()).map(|_| rollup.unwrap());
-
-    let context_nodes: &[serde_json::Value] = match contexts_node
-        .and_then(|r| r["contexts"]["nodes"].as_array())
-    {
-        Some(arr) => arr,
-        None => {
-            // No contexts available — fall back to top-level rollup state for
-            // legacy checks_state, but ci_code_state/ci_gate_state are None.
-            return (None, None, CiChecks::default());
-        }
-    };
+    let context_nodes: &[serde_json::Value] =
+        match rollup.and_then(|r| r["contexts"]["nodes"].as_array()) {
+            Some(arr) => arr,
+            None => {
+                // No contexts available — fall back to top-level rollup state for
+                // legacy checks_state, but ci_code_state/ci_gate_state are None.
+                return (None, None, CiChecks::default());
+            }
+        };
 
     // Warn if truncated.
-    if let Some(total) = contexts_node
-        .and_then(|r| r["contexts"]["totalCount"].as_u64())
+    if let Some(total) = rollup.and_then(|r| r["contexts"]["totalCount"].as_u64())
+        && total > 100
     {
-        if total > 100 {
-            LOG.warn(&format!(
-                "cache_sources: PR {pr_number} has {total} checks, truncating to first 100"
-            ));
-        }
+        LOG.warn(&format!(
+            "cache_sources: PR {pr_number} has {total} checks, truncating to first 100"
+        ));
     }
 
     let mut code_checks: Vec<CheckInfo> = Vec::new();
@@ -239,7 +235,10 @@ fn derive_ci_state_graphql(
             None => continue, // SKIPPED/CANCELLED/STALE — omit from rollup
         };
 
-        let check = CheckInfo { name: name.clone(), state };
+        let check = CheckInfo {
+            name: name.clone(),
+            state,
+        };
         use crate::ci_state::CheckBucket;
         match classify_check(&name, matcher) {
             CheckBucket::Gate => gate_checks.push(check),
@@ -1242,7 +1241,10 @@ mod tests {
             query.contains("conclusion"),
             "query must select CheckRun.conclusion"
         );
-        assert!(query.contains("status"), "query must select CheckRun.status");
+        assert!(
+            query.contains("status"),
+            "query must select CheckRun.status"
+        );
         // StatusContext fields
         assert!(
             query.contains("context"),
@@ -1260,8 +1262,7 @@ mod tests {
     /// Scenario: Parsing normalizes CheckRun and StatusContext into uniform CheckInfo.
     #[test]
     fn parse_check_run_and_status_context_into_check_info() {
-        let check_run_ctx =
-            json!({"__typename": "CheckRun", "name": "test-unit", "conclusion": "SUCCESS", "status": "COMPLETED"});
+        let check_run_ctx = json!({"__typename": "CheckRun", "name": "test-unit", "conclusion": "SUCCESS", "status": "COMPLETED"});
         let status_ctx =
             json!({"__typename": "StatusContext", "context": "travis-ci", "state": "SUCCESS"});
 

@@ -327,6 +327,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};

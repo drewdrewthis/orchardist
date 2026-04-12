@@ -95,13 +95,19 @@ impl GateMatcher {
                     builder.add(glob);
                 }
                 Err(e) => {
-                    // Skip invalid patterns — don't panic at runtime.
-                    eprintln!("ci_state: skipping invalid gate pattern {:?}: {}", pattern, e);
+                    // Skip invalid patterns — don't panic at runtime. Routed
+                    // through the shared logger so the warning surfaces in the
+                    // orchard log file rather than vanishing into stderr.
+                    crate::logger::LOG.warn(&format!(
+                        "ci_state: skipping invalid gate pattern {pattern:?}: {e}"
+                    ));
                 }
             }
         }
         let set = builder.build().unwrap_or_else(|_| {
-            GlobSetBuilder::new().build().expect("empty globset always builds")
+            GlobSetBuilder::new()
+                .build()
+                .expect("empty globset always builds")
         });
         Self { set }
     }
@@ -215,10 +221,7 @@ pub fn rollup_gate_state(checks: &[CheckInfo]) -> Option<String> {
 /// NEUTRAL is treated as passing because it is GitHub's "opinionated pass" used
 /// by bots that ran but made no judgment call.
 /// SKIPPED/CANCELLED/STALE are omitted — they are neither pass nor fail signals.
-pub fn map_check_run_conclusion(
-    conclusion: Option<&str>,
-    status: Option<&str>,
-) -> Option<String> {
+pub fn map_check_run_conclusion(conclusion: Option<&str>, status: Option<&str>) -> Option<String> {
     match conclusion {
         Some(c) => match c {
             "SUCCESS" | "NEUTRAL" => Some("passing".to_string()),
@@ -269,7 +272,10 @@ mod tests {
     #[test]
     fn classify_exact_match_is_gate() {
         let m = GateMatcher::new(&["check-approval-or-label".to_string()]);
-        assert_eq!(classify_check("check-approval-or-label", &m), CheckBucket::Gate);
+        assert_eq!(
+            classify_check("check-approval-or-label", &m),
+            CheckBucket::Gate
+        );
     }
 
     #[test]
@@ -299,8 +305,30 @@ mod tests {
 
     #[test]
     fn classify_no_match_is_code() {
-        let m = GateMatcher::new(&["check-approval-or-label".to_string(), "license/*".to_string()]);
+        let m = GateMatcher::new(&[
+            "check-approval-or-label".to_string(),
+            "license/*".to_string(),
+        ]);
         assert_eq!(classify_check("test-unit", &m), CheckBucket::Code);
+    }
+
+    /// Malformed glob patterns must not panic or poison the matcher — the
+    /// invalid pattern is logged and skipped, and the matcher continues to
+    /// honor the remaining valid patterns.
+    #[test]
+    fn gate_matcher_skips_invalid_pattern_and_preserves_others() {
+        let patterns = vec![
+            "[".to_string(), // invalid: unclosed character class
+            "check-approval-or-label".to_string(),
+        ];
+        let m = GateMatcher::new(&patterns);
+        // The valid pattern still matches.
+        assert_eq!(
+            classify_check("check-approval-or-label", &m),
+            CheckBucket::Gate
+        );
+        // The invalid pattern produces no match surface (it was dropped).
+        assert_eq!(classify_check("[", &m), CheckBucket::Code);
     }
 
     // -----------------------------------------------------------------------
@@ -308,7 +336,10 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn check(state: &str) -> CheckInfo {
-        CheckInfo { name: "x".to_string(), state: state.to_string() }
+        CheckInfo {
+            name: "x".to_string(),
+            state: state.to_string(),
+        }
     }
 
     #[test]
@@ -403,7 +434,10 @@ mod tests {
 
     #[test]
     fn conclusion_action_required_maps_to_failing() {
-        assert_eq!(map_conclusion("ACTION_REQUIRED"), Some("failing".to_string()));
+        assert_eq!(
+            map_conclusion("ACTION_REQUIRED"),
+            Some("failing".to_string())
+        );
     }
 
     #[test]
@@ -436,26 +470,41 @@ mod tests {
 
     #[test]
     fn status_context_success_maps_to_passing() {
-        assert_eq!(map_status_context_state("SUCCESS"), Some("passing".to_string()));
+        assert_eq!(
+            map_status_context_state("SUCCESS"),
+            Some("passing".to_string())
+        );
     }
 
     #[test]
     fn status_context_expected_maps_to_passing() {
-        assert_eq!(map_status_context_state("EXPECTED"), Some("passing".to_string()));
+        assert_eq!(
+            map_status_context_state("EXPECTED"),
+            Some("passing".to_string())
+        );
     }
 
     #[test]
     fn status_context_failure_maps_to_failing() {
-        assert_eq!(map_status_context_state("FAILURE"), Some("failing".to_string()));
+        assert_eq!(
+            map_status_context_state("FAILURE"),
+            Some("failing".to_string())
+        );
     }
 
     #[test]
     fn status_context_error_maps_to_failing() {
-        assert_eq!(map_status_context_state("ERROR"), Some("failing".to_string()));
+        assert_eq!(
+            map_status_context_state("ERROR"),
+            Some("failing".to_string())
+        );
     }
 
     #[test]
     fn status_context_pending_maps_to_pending() {
-        assert_eq!(map_status_context_state("PENDING"), Some("pending".to_string()));
+        assert_eq!(
+            map_status_context_state("PENDING"),
+            Some("pending".to_string())
+        );
     }
 }

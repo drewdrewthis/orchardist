@@ -488,16 +488,17 @@ mod tests {
         assert_eq!(ci_events.len(), 1);
     }
 
-    /// Issue #218: when a PR's `ci_code_state` transitions from passing to
-    /// failing, the watch layer fires a `CiFailed` event.
+    /// Issue #218: verifies the legacy `checks_state` mirror keeps firing
+    /// `CiFailed` when a PR's code CI transitions from passing to failing.
     ///
-    /// Slice 2 of the split-ci-state feature keeps the legacy `checks_state`
-    /// field mirrored with `ci_code_state`, so the existing diff logic (which
-    /// reads `checks_state` for one release) continues to detect the
-    /// transition. A follow-up issue will migrate this reader to fire on
-    /// `ci_code_state` and `ci_gate_state` separately.
+    /// The diff reader currently inspects `checks_state` (the legacy union
+    /// field) for one release. Slice 2 populates `checks_state` as a mirror of
+    /// `ci_code_state`, so when code CI flips, both fields change in lockstep
+    /// and the event still fires. A follow-up issue will migrate the diff
+    /// reader to inspect `ci_code_state`/`ci_gate_state` directly and add new
+    /// `GateBlocked`/`GateCleared` event variants.
     #[test]
-    fn diff_detects_ci_code_state_transition_to_failing() {
+    fn diff_fires_ci_failed_via_legacy_mirror_when_code_state_transitions() {
         let path = "/workspace/repo/feat-1";
         let old_pr = PrState {
             checks_state: Some("passing".to_string()),

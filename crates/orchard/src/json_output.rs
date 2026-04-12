@@ -1239,16 +1239,38 @@ mod tests {
         let json_pr = JsonPr::from(&pr_state);
         let json = serde_json::to_string_pretty(&json_pr).unwrap();
 
-        assert!(json.contains("\"ciCodeState\""), "expected ciCodeState key in: {}", json);
-        assert!(json.contains("\"ciGateState\""), "expected ciGateState key in: {}", json);
-        assert!(json.contains("\"ciChecks\""), "expected ciChecks key in: {}", json);
-        assert!(json.contains("\"checksState\""), "expected checksState key in: {}", json);
+        assert!(
+            json.contains("\"ciCodeState\""),
+            "expected ciCodeState key in: {}",
+            json
+        );
+        assert!(
+            json.contains("\"ciGateState\""),
+            "expected ciGateState key in: {}",
+            json
+        );
+        assert!(
+            json.contains("\"ciChecks\""),
+            "expected ciChecks key in: {}",
+            json
+        );
+        assert!(
+            json.contains("\"checksState\""),
+            "expected checksState key in: {}",
+            json
+        );
 
         // ciChecks must have "code" and "gate" sub-keys
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let ci_checks = &value["ciChecks"];
-        assert!(ci_checks.get("code").is_some(), "ciChecks must have 'code' key");
-        assert!(ci_checks.get("gate").is_some(), "ciChecks must have 'gate' key");
+        assert!(
+            ci_checks.get("code").is_some(),
+            "ciChecks must have 'code' key"
+        );
+        assert!(
+            ci_checks.get("gate").is_some(),
+            "ciChecks must have 'gate' key"
+        );
 
         // Must NOT emit "ignored" (reserved for follow-up issue)
         assert!(

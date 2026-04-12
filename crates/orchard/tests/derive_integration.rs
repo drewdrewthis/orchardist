@@ -385,12 +385,9 @@ fn e2e_code_green_gate_blocked_pr_surfaces_in_json_output() {
     // The orchardist's `jq` filter for "ready for Slack review request":
     //   .pr | select(.ciCodeState == "passing" and .ciGateState == "blocked")
     // matches this PR.
-    let matches_triage_filter = json_value["ciCodeState"] == "passing"
-        && json_value["ciGateState"] == "blocked";
-    assert!(
-        matches_triage_filter,
-        "triage filter must surface this PR"
-    );
+    let matches_triage_filter =
+        json_value["ciCodeState"] == "passing" && json_value["ciGateState"] == "blocked";
+    assert!(matches_triage_filter, "triage filter must surface this PR");
 }
 
 /// @e2e — task #7: a PR whose only gate check is still running (pending) must
@@ -443,8 +440,8 @@ fn e2e_pending_gate_is_not_surfaced_by_blocked_filter() {
 
     // The orchardist's triage filter requires `ciGateState == "blocked"` — this
     // PR must NOT match, because the gate is still running.
-    let matches_triage_filter = json_value["ciCodeState"] == "passing"
-        && json_value["ciGateState"] == "blocked";
+    let matches_triage_filter =
+        json_value["ciCodeState"] == "passing" && json_value["ciGateState"] == "blocked";
     assert!(
         !matches_triage_filter,
         "a pending-gate PR must not be surfaced by the blocked filter"

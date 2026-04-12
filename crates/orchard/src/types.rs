@@ -190,9 +190,8 @@ pub fn resolve_pr_status(pr: &PrInfo) -> PrStatus {
     // A pending gate (but code passing) should surface as PendingCi rather than
     // Failing. We reuse PendingCi to avoid a cascade of enum-variant changes
     // across every match on PrStatus (icons, labels, TUI rendering).
-    let is_gate_pending = pr.ci_gate_state.as_deref() == Some("pending")
-        && !is_code_failing
-        && !is_code_pending;
+    let is_gate_pending =
+        pr.ci_gate_state.as_deref() == Some("pending") && !is_code_failing && !is_code_pending;
 
     if is_code_failing {
         return PrStatus::Failing;

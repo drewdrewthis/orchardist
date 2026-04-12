@@ -1268,7 +1268,10 @@ mod tests {
         let cfg = load_from_path(&path);
 
         let matcher = GateMatcher::new(&cfg.ci_gate_patterns);
-        assert_eq!(classify_check("security-review", &matcher), CheckBucket::Gate);
+        assert_eq!(
+            classify_check("security-review", &matcher),
+            CheckBucket::Gate
+        );
         assert_eq!(classify_check("test-unit", &matcher), CheckBucket::Code);
     }
 }

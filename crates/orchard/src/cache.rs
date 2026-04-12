@@ -657,8 +657,8 @@ mod tests {
             "unresolved_threads": 0
         }"#;
 
-        let pr: CachedPr = serde_json::from_str(json)
-            .expect("old CachedPr format must deserialize without error");
+        let pr: CachedPr =
+            serde_json::from_str(json).expect("old CachedPr format must deserialize without error");
 
         assert_eq!(pr.number, 42);
         assert_eq!(pr.checks_state.as_deref(), Some("passing"));

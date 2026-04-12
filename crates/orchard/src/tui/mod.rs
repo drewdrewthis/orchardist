@@ -2130,6 +2130,7 @@ pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelecti
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo as DPrInfo, WorktreeRow};
@@ -2883,7 +2884,7 @@ mod tests {
                 state: None,
                 review_decision: None,
                 checks_state: Some("failing".to_string()),
-                ci_code_state: None,
+                ci_code_state: Some("failing".to_string()),
                 ci_gate_state: None,
                 ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,

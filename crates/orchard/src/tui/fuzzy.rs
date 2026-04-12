@@ -120,10 +120,14 @@ fn pr_status_haystack(row: &WorktreeRow) -> String {
     if pr.unresolved_threads > 0 {
         return format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads);
     }
-    if pr.checks_state.as_deref() == Some("failing") {
+    // Prefer the split `ci_code_state` introduced in #218. A code-green
+    // gate-blocked PR (e.g. waiting on `check-approval-or-label`) intentionally
+    // does NOT surface as "failing" here — that's the regression this
+    // feature fixes. A future PR will add a dedicated "gate blocked" label.
+    if pr.ci_code_state.as_deref() == Some("failing") {
         return format!("{}\u{2716} failing", prefix);
     }
-    if pr.checks_state.as_deref() == Some("pending") {
+    if pr.ci_code_state.as_deref() == Some("pending") {
         return format!("{}\u{25d0} pending CI", prefix);
     }
     format!("{}\u{25cb} needs review", prefix)
@@ -391,6 +395,7 @@ pub fn truncate_spans_left(spans: Vec<Span<'static>>, max_width: usize) -> Vec<S
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
@@ -509,7 +514,7 @@ mod tests {
                 state: None,
                 review_decision: None,
                 checks_state: Some("failing".to_string()),
-                ci_code_state: None,
+                ci_code_state: Some("failing".to_string()),
                 ci_gate_state: None,
                 ci_checks: crate::ci_state::CiChecks::default(),
                 has_conflicts: false,

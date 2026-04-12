@@ -111,6 +111,7 @@ pub struct PrInfo {
     ///
     /// Deprecated in favour of [`PrInfo::ci_code_state`]. Retained for one release
     /// so downstream consumers are not broken. Will be removed in a future version.
+    #[deprecated(note = "Use ci_code_state; this field is retained for one release")]
     pub checks_state: Option<String>,
     /// Rollup state for code CI checks only: "passing", "failing", "pending", or None.
     pub ci_code_state: Option<String>,
@@ -280,6 +281,9 @@ pub fn derive_all_repos(
 // ---------------------------------------------------------------------------
 
 fn pr_info_from(pr: &CachedPr) -> PrInfo {
+    // Writing the deprecated legacy `checks_state` field is the intended
+    // backcompat bridge for one release — suppressed here with a local allow.
+    #[allow(deprecated)]
     PrInfo {
         number: pr.number,
         branch: pr.branch.clone(),
@@ -552,6 +556,7 @@ fn is_ready_to_merge(pr: &PrInfo) -> bool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)] // PrInfo.checks_state — fixtures still populate the legacy field for now
 mod tests {
     use super::*;
     use crate::cache::{CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
