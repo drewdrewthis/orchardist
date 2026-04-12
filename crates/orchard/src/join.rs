@@ -73,6 +73,11 @@ pub fn derive_worktree_rows(
         let issue_title = linked_issue.map(|i| i.title.clone());
         let issue_state = linked_issue.map(|i| i.state.clone());
         let issue_labels = linked_issue.map(|i| i.labels.clone()).unwrap_or_default();
+        let issue_assignees = linked_issue.map(|i| i.assignees.clone()).unwrap_or_default();
+        let issue_created_at = linked_issue.and_then(|i| i.created_at.clone());
+        let issue_blocked_by = linked_issue.map(|i| i.blocked_by.clone()).unwrap_or_default();
+        let issue_sub_issues = linked_issue.map(|i| i.sub_issues.clone()).unwrap_or_default();
+        let issue_parent = linked_issue.and_then(|i| i.parent);
 
         let is_main_worktree =
             is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));
@@ -94,6 +99,14 @@ pub fn derive_worktree_rows(
             issue_title,
             issue_state,
             issue_labels,
+            issue_assignees,
+            issue_created_at,
+            issue_blocked_by,
+            issue_sub_issues,
+            issue_parent,
+            worktree_ahead: wt.ahead,
+            worktree_behind: wt.behind,
+            worktree_last_commit_at: wt.last_commit_at.clone(),
             pr: pr_info,
             sessions: session_infos,
             display_group,
@@ -145,6 +158,11 @@ pub(crate) fn pr_info_from(pr: &CachedPr) -> PrInfo {
         number: pr.number,
         branch: pr.branch.clone(),
         state: Some(pr.state.clone()),
+        title: pr.title.clone(),
+        is_draft: pr.is_draft,
+        author: pr.author.clone(),
+        requested_reviewers: pr.requested_reviewers.clone(),
+        reviews: pr.reviews.clone(),
         review_decision: pr.review_decision.clone(),
         checks_state: pr.checks_state.clone(),
         ci_code_state: pr.ci_code_state.clone(),
@@ -153,6 +171,11 @@ pub(crate) fn pr_info_from(pr: &CachedPr) -> PrInfo {
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
         labels: pr.labels.clone(),
+        additions: pr.additions,
+        deletions: pr.deletions,
+        created_at: pr.created_at.clone(),
+        updated_at: pr.updated_at.clone(),
+        last_commit_pushed_at: pr.last_commit_pushed_at.clone(),
     }
 }
 
@@ -194,6 +217,8 @@ pub(crate) fn enrich_session(
                 claude,
                 windows,
                 panes,
+                started_at: session.created_at,
+                last_activity_at: session.last_activity_at,
             };
         }
     }
@@ -283,6 +308,8 @@ pub(crate) fn enrich_session_from_scraping(
         claude,
         windows,
         panes,
+        started_at: session.created_at,
+        last_activity_at: session.last_activity_at,
     }
 }
 

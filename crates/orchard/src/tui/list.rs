@@ -2238,6 +2238,14 @@ mod tests {
             issue_title: Some(format!("Test task {}", issue_number)),
             issue_state: None,
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
             pr: None,
             sessions: vec![],
             display_group: group,
@@ -2255,6 +2263,8 @@ mod tests {
             claude: None,
             windows: vec![],
             panes: vec![],
+            started_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -2361,6 +2371,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
@@ -2412,6 +2423,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -2457,6 +2470,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2486,6 +2501,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2512,6 +2528,7 @@ mod tests {
                 has_conflicts: true,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2538,6 +2555,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 3,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2565,6 +2583,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
@@ -2639,6 +2658,8 @@ mod tests {
             claude,
             windows: vec![],
             panes: vec![],
+            started_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -2705,6 +2726,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::Other)
         };
@@ -2741,6 +2763,8 @@ mod tests {
                     }),
                     windows: vec![],
                     panes: vec![],
+                    started_at: None,
+                    last_activity_at: None,
                 },
                 EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -2767,6 +2791,8 @@ mod tests {
                     }),
                     windows: vec![],
                     panes: vec![],
+                    started_at: None,
+                    last_activity_at: None,
                 },
             ],
             ..make_task_row(1, DisplayGroup::NeedsAttention)
@@ -2840,6 +2866,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..PrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };

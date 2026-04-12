@@ -149,6 +149,8 @@ fn build_standalone_sessions(
                 })
                 .unwrap_or_default();
 
+            let started_at = live.and_then(|s| s.created_at);
+            let last_activity_at = live.and_then(|s| s.last_activity_at);
             StandaloneSessionRow {
                 session: EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -159,6 +161,8 @@ fn build_standalone_sessions(
                     claude,
                     windows,
                     panes,
+                    started_at,
+                    last_activity_at,
                 },
                 config: cfg.clone(),
             }
@@ -221,9 +225,21 @@ pub fn build_state_with_hosts(
         .repos
         .iter()
         .filter_map(|r| {
-            repo_map.remove(&r.slug).map(|worktrees| RepoState {
-                slug: r.slug.clone(),
-                worktrees,
+            repo_map.remove(&r.slug).map(|worktrees| {
+                // Read repo meta (default branch, main CI state) from cache.
+                let meta = cache::read_cache::<cache::CachedRepoMeta>(&cache::cache_path(
+                    r.owner(),
+                    r.repo_name(),
+                    "repo_meta",
+                ))
+                .entries;
+                let repo_meta = meta.into_iter().next();
+                RepoState {
+                    slug: r.slug.clone(),
+                    worktrees,
+                    default_branch: repo_meta.as_ref().and_then(|m| m.default_branch.clone()),
+                    main_ci_state: repo_meta.as_ref().and_then(|m| m.main_ci_state.clone()),
+                }
             })
         })
         .collect();

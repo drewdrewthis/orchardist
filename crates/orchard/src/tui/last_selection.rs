@@ -264,6 +264,8 @@ mod tests {
                 claude: None,
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             },
             config: StandaloneConfig {
                 name: name.to_string(),
@@ -285,10 +287,18 @@ mod tests {
             issue_title: Some(format!("Test task {issue_number}")),
             issue_state: None,
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
             pr: None,
             sessions: vec![],
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
         }
     }
 

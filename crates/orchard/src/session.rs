@@ -355,6 +355,10 @@ pub struct EnrichedSession {
     /// Derived from `windows` — all panes in window order concatenated.
     /// Preserved for backward compatibility; use `windows` for hierarchy-aware code.
     pub panes: Vec<PaneInfo>,
+    /// Unix timestamp when the tmux session was created.
+    pub started_at: Option<u64>,
+    /// Unix timestamp of the last activity in this session.
+    pub last_activity_at: Option<u64>,
 }
 
 impl ClaudeSessionInfo {

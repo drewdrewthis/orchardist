@@ -91,6 +91,16 @@ pub struct PrInfo {
     pub branch: String,
     /// PR state: "OPEN", "CLOSED", or "MERGED".
     pub state: Option<String>,
+    /// PR title.
+    pub title: Option<String>,
+    /// Whether the PR is a draft.
+    pub is_draft: Option<bool>,
+    /// GitHub login of the PR author.
+    pub author: Option<String>,
+    /// GitHub logins of requested reviewers.
+    pub requested_reviewers: Vec<String>,
+    /// Reviews submitted on this PR.
+    pub reviews: Vec<crate::cache::CachedReview>,
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
     /// Aggregate CI checks state (legacy union field).
@@ -111,6 +121,16 @@ pub struct PrInfo {
     pub unresolved_threads: u32,
     /// Labels applied to the PR.
     pub labels: Vec<String>,
+    /// Number of lines added.
+    pub additions: Option<u32>,
+    /// Number of lines deleted.
+    pub deletions: Option<u32>,
+    /// ISO 8601 timestamp when the PR was created.
+    pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the PR was last updated.
+    pub updated_at: Option<String>,
+    /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
+    pub last_commit_pushed_at: Option<String>,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -135,6 +155,22 @@ pub struct WorktreeRow {
     /// Labels on the linked issue, if any. Empty when no issue is linked or
     /// the issue has no labels.
     pub issue_labels: Vec<String>,
+    /// Assignees of the linked issue, if any.
+    pub issue_assignees: Vec<String>,
+    /// ISO 8601 timestamp when the linked issue was created, if any.
+    pub issue_created_at: Option<String>,
+    /// Issue numbers blocking the linked issue, if any.
+    pub issue_blocked_by: Vec<u32>,
+    /// Sub-issues of the linked issue, if any.
+    pub issue_sub_issues: Vec<crate::cache::CachedSubIssue>,
+    /// Parent issue number of the linked issue, if any.
+    pub issue_parent: Option<u32>,
+    /// Commits ahead of upstream for this worktree, if available.
+    pub worktree_ahead: Option<u32>,
+    /// Commits behind upstream for this worktree, if available.
+    pub worktree_behind: Option<u32>,
+    /// ISO 8601 timestamp of the last commit in this worktree, if available.
+    pub worktree_last_commit_at: Option<String>,
     /// Linked pull request, if one exists for this branch.
     pub pr: Option<PrInfo>,
     /// Active tmux sessions associated with this worktree path.
@@ -143,6 +179,43 @@ pub struct WorktreeRow {
     pub display_group: DisplayGroup,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Default impls (for test ergonomics — new-field defaults)
+// ---------------------------------------------------------------------------
+
+#[allow(deprecated)]
+impl Default for PrInfo {
+    /// Returns a `PrInfo` with every new enrichment field set to its empty/absent default.
+    ///
+    /// Intended for test fixtures that set only the fields under test; use struct update
+    /// syntax (`PrInfo { field: value, ..PrInfo::default() }`) to override specific fields.
+    fn default() -> Self {
+        Self {
+            number: 0,
+            branch: String::new(),
+            state: None,
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            review_decision: None,
+            checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: crate::ci_state::CiChecks::default(),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            labels: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

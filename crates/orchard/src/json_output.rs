@@ -43,8 +43,24 @@ pub struct JsonOutput {
 pub struct JsonRepo {
     /// Repository slug in `owner/repo` format.
     pub slug: String,
+    /// Default branch name (e.g. `main`), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    /// Rollup CI state of the default branch, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_ci_state: Option<String>,
     /// All worktrees belonging to this repository.
     pub worktrees: Vec<JsonWorktree>,
+}
+
+/// Commit distance from the upstream branch.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonAheadBehind {
+    /// Commits ahead of upstream.
+    pub ahead: u32,
+    /// Commits behind upstream.
+    pub behind: u32,
 }
 
 /// A single worktree in JSON output.
@@ -59,6 +75,12 @@ pub struct JsonWorktree {
     pub branch: String,
     /// Remote SSH host this worktree lives on, or `null` for local.
     pub host: Option<String>,
+    /// Commit distance from upstream, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead_behind: Option<JsonAheadBehind>,
+    /// ISO 8601 timestamp of the most recent commit, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit_at: Option<String>,
     /// Linked GitHub issue, if any.
     pub issue: Option<JsonIssue>,
     /// Linked pull request, if any.
@@ -69,6 +91,18 @@ pub struct JsonWorktree {
     pub display_group: String,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+}
+
+/// A child issue nested under a parent in JSON output.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonSubIssue {
+    /// GitHub issue number.
+    pub number: u32,
+    /// Sub-issue title.
+    pub title: String,
+    /// Sub-issue state.
+    pub state: String,
 }
 
 /// Issue information in JSON output.
@@ -83,9 +117,34 @@ pub struct JsonIssue {
     pub title: String,
     /// Issue state: "open", "closed", or "completed".
     pub state: String,
+    /// Assignees of this issue.
+    pub assignees: Vec<String>,
+    /// ISO 8601 timestamp when the issue was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Issue numbers that block this issue.
+    pub blocked_by: Vec<u32>,
+    /// Child issues of this issue.
+    pub sub_issues: Vec<JsonSubIssue>,
+    /// Parent issue number, if this is a sub-issue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
     /// Workflow phase derived from labels (e.g. `"in-progress"`, `"blocked"`).
     /// Always present: `null` when no phase label is set.
     pub phase: Option<&'static str>,
+}
+
+/// A single review on a pull request in JSON output.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonReview {
+    /// GitHub login of the reviewer.
+    pub author: String,
+    /// Review state (e.g. `APPROVED`, `CHANGES_REQUESTED`).
+    pub state: String,
+    /// ISO 8601 timestamp when the review was submitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted_at: Option<String>,
 }
 
 /// Pull request information in JSON output.
@@ -99,6 +158,19 @@ pub struct JsonPr {
     pub number: u32,
     /// Head branch name for this PR.
     pub branch: String,
+    /// PR title, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the PR is a draft.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
+    /// GitHub login of the PR author.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Logins of users and teams requested as reviewers.
+    pub requested_reviewers: Vec<String>,
+    /// Reviews submitted on this PR.
+    pub reviews: Vec<JsonReview>,
     /// PR state: "OPEN", "CLOSED", or "MERGED".
     pub state: Option<String>,
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
@@ -128,6 +200,21 @@ pub struct JsonPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Lines added by this PR.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    /// Lines deleted by this PR.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    /// ISO 8601 timestamp when the PR was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the PR was last updated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// ISO 8601 timestamp of when the last commit was pushed to this PR.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit_pushed_at: Option<String>,
     /// Workflow phase derived from labels (e.g. `"pr-ready"`, `"blocked"`).
     /// Always present: `null` when no phase label is set.
     pub phase: Option<&'static str>,
@@ -146,6 +233,12 @@ pub struct JsonSession {
     pub host: String,
     /// Session status: "running" or "dead".
     pub status: String,
+    /// ISO 8601 timestamp when the session was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// ISO 8601 timestamp of the last activity in this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
     /// Claude enrichment data, or `null` when no Claude process is active.
     pub claude: Option<JsonClaudeInfo>,
     /// Window hierarchy for this session (window → pane structure).
@@ -250,6 +343,16 @@ pub struct JsonHostState {
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
+/// Converts a Unix epoch seconds timestamp to an ISO 8601 string.
+///
+/// Returns `None` when the input is `None` or the conversion fails.
+fn unix_to_iso8601(ts: Option<u64>) -> Option<String> {
+    use chrono::{DateTime, Utc};
+    let secs = ts?;
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0)?;
+    Some(dt.to_rfc3339())
+}
+
 /// Computes elapsed seconds since `session_start_ts` (unix epoch seconds) at
 /// the time of the call. Returns `None` when `session_start_ts` is absent or
 /// the clock goes backwards.
@@ -331,6 +434,19 @@ impl From<&IssueInfo> for JsonIssue {
             number: i.number,
             title: i.title.clone(),
             state: i.state.clone(),
+            assignees: i.assignees.clone(),
+            created_at: i.created_at.clone(),
+            blocked_by: i.blocked_by.clone(),
+            sub_issues: i
+                .sub_issues
+                .iter()
+                .map(|s| JsonSubIssue {
+                    number: s.number,
+                    title: s.title.clone(),
+                    state: s.state.clone(),
+                })
+                .collect(),
+            parent: i.parent,
             phase: phase_from_labels(&i.labels),
         }
     }
@@ -348,6 +464,19 @@ impl From<&PrState> for JsonPr {
         Self {
             number: pr.number,
             branch: pr.branch.clone(),
+            title: pr.title.clone(),
+            is_draft: pr.is_draft,
+            author: pr.author.clone(),
+            requested_reviewers: pr.requested_reviewers.clone(),
+            reviews: pr
+                .reviews
+                .iter()
+                .map(|r| JsonReview {
+                    author: r.author.clone(),
+                    state: r.state.clone(),
+                    submitted_at: r.submitted_at.clone(),
+                })
+                .collect(),
             state: pr.state.clone(),
             review_decision: pr.review_decision.clone(),
             checks_state: pr.checks_state.clone(),
@@ -356,6 +485,11 @@ impl From<&PrState> for JsonPr {
             ci_checks: pr.ci_checks.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            additions: pr.additions,
+            deletions: pr.deletions,
+            created_at: pr.created_at.clone(),
+            updated_at: pr.updated_at.clone(),
+            last_commit_pushed_at: pr.last_commit_pushed_at.clone(),
             phase: phase_from_labels(&pr.labels),
         }
     }
@@ -395,6 +529,8 @@ impl From<&SessionState> for JsonSession {
             name: s.name.clone(),
             host,
             status: "running".to_string(),
+            started_at: unix_to_iso8601(s.started_at),
+            last_activity_at: unix_to_iso8601(s.last_activity_at),
             claude,
             windows: s.windows.iter().map(Into::into).collect(),
         }
@@ -404,10 +540,16 @@ impl From<&SessionState> for JsonSession {
 impl From<&WorktreeState> for JsonWorktree {
     /// Converts an internal `WorktreeState` to JSON output format, serializing the display group to a string.
     fn from(ws: &WorktreeState) -> Self {
+        let ahead_behind = ws.ahead_behind.map(|(ahead, behind)| JsonAheadBehind {
+            ahead,
+            behind,
+        });
         Self {
             path: ws.path.clone(),
             branch: ws.branch.clone(),
             host: ws.host.clone(),
+            ahead_behind,
+            last_commit_at: ws.last_commit_at.clone(),
             issue: ws.issue.as_ref().map(Into::into),
             pr: ws.pr.as_ref().map(Into::into),
             sessions: ws.sessions.iter().map(Into::into).collect(),
@@ -422,6 +564,8 @@ impl From<&RepoState> for JsonRepo {
     fn from(r: &RepoState) -> Self {
         Self {
             slug: r.slug.clone(),
+            default_branch: r.default_branch.clone(),
+            main_ci_state: r.main_ci_state.clone(),
             worktrees: r.worktrees.iter().map(Into::into).collect(),
         }
     }
@@ -463,6 +607,8 @@ impl From<&StandaloneSessionRow> for JsonSession {
             name: row.session.tmux.name.clone(),
             host,
             status: status.to_string(),
+            started_at: unix_to_iso8601(row.session.started_at),
+            last_activity_at: unix_to_iso8601(row.session.last_activity_at),
             claude,
             windows,
         }
@@ -515,6 +661,8 @@ mod tests {
             sessions: vec![],
             display_group,
             is_main_worktree: false,
+            ahead_behind: None,
+            last_commit_at: None,
         }
     }
 
@@ -579,6 +727,8 @@ mod tests {
             repos: vec![RepoState {
                 slug: "owner/repo".to_string(),
                 worktrees: vec![],
+                default_branch: None,
+                main_ci_state: None,
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
@@ -599,6 +749,8 @@ mod tests {
             repos: vec![RepoState {
                 slug: "owner/repo".to_string(),
                 worktrees: vec![make_worktree(DisplayGroup::RepoMain)],
+                default_branch: None,
+                main_ci_state: None,
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
@@ -639,6 +791,8 @@ mod tests {
                 turn_count: None,
             }),
             windows: vec![],
+            started_at: None,
+            last_activity_at: None,
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.host, "local");
@@ -654,6 +808,8 @@ mod tests {
             host: None,
             claude: None,
             windows: vec![],
+            started_at: None,
+            last_activity_at: None,
         };
         let js = JsonSession::from(&session);
         assert!(js.claude.is_none());
@@ -668,6 +824,8 @@ mod tests {
             name: "test-session".to_string(),
             host: None,
             claude: None,
+            started_at: None,
+            last_activity_at: None,
             windows: vec![
                 WindowState {
                     index: 0,
@@ -752,6 +910,8 @@ mod tests {
             name: "single-window".to_string(),
             host: None,
             claude: None,
+            started_at: None,
+            last_activity_at: None,
             windows: vec![WindowState {
                 index: 0,
                 name: "main".to_string(),
@@ -771,6 +931,11 @@ mod tests {
             title: title.to_string(),
             state: state.to_string(),
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 
@@ -781,6 +946,11 @@ mod tests {
             number,
             branch: branch.to_string(),
             state: Some("open".to_string()),
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
             review_decision: None,
             checks_state: None,
             ci_code_state: None,
@@ -789,6 +959,11 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 
@@ -896,6 +1071,8 @@ mod tests {
             host: None,
             claude: Some(enrichment),
             windows: vec![],
+            started_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -1108,6 +1285,8 @@ mod tests {
             host: None,
             claude: None,
             windows: vec![],
+            started_at: None,
+            last_activity_at: None,
         };
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
         assert!(
@@ -1295,6 +1474,11 @@ mod tests {
             number: 1,
             branch: "feat/branch".to_string(),
             state: Some("OPEN".to_string()),
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
             review_decision: None,
             checks_state: checks_state.map(|s| s.to_string()),
             ci_code_state: ci_code_state.map(|s| s.to_string()),
@@ -1303,6 +1487,11 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             labels: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 

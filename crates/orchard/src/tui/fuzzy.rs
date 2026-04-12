@@ -411,10 +411,18 @@ mod tests {
             issue_title: Some("Fix Azure integration bug".to_string()),
             issue_state: None,
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
             pr: None,
             sessions: vec![],
             display_group: DisplayGroup::NeedsAttention,
             is_main_worktree: false,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
         }
     }
 
@@ -428,6 +436,8 @@ mod tests {
             claude: None,
             windows: vec![],
             panes: vec![],
+            started_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -485,15 +495,8 @@ mod tests {
             pr: Some(PrInfo {
                 number: 99,
                 branch: "feat/issue-42".to_string(),
-                state: None,
                 review_decision: Some("approved".to_string()),
-                checks_state: None,
-                ci_code_state: None,
-                ci_gate_state: None,
-                ci_checks: crate::ci_state::CiChecks::default(),
-                has_conflicts: false,
-                unresolved_threads: 0,
-                labels: vec![],
+                ..PrInfo::default()
             }),
             ..base_row()
         };
@@ -511,15 +514,9 @@ mod tests {
             pr: Some(PrInfo {
                 number: 12,
                 branch: "feat/issue-42".to_string(),
-                state: None,
-                review_decision: None,
                 checks_state: Some("failing".to_string()),
                 ci_code_state: Some("failing".to_string()),
-                ci_gate_state: None,
-                ci_checks: crate::ci_state::CiChecks::default(),
-                has_conflicts: false,
-                unresolved_threads: 0,
-                labels: vec![],
+                ..PrInfo::default()
             }),
             ..base_row()
         };
@@ -549,14 +546,7 @@ mod tests {
                 number: 7,
                 branch: "feat/issue-42".to_string(),
                 state: Some("merged".to_string()),
-                review_decision: None,
-                checks_state: None,
-                ci_code_state: None,
-                ci_gate_state: None,
-                ci_checks: crate::ci_state::CiChecks::default(),
-                has_conflicts: false,
-                unresolved_threads: 0,
-                labels: vec![],
+                ..PrInfo::default()
             }),
             ..base_row()
         };

@@ -301,6 +301,8 @@ mod tests {
             sessions: vec![],
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
+            ahead_behind: None,
+            last_commit_at: None,
         }
     }
 
@@ -326,6 +328,8 @@ mod tests {
                 turn_count: None,
             }),
             windows: vec![],
+            started_at: None,
+            last_activity_at: None,
         }];
         wt
     }
@@ -340,6 +344,8 @@ mod tests {
             repos: vec![RepoState {
                 slug: "test/repo".to_string(),
                 worktrees,
+                default_branch: None,
+                main_ci_state: None,
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
@@ -351,6 +357,11 @@ mod tests {
             number,
             branch: "feat/branch".to_string(),
             state: Some("OPEN".to_string()),
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
             review_decision: None,
             checks_state: None,
             ci_code_state: None,
@@ -359,6 +370,11 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             labels: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 
@@ -688,6 +704,8 @@ mod tests {
                     claude: None,
                     windows: vec![],
                     panes: vec![],
+                    started_at: None,
+                    last_activity_at: None,
                 },
                 config: StandaloneConfig {
                     name: "orchardist".to_string(),
@@ -727,6 +745,8 @@ mod tests {
                     claude: None,
                     windows: vec![],
                     panes: vec![],
+                    started_at: None,
+                    last_activity_at: None,
                 },
                 config: StandaloneConfig {
                     name: "orchardist".to_string(),

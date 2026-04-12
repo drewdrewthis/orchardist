@@ -2156,6 +2156,14 @@ mod tests {
             issue_title: Some(format!("Test task {}", issue_number)),
             issue_state: None,
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
             pr: None,
             sessions: vec![],
             display_group: group,
@@ -2288,6 +2296,7 @@ mod tests {
                     has_conflicts: false,
                     unresolved_threads: 0,
                     labels: vec![],
+                    ..DPrInfo::default()
                 }),
                 ..make_task_row(1, DisplayGroup::Other)
             },
@@ -2322,6 +2331,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -2355,6 +2365,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -2597,6 +2608,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_task_row(42, DisplayGroup::ReadyToMerge)
         };
@@ -2619,6 +2631,8 @@ mod tests {
                 claude: None,
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
@@ -2695,6 +2709,14 @@ mod tests {
             issue_title: None,
             issue_state: None,
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
             pr: None,
             sessions: vec![],
             display_group: group,
@@ -2767,6 +2789,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
         };
@@ -2796,6 +2819,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_worktree_row("feat/claude-active", DisplayGroup::ClaudeWorking)
         };
@@ -2812,6 +2837,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_worktree_row("feat/approved", DisplayGroup::ReadyToMerge)
         };
@@ -2871,6 +2897,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
         };
@@ -2902,6 +2930,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_worktree_row("feat/branch", DisplayGroup::NeedsAttention)
         };
@@ -2945,6 +2974,8 @@ mod tests {
                 claude: None,
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
@@ -3363,6 +3394,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_worktree_row("main", DisplayGroup::RepoMain)
         };
@@ -3379,6 +3412,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 2,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3405,6 +3439,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row_with_title(53, "TEA pattern refactor", DisplayGroup::NeedsAttention)
         };
@@ -3421,6 +3457,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3447,6 +3484,8 @@ mod tests {
                 }),
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row_with_title(
                 47,
@@ -3467,6 +3506,7 @@ mod tests {
                 has_conflicts: false,
                 unresolved_threads: 0,
                 labels: vec![],
+                ..DPrInfo::default()
             }),
             ..make_task_row_with_title(54, "Add Theme struct", DisplayGroup::ReadyToMerge)
         };
@@ -3714,6 +3754,8 @@ mod tests {
                     claude: None,
                     windows: vec![],
                     panes: vec![],
+                    started_at: None,
+                    last_activity_at: None,
                 },
             });
 
@@ -3969,6 +4011,8 @@ mod tests {
                 claude: None,
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             },
         }
     }
@@ -3983,6 +4027,14 @@ mod tests {
             issue_title: None,
             issue_state: None,
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
             pr: None,
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3993,6 +4045,8 @@ mod tests {
                 claude: None,
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             }],
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
@@ -4128,6 +4182,8 @@ mod tests {
                 claude: None,
                 windows,
                 panes,
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row(issue, DisplayGroup::Other)
         }
@@ -4169,6 +4225,8 @@ mod tests {
                 claude: None,
                 windows,
                 panes: all_panes,
+                started_at: None,
+                last_activity_at: None,
             }],
             ..make_task_row(issue, DisplayGroup::Other)
         }
@@ -4572,6 +4630,8 @@ mod tests {
                 claude: None,
                 windows: vec![],
                 panes: vec![],
+                started_at: None,
+                last_activity_at: None,
             },
             config: StandaloneConfig {
                 name: name.to_string(),
