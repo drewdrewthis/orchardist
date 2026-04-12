@@ -61,7 +61,7 @@ pub struct ClaudeStateFile {
 }
 
 /// Parsed Claude state for use in derive logic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeState {
     /// Claude is actively executing a tool or generating a response.
@@ -116,6 +116,68 @@ pub fn state_for_session<'a>(
     tmux_session: &str,
 ) -> Option<&'a ClaudeStateFile> {
     states.iter().find(|s| s.tmux_session == tmux_session)
+}
+
+/// Telemetry data written by the Claude Code status line script.
+///
+/// Read from `$TMPDIR/orchard-statusline-<session>.json`. Merged with
+/// `ClaudeStateFile` (hook data) on read — the two files are separate
+/// channels with no coordination protocol.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StatusLineFile {
+    /// The tmux session name this status line belongs to.
+    pub tmux_session: String,
+    /// Context window usage percentage (0.0 to 100.0).
+    #[serde(default)]
+    pub context_window_pct: Option<f64>,
+    /// Total cost in USD for this session.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    /// Total duration of the session in milliseconds.
+    #[serde(default)]
+    pub total_duration_ms: Option<u64>,
+    /// 5-hour rate limit usage percentage.
+    #[serde(default)]
+    pub rate_limit_five_hour_used_pct: Option<f64>,
+    /// 5-hour rate limit reset timestamp (ISO 8601).
+    #[serde(default)]
+    pub rate_limit_five_hour_resets_at: Option<String>,
+    /// 7-day rate limit usage percentage.
+    #[serde(default)]
+    pub rate_limit_seven_day_used_pct: Option<f64>,
+    /// 7-day rate limit reset timestamp (ISO 8601).
+    #[serde(default)]
+    pub rate_limit_seven_day_resets_at: Option<String>,
+}
+
+/// Reads all orchard status line telemetry files from the given directory.
+///
+/// Only files matching `{dir}/orchard-statusline-*.json` are read.
+/// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
+pub fn read_all_statusline_files(dir: &Path) -> Vec<StatusLineFile> {
+    let pattern = format!("{}/orchard-statusline-*.json", dir.display());
+    let mut results = Vec::new();
+
+    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
+        if path.to_string_lossy().contains(".tmp.") {
+            continue;
+        }
+        if let Ok(data) = std::fs::read(&path)
+            && let Ok(sl) = serde_json::from_slice::<StatusLineFile>(&data)
+        {
+            results.push(sl);
+        }
+    }
+
+    results
+}
+
+/// Finds the status line telemetry for a specific tmux session name.
+pub fn statusline_for_session<'a>(
+    files: &'a [StatusLineFile],
+    tmux_session: &str,
+) -> Option<&'a StatusLineFile> {
+    files.iter().find(|s| s.tmux_session == tmux_session)
 }
 
 /// Parses concatenated Claude state JSON from batched SSH output.
@@ -259,6 +321,96 @@ mod tests {
         // but we can verify serde handles bad data gracefully
         let result = serde_json::from_slice::<ClaudeStateFile>(b"not json");
         assert!(result.is_err());
+    }
+
+    // -- StatusLineFile / read_all_statusline_files / statusline_for_session ---
+
+    fn make_statusline_file(tmux_session: &str) -> StatusLineFile {
+        StatusLineFile {
+            tmux_session: tmux_session.to_string(),
+            context_window_pct: Some(42.5),
+            cost_usd: Some(0.25),
+            total_duration_ms: Some(60000),
+            rate_limit_five_hour_used_pct: Some(10.0),
+            rate_limit_five_hour_resets_at: Some("2026-04-13T00:00:00Z".to_string()),
+            rate_limit_seven_day_used_pct: Some(5.0),
+            rate_limit_seven_day_resets_at: Some("2026-04-18T00:00:00Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn read_all_statusline_files_reads_matching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sl = make_statusline_file("repo_47_claude");
+        let json = serde_json::to_string(&sl).unwrap();
+        std::fs::write(dir.path().join("orchard-statusline-abc.json"), &json).unwrap();
+
+        let results = read_all_statusline_files(dir.path());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tmux_session, "repo_47_claude");
+        assert_eq!(results[0].context_window_pct, Some(42.5));
+        assert_eq!(results[0].cost_usd, Some(0.25));
+    }
+
+    #[test]
+    fn read_all_statusline_files_skips_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("orchard-statusline-bad.json"), b"not json").unwrap();
+        let results = read_all_statusline_files(dir.path());
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn read_all_statusline_files_skips_tmp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sl = make_statusline_file("repo_47_claude");
+        let json = serde_json::to_string(&sl).unwrap();
+        std::fs::write(dir.path().join("orchard-statusline-.tmp.abc.json"), &json).unwrap();
+        let results = read_all_statusline_files(dir.path());
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn read_all_statusline_files_non_matching_files_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let sl = make_statusline_file("repo_47_claude");
+        let json = serde_json::to_string(&sl).unwrap();
+        // Write a file with a different prefix — should not be picked up.
+        std::fs::write(dir.path().join("orchard-claude-abc.json"), &json).unwrap();
+        let results = read_all_statusline_files(dir.path());
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn statusline_for_session_finds_matching_entry() {
+        let files = vec![
+            make_statusline_file("repo_47_claude"),
+            make_statusline_file("repo_48_main"),
+        ];
+        let found = statusline_for_session(&files, "repo_47_claude");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().tmux_session, "repo_47_claude");
+    }
+
+    #[test]
+    fn statusline_for_session_returns_none_when_not_found() {
+        let files = vec![make_statusline_file("repo_48_main")];
+        let found = statusline_for_session(&files, "repo_47_claude");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn statusline_file_deserializes_with_all_optional_fields_missing() {
+        let json = r#"{"tmux_session":"repo_47"}"#;
+        let sl: StatusLineFile = serde_json::from_str(json).unwrap();
+        assert_eq!(sl.tmux_session, "repo_47");
+        assert!(sl.context_window_pct.is_none());
+        assert!(sl.cost_usd.is_none());
+        assert!(sl.total_duration_ms.is_none());
+        assert!(sl.rate_limit_five_hour_used_pct.is_none());
+        assert!(sl.rate_limit_five_hour_resets_at.is_none());
+        assert!(sl.rate_limit_seven_day_used_pct.is_none());
+        assert!(sl.rate_limit_seven_day_resets_at.is_none());
     }
 
     #[test]

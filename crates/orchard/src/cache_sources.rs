@@ -3,9 +3,13 @@
 //! Fetches issues, PRs, worktrees, and tmux sessions from their respective
 //! sources (GitHub CLI, git, SSH remotes) and writes the results to the
 //! cache files consumed by `sources::*` and `derive`.
+use std::collections::HashMap;
 use std::process::Command;
 
-use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
+use crate::cache::{
+    self, CachedIssue, CachedPr, CachedRepoMeta, CachedReview, CachedSubIssue, CachedTmuxSession,
+    CachedWorktree,
+};
 use crate::ci_state::{
     CheckInfo, CiChecks, GateMatcher, classify_check, map_check_run_conclusion,
     map_status_context_state, rollup_code_state, rollup_gate_state,
@@ -48,9 +52,176 @@ pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
                 title,
                 state,
                 labels,
+                assignees: vec![],
+                created_at: None,
+                blocked_by: vec![],
+                sub_issues: vec![],
+                parent: None,
             })
         })
         .collect()
+}
+
+/// Builds a per-issue GraphQL query using aliased `repository.issue(number:N)` fields.
+///
+/// Uses a `IssueFields` fragment to avoid repeating the field set for each alias.
+/// The `subIssues` and `parent` fields require the `GraphQL-Features: sub_issues`
+/// header to be passed to `gh api graphql`.
+///
+/// If `issue_numbers` is empty, returns a minimal stub query that only fetches
+/// the repository name (no issue aliases).
+pub fn issue_graphql_query(owner: &str, name: &str, issue_numbers: &[u32]) -> String {
+    if issue_numbers.is_empty() {
+        return format!(r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#);
+    }
+
+    let aliases: Vec<String> = issue_numbers
+        .iter()
+        .map(|n| format!(r#"    i_{n}: issue(number: {n}) {{ ...IssueFields }}"#))
+        .collect();
+
+    format!(
+        r#"query {{
+  repository(owner: "{owner}", name: "{name}") {{
+{aliases}
+  }}
+}}
+
+fragment IssueFields on Issue {{
+  number
+  title
+  state
+  labels(first: 100) {{ nodes {{ name }} }}
+  assignees(first: 20) {{ nodes {{ login }} }}
+  createdAt
+  body
+  subIssues(first: 50) {{ nodes {{ number title state }} }}
+  parent {{ number }}
+}}"#,
+        aliases = aliases.join("\n")
+    )
+}
+
+/// Extracts issue numbers that block `body` text using the blocking-reference regex.
+///
+/// Matches: "blocked by #N", "depends on #N", "waiting on #N" (case-insensitive).
+/// Does NOT match: "fixes #N", "closes #N", or bare "#N".
+fn extract_blocked_by(body: &str) -> Vec<u32> {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)(?:blocked\s+by|depends\s+on|waiting\s+on)\s+#(\d+)")
+            .expect("blocking regex is valid")
+    });
+    re.captures_iter(body)
+        .filter_map(|caps| caps[1].parse::<u32>().ok())
+        .collect()
+}
+
+/// Parses a per-issue aliased GraphQL response into `Vec<CachedIssue>`.
+///
+/// Expects shape: `{"data":{"repository":{"i_42":{...}, "i_99":{...}, ...}}}`.
+/// Iterates over all keys in `data.repository` that start with `i_`, maps each
+/// to a `CachedIssue` with enriched fields including sub-issues, parent, assignees,
+/// createdAt, and blocking references parsed from the body.
+///
+/// GraphQL returns state in uppercase (`OPEN`/`CLOSED`); this function normalizes
+/// to lowercase.
+pub fn parse_issues_graphql(json: &str) -> Vec<CachedIssue> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: failed to parse issues GraphQL JSON: {e}"
+            ));
+            return Vec::new();
+        }
+    };
+
+    let repo = match root["data"]["repository"].as_object() {
+        Some(obj) => obj,
+        None => {
+            LOG.warn("cache_sources: issues GraphQL response missing data.repository");
+            return Vec::new();
+        }
+    };
+
+    let mut issues = Vec::new();
+
+    for (key, val) in repo {
+        if !key.starts_with("i_") {
+            continue;
+        }
+
+        // A null value means the issue doesn't exist (deleted / wrong number).
+        if val.is_null() {
+            continue;
+        }
+
+        let Some(number) = val["number"].as_u64().map(|n| n as u32) else {
+            continue;
+        };
+
+        let title = val["title"].as_str().unwrap_or("").to_string();
+        let state = val["state"].as_str().unwrap_or("OPEN").to_lowercase();
+
+        let labels = val["labels"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let assignees = val["assignees"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a["login"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let created_at = val["createdAt"].as_str().map(|s| s.to_string());
+
+        let body = val["body"].as_str().unwrap_or("");
+        let blocked_by = extract_blocked_by(body);
+
+        let sub_issues = val["subIssues"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        let sub_number = s["number"].as_u64()? as u32;
+                        let sub_title = s["title"].as_str().unwrap_or("").to_string();
+                        let sub_state = s["state"].as_str().unwrap_or("OPEN").to_lowercase();
+                        Some(CachedSubIssue {
+                            number: sub_number,
+                            title: sub_title,
+                            state: sub_state,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let parent = val["parent"]["number"].as_u64().map(|n| n as u32);
+
+        issues.push(CachedIssue {
+            number,
+            title,
+            state,
+            labels,
+            assignees,
+            created_at,
+            blocked_by,
+            sub_issues,
+            parent,
+        });
+    }
+
+    issues
 }
 
 /// Parses GraphQL PR response JSON into a `Vec<CachedPr>`.
@@ -163,6 +334,16 @@ pub fn parse_prs_graphql(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
                 unresolved_threads,
                 linked_issue_state,
                 labels,
+                title: None,
+                is_draft: None,
+                author: None,
+                requested_reviewers: vec![],
+                reviews: vec![],
+                additions: None,
+                deletions: None,
+                created_at: None,
+                updated_at: None,
+                last_commit_pushed_at: None,
             })
         })
         .collect()
@@ -213,19 +394,20 @@ fn derive_ci_state_graphql(
 
     for node in context_nodes {
         let typename = node["__typename"].as_str().unwrap_or("");
-        let (name, state_opt) = match typename {
+        let (name, state_opt, details_url) = match typename {
             "CheckRun" => {
                 let name = node["name"].as_str().unwrap_or("").to_string();
                 let conclusion = node["conclusion"].as_str();
                 let status = node["status"].as_str();
                 let state = map_check_run_conclusion(conclusion, status);
-                (name, state)
+                let details_url = node["detailsUrl"].as_str().map(|s| s.to_string());
+                (name, state, details_url)
             }
             "StatusContext" => {
                 let name = node["context"].as_str().unwrap_or("").to_string();
                 let raw_state = node["state"].as_str().unwrap_or("");
                 let state = map_status_context_state(raw_state);
-                (name, state)
+                (name, state, None)
             }
             _ => continue,
         };
@@ -238,6 +420,7 @@ fn derive_ci_state_graphql(
         let check = CheckInfo {
             name: name.clone(),
             state,
+            details_url,
         };
         use crate::ci_state::CheckBucket;
         match classify_check(&name, matcher) {
@@ -308,6 +491,9 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
             is_bare,
             is_locked,
             host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
         });
     }
 
@@ -317,7 +503,12 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
 ///
-/// `sessions_output` has lines in the format `{session_name}:{session_path}`.
+/// `sessions_output` has lines in the format
+/// `{session_name}:{session_path}|{session_created}|{session_activity}`.
+/// Session path is everything between the first `:` and the first `|`;
+/// `session_created` and `session_activity` are Unix timestamps (integers)
+/// appended with `|` separators and omitted when the format string does not
+/// include them (backward-compatible: lines without `|` produce `None` for both).
 /// `panes_fn` is called with each session name and returns lines in the format
 /// `{pane_title}:{pane_current_command}`.
 /// `content_fn` is called with each session name and returns the last few lines
@@ -334,12 +525,19 @@ pub fn parse_tmux_output(
         if line.is_empty() {
             continue;
         }
-        // Format: "{session_name}:{session_path}"
+        // Format: "{session_name}:{session_path}|{session_created}|{session_activity}"
         // Session path may itself contain colons (e.g. Windows paths or
-        // absolute paths on some systems), so we split on the first colon only.
-        let Some((name, path)) = line.split_once(':') else {
+        // absolute paths on some systems), so we split on the first colon only
+        // to get name; then the remainder may contain pipe-separated timestamps.
+        let Some((name, rest)) = line.split_once(':') else {
             continue;
         };
+
+        // Split `rest` on `|` to separate path from optional timestamps.
+        let parts: Vec<&str> = rest.splitn(3, '|').collect();
+        let path = parts[0];
+        let created_at: Option<u64> = parts.get(1).and_then(|s| s.parse().ok());
+        let last_activity_at: Option<u64> = parts.get(2).and_then(|s| s.parse().ok());
 
         let pane_output = panes_fn(name);
         let parsed = parse_pane_lines(&pane_output);
@@ -354,6 +552,8 @@ pub fn parse_tmux_output(
             window_names: parsed.window_names,
             window_active: parsed.window_active,
             host: host.map(|h| h.to_string()),
+            created_at,
+            last_activity_at,
             last_output_lines,
             claude_state_raw: None, // populated after parsing remote Claude state
         });
@@ -465,25 +665,60 @@ fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<Strin
 // Public refresh functions
 // ---------------------------------------------------------------------------
 
-/// Fetches all GitHub issues for `config.slug` and writes to the issues cache.
+/// Fetches GitHub issues linked to known worktree branches for `config.slug` and
+/// writes to the issues cache.
+///
+/// Extracts issue numbers from:
+/// 1. `linked_issue` fields in the PRs cache (from `closingIssuesReferences`)
+/// 2. Branch names in the worktrees cache via `extract_issue_number()`
+///
+/// Then queries only those issues via a per-issue GraphQL query with the
+/// `GraphQL-Features: sub_issues` header to populate sub-issues and parent fields.
 ///
 /// On API failure the error is logged and the existing cache is left intact.
 pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "issues");
 
+    // Collect issue numbers from PRs cache (closingIssuesReferences).
+    let prs_path = cache::cache_path(config.owner(), config.repo_name(), "prs");
+    let prs: Vec<CachedPr> = cache::read_cache::<CachedPr>(&prs_path).entries;
+    let mut issue_numbers: std::collections::HashSet<u32> =
+        prs.iter().filter_map(|pr| pr.linked_issue).collect();
+
+    // Also collect from worktree branch names.
+    let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
+    let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
+    for wt in &worktrees {
+        if !wt.is_bare
+            && let Some(n) = crate::github::extract_issue_number(&wt.branch)
+        {
+            issue_numbers.insert(n);
+        }
+    }
+
+    if issue_numbers.is_empty() {
+        LOG.info(&format!(
+            "cache_sources: refresh_issues({}): no linked issues found, skipping",
+            config.slug
+        ));
+        cache::write_cache_if_nonempty(&path, &Vec::<CachedIssue>::new())?;
+        return Ok(());
+    }
+
+    let mut numbers: Vec<u32> = issue_numbers.into_iter().collect();
+    numbers.sort_unstable();
+
+    let query = issue_graphql_query(config.owner(), config.repo_name(), &numbers);
+
     let out = run_local(
         "gh",
         &[
-            "issue",
-            "list",
-            "--repo",
-            &config.slug,
-            "--state",
-            "all",
-            "--limit",
-            "100",
-            "--json",
-            "number,title,state,labels",
+            "api",
+            "graphql",
+            "-H",
+            "GraphQL-Features: sub_issues",
+            "-f",
+            &format!("query={query}"),
         ],
     );
 
@@ -496,7 +731,7 @@ pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(json) => {
-            let issues = parse_issues_json(&json);
+            let issues = parse_issues_graphql(&json);
             cache::write_cache_if_nonempty(&path, &issues)?;
             LOG.info(&format!(
                 "cache_sources: refresh_issues({}): wrote {} entries",
@@ -576,6 +811,408 @@ pub fn pr_graphql_query(owner: &str, name: &str) -> String {
     )
 }
 
+/// Sanitizes a branch name into a valid GraphQL alias.
+///
+/// Replaces non-alphanumeric characters with `_` and prefixes with `b_` to
+/// ensure the alias starts with a letter (GraphQL identifiers must match `[_a-zA-Z][_a-zA-Z0-9]*`).
+fn sanitize_branch_alias(branch: &str) -> String {
+    let clean: String = branch
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("b_{clean}")
+}
+
+/// Builds a per-branch GraphQL query using aliases.
+///
+/// For each branch, adds an aliased `pullRequests(headRefName: "...", first: 1)` field
+/// that returns the most recent PR regardless of state (open, merged, closed).
+/// All aliases share a `PrFields` fragment for the full field set.
+///
+/// Returns the complete query string ready for `gh api graphql -f query=...`.
+pub fn pr_graphql_query_per_branch(owner: &str, name: &str, branches: &[String]) -> String {
+    if branches.is_empty() {
+        return format!(r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#);
+    }
+
+    let aliases: Vec<String> = branches
+        .iter()
+        .map(|branch| {
+            let alias = sanitize_branch_alias(branch);
+            format!(
+                r#"    {alias}: pullRequests(headRefName: "{branch}", first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+      nodes {{ ...PrFields }}
+    }}"#
+            )
+        })
+        .collect();
+
+    format!(
+        r#"query {{
+  repository(owner: "{owner}", name: "{name}") {{
+    defaultBranchRef {{
+      name
+      target {{
+        ... on Commit {{
+          statusCheckRollup {{
+            state
+          }}
+        }}
+      }}
+    }}
+{aliases}
+  }}
+}}
+
+fragment PrFields on PullRequest {{
+  number
+  headRefName
+  baseRefName
+  title
+  state
+  isDraft
+  author {{ login }}
+  reviewDecision
+  mergeable
+  labels(first: 100) {{ nodes {{ name }} }}
+  reviewRequests(first: 20) {{ nodes {{ requestedReviewer {{ ... on User {{ login }} ... on Team {{ name }} }} }} }}
+  reviews(first: 20) {{ nodes {{ author {{ login }} state submittedAt }} }}
+  reviewThreads(first: 100) {{ nodes {{ isResolved }} }}
+  closingIssuesReferences(first: 5) {{ nodes {{ number state stateReason }} }}
+  additions
+  deletions
+  createdAt
+  updatedAt
+  commits(last: 1) {{
+    nodes {{
+      commit {{
+        pushedDate
+        statusCheckRollup {{
+          state
+          contexts(first: 100) {{
+            totalCount
+            nodes {{
+              __typename
+              ... on CheckRun {{ name conclusion status detailsUrl }}
+              ... on StatusContext {{ context state }}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"#,
+        aliases = aliases.join("\n")
+    )
+}
+
+/// Parses a per-branch aliased GraphQL PR response into `Vec<CachedPr>`.
+///
+/// Expects shape: `{"data":{"repository":{"b_branch_name":{"nodes":[...]}, ...}}}`.
+/// Iterates over all keys in `data.repository` that start with `b_`, extracts the
+/// first node from each alias, and maps it to a `CachedPr` with all enriched fields.
+pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: failed to parse per-branch PRs GraphQL JSON: {e}"
+            ));
+            return Vec::new();
+        }
+    };
+
+    let repo = match root["data"]["repository"].as_object() {
+        Some(obj) => obj,
+        None => {
+            LOG.warn("cache_sources: per-branch PRs response missing data.repository");
+            return Vec::new();
+        }
+    };
+
+    let mut prs = Vec::new();
+
+    for (key, val) in repo {
+        if !key.starts_with("b_") {
+            continue;
+        }
+
+        let nodes = match val["nodes"].as_array() {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let Some(v) = nodes.first() else { continue };
+
+        let Some(number) = v["number"].as_u64().map(|n| n as u32) else {
+            continue;
+        };
+
+        let branch = v["headRefName"].as_str().unwrap_or("").to_string();
+        let base = v["baseRefName"].as_str().unwrap_or("");
+        let state = v["state"].as_str().unwrap_or("OPEN").to_lowercase();
+
+        if branch == base {
+            continue;
+        }
+
+        let title = v["title"].as_str().map(|s| s.to_string());
+        let is_draft = v["isDraft"].as_bool();
+        let author = v["author"]["login"].as_str().map(|s| s.to_string());
+
+        let review_decision = match v["reviewDecision"].as_str().unwrap_or("") {
+            "APPROVED" => Some("approved".to_string()),
+            "CHANGES_REQUESTED" => Some("changes_requested".to_string()),
+            "REVIEW_REQUIRED" => Some("review_required".to_string()),
+            _ => None,
+        };
+
+        let requested_reviewers: Vec<String> = v["reviewRequests"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|n| {
+                        let reviewer = &n["requestedReviewer"];
+                        reviewer["login"]
+                            .as_str()
+                            .or_else(|| reviewer["name"].as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let reviews: Vec<CachedReview> = v["reviews"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        let author = r["author"]["login"].as_str()?.to_string();
+                        let state = r["state"].as_str().unwrap_or("").to_string();
+                        let submitted_at = r["submittedAt"].as_str().map(|s| s.to_string());
+                        Some(CachedReview {
+                            author,
+                            state,
+                            submitted_at,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let additions = v["additions"].as_u64().map(|n| n as u32);
+        let deletions = v["deletions"].as_u64().map(|n| n as u32);
+        let created_at = v["createdAt"].as_str().map(|s| s.to_string());
+        let updated_at = v["updatedAt"].as_str().map(|s| s.to_string());
+        let last_commit_pushed_at = v["commits"]["nodes"]
+            .as_array()
+            .and_then(|arr| arr.last())
+            .and_then(|n| n["commit"]["pushedDate"].as_str())
+            .map(|s| s.to_string());
+
+        let (ci_code_state, ci_gate_state, ci_checks) = derive_ci_state_graphql(v, number, matcher);
+        let checks_state = ci_code_state.clone();
+
+        let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
+
+        let unresolved_threads = v["reviewThreads"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|t| t["isResolved"].as_bool() != Some(true))
+                    .count() as u32
+            })
+            .unwrap_or(0);
+
+        let first_linked = v["closingIssuesReferences"]["nodes"]
+            .as_array()
+            .and_then(|arr| arr.first());
+        let linked_issue = first_linked
+            .and_then(|issue| issue["number"].as_u64())
+            .map(|n| n as u32);
+        let linked_issue_state = first_linked.and_then(|issue| {
+            let s = issue["state"].as_str()?;
+            let reason = issue["stateReason"].as_str().unwrap_or("");
+            let normalised = if s == "OPEN" {
+                "open"
+            } else if reason == "COMPLETED" {
+                "completed"
+            } else {
+                "closed"
+            };
+            Some(normalised.to_string())
+        });
+
+        let labels = v["labels"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        prs.push(CachedPr {
+            number,
+            branch,
+            linked_issue,
+            state,
+            review_decision,
+            checks_state,
+            ci_code_state,
+            ci_gate_state,
+            ci_checks,
+            has_conflicts,
+            unresolved_threads,
+            linked_issue_state,
+            labels,
+            title,
+            is_draft,
+            author,
+            requested_reviewers,
+            reviews,
+            additions,
+            deletions,
+            created_at,
+            updated_at,
+            last_commit_pushed_at,
+        });
+    }
+
+    prs
+}
+
+/// Extracts repo-level metadata from a per-branch PR GraphQL response.
+///
+/// Reads the `repository.defaultBranchRef` field that is included by
+/// [`pr_graphql_query_per_branch`] alongside the branch aliases. Returns a
+/// [`CachedRepoMeta`] with the default branch name and the CI rollup state of
+/// its HEAD commit.
+///
+/// The same JSON is passed to both this function and
+/// [`parse_prs_graphql_per_branch`] so that only one API call is needed for
+/// both datasets.
+pub fn parse_repo_meta_from_pr_response(json: &str) -> CachedRepoMeta {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: failed to parse repo meta from PR response: {e}"
+            ));
+            return CachedRepoMeta::default();
+        }
+    };
+
+    let default_branch_ref = &root["data"]["repository"]["defaultBranchRef"];
+    if default_branch_ref.is_null() {
+        return CachedRepoMeta::default();
+    }
+
+    let default_branch = default_branch_ref["name"].as_str().map(|s| s.to_string());
+
+    let main_ci_state = default_branch_ref["target"]["statusCheckRollup"]["state"]
+        .as_str()
+        .map(|s| s.to_string());
+
+    CachedRepoMeta {
+        default_branch,
+        main_ci_state,
+    }
+}
+
+/// Parses output of `git branch -vv` to extract ahead/behind counts per branch.
+///
+/// Returns a map of branch name → `(ahead, behind)`. Branches without a
+/// tracking remote, or tracking remotes with no divergence count, return
+/// `(0, 0)`.
+///
+/// Input format:
+/// ```text
+/// * main                abc1234 [origin/main] Latest commit
+///   issue42/fix-bug     def5678 [origin/issue42/fix-bug: ahead 3, behind 1] Some commit
+///   feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit
+/// ```
+pub fn parse_git_ahead_behind(output: &str) -> HashMap<String, (u32, u32)> {
+    let mut result = HashMap::new();
+
+    for line in output.lines() {
+        // Strip the leading "* " or "  " marker and trim.
+        let stripped = if line.starts_with("* ") || line.starts_with("  ") {
+            &line[2..]
+        } else {
+            line
+        };
+
+        // Branch name is the first whitespace-separated token.
+        let mut parts = stripped.splitn(2, ' ');
+        let branch = match parts.next() {
+            Some(b) if !b.is_empty() => b.to_string(),
+            _ => continue,
+        };
+        let rest = parts.next().unwrap_or("").trim();
+
+        // Extract the "[origin/...: ahead N, behind M]" section if present.
+        let (ahead, behind) = if let Some(bracket_start) = rest.find('[') {
+            if let Some(bracket_end) = rest.find(']') {
+                let bracket_content = &rest[bracket_start + 1..bracket_end];
+                let ahead = bracket_content
+                    .split("ahead ")
+                    .nth(1)
+                    .and_then(|s| s.split([',', ']']).next())
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                let behind = bracket_content
+                    .split("behind ")
+                    .nth(1)
+                    .and_then(|s| s.split([',', ']']).next())
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                (ahead, behind)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        result.insert(branch, (ahead, behind));
+    }
+
+    result
+}
+
+/// Parses output of `git for-each-ref --format='%(refname:short) %(committerdate:iso-strict)' refs/heads/`
+/// to extract the last commit timestamp per branch.
+///
+/// Returns a map of branch name → ISO 8601 date string.
+///
+/// Input format:
+/// ```text
+/// main 2026-04-10T10:00:00-07:00
+/// issue42/fix-bug 2026-04-12T14:30:00-07:00
+/// ```
+pub fn parse_git_last_commit_dates(output: &str) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Split on the LAST space: branch names may contain slashes but not spaces,
+        // and the date is always the last token.
+        if let Some(pos) = trimmed.rfind(' ') {
+            let branch = trimmed[..pos].trim().to_string();
+            let date = trimmed[pos + 1..].trim().to_string();
+            if !branch.is_empty() && !date.is_empty() {
+                result.insert(branch, date);
+            }
+        }
+    }
+
+    result
+}
+
 /// Fetches open GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
 ///
 /// Uses GraphQL to get closingIssuesReferences (linked issues), reviewThreads,
@@ -585,7 +1222,25 @@ pub fn pr_graphql_query(owner: &str, name: &str) -> String {
 pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "prs");
 
-    let query = pr_graphql_query(config.owner(), config.repo_name());
+    // Read worktree cache to get branch list for per-branch queries.
+    let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
+    let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
+    let branches: Vec<String> = worktrees
+        .iter()
+        .filter(|w| !w.is_bare && !crate::derive::is_default_branch(&w.branch))
+        .map(|w| w.branch.clone())
+        .collect();
+
+    if branches.is_empty() {
+        LOG.info(&format!(
+            "cache_sources: refresh_prs({}): no feature branches, skipping",
+            config.slug
+        ));
+        cache::write_cache_if_nonempty(&path, &Vec::<CachedPr>::new())?;
+        return Ok(());
+    }
+
+    let query = pr_graphql_query_per_branch(config.owner(), config.repo_name(), &branches);
 
     // Build gate matcher from global config so classification is consistent
     // with the loaded user preferences.
@@ -600,13 +1255,19 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(json) => {
-            let prs = parse_prs_graphql(&json, &matcher);
+            let prs = parse_prs_graphql_per_branch(&json, &matcher);
             cache::write_cache_if_nonempty(&path, &prs)?;
             LOG.info(&format!(
                 "cache_sources: refresh_prs({}): wrote {} entries",
                 config.slug,
                 prs.len()
             ));
+
+            // Parse repo-level meta (default branch, main CI state) from the
+            // same response and write to its own cache file.
+            let repo_meta = parse_repo_meta_from_pr_response(&json);
+            let meta_path = cache::cache_path(config.owner(), config.repo_name(), "repo_meta");
+            cache::write_cache(&meta_path, &[repo_meta])?;
         }
     }
 
@@ -614,6 +1275,10 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
 }
 
 /// Fetches git worktrees for `config.path` and writes to the worktrees cache.
+///
+/// After parsing the worktree list, also runs `git branch -vv` and
+/// `git for-each-ref` to populate `ahead`, `behind`, and `last_commit_at`
+/// fields on each non-bare worktree entry.
 ///
 /// On failure the error is logged and the existing cache is left intact.
 pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
@@ -630,7 +1295,36 @@ pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(porcelain) => {
-            let worktrees = parse_worktree_porcelain(&porcelain);
+            let mut worktrees = parse_worktree_porcelain(&porcelain);
+
+            // Enrich with ahead/behind counts from `git branch -vv`.
+            let ahead_behind = run_local_in("git", &["branch", "-vv"], &config.path)
+                .map(|out| parse_git_ahead_behind(&out))
+                .unwrap_or_default();
+
+            // Enrich with last commit timestamps from `git for-each-ref`.
+            let commit_dates = run_local_in(
+                "git",
+                &[
+                    "for-each-ref",
+                    "--format=%(refname:short) %(committerdate:iso-strict)",
+                    "refs/heads/",
+                ],
+                &config.path,
+            )
+            .map(|out| parse_git_last_commit_dates(&out))
+            .unwrap_or_default();
+
+            for wt in &mut worktrees {
+                if !wt.is_bare {
+                    if let Some(&(a, b)) = ahead_behind.get(&wt.branch) {
+                        wt.ahead = if a > 0 { Some(a) } else { None };
+                        wt.behind = if b > 0 { Some(b) } else { None };
+                    }
+                    wt.last_commit_at = commit_dates.get(&wt.branch).cloned();
+                }
+            }
+
             cache::write_cache_if_nonempty(&path, &worktrees)?;
             LOG.info(&format!(
                 "cache_sources: refresh_worktrees({}): wrote {} entries",
@@ -665,11 +1359,15 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let sessions_out = match host {
         None => run_local(
             "tmux",
-            &["list-sessions", "-F", "#{session_name}:#{session_path}"],
+            &[
+                "list-sessions",
+                "-F",
+                "#{session_name}:#{session_path}|#{session_created}|#{session_activity}",
+            ],
         ),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}|#{{session_created}}|#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
                 CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)
@@ -1698,5 +2396,591 @@ mod tests {
         assert_eq!(parsed.window_active, vec!["1"]);
         assert_eq!(parsed.titles, vec!["Claude"]);
         assert_eq!(parsed.commands, vec![" my-project:node"]);
+    }
+
+    // -- issue_graphql_query ---------------------------------------------------
+
+    #[test]
+    fn issue_graphql_query_empty_returns_stub() {
+        let q = issue_graphql_query("acme", "myrepo", &[]);
+        assert!(q.contains("repository(owner: \"acme\", name: \"myrepo\")"));
+        assert!(!q.contains("i_"), "empty query must have no issue aliases");
+    }
+
+    #[test]
+    fn issue_graphql_query_generates_aliases_and_fragment() {
+        let q = issue_graphql_query("acme", "myrepo", &[42, 99]);
+
+        // Each issue gets an alias.
+        assert!(q.contains("i_42: issue(number: 42)"), "missing i_42 alias");
+        assert!(q.contains("i_99: issue(number: 99)"), "missing i_99 alias");
+
+        // Fragment is defined and referenced.
+        assert!(
+            q.contains("...IssueFields"),
+            "aliases must use ...IssueFields spread"
+        );
+        assert!(
+            q.contains("fragment IssueFields on Issue"),
+            "IssueFields fragment must be defined"
+        );
+
+        // Fragment contains required fields.
+        assert!(
+            q.contains("subIssues(first: 50)"),
+            "fragment must select subIssues"
+        );
+        assert!(
+            q.contains("parent { number }"),
+            "fragment must select parent.number"
+        );
+        assert!(
+            q.contains("assignees(first: 20)"),
+            "fragment must select assignees"
+        );
+        assert!(q.contains("createdAt"), "fragment must select createdAt");
+        assert!(q.contains("body"), "fragment must select body");
+        assert!(
+            q.contains("labels(first: 100)"),
+            "fragment must select labels(first: 100)"
+        );
+    }
+
+    #[test]
+    fn issue_graphql_query_single_issue() {
+        let q = issue_graphql_query("owner", "repo", &[1]);
+        assert!(q.contains("i_1: issue(number: 1)"));
+    }
+
+    // -- extract_blocked_by (blocking regex) ------------------------------------
+
+    #[test]
+    fn blocking_regex_matches_blocked_by() {
+        let result = extract_blocked_by("This is blocked by #42");
+        assert_eq!(result, vec![42]);
+    }
+
+    #[test]
+    fn blocking_regex_matches_depends_on() {
+        let result = extract_blocked_by("Depends on #99");
+        assert_eq!(result, vec![99]);
+    }
+
+    #[test]
+    fn blocking_regex_matches_waiting_on() {
+        let result = extract_blocked_by("waiting on #7");
+        assert_eq!(result, vec![7]);
+    }
+
+    #[test]
+    fn blocking_regex_case_insensitive() {
+        let result = extract_blocked_by("BLOCKED BY #100 and Depends On #200");
+        assert!(result.contains(&100), "should match BLOCKED BY #100");
+        assert!(result.contains(&200), "should match Depends On #200");
+    }
+
+    #[test]
+    fn blocking_regex_does_not_match_fixes() {
+        let result = extract_blocked_by("fixes #42");
+        assert!(result.is_empty(), "should not match 'fixes #N'");
+    }
+
+    #[test]
+    fn blocking_regex_does_not_match_closes() {
+        let result = extract_blocked_by("closes #42");
+        assert!(result.is_empty(), "should not match 'closes #N'");
+    }
+
+    #[test]
+    fn blocking_regex_does_not_match_bare_hash() {
+        let result = extract_blocked_by("see #42 for context");
+        assert!(result.is_empty(), "should not match bare '#N'");
+    }
+
+    #[test]
+    fn blocking_regex_multiple_blockers() {
+        let result = extract_blocked_by("blocked by #10\ndepends on #20\nwaiting on #30");
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&10));
+        assert!(result.contains(&20));
+        assert!(result.contains(&30));
+    }
+
+    // -- parse_issues_graphql --------------------------------------------------
+
+    fn graphql_issues_response(aliases: serde_json::Value) -> String {
+        serde_json::to_string(&json!({
+            "data": {
+                "repository": aliases
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn parse_issues_graphql_basic_fields() {
+        let json = graphql_issues_response(json!({
+            "i_42": {
+                "number": 42,
+                "title": "Fix the thing",
+                "state": "OPEN",
+                "labels": { "nodes": [{"name": "bug"}] },
+                "assignees": { "nodes": [{"login": "alice"}] },
+                "createdAt": "2026-01-15T10:00:00Z",
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1);
+        let issue = &issues[0];
+        assert_eq!(issue.number, 42);
+        assert_eq!(issue.title, "Fix the thing");
+        assert_eq!(issue.state, "open", "state should be lowercased");
+        assert_eq!(issue.labels, vec!["bug"]);
+        assert_eq!(issue.assignees, vec!["alice"]);
+        assert_eq!(issue.created_at.as_deref(), Some("2026-01-15T10:00:00Z"));
+        assert!(issue.blocked_by.is_empty());
+        assert!(issue.sub_issues.is_empty());
+        assert!(issue.parent.is_none());
+    }
+
+    #[test]
+    fn parse_issues_graphql_closed_state_normalized() {
+        let json = graphql_issues_response(json!({
+            "i_10": {
+                "number": 10,
+                "title": "Old issue",
+                "state": "CLOSED",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues[0].state, "closed");
+    }
+
+    #[test]
+    fn parse_issues_graphql_sub_issues_and_parent() {
+        let json = graphql_issues_response(json!({
+            "i_5": {
+                "number": 5,
+                "title": "Parent issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": {
+                    "nodes": [
+                        {"number": 6, "title": "Child one", "state": "OPEN"},
+                        {"number": 7, "title": "Child two", "state": "CLOSED"}
+                    ]
+                },
+                "parent": null
+            },
+            "i_6": {
+                "number": 6,
+                "title": "Child one",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": {"number": 5}
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        let parent = issues.iter().find(|i| i.number == 5).unwrap();
+        assert_eq!(parent.sub_issues.len(), 2);
+        assert_eq!(parent.sub_issues[0].number, 6);
+        assert_eq!(parent.sub_issues[0].title, "Child one");
+        assert_eq!(parent.sub_issues[0].state, "open");
+        assert_eq!(parent.sub_issues[1].number, 7);
+        assert_eq!(parent.sub_issues[1].state, "closed");
+        assert!(parent.parent.is_none());
+
+        let child = issues.iter().find(|i| i.number == 6).unwrap();
+        assert_eq!(child.parent, Some(5));
+        assert!(child.sub_issues.is_empty());
+    }
+
+    #[test]
+    fn parse_issues_graphql_blocking_references_from_body() {
+        let json = graphql_issues_response(json!({
+            "i_20": {
+                "number": 20,
+                "title": "Blocked issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "This issue is blocked by #18 and depends on #19",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1);
+        let issue = &issues[0];
+        assert!(issue.blocked_by.contains(&18), "should contain 18");
+        assert!(issue.blocked_by.contains(&19), "should contain 19");
+    }
+
+    #[test]
+    fn parse_issues_graphql_skips_non_i_prefixed_keys() {
+        // 'name' key from the stub query must not be parsed as an issue.
+        let json = graphql_issues_response(json!({
+            "name": "myrepo",
+            "i_1": {
+                "number": 1,
+                "title": "Real issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].number, 1);
+    }
+
+    #[test]
+    fn parse_issues_graphql_null_issue_skipped() {
+        // GitHub returns null for an issue alias if the issue doesn't exist.
+        let json = graphql_issues_response(json!({
+            "i_999": null,
+            "i_1": {
+                "number": 1,
+                "title": "Exists",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues.len(), 1, "null issue alias must be skipped");
+        assert_eq!(issues[0].number, 1);
+    }
+
+    #[test]
+    fn parse_issues_graphql_invalid_json_returns_empty() {
+        let issues = parse_issues_graphql("not json");
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn parse_issues_graphql_multiple_assignees() {
+        let json = graphql_issues_response(json!({
+            "i_3": {
+                "number": 3,
+                "title": "Team issue",
+                "state": "OPEN",
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [{"login": "alice"}, {"login": "bob"}] },
+                "createdAt": null,
+                "body": "",
+                "subIssues": { "nodes": [] },
+                "parent": null
+            }
+        }));
+
+        let issues = parse_issues_graphql(&json);
+        assert_eq!(issues[0].assignees, vec!["alice", "bob"]);
+    }
+
+    // -- parse_git_ahead_behind -----------------------------------------------
+
+    #[test]
+    fn ahead_behind_branch_with_both() {
+        let output = "  issue42/fix-bug     def5678 [origin/issue42/fix-bug: ahead 3, behind 1] Some commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("issue42/fix-bug"), Some(&(3, 1)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_ahead_only() {
+        let output =
+            "  feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("feat/new-thing"), Some(&(2, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_behind_only() {
+        let output = "  stale/branch        abc1234 [origin/stale/branch: behind 5] Old commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("stale/branch"), Some(&(0, 5)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_no_divergence() {
+        // Tracking remote but no ahead/behind counts — branch is in sync.
+        let output = "* main                abc1234 [origin/main] Latest commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("main"), Some(&(0, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_branch_no_tracking() {
+        // No bracket section — untracked local branch.
+        let output = "  local-only          abc1234 Untracked commit\n";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.get("local-only"), Some(&(0, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_multiple_branches() {
+        let output = "\
+* main                abc1234 [origin/main] Latest commit
+  issue42/fix-bug     def5678 [origin/issue42/fix-bug: ahead 3, behind 1] Some commit
+  feat/new-thing      ghi9012 [origin/feat/new-thing: ahead 2] Another commit
+";
+        let map = parse_git_ahead_behind(output);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get("main"), Some(&(0, 0)));
+        assert_eq!(map.get("issue42/fix-bug"), Some(&(3, 1)));
+        assert_eq!(map.get("feat/new-thing"), Some(&(2, 0)));
+    }
+
+    #[test]
+    fn ahead_behind_empty_output() {
+        let map = parse_git_ahead_behind("");
+        assert!(map.is_empty());
+    }
+
+    // -- parse_git_last_commit_dates ------------------------------------------
+
+    #[test]
+    fn commit_dates_multiple_branches() {
+        let output = "\
+main 2026-04-10T10:00:00-07:00
+issue42/fix-bug 2026-04-12T14:30:00-07:00
+";
+        let map = parse_git_last_commit_dates(output);
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get("main"),
+            Some(&"2026-04-10T10:00:00-07:00".to_string())
+        );
+        assert_eq!(
+            map.get("issue42/fix-bug"),
+            Some(&"2026-04-12T14:30:00-07:00".to_string())
+        );
+    }
+
+    #[test]
+    fn commit_dates_empty_output() {
+        let map = parse_git_last_commit_dates("");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn commit_dates_single_branch() {
+        let output = "feat/my-feature 2026-03-01T09:00:00+00:00\n";
+        let map = parse_git_last_commit_dates(output);
+        assert_eq!(
+            map.get("feat/my-feature"),
+            Some(&"2026-03-01T09:00:00+00:00".to_string())
+        );
+    }
+
+    // -- parse_tmux_output with session timestamps ----------------------------
+
+    #[test]
+    fn parse_tmux_output_with_session_timestamps() {
+        let sessions = "my-session:/home/user/repo|1700000000|1700001000\n";
+        let result = parse_tmux_output(sessions, None, |_| "".to_string(), |_| vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "my-session");
+        assert_eq!(result[0].path, "/home/user/repo");
+        assert_eq!(result[0].created_at, Some(1700000000u64));
+        assert_eq!(result[0].last_activity_at, Some(1700001000u64));
+    }
+
+    #[test]
+    fn parse_tmux_output_without_timestamps_defaults_to_none() {
+        // Old format without timestamps — backward-compatible.
+        let sessions = "my-session:/home/user/repo\n";
+        let result = parse_tmux_output(sessions, None, |_| "".to_string(), |_| vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].created_at, None);
+        assert_eq!(result[0].last_activity_at, None);
+    }
+
+    #[test]
+    fn parse_tmux_output_with_only_created_timestamp() {
+        let sessions = "my-session:/home/user/repo|1700000000\n";
+        let result = parse_tmux_output(sessions, None, |_| "".to_string(), |_| vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].created_at, Some(1700000000u64));
+        assert_eq!(result[0].last_activity_at, None);
+    }
+
+    // -- parse_repo_meta_from_pr_response -------------------------------------
+
+    #[test]
+    fn parse_repo_meta_extracts_default_branch_and_ci_state() {
+        let json = serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {
+                            "statusCheckRollup": {
+                                "state": "SUCCESS"
+                            }
+                        }
+                    },
+                    "b_feat_branch": {
+                        "nodes": []
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let meta = parse_repo_meta_from_pr_response(&json);
+        assert_eq!(meta.default_branch.as_deref(), Some("main"));
+        assert_eq!(meta.main_ci_state.as_deref(), Some("SUCCESS"));
+    }
+
+    #[test]
+    fn parse_repo_meta_null_default_branch_returns_default() {
+        let json = serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "defaultBranchRef": null
+                }
+            }
+        }))
+        .unwrap();
+
+        let meta = parse_repo_meta_from_pr_response(&json);
+        assert!(meta.default_branch.is_none());
+        assert!(meta.main_ci_state.is_none());
+    }
+
+    #[test]
+    fn parse_repo_meta_missing_ci_state_returns_none() {
+        let json = serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {}
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let meta = parse_repo_meta_from_pr_response(&json);
+        assert_eq!(meta.default_branch.as_deref(), Some("main"));
+        assert!(meta.main_ci_state.is_none());
+    }
+
+    #[test]
+    fn parse_repo_meta_invalid_json_returns_default() {
+        let meta = parse_repo_meta_from_pr_response("not json");
+        assert!(meta.default_branch.is_none());
+        assert!(meta.main_ci_state.is_none());
+    }
+
+    // -- pr_graphql_query_per_branch includes defaultBranchRef ----------------
+
+    #[test]
+    fn per_branch_query_includes_default_branch_ref() {
+        let query = pr_graphql_query_per_branch("acme", "my-project", &["feat/branch".to_string()]);
+        assert!(
+            query.contains("defaultBranchRef"),
+            "query must select defaultBranchRef"
+        );
+        assert!(
+            query.contains("statusCheckRollup"),
+            "query must select statusCheckRollup on defaultBranchRef target"
+        );
+    }
+
+    #[test]
+    fn per_branch_parser_populates_details_url_on_check_info() {
+        let json = r#"{
+            "data": {
+                "repository": {
+                    "defaultBranchRef": null,
+                    "b_feat_branch": {
+                        "nodes": [{
+                            "number": 1,
+                            "headRefName": "feat/branch",
+                            "baseRefName": "main",
+                            "title": "Test",
+                            "state": "OPEN",
+                            "isDraft": false,
+                            "author": { "login": "dev" },
+                            "reviewDecision": null,
+                            "mergeable": "MERGEABLE",
+                            "labels": { "nodes": [] },
+                            "reviewRequests": { "nodes": [] },
+                            "reviews": { "nodes": [] },
+                            "reviewThreads": { "nodes": [] },
+                            "closingIssuesReferences": { "nodes": [] },
+                            "additions": 10,
+                            "deletions": 5,
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "updatedAt": "2026-01-02T00:00:00Z",
+                            "commits": {
+                                "nodes": [{
+                                    "commit": {
+                                        "pushedDate": "2026-01-01T12:00:00Z",
+                                        "statusCheckRollup": {
+                                            "state": "SUCCESS",
+                                            "contexts": {
+                                                "totalCount": 1,
+                                                "nodes": [{
+                                                    "__typename": "CheckRun",
+                                                    "name": "test-unit",
+                                                    "conclusion": "SUCCESS",
+                                                    "status": "COMPLETED",
+                                                    "detailsUrl": "https://github.com/owner/repo/actions/runs/123"
+                                                }]
+                                            }
+                                        }
+                                    }
+                                }]
+                            }
+                        }]
+                    }
+                }
+            }
+        }"#;
+
+        let matcher = GateMatcher::new(&[]);
+        let prs = parse_prs_graphql_per_branch(json, &matcher);
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].ci_checks.code.len(), 1);
+        assert_eq!(
+            prs[0].ci_checks.code[0].details_url.as_deref(),
+            Some("https://github.com/owner/repo/actions/runs/123")
+        );
     }
 }

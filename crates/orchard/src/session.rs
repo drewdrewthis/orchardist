@@ -62,6 +62,19 @@ pub struct TmuxSessionInfo {
 // ClaudeSessionInfo
 // ---------------------------------------------------------------------------
 
+/// Rate limit info from Claude Code status line telemetry.
+#[derive(Debug, Clone)]
+pub struct ClaudeRateLimits {
+    /// 5-hour rate limit usage percentage.
+    pub five_hour_used_pct: Option<f64>,
+    /// 5-hour rate limit reset timestamp.
+    pub five_hour_resets_at: Option<String>,
+    /// 7-day rate limit usage percentage.
+    pub seven_day_used_pct: Option<f64>,
+    /// 7-day rate limit reset timestamp.
+    pub seven_day_resets_at: Option<String>,
+}
+
 /// Claude-specific enrichment data read from hook state files.
 ///
 /// Grouped separately from tmux data so that sessions without Claude
@@ -86,6 +99,18 @@ pub struct ClaudeSessionInfo {
     pub cache_creation_input_tokens: Option<u64>,
     /// Cache read input tokens from the most recent assistant message.
     pub cache_read_input_tokens: Option<u64>,
+    /// Context window usage percentage from status line telemetry.
+    pub context_window_pct: Option<f64>,
+    /// Total cost in USD from status line telemetry.
+    pub cost_usd: Option<f64>,
+    /// Total session duration in milliseconds from status line telemetry.
+    pub total_duration_ms: Option<u64>,
+    /// Rate limit data from status line telemetry.
+    pub rate_limits: Option<ClaudeRateLimits>,
+    /// Stop reason from the last Stop event.
+    pub stop_reason: Option<String>,
+    /// Number of assistant turns in the conversation.
+    pub turn_count: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -330,16 +355,46 @@ pub struct EnrichedSession {
     /// Derived from `windows` — all panes in window order concatenated.
     /// Preserved for backward compatibility; use `windows` for hierarchy-aware code.
     pub panes: Vec<PaneInfo>,
+    /// Unix timestamp when the tmux session was created.
+    pub started_at: Option<u64>,
+    /// Unix timestamp of the last activity in this session.
+    pub last_activity_at: Option<u64>,
 }
 
 impl ClaudeSessionInfo {
     /// Constructs `ClaudeSessionInfo` from a hook state file, returning `None`
     /// when the parsed state is `ClaudeState::None` (no active Claude process).
     pub fn from_state_file(sf: &crate::claude_state::ClaudeStateFile) -> Option<Self> {
+        Self::from_state_file_with_statusline(sf, None)
+    }
+
+    /// Constructs `ClaudeSessionInfo` from a hook state file merged with optional status line data.
+    ///
+    /// Returns `None` when the parsed state is `ClaudeState::None`.
+    /// Status line fields (context window, cost, duration, rate limits) are merged
+    /// from `sl` when present — the two files are independent channels.
+    pub fn from_state_file_with_statusline(
+        sf: &crate::claude_state::ClaudeStateFile,
+        sl: Option<&crate::claude_state::StatusLineFile>,
+    ) -> Option<Self> {
         let state: ClaudeState = sf.state.parse().unwrap_or(ClaudeState::None);
         if state == ClaudeState::None {
             return None;
         }
+        let rate_limits = sl.and_then(|s| {
+            if s.rate_limit_five_hour_used_pct.is_some()
+                || s.rate_limit_seven_day_used_pct.is_some()
+            {
+                Some(ClaudeRateLimits {
+                    five_hour_used_pct: s.rate_limit_five_hour_used_pct,
+                    five_hour_resets_at: s.rate_limit_five_hour_resets_at.clone(),
+                    seven_day_used_pct: s.rate_limit_seven_day_used_pct,
+                    seven_day_resets_at: s.rate_limit_seven_day_resets_at.clone(),
+                })
+            } else {
+                None
+            }
+        });
         Some(ClaudeSessionInfo {
             status: state,
             model: sf.model.clone(),
@@ -350,6 +405,12 @@ impl ClaudeSessionInfo {
             output_tokens: sf.output_tokens,
             cache_creation_input_tokens: sf.cache_creation_input_tokens,
             cache_read_input_tokens: sf.cache_read_input_tokens,
+            context_window_pct: sl.and_then(|s| s.context_window_pct),
+            cost_usd: sl.and_then(|s| s.cost_usd),
+            total_duration_ms: sl.and_then(|s| s.total_duration_ms),
+            rate_limits,
+            stop_reason: sf.stop_reason.clone(),
+            turn_count: None,
         })
     }
 }
@@ -589,6 +650,122 @@ mod tests {
         assert_eq!(panes, expected);
         assert_eq!(panes.len(), 3);
     }
+
+    // -- ClaudeSessionInfo::from_state_file_with_statusline tests ---------------
+
+    fn make_state_file(state: &str) -> crate::claude_state::ClaudeStateFile {
+        crate::claude_state::ClaudeStateFile {
+            state: state.to_string(),
+            session_id: "sess-abc".to_string(),
+            tmux_session: "repo_47_claude".to_string(),
+            cwd: "/workspace/repo".to_string(),
+            event: "Stop".to_string(),
+            timestamp: "2026-04-12T10:00:00Z".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            last_tool: None,
+            current_task: None,
+            session_start_ts: Some(1700000000),
+            input_tokens: Some(1000),
+            output_tokens: Some(100),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            stop_reason: Some("end_turn".to_string()),
+            inflight_tool_count: None,
+        }
+    }
+
+    fn make_statusline_file() -> crate::claude_state::StatusLineFile {
+        crate::claude_state::StatusLineFile {
+            tmux_session: "repo_47_claude".to_string(),
+            context_window_pct: Some(42.5),
+            cost_usd: Some(0.25),
+            total_duration_ms: Some(60000),
+            rate_limit_five_hour_used_pct: Some(10.0),
+            rate_limit_five_hour_resets_at: Some("2026-04-13T00:00:00Z".to_string()),
+            rate_limit_seven_day_used_pct: Some(5.0),
+            rate_limit_seven_day_resets_at: Some("2026-04-18T00:00:00Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn from_state_file_returns_none_for_unknown_state() {
+        let sf = make_state_file("unknown");
+        let result = ClaudeSessionInfo::from_state_file(&sf);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn from_state_file_returns_some_for_idle() {
+        let sf = make_state_file("idle");
+        let result = ClaudeSessionInfo::from_state_file(&sf);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert!(matches!(
+            info.status,
+            crate::claude_state::ClaudeState::Idle
+        ));
+        assert_eq!(info.model.as_deref(), Some("claude-opus-4-6"));
+        assert!(info.context_window_pct.is_none());
+        assert!(info.cost_usd.is_none());
+        assert!(info.rate_limits.is_none());
+        assert_eq!(info.stop_reason.as_deref(), Some("end_turn"));
+        assert!(info.turn_count.is_none());
+    }
+
+    #[test]
+    fn from_state_file_with_statusline_merges_both_sources() {
+        let sf = make_state_file("working");
+        let sl = make_statusline_file();
+        let result = ClaudeSessionInfo::from_state_file_with_statusline(&sf, Some(&sl));
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert!(matches!(
+            info.status,
+            crate::claude_state::ClaudeState::Working
+        ));
+        // Fields from state file
+        assert_eq!(info.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(info.input_tokens, Some(1000));
+        assert_eq!(info.stop_reason.as_deref(), Some("end_turn"));
+        // Fields from status line
+        assert_eq!(info.context_window_pct, Some(42.5));
+        assert_eq!(info.cost_usd, Some(0.25));
+        assert_eq!(info.total_duration_ms, Some(60000));
+        let rl = info.rate_limits.as_ref().expect("rate_limits must be Some");
+        assert_eq!(rl.five_hour_used_pct, Some(10.0));
+        assert_eq!(rl.seven_day_used_pct, Some(5.0));
+    }
+
+    #[test]
+    fn from_state_file_with_statusline_none_sl_gives_none_telemetry() {
+        let sf = make_state_file("idle");
+        let result = ClaudeSessionInfo::from_state_file_with_statusline(&sf, None);
+        let info = result.unwrap();
+        assert!(info.context_window_pct.is_none());
+        assert!(info.cost_usd.is_none());
+        assert!(info.total_duration_ms.is_none());
+        assert!(info.rate_limits.is_none());
+    }
+
+    #[test]
+    fn from_state_file_with_statusline_rate_limits_none_when_no_rate_fields() {
+        let sf = make_state_file("working");
+        let sl = crate::claude_state::StatusLineFile {
+            tmux_session: "repo_47_claude".to_string(),
+            context_window_pct: Some(50.0),
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limit_five_hour_used_pct: None,
+            rate_limit_five_hour_resets_at: None,
+            rate_limit_seven_day_used_pct: None,
+            rate_limit_seven_day_resets_at: None,
+        };
+        let result = ClaudeSessionInfo::from_state_file_with_statusline(&sf, Some(&sl));
+        let info = result.unwrap();
+        assert_eq!(info.context_window_pct, Some(50.0));
+        // No rate fields → rate_limits is None
+        assert!(info.rate_limits.is_none());
+    }
 }
 
 /// What appears in the TUI list: either a worktree row or a standalone session.
@@ -598,7 +775,7 @@ mod tests {
 #[derive(Debug, Clone)]
 pub enum ListEntry {
     /// A worktree row from the derive pipeline.
-    Worktree(WorktreeRow),
+    Worktree(Box<WorktreeRow>),
     /// A standalone session not tied to any worktree.
-    Standalone(StandaloneSessionRow),
+    Standalone(Box<StandaloneSessionRow>),
 }

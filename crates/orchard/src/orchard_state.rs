@@ -77,6 +77,10 @@ pub struct RepoState {
     pub slug: String,
     /// All worktrees belonging to this repository.
     pub worktrees: Vec<WorktreeState>,
+    /// Default branch name (e.g. `main`), from repo meta cache.
+    pub default_branch: Option<String>,
+    /// Rollup CI state of the default branch.
+    pub main_ci_state: Option<String>,
 }
 
 /// State for a single worktree, enriched with issue/PR/session metadata.
@@ -100,6 +104,10 @@ pub struct WorktreeState {
     pub display_group: DisplayGroup,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+    /// Commit distance from upstream (ahead, behind), if available.
+    pub ahead_behind: Option<(u32, u32)>,
+    /// ISO 8601 timestamp of the most recent commit in this worktree.
+    pub last_commit_at: Option<String>,
 }
 
 /// Lightweight issue summary attached to a worktree.
@@ -113,6 +121,16 @@ pub struct IssueInfo {
     pub state: String,
     /// Labels applied to the issue.
     pub labels: Vec<String>,
+    /// Assignees of this issue.
+    pub assignees: Vec<String>,
+    /// ISO 8601 timestamp when the issue was created.
+    pub created_at: Option<String>,
+    /// Issue numbers blocking this issue.
+    pub blocked_by: Vec<u32>,
+    /// Child issues under this issue.
+    pub sub_issues: Vec<crate::cache::CachedSubIssue>,
+    /// Parent issue number if this is a sub-issue.
+    pub parent: Option<u32>,
 }
 
 /// Lightweight PR summary attached to a worktree.
@@ -124,6 +142,16 @@ pub struct PrState {
     pub branch: String,
     /// PR state: "OPEN", "CLOSED", or "MERGED".
     pub state: Option<String>,
+    /// PR title.
+    pub title: Option<String>,
+    /// Whether the PR is a draft.
+    pub is_draft: Option<bool>,
+    /// GitHub login of the PR author.
+    pub author: Option<String>,
+    /// Logins of requested reviewers.
+    pub requested_reviewers: Vec<String>,
+    /// Reviews submitted on this PR.
+    pub reviews: Vec<crate::cache::CachedReview>,
     /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
     pub review_decision: Option<String>,
     /// Aggregate CI checks state: "SUCCESS", "FAILURE", "PENDING", etc.
@@ -148,6 +176,16 @@ pub struct PrState {
     pub unresolved_threads: u32,
     /// Labels applied to the PR.
     pub labels: Vec<String>,
+    /// Number of lines added.
+    pub additions: Option<u32>,
+    /// Number of lines deleted.
+    pub deletions: Option<u32>,
+    /// ISO 8601 timestamp when the PR was created.
+    pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the PR was last updated.
+    pub updated_at: Option<String>,
+    /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
+    pub last_commit_pushed_at: Option<String>,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
@@ -165,6 +203,10 @@ pub struct SessionState {
     pub claude: Option<ClaudeEnrichment>,
     /// Window hierarchy for this session (window → pane structure).
     pub windows: Vec<WindowState>,
+    /// Unix timestamp when the tmux session was created.
+    pub started_at: Option<u64>,
+    /// Unix timestamp of the last activity in this session.
+    pub last_activity_at: Option<u64>,
 }
 
 /// Window within a session, with nested panes.
@@ -222,6 +264,18 @@ pub struct ClaudeEnrichment {
     pub cache_creation_input_tokens: Option<u64>,
     /// Cache read input tokens from the most recent assistant message.
     pub cache_read_input_tokens: Option<u64>,
+    /// Context window usage percentage from status line telemetry.
+    pub context_window_pct: Option<f64>,
+    /// Total cost in USD from status line telemetry.
+    pub cost_usd: Option<f64>,
+    /// Total session duration in milliseconds from status line telemetry.
+    pub total_duration_ms: Option<u64>,
+    /// Rate limit data from status line telemetry.
+    pub rate_limits: Option<crate::session::ClaudeRateLimits>,
+    /// Stop reason from the last Stop event.
+    pub stop_reason: Option<String>,
+    /// Number of assistant turns in the conversation.
+    pub turn_count: Option<u32>,
 }
 
 /// Reachability state for a remote host.
@@ -242,6 +296,11 @@ impl From<&crate::derive::PrInfo> for PrState {
             number: pr.number,
             branch: pr.branch.clone(),
             state: pr.state.clone(),
+            title: pr.title.clone(),
+            is_draft: pr.is_draft,
+            author: pr.author.clone(),
+            requested_reviewers: pr.requested_reviewers.clone(),
+            reviews: pr.reviews.clone(),
             review_decision: pr.review_decision.clone(),
             checks_state: pr.checks_state.clone(),
             ci_code_state: pr.ci_code_state.clone(),
@@ -250,6 +309,11 @@ impl From<&crate::derive::PrInfo> for PrState {
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
             labels: pr.labels.clone(),
+            additions: pr.additions,
+            deletions: pr.deletions,
+            created_at: pr.created_at.clone(),
+            updated_at: pr.updated_at.clone(),
+            last_commit_pushed_at: pr.last_commit_pushed_at.clone(),
         }
     }
 }
@@ -270,6 +334,12 @@ impl From<&EnrichedSession> for SessionState {
             output_tokens: c.output_tokens,
             cache_creation_input_tokens: c.cache_creation_input_tokens,
             cache_read_input_tokens: c.cache_read_input_tokens,
+            context_window_pct: c.context_window_pct,
+            cost_usd: c.cost_usd,
+            total_duration_ms: c.total_duration_ms,
+            rate_limits: c.rate_limits.clone(),
+            stop_reason: c.stop_reason.clone(),
+            turn_count: c.turn_count,
         });
         let windows = s
             .windows
@@ -296,6 +366,8 @@ impl From<&EnrichedSession> for SessionState {
             host,
             claude,
             windows,
+            started_at: s.started_at,
+            last_activity_at: s.last_activity_at,
         }
     }
 }
@@ -310,7 +382,19 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
                 .clone()
                 .unwrap_or_else(|| "open".to_string()),
             labels: row.issue_labels.clone(),
+            assignees: row.issue_assignees.clone(),
+            created_at: row.issue_created_at.clone(),
+            blocked_by: row.issue_blocked_by.clone(),
+            sub_issues: row.issue_sub_issues.clone(),
+            parent: row.issue_parent,
         });
+
+        let ahead_behind = match (row.worktree_ahead, row.worktree_behind) {
+            (Some(a), Some(b)) => Some((a, b)),
+            (Some(a), None) => Some((a, 0)),
+            (None, Some(b)) => Some((0, b)),
+            (None, None) => None,
+        };
 
         Self {
             path: row.worktree_path.clone(),
@@ -322,6 +406,8 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             sessions: row.sessions.iter().map(Into::into).collect(),
             display_group: row.display_group,
             is_main_worktree: row.is_main_worktree,
+            ahead_behind,
+            last_commit_at: row.worktree_last_commit_at.clone(),
         }
     }
 }
@@ -348,10 +434,18 @@ mod tests {
             issue_title: issue_number.map(|n| format!("Issue {}", n)),
             issue_state: issue_state.map(|s| s.to_string()),
             issue_labels: vec![],
+            issue_assignees: vec![],
+            issue_created_at: None,
+            issue_blocked_by: vec![],
+            issue_sub_issues: vec![],
+            issue_parent: None,
             pr: None,
             sessions: vec![],
             display_group,
             is_main_worktree: false,
+            worktree_ahead: None,
+            worktree_behind: None,
+            worktree_last_commit_at: None,
         }
     }
 
@@ -366,7 +460,12 @@ mod tests {
         }
         let repos = repo_map
             .into_iter()
-            .map(|(slug, worktrees)| RepoState { slug, worktrees })
+            .map(|(slug, worktrees)| RepoState {
+                slug,
+                worktrees,
+                default_branch: None,
+                main_ci_state: None,
+            })
             .collect();
         OrchardState {
             repos,
@@ -467,14 +566,7 @@ mod tests {
             number: 42,
             branch: "feat/branch".to_string(),
             state: Some("open".to_string()),
-            review_decision: None,
-            checks_state: None,
-            ci_code_state: None,
-            ci_gate_state: None,
-            ci_checks: crate::ci_state::CiChecks::default(),
-            has_conflicts: false,
-            unresolved_threads: 0,
-            labels: vec![],
+            ..PrInfo::default()
         };
         let pr_state = PrState::from(&pr_info);
         assert_eq!(pr_state.state, Some("open".to_string()));
@@ -486,14 +578,7 @@ mod tests {
             number: 42,
             branch: "feat/branch".to_string(),
             state: None,
-            review_decision: None,
-            checks_state: None,
-            ci_code_state: None,
-            ci_gate_state: None,
-            ci_checks: crate::ci_state::CiChecks::default(),
-            has_conflicts: false,
-            unresolved_threads: 0,
-            labels: vec![],
+            ..PrInfo::default()
         };
         let pr_state = PrState::from(&pr_info);
         assert!(pr_state.state.is_none());
@@ -516,6 +601,8 @@ mod tests {
             claude: None,
             windows,
             panes,
+            started_at: None,
+            last_activity_at: None,
         }
     }
 

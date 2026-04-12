@@ -17,6 +17,17 @@ use crate::claude_state::ClaudeStateFile;
 // Entry types
 // ---------------------------------------------------------------------------
 
+/// A child issue from GitHub's sub-issues API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CachedSubIssue {
+    /// GitHub issue number of the sub-issue.
+    pub number: u32,
+    /// Sub-issue title.
+    pub title: String,
+    /// Sub-issue state string (e.g. `"open"`, `"closed"`).
+    pub state: String,
+}
+
 /// A GitHub issue entry as stored in the issues cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedIssue {
@@ -28,6 +39,33 @@ pub struct CachedIssue {
     pub state: String,
     /// Labels applied to the issue.
     pub labels: Vec<String>,
+    /// GitHub logins of assignees.
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    /// ISO 8601 timestamp when the issue was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Issue numbers that block this issue (from body text regex + sub-issues API).
+    #[serde(default)]
+    pub blocked_by: Vec<u32>,
+    /// Child issues from GitHub sub-issues API.
+    #[serde(default)]
+    pub sub_issues: Vec<CachedSubIssue>,
+    /// Parent issue number from GitHub sub-issues API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
+}
+
+/// A single review submitted on a pull request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CachedReview {
+    /// GitHub login of the reviewer.
+    pub author: String,
+    /// Review state string from GitHub (e.g. `"APPROVED"`, `"CHANGES_REQUESTED"`, `"COMMENTED"`).
+    pub state: String,
+    /// ISO 8601 timestamp when the review was submitted, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_at: Option<String>,
 }
 
 /// A GitHub pull request entry as stored in the PRs cache file.
@@ -73,6 +111,47 @@ pub struct CachedPr {
     /// deserialize successfully (producing an empty vec).
     #[serde(default)]
     pub labels: Vec<String>,
+    /// PR title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the PR is a draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
+    /// GitHub login of the PR author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Logins or team names of requested reviewers.
+    #[serde(default)]
+    pub requested_reviewers: Vec<String>,
+    /// Reviews submitted on this PR.
+    #[serde(default)]
+    pub reviews: Vec<CachedReview>,
+    /// Number of lines added by this PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    /// Number of lines deleted by this PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    /// ISO 8601 timestamp when the PR was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the PR was last updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_commit_pushed_at: Option<String>,
+}
+
+/// Repo-level metadata extracted from the per-branch PR GraphQL response.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CachedRepoMeta {
+    /// Name of the default branch (e.g. "main").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    /// CI state of the default branch HEAD: "SUCCESS", "FAILURE", "PENDING", etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_ci_state: Option<String>,
 }
 
 /// A git worktree entry as stored in the worktrees cache file.
@@ -86,9 +165,18 @@ pub struct CachedWorktree {
     pub is_bare: bool,
     /// Whether the worktree is locked (cannot be pruned by git).
     pub is_locked: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Remote host identifier if this worktree lives on a remote machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Commits ahead of upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    /// Commits behind upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind: Option<u32>,
+    /// ISO 8601 timestamp of the last commit on this branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_commit_at: Option<String>,
 }
 
 /// A tmux session entry as stored in the tmux sessions cache file.
@@ -119,6 +207,12 @@ pub struct CachedTmuxSession {
     pub window_active: Vec<String>,
     /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
+    /// Unix timestamp when the tmux session was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
+    /// Unix timestamp of the last activity in this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<u64>,
     #[serde(default)]
     /// Recent output lines from the session's active pane.
     pub last_output_lines: Vec<String>,
@@ -318,6 +412,11 @@ mod tests {
             title: "Fix the thing".to_string(),
             state: "open".to_string(),
             labels: vec!["bug".to_string()],
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 
@@ -336,6 +435,16 @@ mod tests {
             unresolved_threads: 0,
             linked_issue_state: None,
             labels: vec![],
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 
@@ -346,6 +455,9 @@ mod tests {
             is_bare: false,
             is_locked: false,
             host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
         }
     }
 
@@ -359,6 +471,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: None,
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         }
@@ -581,6 +695,8 @@ mod tests {
             window_names: vec!["main".to_string(), "editor".to_string()],
             window_active: vec!["1".to_string(), "0".to_string()],
             host: None,
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         };

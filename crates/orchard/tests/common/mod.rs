@@ -127,6 +127,11 @@ pub fn make_issue(number: u32, title: &str) -> CachedIssue {
         title: title.to_string(),
         state: "open".to_string(),
         labels: vec![],
+        assignees: vec![],
+        created_at: None,
+        blocked_by: vec![],
+        sub_issues: vec![],
+        parent: None,
     }
 }
 
@@ -145,6 +150,16 @@ pub fn make_pr(number: u32, branch: &str) -> CachedPr {
         unresolved_threads: 0,
         linked_issue_state: None,
         labels: vec![],
+        title: None,
+        is_draft: None,
+        author: None,
+        requested_reviewers: vec![],
+        reviews: vec![],
+        additions: None,
+        deletions: None,
+        created_at: None,
+        updated_at: None,
+        last_commit_pushed_at: None,
     }
 }
 
@@ -170,6 +185,9 @@ pub fn make_worktree(path: &str, branch: &str) -> CachedWorktree {
         is_bare: false,
         is_locked: false,
         host: None,
+        ahead: None,
+        behind: None,
+        last_commit_at: None,
     }
 }
 
@@ -185,6 +203,8 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         window_names: vec![],
         window_active: vec![],
         host: None,
+        created_at: None,
+        last_activity_at: None,
         last_output_lines: vec![],
         claude_state_raw: None,
     }

@@ -149,6 +149,8 @@ fn build_standalone_sessions(
                 })
                 .unwrap_or_default();
 
+            let started_at = live.and_then(|s| s.created_at);
+            let last_activity_at = live.and_then(|s| s.last_activity_at);
             StandaloneSessionRow {
                 session: EnrichedSession {
                     tmux: TmuxSessionInfo {
@@ -159,6 +161,8 @@ fn build_standalone_sessions(
                     claude,
                     windows,
                     panes,
+                    started_at,
+                    last_activity_at,
                 },
                 config: cfg.clone(),
             }
@@ -189,7 +193,7 @@ pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
     let mut claude_states = sources::claude::read_state_files();
     claude_states.extend(remote_claude_states);
-    crate::derive::derive_all_repos(&repo_caches, &claude_states)
+    crate::derive::derive_all_repos(&repo_caches, &claude_states, &[])
 }
 
 /// Builds an `OrchardState` by reading all caches, with known host reachability.
@@ -205,7 +209,7 @@ pub fn build_state_with_hosts(
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
     let mut claude_states = sources::claude::read_state_files();
     claude_states.extend(remote_claude_states);
-    let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states);
+    let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states, &[]);
 
     // Group WorktreeRows back by repo_slug into RepoStates.
     let mut repo_map: HashMap<String, Vec<WorktreeState>> = HashMap::new();
@@ -221,9 +225,21 @@ pub fn build_state_with_hosts(
         .repos
         .iter()
         .filter_map(|r| {
-            repo_map.remove(&r.slug).map(|worktrees| RepoState {
-                slug: r.slug.clone(),
-                worktrees,
+            repo_map.remove(&r.slug).map(|worktrees| {
+                // Read repo meta (default branch, main CI state) from cache.
+                let meta = cache::read_cache::<cache::CachedRepoMeta>(&cache::cache_path(
+                    r.owner(),
+                    r.repo_name(),
+                    "repo_meta",
+                ))
+                .entries;
+                let repo_meta = meta.into_iter().next();
+                RepoState {
+                    slug: r.slug.clone(),
+                    worktrees,
+                    default_branch: repo_meta.as_ref().and_then(|m| m.default_branch.clone()),
+                    main_ci_state: repo_meta.as_ref().and_then(|m| m.main_ci_state.clone()),
+                }
             })
         })
         .collect();
@@ -369,6 +385,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: None,
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         }
@@ -509,6 +527,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: Some(make_state_file(state, name, timestamp)),
         }
@@ -590,6 +610,8 @@ mod tests {
             window_names: vec![],
             window_active: vec![],
             host: Some("ubuntu@10.0.0.1".to_string()),
+            created_at: None,
+            last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
         };
@@ -623,6 +645,9 @@ mod tests {
             is_bare: false,
             is_locked: false,
             host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
         }
     }
 
@@ -642,6 +667,16 @@ mod tests {
             unresolved_threads: 0,
             linked_issue_state: None,
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 
@@ -651,6 +686,11 @@ mod tests {
             title: format!("Issue #{number}"),
             state: "open".to_string(),
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            assignees: vec![],
+            created_at: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            parent: None,
         }
     }
 
@@ -663,7 +703,7 @@ mod tests {
         ];
         let prs = vec![make_pr_with_labels(55, branch, vec!["planned"])];
 
-        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();
         let pr = row.pr.as_ref().expect("PR should be present");
         assert_eq!(pr.labels, vec!["planned"]);
@@ -686,7 +726,7 @@ mod tests {
             vec!["in-progress", "enhancement"],
         )];
 
-        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[]);
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[], &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();
         assert_eq!(row.issue_labels, vec!["in-progress", "enhancement"]);
 
@@ -705,7 +745,7 @@ mod tests {
         ];
         let prs = vec![make_pr_with_labels(99, branch, vec![])];
 
-        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &[]);
         let row = rows.iter().find(|r| r.branch == branch).unwrap();
         let pr = row.pr.as_ref().expect("PR should be present");
         assert!(pr.labels.is_empty());
