@@ -33,6 +33,12 @@ pub struct CheckInfo {
     pub name: String,
     /// Normalized state: `"passing"`, `"failing"`, or `"pending"`.
     pub state: String,
+    /// URL linking to the check run details page, if available.
+    ///
+    /// Only populated for `CheckRun` nodes that include `detailsUrl`.
+    /// `StatusContext` nodes do not have a details URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details_url: Option<String>,
 }
 
 /// Two-bucket classification of all CI checks on a PR.
@@ -339,6 +345,7 @@ mod tests {
         CheckInfo {
             name: "x".to_string(),
             state: state.to_string(),
+            details_url: None,
         }
     }
 

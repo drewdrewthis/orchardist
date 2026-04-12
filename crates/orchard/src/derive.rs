@@ -502,7 +502,11 @@ fn derive_display_group(
     DisplayGroup::Other
 }
 
-fn is_default_branch(branch: &str) -> bool {
+/// Returns `true` if the branch is a well-known default branch name.
+///
+/// Used to skip default branches when building per-branch PR queries — we only
+/// want to look up PRs for feature/issue branches, not the base branch itself.
+pub fn is_default_branch(branch: &str) -> bool {
     matches!(branch, "main" | "master" | "develop" | "dev")
 }
 
@@ -611,24 +615,25 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 
     fn approved_passing_pr_for_branch(pr_number: u32, branch: &str) -> CachedPr {
         CachedPr {
-            number: pr_number,
-            branch: branch.to_string(),
-            linked_issue: None,
-            state: "open".to_string(),
             review_decision: Some("approved".to_string()),
             checks_state: Some("passing".to_string()),
             ci_code_state: Some("passing".to_string()),
-            ci_gate_state: None,
-            ci_checks: CiChecks::default(),
-            has_conflicts: false,
-            unresolved_threads: 0,
-            linked_issue_state: None,
-            labels: vec![],
+            ..pr_for_branch(pr_number, branch)
         }
     }
 
@@ -1776,18 +1781,15 @@ mod tests {
         let gate_check = CheckInfo {
             name: "check-approval-or-label".to_string(),
             state: "failing".to_string(),
+            details_url: None,
         };
         let code_check = CheckInfo {
             name: "test-unit".to_string(),
             state: "passing".to_string(),
+            details_url: None,
         };
 
         let cached_pr = CachedPr {
-            number: 99,
-            branch: "feat/issue-99".to_string(),
-            linked_issue: None,
-            state: "open".to_string(),
-            review_decision: None,
             checks_state: Some("passing".to_string()),
             ci_code_state: Some("passing".to_string()),
             ci_gate_state: Some("blocked".to_string()),
@@ -1795,10 +1797,7 @@ mod tests {
                 code: vec![code_check.clone()],
                 gate: vec![gate_check.clone()],
             },
-            has_conflicts: false,
-            unresolved_threads: 0,
-            linked_issue_state: None,
-            labels: vec![],
+            ..pr_for_branch(99, "feat/issue-99")
         };
 
         let pr_info = pr_info_from(&cached_pr);

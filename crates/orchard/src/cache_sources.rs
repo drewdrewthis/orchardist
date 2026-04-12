@@ -5,7 +5,7 @@
 //! cache files consumed by `sources::*` and `derive`.
 use std::process::Command;
 
-use crate::cache::{self, CachedIssue, CachedPr, CachedTmuxSession, CachedWorktree};
+use crate::cache::{self, CachedIssue, CachedPr, CachedReview, CachedTmuxSession, CachedWorktree};
 use crate::ci_state::{
     CheckInfo, CiChecks, GateMatcher, classify_check, map_check_run_conclusion,
     map_status_context_state, rollup_code_state, rollup_gate_state,
@@ -163,6 +163,16 @@ pub fn parse_prs_graphql(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
                 unresolved_threads,
                 linked_issue_state,
                 labels,
+                title: None,
+                is_draft: None,
+                author: None,
+                requested_reviewers: vec![],
+                reviews: vec![],
+                additions: None,
+                deletions: None,
+                created_at: None,
+                updated_at: None,
+                last_commit_pushed_at: None,
             })
         })
         .collect()
@@ -213,19 +223,20 @@ fn derive_ci_state_graphql(
 
     for node in context_nodes {
         let typename = node["__typename"].as_str().unwrap_or("");
-        let (name, state_opt) = match typename {
+        let (name, state_opt, details_url) = match typename {
             "CheckRun" => {
                 let name = node["name"].as_str().unwrap_or("").to_string();
                 let conclusion = node["conclusion"].as_str();
                 let status = node["status"].as_str();
                 let state = map_check_run_conclusion(conclusion, status);
-                (name, state)
+                let details_url = node["detailsUrl"].as_str().map(|s| s.to_string());
+                (name, state, details_url)
             }
             "StatusContext" => {
                 let name = node["context"].as_str().unwrap_or("").to_string();
                 let raw_state = node["state"].as_str().unwrap_or("");
                 let state = map_status_context_state(raw_state);
-                (name, state)
+                (name, state, None)
             }
             _ => continue,
         };
@@ -238,6 +249,7 @@ fn derive_ci_state_graphql(
         let check = CheckInfo {
             name: name.clone(),
             state,
+            details_url,
         };
         use crate::ci_state::CheckBucket;
         match classify_check(&name, matcher) {
@@ -576,6 +588,270 @@ pub fn pr_graphql_query(owner: &str, name: &str) -> String {
     )
 }
 
+/// Sanitizes a branch name into a valid GraphQL alias.
+///
+/// Replaces non-alphanumeric characters with `_` and prefixes with `b_` to
+/// ensure the alias starts with a letter (GraphQL identifiers must match `[_a-zA-Z][_a-zA-Z0-9]*`).
+fn sanitize_branch_alias(branch: &str) -> String {
+    let clean: String = branch
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("b_{clean}")
+}
+
+/// Builds a per-branch GraphQL query using aliases.
+///
+/// For each branch, adds an aliased `pullRequests(headRefName: "...", first: 1)` field
+/// that returns the most recent PR regardless of state (open, merged, closed).
+/// All aliases share a `PrFields` fragment for the full field set.
+///
+/// Returns the complete query string ready for `gh api graphql -f query=...`.
+pub fn pr_graphql_query_per_branch(owner: &str, name: &str, branches: &[String]) -> String {
+    if branches.is_empty() {
+        return format!(
+            r#"query {{ repository(owner: "{owner}", name: "{name}") {{ name }} }}"#
+        );
+    }
+
+    let aliases: Vec<String> = branches
+        .iter()
+        .map(|branch| {
+            let alias = sanitize_branch_alias(branch);
+            format!(
+                r#"    {alias}: pullRequests(headRefName: "{branch}", first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+      nodes {{ ...PrFields }}
+    }}"#
+            )
+        })
+        .collect();
+
+    format!(
+        r#"query {{
+  repository(owner: "{owner}", name: "{name}") {{
+{aliases}
+  }}
+}}
+
+fragment PrFields on PullRequest {{
+  number
+  headRefName
+  baseRefName
+  title
+  state
+  isDraft
+  author {{ login }}
+  reviewDecision
+  mergeable
+  labels(first: 100) {{ nodes {{ name }} }}
+  reviewRequests(first: 20) {{ nodes {{ requestedReviewer {{ ... on User {{ login }} ... on Team {{ name }} }} }} }}
+  reviews(first: 20) {{ nodes {{ author {{ login }} state submittedAt }} }}
+  reviewThreads(first: 100) {{ nodes {{ isResolved }} }}
+  closingIssuesReferences(first: 5) {{ nodes {{ number state stateReason }} }}
+  additions
+  deletions
+  createdAt
+  updatedAt
+  commits(last: 1) {{
+    nodes {{
+      commit {{
+        pushedDate
+        statusCheckRollup {{
+          state
+          contexts(first: 100) {{
+            totalCount
+            nodes {{
+              __typename
+              ... on CheckRun {{ name conclusion status detailsUrl }}
+              ... on StatusContext {{ context state }}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"#,
+        aliases = aliases.join("\n")
+    )
+}
+
+/// Parses a per-branch aliased GraphQL PR response into `Vec<CachedPr>`.
+///
+/// Expects shape: `{"data":{"repository":{"b_branch_name":{"nodes":[...]}, ...}}}`.
+/// Iterates over all keys in `data.repository` that start with `b_`, extracts the
+/// first node from each alias, and maps it to a `CachedPr` with all enriched fields.
+pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: failed to parse per-branch PRs GraphQL JSON: {e}"
+            ));
+            return Vec::new();
+        }
+    };
+
+    let repo = match root["data"]["repository"].as_object() {
+        Some(obj) => obj,
+        None => {
+            LOG.warn("cache_sources: per-branch PRs response missing data.repository");
+            return Vec::new();
+        }
+    };
+
+    let mut prs = Vec::new();
+
+    for (key, val) in repo {
+        if !key.starts_with("b_") {
+            continue;
+        }
+
+        let nodes = match val["nodes"].as_array() {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let Some(v) = nodes.first() else { continue };
+
+        let Some(number) = v["number"].as_u64().map(|n| n as u32) else {
+            continue;
+        };
+
+        let branch = v["headRefName"].as_str().unwrap_or("").to_string();
+        let base = v["baseRefName"].as_str().unwrap_or("");
+        let state = v["state"].as_str().unwrap_or("OPEN").to_lowercase();
+
+        if branch == base {
+            continue;
+        }
+
+        let title = v["title"].as_str().map(|s| s.to_string());
+        let is_draft = v["isDraft"].as_bool();
+        let author = v["author"]["login"].as_str().map(|s| s.to_string());
+
+        let review_decision = match v["reviewDecision"].as_str().unwrap_or("") {
+            "APPROVED" => Some("approved".to_string()),
+            "CHANGES_REQUESTED" => Some("changes_requested".to_string()),
+            "REVIEW_REQUIRED" => Some("review_required".to_string()),
+            _ => None,
+        };
+
+        let requested_reviewers: Vec<String> = v["reviewRequests"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|n| {
+                        let reviewer = &n["requestedReviewer"];
+                        reviewer["login"]
+                            .as_str()
+                            .or_else(|| reviewer["name"].as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let reviews: Vec<CachedReview> = v["reviews"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        let author = r["author"]["login"].as_str()?.to_string();
+                        let state = r["state"].as_str().unwrap_or("").to_string();
+                        let submitted_at = r["submittedAt"].as_str().map(|s| s.to_string());
+                        Some(CachedReview {
+                            author,
+                            state,
+                            submitted_at,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let additions = v["additions"].as_u64().map(|n| n as u32);
+        let deletions = v["deletions"].as_u64().map(|n| n as u32);
+        let created_at = v["createdAt"].as_str().map(|s| s.to_string());
+        let updated_at = v["updatedAt"].as_str().map(|s| s.to_string());
+        let last_commit_pushed_at = v["commits"]["nodes"]
+            .as_array()
+            .and_then(|arr| arr.last())
+            .and_then(|n| n["commit"]["pushedDate"].as_str())
+            .map(|s| s.to_string());
+
+        let (ci_code_state, ci_gate_state, ci_checks) =
+            derive_ci_state_graphql(v, number, matcher);
+        let checks_state = ci_code_state.clone();
+
+        let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
+
+        let unresolved_threads = v["reviewThreads"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|t| t["isResolved"].as_bool() != Some(true))
+                    .count() as u32
+            })
+            .unwrap_or(0);
+
+        let first_linked = v["closingIssuesReferences"]["nodes"]
+            .as_array()
+            .and_then(|arr| arr.first());
+        let linked_issue = first_linked
+            .and_then(|issue| issue["number"].as_u64())
+            .map(|n| n as u32);
+        let linked_issue_state = first_linked.and_then(|issue| {
+            let s = issue["state"].as_str()?;
+            let reason = issue["stateReason"].as_str().unwrap_or("");
+            let normalised = if s == "OPEN" {
+                "open"
+            } else if reason == "COMPLETED" {
+                "completed"
+            } else {
+                "closed"
+            };
+            Some(normalised.to_string())
+        });
+
+        let labels = v["labels"]["nodes"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        prs.push(CachedPr {
+            number,
+            branch,
+            linked_issue,
+            state,
+            review_decision,
+            checks_state,
+            ci_code_state,
+            ci_gate_state,
+            ci_checks,
+            has_conflicts,
+            unresolved_threads,
+            linked_issue_state,
+            labels,
+            title,
+            is_draft,
+            author,
+            requested_reviewers,
+            reviews,
+            additions,
+            deletions,
+            created_at,
+            updated_at,
+            last_commit_pushed_at,
+        });
+    }
+
+    prs
+}
+
 /// Fetches open GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
 ///
 /// Uses GraphQL to get closingIssuesReferences (linked issues), reviewThreads,
@@ -585,7 +861,25 @@ pub fn pr_graphql_query(owner: &str, name: &str) -> String {
 pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "prs");
 
-    let query = pr_graphql_query(config.owner(), config.repo_name());
+    // Read worktree cache to get branch list for per-branch queries.
+    let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
+    let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
+    let branches: Vec<String> = worktrees
+        .iter()
+        .filter(|w| !w.is_bare && !crate::derive::is_default_branch(&w.branch))
+        .map(|w| w.branch.clone())
+        .collect();
+
+    if branches.is_empty() {
+        LOG.info(&format!(
+            "cache_sources: refresh_prs({}): no feature branches, skipping",
+            config.slug
+        ));
+        cache::write_cache_if_nonempty(&path, &Vec::<CachedPr>::new())?;
+        return Ok(());
+    }
+
+    let query = pr_graphql_query_per_branch(config.owner(), config.repo_name(), &branches);
 
     // Build gate matcher from global config so classification is consistent
     // with the loaded user preferences.
@@ -600,7 +894,7 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(json) => {
-            let prs = parse_prs_graphql(&json, &matcher);
+            let prs = parse_prs_graphql_per_branch(&json, &matcher);
             cache::write_cache_if_nonempty(&path, &prs)?;
             LOG.info(&format!(
                 "cache_sources: refresh_prs({}): wrote {} entries",

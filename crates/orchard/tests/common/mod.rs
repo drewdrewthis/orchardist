@@ -145,6 +145,16 @@ pub fn make_pr(number: u32, branch: &str) -> CachedPr {
         unresolved_threads: 0,
         linked_issue_state: None,
         labels: vec![],
+        title: None,
+        is_draft: None,
+        author: None,
+        requested_reviewers: vec![],
+        reviews: vec![],
+        additions: None,
+        deletions: None,
+        created_at: None,
+        updated_at: None,
+        last_commit_pushed_at: None,
     }
 }
 

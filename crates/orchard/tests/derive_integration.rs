@@ -301,25 +301,39 @@ fn make_code_green_gate_blocked_pr(number: u32, branch: &str) -> CachedPr {
                 CheckInfo {
                     name: "test-unit".to_string(),
                     state: "passing".to_string(),
+                    details_url: None,
                 },
                 CheckInfo {
                     name: "test-integration".to_string(),
                     state: "passing".to_string(),
+                    details_url: None,
                 },
                 CheckInfo {
                     name: "lint".to_string(),
                     state: "passing".to_string(),
+                    details_url: None,
                 },
             ],
             gate: vec![CheckInfo {
                 name: "check-approval-or-label".to_string(),
                 state: "failing".to_string(),
+                details_url: None,
             }],
         },
         has_conflicts: false,
         unresolved_threads: 0,
         linked_issue_state: None,
         labels: vec![],
+        title: None,
+        is_draft: None,
+        author: None,
+        requested_reviewers: vec![],
+        reviews: vec![],
+        additions: None,
+        deletions: None,
+        created_at: None,
+        updated_at: None,
+        last_commit_pushed_at: None,
     }
 }
 
@@ -415,16 +429,28 @@ fn e2e_pending_gate_is_not_surfaced_by_blocked_filter() {
             code: vec![CheckInfo {
                 name: "test-unit".to_string(),
                 state: "passing".to_string(),
+                details_url: None,
             }],
             gate: vec![CheckInfo {
                 name: "Mintlify Deployment".to_string(),
                 state: "pending".to_string(),
+                details_url: None,
             }],
         },
         has_conflicts: false,
         unresolved_threads: 0,
         linked_issue_state: None,
         labels: vec![],
+        title: None,
+        is_draft: None,
+        author: None,
+        requested_reviewers: vec![],
+        reviews: vec![],
+        additions: None,
+        deletions: None,
+        created_at: None,
+        updated_at: None,
+        last_commit_pushed_at: None,
     }];
 
     let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[]);

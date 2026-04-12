@@ -642,6 +642,16 @@ mod tests {
             unresolved_threads: 0,
             linked_issue_state: None,
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 

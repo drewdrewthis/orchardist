@@ -30,6 +30,18 @@ pub struct CachedIssue {
     pub labels: Vec<String>,
 }
 
+/// A single review submitted on a pull request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CachedReview {
+    /// GitHub login of the reviewer.
+    pub author: String,
+    /// Review state string from GitHub (e.g. `"APPROVED"`, `"CHANGES_REQUESTED"`, `"COMMENTED"`).
+    pub state: String,
+    /// ISO 8601 timestamp when the review was submitted, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_at: Option<String>,
+}
+
 /// A GitHub pull request entry as stored in the PRs cache file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedPr {
@@ -73,6 +85,36 @@ pub struct CachedPr {
     /// deserialize successfully (producing an empty vec).
     #[serde(default)]
     pub labels: Vec<String>,
+    /// PR title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the PR is a draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
+    /// GitHub login of the PR author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Logins or team names of requested reviewers.
+    #[serde(default)]
+    pub requested_reviewers: Vec<String>,
+    /// Reviews submitted on this PR.
+    #[serde(default)]
+    pub reviews: Vec<CachedReview>,
+    /// Number of lines added by this PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    /// Number of lines deleted by this PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    /// ISO 8601 timestamp when the PR was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the PR was last updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_commit_pushed_at: Option<String>,
 }
 
 /// A git worktree entry as stored in the worktrees cache file.
@@ -336,6 +378,16 @@ mod tests {
             unresolved_threads: 0,
             linked_issue_state: None,
             labels: vec![],
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: None,
         }
     }
 

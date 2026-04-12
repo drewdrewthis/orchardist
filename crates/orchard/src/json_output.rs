@@ -1207,10 +1207,12 @@ mod tests {
                 code: vec![CheckInfo {
                     name: "test-unit".to_string(),
                     state: "passing".to_string(),
+                    details_url: None,
                 }],
                 gate: vec![CheckInfo {
                     name: "check-approval-or-label".to_string(),
                     state: "failing".to_string(),
+                    details_url: None,
                 }],
             }
         } else {
