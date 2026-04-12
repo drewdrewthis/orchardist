@@ -284,6 +284,7 @@ mod tests {
             issue_number: Some(issue_number),
             issue_title: Some(format!("Test task {issue_number}")),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: DisplayGroup::Other,

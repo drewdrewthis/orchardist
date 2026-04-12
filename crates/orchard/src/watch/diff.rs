@@ -332,6 +332,7 @@ mod tests {
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
+            labels: vec![],
         }
     }
 

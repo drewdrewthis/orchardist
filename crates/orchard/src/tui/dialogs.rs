@@ -480,6 +480,7 @@ mod tests {
                 issue_number: None,
                 issue_title: None,
                 issue_state: None,
+                issue_labels: vec![],
                 pr: None,
                 sessions: vec![],
                 display_group: crate::derive::DisplayGroup::Other,

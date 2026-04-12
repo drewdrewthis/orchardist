@@ -126,6 +126,17 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 Some(normalised.to_string())
             });
 
+            // GraphQL shape is `labels: { nodes: [{ name: "..." }, ...] }` —
+            // unlike `parse_issues_json` above which reads a flat REST array.
+            let labels = v["labels"]["nodes"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             Some(CachedPr {
                 number,
                 branch,
@@ -136,6 +147,7 @@ pub fn parse_prs_graphql(json: &str) -> Vec<CachedPr> {
                 has_conflicts,
                 unresolved_threads,
                 linked_issue_state,
+                labels,
             })
         })
         .collect()
@@ -428,6 +440,14 @@ pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
         state
         reviewDecision
         mergeable
+        # 100 is deliberately high: GitHub rarely surfaces more than ~20 labels
+        # on a single PR, and truncation would silently drop a phase label,
+        # flipping the computed `phase` projection from its real value to null.
+        labels(first: 100) {{
+          nodes {{
+            name
+          }}
+        }}
         reviewThreads(first: 100) {{
           nodes {{
             isResolved
@@ -1002,6 +1022,67 @@ mod tests {
     #[test]
     fn parse_prs_graphql_invalid_json_returns_empty() {
         assert!(parse_prs_graphql("{bad}").is_empty());
+    }
+
+    // -- parse_prs_graphql labels extraction --------------------------------
+
+    /// Builds a PR node with an explicit `labels` array of name strings.
+    fn gql_pr_node_with_labels(number: u32, label_names: &[&str]) -> serde_json::Value {
+        let mut node = gql_pr_node(number, "test/branch", None, "MERGEABLE", None, vec![], 0);
+        let label_nodes: Vec<serde_json::Value> =
+            label_names.iter().map(|n| json!({"name": n})).collect();
+        node["labels"] = json!({ "nodes": label_nodes });
+        node
+    }
+
+    #[test]
+    fn parse_prs_graphql_extracts_labels_when_present() {
+        let json = graphql_prs(json!([gql_pr_node_with_labels(
+            55,
+            &["in-progress", "bug"],
+        )]));
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs[0].labels, vec!["in-progress", "bug"]);
+    }
+
+    #[test]
+    fn parse_prs_graphql_labels_empty_when_nodes_missing() {
+        // Existing `gql_pr_node` helper emits no `labels` key at all.
+        let json = graphql_prs(json!([gql_pr_node(
+            55,
+            "test/branch",
+            None,
+            "MERGEABLE",
+            None,
+            vec![],
+            0,
+        )]));
+        let prs = parse_prs_graphql(&json);
+        assert!(prs[0].labels.is_empty());
+    }
+
+    #[test]
+    fn parse_prs_graphql_labels_empty_when_nodes_array_is_empty() {
+        let json = graphql_prs(json!([gql_pr_node_with_labels(55, &[])]));
+        let prs = parse_prs_graphql(&json);
+        assert!(prs[0].labels.is_empty());
+    }
+
+    #[test]
+    fn parse_prs_graphql_skips_label_nodes_without_name() {
+        // Defensive: if a node in the labels array is missing a `name` field,
+        // skip it rather than panicking or emitting a placeholder.
+        let mut node = gql_pr_node(55, "test/branch", None, "MERGEABLE", None, vec![], 0);
+        node["labels"] = json!({
+            "nodes": [
+                {"name": "keep-me"},
+                {"other": "no-name-here"},
+                {"name": "also-keep"},
+            ]
+        });
+        let json = graphql_prs(json!([node]));
+        let prs = parse_prs_graphql(&json);
+        assert_eq!(prs[0].labels, vec!["keep-me", "also-keep"]);
     }
 
     // -- parse_worktree_porcelain -------------------------------------------

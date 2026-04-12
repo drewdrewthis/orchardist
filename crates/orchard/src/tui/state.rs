@@ -17,7 +17,7 @@ pub enum ViewState {
     /// The main worktree task list.
     List,
     /// A confirmation dialog for deleting a worktree.
-    ConfirmDelete(DeleteState),
+    ConfirmDelete(Box<DeleteState>),
     /// A multi-select dialog for cleaning up stale worktrees.
     Cleanup(CleanupState),
     /// A text-entry dialog for creating a new tmux session.

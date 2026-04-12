@@ -52,6 +52,12 @@ pub struct CachedPr {
     /// the GraphQL `closingIssuesReferences` nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_issue_state: Option<String>,
+    /// Labels applied to the PR.
+    ///
+    /// Uses `serde(default)` so pre-upgrade cache files without this key still
+    /// deserialize successfully (producing an empty vec).
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// A git worktree entry as stored in the worktrees cache file.
@@ -311,6 +317,7 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            labels: vec![],
         }
     }
 
@@ -635,5 +642,56 @@ mod tests {
         // Also verify the JSON on disk contains the field name.
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"last_refreshed\""));
+    }
+
+    // -- CachedPr labels migration -------------------------------------------
+
+    #[test]
+    fn cached_pr_without_labels_key_deserializes_to_empty_vec() {
+        let json = r#"{
+            "number": 55,
+            "branch": "issue/example",
+            "linked_issue": null,
+            "state": "open",
+            "review_decision": null,
+            "checks_state": null,
+            "has_conflicts": false,
+            "unresolved_threads": 0
+        }"#;
+        let pr: CachedPr = serde_json::from_str(json).expect("deserialization should succeed");
+        assert!(
+            pr.labels.is_empty(),
+            "labels should default to empty vec when key is absent"
+        );
+    }
+
+    #[test]
+    fn cached_pr_with_labels_key_round_trips() {
+        let json = r#"{
+            "number": 55,
+            "branch": "issue/example",
+            "linked_issue": null,
+            "state": "open",
+            "review_decision": null,
+            "checks_state": null,
+            "has_conflicts": false,
+            "unresolved_threads": 0,
+            "labels": ["in-progress", "bug"]
+        }"#;
+        let pr: CachedPr = serde_json::from_str(json).expect("deserialization should succeed");
+        assert_eq!(pr.labels, vec!["in-progress", "bug"]);
+    }
+
+    #[test]
+    fn cached_issue_with_labels_key_deserializes_correctly() {
+        let json = r#"{
+            "number": 42,
+            "title": "Test issue",
+            "state": "open",
+            "labels": ["enhancement"]
+        }"#;
+        let issue: CachedIssue =
+            serde_json::from_str(json).expect("deserialization should succeed");
+        assert_eq!(issue.labels, vec!["enhancement"]);
     }
 }

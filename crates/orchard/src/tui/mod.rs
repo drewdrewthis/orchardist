@@ -1440,11 +1440,11 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
-                    self.view = ViewState::ConfirmDelete(state::DeleteState {
+                    self.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
                         target: vt.row.clone(),
                         phase: Phase::Confirm,
                         error: None,
-                    });
+                    }));
                 }
                 ok()
             }
@@ -2154,6 +2154,7 @@ mod tests {
             issue_number: Some(issue_number),
             issue_title: Some(format!("Test task {}", issue_number)),
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: group,
@@ -2282,6 +2283,7 @@ mod tests {
                     checks_state: None,
                     has_conflicts: false,
                     unresolved_threads: 0,
+                    labels: vec![],
                 }),
                 ..make_task_row(1, DisplayGroup::Other)
             },
@@ -2312,6 +2314,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -2341,6 +2344,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_task_row(1, DisplayGroup::Other)
         }];
@@ -2579,6 +2583,7 @@ mod tests {
                 checks_state: None,
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_task_row(42, DisplayGroup::ReadyToMerge)
         };
@@ -2676,6 +2681,7 @@ mod tests {
             issue_number: None,
             issue_title: None,
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![],
             display_group: group,
@@ -2744,6 +2750,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_worktree_row("feat/needs-attn", DisplayGroup::NeedsAttention)
         };
@@ -2774,6 +2781,7 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_worktree_row("feat/approved", DisplayGroup::ReadyToMerge)
         };
@@ -2849,6 +2857,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_worktree_row("feat/branch", DisplayGroup::NeedsAttention)
         };
@@ -3073,11 +3082,11 @@ mod tests {
     #[test]
     fn handle_event_delete_confirm_y() {
         let mut app = App::new_test(vec![]);
-        app.view = ViewState::ConfirmDelete(state::DeleteState {
+        app.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
             target: make_task_row(1, DisplayGroup::Other),
             phase: Phase::Confirm,
             error: None,
-        });
+        }));
         let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::ConfirmYes));
     }
@@ -3306,6 +3315,7 @@ mod tests {
                 checks_state: Some("failing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 2,
+                labels: vec![],
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3333,6 +3343,7 @@ mod tests {
                 checks_state: Some("pending".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {
@@ -3364,6 +3375,7 @@ mod tests {
                 checks_state: Some("passing".to_string()),
                 has_conflicts: false,
                 unresolved_threads: 0,
+                labels: vec![],
             }),
             ..make_task_row_with_title(54, "Add Theme struct", DisplayGroup::ReadyToMerge)
         };
@@ -3539,11 +3551,11 @@ mod tests {
     #[test]
     fn mouse_events_ignored_in_confirm_delete_view() {
         let mut app = app_with_table_area(vec![]);
-        app.view = ViewState::ConfirmDelete(state::DeleteState {
+        app.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
             target: make_task_row(1, DisplayGroup::Other),
             phase: Phase::Confirm,
             error: None,
-        });
+        }));
         let event = make_mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 7);
         assert_eq!(app.handle_mouse_event(event), None);
     }
@@ -3879,6 +3891,7 @@ mod tests {
             issue_number: None,
             issue_title: None,
             issue_state: None,
+            issue_labels: vec![],
             pr: None,
             sessions: vec![EnrichedSession {
                 tmux: TmuxSessionInfo {

@@ -28,6 +28,50 @@ type RepoCacheEntry = (
 /// Maximum age (in seconds) before a Claude hook state file is considered stale.
 const HOOK_STATE_STALENESS_SECS: u64 = 300;
 
+/// Workflow phase labels applied by the `/gh-tag` skill, in priority order.
+///
+/// Highest-priority first: `blocked` wins over everything so a blocked PR never
+/// silently vanishes from filters when multiple phase labels coexist.
+///
+/// Source of truth for the label set: `~/.claude/skills/gh-tag/tag.sh`.
+/// Keep in sync manually when new phase labels are added to that skill.
+pub const PHASE_PRIORITY: &[&str] = &[
+    "blocked",
+    "in-ai-review",
+    "pr-ready",
+    "in-progress",
+    "needs-repro",
+    "needs-plan",
+    "investigating",
+    "planned",
+];
+
+/// Derives the workflow phase from a slice of label strings.
+///
+/// Iterates `PHASE_PRIORITY` in order and returns the first label whose name
+/// appears anywhere in the input slice. Returns `None` if no phase label is
+/// present. Matching is case-sensitive and exact.
+///
+/// # Examples
+///
+/// ```
+/// use orchard::derive::phase_from_labels;
+///
+/// assert_eq!(phase_from_labels(&[]), None);
+/// assert_eq!(phase_from_labels(&["bug".to_string()]), None);
+/// assert_eq!(phase_from_labels(&["in-progress".to_string()]), Some("in-progress"));
+/// assert_eq!(
+///     phase_from_labels(&["in-progress".to_string(), "blocked".to_string()]),
+///     Some("blocked"),
+/// );
+/// ```
+pub fn phase_from_labels(labels: &[String]) -> Option<&'static str> {
+    PHASE_PRIORITY
+        .iter()
+        .find(|&&priority_label| labels.iter().any(|l| l == priority_label))
+        .copied()
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -68,6 +112,8 @@ pub struct PrInfo {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Labels applied to the PR.
+    pub labels: Vec<String>,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -89,6 +135,9 @@ pub struct WorktreeRow {
     /// State of the linked issue ("open", "closed", "completed"), if any.
     /// Used to detect stale worktrees whose issue has been resolved without a PR.
     pub issue_state: Option<String>,
+    /// Labels on the linked issue, if any. Empty when no issue is linked or
+    /// the issue has no labels.
+    pub issue_labels: Vec<String>,
     /// Linked pull request, if one exists for this branch.
     pub pr: Option<PrInfo>,
     /// Active tmux sessions associated with this worktree path.
@@ -148,6 +197,7 @@ pub fn derive_worktree_rows(
         let linked_issue = issue_number.and_then(|num| issues.iter().find(|i| i.number == num));
         let issue_title = linked_issue.map(|i| i.title.clone());
         let issue_state = linked_issue.map(|i| i.state.clone());
+        let issue_labels = linked_issue.map(|i| i.labels.clone()).unwrap_or_default();
 
         let is_main_worktree =
             is_first_non_bare || session_infos.iter().any(|s| s.tmux.name.ends_with("_main"));
@@ -168,6 +218,7 @@ pub fn derive_worktree_rows(
             issue_number,
             issue_title,
             issue_state,
+            issue_labels,
             pr: pr_info,
             sessions: session_infos,
             display_group,
@@ -227,6 +278,7 @@ fn pr_info_from(pr: &CachedPr) -> PrInfo {
         checks_state: pr.checks_state.clone(),
         has_conflicts: pr.has_conflicts,
         unresolved_threads: pr.unresolved_threads,
+        labels: pr.labels.clone(),
     }
 }
 
@@ -497,6 +549,7 @@ mod tests {
             linked_issue: None,
             state: "open".to_string(),
             review_decision: None,
+            labels: vec![],
             checks_state: None,
             has_conflicts: false,
             unresolved_threads: 0,
@@ -515,6 +568,7 @@ mod tests {
             has_conflicts: false,
             unresolved_threads: 0,
             linked_issue_state: None,
+            labels: vec![],
         }
     }
 
@@ -1487,5 +1541,148 @@ mod tests {
         let enriched = enrich_session_from_scraping_for_test(&sess);
         assert_eq!(enriched.panes.len(), 1);
         assert!(enriched.panes[0].has_claude);
+    }
+
+    // -----------------------------------------------------------------------
+    // phase_from_labels tests
+    // -----------------------------------------------------------------------
+
+    fn ls(labels: &[&str]) -> Vec<String> {
+        labels.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn phase_from_labels_empty_returns_none() {
+        assert_eq!(phase_from_labels(&[]), None);
+    }
+
+    #[test]
+    fn phase_from_labels_no_phase_labels_returns_none() {
+        assert_eq!(
+            phase_from_labels(&ls(&["bug", "enhancement", "good-first-issue"])),
+            None
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_single_phase_label_returns_it() {
+        assert_eq!(
+            phase_from_labels(&ls(&["in-progress"])),
+            Some("in-progress")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_mixed_with_unrelated_returns_phase() {
+        assert_eq!(
+            phase_from_labels(&ls(&["bug", "planned", "priority-high"])),
+            Some("planned")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_priority_resolves_two_labels() {
+        // in-progress (rank 4) beats planned (rank 8)
+        assert_eq!(
+            phase_from_labels(&ls(&["planned", "in-progress"])),
+            Some("in-progress")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_blocked_wins_over_in_progress() {
+        assert_eq!(
+            phase_from_labels(&ls(&["in-progress", "blocked"])),
+            Some("blocked")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_blocked_wins_over_in_ai_review() {
+        assert_eq!(
+            phase_from_labels(&ls(&["in-ai-review", "blocked"])),
+            Some("blocked")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_priority_resolves_three_labels() {
+        assert_eq!(
+            phase_from_labels(&ls(&["investigating", "needs-plan", "blocked"])),
+            Some("blocked")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_in_ai_review_wins_over_pr_ready() {
+        assert_eq!(
+            phase_from_labels(&ls(&["pr-ready", "in-ai-review"])),
+            Some("in-ai-review")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_investigating() {
+        assert_eq!(
+            phase_from_labels(&ls(&["investigating"])),
+            Some("investigating")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_needs_plan() {
+        assert_eq!(phase_from_labels(&ls(&["needs-plan"])), Some("needs-plan"));
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_needs_repro() {
+        assert_eq!(
+            phase_from_labels(&ls(&["needs-repro"])),
+            Some("needs-repro")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_planned() {
+        assert_eq!(phase_from_labels(&ls(&["planned"])), Some("planned"));
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_in_progress() {
+        assert_eq!(
+            phase_from_labels(&ls(&["in-progress"])),
+            Some("in-progress")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_in_ai_review() {
+        assert_eq!(
+            phase_from_labels(&ls(&["in-ai-review"])),
+            Some("in-ai-review")
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_pr_ready() {
+        assert_eq!(phase_from_labels(&ls(&["pr-ready"])), Some("pr-ready"));
+    }
+
+    #[test]
+    fn phase_from_labels_recognizes_blocked() {
+        assert_eq!(phase_from_labels(&ls(&["blocked"])), Some("blocked"));
+    }
+
+    #[test]
+    fn phase_from_labels_ignores_unknown_labels() {
+        assert_eq!(
+            phase_from_labels(&ls(&["wontfix", "duplicate", "question"])),
+            None
+        );
+    }
+
+    #[test]
+    fn phase_from_labels_case_sensitive_no_match_for_uppercase() {
+        assert_eq!(phase_from_labels(&ls(&["In-Progress"])), None);
     }
 }
