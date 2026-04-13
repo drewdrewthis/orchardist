@@ -129,6 +129,8 @@ pub struct JsonIssue {
     /// Parent issue number, if this is a sub-issue.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<u32>,
+    /// All GitHub labels on this issue, in the order returned by the API.
+    pub labels: Vec<String>,
     /// Workflow phase derived from labels (e.g. `"in-progress"`, `"blocked"`).
     /// Always present: `null` when no phase label is set.
     pub phase: Option<&'static str>,
@@ -200,6 +202,8 @@ pub struct JsonPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// All GitHub labels on this PR, in the order returned by the API.
+    pub labels: Vec<String>,
     /// Lines added by this PR.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub additions: Option<u32>,
@@ -447,6 +451,7 @@ impl From<&IssueInfo> for JsonIssue {
                 })
                 .collect(),
             parent: i.parent,
+            labels: i.labels.clone(),
             phase: phase_from_labels(&i.labels),
         }
     }
@@ -485,6 +490,7 @@ impl From<&PrState> for JsonPr {
             ci_checks: pr.ci_checks.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            labels: pr.labels.clone(),
             additions: pr.additions,
             deletions: pr.deletions,
             created_at: pr.created_at.clone(),
@@ -1597,5 +1603,71 @@ mod tests {
             serde_json::Value::Null,
             "checksState must be null when PR has no CI checks"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // labels field tests (issue #235)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn json_issue_includes_labels() {
+        let issue = make_issue_info(1, "labeled issue", "open", vec!["bug", "in-progress"]);
+        let ji = JsonIssue::from(&issue);
+        assert_eq!(ji.labels, vec!["bug", "in-progress"]);
+        let v = serde_json::to_value(&ji).unwrap();
+        assert_eq!(v["labels"], serde_json::json!(["bug", "in-progress"]));
+    }
+
+    #[test]
+    fn json_issue_empty_labels() {
+        let issue = make_issue_info(2, "unlabeled issue", "open", vec![]);
+        let ji = JsonIssue::from(&issue);
+        assert!(ji.labels.is_empty());
+        let v = serde_json::to_value(&ji).unwrap();
+        assert_eq!(v["labels"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn json_pr_includes_labels() {
+        let pr = make_pr_state_with_labels(10, "feat/branch", vec!["enhancement", "pr-ready"]);
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.labels, vec!["enhancement", "pr-ready"]);
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(v["labels"], serde_json::json!(["enhancement", "pr-ready"]));
+    }
+
+    #[test]
+    fn json_pr_empty_labels() {
+        let pr = make_pr_state_with_labels(11, "feat/unlabeled", vec![]);
+        let jp = JsonPr::from(&pr);
+        assert!(jp.labels.is_empty());
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(v["labels"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn json_pr_labels_preserve_order() {
+        let pr =
+            make_pr_state_with_labels(12, "feat/ordered", vec!["z-label", "a-label", "m-label"]);
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.labels, vec!["z-label", "a-label", "m-label"]);
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(
+            v["labels"],
+            serde_json::json!(["z-label", "a-label", "m-label"])
+        );
+    }
+
+    #[test]
+    fn labels_field_does_not_change_phase() {
+        // "blocked" is higher priority than "in-progress"; phase must be "blocked"
+        // AND labels must contain both values.
+        let pr = make_pr_state_with_labels(13, "feat/both", vec!["blocked", "in-progress"]);
+        let jp = JsonPr::from(&pr);
+        assert_eq!(jp.phase, Some("blocked"));
+        assert_eq!(jp.labels, vec!["blocked", "in-progress"]);
+        let v = serde_json::to_value(&jp).unwrap();
+        assert_eq!(v["phase"], "blocked");
+        assert_eq!(v["labels"], serde_json::json!(["blocked", "in-progress"]));
     }
 }
