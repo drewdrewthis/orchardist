@@ -1049,10 +1049,10 @@ impl App {
         let show_branch = self.show_branch_column;
 
         // Compute available width for the TITLE column.
-        // Column order: BAR (1) + # (3) + CLAUDE (14) + ISSUE (6) + TITLE (flex)
+        // Column order: BAR (1) + # (3) + CLAUDE (18) + ISSUE (6) + TITLE (flex)
         //               + [BRANCH (20)] + [HOST (12)] + STATUS (22)
         // Each column has 1 spacing. Plus borders (2).
-        let fixed = 1 + 1 + 3 + 1 + 14 + 1 + 6 + 1 + 1 + 22 + 2;
+        let fixed = 1 + 1 + 3 + 1 + 18 + 1 + 6 + 1 + 1 + 22 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 12 + 1 } else { 0 };
         let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
