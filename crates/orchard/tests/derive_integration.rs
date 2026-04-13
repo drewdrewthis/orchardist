@@ -438,7 +438,11 @@ fn smart_sort_recent_activity_within_same_group() {
     let rows = derive_all_repos(&repo_caches, &[], &[]);
 
     // rows[0] is RepoMain; rows[1] and rows[2] are the two feature worktrees
-    assert!(rows.len() >= 3, "expected at least 3 rows, got {}", rows.len());
+    assert!(
+        rows.len() >= 3,
+        "expected at least 3 rows, got {}",
+        rows.len()
+    );
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
 
     // Both feature rows must be in Other (plain PRs, no special review state)
@@ -486,7 +490,11 @@ fn smart_sort_display_group_trumps_recency() {
 
     let rows = derive_all_repos(&repo_caches, &[], &[]);
 
-    assert!(rows.len() >= 3, "expected at least 3 rows, got {}", rows.len());
+    assert!(
+        rows.len() >= 3,
+        "expected at least 3 rows, got {}",
+        rows.len()
+    );
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
 
     // NeedsAttention must precede Other, regardless of timestamps
@@ -523,7 +531,11 @@ fn smart_sort_worktree_with_pr_before_without() {
 
     let rows = derive_all_repos(&repo_caches, &[], &[]);
 
-    assert!(rows.len() >= 3, "expected at least 3 rows, got {}", rows.len());
+    assert!(
+        rows.len() >= 3,
+        "expected at least 3 rows, got {}",
+        rows.len()
+    );
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
 
     // Both non-main rows are in Other

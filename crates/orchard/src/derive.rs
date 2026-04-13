@@ -554,7 +554,10 @@ mod tests {
             has_claude_input: false,
             ..base_key("feature-b")
         };
-        assert!(with_input < without_input, "claude input should sort before no input");
+        assert!(
+            with_input < without_input,
+            "claude input should sort before no input"
+        );
     }
 
     #[test]
@@ -580,7 +583,10 @@ mod tests {
             best_timestamp: None,
             ..base_key("branch-b")
         };
-        assert!(has_ts < no_ts, "row with timestamp should sort before row without");
+        assert!(
+            has_ts < no_ts,
+            "row with timestamp should sort before row without"
+        );
     }
 
     #[test]
@@ -595,7 +601,10 @@ mod tests {
             issue_number: Some(20),
             ..base_key("branch-b")
         };
-        assert!(low_issue < high_issue, "lower issue number should sort first");
+        assert!(
+            low_issue < high_issue,
+            "lower issue number should sort first"
+        );
     }
 
     #[test]
@@ -608,7 +617,10 @@ mod tests {
             has_pr: false,
             ..base_key("branch-b")
         };
-        assert!(with_pr < without_pr, "row with PR should sort before row without");
+        assert!(
+            with_pr < without_pr,
+            "row with PR should sort before row without"
+        );
     }
 
     #[test]
@@ -621,14 +633,20 @@ mod tests {
             issue_number: None,
             ..base_key("branch-b")
         };
-        assert!(with_issue < without_issue, "row with issue number should sort before row without");
+        assert!(
+            with_issue < without_issue,
+            "row with issue number should sort before row without"
+        );
     }
 
     #[test]
     fn sort_key_branch_alphabetical_as_final_tiebreaker() {
         let aardvark = base_key("aardvark");
         let zebra = base_key("zebra");
-        assert!(aardvark < zebra, "alphabetically earlier branch should sort first");
+        assert!(
+            aardvark < zebra,
+            "alphabetically earlier branch should sort first"
+        );
     }
 
     #[test]

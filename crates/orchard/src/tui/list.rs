@@ -1478,20 +1478,13 @@ impl App {
             };
             // Compute label badge spans for non-phase labels, giving them space
             // that remains after the title text is rendered.
-            let issue_label_strs: Vec<&str> = vt
-                .row
-                .issue_labels
-                .iter()
-                .map(|s| s.as_str())
-                .collect();
+            let issue_label_strs: Vec<&str> =
+                vt.row.issue_labels.iter().map(|s| s.as_str()).collect();
             // Title occupies at most min(title_raw_chars, title_width) chars.
             let title_raw_chars = title_raw.chars().count().min(title_width);
             let badges_available = title_width.saturating_sub(title_raw_chars);
             let badge_spans = label_badges(&issue_label_strs, badges_available);
-            let badge_chars: usize = badge_spans
-                .iter()
-                .map(|s| s.content.chars().count())
-                .sum();
+            let badge_chars: usize = badge_spans.iter().map(|s| s.content.chars().count()).sum();
             // Allocate remaining title budget after reserving badge space.
             let title_budget = title_width.saturating_sub(badge_chars);
             let title_display = crate::paths::truncate_left(title_raw, title_budget);
@@ -1552,10 +1545,7 @@ impl App {
                 } else if is_prioritized {
                     // Color the star with the prioritized theme color.
                     Cell::from(Line::from(vec![
-                        Span::styled(
-                            "\u{2605}",
-                            Style::default().fg(theme.prioritized),
-                        ),
+                        Span::styled("\u{2605}", Style::default().fg(theme.prioritized)),
                         Span::raw(num.to_string()),
                     ]))
                 } else {
@@ -1613,8 +1603,7 @@ impl App {
                         Style::default(),
                         highlight_style,
                     );
-                    let mut truncated =
-                        crate::tui::fuzzy::truncate_spans_left(spans, title_budget);
+                    let mut truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_budget);
                     truncated.extend(badge_spans);
                     Cell::from(Line::from(truncated))
                 } else {
@@ -3802,7 +3791,10 @@ mod tests {
     fn label_badges_returns_empty_when_no_space_available() {
         let labels = vec!["bug"];
         let spans = label_badges(&labels, 0);
-        assert!(spans.is_empty(), "expected no badges when available_width=0");
+        assert!(
+            spans.is_empty(),
+            "expected no badges when available_width=0"
+        );
     }
 
     #[test]
