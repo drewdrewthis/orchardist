@@ -37,24 +37,13 @@ impl OrchardState {
     }
 
     /// Returns a flat list of all worktrees across all repos, sorted by
-    /// display_group then by issue number (worktrees without issues sort last
-    /// within their group, then by branch name).
+    /// display_group then by smart criteria (claude input, recency, PR presence,
+    /// issue number, branch name).
     pub fn all_worktrees(&self) -> Vec<&WorktreeState> {
         let mut all: Vec<&WorktreeState> =
             self.repos.iter().flat_map(|r| r.worktrees.iter()).collect();
 
-        all.sort_by(|a, b| {
-            a.display_group.cmp(&b.display_group).then_with(|| {
-                let a_num = a.issue.as_ref().map(|i| i.number);
-                let b_num = b.issue.as_ref().map(|i| i.number);
-                match (a_num, b_num) {
-                    (Some(an), Some(bn)) => an.cmp(&bn),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.branch.cmp(&b.branch),
-                }
-            })
-        });
+        all.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
         all
     }
@@ -108,6 +97,30 @@ pub struct WorktreeState {
     pub ahead_behind: Option<(u32, u32)>,
     /// ISO 8601 timestamp of the most recent commit in this worktree.
     pub last_commit_at: Option<String>,
+}
+
+impl WorktreeState {
+    /// Builds a sort key for multi-criteria ordering of worktree rows.
+    pub fn sort_key(&self) -> crate::derive::WorktreeSortKey<'_> {
+        let has_claude_input = self.sessions.iter().any(|s| {
+            s.claude
+                .as_ref()
+                .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
+        });
+        let best_timestamp = self
+            .pr
+            .as_ref()
+            .and_then(|pr| pr.last_commit_pushed_at.as_deref())
+            .or(self.last_commit_at.as_deref());
+        crate::derive::WorktreeSortKey {
+            display_group: self.display_group,
+            has_claude_input,
+            best_timestamp,
+            has_pr: self.pr.is_some(),
+            issue_number: self.issue.as_ref().map(|i| i.number),
+            branch: &self.branch,
+        }
+    }
 }
 
 /// Lightweight issue summary attached to a worktree.

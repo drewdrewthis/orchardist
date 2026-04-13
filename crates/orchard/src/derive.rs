@@ -231,6 +231,86 @@ impl Default for PrInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Sort key
+// ---------------------------------------------------------------------------
+
+/// Sort key extracted from a worktree for consistent ordering.
+/// Implements Ord so both WorktreeRow and WorktreeState can use the same comparator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeSortKey<'a> {
+    /// Primary: display group (ascending).
+    pub display_group: DisplayGroup,
+    /// Secondary: rows where any session has ClaudeState::Input sort first.
+    pub has_claude_input: bool,
+    /// Tertiary: best available timestamp (ISO 8601, descending — most recent first).
+    pub best_timestamp: Option<&'a str>,
+    /// Quaternary: rows with a PR sort before rows without.
+    pub has_pr: bool,
+    /// Quinary: issue number ascending; Some before None.
+    pub issue_number: Option<u32>,
+    /// Senary: branch name alphabetical.
+    pub branch: &'a str,
+}
+
+impl<'a> PartialOrd for WorktreeSortKey<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for WorktreeSortKey<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Primary: display_group ascending
+        self.display_group
+            .cmp(&other.display_group)
+            // Secondary: claude input first (true before false)
+            .then_with(|| other.has_claude_input.cmp(&self.has_claude_input))
+            // Tertiary: best_timestamp descending (most recent first); None sorts last
+            .then_with(|| match (self.best_timestamp, other.best_timestamp) {
+                (Some(a), Some(b)) => b.cmp(a), // reverse: larger timestamp = more recent
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            // Quaternary: has_pr true before false
+            .then_with(|| other.has_pr.cmp(&self.has_pr))
+            // Quinary: issue number ascending; Some before None
+            .then_with(|| match (self.issue_number, other.issue_number) {
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            // Senary: branch alphabetical
+            .then_with(|| self.branch.cmp(other.branch))
+    }
+}
+
+impl WorktreeRow {
+    /// Builds a sort key from this row for use in multi-criteria ordering.
+    pub fn sort_key(&self) -> WorktreeSortKey<'_> {
+        let has_claude_input = self.sessions.iter().any(|s| {
+            s.claude
+                .as_ref()
+                .is_some_and(|c| c.status == crate::claude_state::ClaudeState::Input)
+        });
+        let best_timestamp = self
+            .pr
+            .as_ref()
+            .and_then(|pr| pr.last_commit_pushed_at.as_deref())
+            .or(self.worktree_last_commit_at.as_deref());
+        WorktreeSortKey {
+            display_group: self.display_group,
+            has_claude_input,
+            best_timestamp,
+            has_pr: self.pr.is_some(),
+            issue_number: self.issue_number,
+            branch: &self.branch,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Staleness helpers
 // ---------------------------------------------------------------------------
 
@@ -432,5 +512,134 @@ mod tests {
     #[test]
     fn is_state_stale_returns_true_for_unparseable_timestamp() {
         assert!(is_state_stale("not-a-timestamp", 300));
+    }
+
+    // -----------------------------------------------------------------------
+    // WorktreeSortKey tests
+    // -----------------------------------------------------------------------
+
+    fn base_key<'a>(branch: &'a str) -> WorktreeSortKey<'a> {
+        WorktreeSortKey {
+            display_group: DisplayGroup::Other,
+            has_claude_input: false,
+            best_timestamp: None,
+            has_pr: false,
+            issue_number: None,
+            branch,
+        }
+    }
+
+    #[test]
+    fn sort_key_display_group_is_primary_sort() {
+        let main = WorktreeSortKey {
+            display_group: DisplayGroup::RepoMain,
+            ..base_key("main")
+        };
+        let other = WorktreeSortKey {
+            display_group: DisplayGroup::Other,
+            ..base_key("feature")
+        };
+        assert!(main < other, "RepoMain should sort before Other");
+    }
+
+    #[test]
+    fn sort_key_claude_input_sorts_first_within_group() {
+        let with_input = WorktreeSortKey {
+            has_claude_input: true,
+            ..base_key("feature-a")
+        };
+        let without_input = WorktreeSortKey {
+            has_claude_input: false,
+            ..base_key("feature-b")
+        };
+        assert!(with_input < without_input, "claude input should sort before no input");
+    }
+
+    #[test]
+    fn sort_key_recent_timestamp_sorts_before_stale() {
+        let recent = WorktreeSortKey {
+            best_timestamp: Some("2024-06-01T10:00:00Z"),
+            ..base_key("branch-a")
+        };
+        let stale = WorktreeSortKey {
+            best_timestamp: Some("2024-01-01T10:00:00Z"),
+            ..base_key("branch-b")
+        };
+        assert!(recent < stale, "more recent timestamp should sort first");
+    }
+
+    #[test]
+    fn sort_key_none_timestamp_sorts_last() {
+        let has_ts = WorktreeSortKey {
+            best_timestamp: Some("2024-01-01T10:00:00Z"),
+            ..base_key("branch-a")
+        };
+        let no_ts = WorktreeSortKey {
+            best_timestamp: None,
+            ..base_key("branch-b")
+        };
+        assert!(has_ts < no_ts, "row with timestamp should sort before row without");
+    }
+
+    #[test]
+    fn sort_key_same_timestamp_falls_back_to_issue_number() {
+        let low_issue = WorktreeSortKey {
+            best_timestamp: Some("2024-06-01T10:00:00Z"),
+            issue_number: Some(10),
+            ..base_key("branch-a")
+        };
+        let high_issue = WorktreeSortKey {
+            best_timestamp: Some("2024-06-01T10:00:00Z"),
+            issue_number: Some(20),
+            ..base_key("branch-b")
+        };
+        assert!(low_issue < high_issue, "lower issue number should sort first");
+    }
+
+    #[test]
+    fn sort_key_has_pr_sorts_before_no_pr() {
+        let with_pr = WorktreeSortKey {
+            has_pr: true,
+            ..base_key("branch-a")
+        };
+        let without_pr = WorktreeSortKey {
+            has_pr: false,
+            ..base_key("branch-b")
+        };
+        assert!(with_pr < without_pr, "row with PR should sort before row without");
+    }
+
+    #[test]
+    fn sort_key_issue_number_some_before_none() {
+        let with_issue = WorktreeSortKey {
+            issue_number: Some(5),
+            ..base_key("branch-a")
+        };
+        let without_issue = WorktreeSortKey {
+            issue_number: None,
+            ..base_key("branch-b")
+        };
+        assert!(with_issue < without_issue, "row with issue number should sort before row without");
+    }
+
+    #[test]
+    fn sort_key_branch_alphabetical_as_final_tiebreaker() {
+        let aardvark = base_key("aardvark");
+        let zebra = base_key("zebra");
+        assert!(aardvark < zebra, "alphabetically earlier branch should sort first");
+    }
+
+    #[test]
+    fn sort_key_ord_equality() {
+        let a = WorktreeSortKey {
+            display_group: DisplayGroup::ClaudeWorking,
+            has_claude_input: true,
+            best_timestamp: Some("2024-06-01T10:00:00Z"),
+            has_pr: true,
+            issue_number: Some(42),
+            branch: "feature/42",
+        };
+        let b = a.clone();
+        assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
     }
 }
