@@ -1478,7 +1478,7 @@ impl App {
             };
             // Compute label badge spans for non-phase labels, giving them space
             // that remains after the title text is rendered.
-            let non_phase_label_strs: Vec<&str> = vt
+            let issue_label_strs: Vec<&str> = vt
                 .row
                 .issue_labels
                 .iter()
@@ -1487,7 +1487,7 @@ impl App {
             // Title occupies at most min(title_raw_chars, title_width) chars.
             let title_raw_chars = title_raw.chars().count().min(title_width);
             let badges_available = title_width.saturating_sub(title_raw_chars);
-            let badge_spans = label_badges(&non_phase_label_strs, badges_available);
+            let badge_spans = label_badges(&issue_label_strs, badges_available);
             let badge_chars: usize = badge_spans
                 .iter()
                 .map(|s| s.content.chars().count())

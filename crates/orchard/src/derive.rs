@@ -243,6 +243,8 @@ pub struct WorktreeSortKey<'a> {
     /// Secondary: rows where any session has ClaudeState::Input sort first.
     pub has_claude_input: bool,
     /// Tertiary: best available timestamp (ISO 8601, descending — most recent first).
+    /// Compared lexicographically, which is correct for ISO 8601 with Z suffix.
+    /// All timestamps from GitHub and git use UTC with Z suffix.
     pub best_timestamp: Option<&'a str>,
     /// Quaternary: rows with a PR sort before rows without.
     pub has_pr: bool,
