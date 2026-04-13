@@ -1647,11 +1647,8 @@ mod tests {
 
     #[test]
     fn json_pr_labels_preserve_order() {
-        let pr = make_pr_state_with_labels(
-            12,
-            "feat/ordered",
-            vec!["z-label", "a-label", "m-label"],
-        );
+        let pr =
+            make_pr_state_with_labels(12, "feat/ordered", vec!["z-label", "a-label", "m-label"]);
         let jp = JsonPr::from(&pr);
         assert_eq!(jp.labels, vec!["z-label", "a-label", "m-label"]);
         let v = serde_json::to_value(&jp).unwrap();
