@@ -58,6 +58,12 @@ pub struct ClaudeStateFile {
     /// during `PreToolUse`/`PostToolUse`/`PostToolUseFailure` events.
     #[serde(default)]
     pub inflight_tool_count: Option<u32>,
+    /// ISO 8601 timestamp when the state last transitioned.
+    ///
+    /// Only updated when the state value changes (e.g. working → idle).
+    /// Preserved unchanged on events that don't change the state.
+    #[serde(default)]
+    pub state_changed_at: Option<String>,
 }
 
 /// Parsed Claude state for use in derive logic.
@@ -267,6 +273,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }
     }
 
@@ -586,5 +593,34 @@ mod tests {
         let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
         assert!(sf.stop_reason.is_none());
         assert!(sf.inflight_tool_count.is_none());
+    }
+
+    #[test]
+    fn state_file_deserializes_state_changed_at() {
+        let json = r#"{
+            "state": "working",
+            "session_id": "abc",
+            "tmux_session": "repo_47",
+            "cwd": "/workspace",
+            "event": "PreToolUse",
+            "timestamp": "2026-04-13T10:00:00Z",
+            "state_changed_at": "2026-04-13T10:00:00Z"
+        }"#;
+        let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
+        assert_eq!(sf.state_changed_at.as_deref(), Some("2026-04-13T10:00:00Z"));
+    }
+
+    #[test]
+    fn state_file_state_changed_at_defaults_to_none_when_absent() {
+        let json = r#"{
+            "state": "idle",
+            "session_id": "abc",
+            "tmux_session": "repo_47",
+            "cwd": "/workspace",
+            "event": "Stop",
+            "timestamp": "2026-04-13T10:00:00Z"
+        }"#;
+        let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
+        assert!(sf.state_changed_at.is_none());
     }
 }

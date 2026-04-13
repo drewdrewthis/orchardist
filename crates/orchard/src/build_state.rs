@@ -451,6 +451,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }];
         let rows = build_standalone_sessions(&config, &[], &claude_states);
         let claude = rows[0].session.claude.as_ref().unwrap();
@@ -510,6 +511,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }
     }
 

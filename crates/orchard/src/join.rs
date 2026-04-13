@@ -303,6 +303,7 @@ pub(crate) fn enrich_session_from_scraping(
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         })
     } else {
         None
@@ -469,6 +470,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }
     }
 
@@ -492,6 +494,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }
     }
 
