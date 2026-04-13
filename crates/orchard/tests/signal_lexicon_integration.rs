@@ -15,7 +15,9 @@ mod common;
 use common::{make_issue, make_pr, make_worktree};
 use orchard::cache::CachedPr;
 use orchard::derive::derive_all_repos;
-use orchard::signal::{Activity, PipelineStatus, resolve_status_row, rollup_activity_row, sort_key_row};
+use orchard::signal::{
+    Activity, PipelineStatus, resolve_status_row, rollup_activity_row, sort_key_row,
+};
 
 // ---------------------------------------------------------------------------
 // Pipeline status hierarchy
@@ -187,10 +189,8 @@ fn sort_respects_merge_blocker_hierarchy() {
     assert_eq!(rows[0].branch, "main");
 
     // Compute sort keys and verify status ordering.
-    let tail_status: Vec<PipelineStatus> = rows[1..]
-        .iter()
-        .map(|r| sort_key_row(r).status)
-        .collect();
+    let tail_status: Vec<PipelineStatus> =
+        rows[1..].iter().map(|r| sort_key_row(r).status).collect();
     assert_eq!(
         tail_status,
         vec![
