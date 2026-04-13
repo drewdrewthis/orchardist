@@ -406,6 +406,138 @@ fn e2e_code_green_gate_blocked_pr_surfaces_in_json_output() {
     assert!(matches_triage_filter, "triage filter must surface this PR");
 }
 
+// ---------------------------------------------------------------------------
+// Smart sort: recency within same display group
+// ---------------------------------------------------------------------------
+
+/// Within the same `DisplayGroup`, worktrees with more recent PR activity
+/// (measured by `last_commit_pushed_at`) must sort before older ones.
+#[test]
+fn smart_sort_recent_activity_within_same_group() {
+    let repo_caches = vec![(
+        "owner/repo".to_string(),
+        vec![make_issue(10, "Issue ten"), make_issue(20, "Issue twenty")],
+        vec![
+            CachedPr {
+                last_commit_pushed_at: Some("2026-04-13T10:00:00Z".to_string()),
+                ..make_pr(10, "feat/issue-10")
+            },
+            CachedPr {
+                last_commit_pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
+                ..make_pr(20, "feat/issue-20")
+            },
+        ],
+        vec![
+            make_worktree("/tmp/wt-main", "main"),
+            make_worktree("/tmp/wt-a", "feat/issue-10"),
+            make_worktree("/tmp/wt-b", "feat/issue-20"),
+        ],
+        vec![],
+    )];
+
+    let rows = derive_all_repos(&repo_caches, &[], &[]);
+
+    // rows[0] is RepoMain; rows[1] and rows[2] are the two feature worktrees
+    assert!(rows.len() >= 3, "expected at least 3 rows, got {}", rows.len());
+    assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
+
+    // Both feature rows must be in Other (plain PRs, no special review state)
+    assert_eq!(rows[1].display_group, DisplayGroup::Other);
+    assert_eq!(rows[2].display_group, DisplayGroup::Other);
+
+    // More recent activity (April 13) must appear before stale activity (April 1)
+    assert_eq!(
+        rows[1].branch, "feat/issue-10",
+        "feat/issue-10 (recent) should sort before feat/issue-20 (stale)"
+    );
+    assert_eq!(rows[2].branch, "feat/issue-20");
+}
+
+// ---------------------------------------------------------------------------
+// Smart sort: display group trumps recency
+// ---------------------------------------------------------------------------
+
+/// `DisplayGroup` is the primary sort key. A `NeedsAttention` row with an
+/// older timestamp must appear before an `Other` row with a newer timestamp.
+#[test]
+fn smart_sort_display_group_trumps_recency() {
+    let repo_caches = vec![(
+        "owner/repo".to_string(),
+        vec![],
+        vec![
+            // Worktree A: changes_requested → NeedsAttention; older timestamp
+            CachedPr {
+                last_commit_pushed_at: Some("2026-03-01T10:00:00Z".to_string()),
+                ..make_changes_requested_pr(1, "feat/needs-attention")
+            },
+            // Worktree B: plain PR → Other; newer timestamp
+            CachedPr {
+                last_commit_pushed_at: Some("2026-04-13T10:00:00Z".to_string()),
+                ..make_pr(2, "feat/plain")
+            },
+        ],
+        vec![
+            make_worktree("/tmp/wt-main", "main"),
+            make_worktree("/tmp/wt-needs-attention", "feat/needs-attention"),
+            make_worktree("/tmp/wt-plain", "feat/plain"),
+        ],
+        vec![],
+    )];
+
+    let rows = derive_all_repos(&repo_caches, &[], &[]);
+
+    assert!(rows.len() >= 3, "expected at least 3 rows, got {}", rows.len());
+    assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
+
+    // NeedsAttention must precede Other, regardless of timestamps
+    assert_eq!(
+        rows[1].display_group,
+        DisplayGroup::NeedsAttention,
+        "NeedsAttention (older timestamp) must sort before Other (newer timestamp)"
+    );
+    assert_eq!(rows[2].display_group, DisplayGroup::Other);
+}
+
+// ---------------------------------------------------------------------------
+// Smart sort: worktrees with PR before without PR
+// ---------------------------------------------------------------------------
+
+/// Within the same `DisplayGroup`, a worktree that has a PR must sort before
+/// a worktree with no PR at all.
+#[test]
+fn smart_sort_worktree_with_pr_before_without() {
+    let repo_caches = vec![(
+        "owner/repo".to_string(),
+        vec![],
+        vec![
+            // Only worktree B has a PR
+            make_pr(99, "feat/has-pr"),
+        ],
+        vec![
+            make_worktree("/tmp/wt-main", "main"),
+            make_worktree("/tmp/wt-no-pr", "feat/no-pr"),
+            make_worktree("/tmp/wt-has-pr", "feat/has-pr"),
+        ],
+        vec![],
+    )];
+
+    let rows = derive_all_repos(&repo_caches, &[], &[]);
+
+    assert!(rows.len() >= 3, "expected at least 3 rows, got {}", rows.len());
+    assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
+
+    // Both non-main rows are in Other
+    assert_eq!(rows[1].display_group, DisplayGroup::Other);
+    assert_eq!(rows[2].display_group, DisplayGroup::Other);
+
+    // Row with a PR must sort before row without
+    assert_eq!(
+        rows[1].branch, "feat/has-pr",
+        "worktree with PR should sort before worktree without PR"
+    );
+    assert_eq!(rows[2].branch, "feat/no-pr");
+}
+
 /// @e2e — task #7: a PR whose only gate check is still running (pending) must
 /// resolve to `ciGateState == "pending"`, not `"blocked"`, so the
 /// orchardist's triage filter (blocked only) does NOT surface it. This
