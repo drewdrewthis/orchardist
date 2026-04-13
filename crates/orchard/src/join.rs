@@ -150,16 +150,7 @@ pub fn derive_all_repos(
         })
         .collect();
 
-    rows.sort_by(|a, b| {
-        a.display_group
-            .cmp(&b.display_group)
-            .then_with(|| match (a.issue_number, b.issue_number) {
-                (Some(a_num), Some(b_num)) => a_num.cmp(&b_num),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.branch.cmp(&b.branch),
-            })
-    });
+    rows.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
     rows
 }

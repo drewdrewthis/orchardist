@@ -135,7 +135,7 @@ impl Default for Theme {
             text: Color::White,
             orchardist: Color::Magenta,
             merge_conflict: Color::Red,
-            prioritized: Color::White,
+            prioritized: Color::Yellow,
             pr_merged: Color::Magenta,
             host_unknown: Color::Magenta,
             preview_content: Color::Gray,
@@ -239,8 +239,8 @@ mod tests {
     }
 
     #[test]
-    fn default_prioritized_is_white() {
-        assert_eq!(Theme::default().prioritized, Color::White);
+    fn default_prioritized_is_yellow() {
+        assert_eq!(Theme::default().prioritized, Color::Yellow);
     }
 
     #[test]

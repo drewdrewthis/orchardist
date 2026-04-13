@@ -1476,7 +1476,18 @@ impl App {
                     _ => branch_tail(&vt.row.branch),
                 }
             };
-            let title_display = crate::paths::truncate_left(title_raw, title_width);
+            // Compute label badge spans for non-phase labels, giving them space
+            // that remains after the title text is rendered.
+            let issue_label_strs: Vec<&str> =
+                vt.row.issue_labels.iter().map(|s| s.as_str()).collect();
+            // Title occupies at most min(title_raw_chars, title_width) chars.
+            let title_raw_chars = title_raw.chars().count().min(title_width);
+            let badges_available = title_width.saturating_sub(title_raw_chars);
+            let badge_spans = label_badges(&issue_label_strs, badges_available);
+            let badge_chars: usize = badge_spans.iter().map(|s| s.content.chars().count()).sum();
+            // Allocate remaining title budget after reserving badge space.
+            let title_budget = title_width.saturating_sub(badge_chars);
+            let title_display = crate::paths::truncate_left(title_raw, title_budget);
 
             let task_host: Option<&str> = vt
                 .row
@@ -1515,8 +1526,13 @@ impl App {
             // 5=session_status, 6=display_group.
             let fo = &vt.field_offsets;
 
+            let is_prioritized = vt.group == DisplayGroup::Prioritized;
             let issue_cell = if let Some(num) = vt.row.issue_number {
-                let issue_str = format!("#{}", num);
+                let issue_str = if is_prioritized {
+                    format!("\u{2605}{}", num) // ★N
+                } else {
+                    format!("#{}", num)
+                };
                 if !vt.match_indices.is_empty() && fo.len() > 2 {
                     let spans = crate::tui::fuzzy::highlight_spans(
                         &issue_str,
@@ -1526,6 +1542,12 @@ impl App {
                         highlight_style,
                     );
                     Cell::from(Line::from(spans))
+                } else if is_prioritized {
+                    // Color the star with the prioritized theme color.
+                    Cell::from(Line::from(vec![
+                        Span::styled("\u{2605}", Style::default().fg(theme.prioritized)),
+                        Span::raw(num.to_string()),
+                    ]))
                 } else {
                     Cell::from(issue_str)
                 }
@@ -1562,7 +1584,8 @@ impl App {
             // The TITLE field is issue_title (field index 3) or branch (field index 1).
             // We highlight against `title_raw` (the untruncated source) because field
             // offsets are computed from the original haystack text. After highlighting,
-            // we truncate the resulting spans to `title_width` chars.
+            // we truncate the resulting spans to `title_budget` chars (leaving room
+            // for label badge spans which are appended after the title text).
             let title_cell = if !vt.match_indices.is_empty() && !fo.is_empty() {
                 let field_idx = if vt.row.is_main_worktree {
                     usize::MAX
@@ -1580,13 +1603,18 @@ impl App {
                         Style::default(),
                         highlight_style,
                     );
-                    let truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_width);
+                    let mut truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_budget);
+                    truncated.extend(badge_spans);
                     Cell::from(Line::from(truncated))
                 } else {
-                    Cell::from(title_display)
+                    let mut line_spans = vec![Span::raw(title_display)];
+                    line_spans.extend(badge_spans);
+                    Cell::from(Line::from(line_spans))
                 }
             } else {
-                Cell::from(title_display)
+                let mut line_spans = vec![Span::raw(title_display)];
+                line_spans.extend(badge_spans);
+                Cell::from(Line::from(line_spans))
             };
 
             // Build status cell with fuzzy highlights (field index 4 = pr_status).
@@ -2201,6 +2229,70 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
         cells.push(Cell::from(""));
     }
     Row::new(cells)
+}
+
+/// Builds dimmed `[label]` badge spans for non-phase issue labels.
+///
+/// Filters out any labels that appear in [`crate::derive::PHASE_PRIORITY`] (those are
+/// already represented by the display group) and formats the remainder as ` [label]`
+/// spans with a dimmed style.  When the accumulated badge text would exceed
+/// `available_width`, the remaining labels are collapsed into a ` +N` span.
+/// Returns an empty `Vec` when there are no non-phase labels or no space is available.
+pub(crate) fn label_badges(labels: &[&str], available_width: usize) -> Vec<Span<'static>> {
+    if available_width == 0 {
+        return vec![];
+    }
+
+    let non_phase: Vec<&str> = labels
+        .iter()
+        .copied()
+        .filter(|l| !crate::derive::PHASE_PRIORITY.contains(l))
+        .collect();
+
+    if non_phase.is_empty() {
+        return vec![];
+    }
+
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used: usize = 0;
+    let mut skipped: usize = 0;
+
+    for label in &non_phase {
+        // Badge text: " [label]"
+        let badge = format!(" [{}]", label);
+        let badge_len = badge.chars().count();
+
+        if used + badge_len <= available_width {
+            spans.push(Span::styled(badge, dim));
+            used += badge_len;
+        } else {
+            skipped += 1;
+        }
+    }
+
+    // If any labels were skipped, check if we can fit a " +N" overflow indicator.
+    if skipped > 0 {
+        let overflow = format!(" +{}", skipped);
+        let overflow_len = overflow.chars().count();
+        if used + overflow_len <= available_width {
+            spans.push(Span::styled(overflow, dim));
+        } else {
+            // Replace the last badge with the overflow indicator if it fits.
+            // If nothing fits at all, just return empty.
+            if let Some(last) = spans.pop() {
+                used -= last.content.chars().count();
+                skipped += 1;
+                let overflow2 = format!(" +{}", skipped);
+                let overflow2_len = overflow2.chars().count();
+                if used + overflow2_len <= available_width {
+                    spans.push(Span::styled(overflow2, dim));
+                }
+            }
+        }
+    }
+
+    spans
 }
 
 /// Returns the height (in terminal rows) to allocate for the header.
@@ -3449,6 +3541,70 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Priority star indicator
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn prioritized_row_shows_star_in_issue_cell() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let row = make_task_row(42, DisplayGroup::Prioritized);
+        let app = App::new_test(vec![row]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut full_text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                full_text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        assert!(
+            full_text.contains('\u{2605}'),
+            "prioritized row should render ★ (U+2605) in the issue cell"
+        );
+    }
+
+    #[test]
+    fn non_prioritized_row_shows_hash_in_issue_cell() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let row = make_task_row(42, DisplayGroup::Other);
+        let app = App::new_test(vec![row]);
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                app.render_task_list(f);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut full_text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                full_text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        assert!(
+            full_text.contains("#42"),
+            "non-prioritized row should render #42, got no #42 in output"
+        );
+        assert!(
+            !full_text.contains('\u{2605}'),
+            "non-prioritized row should not render ★"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Hints bar — expand/collapse hints
     // -----------------------------------------------------------------------
 
@@ -3570,6 +3726,98 @@ mod tests {
         assert!(
             table_chunk_height >= TABLE_MIN_HEIGHT,
             "table chunk height {table_chunk_height} should be >= {TABLE_MIN_HEIGHT}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // label_badges tests
+    // -----------------------------------------------------------------------
+
+    fn badge_text(spans: &[Span<'_>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn label_badges_non_phase_labels_rendered_as_brackets() {
+        let labels = vec!["bug", "enhancement"];
+        let spans = label_badges(&labels, 80);
+        let text = badge_text(&spans);
+        assert!(
+            text.contains("[bug]"),
+            "expected '[bug]' in badge text: {:?}",
+            text
+        );
+        assert!(
+            text.contains("[enhancement]"),
+            "expected '[enhancement]' in badge text: {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn label_badges_phase_only_label_renders_nothing() {
+        let labels = vec!["in-progress"];
+        let spans = label_badges(&labels, 80);
+        assert!(
+            spans.is_empty(),
+            "expected no badges for phase-only label, got: {:?}",
+            badge_text(&spans)
+        );
+    }
+
+    #[test]
+    fn label_badges_mixed_phase_and_non_phase_renders_only_non_phase() {
+        let labels = vec!["bug", "in-progress", "planned"];
+        let spans = label_badges(&labels, 80);
+        let text = badge_text(&spans);
+        assert!(
+            text.contains("[bug]"),
+            "expected '[bug]' in badge text: {:?}",
+            text
+        );
+        assert!(
+            !text.contains("[in-progress]"),
+            "unexpected '[in-progress]' in badge text: {:?}",
+            text
+        );
+        assert!(
+            !text.contains("[planned]"),
+            "unexpected '[planned]' in badge text: {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn label_badges_returns_empty_when_no_space_available() {
+        let labels = vec!["bug"];
+        let spans = label_badges(&labels, 0);
+        assert!(
+            spans.is_empty(),
+            "expected no badges when available_width=0"
+        );
+    }
+
+    #[test]
+    fn label_badges_overflow_shows_plus_n() {
+        // " [a]" = 4 chars; only fits one badge in 4 chars, remaining 1 label → " +1" = 3 chars.
+        // With available_width=7: " [a]" (4) + " +1" (3) = 7 → fits.
+        let labels = vec!["a", "b"];
+        let spans = label_badges(&labels, 7);
+        let text = badge_text(&spans);
+        assert!(
+            text.contains("[a]"),
+            "expected '[a]' in badge text: {:?}",
+            text
+        );
+        assert!(
+            text.contains("+1"),
+            "expected '+1' overflow in badge text: {:?}",
+            text
+        );
+        assert!(
+            !text.contains("[b]"),
+            "unexpected '[b]' in badge text: {:?}",
+            text
         );
     }
 }

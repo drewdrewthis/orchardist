@@ -91,6 +91,10 @@ pub struct JsonWorktree {
     pub display_group: String,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+    /// ISO 8601 timestamp of the most recent activity: `pr.last_commit_pushed_at` if set,
+    /// otherwise the worktree's own `last_commit_at`. `null` when neither exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
 }
 
 /// A child issue nested under a parent in JSON output.
@@ -560,6 +564,11 @@ impl From<&WorktreeState> for JsonWorktree {
             sessions: ws.sessions.iter().map(Into::into).collect(),
             display_group: display_group_str(ws.display_group).to_string(),
             is_main_worktree: ws.is_main_worktree,
+            last_activity_at: ws
+                .pr
+                .as_ref()
+                .and_then(|pr| pr.last_commit_pushed_at.clone())
+                .or_else(|| ws.last_commit_at.clone()),
         }
     }
 }
@@ -1669,5 +1678,67 @@ mod tests {
         let v = serde_json::to_value(&jp).unwrap();
         assert_eq!(v["phase"], "blocked");
         assert_eq!(v["labels"], serde_json::json!(["blocked", "in-progress"]));
+    }
+
+    // -----------------------------------------------------------------------
+    // last_activity_at field tests (issue #240)
+    // -----------------------------------------------------------------------
+
+    /// Builds a minimal PrState with the given `last_commit_pushed_at` value.
+    #[allow(deprecated)]
+    fn make_pr_with_last_commit_pushed_at(pushed_at: Option<&str>) -> PrState {
+        use crate::ci_state::CiChecks;
+        PrState {
+            number: 99,
+            branch: "feat/activity".to_string(),
+            state: Some("OPEN".to_string()),
+            title: None,
+            is_draft: None,
+            author: None,
+            requested_reviewers: vec![],
+            reviews: vec![],
+            review_decision: None,
+            checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            labels: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: pushed_at.map(|s| s.to_string()),
+        }
+    }
+
+    /// `last_activity_at` is taken from `pr.last_commit_pushed_at` when set.
+    #[test]
+    fn json_worktree_last_activity_at_from_pr() {
+        let ts = "2024-06-01T12:00:00Z";
+        let mut wt = make_worktree(DisplayGroup::Other);
+        wt.pr = Some(make_pr_with_last_commit_pushed_at(Some(ts)));
+        wt.last_commit_at = Some("2024-01-01T00:00:00Z".to_string());
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.last_activity_at.as_deref(), Some(ts));
+    }
+
+    /// `last_activity_at` is `None` when there is no PR and no `last_commit_at`.
+    #[test]
+    fn json_worktree_last_activity_at_null_when_no_timestamps() {
+        let wt = make_worktree(DisplayGroup::Other);
+        let jw = JsonWorktree::from(&wt);
+        assert!(jw.last_activity_at.is_none());
+    }
+
+    /// `last_activity_at` falls back to `last_commit_at` when no PR is present.
+    #[test]
+    fn json_worktree_last_activity_at_from_worktree_commit() {
+        let ts = "2024-03-15T08:30:00Z";
+        let mut wt = make_worktree(DisplayGroup::Other);
+        wt.last_commit_at = Some(ts.to_string());
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.last_activity_at.as_deref(), Some(ts));
     }
 }
