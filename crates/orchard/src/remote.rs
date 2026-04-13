@@ -32,7 +32,8 @@ pub fn shell_escape(s: &str) -> String {
 /// The ControlPath is placed under the system temp directory (`$TMPDIR` / `std::env::temp_dir`)
 /// rather than a hardcoded `/tmp`.
 fn ssh_flags() -> Vec<String> {
-    let control_path = std::env::temp_dir().join("orchard-ssh-%C");
+    // Use /tmp directly — macOS $TMPDIR is too long for Unix domain sockets.
+    let control_path = std::path::PathBuf::from("/tmp/orchard-ssh-%C");
     vec![
         "-o".to_string(),
         "ConnectTimeout=5".to_string(),
