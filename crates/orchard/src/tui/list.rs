@@ -39,6 +39,12 @@ const TABLE_MIN_HEIGHT: u16 = 5;
 /// Lines scrolled per mouse wheel tick on the preview pane.
 pub(crate) const MOUSE_SCROLL_LINES: usize = 3;
 
+/// ID column width (issue #251).
+///
+/// Holds `#NNN / PR#NNN` — six digits each plus the separator — with a little
+/// slack for 4-digit numbers on long-running repos.
+pub(crate) const ID_W: usize = 17;
+
 // ---------------------------------------------------------------------------
 // Task view helpers
 // ---------------------------------------------------------------------------
@@ -207,9 +213,82 @@ pub(crate) fn visible_tasks_filtered<'a>(
     result
 }
 
+// ---------------------------------------------------------------------------
+// Signal-lexicon helpers (issue #251)
+// ---------------------------------------------------------------------------
+
+/// Formats the unified ID cell: `#N`, `#N / PR#N`, `PR#N`, or branch name.
+///
+/// Rules (issue #251):
+/// - Issue + PR present: `#{issue} / PR#{pr}`
+/// - Issue only: `#{issue}`
+/// - PR only: `PR#{pr}`
+/// - Neither: branch name (left-truncated)
+pub(crate) fn id_cell_text(row: &WorktreeRow, max_width: usize) -> String {
+    match (row.issue_number, row.pr.as_ref().map(|p| p.number)) {
+        (Some(i), Some(p)) => format!("#{} / PR#{}", i, p),
+        (Some(i), None) => format!("#{}", i),
+        (None, Some(p)) => format!("PR#{}", p),
+        (None, None) => crate::paths::truncate_left(branch_tail(&row.branch), max_width),
+    }
+}
+
+/// Returns the colored style used to tint the STATUS glyph on a parent row.
+///
+/// Matches the merge-blocker hierarchy to the existing theme palette so users
+/// get consistent color cues across redraws.
+pub(crate) fn status_style(status: crate::signal::PipelineStatus, theme: &Theme) -> Style {
+    use crate::signal::PipelineStatus as S;
+    let color = match status {
+        S::NeedsInput => theme.claude_needs_input,
+        S::CiFailing => theme.error,
+        S::MergeConflict => theme.merge_conflict,
+        S::ChangesRequested => theme.error,
+        S::AwaitingReview => theme.warning,
+        S::Coding => theme.claude_active,
+        S::Draft => theme.dimmed,
+        S::Blocked => theme.warning,
+        S::Paused => theme.dimmed,
+        S::Ready => theme.success,
+        S::Merged => theme.pr_merged,
+    };
+    Style::default().fg(color)
+}
+
+/// Returns the colored style used to tint the activity glyph in column A.
+pub(crate) fn activity_style(activity: crate::signal::Activity, theme: &Theme) -> Style {
+    use crate::signal::Activity as A;
+    match activity {
+        A::None => Style::default().fg(theme.dimmed),
+        A::Idle => Style::default().fg(theme.claude_idle),
+        A::Working => Style::default().fg(theme.claude_active),
+        A::Input => Style::default().fg(theme.claude_needs_input),
+        A::Exhausted => Style::default().fg(theme.error),
+    }
+}
+
+/// Computes the SINCE elapsed string for a worktree row given the now-time.
+///
+/// Returns the empty string when no SINCE timestamp is available (rather than
+/// rendering a placeholder) so the column stays visually quiet for rows that
+/// genuinely have no timestamp to show.
+pub(crate) fn since_text(
+    row: &WorktreeRow,
+    status: crate::signal::PipelineStatus,
+    now_epoch: u64,
+) -> String {
+    match crate::signal::since_epoch_row(row, status) {
+        Some(ts) => format_elapsed(now_epoch.saturating_sub(ts)),
+        None => String::new(),
+    }
+}
+
 /// Returns a single PR status string for the task row.
 ///
-/// When a PR exists its number is prepended: e.g. `#123 ✓ approved`.
+/// Retained for the legacy `column_order_claude_after_number` smoke test path.
+/// Callers outside tests use the signal-lexicon helpers above; this function
+/// may be removed when those tests are rewritten to the new layout.
+#[cfg(test)]
 fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
     let Some(ref pr) = row.pr else {
         // No PR — check if the linked issue is closed/completed (stale worktree)
@@ -307,8 +386,9 @@ pub(crate) fn format_elapsed(secs: u64) -> String {
 
 /// Returns a Claude activity indicator for the task row.
 ///
-/// When hook state files are available, shows richer info including context
-/// window percentage. Falls back to boolean flags from terminal scraping.
+/// Retained for legacy tests only; the rendering path now uses
+/// [`crate::signal::rollup_activity_row`] for column A.
+#[cfg(test)]
 fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
     if row.sessions.is_empty() {
         return (
@@ -361,6 +441,7 @@ fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
 ///
 /// When `state_changed_at` is `Some`, appends ` ({elapsed})` between the
 /// state label and the session count suffix, e.g. `"⚡ active (23m) 2"`.
+#[cfg(test)]
 fn format_claude_state(
     state: crate::claude_state::ClaudeState,
     state_changed_at: Option<u64>,
@@ -399,20 +480,6 @@ fn format_claude_state(
             Style::default().fg(theme.claude_idle),
         ),
     }
-}
-
-/// Returns Claude status text for a standalone session's single EnrichedSession.
-fn standalone_claude_status(
-    session: &crate::session::EnrichedSession,
-    theme: &Theme,
-) -> (String, Style) {
-    let Some(ref claude) = session.claude else {
-        return (
-            "\u{25cb} none".to_string(),
-            Style::default().fg(theme.claude_idle),
-        );
-    };
-    format_claude_state(claude.status, claude.state_changed_at, "", theme)
 }
 
 impl App {
@@ -1048,30 +1115,61 @@ impl App {
 
         let show_branch = self.show_branch_column;
 
-        // Compute available width for the TITLE column.
-        // Column order: BAR (1) + # (3) + CLAUDE (18) + ISSUE (6) + TITLE (flex)
-        //               + [BRANCH (20)] + [HOST (12)] + STATUS (22)
-        // Each column has 1 spacing. Plus borders (2).
-        let fixed = 1 + 1 + 3 + 1 + 18 + 1 + 6 + 1 + 1 + 22 + 2;
-        let branch_extra = if show_branch { 20 + 1 } else { 0 };
-        let host_extra = if has_remote { 12 + 1 } else { 0 };
-        let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
-
-        // Column widths — CLAUDE after #, STATUS at end.
-        let mut widths: Vec<Constraint> = vec![
-            Constraint::Length(1),  // BAR (colored repo indicator)
-            Constraint::Length(3),  // #
-            Constraint::Length(18), // CLAUDE (status + elapsed + expand indicator like "▶3")
-            Constraint::Length(6),  // ISSUE
-            Constraint::Min(20),    // TITLE (flexible)
-        ];
+        // Column layout (issue #251): BAR | A | # | STATUS | ID | TITLE | [HOST] | SINCE | LABELS
+        //   BAR    — 1 (repo-color dot, kept from existing layout)
+        //   A      — 2 (activity glyph; 2 cells for emoji safety)
+        //   #      — 3 (row number, right-aligned)
+        //   STATUS — 3 (merge-blocker emoji; 3 cells covers VS16-prefixed combining marks)
+        //   ID     — 17 ("#NNN / PR#NNN" + slack for 4-digit numbers)
+        //   TITLE  — flex (min 20)
+        //   HOST   — 12 (only when any row is remote)
+        //   SINCE  — 6 (" 23m " / " 2d ")
+        //   LABELS — flex (min 0 — label badges; collapses when narrow)
+        // +1 column-spacing between columns; +2 for borders.
+        const BAR_W: usize = 1;
+        const A_W: usize = 2;
+        const NUM_W: usize = 3;
+        const STATUS_W: usize = 3;
+        const HOST_W: usize = 12;
+        const SINCE_W: usize = 6;
+        // Minimum TITLE width before LABELS gets any space.
+        const TITLE_MIN: usize = 20;
+        // Number of inter-column gaps depends on whether HOST/BRANCH show.
+        // Base columns: BAR, A, #, STATUS, ID, TITLE, SINCE, LABELS = 8 columns
+        // + optional HOST and BRANCH columns.
+        let mut fixed = BAR_W + A_W + NUM_W + STATUS_W + ID_W + SINCE_W + 2;
+        let mut gaps = 7; // 8 columns → 7 gaps
         if show_branch {
-            widths.push(Constraint::Length(20)); // BRANCH (left-truncated)
+            fixed += 20;
+            gaps += 1;
         }
         if has_remote {
-            widths.push(Constraint::Length(12)); // HOST
+            fixed += HOST_W;
+            gaps += 1;
         }
-        widths.push(Constraint::Length(22)); // STATUS (last)
+        let reserved_for_title = TITLE_MIN;
+        let flex_budget = (area.width as usize).saturating_sub(fixed + gaps + reserved_for_title);
+        // TITLE gets at least TITLE_MIN. LABELS gets whatever remains (can be 0).
+        let title_width = TITLE_MIN + flex_budget / 2;
+        let labels_width = flex_budget.saturating_sub(flex_budget / 2);
+
+        // Column widths in rendering order.
+        let mut widths: Vec<Constraint> = vec![
+            Constraint::Length(BAR_W as u16),       // BAR
+            Constraint::Length(A_W as u16),         // A (activity)
+            Constraint::Length(NUM_W as u16),       // #
+            Constraint::Length(STATUS_W as u16),    // STATUS
+            Constraint::Length(ID_W as u16),        // ID
+            Constraint::Length(title_width as u16), // TITLE
+        ];
+        if show_branch {
+            widths.push(Constraint::Length(20)); // BRANCH
+        }
+        if has_remote {
+            widths.push(Constraint::Length(HOST_W as u16)); // HOST
+        }
+        widths.push(Constraint::Length(SINCE_W as u16)); // SINCE
+        widths.push(Constraint::Length(labels_width.max(1) as u16)); // LABELS
 
         // Build rows for the table, including standalone sessions and section header rows.
         let num_columns = widths.len();
@@ -1081,6 +1179,7 @@ impl App {
             show_branch,
             has_remote,
             title_width,
+            labels_width,
             num_columns,
         );
 
@@ -1150,11 +1249,12 @@ impl App {
             .fg(theme.dimmed)
             .add_modifier(Modifier::BOLD);
         let mut header_cells = vec![
-            Cell::from(""), // BAR (no label)
-            Cell::from(" #"),
-            Cell::from("CLAUDE"),
-            Cell::from("ISSUE"),
-            Cell::from("TITLE"),
+            Cell::from(""),      // BAR (no label)
+            Cell::from("A"),     // activity
+            Cell::from(" #"),    // row number
+            Cell::from("ST"),    // STATUS (short — the glyphs speak for themselves)
+            Cell::from("ID"),    // ID (#N / PR#N)
+            Cell::from("TITLE"), // TITLE
         ];
         if show_branch {
             header_cells.push(Cell::from("BRANCH"));
@@ -1162,7 +1262,8 @@ impl App {
         if has_remote {
             header_cells.push(Cell::from("HOST"));
         }
-        header_cells.push(Cell::from("STATUS"));
+        header_cells.push(Cell::from("SINCE"));
+        header_cells.push(Cell::from("LABELS"));
         let header_row = Row::new(header_cells).style(header_style);
 
         let table_title = match self.active_repo_slug() {
@@ -1379,7 +1480,7 @@ impl App {
 
     /// Builds table rows: standalone sessions first, then worktree task rows with group headers.
     ///
-    /// Column order: BAR, #, CLAUDE, ISSUE, TITLE, [BRANCH], [HOST], STATUS.
+    /// Column order (issue #251): BAR, A, #, STATUS, ID, TITLE, [BRANCH], [HOST], SINCE, LABELS.
     /// Unified sequential numbering across standalone + worktree rows.
     /// Expanded rows get pane sub-rows inserted after the parent.
     fn build_task_table_rows_with_standalone(
@@ -1388,6 +1489,7 @@ impl App {
         show_branch: bool,
         has_remote: bool,
         title_width: usize,
+        labels_width: usize,
         num_columns: usize,
     ) -> (Vec<Row<'static>>, Vec<u16>, Option<usize>) {
         let theme = &self.theme;
@@ -1405,24 +1507,57 @@ impl App {
             if selected {
                 selected_visual_idx = Some(rows.len());
             }
-            let (claude_text, claude_style) = standalone_claude_status(&ss.session, theme);
-            let status_text = match &ss.session.tmux.status {
-                crate::session::SessionStatus::Running { .. } => "running",
-                crate::session::SessionStatus::Dead => "not running",
-            };
-            let status_style = match &ss.session.tmux.status {
-                crate::session::SessionStatus::Running { .. } => Style::default().fg(Color::Green),
-                crate::session::SessionStatus::Dead => Style::default().fg(Color::DarkGray),
+
+            // Activity glyph from the single EnrichedSession's claude state.
+            let activity = ss
+                .session
+                .claude
+                .as_ref()
+                .map(|c| {
+                    let ce = crate::orchard_state::ClaudeEnrichment {
+                        status: c.status,
+                        model: c.model.clone(),
+                        last_tool: c.last_tool.clone(),
+                        current_task: c.current_task.clone(),
+                        session_start_ts: c.session_start_ts,
+                        input_tokens: c.input_tokens,
+                        output_tokens: c.output_tokens,
+                        cache_creation_input_tokens: c.cache_creation_input_tokens,
+                        cache_read_input_tokens: c.cache_read_input_tokens,
+                        context_window_pct: c.context_window_pct,
+                        cost_usd: c.cost_usd,
+                        total_duration_ms: c.total_duration_ms,
+                        rate_limits: c.rate_limits.clone(),
+                        stop_reason: c.stop_reason.clone(),
+                        turn_count: c.turn_count,
+                        state_changed_at: c.state_changed_at,
+                    };
+                    crate::signal::activity_from_claude(&ce)
+                })
+                .unwrap_or(crate::signal::Activity::None);
+            let activity_cell = Cell::from(activity.glyph()).style(activity_style(activity, theme));
+
+            // Running/Dead → STATUS glyph. Standalone sessions aren't subject
+            // to merge-blocker hierarchy; show a simple liveness indicator.
+            let (status_glyph, status_st) = match &ss.session.tmux.status {
+                crate::session::SessionStatus::Running { .. } => {
+                    ("\u{1F7E2}", Style::default().fg(theme.success))
+                }
+                crate::session::SessionStatus::Dead => {
+                    ("\u{26AB}", Style::default().fg(theme.dimmed))
+                }
             };
 
-            // Expand/collapse indicator in CLAUDE cell.
-            let pane_count = ss.session.panes.len();
-            let window_count = ss.session.windows.len();
             let is_expanded = self.expanded.contains(&ss.session.tmux.name);
-            let claude_display = if window_count > 1 {
-                expand_indicator_windows(&claude_text, window_count, is_expanded)
+            let has_multi_children = ss.session.windows.len() > 1 || ss.session.panes.len() > 1;
+            let expand_mark = if has_multi_children {
+                if is_expanded {
+                    " \u{25BC}"
+                } else {
+                    " \u{25B6}"
+                }
             } else {
-                expand_indicator(&claude_text, pane_count, is_expanded)
+                ""
             };
 
             let row_style = if selected {
@@ -1433,12 +1568,30 @@ impl App {
                 Style::default()
             };
 
+            // SINCE: time since state changed for this session's claude.
+            let since_display = ss
+                .session
+                .claude
+                .as_ref()
+                .and_then(|c| c.state_changed_at)
+                .map(|ts| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    format_elapsed(now.saturating_sub(ts))
+                })
+                .unwrap_or_default();
+
+            let title_cell = Cell::from(format!("{}{}", ss.config.name, expand_mark));
+
             let mut cells = vec![
                 Cell::from(""), // no bar for standalone sessions
+                activity_cell,
                 Cell::from(format!("{:>2}", unified_num)),
-                Cell::from(claude_display).style(claude_style),
-                Cell::from("").style(Style::default().fg(Color::DarkGray)), // no issue
-                Cell::from(ss.config.name.clone()),
+                Cell::from(status_glyph).style(status_st),
+                Cell::from(""), // no ID for standalone
+                title_cell,
             ];
 
             if show_branch {
@@ -1447,10 +1600,13 @@ impl App {
             if has_remote {
                 cells.push(Cell::from("")); // always local
             }
-            cells.push(Cell::from(status_text).style(status_style));
+            cells.push(Cell::from(since_display).style(Style::default().fg(theme.dimmed)));
+            cells.push(Cell::from("")); // no labels
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
+            // Silence unused-variable lint for now — used later when label column renders.
+            let _ = labels_width;
 
             // Sub-rows for expanded standalone sessions.
             if is_expanded {
@@ -1489,6 +1645,12 @@ impl App {
         // Render worktree task rows.
         let mut last_group: Option<DisplayGroup> = None;
 
+        // now_epoch once per render for consistent SINCE strings.
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
         for (flat_idx, vt) in tasks.iter().enumerate() {
             let cursor_idx = flat_idx + standalone_count;
             let selected =
@@ -1506,10 +1668,13 @@ impl App {
                 selected_visual_idx = Some(rows.len());
             }
 
-            let (pr_text, pr_style) = pr_status_text(vt.row, theme);
-            let (claude_text, claude_style) = claude_status_text(vt.row, theme);
+            // Pipeline status & activity rollup from the signal module.
+            let status = crate::signal::resolve_status_row(vt.row);
+            let activity = crate::signal::rollup_activity_row(vt.row);
+            let is_merged = matches!(status, crate::signal::PipelineStatus::Merged);
 
-            let title_raw = if vt.row.is_main_worktree {
+            // TITLE: issue title if available, else branch tail, else repo name for main worktree.
+            let title_raw: &str = if vt.row.is_main_worktree {
                 vt.row
                     .repo_slug
                     .split('/')
@@ -1517,23 +1682,14 @@ impl App {
                     .unwrap_or(&vt.row.repo_slug)
             } else {
                 match vt.row.issue_title.as_deref() {
-                    Some(title) if !title.is_empty() => title,
+                    Some(t) if !t.is_empty() => t,
                     _ => branch_tail(&vt.row.branch),
                 }
             };
-            // Compute label badge spans for non-phase labels, giving them space
-            // that remains after the title text is rendered.
-            let issue_label_strs: Vec<&str> =
-                vt.row.issue_labels.iter().map(|s| s.as_str()).collect();
-            // Title occupies at most min(title_raw_chars, title_width) chars.
-            let title_raw_chars = title_raw.chars().count().min(title_width);
-            let badges_available = title_width.saturating_sub(title_raw_chars);
-            let badge_spans = label_badges(&issue_label_strs, badges_available);
-            let badge_chars: usize = badge_spans.iter().map(|s| s.content.chars().count()).sum();
-            // Allocate remaining title budget after reserving badge space.
-            let title_budget = title_width.saturating_sub(badge_chars);
-            let title_display = crate::paths::truncate_left(title_raw, title_budget);
+            let title_display = crate::paths::truncate_left(title_raw, title_width);
 
+            // HOST column: render hostname for remote rows. Matches the detection
+            // that decides host_unreachable for dim/error styling.
             let task_host: Option<&str> = vt
                 .row
                 .sessions
@@ -1546,16 +1702,17 @@ impl App {
             let host_unreachable = task_host.is_some()
                 && task_host.and_then(|h| self.host_reachable.get(h)).copied() != Some(true);
 
+            // Base row style: dim merged rows and unreachable hosts.
             let row_style = if selected {
                 let base = Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD);
-                if host_unreachable {
+                if host_unreachable || is_merged {
                     base.add_modifier(Modifier::DIM)
                 } else {
                     base
                 }
-            } else if host_unreachable {
+            } else if host_unreachable || is_merged {
                 Style::default().add_modifier(Modifier::DIM)
             } else {
                 Style::default()
@@ -1565,40 +1722,7 @@ impl App {
             let highlight_style = Style::default()
                 .add_modifier(Modifier::BOLD)
                 .add_modifier(Modifier::REVERSED);
-
-            // Field offsets from the fuzzy haystack (see fuzzy::row_haystack_fields):
-            // 0=repo_slug, 1=branch, 2=issue_num, 3=issue_title, 4=pr_status,
-            // 5=session_status, 6=display_group.
             let fo = &vt.field_offsets;
-
-            let is_prioritized = vt.group == DisplayGroup::Prioritized;
-            let issue_cell = if let Some(num) = vt.row.issue_number {
-                let issue_str = if is_prioritized {
-                    format!("\u{2605}{}", num) // ★N
-                } else {
-                    format!("#{}", num)
-                };
-                if !vt.match_indices.is_empty() && fo.len() > 2 {
-                    let spans = crate::tui::fuzzy::highlight_spans(
-                        &issue_str,
-                        fo[2],
-                        &vt.match_indices,
-                        Style::default(),
-                        highlight_style,
-                    );
-                    Cell::from(Line::from(spans))
-                } else if is_prioritized {
-                    // Color the star with the prioritized theme color.
-                    Cell::from(Line::from(vec![
-                        Span::styled("\u{2605}", Style::default().fg(theme.prioritized)),
-                        Span::raw(num.to_string()),
-                    ]))
-                } else {
-                    Cell::from(issue_str)
-                }
-            } else {
-                Cell::from("").style(Style::default().fg(theme.dimmed))
-            };
 
             let repo_idx = self
                 .global_config
@@ -1607,10 +1731,42 @@ impl App {
                 .position(|r| r.slug == vt.row.repo_slug)
                 .unwrap_or(0);
             let bar_color = repo_color(repo_idx);
-            let bar_cell = Cell::from("\u{25cf}") // ●
-                .style(Style::default().fg(bar_color));
+            let bar_cell = Cell::from("\u{25cf}").style(Style::default().fg(bar_color));
 
-            // Expand/collapse indicator in CLAUDE cell.
+            // ACTIVITY cell (column A) — rollup glyph.
+            let activity_cell = Cell::from(activity.glyph()).style(activity_style(activity, theme));
+
+            // STATUS cell — merge-blocker glyph.
+            let status_cell = Cell::from(status.glyph()).style(status_style(status, theme));
+
+            // ID cell.
+            let is_prioritized = vt.group == DisplayGroup::Prioritized;
+            let id_str = id_cell_text(vt.row, ID_W);
+            let id_cell =
+                if !vt.match_indices.is_empty() && fo.len() > 2 && vt.row.issue_number.is_some() {
+                    // Preserve fuzzy highlights when the filter matched the issue number.
+                    let spans = crate::tui::fuzzy::highlight_spans(
+                        &id_str,
+                        fo[2],
+                        &vt.match_indices,
+                        if is_prioritized {
+                            Style::default().fg(theme.prioritized)
+                        } else {
+                            Style::default()
+                        },
+                        highlight_style,
+                    );
+                    Cell::from(Line::from(spans))
+                } else if is_prioritized {
+                    Cell::from(id_str).style(Style::default().fg(theme.prioritized))
+                } else if vt.row.issue_number.is_none() && vt.row.pr.is_none() {
+                    // Branch-anchored row (no issue, no PR) — dim to signal "orphan".
+                    Cell::from(id_str).style(Style::default().fg(theme.dimmed))
+                } else {
+                    Cell::from(id_str)
+                };
+
+            // Expand/collapse caret decorates TITLE when multi-window or multi-pane.
             let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             let window_count = vt
                 .row
@@ -1619,18 +1775,18 @@ impl App {
                 .map(|s| s.windows.len())
                 .unwrap_or(0);
             let is_expanded = self.expanded.contains(&vt.row.worktree_path);
-            let claude_display = if window_count > 1 {
-                expand_indicator_windows(&claude_text, window_count, is_expanded)
+            let has_multi_children = window_count > 1 || pane_count > 1;
+            let caret: &str = if has_multi_children {
+                if is_expanded {
+                    " \u{25BC}"
+                } else {
+                    " \u{25B6}"
+                }
             } else {
-                expand_indicator(&claude_text, pane_count, is_expanded)
+                ""
             };
 
-            // Build title cell with fuzzy highlights when a filter is active.
-            // The TITLE field is issue_title (field index 3) or branch (field index 1).
-            // We highlight against `title_raw` (the untruncated source) because field
-            // offsets are computed from the original haystack text. After highlighting,
-            // we truncate the resulting spans to `title_budget` chars (leaving room
-            // for label badge spans which are appended after the title text).
+            // TITLE with fuzzy highlight + optional caret suffix.
             let title_cell = if !vt.match_indices.is_empty() && !fo.is_empty() {
                 let field_idx = if vt.row.is_main_worktree {
                     usize::MAX
@@ -1648,40 +1804,59 @@ impl App {
                         Style::default(),
                         highlight_style,
                     );
-                    let mut truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_budget);
-                    truncated.extend(badge_spans);
+                    let mut truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_width);
+                    if !caret.is_empty() {
+                        truncated.push(Span::raw(caret.to_string()));
+                    }
                     Cell::from(Line::from(truncated))
                 } else {
-                    let mut line_spans = vec![Span::raw(title_display)];
-                    line_spans.extend(badge_spans);
-                    Cell::from(Line::from(line_spans))
+                    Cell::from(format!("{}{}", title_display, caret))
                 }
             } else {
-                let mut line_spans = vec![Span::raw(title_display)];
-                line_spans.extend(badge_spans);
-                Cell::from(Line::from(line_spans))
+                Cell::from(format!("{}{}", title_display, caret))
             };
 
-            // Build status cell with fuzzy highlights (field index 4 = pr_status).
-            let status_cell = if !vt.match_indices.is_empty() && fo.len() > 4 {
-                let spans = crate::tui::fuzzy::highlight_spans(
-                    &pr_text,
-                    fo[4],
-                    &vt.match_indices,
-                    pr_style,
-                    highlight_style,
-                );
-                Cell::from(Line::from(spans))
-            } else {
-                Cell::from(pr_text).style(pr_style)
+            // SINCE cell — time in current state, formatted via format_elapsed.
+            let since_str = since_text(vt.row, status, now_epoch);
+            let since_cell = Cell::from(since_str).style(Style::default().fg(theme.dimmed));
+
+            // LABELS cell — unified issue + PR labels, deduped (case-insensitive).
+            // Inline the merge so we don't allocate wrapper structs just to
+            // satisfy the signal::unified_labels signature.
+            let unified: Vec<String> = {
+                let mut out: Vec<String> = Vec::new();
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for l in &vt.row.issue_labels {
+                    if seen.insert(l.to_ascii_lowercase()) {
+                        out.push(l.clone());
+                    }
+                }
+                if let Some(pr) = vt.row.pr.as_ref() {
+                    for l in &pr.labels {
+                        if seen.insert(l.to_ascii_lowercase()) {
+                            out.push(l.clone());
+                        }
+                    }
+                }
+                out
+            };
+            let unified_refs: Vec<&str> = unified.iter().map(|s| s.as_str()).collect();
+            let labels_cell = {
+                let spans = label_badges(&unified_refs, labels_width);
+                if spans.is_empty() {
+                    Cell::from("")
+                } else {
+                    Cell::from(Line::from(spans))
+                }
             };
 
-            // Use unified numbering (continues from standalone count).
+            // Assemble row. Unified numbering (continues from standalone count).
             let mut cells = vec![
                 bar_cell,
+                activity_cell,
                 Cell::from(format!("{:>2}", unified_num)),
-                Cell::from(claude_display).style(claude_style),
-                issue_cell,
+                status_cell,
+                id_cell,
                 title_cell,
             ];
 
@@ -1708,7 +1883,8 @@ impl App {
                 cells.push(host_cell);
             }
 
-            cells.push(status_cell);
+            cells.push(since_cell);
+            cells.push(labels_cell);
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -1779,18 +1955,18 @@ impl App {
                         pane: pi,
                     };
 
-            // Tree connector: ├─N for non-last, └─N for last pane.
+            // Tree connector: ├─ for non-last, └─ for last pane.
             let connector = if is_last {
                 format!("{}\u{2514}\u{2500}{}", prefix, pane.index)
             } else {
                 format!("{}\u{251c}\u{2500}{}", prefix, pane.index)
             };
 
-            // Claude indicator for this pane.
-            let claude_cell = if pane.has_claude {
-                Cell::from("\u{26a1}").style(Style::default().fg(ctx.theme.claude_active))
+            // Activity glyph for this pane — ⚡ if claude, blank otherwise.
+            let activity_cell = if pane.has_claude {
+                Cell::from("\u{26A1}").style(Style::default().fg(ctx.theme.claude_active))
             } else {
-                Cell::from("\u{2500}").style(Style::default().fg(ctx.theme.dimmed))
+                Cell::from("").style(Style::default().fg(ctx.theme.dimmed))
             };
 
             let row_style = if selected {
@@ -1801,25 +1977,30 @@ impl App {
                 Style::default().fg(ctx.theme.dimmed)
             };
 
+            let title_text = if pane.title.is_empty() {
+                pane.command.clone()
+            } else {
+                pane.title.clone()
+            };
+
+            // Columns match parent: BAR, A, #, STATUS, ID, TITLE, [BRANCH], [HOST], SINCE, LABELS.
             let mut cells = vec![
-                Cell::from("\u{25cf}").style(Style::default().fg(bar_color)), // BAR inherits parent
-                Cell::from(connector), // # cell: tree connector
-                claude_cell,           // CLAUDE cell
-                Cell::from(""),        // ISSUE: empty
-                Cell::from(if pane.title.is_empty() {
-                    pane.command.clone()
-                } else {
-                    pane.title.clone()
-                }), // TITLE: pane title (falls back to command)
+                Cell::from("\u{25CF}").style(Style::default().fg(bar_color)), // BAR inherits parent
+                activity_cell,                                                // A (activity)
+                Cell::from(connector),  // # cell: tree connector
+                Cell::from(""),         // STATUS: empty (parent owns status)
+                Cell::from(""),         // ID: empty (parent owns ID)
+                Cell::from(title_text), // TITLE: pane title (or command)
             ];
 
             if ctx.show_branch {
-                cells.push(Cell::from("")); // BRANCH: empty
+                cells.push(Cell::from("")); // BRANCH
             }
             if ctx.has_remote {
-                cells.push(Cell::from("")); // HOST: empty
+                cells.push(Cell::from("")); // HOST
             }
-            cells.push(Cell::from("")); // STATUS: empty
+            cells.push(Cell::from("")); // SINCE
+            cells.push(Cell::from("")); // LABELS
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -1890,11 +2071,19 @@ impl App {
                 Style::default().fg(ctx.theme.dimmed)
             };
 
+            // Window-level activity: max over its panes.
+            let window_activity = if window.panes.iter().any(|p| p.has_claude) {
+                Cell::from("\u{26A1}").style(Style::default().fg(ctx.theme.claude_active))
+            } else {
+                Cell::from("")
+            };
+
             let mut cells = vec![
-                Cell::from("\u{25cf}").style(Style::default().fg(bar_color)),
+                Cell::from("\u{25CF}").style(Style::default().fg(bar_color)),
+                window_activity,            // A (activity)
                 Cell::from(pane_indicator), // # column: connector + pane count
-                Cell::from(""),             // CLAUDE: empty
-                Cell::from(""),             // ISSUE: empty
+                Cell::from(""),             // STATUS: empty
+                Cell::from(""),             // ID: empty
                 Cell::from(window_title),   // TITLE: window name
             ];
 
@@ -1904,7 +2093,8 @@ impl App {
             if ctx.has_remote {
                 cells.push(Cell::from(""));
             }
-            cells.push(Cell::from("")); // STATUS: empty
+            cells.push(Cell::from("")); // SINCE
+            cells.push(Cell::from("")); // LABELS
 
             rows.push(Row::new(cells).style(row_style));
             row_heights.push(1);
@@ -2197,6 +2387,7 @@ impl App {
 /// For multi-pane rows, replaces the leading status icon (⚡, ●, ○) with
 /// ▶ (collapsed) or ▼ (expanded) and appends `(N)`.
 /// Single-pane or zero-pane rows are returned unchanged.
+#[cfg(test)]
 pub(crate) fn expand_indicator(base_text: &str, pane_count: usize, expanded: bool) -> String {
     if pane_count <= 1 {
         return base_text.to_string();
@@ -2209,27 +2400,6 @@ pub(crate) fn expand_indicator(base_text: &str, pane_count: usize, expanded: boo
         .map(|(i, _)| &base_text[i..])
         .unwrap_or(base_text);
     format!("{} {}({})", caret, rest.trim_start(), pane_count)
-}
-
-/// Expand indicator for multi-window sessions, showing window count with "w" suffix.
-///
-/// For multi-window sessions (2+ windows), shows `▶Nw` or `▼Nw`.
-/// Returns the base text unchanged if window_count <= 1.
-pub(crate) fn expand_indicator_windows(
-    base_text: &str,
-    window_count: usize,
-    expanded: bool,
-) -> String {
-    if window_count <= 1 {
-        return base_text.to_string();
-    }
-    let caret = if expanded { "\u{25bc}" } else { "\u{25b6}" }; // ▼ / ▶
-    let rest = base_text
-        .char_indices()
-        .nth(1)
-        .map(|(i, _)| &base_text[i..])
-        .unwrap_or(base_text);
-    format!("{} {}({}w)", caret, rest.trim_start(), window_count)
 }
 
 /// Creates a section header row spanning all columns for a display group.
@@ -2262,15 +2432,17 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
         Style::default().fg(color)
     };
 
-    // Header text goes in the TITLE column (index 4: BAR, #, CLAUDE, ISSUE, TITLE).
+    // Header text goes in the TITLE column (index 5 in the new layout:
+    // BAR, A, #, STATUS, ID, TITLE, [BRANCH], [HOST], SINCE, LABELS).
     let mut cells: Vec<Cell> = vec![
-        Cell::from(""), // bar placeholder
+        Cell::from(""), // BAR placeholder
+        Cell::from(""), // A placeholder
         Cell::from(""), // # placeholder
-        Cell::from(""), // CLAUDE placeholder
-        Cell::from(""), // ISSUE placeholder
+        Cell::from(""), // STATUS placeholder
+        Cell::from(""), // ID placeholder
         Cell::from(text).style(title_style),
     ];
-    for _ in 5..num_columns {
+    for _ in 6..num_columns {
         cells.push(Cell::from(""));
     }
     Row::new(cells)
@@ -3711,7 +3883,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn column_order_claude_after_number() {
+    fn column_order_matches_signal_lexicon_spec() {
+        // Issue #251: column layout is A | # | STATUS | ID | TITLE | [HOST] | SINCE | LABELS
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3729,38 +3902,29 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer().clone();
-        // Check that the header row contains CLAUDE before ISSUE
         let mut header_text = String::new();
-        // Header row is in the table area; check all rows for the header
         for y in 0..buffer.area.height {
             let mut line = String::new();
             for x in 0..buffer.area.width {
                 line.push_str(buffer[(x, y)].symbol());
             }
-            if line.contains("CLAUDE") && line.contains("ISSUE") && line.contains("TITLE") {
+            if line.contains("TITLE") && line.contains("SINCE") && line.contains("LABELS") {
                 header_text = line;
                 break;
             }
         }
         assert!(
             !header_text.is_empty(),
-            "should find header row with CLAUDE, ISSUE, TITLE"
+            "should find header row with TITLE, SINCE, LABELS"
         );
-        let claude_pos = header_text.find("CLAUDE").unwrap();
-        let issue_pos = header_text.find("ISSUE").unwrap();
+        // A (activity) must come before # which comes before ID and TITLE.
+        let a_pos = header_text.find(" A ").expect("A column");
         let title_pos = header_text.find("TITLE").unwrap();
-        assert!(
-            claude_pos < issue_pos,
-            "CLAUDE ({}) must appear before ISSUE ({})",
-            claude_pos,
-            issue_pos
-        );
-        assert!(
-            issue_pos < title_pos,
-            "ISSUE ({}) must appear before TITLE ({})",
-            issue_pos,
-            title_pos
-        );
+        let since_pos = header_text.find("SINCE").unwrap();
+        let labels_pos = header_text.find("LABELS").unwrap();
+        assert!(a_pos < title_pos, "A before TITLE");
+        assert!(title_pos < since_pos, "TITLE before SINCE");
+        assert!(since_pos < labels_pos, "SINCE before LABELS");
     }
 
     // -----------------------------------------------------------------------
@@ -3768,7 +3932,10 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn prioritized_row_shows_star_in_issue_cell() {
+    fn prioritized_row_renders_id_in_prioritized_color() {
+        // Issue #251 reshape: priority is a sort signal (floats rows up within
+        // a status group) and the ID cell is tinted with the prioritized color.
+        // The star glyph is no longer used — STATUS is the single emoji per row.
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3789,9 +3956,10 @@ mod tests {
                 full_text.push_str(buffer[(x, y)].symbol());
             }
         }
+        // The ID cell should show `#42` (not the old `★42`).
         assert!(
-            full_text.contains('\u{2605}'),
-            "prioritized row should render ★ (U+2605) in the issue cell"
+            full_text.contains("#42"),
+            "prioritized row ID cell should show #42"
         );
     }
 

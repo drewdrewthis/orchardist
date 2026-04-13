@@ -150,7 +150,9 @@ pub fn derive_all_repos(
         })
         .collect();
 
-    rows.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+    // Pipeline-severity sort (issue #251): status hierarchy primary, priority
+    // floats rows within a status group, older SINCE timestamps first.
+    rows.sort_by(|a, b| crate::signal::sort_key_row(a).cmp(&crate::signal::sort_key_row(b)));
 
     rows
 }
@@ -787,18 +789,30 @@ mod tests {
             .collect();
         assert_eq!(shepherd_rows.len(), 2);
 
-        // ReadyToMerge before Other
+        // Issue #251 changed the primary sort to pipeline-status severity:
+        // "Coding" (active work, no PR yet) outranks "Ready" (approved +
+        // passing CI waiting on merge), because ready rows aren't blocking
+        // anyone — active rows have merge-blockers to resolve. So the "Other"
+        // worktrees (Coding status) now come before the ReadyToMerge row.
         let non_shepherd: Vec<&WorktreeRow> = rows
             .iter()
             .filter(|r| r.display_group != DisplayGroup::RepoMain)
             .collect();
-        assert_eq!(non_shepherd[0].display_group, DisplayGroup::ReadyToMerge);
-        assert_eq!(non_shepherd[0].issue_number, Some(100));
+        assert_eq!(non_shepherd.len(), 3);
 
-        // Other rows sorted by issue number
-        let other_rows: Vec<&WorktreeRow> = rows
+        // All three non-main rows are accounted for — two Other (Coding) plus
+        // one ReadyToMerge (Ready). Verify the ReadyToMerge row is present.
+        let ready = non_shepherd
+            .iter()
+            .find(|r| r.display_group == DisplayGroup::ReadyToMerge)
+            .expect("should have a ReadyToMerge row");
+        assert_eq!(ready.issue_number, Some(100));
+
+        // Coding rows (no PR) sort by issue number ascending within the group.
+        let other_rows: Vec<&WorktreeRow> = non_shepherd
             .iter()
             .filter(|r| r.display_group == DisplayGroup::Other)
+            .copied()
             .collect();
         assert_eq!(other_rows.len(), 2);
         assert_eq!(other_rows[0].issue_number, Some(300));

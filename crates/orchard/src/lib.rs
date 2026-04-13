@@ -34,6 +34,7 @@ pub mod remote;
 pub mod session;
 pub mod setup_remote;
 pub mod shell;
+pub mod signal;
 pub mod sources;
 pub mod tmux;
 pub mod tui;

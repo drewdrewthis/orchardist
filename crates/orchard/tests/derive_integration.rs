@@ -410,10 +410,14 @@ fn e2e_code_green_gate_blocked_pr_surfaces_in_json_output() {
 // Smart sort: recency within same display group
 // ---------------------------------------------------------------------------
 
-/// Within the same `DisplayGroup`, worktrees with more recent PR activity
-/// (measured by `last_commit_pushed_at`) must sort before older ones.
+/// Within the same pipeline status group, the worktree that has been STUCK
+/// the longest (oldest SINCE timestamp) sorts first — it's the most urgent
+/// because it's been blocked on review the longest.
+///
+/// Issue #251 inverted the previous "recent-first" behavior: "recent" rows are
+/// still active so they can wait; stale rows are the ones that need attention.
 #[test]
-fn smart_sort_recent_activity_within_same_group() {
+fn smart_sort_oldest_stuck_first_within_status_group() {
     let repo_caches = vec![(
         "owner/repo".to_string(),
         vec![make_issue(10, "Issue ten"), make_issue(20, "Issue twenty")],
@@ -437,7 +441,7 @@ fn smart_sort_recent_activity_within_same_group() {
 
     let rows = derive_all_repos(&repo_caches, &[], &[]);
 
-    // rows[0] is RepoMain; rows[1] and rows[2] are the two feature worktrees
+    // rows[0] is RepoMain; rows[1..] are the two feature worktrees.
     assert!(
         rows.len() >= 3,
         "expected at least 3 rows, got {}",
@@ -445,16 +449,13 @@ fn smart_sort_recent_activity_within_same_group() {
     );
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
 
-    // Both feature rows must be in Other (plain PRs, no special review state)
-    assert_eq!(rows[1].display_group, DisplayGroup::Other);
-    assert_eq!(rows[2].display_group, DisplayGroup::Other);
-
-    // More recent activity (April 13) must appear before stale activity (April 1)
+    // Both feature rows resolve to AwaitingReview (open PR, no decision).
+    // Older SINCE timestamp sorts first — stale PR #20 is more urgent.
     assert_eq!(
-        rows[1].branch, "feat/issue-10",
-        "feat/issue-10 (recent) should sort before feat/issue-20 (stale)"
+        rows[1].branch, "feat/issue-20",
+        "feat/issue-20 (stale since April 1) should sort before feat/issue-10 (recent)"
     );
-    assert_eq!(rows[2].branch, "feat/issue-20");
+    assert_eq!(rows[2].branch, "feat/issue-10");
 }
 
 // ---------------------------------------------------------------------------

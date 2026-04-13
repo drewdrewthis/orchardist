@@ -181,9 +181,7 @@ impl App {
 
         let persist_selection = command != "cleanup";
 
-        let view = if persist_selection {
-            ViewState::List
-        } else {
+        let view = if !persist_selection {
             ViewState::Cleanup(CleanupState {
                 stale: Vec::new(),
                 selected: std::collections::HashSet::new(),
@@ -192,6 +190,12 @@ impl App {
                 deleted: Vec::new(),
                 errors: Vec::new(),
             })
+        } else if crate::signal::is_first_launch() {
+            // Surface the legend overlay once so new users see the status &
+            // activity lexicon before they're asked to read emoji-encoded rows.
+            ViewState::Help
+        } else {
+            ViewState::List
         };
 
         // Resolve the initial cursor position and active repo from the last saved selection.
@@ -1586,6 +1590,9 @@ impl App {
             }
             Message::ToggleHelp => {
                 self.view = if matches!(self.view, ViewState::Help) {
+                    // Leaving the legend counts as "seen" — first-launch users
+                    // won't be shown it again on the next start.
+                    crate::signal::mark_legend_seen();
                     ViewState::List
                 } else {
                     ViewState::Help
@@ -1620,6 +1627,10 @@ impl App {
                 ok()
             }
             Message::ConfirmNo | Message::Cancel | Message::DismissDialog => {
+                // Dismissing the legend counts as "seen" for first-launch.
+                if matches!(self.view, ViewState::Help) {
+                    crate::signal::mark_legend_seen();
+                }
                 self.view = ViewState::List;
                 ok()
             }
@@ -2907,9 +2918,13 @@ mod tests {
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
+        // Issue #251: NeedsInput renders as a ❓ glyph in the STATUS column
+        // (parent row's single merge-blocker glyph). Activity column A shows
+        // ⚡ because the agent is "doing something" (waiting on input).
+        let needs_input_glyph = crate::signal::PipelineStatus::NeedsInput.glyph();
         assert!(
-            output.contains("input"),
-            "expected 'input' claude status indicator"
+            output.contains(needs_input_glyph),
+            "expected ❓ needs-input glyph in STATUS column, got:\n{output}"
         );
         assert!(
             output.contains("needs attention"),
@@ -2939,10 +2954,17 @@ mod tests {
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
-        assert!(output.contains("#55"), "expected PR number #55 in output");
+        // Issue #251: PR number renders in the ID column as `PR#55` (when no
+        // issue is linked) or `#N / PR#55` when an issue is present. A failing
+        // CI state shows as ❌ in the STATUS column.
         assert!(
-            output.contains("failing"),
-            "expected 'failing' CI state in output"
+            output.contains("PR#55") || output.contains("#55"),
+            "expected PR 55 in ID column, got:\n{output}"
+        );
+        let failing_glyph = crate::signal::PipelineStatus::CiFailing.glyph();
+        assert!(
+            output.contains(failing_glyph),
+            "expected ❌ ci-failing glyph in STATUS column, got:\n{output}"
         );
     }
 
