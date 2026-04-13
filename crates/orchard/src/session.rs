@@ -372,11 +372,7 @@ pub(crate) fn parse_iso8601_to_epoch(s: &str) -> Option<u64> {
         .or_else(|_| chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ"))
         .ok()?;
     let epoch = dt.timestamp();
-    if epoch < 0 {
-        None
-    } else {
-        Some(epoch as u64)
-    }
+    if epoch < 0 { None } else { Some(epoch as u64) }
 }
 
 impl ClaudeSessionInfo {

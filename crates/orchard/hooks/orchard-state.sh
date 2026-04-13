@@ -99,7 +99,7 @@ write_state() {
     # state_changed_at: only update when the state actually changes.
     local existing_state
     existing_state=$(read_state_field "state")
-    local state_changed_at
+    local state_changed_at=""
     if [ "$state" = "$existing_state" ]; then
         state_changed_at=$(read_state_field "state_changed_at")
     fi

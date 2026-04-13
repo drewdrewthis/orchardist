@@ -607,10 +607,7 @@ mod tests {
             "state_changed_at": "2026-04-13T10:00:00Z"
         }"#;
         let sf: ClaudeStateFile = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            sf.state_changed_at.as_deref(),
-            Some("2026-04-13T10:00:00Z")
-        );
+        assert_eq!(sf.state_changed_at.as_deref(), Some("2026-04-13T10:00:00Z"));
     }
 
     #[test]
