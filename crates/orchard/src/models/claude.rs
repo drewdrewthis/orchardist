@@ -60,4 +60,13 @@ pub struct Claude {
     /// Age of the session in seconds, computed at serialization time. Not stored in cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_age_sec: Option<u64>,
+    /// Unix epoch seconds when the state last transitioned.
+    ///
+    /// Only updated when the state value changes. Absent for hooks that don't
+    /// yet write `state_changed_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_changed_at: Option<u64>,
+    /// Elapsed seconds since the current state was entered, computed at serialization time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_elapsed_sec: Option<u64>,
 }

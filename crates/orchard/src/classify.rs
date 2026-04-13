@@ -408,6 +408,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }];
 
         let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &states, &[]);
@@ -439,6 +440,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: None,
             inflight_tool_count: None,
+            state_changed_at: None,
         }];
 
         let rows = derive_worktree_rows(&[], &[], &all_wts, &sessions, "owner/repo", &states, &[]);

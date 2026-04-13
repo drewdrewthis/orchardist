@@ -326,6 +326,7 @@ mod tests {
                 rate_limits: None,
                 stop_reason: None,
                 turn_count: None,
+                state_changed_at: None,
             }),
             windows: vec![],
             started_at: None,

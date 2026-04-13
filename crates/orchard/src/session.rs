@@ -111,6 +111,8 @@ pub struct ClaudeSessionInfo {
     pub stop_reason: Option<String>,
     /// Number of assistant turns in the conversation.
     pub turn_count: Option<u32>,
+    /// Unix epoch seconds when the state last transitioned, if available.
+    pub state_changed_at: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +363,22 @@ pub struct EnrichedSession {
     pub last_activity_at: Option<u64>,
 }
 
+/// Parses an ISO 8601 timestamp string into Unix epoch seconds.
+///
+/// Returns `None` when `s` is empty or cannot be parsed as RFC 3339.
+/// Reusable across `ClaudeSessionInfo` and JSON serialization helpers.
+pub(crate) fn parse_iso8601_to_epoch(s: &str) -> Option<u64> {
+    let dt = chrono::DateTime::parse_from_rfc3339(s)
+        .or_else(|_| chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ"))
+        .ok()?;
+    let epoch = dt.timestamp();
+    if epoch < 0 {
+        None
+    } else {
+        Some(epoch as u64)
+    }
+}
+
 impl ClaudeSessionInfo {
     /// Constructs `ClaudeSessionInfo` from a hook state file, returning `None`
     /// when the parsed state is `ClaudeState::None` (no active Claude process).
@@ -395,6 +413,10 @@ impl ClaudeSessionInfo {
                 None
             }
         });
+        let state_changed_at = sf
+            .state_changed_at
+            .as_deref()
+            .and_then(parse_iso8601_to_epoch);
         Some(ClaudeSessionInfo {
             status: state,
             model: sf.model.clone(),
@@ -411,6 +433,7 @@ impl ClaudeSessionInfo {
             rate_limits,
             stop_reason: sf.stop_reason.clone(),
             turn_count: None,
+            state_changed_at,
         })
     }
 }
@@ -671,6 +694,7 @@ mod tests {
             cache_read_input_tokens: None,
             stop_reason: Some("end_turn".to_string()),
             inflight_tool_count: None,
+            state_changed_at: None,
         }
     }
 
@@ -765,6 +789,53 @@ mod tests {
         assert_eq!(info.context_window_pct, Some(50.0));
         // No rate fields → rate_limits is None
         assert!(info.rate_limits.is_none());
+    }
+
+    // -- parse_iso8601_to_epoch tests ----------------------------------------
+
+    #[test]
+    fn parse_iso8601_to_epoch_valid_rfc3339() {
+        let result = parse_iso8601_to_epoch("2026-04-13T10:00:00Z");
+        assert!(result.is_some(), "expected Some for valid ISO 8601");
+        // Cross-check against chrono directly.
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-04-13T10:00:00Z")
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(result.unwrap(), expected);
+    }
+
+    #[test]
+    fn parse_iso8601_to_epoch_none_for_invalid() {
+        let result = parse_iso8601_to_epoch("not-a-timestamp");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_iso8601_to_epoch_none_for_empty() {
+        let result = parse_iso8601_to_epoch("");
+        assert!(result.is_none());
+    }
+
+    // -- state_changed_at propagation ----------------------------------------
+
+    #[test]
+    fn from_state_file_propagates_state_changed_at_to_epoch() {
+        let ts = "2026-04-13T10:00:00Z";
+        let mut sf = make_state_file("working");
+        sf.state_changed_at = Some(ts.to_string());
+        let info = ClaudeSessionInfo::from_state_file(&sf).unwrap();
+        let expected = chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(info.state_changed_at, Some(expected));
+    }
+
+    #[test]
+    fn from_state_file_state_changed_at_none_when_absent() {
+        let sf = make_state_file("idle");
+        // state_changed_at is None in the fixture
+        let info = ClaudeSessionInfo::from_state_file(&sf).unwrap();
+        assert!(info.state_changed_at.is_none());
     }
 }
 

@@ -336,6 +336,12 @@ pub struct JsonClaudeInfo {
     /// Number of assistant turns in the conversation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_count: Option<u32>,
+    /// Elapsed seconds since the current state was entered, computed at read time.
+    ///
+    /// Derived from `state_changed_at` in the hook state file. Absent when the
+    /// hook version does not write `state_changed_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_elapsed_sec: Option<u64>,
 }
 
 /// Host reachability information in JSON output.
@@ -389,6 +395,7 @@ fn claude_info_from_enrichment(c: &crate::orchard_state::ClaudeEnrichment) -> Js
         total_duration_ms: c.total_duration_ms,
         stop_reason: c.stop_reason.clone(),
         turn_count: c.turn_count,
+        state_elapsed_sec: compute_session_age_sec(c.state_changed_at),
     }
 }
 
@@ -408,6 +415,7 @@ fn claude_info_from_session(c: &crate::session::ClaudeSessionInfo) -> JsonClaude
         total_duration_ms: c.total_duration_ms,
         stop_reason: c.stop_reason.clone(),
         turn_count: c.turn_count,
+        state_elapsed_sec: compute_session_age_sec(c.state_changed_at),
     }
 }
 
@@ -803,6 +811,7 @@ mod tests {
                 rate_limits: None,
                 stop_reason: None,
                 turn_count: None,
+                state_changed_at: None,
             }),
             windows: vec![],
             started_at: None,
@@ -1107,6 +1116,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         }
     }
 
@@ -1166,6 +1176,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         });
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
         let claude = &value["claude"];
@@ -1220,6 +1231,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         });
         let js = JsonSession::from(&session);
         let age = js.claude.unwrap().session_age_sec.unwrap();
@@ -1249,6 +1261,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         });
         let js = JsonSession::from(&session);
         assert!(
@@ -1282,6 +1295,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         });
         let js = JsonSession::from(&session);
         let age = js.claude.unwrap().session_age_sec.unwrap();
@@ -1333,6 +1347,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         });
         let js = JsonSession::from(&session);
         let claude = js.claude.unwrap();
@@ -1391,6 +1406,7 @@ mod tests {
             rate_limits: None,
             stop_reason: None,
             turn_count: None,
+            state_changed_at: None,
         });
         let js = JsonSession::from(&session);
         let claude = js.claude.unwrap();
@@ -1453,6 +1469,72 @@ mod tests {
         assert!(
             result.is_none(),
             "session_age_sec must be None when start_ts is ahead of now (clock skew); got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // state_elapsed_sec tests (Part 6)
+    // -----------------------------------------------------------------------
+
+    /// AC: state_elapsed_sec is computed from state_changed_at at read time.
+    #[test]
+    fn state_elapsed_sec_computed_from_state_changed_at() {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let state_changed_at = now_secs - 120; // 120 seconds ago
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Working,
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
+            state_changed_at: Some(state_changed_at),
+        });
+        let js = JsonSession::from(&session);
+        let elapsed = js.claude.unwrap().state_elapsed_sec.unwrap();
+        assert!(
+            elapsed >= 120,
+            "state_elapsed_sec must be >= 120 when state changed 120s ago: got {elapsed}"
+        );
+    }
+
+    /// AC: state_elapsed_sec absent when state_changed_at is None.
+    #[test]
+    fn state_elapsed_sec_absent_when_no_state_changed_at() {
+        let session = make_enriched_session(ClaudeEnrichment {
+            status: crate::claude_state::ClaudeState::Idle,
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            context_window_pct: None,
+            cost_usd: None,
+            total_duration_ms: None,
+            rate_limits: None,
+            stop_reason: None,
+            turn_count: None,
+            state_changed_at: None,
+        });
+        let js = JsonSession::from(&session);
+        assert!(
+            js.claude.unwrap().state_elapsed_sec.is_none(),
+            "state_elapsed_sec must be absent when state_changed_at is None"
         );
     }
 

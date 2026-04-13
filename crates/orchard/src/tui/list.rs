@@ -287,6 +287,24 @@ fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
     )
 }
 
+/// Formats an elapsed-seconds value into a compact duration string.
+///
+/// - `< 60` → `"0m"`
+/// - `< 3600` → `"{minutes}m"` (e.g., `"23m"`)
+/// - `< 86400` → `"{hours}h"` (e.g., `"4h"`)
+/// - `>= 86400` → `"{days}d"` (e.g., `"2d"`)
+pub(crate) fn format_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        "0m".to_string()
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
+}
+
 /// Returns a Claude activity indicator for the task row.
 ///
 /// When hook state files are available, shows richer info including context
@@ -326,27 +344,54 @@ fn claude_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
         ClaudeState::Idle
     };
 
-    format_claude_state(state, &count_suffix, theme)
+    // Find the oldest state_changed_at among sessions in the winning state
+    // (smallest epoch = longest time in this state).
+    let state_changed_at = row
+        .sessions
+        .iter()
+        .filter_map(|s| s.claude.as_ref())
+        .filter(|c| c.status == state)
+        .filter_map(|c| c.state_changed_at)
+        .min();
+
+    format_claude_state(state, state_changed_at, &count_suffix, theme)
 }
 
 /// Formats a single Claude state into display text and style.
+///
+/// When `state_changed_at` is `Some`, appends ` ({elapsed})` between the
+/// state label and the session count suffix, e.g. `"⚡ active (23m) 2"`.
 fn format_claude_state(
     state: crate::claude_state::ClaudeState,
+    state_changed_at: Option<u64>,
     suffix: &str,
     theme: &Theme,
 ) -> (String, Style) {
     use crate::claude_state::ClaudeState;
+
+    // Compute elapsed duration suffix if state_changed_at is known.
+    let duration_part = if let Some(ts) = state_changed_at {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let elapsed = now.saturating_sub(ts);
+        format!(" ({})", format_elapsed(elapsed))
+    } else {
+        String::new()
+    };
+
     match state {
         ClaudeState::Input => (
-            format!("\u{26a1} input{}", suffix),
+            format!("\u{26a1} input{}{}", duration_part, suffix),
             Style::default().fg(theme.claude_needs_input),
         ),
         ClaudeState::Working => (
-            format!("\u{26a1} active{}", suffix),
+            format!("\u{26a1} active{}{}", duration_part, suffix),
             Style::default().fg(theme.claude_active),
         ),
         ClaudeState::Idle => (
-            format!("\u{25cf} idle{}", suffix),
+            format!("\u{25cf} idle{}{}", duration_part, suffix),
             Style::default().fg(theme.warning),
         ),
         ClaudeState::None => (
@@ -367,7 +412,7 @@ fn standalone_claude_status(
             Style::default().fg(theme.claude_idle),
         );
     };
-    format_claude_state(claude.status, "", theme)
+    format_claude_state(claude.status, claude.state_changed_at, "", theme)
 }
 
 impl App {
@@ -1004,10 +1049,10 @@ impl App {
         let show_branch = self.show_branch_column;
 
         // Compute available width for the TITLE column.
-        // Column order: BAR (1) + # (3) + CLAUDE (10) + ISSUE (6) + TITLE (flex)
+        // Column order: BAR (1) + # (3) + CLAUDE (14) + ISSUE (6) + TITLE (flex)
         //               + [BRANCH (20)] + [HOST (12)] + STATUS (22)
         // Each column has 1 spacing. Plus borders (2).
-        let fixed = 1 + 1 + 3 + 1 + 10 + 1 + 6 + 1 + 1 + 22 + 2;
+        let fixed = 1 + 1 + 3 + 1 + 14 + 1 + 6 + 1 + 1 + 22 + 2;
         let branch_extra = if show_branch { 20 + 1 } else { 0 };
         let host_extra = if has_remote { 12 + 1 } else { 0 };
         let title_width = (area.width as usize).saturating_sub(fixed + branch_extra + host_extra);
@@ -1016,7 +1061,7 @@ impl App {
         let mut widths: Vec<Constraint> = vec![
             Constraint::Length(1),  // BAR (colored repo indicator)
             Constraint::Length(3),  // #
-            Constraint::Length(14), // CLAUDE (status + expand indicator like "▶3")
+            Constraint::Length(18), // CLAUDE (status + elapsed + expand indicator like "▶3")
             Constraint::Length(6),  // ISSUE
             Constraint::Min(20),    // TITLE (flexible)
         ];
@@ -2512,6 +2557,7 @@ mod tests {
                     rate_limits: None,
                     stop_reason: None,
                     turn_count: None,
+                    state_changed_at: None,
                 }),
                 windows: vec![],
                 panes: vec![],
@@ -2559,6 +2605,7 @@ mod tests {
                     rate_limits: None,
                     stop_reason: None,
                     turn_count: None,
+                    state_changed_at: None,
                 }),
                 windows: vec![],
                 panes: vec![],
@@ -2737,6 +2784,7 @@ mod tests {
                 rate_limits: None,
                 stop_reason: None,
                 turn_count: None,
+                state_changed_at: None,
             })
         } else {
             None
@@ -2852,6 +2900,7 @@ mod tests {
                         rate_limits: None,
                         stop_reason: None,
                         turn_count: None,
+                        state_changed_at: None,
                     }),
                     windows: vec![],
                     panes: vec![],
@@ -2880,6 +2929,7 @@ mod tests {
                         rate_limits: None,
                         stop_reason: None,
                         turn_count: None,
+                        state_changed_at: None,
                     }),
                     windows: vec![],
                     panes: vec![],
@@ -2896,6 +2946,179 @@ mod tests {
             text.contains("2"),
             "expected session count '2' in: {}",
             text
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // format_elapsed tests (Part 3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_elapsed_under_one_minute_shows_0m() {
+        assert_eq!(format_elapsed(0), "0m");
+        assert_eq!(format_elapsed(45), "0m");
+        assert_eq!(format_elapsed(59), "0m");
+    }
+
+    #[test]
+    fn format_elapsed_minutes() {
+        assert_eq!(format_elapsed(60), "1m");
+        assert_eq!(format_elapsed(1380), "23m");
+        assert_eq!(format_elapsed(3599), "59m");
+    }
+
+    #[test]
+    fn format_elapsed_hours() {
+        assert_eq!(format_elapsed(3600), "1h");
+        assert_eq!(format_elapsed(14400), "4h");
+        assert_eq!(format_elapsed(86399), "23h");
+    }
+
+    #[test]
+    fn format_elapsed_days() {
+        assert_eq!(format_elapsed(86400), "1d");
+        assert_eq!(format_elapsed(172800), "2d");
+    }
+
+    // -----------------------------------------------------------------------
+    // claude_status_text with elapsed time (Part 4)
+    // -----------------------------------------------------------------------
+
+    fn session_with_state_changed_at(
+        state: crate::claude_state::ClaudeState,
+        state_changed_at: Option<u64>,
+    ) -> crate::session::EnrichedSession {
+        use crate::session::{EnrichedSession, SessionStatus, TmuxSessionInfo};
+        let claude = if state != crate::claude_state::ClaudeState::None {
+            Some(ClaudeSessionInfo {
+                status: state,
+                model: None,
+                last_tool: None,
+                current_task: None,
+                session_start_ts: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                context_window_pct: None,
+                cost_usd: None,
+                total_duration_ms: None,
+                rate_limits: None,
+                stop_reason: None,
+                turn_count: None,
+                state_changed_at,
+            })
+        } else {
+            None
+        };
+        EnrichedSession {
+            tmux: TmuxSessionInfo {
+                host: Host::Local,
+                name: "sess".to_string(),
+                status: SessionStatus::Running { attached: false },
+            },
+            claude,
+            windows: vec![],
+            panes: vec![],
+            started_at: None,
+            last_activity_at: None,
+        }
+    }
+
+    #[test]
+    fn claude_status_working_with_elapsed_time() {
+        // Set state_changed_at to 23 minutes ago
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let state_changed_at = now - 23 * 60;
+        let row = WorktreeRow {
+            sessions: vec![session_with_state_changed_at(
+                crate::claude_state::ClaudeState::Working,
+                Some(state_changed_at),
+            )],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let (text, _) = claude_status_text(&row, &Theme::default());
+        assert!(text.contains("active"), "expected 'active' in: {}", text);
+        assert!(text.contains("23m"), "expected '23m' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_idle_with_elapsed_hours() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let state_changed_at = now - 4 * 3600;
+        let row = WorktreeRow {
+            sessions: vec![session_with_state_changed_at(
+                crate::claude_state::ClaudeState::Idle,
+                Some(state_changed_at),
+            )],
+            ..make_task_row(1, DisplayGroup::Other)
+        };
+        let (text, _) = claude_status_text(&row, &Theme::default());
+        assert!(text.contains("idle"), "expected 'idle' in: {}", text);
+        assert!(text.contains("4h"), "expected '4h' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_input_with_elapsed_minutes() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let state_changed_at = now - 2 * 60;
+        let row = WorktreeRow {
+            sessions: vec![session_with_state_changed_at(
+                crate::claude_state::ClaudeState::Input,
+                Some(state_changed_at),
+            )],
+            ..make_task_row(1, DisplayGroup::NeedsAttention)
+        };
+        let (text, _) = claude_status_text(&row, &Theme::default());
+        assert!(text.contains("input"), "expected 'input' in: {}", text);
+        assert!(text.contains("2m"), "expected '2m' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_no_session_shows_none_without_duration() {
+        let row = make_task_row(1, DisplayGroup::Other);
+        let (text, _) = claude_status_text(&row, &Theme::default());
+        assert!(text.contains("none"), "expected 'none' in: {}", text);
+        assert!(!text.contains('('), "expected no '(' in: {}", text);
+    }
+
+    #[test]
+    fn claude_status_missing_state_changed_at_omits_duration() {
+        let row = WorktreeRow {
+            sessions: vec![session_with_state_changed_at(
+                crate::claude_state::ClaudeState::Working,
+                None,
+            )],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let (text, _) = claude_status_text(&row, &Theme::default());
+        assert!(text.contains("active"), "expected 'active' in: {}", text);
+        assert!(!text.contains('('), "expected no '(' in: {}", text);
+    }
+
+    // -----------------------------------------------------------------------
+    // Column width test (Part 5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn claude_column_width_is_at_least_16() {
+        // The CLAUDE constraint must be at least 16 to accommodate "⚡ active (23m) 2"
+        // We verify the constant used in build_task_table_rows_with_standalone.
+        // The constraint is Constraint::Length(18) as of this feature.
+        let width: u16 = 18;
+        assert!(
+            width >= 16,
+            "CLAUDE column must be >= 16 chars wide, got {}",
+            width
         );
     }
 

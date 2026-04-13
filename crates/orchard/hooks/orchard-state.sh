@@ -73,7 +73,8 @@ run_hook_enrich() {
 
 # Writes the main state file atomically.
 # Reads inflight count from sidecar. Preserves session_start_ts, model,
-# last_tool, and current_task across events; extra fields passed in $2 override.
+# last_tool, current_task, and state_changed_at across events; extra fields
+# passed in $2 override. state_changed_at only updates when state transitions.
 write_state() {
     local state="$1"
     local inflight_count
@@ -94,6 +95,18 @@ write_state() {
     # Preserve current_task across events — caller overwrites via extra when needed.
     local existing_current_task
     existing_current_task=$(read_state_field "current_task")
+
+    # state_changed_at: only update when the state actually changes.
+    local existing_state
+    existing_state=$(read_state_field "state")
+    local state_changed_at
+    if [ "$state" = "$existing_state" ]; then
+        state_changed_at=$(read_state_field "state_changed_at")
+    fi
+    # If state changed or no previous state_changed_at, set to now.
+    if [ -z "$state_changed_at" ]; then
+        state_changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
 
     # Merge transcript enrichment.
     local enrichment
@@ -116,6 +129,7 @@ write_state() {
         --arg cwd "$cwd" \
         --arg event "$event" \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg state_changed_at "$state_changed_at" \
         --argjson inflight_tool_count "$inflight_count" \
         --argjson session_start_ts_val "$([ -n "$session_start_ts" ] && echo "$session_start_ts" || echo "null")" \
         --arg existing_model "$existing_model" \
@@ -131,6 +145,7 @@ write_state() {
           cwd: $cwd,
           event: $event,
           timestamp: $timestamp,
+          state_changed_at: $state_changed_at,
           inflight_tool_count: $inflight_tool_count
         }
         # Preserve session_start_ts if available.
@@ -207,6 +222,15 @@ case "$event" in
     existing_cache_creation=$(read_state_field "cache_creation_input_tokens")
     existing_cache_read=$(read_state_field "cache_read_input_tokens")
 
+    # state_changed_at: only update when state transitions (previous != "idle").
+    existing_state=$(read_state_field "state")
+    if [ "$existing_state" = "idle" ]; then
+        state_changed_at=$(read_state_field "state_changed_at")
+    fi
+    if [ -z "${state_changed_at:-}" ]; then
+        state_changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+
     enrichment=$(run_hook_enrich)
 
     local_tmp="${state_file}.tmp.$$"
@@ -217,6 +241,7 @@ case "$event" in
         --arg cwd "$cwd" \
         --arg event "$event" \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg state_changed_at "$state_changed_at" \
         --arg stop_reason "$stop_reason" \
         --argjson inflight_tool_count "$inflight_count" \
         --argjson session_start_ts_val "$([ -n "$session_start_ts" ] && echo "$session_start_ts" || echo "null")" \
@@ -235,6 +260,7 @@ case "$event" in
           cwd: $cwd,
           event: $event,
           timestamp: $timestamp,
+          state_changed_at: $state_changed_at,
           stop_reason: $stop_reason,
           inflight_tool_count: $inflight_tool_count
         }
@@ -281,13 +307,16 @@ case "$event" in
     inflight_count=$(read_inflight | jq 'length')
     enrichment=$(run_hook_enrich)
     local_tmp="${state_file}.tmp.$$"
+    # SessionStart always sets state_changed_at fresh.
+    state_changed_at_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     jq -n \
         --arg state "idle" \
         --arg session_id "$session_id" \
         --arg tmux_session "$tmux_session" \
         --arg cwd "$cwd" \
         --arg event "$event" \
-        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg timestamp "$state_changed_at_now" \
+        --arg state_changed_at "$state_changed_at_now" \
         --argjson inflight_tool_count "$inflight_count" \
         --argjson extra "$extra" \
         --argjson enrichment "$enrichment" \
@@ -299,6 +328,7 @@ case "$event" in
           cwd: $cwd,
           event: $event,
           timestamp: $timestamp,
+          state_changed_at: $state_changed_at,
           inflight_tool_count: $inflight_tool_count
         }
         | . + $extra

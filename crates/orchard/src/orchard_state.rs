@@ -289,6 +289,8 @@ pub struct ClaudeEnrichment {
     pub stop_reason: Option<String>,
     /// Number of assistant turns in the conversation.
     pub turn_count: Option<u32>,
+    /// Unix epoch seconds when the state last transitioned, if available.
+    pub state_changed_at: Option<u64>,
 }
 
 /// Reachability state for a remote host.
@@ -353,6 +355,7 @@ impl From<&EnrichedSession> for SessionState {
             rate_limits: c.rate_limits.clone(),
             stop_reason: c.stop_reason.clone(),
             turn_count: c.turn_count,
+            state_changed_at: c.state_changed_at,
         });
         let windows = s
             .windows
