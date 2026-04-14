@@ -1738,11 +1738,27 @@ impl App {
             let bar_color = repo_color(repo_idx);
             let bar_cell = Cell::from("\u{25cf}").style(Style::default().fg(bar_color));
 
-            // ACTIVITY cell (column A) — rollup glyph.
-            let activity_cell = Cell::from(activity.glyph()).style(activity_style(activity, theme));
+            // Expansion state governs both the caret and whether the parent row
+            // shows its rolled-up STATUS/A glyphs (hidden when expanded, since the
+            // child rows carry detail — showing both is noisy).
+            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+            let window_count = vt
+                .row
+                .sessions
+                .first()
+                .map(|s| s.windows.len())
+                .unwrap_or(0);
+            let is_expanded = self.expanded.contains(&vt.row.worktree_path);
+            let has_multi_children = window_count > 1 || pane_count > 1;
+            let hide_rollup = is_expanded && has_multi_children;
 
-            // STATUS cell — merge-blocker glyph.
-            let status_cell = Cell::from(status.glyph()).style(status_style(status, theme));
+            // ACTIVITY cell (column A) — rollup glyph. Hidden when expanded.
+            let activity_glyph = if hide_rollup { "" } else { activity.glyph() };
+            let activity_cell = Cell::from(activity_glyph).style(activity_style(activity, theme));
+
+            // STATUS cell — merge-blocker glyph. Hidden when expanded.
+            let status_glyph = if hide_rollup { "" } else { status.glyph() };
+            let status_cell = Cell::from(status_glyph).style(status_style(status, theme));
 
             // ID cell.
             let is_prioritized = vt.group == DisplayGroup::Prioritized;
@@ -1772,15 +1788,6 @@ impl App {
                 };
 
             // Expand/collapse caret decorates TITLE when multi-window or multi-pane.
-            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
-            let window_count = vt
-                .row
-                .sessions
-                .first()
-                .map(|s| s.windows.len())
-                .unwrap_or(0);
-            let is_expanded = self.expanded.contains(&vt.row.worktree_path);
-            let has_multi_children = window_count > 1 || pane_count > 1;
             let caret: &str = if has_multi_children {
                 if is_expanded {
                     " \u{25BC}"

@@ -508,18 +508,20 @@ fn smart_sort_display_group_trumps_recency() {
 }
 
 // ---------------------------------------------------------------------------
-// Smart sort: worktrees with PR before without PR
+// Smart sort: active coding outranks awaiting-review (signal-lexicon severity)
 // ---------------------------------------------------------------------------
 
-/// Within the same `DisplayGroup`, a worktree that has a PR must sort before
-/// a worktree with no PR at all.
+/// Under the signal-lexicon sort (issue #251), `Coding` (active work — watch
+/// the agent) outranks `AwaitingReview` (passive wait on a human reviewer).
+/// A worktree with no PR (Coding) sorts ahead of one with an open PR
+/// (AwaitingReview), because the user can act on the former but not the latter.
 #[test]
-fn smart_sort_worktree_with_pr_before_without() {
+fn smart_sort_coding_outranks_awaiting_review() {
     let repo_caches = vec![(
         "owner/repo".to_string(),
         vec![],
         vec![
-            // Only worktree B has a PR
+            // Only the second worktree has a PR → AwaitingReview status.
             make_pr(99, "feat/has-pr"),
         ],
         vec![
@@ -538,17 +540,15 @@ fn smart_sort_worktree_with_pr_before_without() {
         rows.len()
     );
     assert_eq!(rows[0].display_group, DisplayGroup::RepoMain);
-
-    // Both non-main rows are in Other
     assert_eq!(rows[1].display_group, DisplayGroup::Other);
     assert_eq!(rows[2].display_group, DisplayGroup::Other);
 
-    // Row with a PR must sort before row without
+    // Coding (no PR) must sort before AwaitingReview (open PR) under #251.
     assert_eq!(
-        rows[1].branch, "feat/has-pr",
-        "worktree with PR should sort before worktree without PR"
+        rows[1].branch, "feat/no-pr",
+        "coding row should outrank awaiting-review row"
     );
-    assert_eq!(rows[2].branch, "feat/no-pr");
+    assert_eq!(rows[2].branch, "feat/has-pr");
 }
 
 /// @e2e — task #7: a PR whose only gate check is still running (pending) must

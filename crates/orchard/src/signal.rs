@@ -10,16 +10,19 @@
 //! | Glyph | PipelineStatus | Meaning |
 //! |---|---|---|
 //! | ❓ | NeedsInput | any descendant Claude agent is waiting for user input |
-//! | ❌ | CiFailing | `pr.ci_code_state == "failing"` |
+//! | 🚫 | CiFailing | `pr.ci_code_state == "failing"` |
 //! | ⚠️ | MergeConflict | `pr.has_conflicts` |
 //! | 🔴 | ChangesRequested | `pr.review_decision == "CHANGES_REQUESTED"` |
-//! | 🤞 | AwaitingReview | PR open, no decision yet |
-//! | ✍️ | Coding | no PR, or PR without review requested |
+//! | ⌨️ | Coding | no PR, or PR without review requested (active work branch) |
+//! | ⬆️ | AwaitingReview | PR open, no decision yet — up-arrow asks reviewer to act |
 //! | 📝 | Draft | `pr.is_draft` |
 //! | 🔗 | Blocked | `issue.blocked_by` non-empty with open blockers |
 //! | ⏸️ | Paused | `paused` label present |
 //! | 🟢 | Ready | all gates green |
 //! | 🚀 | Merged | `pr.state == MERGED` |
+//!
+//! Severity note: `Coding` (active work — watch the agent) outranks `AwaitingReview`
+//! (passive wait — nothing to do). Watching workers beats waiting on a reviewer.
 //!
 //! | Glyph | Activity | Meaning |
 //! |---|---|---|
@@ -44,16 +47,19 @@ use crate::orchard_state::{ClaudeEnrichment, IssueInfo, PrState, WorktreeState};
 pub enum PipelineStatus {
     /// ❓ Any descendant agent is waiting for user input.
     NeedsInput,
-    /// ❌ PR has failing CI.
+    /// 🚫 PR has failing CI.
     CiFailing,
     /// ⚠️ PR has merge conflicts.
     MergeConflict,
     /// 🔴 PR has CHANGES_REQUESTED review.
     ChangesRequested,
-    /// 🤞 PR is open with no review decision yet.
-    AwaitingReview,
-    /// ✍️ Branch is being actively coded on — no PR, or PR without review requested.
+    /// ⌨️ Branch is being actively coded on — no PR, or PR without review requested.
+    ///
+    /// Severity: outranks `AwaitingReview` because active work needs watching;
+    /// waiting on a reviewer is passive (the user can't act on it anyway).
     Coding,
+    /// ⬆️ PR is open with no review decision yet — waiting on a human reviewer.
+    AwaitingReview,
     /// 📝 PR is a draft.
     Draft,
     /// 🔗 Issue is blocked by open blockers.
@@ -70,17 +76,17 @@ impl PipelineStatus {
     /// Single-glyph representation of this status.
     pub fn glyph(self) -> &'static str {
         match self {
-            Self::NeedsInput => "\u{2753}",            // ❓
-            Self::CiFailing => "\u{274C}",             // ❌
-            Self::MergeConflict => "\u{26A0}\u{FE0F}", // ⚠️
-            Self::ChangesRequested => "\u{1F534}",     // 🔴
-            Self::AwaitingReview => "\u{1F91E}",       // 🤞
-            Self::Coding => "\u{270D}\u{FE0F}",        // ✍️
-            Self::Draft => "\u{1F4DD}",                // 📝
-            Self::Blocked => "\u{1F517}",              // 🔗
-            Self::Paused => "\u{23F8}\u{FE0F}",        // ⏸️
-            Self::Ready => "\u{1F7E2}",                // 🟢
-            Self::Merged => "\u{1F680}",               // 🚀
+            Self::NeedsInput => "\u{2753}",             // ❓
+            Self::CiFailing => "\u{1F6AB}",             // 🚫
+            Self::MergeConflict => "\u{26A0}\u{FE0F}",  // ⚠️
+            Self::ChangesRequested => "\u{1F534}",      // 🔴
+            Self::Coding => "\u{2328}\u{FE0F}",         // ⌨️
+            Self::AwaitingReview => "\u{2B06}\u{FE0F}", // ⬆️
+            Self::Draft => "\u{1F4DD}",                 // 📝
+            Self::Blocked => "\u{1F517}",               // 🔗
+            Self::Paused => "\u{23F8}\u{FE0F}",         // ⏸️
+            Self::Ready => "\u{1F7E2}",                 // 🟢
+            Self::Merged => "\u{1F680}",                // 🚀
         }
     }
 
@@ -91,8 +97,8 @@ impl PipelineStatus {
             Self::CiFailing => "CI failing",
             Self::MergeConflict => "merge conflict",
             Self::ChangesRequested => "changes requested",
-            Self::AwaitingReview => "awaiting review",
             Self::Coding => "coding",
+            Self::AwaitingReview => "awaiting review",
             Self::Draft => "draft",
             Self::Blocked => "blocked",
             Self::Paused => "paused",
@@ -794,7 +800,9 @@ mod tests {
     fn status_ord_matches_hierarchy() {
         assert!(PipelineStatus::NeedsInput < PipelineStatus::CiFailing);
         assert!(PipelineStatus::CiFailing < PipelineStatus::MergeConflict);
-        assert!(PipelineStatus::AwaitingReview < PipelineStatus::Coding);
+        // Coding (active work, needs watching) outranks AwaitingReview (passive wait).
+        assert!(PipelineStatus::Coding < PipelineStatus::AwaitingReview);
+        assert!(PipelineStatus::AwaitingReview < PipelineStatus::Draft);
         assert!(PipelineStatus::Ready < PipelineStatus::Merged);
     }
 

@@ -366,12 +366,12 @@ impl App {
                 PipelineStatus::ChangesRequested.label(),
             ),
             legend_row(
-                PipelineStatus::AwaitingReview.glyph(),
-                PipelineStatus::AwaitingReview.label(),
-            ),
-            legend_row(
                 PipelineStatus::Coding.glyph(),
                 PipelineStatus::Coding.label(),
+            ),
+            legend_row(
+                PipelineStatus::AwaitingReview.glyph(),
+                PipelineStatus::AwaitingReview.label(),
             ),
             legend_row(PipelineStatus::Draft.glyph(), PipelineStatus::Draft.label()),
             legend_row(
@@ -394,6 +394,7 @@ impl App {
             )]),
             Line::from(""),
             legend_row(Activity::Working.glyph(), Activity::Working.label()),
+            legend_row(Activity::Input.glyph(), Activity::Input.label()),
             legend_row(Activity::Idle.glyph(), Activity::Idle.label()),
             legend_row(Activity::Exhausted.glyph(), Activity::Exhausted.label()),
             Line::from(""),
