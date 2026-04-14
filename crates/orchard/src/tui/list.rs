@@ -1132,7 +1132,7 @@ impl App {
         // +1 column-spacing between columns; +2 for borders.
         const BAR_W: usize = 1;
         const A_W: usize = 2;
-        const NUM_W: usize = 3;
+        const NUM_W: usize = 4;
         const STATUS_W: usize = 3;
         const HOST_W: usize = 12;
         const SINCE_W: usize = 6;
@@ -1554,12 +1554,10 @@ impl App {
 
             let is_expanded = self.expanded.contains(&ss.session.tmux.name);
             let has_multi_children = ss.session.windows.len() > 1 || ss.session.panes.len() > 1;
+            // Caret lives in the `#` column (next to the number, above the tree
+            // connectors) — matches worktree parent rows.
             let expand_mark = if has_multi_children {
-                if is_expanded {
-                    " \u{25BC}"
-                } else {
-                    " \u{25B6}"
-                }
+                if is_expanded { "\u{25BC}" } else { "\u{25B6}" }
             } else {
                 ""
             };
@@ -1587,12 +1585,18 @@ impl App {
                 })
                 .unwrap_or_default();
 
-            let title_cell = Cell::from(format!("{}{}", ss.config.name, expand_mark));
+            let title_cell = Cell::from(ss.config.name.clone());
+
+            let num_cell_text = if expand_mark.is_empty() {
+                format!("{:>2}", unified_num)
+            } else {
+                format!("{:>2} {}", unified_num, expand_mark)
+            };
 
             let mut cells = vec![
                 Cell::from(""), // no bar for standalone sessions
                 activity_cell,
-                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(num_cell_text),
                 Cell::from(status_glyph).style(status_st),
                 Cell::from(""), // no ID for standalone
                 title_cell,
@@ -1756,7 +1760,10 @@ impl App {
             let activity_glyph = if hide_rollup { "" } else { activity.glyph() };
             let activity_cell = Cell::from(activity_glyph).style(activity_style(activity, theme));
 
-            // STATUS cell — merge-blocker glyph. Hidden when expanded.
+            // STATUS cell — merge-blocker glyph. Hidden when expanded, or
+            // blank for `Coding` (no blocker yet — agent activity in column A
+            // carries that signal). Keeps STATUS focused on "why isn't this
+            // merged?" without mixing with agent activity semantics.
             let status_glyph = if hide_rollup { "" } else { status.glyph() };
             let status_cell = Cell::from(status_glyph).style(status_style(status, theme));
 
@@ -1787,18 +1794,16 @@ impl App {
                     Cell::from(id_str)
                 };
 
-            // Expand/collapse caret decorates TITLE when multi-window or multi-pane.
+            // Expand/collapse caret lives in the `#` column — same column the
+            // tree connectors render into on sub-rows, so the caret aligns
+            // with the tree branch it toggles.
             let caret: &str = if has_multi_children {
-                if is_expanded {
-                    " \u{25BC}"
-                } else {
-                    " \u{25B6}"
-                }
+                if is_expanded { "\u{25BC}" } else { "\u{25B6}" }
             } else {
                 ""
             };
 
-            // TITLE with fuzzy highlight + optional caret suffix.
+            // TITLE — fuzzy-highlighted, no caret suffix.
             let title_cell = if !vt.match_indices.is_empty() && !fo.is_empty() {
                 let field_idx = if vt.row.is_main_worktree {
                     usize::MAX
@@ -1816,16 +1821,13 @@ impl App {
                         Style::default(),
                         highlight_style,
                     );
-                    let mut truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_width);
-                    if !caret.is_empty() {
-                        truncated.push(Span::raw(caret.to_string()));
-                    }
+                    let truncated = crate::tui::fuzzy::truncate_spans_left(spans, title_width);
                     Cell::from(Line::from(truncated))
                 } else {
-                    Cell::from(format!("{}{}", title_display, caret))
+                    Cell::from(title_display.to_string())
                 }
             } else {
-                Cell::from(format!("{}{}", title_display, caret))
+                Cell::from(title_display.to_string())
             };
 
             // SINCE cell — time in current state, formatted via format_elapsed.
@@ -1862,11 +1864,21 @@ impl App {
                 }
             };
 
+            // # column: row number, with caret suffix when the row has
+            // expandable children. The tree connectors in sub-rows render
+            // into this same column, so the caret aligns visually with the
+            // branch it toggles.
+            let num_cell_text = if caret.is_empty() {
+                format!("{:>2}", unified_num)
+            } else {
+                format!("{:>2} {}", unified_num, caret)
+            };
+
             // Assemble row. Unified numbering (continues from standalone count).
             let mut cells = vec![
                 bar_cell,
                 activity_cell,
-                Cell::from(format!("{:>2}", unified_num)),
+                Cell::from(num_cell_text),
                 status_cell,
                 id_cell,
                 title_cell,

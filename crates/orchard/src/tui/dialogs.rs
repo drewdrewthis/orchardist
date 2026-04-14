@@ -365,10 +365,7 @@ impl App {
                 PipelineStatus::ChangesRequested.glyph(),
                 PipelineStatus::ChangesRequested.label(),
             ),
-            legend_row(
-                PipelineStatus::Coding.glyph(),
-                PipelineStatus::Coding.label(),
-            ),
+            // Coding intentionally omitted — it renders blank (no blocker).
             legend_row(
                 PipelineStatus::AwaitingReview.glyph(),
                 PipelineStatus::AwaitingReview.label(),

@@ -13,13 +13,18 @@
 //! | 🚫 | CiFailing | `pr.ci_code_state == "failing"` |
 //! | ⚠️ | MergeConflict | `pr.has_conflicts` |
 //! | 🔴 | ChangesRequested | `pr.review_decision == "CHANGES_REQUESTED"` |
-//! | ⌨️ | Coding | no PR, or PR without review requested (active work branch) |
+//! | (blank) | Coding | no PR, or PR without review — no blocker to render yet |
 //! | ⬆️ | AwaitingReview | PR open, no decision yet — up-arrow asks reviewer to act |
 //! | 📝 | Draft | `pr.is_draft` |
 //! | 🔗 | Blocked | `issue.blocked_by` non-empty with open blockers |
 //! | ⏸️ | Paused | `paused` label present |
 //! | 🟢 | Ready | all gates green |
 //! | 🚀 | Merged | `pr.state == MERGED` |
+//!
+//! `Coding` renders a blank STATUS glyph on purpose: the STATUS column answers
+//! "why isn't this merged?" and for a work-in-progress branch the answer is
+//! "nothing's blocking, work is in progress." Agent activity (⚡/○ in column A)
+//! carries whether someone is on it — mixing the two axes confused the signal.
 //!
 //! Severity note: `Coding` (active work — watch the agent) outranks `AwaitingReview`
 //! (passive wait — nothing to do). Watching workers beats waiting on a reviewer.
@@ -76,11 +81,13 @@ impl PipelineStatus {
     /// Single-glyph representation of this status.
     pub fn glyph(self) -> &'static str {
         match self {
-            Self::NeedsInput => "\u{2753}",             // ❓
-            Self::CiFailing => "\u{1F6AB}",             // 🚫
-            Self::MergeConflict => "\u{26A0}\u{FE0F}",  // ⚠️
-            Self::ChangesRequested => "\u{1F534}",      // 🔴
-            Self::Coding => "\u{2328}\u{FE0F}",         // ⌨️
+            Self::NeedsInput => "\u{2753}",            // ❓
+            Self::CiFailing => "\u{1F6AB}",            // 🚫
+            Self::MergeConflict => "\u{26A0}\u{FE0F}", // ⚠️
+            Self::ChangesRequested => "\u{1F534}",     // 🔴
+            // Coding: blank — "no blocker, work in progress." Agent activity
+            // in column A carries whether someone is on it.
+            Self::Coding => "",
             Self::AwaitingReview => "\u{2B06}\u{FE0F}", // ⬆️
             Self::Draft => "\u{1F4DD}",                 // 📝
             Self::Blocked => "\u{1F517}",               // 🔗
@@ -779,13 +786,15 @@ mod tests {
 
     #[test]
     fn every_status_has_distinct_glyph() {
+        // `Coding` is intentionally blank (no blocker to show) — excluded here
+        // because an empty string can't be "distinct" from itself, and it's
+        // the only status that maps to no glyph by design.
         let all = [
             PipelineStatus::NeedsInput,
             PipelineStatus::CiFailing,
             PipelineStatus::MergeConflict,
             PipelineStatus::ChangesRequested,
             PipelineStatus::AwaitingReview,
-            PipelineStatus::Coding,
             PipelineStatus::Draft,
             PipelineStatus::Blocked,
             PipelineStatus::Paused,
