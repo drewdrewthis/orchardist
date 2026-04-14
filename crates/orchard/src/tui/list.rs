@@ -1541,12 +1541,12 @@ impl App {
                 .unwrap_or(crate::signal::Activity::None);
             let activity_cell = Cell::from(activity.glyph()).style(activity_style(activity, theme));
 
-            // Running/Dead → STATUS glyph. Standalone sessions aren't subject
-            // to merge-blocker hierarchy; show a simple liveness indicator.
+            // Standalone sessions have no pipeline status — STATUS is purely
+            // "what's blocking this from merging?" and a shepherd/orchardist
+            // session doesn't merge. Liveness goes in column A (activity);
+            // dead sessions render a muted ⚫ so they don't vanish entirely.
             let (status_glyph, status_st) = match &ss.session.tmux.status {
-                crate::session::SessionStatus::Running { .. } => {
-                    ("\u{1F7E2}", Style::default().fg(theme.success))
-                }
+                crate::session::SessionStatus::Running { .. } => ("", Style::default()),
                 crate::session::SessionStatus::Dead => {
                     ("\u{26AB}", Style::default().fg(theme.dimmed))
                 }
