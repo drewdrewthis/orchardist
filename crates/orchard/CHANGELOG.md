@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.7.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.6.0...orchard-v0.7.0) (2026-04-14)
+
+
+### Features
+
+* **claude:** richer worker telemetry in orchard --json ([#220](https://github.com/drewdrewthis/git-orchard-rs/issues/220)) ([#225](https://github.com/drewdrewthis/git-orchard-rs/issues/225)) ([ccdf522](https://github.com/drewdrewthis/git-orchard-rs/commit/ccdf522b6bfb5a2319b548935bcbb1b8cb36df2f))
+* expose raw labels in JSON output ([#237](https://github.com/drewdrewthis/git-orchard-rs/issues/237)) ([0890f5f](https://github.com/drewdrewthis/git-orchard-rs/commit/0890f5f99ba70344af8f70a8044adf9170102c47))
+* GitHub webhook receiver + event stream ([#215](https://github.com/drewdrewthis/git-orchard-rs/issues/215)) ([#226](https://github.com/drewdrewthis/git-orchard-rs/issues/226)) ([6825030](https://github.com/drewdrewthis/git-orchard-rs/commit/682503064fa0b9144f94b63e0aa17b0e5d3d93cf))
+* **json:** first-class phase field on PRs and issues ([#219](https://github.com/drewdrewthis/git-orchard-rs/issues/219)) ([#224](https://github.com/drewdrewthis/git-orchard-rs/issues/224)) ([cf50df5](https://github.com/drewdrewthis/git-orchard-rs/commit/cf50df50852e41b0f192e5c6bac83314eadaa328))
+* simplify data pipeline — canonical types + enriched fields ([#233](https://github.com/drewdrewthis/git-orchard-rs/issues/233)) ([#234](https://github.com/drewdrewthis/git-orchard-rs/issues/234)) ([8b756c3](https://github.com/drewdrewthis/git-orchard-rs/commit/8b756c343e51076803ae27c056fe50dd0e6c577a))
+* split ci state into code-failing vs gate-failing ([#228](https://github.com/drewdrewthis/git-orchard-rs/issues/228)) ([e86ee1d](https://github.com/drewdrewthis/git-orchard-rs/commit/e86ee1ddbe7e6f2af1020aede5dbe12f7cae7f41))
+* **tui:** session elapsed time in claude column ([#250](https://github.com/drewdrewthis/git-orchard-rs/issues/250)) ([1050b61](https://github.com/drewdrewthis/git-orchard-rs/commit/1050b6196182126d209c52191cb8db3f93855498))
+* **tui:** signal lexicon — row pipeline state + tmux pane agent rollup ([#251](https://github.com/drewdrewthis/git-orchard-rs/issues/251)) ([#253](https://github.com/drewdrewthis/git-orchard-rs/issues/253)) ([be40a71](https://github.com/drewdrewthis/git-orchard-rs/commit/be40a710709f4eb36a8ed4d418abc2da0ab7bf0f))
+* **tui:** smart sorting, priority indicators, and label badges ([#244](https://github.com/drewdrewthis/git-orchard-rs/issues/244)) ([25b1262](https://github.com/drewdrewthis/git-orchard-rs/commit/25b12625fca77c701eaf4d4fff457cc216d2bf71))
+
+
+### Bug Fixes
+
+* use /tmp for SSH ControlPath — macOS $TMPDIR too long even with %C ([b4d8b46](https://github.com/drewdrewthis/git-orchard-rs/commit/b4d8b466ec5715bc36c15c63e1d820b5ce14894c)), closes [#241](https://github.com/drewdrewthis/git-orchard-rs/issues/241)
+* use SSH %C hash token to avoid ControlPath length limit ([#242](https://github.com/drewdrewthis/git-orchard-rs/issues/242)) ([8c7244e](https://github.com/drewdrewthis/git-orchard-rs/commit/8c7244e0c6dcc08c4140a438a6c749cc5956586a)), closes [#241](https://github.com/drewdrewthis/git-orchard-rs/issues/241)
+* **watch:** debounce claude status transitions to suppress flicker ([#223](https://github.com/drewdrewthis/git-orchard-rs/issues/223)) ([0a1f379](https://github.com/drewdrewthis/git-orchard-rs/commit/0a1f379bbd9ddfd81a641d7ddd6449d9ee2ba7ae))
+
 ## [0.6.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.5.0...orchard-v0.6.0) (2026-04-10)
 
 
