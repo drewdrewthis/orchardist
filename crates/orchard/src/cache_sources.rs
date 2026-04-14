@@ -54,6 +54,7 @@ pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
                 labels,
                 assignees: vec![],
                 created_at: None,
+                updated_at: None,
                 blocked_by: vec![],
                 sub_issues: vec![],
                 parent: None,
@@ -94,6 +95,7 @@ fragment IssueFields on Issue {{
   labels(first: 100) {{ nodes {{ name }} }}
   assignees(first: 20) {{ nodes {{ login }} }}
   createdAt
+  updatedAt
   body
   subIssues(first: 50) {{ nodes {{ number title state }} }}
   parent {{ number }}
@@ -184,6 +186,9 @@ pub fn parse_issues_graphql(json: &str) -> Vec<CachedIssue> {
             .unwrap_or_default();
 
         let created_at = val["createdAt"].as_str().map(|s| s.to_string());
+        // GitHub GraphQL exposes `updatedAt` on issues; used by TUI SINCE
+        // column for Blocked / Paused statuses (issue #251).
+        let updated_at = val["updatedAt"].as_str().map(|s| s.to_string());
 
         let body = val["body"].as_str().unwrap_or("");
         let blocked_by = extract_blocked_by(body);
@@ -215,6 +220,7 @@ pub fn parse_issues_graphql(json: &str) -> Vec<CachedIssue> {
             labels,
             assignees,
             created_at,
+            updated_at,
             blocked_by,
             sub_issues,
             parent,
@@ -1213,6 +1219,33 @@ pub fn parse_git_last_commit_dates(output: &str) -> HashMap<String, String> {
     result
 }
 
+/// Collects the set of branches to look up PRs for, given local and remote
+/// worktree cache entries.
+///
+/// Rules:
+/// - Skip bare worktrees (they have no branch checked out).
+/// - Skip the repo's default branch (a PR whose head is `main` is
+///   structurally not meaningful for worktree work).
+/// - Dedupe: a branch checked out in both a local and a remote worktree
+///   produces a single query.
+///
+/// Remote-only worktrees were previously invisible to this collection, so
+/// merged PRs for remote-only branches never made it into the cache and the
+/// row rendered as blank Coding status forever (see #256).
+pub fn collect_pr_query_branches(
+    local: &[CachedWorktree],
+    remote: &[CachedWorktree],
+) -> Vec<String> {
+    local
+        .iter()
+        .chain(remote.iter())
+        .filter(|w| !w.is_bare && !crate::derive::is_default_branch(&w.branch))
+        .map(|w| w.branch.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Fetches open GitHub PRs for `config.slug` via GraphQL and writes to the PRs cache.
 ///
 /// Uses GraphQL to get closingIssuesReferences (linked issues), reviewThreads,
@@ -1222,14 +1255,16 @@ pub fn parse_git_last_commit_dates(output: &str) -> HashMap<String, String> {
 pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "prs");
 
-    // Read worktree cache to get branch list for per-branch queries.
+    // Read both local and remote worktree caches to collect every branch
+    // that needs a PR lookup. See `collect_pr_query_branches` for the
+    // filtering + dedupe rules.
     let wt_path = cache::cache_path(config.owner(), config.repo_name(), "worktrees");
-    let worktrees: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
-    let branches: Vec<String> = worktrees
-        .iter()
-        .filter(|w| !w.is_bare && !crate::derive::is_default_branch(&w.branch))
-        .map(|w| w.branch.clone())
-        .collect();
+    let remote_wt_path = cache::cache_path(config.owner(), config.repo_name(), "remote_worktrees");
+    let local_wts: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&wt_path).entries;
+    let remote_wts: Vec<CachedWorktree> =
+        cache::read_cache::<CachedWorktree>(&remote_wt_path).entries;
+
+    let branches = collect_pr_query_branches(&local_wts, &remote_wts);
 
     if branches.is_empty() {
         LOG.info(&format!(
@@ -1533,6 +1568,68 @@ pub fn refresh_remote_worktrees(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // -- collect_pr_query_branches -----------------------------------------
+
+    fn wt(path: &str, branch: &str, is_bare: bool, host: Option<&str>) -> CachedWorktree {
+        CachedWorktree {
+            path: path.to_string(),
+            branch: branch.to_string(),
+            is_bare,
+            is_locked: false,
+            host: host.map(str::to_string),
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
+        }
+    }
+
+    #[test]
+    fn collect_pr_query_branches_includes_remote_only_branches() {
+        // Regression for #256: remote worktree's branch must appear in the
+        // query list so merged PRs for remote-only worktrees get fetched.
+        let local = vec![wt("/local/wt", "feat/local", false, None)];
+        let remote = vec![wt(
+            "/remote/wt",
+            "issue247/session-elapsed-time",
+            false,
+            Some("boxd"),
+        )];
+        let branches = collect_pr_query_branches(&local, &remote);
+        assert!(branches.contains(&"feat/local".to_string()));
+        assert!(branches.contains(&"issue247/session-elapsed-time".to_string()));
+    }
+
+    #[test]
+    fn collect_pr_query_branches_dedupes_branch_present_in_both_caches() {
+        let local = vec![wt("/local/wt", "feat/shared", false, None)];
+        let remote = vec![wt("/remote/wt", "feat/shared", false, Some("boxd"))];
+        let branches = collect_pr_query_branches(&local, &remote);
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0], "feat/shared");
+    }
+
+    #[test]
+    fn collect_pr_query_branches_skips_bare_worktrees_from_either_cache() {
+        let local = vec![wt("/local/bare", "", true, None)];
+        let remote = vec![wt("/remote/bare", "", true, Some("boxd"))];
+        let branches = collect_pr_query_branches(&local, &remote);
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn collect_pr_query_branches_skips_default_branch_from_either_cache() {
+        let local = vec![wt("/local/main", "main", false, None)];
+        let remote = vec![wt("/remote/main", "main", false, Some("boxd"))];
+        let branches = collect_pr_query_branches(&local, &remote);
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn collect_pr_query_branches_empty_inputs_returns_empty() {
+        let branches = collect_pr_query_branches(&[], &[]);
+        assert!(branches.is_empty());
+    }
 
     // -- parse_issues_json --------------------------------------------------
 

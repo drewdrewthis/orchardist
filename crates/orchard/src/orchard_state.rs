@@ -138,6 +138,8 @@ pub struct IssueInfo {
     pub assignees: Vec<String>,
     /// ISO 8601 timestamp when the issue was created.
     pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the issue was last updated (issue #251 SINCE).
+    pub updated_at: Option<String>,
     /// Issue numbers blocking this issue.
     pub blocked_by: Vec<u32>,
     /// Child issues under this issue.
@@ -400,6 +402,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             labels: row.issue_labels.clone(),
             assignees: row.issue_assignees.clone(),
             created_at: row.issue_created_at.clone(),
+            updated_at: row.issue_updated_at.clone(),
             blocked_by: row.issue_blocked_by.clone(),
             sub_issues: row.issue_sub_issues.clone(),
             parent: row.issue_parent,
@@ -452,6 +455,7 @@ mod tests {
             issue_labels: vec![],
             issue_assignees: vec![],
             issue_created_at: None,
+            issue_updated_at: None,
             issue_blocked_by: vec![],
             issue_sub_issues: vec![],
             issue_parent: None,

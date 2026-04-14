@@ -181,9 +181,7 @@ impl App {
 
         let persist_selection = command != "cleanup";
 
-        let view = if persist_selection {
-            ViewState::List
-        } else {
+        let view = if !persist_selection {
             ViewState::Cleanup(CleanupState {
                 stale: Vec::new(),
                 selected: std::collections::HashSet::new(),
@@ -192,6 +190,12 @@ impl App {
                 deleted: Vec::new(),
                 errors: Vec::new(),
             })
+        } else if crate::signal::is_first_launch() {
+            // Surface the legend overlay once so new users see the status &
+            // activity lexicon before they're asked to read emoji-encoded rows.
+            ViewState::Help
+        } else {
+            ViewState::List
         };
 
         // Resolve the initial cursor position and active repo from the last saved selection.
@@ -205,7 +209,7 @@ impl App {
             (0, 0)
         };
 
-        App {
+        let mut app = App {
             cursor: initial_cursor,
             loading: true,
             refreshing: false,
@@ -241,7 +245,12 @@ impl App {
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
-        }
+        };
+        // Default-expanded: issue #251 requires the hierarchy visible from
+        // first paint without a data-refresh round-trip. `prune_expansion_state`
+        // auto-expands every multi-child row, so seed the expansion set now.
+        app.prune_expansion_state();
+        app
     }
 
     // -------------------------------------------------------------------
@@ -1586,6 +1595,9 @@ impl App {
             }
             Message::ToggleHelp => {
                 self.view = if matches!(self.view, ViewState::Help) {
+                    // Leaving the legend counts as "seen" — first-launch users
+                    // won't be shown it again on the next start.
+                    crate::signal::mark_legend_seen();
                     ViewState::List
                 } else {
                     ViewState::Help
@@ -1620,6 +1632,10 @@ impl App {
                 ok()
             }
             Message::ConfirmNo | Message::Cancel | Message::DismissDialog => {
+                // Dismissing the legend counts as "seen" for first-launch.
+                if matches!(self.view, ViewState::Help) {
+                    crate::signal::mark_legend_seen();
+                }
                 self.view = ViewState::List;
                 ok()
             }
@@ -1937,7 +1953,7 @@ impl App {
     #[cfg(test)]
     fn new_test(task_rows: Vec<derive::WorktreeRow>) -> Self {
         let (tx, rx) = mpsc::channel();
-        App {
+        let mut app = App {
             cursor: 0,
             loading: false,
             refreshing: false,
@@ -1973,7 +1989,11 @@ impl App {
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
-        }
+        };
+        // Mirror production: auto-expand multi-child rows so tests see
+        // hierarchy by default (issue #251).
+        app.prune_expansion_state();
+        app
     }
 }
 
@@ -2158,6 +2178,7 @@ mod tests {
             issue_labels: vec![],
             issue_assignees: vec![],
             issue_created_at: None,
+            issue_updated_at: None,
             issue_blocked_by: vec![],
             issue_sub_issues: vec![],
             issue_parent: None,
@@ -2711,6 +2732,7 @@ mod tests {
             issue_labels: vec![],
             issue_assignees: vec![],
             issue_created_at: None,
+            issue_updated_at: None,
             issue_blocked_by: vec![],
             issue_sub_issues: vec![],
             issue_parent: None,
@@ -2907,9 +2929,13 @@ mod tests {
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
+        // Issue #251: NeedsInput renders as a ❓ glyph in the STATUS column
+        // (parent row's single merge-blocker glyph). Activity column A shows
+        // ⚡ because the agent is "doing something" (waiting on input).
+        let needs_input_glyph = crate::signal::PipelineStatus::NeedsInput.glyph();
         assert!(
-            output.contains("input"),
-            "expected 'input' claude status indicator"
+            output.contains(needs_input_glyph),
+            "expected ❓ needs-input glyph in STATUS column, got:\n{output}"
         );
         assert!(
             output.contains("needs attention"),
@@ -2939,10 +2965,17 @@ mod tests {
         let mut app = App::new_test(vec![row]);
         let output = render_to_string(&mut app, 120, 40);
 
-        assert!(output.contains("#55"), "expected PR number #55 in output");
+        // Issue #251: PR number renders in the ID column as `PR#55` (when no
+        // issue is linked) or `#N / PR#55` when an issue is present. A failing
+        // CI state shows as ❌ in the STATUS column.
         assert!(
-            output.contains("failing"),
-            "expected 'failing' CI state in output"
+            output.contains("PR#55") || output.contains("#55"),
+            "expected PR 55 in ID column, got:\n{output}"
+        );
+        let failing_glyph = crate::signal::PipelineStatus::CiFailing.glyph();
+        assert!(
+            output.contains(failing_glyph),
+            "expected ❌ ci-failing glyph in STATUS column, got:\n{output}"
         );
     }
 
@@ -4034,6 +4067,7 @@ mod tests {
             issue_labels: vec![],
             issue_assignees: vec![],
             issue_created_at: None,
+            issue_updated_at: None,
             issue_blocked_by: vec![],
             issue_sub_issues: vec![],
             issue_parent: None,
@@ -4261,11 +4295,15 @@ mod tests {
 
     #[test]
     fn toggle_expand_all_expands_when_any_collapsed() {
+        // Issue #251 made rows default-expanded, so force at least one row
+        // collapsed to exercise the "expand all" branch.
         let mut app = App::new_test(vec![
             make_task_row_with_panes(1, 3),
             make_task_row_with_panes(2, 3),
             make_task_row_with_panes(3, 3),
         ]);
+        app.expanded.remove("/workspace/repo-2");
+        assert_eq!(app.expanded.len(), 2, "precondition: one row collapsed");
         app.update(Message::ToggleExpandAll);
         assert_eq!(app.expanded.len(), 3);
     }
@@ -4465,13 +4503,21 @@ mod tests {
 
     #[test]
     fn prune_expansion_state_auto_expands_new_multi_pane_rows() {
+        // Issue #251: rows default-expanded. `new_test` already seeds the
+        // expansion set via `prune_expansion_state`, so a multi-pane row is
+        // expanded immediately after construction.
         let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
-        // expanded starts empty
-        assert!(app.expanded.is_empty());
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "multi-pane row should be auto-expanded by default"
+        );
+        // Clearing + re-pruning must re-seed the same state — proves the
+        // auto-expand behavior is idempotent, not a one-time init quirk.
+        app.expanded.clear();
         app.prune_expansion_state();
         assert!(
             app.expanded.contains("/workspace/repo-1"),
-            "multi-pane row should be auto-expanded after prune"
+            "multi-pane row should be re-expanded by prune"
         );
     }
 
@@ -4482,6 +4528,30 @@ mod tests {
         assert!(
             app.expanded.is_empty(),
             "single-pane row should not be auto-expanded"
+        );
+    }
+
+    #[test]
+    fn new_test_default_expands_multi_pane_rows_per_issue_251() {
+        // Issue #251 spec: "Default-expanded, user-collapsible." The expansion
+        // set must be populated at construction — no data-refresh round-trip
+        // should be required to surface the hierarchy.
+        let app = App::new_test(vec![
+            make_task_row_with_panes(1, 3),
+            make_task_row_with_panes(2, 2),
+            make_task_row_with_panes(3, 1), // single-pane should NOT expand
+        ]);
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "3-pane row must be expanded on construction"
+        );
+        assert!(
+            app.expanded.contains("/workspace/repo-2"),
+            "2-pane row must be expanded on construction"
+        );
+        assert!(
+            !app.expanded.contains("/workspace/repo-3"),
+            "1-pane row must NOT be expanded (nothing to show)"
         );
     }
 
@@ -4725,6 +4795,9 @@ mod tests {
             &[(2, "main"), (2, "editor")],
         )]);
         app.expanded.insert("/workspace/repo-1".to_string());
+        // Issue #251 default-expands windows too; force window 0 closed to
+        // exercise the collapsed-window navigation path this test targets.
+        app.window_expanded.clear();
         app.sub_cursor = SubCursor::Window(0);
         app.update(Message::CursorDown);
         assert_eq!(app.sub_cursor, SubCursor::Window(1));
@@ -4872,6 +4945,9 @@ mod tests {
             make_task_row_with_panes(2, 2),
         ]);
         app.expanded.insert("/workspace/repo-1".to_string());
+        // Collapse windows so we land on the sibling Window(1) row, not one
+        // of its panes — the navigation path under test.
+        app.window_expanded.clear();
         app.cursor = 1;
         app.update(Message::CursorUp);
         assert_eq!(app.cursor, 0);

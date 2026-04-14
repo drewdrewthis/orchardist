@@ -334,7 +334,67 @@ impl App {
             .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
 
+        use crate::signal::{Activity, PipelineStatus};
+
+        let legend_row = |glyph: &str, label: &str| {
+            Line::from(vec![
+                Span::styled(format!("{:<6}", glyph), Style::default()),
+                Span::styled(label.to_string(), dim),
+            ])
+        };
+
         let lines = vec![
+            Line::from(vec![Span::styled(
+                "Pipeline status (why isn't this merged yet?)",
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            legend_row(
+                PipelineStatus::NeedsInput.glyph(),
+                PipelineStatus::NeedsInput.label(),
+            ),
+            legend_row(
+                PipelineStatus::CiFailing.glyph(),
+                PipelineStatus::CiFailing.label(),
+            ),
+            legend_row(
+                PipelineStatus::MergeConflict.glyph(),
+                PipelineStatus::MergeConflict.label(),
+            ),
+            legend_row(
+                PipelineStatus::ChangesRequested.glyph(),
+                PipelineStatus::ChangesRequested.label(),
+            ),
+            // Coding intentionally omitted — it renders blank (no blocker).
+            legend_row(
+                PipelineStatus::AwaitingReview.glyph(),
+                PipelineStatus::AwaitingReview.label(),
+            ),
+            legend_row(PipelineStatus::Draft.glyph(), PipelineStatus::Draft.label()),
+            legend_row(
+                PipelineStatus::Blocked.glyph(),
+                PipelineStatus::Blocked.label(),
+            ),
+            legend_row(
+                PipelineStatus::Paused.glyph(),
+                PipelineStatus::Paused.label(),
+            ),
+            legend_row(PipelineStatus::Ready.glyph(), PipelineStatus::Ready.label()),
+            legend_row(
+                PipelineStatus::Merged.glyph(),
+                PipelineStatus::Merged.label(),
+            ),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "Agent activity (column A)",
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            legend_row(Activity::Working.glyph(), Activity::Working.label()),
+            legend_row(Activity::Input.glyph(), Activity::Input.label()),
+            legend_row(Activity::Idle.glyph(), Activity::Idle.label()),
+            legend_row(Activity::Exhausted.glyph(), Activity::Exhausted.label()),
+            Line::from(""),
             Line::from(vec![Span::styled(
                 "Keyboard Shortcuts",
                 Style::default().add_modifier(Modifier::BOLD),
@@ -425,9 +485,9 @@ impl App {
             lines,
             theme.accent,
             theme.background,
-            60,
-            22,
-            Some(" HELP "),
+            64,
+            44,
+            Some(" HELP / LEGEND "),
             Padding::new(2, 2, 1, 1),
         );
     }
@@ -442,8 +502,11 @@ mod tests {
 
     #[test]
     fn help_overlay_renders_w_keybinding() {
+        // The legend popup is taller now (issue #251 added status + activity
+        // glyphs above the keybinding section) — give the test backend enough
+        // rows for both sections to render.
         let app = App::new_test(vec![]);
-        let backend = TestBackend::new(80, 30);
+        let backend = TestBackend::new(120, 60);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -464,6 +527,16 @@ mod tests {
             text.contains("w") && text.contains("New worktree"),
             "help overlay must include 'w' keybinding mapped to 'New worktree', got:\n{text}"
         );
+        // Pipeline-status legend section must appear (added in issue #251).
+        assert!(
+            text.contains("needs input") && text.contains("merged"),
+            "help overlay must include pipeline-status lexicon rows"
+        );
+        // Agent-activity legend section must appear.
+        assert!(
+            text.contains("working") && text.contains("exhausted"),
+            "help overlay must include agent-activity lexicon rows"
+        );
     }
 
     #[test]
@@ -483,6 +556,7 @@ mod tests {
                 issue_labels: vec![],
                 issue_assignees: vec![],
                 issue_created_at: None,
+                issue_updated_at: None,
                 issue_blocked_by: vec![],
                 issue_sub_issues: vec![],
                 issue_parent: None,

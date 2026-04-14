@@ -171,6 +171,9 @@ pub struct WorktreeRow {
     pub issue_assignees: Vec<String>,
     /// ISO 8601 timestamp when the linked issue was created, if any.
     pub issue_created_at: Option<String>,
+    /// ISO 8601 timestamp when the linked issue was last updated, if any.
+    /// Used by the SINCE column for `Blocked` / `Paused` statuses.
+    pub issue_updated_at: Option<String>,
     /// Issue numbers blocking the linked issue, if any.
     pub issue_blocked_by: Vec<u32>,
     /// Sub-issues of the linked issue, if any.
