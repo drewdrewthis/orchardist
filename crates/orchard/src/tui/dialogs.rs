@@ -558,6 +558,7 @@ mod tests {
                 issue_labels: vec![],
                 issue_assignees: vec![],
                 issue_created_at: None,
+                issue_updated_at: None,
                 issue_blocked_by: vec![],
                 issue_sub_issues: vec![],
                 issue_parent: None,

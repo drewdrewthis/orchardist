@@ -1088,6 +1088,10 @@ struct SubRowContext<'a> {
     theme: &'a Theme,
     bar_color: Color,
     prefix: &'a str,
+    /// Severity of the enclosing session's Claude agent, used by pane sub-rows
+    /// so a pane inherits its session's activity glyph (issue #251 lossless
+    /// rollup: 💀 in a session shows on each of its claude panes, not just ⚡).
+    session_activity: crate::signal::Activity,
 }
 
 impl App {
@@ -1616,6 +1620,7 @@ impl App {
                     theme,
                     bar_color: Color::DarkGray,
                     prefix: "",
+                    session_activity: activity,
                 };
                 if ss.session.windows.len() > 1 {
                     self.push_window_sub_rows(
@@ -1891,14 +1896,43 @@ impl App {
 
             // Sub-rows for expanded worktree rows.
             if is_expanded {
-                let sub_ctx = SubRowContext {
-                    show_branch,
-                    has_remote,
-                    theme,
-                    bar_color,
-                    prefix: "",
-                };
-                if let Some(session) = vt.row.sessions.first() {
+                // Issue #251: render ALL sessions under a worktree, not just
+                // the first. Each session's activity is computed from its own
+                // Claude enrichment so collapse stays lossless.
+                for session in &vt.row.sessions {
+                    let this_session_activity = session
+                        .claude
+                        .as_ref()
+                        .map(|c| {
+                            let ce = crate::orchard_state::ClaudeEnrichment {
+                                status: c.status,
+                                model: c.model.clone(),
+                                last_tool: c.last_tool.clone(),
+                                current_task: c.current_task.clone(),
+                                session_start_ts: c.session_start_ts,
+                                input_tokens: c.input_tokens,
+                                output_tokens: c.output_tokens,
+                                cache_creation_input_tokens: c.cache_creation_input_tokens,
+                                cache_read_input_tokens: c.cache_read_input_tokens,
+                                context_window_pct: c.context_window_pct,
+                                cost_usd: c.cost_usd,
+                                total_duration_ms: c.total_duration_ms,
+                                rate_limits: c.rate_limits.clone(),
+                                stop_reason: c.stop_reason.clone(),
+                                turn_count: c.turn_count,
+                                state_changed_at: c.state_changed_at,
+                            };
+                            crate::signal::activity_from_claude(&ce)
+                        })
+                        .unwrap_or(crate::signal::Activity::None);
+                    let sub_ctx = SubRowContext {
+                        show_branch,
+                        has_remote,
+                        theme,
+                        bar_color,
+                        prefix: "",
+                        session_activity: this_session_activity,
+                    };
                     if session.windows.len() > 1 {
                         self.push_window_sub_rows(
                             session,
@@ -1920,6 +1954,8 @@ impl App {
                         );
                     }
                 }
+                let _ = activity; // kept for the parent row; child rows use
+                // per-session activity computed above.
             }
 
             unified_num += 1;
@@ -1962,12 +1998,17 @@ impl App {
                 format!("{}\u{251c}\u{2500}{}", prefix, pane.index)
             };
 
-            // Activity glyph for this pane — ⚡ if claude, blank otherwise.
-            let activity_cell = if pane.has_claude {
-                Cell::from("\u{26A1}").style(Style::default().fg(ctx.theme.claude_active))
+            // Activity glyph for this pane — inherits the session's severity
+            // when the pane runs claude, blank otherwise. This keeps the
+            // bottom-up rollup lossless (issue #251): a 💀-exhausted session
+            // shows 💀 on every claude pane, not a generic ⚡.
+            let pane_activity = if pane.has_claude {
+                ctx.session_activity
             } else {
-                Cell::from("").style(Style::default().fg(ctx.theme.dimmed))
+                crate::signal::Activity::None
             };
+            let activity_cell =
+                Cell::from(pane_activity.glyph()).style(activity_style(pane_activity, ctx.theme));
 
             let row_style = if selected {
                 Style::default()
@@ -2071,12 +2112,28 @@ impl App {
                 Style::default().fg(ctx.theme.dimmed)
             };
 
-            // Window-level activity: max over its panes.
-            let window_activity = if window.panes.iter().any(|p| p.has_claude) {
-                Cell::from("\u{26A1}").style(Style::default().fg(ctx.theme.claude_active))
-            } else {
-                Cell::from("")
-            };
+            // Window-level activity: severity-preserving rollup over panes.
+            // Issue #251 requires collapse to be lossless — a window whose
+            // pane runs a 💀-exhausted or ❓-input agent must show that
+            // severity in column A, not a generic ⚡. Each claude pane
+            // inherits the enclosing session's severity (today's data model
+            // pins the same enrichment across all panes within a session;
+            // this `max` over Activity::None for non-claude panes still does
+            // the right thing if per-pane enrichment is later added).
+            let window_level_activity = window
+                .panes
+                .iter()
+                .map(|p| {
+                    if p.has_claude {
+                        ctx.session_activity
+                    } else {
+                        crate::signal::Activity::None
+                    }
+                })
+                .max()
+                .unwrap_or(crate::signal::Activity::None);
+            let window_activity = Cell::from(window_level_activity.glyph())
+                .style(activity_style(window_level_activity, ctx.theme));
 
             let mut cells = vec![
                 Cell::from("\u{25CF}").style(Style::default().fg(bar_color)),
@@ -2549,6 +2606,7 @@ mod tests {
             issue_labels: vec![],
             issue_assignees: vec![],
             issue_created_at: None,
+            issue_updated_at: None,
             issue_blocked_by: vec![],
             issue_sub_issues: vec![],
             issue_parent: None,

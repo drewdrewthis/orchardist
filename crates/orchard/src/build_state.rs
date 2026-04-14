@@ -690,6 +690,7 @@ mod tests {
             labels: labels.into_iter().map(|s| s.to_string()).collect(),
             assignees: vec![],
             created_at: None,
+            updated_at: None,
             blocked_by: vec![],
             sub_issues: vec![],
             parent: None,

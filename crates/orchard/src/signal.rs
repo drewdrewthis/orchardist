@@ -567,7 +567,18 @@ pub fn since_epoch(wt: &WorktreeState, status: PipelineStatus) -> Option<u64> {
         PipelineStatus::ChangesRequested => wt
             .pr
             .as_ref()
-            .and_then(|pr| pr.updated_at.as_deref())
+            .and_then(|pr| {
+                // Prefer the latest CHANGES_REQUESTED review's submission
+                // timestamp — that's when the reviewer actually blocked the PR.
+                // Fall back to `pr.updated_at` when no per-review timestamp
+                // is available.
+                pr.reviews
+                    .iter()
+                    .filter(|r| r.state.eq_ignore_ascii_case("CHANGES_REQUESTED"))
+                    .filter_map(|r| r.submitted_at.as_deref())
+                    .max()
+                    .or(pr.updated_at.as_deref())
+            })
             .and_then(parse_iso8601),
         PipelineStatus::AwaitingReview => wt
             .pr
@@ -591,12 +602,12 @@ pub fn since_epoch(wt: &WorktreeState, status: PipelineStatus) -> Option<u64> {
         PipelineStatus::Blocked => wt
             .issue
             .as_ref()
-            .and_then(|i| i.created_at.as_deref())
+            .and_then(|i| i.updated_at.as_deref().or(i.created_at.as_deref()))
             .and_then(parse_iso8601),
         PipelineStatus::Paused => wt
             .issue
             .as_ref()
-            .and_then(|i| i.created_at.as_deref())
+            .and_then(|i| i.updated_at.as_deref().or(i.created_at.as_deref()))
             .or_else(|| wt.pr.as_ref().and_then(|pr| pr.updated_at.as_deref()))
             .and_then(parse_iso8601),
         PipelineStatus::Ready => wt
@@ -683,6 +694,7 @@ mod tests {
             issue_labels: vec![],
             issue_assignees: vec![],
             issue_created_at: None,
+            issue_updated_at: None,
             issue_blocked_by: vec![],
             issue_sub_issues: vec![],
             issue_parent: None,
@@ -716,6 +728,7 @@ mod tests {
             labels: vec![],
             assignees: vec![],
             created_at: None,
+            updated_at: None,
             blocked_by: vec![],
             sub_issues: vec![],
             parent: None,
@@ -1019,6 +1032,86 @@ mod tests {
         let mut w = wt();
         w.last_commit_at = Some("2024-06-01T10:00:00Z".into());
         assert!(since_epoch(&w, PipelineStatus::Coding).is_some());
+    }
+
+    #[test]
+    fn since_blocked_prefers_issue_updated_at_over_created_at() {
+        // Issue #251 spec: Blocked SINCE sources from issue.updated_at.
+        let mut w = wt();
+        w.issue = Some(issue(|i| {
+            i.blocked_by = vec![99];
+            i.created_at = Some("2024-01-01T00:00:00Z".into());
+            i.updated_at = Some("2024-06-01T00:00:00Z".into());
+        }));
+        let ts = since_epoch(&w, PipelineStatus::Blocked).expect("blocked ts");
+        let created_ts = parse_iso8601("2024-01-01T00:00:00Z").unwrap();
+        assert!(ts > created_ts, "should use updated_at, not created_at");
+    }
+
+    #[test]
+    fn since_blocked_falls_back_to_created_at_when_updated_at_missing() {
+        let mut w = wt();
+        w.issue = Some(issue(|i| {
+            i.blocked_by = vec![99];
+            i.created_at = Some("2024-01-01T00:00:00Z".into());
+        }));
+        assert!(since_epoch(&w, PipelineStatus::Blocked).is_some());
+    }
+
+    #[test]
+    fn since_paused_prefers_issue_updated_at() {
+        let mut w = wt();
+        w.issue = Some(issue(|i| {
+            i.labels = vec!["paused".into()];
+            i.updated_at = Some("2024-06-01T00:00:00Z".into());
+        }));
+        assert!(since_epoch(&w, PipelineStatus::Paused).is_some());
+    }
+
+    #[test]
+    fn since_changes_requested_uses_latest_review_timestamp() {
+        // Multiple reviews; the LATEST CHANGES_REQUESTED review timestamp wins.
+        // Earlier approved reviews and COMMENTED reviews are ignored.
+        use crate::cache::CachedReview;
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.review_decision = Some("CHANGES_REQUESTED".into());
+            p.updated_at = Some("2024-01-01T00:00:00Z".into());
+            p.reviews = vec![
+                CachedReview {
+                    author: "a".into(),
+                    state: "APPROVED".into(),
+                    submitted_at: Some("2024-03-01T00:00:00Z".into()),
+                },
+                CachedReview {
+                    author: "b".into(),
+                    state: "CHANGES_REQUESTED".into(),
+                    submitted_at: Some("2024-05-01T00:00:00Z".into()),
+                },
+                CachedReview {
+                    author: "c".into(),
+                    state: "COMMENTED".into(),
+                    submitted_at: Some("2024-06-01T00:00:00Z".into()),
+                },
+            ];
+        }));
+        let ts = since_epoch(&w, PipelineStatus::ChangesRequested).expect("ts");
+        let expected = parse_iso8601("2024-05-01T00:00:00Z").unwrap();
+        assert_eq!(
+            ts, expected,
+            "latest CHANGES_REQUESTED review ts should win"
+        );
+    }
+
+    #[test]
+    fn since_changes_requested_falls_back_to_pr_updated_at() {
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.review_decision = Some("CHANGES_REQUESTED".into());
+            p.updated_at = Some("2024-06-01T00:00:00Z".into());
+            // Reviews vector is empty — no per-review timestamp available.
+        }));
+        assert!(since_epoch(&w, PipelineStatus::ChangesRequested).is_some());
     }
 
     #[test]

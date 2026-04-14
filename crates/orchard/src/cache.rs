@@ -45,6 +45,13 @@ pub struct CachedIssue {
     /// ISO 8601 timestamp when the issue was created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// ISO 8601 timestamp when the issue was last updated.
+    ///
+    /// Used by the TUI's SINCE column for `Blocked` and `Paused` statuses
+    /// (issue #251). `None` for older cache files written before this field
+    /// was added; the signal layer falls back to `created_at` in that case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// Issue numbers that block this issue (from body text regex + sub-issues API).
     #[serde(default)]
     pub blocked_by: Vec<u32>,
@@ -414,6 +421,7 @@ mod tests {
             labels: vec!["bug".to_string()],
             assignees: vec![],
             created_at: None,
+            updated_at: None,
             blocked_by: vec![],
             sub_issues: vec![],
             parent: None,

@@ -54,6 +54,7 @@ pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
                 labels,
                 assignees: vec![],
                 created_at: None,
+                updated_at: None,
                 blocked_by: vec![],
                 sub_issues: vec![],
                 parent: None,
@@ -94,6 +95,7 @@ fragment IssueFields on Issue {{
   labels(first: 100) {{ nodes {{ name }} }}
   assignees(first: 20) {{ nodes {{ login }} }}
   createdAt
+  updatedAt
   body
   subIssues(first: 50) {{ nodes {{ number title state }} }}
   parent {{ number }}
@@ -184,6 +186,9 @@ pub fn parse_issues_graphql(json: &str) -> Vec<CachedIssue> {
             .unwrap_or_default();
 
         let created_at = val["createdAt"].as_str().map(|s| s.to_string());
+        // GitHub GraphQL exposes `updatedAt` on issues; used by TUI SINCE
+        // column for Blocked / Paused statuses (issue #251).
+        let updated_at = val["updatedAt"].as_str().map(|s| s.to_string());
 
         let body = val["body"].as_str().unwrap_or("");
         let blocked_by = extract_blocked_by(body);
@@ -215,6 +220,7 @@ pub fn parse_issues_graphql(json: &str) -> Vec<CachedIssue> {
             labels,
             assignees,
             created_at,
+            updated_at,
             blocked_by,
             sub_issues,
             parent,

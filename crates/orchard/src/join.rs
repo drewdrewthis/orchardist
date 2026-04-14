@@ -77,6 +77,7 @@ pub fn derive_worktree_rows(
             .map(|i| i.assignees.clone())
             .unwrap_or_default();
         let issue_created_at = linked_issue.and_then(|i| i.created_at.clone());
+        let issue_updated_at = linked_issue.and_then(|i| i.updated_at.clone());
         let issue_blocked_by = linked_issue
             .map(|i| i.blocked_by.clone())
             .unwrap_or_default();
@@ -107,6 +108,7 @@ pub fn derive_worktree_rows(
             issue_labels,
             issue_assignees,
             issue_created_at,
+            issue_updated_at,
             issue_blocked_by,
             issue_sub_issues,
             issue_parent,
@@ -367,6 +369,7 @@ mod tests {
             labels: vec![],
             assignees: vec![],
             created_at: None,
+            updated_at: None,
             blocked_by: vec![],
             sub_issues: vec![],
             parent: None,
@@ -1019,6 +1022,7 @@ mod tests {
             labels: vec![],
             assignees: vec![],
             created_at: None,
+            updated_at: None,
             blocked_by: vec![],
             sub_issues: vec![],
             parent: None,
@@ -1033,6 +1037,7 @@ mod tests {
             labels: vec![],
             assignees: vec![],
             created_at: None,
+            updated_at: None,
             blocked_by: vec![],
             sub_issues: vec![],
             parent: None,
