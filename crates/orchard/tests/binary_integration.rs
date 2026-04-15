@@ -116,6 +116,24 @@ fn help_includes_toon_flag() {
         .stderr(contains("AI agent"));
 }
 
+/// `orchard heal --toon` must reject the invocation — `--toon` currently
+/// only applies to the top-level dashboard output, not subcommands.
+#[test]
+fn toon_with_subcommand_is_rejected() {
+    let repo = common::TestRepo::new();
+    let home = tempfile::TempDir::new().unwrap();
+
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .args(["heal", "--toon"])
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .env_remove("TMUX")
+        .assert()
+        .failure()
+        .stderr(contains("--toon is not supported"));
+}
+
 /// `orchard --json --toon` must reject the invocation (mutually exclusive).
 #[test]
 fn json_and_toon_are_mutually_exclusive() {
@@ -155,6 +173,12 @@ fn toon_mode_outputs_valid_toon() {
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(!stdout.is_empty(), "toon stdout should not be empty");
+        // Happy-path AC: stderr is empty when the command succeeds.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.is_empty(),
+            "expected empty stderr on success, got: {stderr}"
+        );
         let decoded = json2toon_rs::decode(&stdout, &json2toon_rs::DecoderOptions::default())
             .expect("stdout should be decodable TOON");
         assert!(

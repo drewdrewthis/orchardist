@@ -76,6 +76,19 @@ fn main() {
         std::process::exit(2);
     }
 
+    // `--toon` currently only applies to the top-level worktree dashboard
+    // (the `command.is_empty()` path). `--json` is already supported on
+    // subcommands like `heal`; extending `--toon` to those is out of scope
+    // for issue #260. Reject the combination explicitly so users aren't
+    // silently ignored.
+    if toon_flag && !command.is_empty() {
+        eprintln!(
+            "error: --toon is not supported with the `{command}` subcommand; \
+             use --json instead"
+        );
+        std::process::exit(2);
+    }
+
     logger::LOG.info(&format!(
         "startup: orchard{}",
         if command.is_empty() {
@@ -252,10 +265,19 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
     }
 }
 
-fn handle_json() {
+/// Builds the versioned JSON output from fresh state.
+///
+/// Shared by `handle_json` and `handle_toon` — both emit the same data,
+/// only the final encoding differs. `JsonOutput` remains the single
+/// source of truth for the machine-readable schema.
+fn build_output() -> JsonOutput {
     let config = global_config::load_global_config();
     let state = build_state::refresh_and_build(&config);
-    let output = JsonOutput::from(&state);
+    JsonOutput::from(&state)
+}
+
+fn handle_json() {
+    let output = build_output();
     let json = serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
         eprintln!("Error serializing JSON: {e}");
         std::process::exit(1);
@@ -267,12 +289,9 @@ fn handle_json() {
 ///
 /// TOON (Token-Oriented Object Notation) is a token-efficient alternative to
 /// JSON for AI-agent consumption, using a header row for uniform arrays.
-/// The underlying schema is identical to `--json` — `JsonOutput` is the
-/// single source of truth.
+/// The underlying schema is identical to `--json`.
 fn handle_toon() {
-    let config = global_config::load_global_config();
-    let state = build_state::refresh_and_build(&config);
-    let output = JsonOutput::from(&state);
+    let output = build_output();
     let toon = toon_output::render(&output).unwrap_or_else(|e| {
         eprintln!("Error serializing TOON: {e}");
         std::process::exit(1);
