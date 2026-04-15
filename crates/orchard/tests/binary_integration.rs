@@ -118,17 +118,13 @@ fn help_includes_toon_flag() {
 
 /// `orchard heal --toon` must reject the invocation — `--toon` currently
 /// only applies to the top-level dashboard output, not subcommands.
+///
+/// This is a parse-time rejection, so no fixture, cwd, or HOME is needed.
 #[test]
 fn toon_with_subcommand_is_rejected() {
-    let repo = common::TestRepo::new();
-    let home = tempfile::TempDir::new().unwrap();
-
     Command::cargo_bin("orchard")
         .unwrap()
         .args(["heal", "--toon"])
-        .current_dir(repo.path())
-        .env("HOME", home.path())
-        .env_remove("TMUX")
         .assert()
         .failure()
         .stderr(contains("--toon is not supported"));

@@ -46,8 +46,8 @@ pub struct NormalizedEvent {
 /// and consumed on the same call path without being stored long-term; the
 /// payload size asymmetry between variants doesn't matter in practice, and
 /// boxing the happy-path variant would add indirection everywhere for no
-/// runtime benefit. The lint began to fire with rust 1.94; tracked outside
-/// the scope of issue #260.
+/// runtime benefit. The lint began to fire with rust 1.94.
+/// See issue #268 for a follow-up if the trade-off ever warrants revisiting.
 #[allow(clippy::large_enum_variant)]
 pub enum NormalizeResult {
     /// The event was recognised and normalised successfully.
