@@ -1,7 +1,14 @@
 //! SSH host reachability probes.
 //!
 //! Simple SSH connectivity checks for remote hosts. Used to determine if a host is
-//! reachable before attempting worktree or tmux operations on it.
+//! reachable before attempting worktree or tmux operations on it. Probes run with a
+//! 5-second connect timeout (set in `remote::ssh_flags()`), so dead hosts fail fast.
+//!
+//! When probing multiple hosts, always use [`probe_reachability_all`] — it runs one
+//! thread per host so a stopped VM can't block probes for healthy hosts behind it.
+
+use std::collections::HashMap;
+use std::thread;
 
 /// Probes whether a remote host is reachable via SSH.
 ///
@@ -9,4 +16,128 @@
 /// SSH connection times out.
 pub fn probe_reachability(host: &str) -> bool {
     crate::remote::ssh_exec(host, "true").is_ok()
+}
+
+/// Probes many hosts concurrently, one thread per unique host.
+///
+/// Deduplicates the input, spawns one probe thread per host, joins them all,
+/// and returns a `host -> reachable` map. Dead hosts can't block healthy
+/// ones because each probe runs on its own thread.
+///
+/// Uses `probe_reachability` under the hood; see [`probe_with`] for a
+/// dependency-injected version used in tests.
+pub fn probe_reachability_all<I, S>(hosts: I) -> HashMap<String, bool>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    probe_with(hosts, probe_reachability)
+}
+
+/// Probes many hosts concurrently using a caller-supplied probe function.
+///
+/// Exposed for tests so they can inject a fake (e.g. time-based) probe without
+/// touching SSH.
+pub fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+    F: Fn(&str) -> bool + Send + Sync + 'static + Clone,
+{
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<String> = hosts
+        .into_iter()
+        .map(Into::into)
+        .filter(|h| seen.insert(h.clone()))
+        .collect();
+
+    let handles: Vec<_> = unique
+        .into_iter()
+        .map(|host| {
+            let probe = probe.clone();
+            thread::spawn(move || {
+                let reachable = probe(&host);
+                (host, reachable)
+            })
+        })
+        .collect();
+
+    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Regression test for issue #263: serial probing lets one dead host block
+    /// every probe behind it. Each fake probe sleeps 200ms; three probes run
+    /// serially would take >=600ms. Parallel dispatch must finish in <400ms.
+    #[test]
+    fn probes_run_concurrently() {
+        let hosts = vec!["alpha", "bravo", "charlie"];
+        let delay = Duration::from_millis(200);
+
+        let start = Instant::now();
+        let result = probe_with(hosts, move |_host| {
+            thread::sleep(delay);
+            true
+        });
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.len(), 3);
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "expected concurrent dispatch (<400ms), got {:?} — probes running serially?",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn probes_dedupe_hosts() {
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls_clone = probe_calls.clone();
+
+        let hosts = vec!["alpha", "alpha", "bravo", "alpha"];
+        let result = probe_with(hosts, move |_host| {
+            probe_calls_clone.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+
+        assert_eq!(result.len(), 2, "expected 2 unique hosts, got {:?}", result);
+        assert_eq!(
+            probe_calls.load(Ordering::SeqCst),
+            2,
+            "probe should be called once per unique host"
+        );
+    }
+
+    #[test]
+    fn dead_host_does_not_block_live_host() {
+        let hosts = vec!["dead", "live"];
+        let start = Instant::now();
+        let result = probe_with(hosts, move |host| {
+            if host == "dead" {
+                thread::sleep(Duration::from_millis(500));
+                false
+            } else {
+                thread::sleep(Duration::from_millis(10));
+                true
+            }
+        });
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.get("live"), Some(&true));
+        assert_eq!(result.get("dead"), Some(&false));
+        // Live host's result is in the map as soon as its thread finishes, but
+        // we join all threads so elapsed >= dead host. The key guarantee is
+        // that we don't take 2x the slow time (500ms), i.e. probes are not serial.
+        assert!(
+            elapsed < Duration::from_millis(750),
+            "parallel probes should finish near the slowest (~500ms), got {:?}",
+            elapsed
+        );
+    }
 }

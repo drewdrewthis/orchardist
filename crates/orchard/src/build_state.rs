@@ -267,23 +267,31 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
     }
     let _ = sources::tmux::refresh_local();
 
-    // Probe and refresh remote sources.
-    let mut hosts: HashMap<String, HostState> = HashMap::new();
-    let mut seen_hosts: HashSet<String> = HashSet::new();
+    // Probe remote hosts concurrently so a dead VM can't block healthy ones.
+    let all_hosts: Vec<String> = config
+        .repos
+        .iter()
+        .flat_map(|r| r.remotes.iter().map(|rm| rm.host.clone()))
+        .collect();
+    let probe_results = sources::hosts::probe_reachability_all(all_hosts);
 
+    let hosts: HashMap<String, HostState> = probe_results
+        .iter()
+        .map(|(h, r)| (h.clone(), HostState { reachable: *r }))
+        .collect();
+
+    // Refresh remote sources for every reachable host, once per (repo, remote) pair.
+    let mut tmux_refreshed: HashSet<String> = HashSet::new();
     for repo in &config.repos {
         for remote in &repo.remotes {
-            if seen_hosts.insert(remote.host.clone()) {
-                let reachable = sources::hosts::probe_reachability(&remote.host);
-                hosts.insert(remote.host.clone(), HostState { reachable });
-                if reachable {
-                    let _ = sources::worktrees::refresh_remote(repo, remote);
+            let reachable = hosts
+                .get(&remote.host)
+                .map(|s| s.reachable)
+                .unwrap_or(false);
+            if reachable {
+                let _ = sources::worktrees::refresh_remote(repo, remote);
+                if tmux_refreshed.insert(remote.host.clone()) {
                     let _ = sources::tmux::refresh_remote(&remote.host);
-                }
-            } else if let Some(state) = hosts.get(&remote.host) {
-                // Already probed — refresh worktrees for this repo if reachable.
-                if state.reachable {
-                    let _ = sources::worktrees::refresh_remote(repo, remote);
                 }
             }
         }
