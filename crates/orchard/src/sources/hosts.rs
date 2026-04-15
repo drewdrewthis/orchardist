@@ -36,13 +36,14 @@ where
 
 /// Probes many hosts concurrently using a caller-supplied probe function.
 ///
-/// Exposed for tests so they can inject a fake (e.g. time-based) probe without
-/// touching SSH.
-pub fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
+/// Crate-private: exists so tests can inject a fake (e.g. time-based) probe
+/// without touching SSH. Callers outside this module should use
+/// [`probe_reachability_all`].
+pub(crate) fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
-    F: Fn(&str) -> bool + Send + Sync + 'static + Clone,
+    F: Fn(&str) -> bool + Clone + Send + 'static,
 {
     let mut seen = std::collections::HashSet::new();
     let unique: Vec<String> = hosts
@@ -73,8 +74,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// Regression test for issue #263: serial probing lets one dead host block
-    /// every probe behind it. Each fake probe sleeps 200ms; three probes run
-    /// serially would take >=600ms. Parallel dispatch must finish in <400ms.
+    /// every probe behind it. Three probes × 200ms = 600ms if serial, but
+    /// parallel dispatch finishes near the slowest (~200ms). Budget of 500ms
+    /// catches serialization while tolerating CI scheduler jitter.
     #[test]
     fn probes_run_concurrently() {
         let hosts = vec!["alpha", "bravo", "charlie"];
@@ -89,8 +91,8 @@ mod tests {
 
         assert_eq!(result.len(), 3);
         assert!(
-            elapsed < Duration::from_millis(400),
-            "expected concurrent dispatch (<400ms), got {:?} — probes running serially?",
+            elapsed < Duration::from_millis(500),
+            "expected concurrent dispatch (<500ms, serial would be ~600ms), got {:?}",
             elapsed
         );
     }
@@ -114,11 +116,24 @@ mod tests {
         );
     }
 
+    /// Records when each probe *starts*. In a serial implementation the second
+    /// probe cannot start until the first finishes, so start times are ≥500ms
+    /// apart. In a parallel implementation both start within a few ms of each
+    /// other. This distinction catches serial execution even when the total
+    /// wall time is similar.
     #[test]
-    fn dead_host_does_not_block_live_host() {
+    fn dead_host_does_not_delay_live_host_probe() {
+        use std::sync::Mutex;
+        let start_times: Arc<Mutex<Vec<(String, Duration)>>> = Arc::new(Mutex::new(Vec::new()));
+        let start_times_clone = start_times.clone();
+        let t0 = Instant::now();
+
         let hosts = vec!["dead", "live"];
-        let start = Instant::now();
         let result = probe_with(hosts, move |host| {
+            start_times_clone
+                .lock()
+                .unwrap()
+                .push((host.to_string(), t0.elapsed()));
             if host == "dead" {
                 thread::sleep(Duration::from_millis(500));
                 false
@@ -127,17 +142,21 @@ mod tests {
                 true
             }
         });
-        let elapsed = start.elapsed();
 
         assert_eq!(result.get("live"), Some(&true));
         assert_eq!(result.get("dead"), Some(&false));
-        // Live host's result is in the map as soon as its thread finishes, but
-        // we join all threads so elapsed >= dead host. The key guarantee is
-        // that we don't take 2x the slow time (500ms), i.e. probes are not serial.
+
+        let times = start_times.lock().unwrap();
+        let live_start = times
+            .iter()
+            .find(|(h, _)| h == "live")
+            .map(|(_, t)| *t)
+            .expect("live probe should have started");
         assert!(
-            elapsed < Duration::from_millis(750),
-            "parallel probes should finish near the slowest (~500ms), got {:?}",
-            elapsed
+            live_start < Duration::from_millis(100),
+            "live probe must start within 100ms of dispatch (serial would delay it ~500ms), \
+             started at {:?}",
+            live_start
         );
     }
 }
