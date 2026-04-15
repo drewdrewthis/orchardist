@@ -41,6 +41,14 @@ pub struct NormalizedEvent {
 }
 
 /// Result of normalising a GitHub webhook payload.
+///
+/// `large_enum_variant` is allowed here because this result type is produced
+/// and consumed on the same call path without being stored long-term; the
+/// payload size asymmetry between variants doesn't matter in practice, and
+/// boxing the happy-path variant would add indirection everywhere for no
+/// runtime benefit. The lint began to fire with rust 1.94; tracked outside
+/// the scope of issue #260.
+#[allow(clippy::large_enum_variant)]
 pub enum NormalizeResult {
     /// The event was recognised and normalised successfully.
     Event(NormalizedEvent),
