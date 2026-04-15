@@ -23,9 +23,6 @@ pub fn probe_reachability(host: &str) -> bool {
 /// Deduplicates the input, spawns one probe thread per host, joins them all,
 /// and returns a `host -> reachable` map. Dead hosts can't block healthy
 /// ones because each probe runs on its own thread.
-///
-/// Uses `probe_reachability` under the hood; see [`probe_with`] for a
-/// dependency-injected version used in tests.
 pub fn probe_reachability_all<I, S>(hosts: I) -> HashMap<String, bool>
 where
     I: IntoIterator<Item = S>,
@@ -34,12 +31,7 @@ where
     probe_with(hosts, probe_reachability)
 }
 
-/// Probes many hosts concurrently using a caller-supplied probe function.
-///
-/// Crate-private: exists so tests can inject a fake (e.g. time-based) probe
-/// without touching SSH. Callers outside this module should use
-/// [`probe_reachability_all`].
-pub(crate) fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
+fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,

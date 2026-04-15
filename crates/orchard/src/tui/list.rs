@@ -830,8 +830,8 @@ impl App {
         } else {
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                for host in unreachable {
-                    let reachable = crate::remote::ssh_exec(&host, "true").is_ok();
+                let results = crate::sources::hosts::probe_reachability_all(unreachable);
+                for (host, reachable) in results {
                     let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
                 }
             });
