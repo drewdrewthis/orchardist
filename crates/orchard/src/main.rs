@@ -19,6 +19,7 @@ use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::setup_remote;
 use orchard::shell;
+use orchard::toon_output;
 use orchard::tui;
 
 fn main() {
@@ -27,6 +28,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut json_flag = false;
+    let mut toon_flag = false;
     let mut fix_flag = false;
     let mut command = String::new();
 
@@ -42,6 +44,7 @@ fn main() {
         }
         match arg.as_str() {
             "--json" => json_flag = true,
+            "--toon" => toon_flag = true,
             "--fix" => fix_flag = true,
             "--version" | "-V" => {
                 println!("orchard {}", env!("CARGO_PKG_VERSION"));
@@ -68,6 +71,24 @@ fn main() {
         }
     }
 
+    if json_flag && toon_flag {
+        eprintln!("error: --json and --toon are mutually exclusive");
+        std::process::exit(2);
+    }
+
+    // `--toon` currently only applies to the top-level worktree dashboard
+    // (the `command.is_empty()` path). `--json` is already supported on
+    // subcommands like `heal`; extending `--toon` to those is out of scope
+    // for issue #260. Reject the combination explicitly so users aren't
+    // silently ignored.
+    if toon_flag && !command.is_empty() {
+        eprintln!(
+            "error: --toon is not supported with the `{command}` subcommand; \
+             use --json instead"
+        );
+        std::process::exit(2);
+    }
+
     logger::LOG.info(&format!(
         "startup: orchard{}",
         if command.is_empty() {
@@ -87,7 +108,9 @@ fn main() {
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         _ => {
-            if json_flag {
+            if toon_flag {
+                handle_toon();
+            } else if json_flag {
                 handle_json();
             } else {
                 handle_tui(&command);
@@ -242,15 +265,38 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
     }
 }
 
-fn handle_json() {
+/// Builds the versioned JSON output from fresh state.
+///
+/// Shared by `handle_json` and `handle_toon` — both emit the same data,
+/// only the final encoding differs. `JsonOutput` remains the single
+/// source of truth for the machine-readable schema.
+fn build_output() -> JsonOutput {
     let config = global_config::load_global_config();
     let state = build_state::refresh_and_build(&config);
-    let output = JsonOutput::from(&state);
+    JsonOutput::from(&state)
+}
+
+fn handle_json() {
+    let output = build_output();
     let json = serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
         eprintln!("Error serializing JSON: {e}");
         std::process::exit(1);
     });
     println!("{json}");
+}
+
+/// Emits the same data as `--json`, serialized as TOON v2.0.
+///
+/// TOON (Token-Oriented Object Notation) is a token-efficient alternative to
+/// JSON for AI-agent consumption, using a header row for uniform arrays.
+/// The underlying schema is identical to `--json`.
+fn handle_toon() {
+    let output = build_output();
+    let toon = toon_output::render(&output).unwrap_or_else(|e| {
+        eprintln!("Error serializing TOON: {e}");
+        std::process::exit(1);
+    });
+    println!("{toon}");
 }
 
 /// Runs the TUI. If inside tmux and run directly (not via popup wrapper),
@@ -361,6 +407,9 @@ fn print_usage() {
 Options:
   --version, -V  Print version and exit
   --json         Output worktree data as JSON and exit
+  --toon         Output worktree data as TOON v2.0 and exit
+                 (token-efficient format intended for AI agent consumption;
+                 mutually exclusive with --json)
 
 Navigation:
   1-9     Jump to worktree by number
