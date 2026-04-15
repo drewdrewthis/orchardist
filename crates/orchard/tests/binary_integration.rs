@@ -101,6 +101,75 @@ fn json_mode_outputs_valid_json() {
 }
 
 // ---------------------------------------------------------------------------
+// TOON mode tests (issue #260)
+// ---------------------------------------------------------------------------
+
+/// `orchard --help` mentions the `--toon` flag and notes it's for AI agents.
+#[test]
+fn help_includes_toon_flag() {
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stderr(contains("--toon"))
+        .stderr(contains("AI agent"));
+}
+
+/// `orchard --json --toon` must reject the invocation (mutually exclusive).
+#[test]
+fn json_and_toon_are_mutually_exclusive() {
+    let repo = common::TestRepo::new();
+    let home = tempfile::TempDir::new().unwrap();
+
+    Command::cargo_bin("orchard")
+        .unwrap()
+        .args(["--json", "--toon"])
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .env_remove("TMUX")
+        .assert()
+        .failure()
+        .stderr(contains("mutually exclusive"));
+}
+
+/// `orchard --toon` run from a real git repo exits 0 and outputs parseable TOON.
+///
+/// Mirrors `json_mode_outputs_valid_json`: if the binary succeeds, the output
+/// must round-trip through the TOON decoder. If it fails (e.g. `gh` not
+/// available), the error must land on stderr.
+#[test]
+fn toon_mode_outputs_valid_toon() {
+    let repo = common::TestRepo::new();
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--toon")
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .env_remove("TMUX")
+        .output()
+        .unwrap();
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.is_empty(), "toon stdout should not be empty");
+        let decoded = json2toon_rs::decode(&stdout, &json2toon_rs::DecoderOptions::default())
+            .expect("stdout should be decodable TOON");
+        assert!(
+            decoded.get("version").is_some(),
+            "decoded toon should expose the version field"
+        );
+    } else {
+        assert!(
+            !output.stderr.is_empty(),
+            "expected an error message on stderr"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Help text includes quick-chat information
 // ---------------------------------------------------------------------------
 

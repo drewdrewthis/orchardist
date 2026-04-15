@@ -2264,6 +2264,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "json2toon_rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a229afbadea9f7381acc717e9977c83f5f6b511a69ccfca772f6cb74d17ae0f9"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "jsonptr"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2867,7 +2877,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchard"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2884,6 +2894,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "json2toon_rs",
  "nucleo-matcher",
  "open",
  "predicates",
@@ -3964,6 +3975,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
+ "indexmap 2.14.0",
  "itoa",
  "memchr",
  "serde",

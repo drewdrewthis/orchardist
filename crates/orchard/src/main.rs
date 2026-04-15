@@ -19,6 +19,7 @@ use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::setup_remote;
 use orchard::shell;
+use orchard::toon_output;
 use orchard::tui;
 
 fn main() {
@@ -27,6 +28,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut json_flag = false;
+    let mut toon_flag = false;
     let mut fix_flag = false;
     let mut command = String::new();
 
@@ -42,6 +44,7 @@ fn main() {
         }
         match arg.as_str() {
             "--json" => json_flag = true,
+            "--toon" => toon_flag = true,
             "--fix" => fix_flag = true,
             "--version" | "-V" => {
                 println!("orchard {}", env!("CARGO_PKG_VERSION"));
@@ -68,6 +71,11 @@ fn main() {
         }
     }
 
+    if json_flag && toon_flag {
+        eprintln!("error: --json and --toon are mutually exclusive");
+        std::process::exit(2);
+    }
+
     logger::LOG.info(&format!(
         "startup: orchard{}",
         if command.is_empty() {
@@ -87,7 +95,9 @@ fn main() {
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         _ => {
-            if json_flag {
+            if toon_flag {
+                handle_toon();
+            } else if json_flag {
                 handle_json();
             } else {
                 handle_tui(&command);
@@ -253,6 +263,23 @@ fn handle_json() {
     println!("{json}");
 }
 
+/// Emits the same data as `--json`, serialized as TOON v2.0.
+///
+/// TOON (Token-Oriented Object Notation) is a token-efficient alternative to
+/// JSON for AI-agent consumption, using a header row for uniform arrays.
+/// The underlying schema is identical to `--json` — `JsonOutput` is the
+/// single source of truth.
+fn handle_toon() {
+    let config = global_config::load_global_config();
+    let state = build_state::refresh_and_build(&config);
+    let output = JsonOutput::from(&state);
+    let toon = toon_output::render(&output).unwrap_or_else(|e| {
+        eprintln!("Error serializing TOON: {e}");
+        std::process::exit(1);
+    });
+    println!("{toon}");
+}
+
 /// Runs the TUI. If inside tmux and run directly (not via popup wrapper),
 /// re-launches itself as a tmux popup using the wrapper script so that
 /// session switching works correctly after the popup closes.
@@ -361,6 +388,9 @@ fn print_usage() {
 Options:
   --version, -V  Print version and exit
   --json         Output worktree data as JSON and exit
+  --toon         Output worktree data as TOON v2.0 and exit
+                 (token-efficient format intended for AI agent consumption;
+                 mutually exclusive with --json)
 
 Navigation:
   1-9     Jump to worktree by number
