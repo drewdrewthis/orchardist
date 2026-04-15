@@ -564,28 +564,21 @@ impl App {
         let config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            // Probe each unique remote host before attempting remote operations.
+            // Probe each unique remote host concurrently before attempting remote
+            // operations. One dead VM must not block probes for healthy hosts.
+            let hosts: Vec<String> = config
+                .repos
+                .iter()
+                .flat_map(|r| r.remotes.iter().map(|rm| rm.host.clone()))
+                .collect();
+            let probe_results = crate::sources::hosts::probe_reachability_all(hosts);
+
             let mut reachable_hosts: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
-            let mut unreachable_hosts: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-
-            for repo in &config.repos {
-                for remote in &repo.remotes {
-                    let host = remote.host.clone();
-                    if reachable_hosts.contains(&host) || unreachable_hosts.contains(&host) {
-                        continue;
-                    }
-                    match crate::remote::ssh_exec(&host, "true") {
-                        Ok(_) => {
-                            let _ = tx.send(AppMsg::HostReachability(host.clone(), true));
-                            reachable_hosts.insert(host);
-                        }
-                        Err(_) => {
-                            let _ = tx.send(AppMsg::HostReachability(host.clone(), false));
-                            unreachable_hosts.insert(host);
-                        }
-                    }
+            for (host, reachable) in &probe_results {
+                let _ = tx.send(AppMsg::HostReachability(host.clone(), *reachable));
+                if *reachable {
+                    reachable_hosts.insert(host.clone());
                 }
             }
 
