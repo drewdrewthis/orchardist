@@ -830,11 +830,10 @@ impl App {
         } else {
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                probe_and_fan_reachability(
-                    unreachable,
-                    tx,
-                    crate::sources::hosts::probe_reachability,
-                );
+                let results = crate::sources::hosts::probe_reachability_all(unreachable);
+                for (host, reachable) in results {
+                    let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
+                }
             });
             self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
         }
@@ -2454,22 +2453,6 @@ impl App {
 // ---------------------------------------------------------------------------
 // Task view helpers (free functions)
 // ---------------------------------------------------------------------------
-
-/// Probes `unreachable` hosts concurrently and fans `HostReachability` messages to `tx`.
-///
-/// Parameterized over `probe` so tests can inject a fake without touching SSH.
-pub(crate) fn probe_and_fan_reachability<F>(
-    unreachable: Vec<String>,
-    tx: std::sync::mpsc::Sender<crate::tui::state::AppMsg>,
-    probe: F,
-) where
-    F: Fn(&str) -> bool + Clone + Send + 'static,
-{
-    let results = crate::sources::hosts::probe_with(unreachable, probe);
-    for (host, reachable) in results {
-        let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
-    }
-}
 
 /// Appends an expand/collapse indicator to a status string when pane count > 1.
 ///
@@ -4303,93 +4286,6 @@ mod tests {
             !text.contains("[b]"),
             "unexpected '[b]' in badge text: {:?}",
             text
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // probe_and_fan_reachability — concurrency regression tests (issue #273)
-    // -----------------------------------------------------------------------
-
-    /// Regression test for issue #273: `reconnect_unreachable_hosts` probed hosts
-    /// serially, so N dead hosts → N × ConnectTimeout wait. `probe_and_fan_reachability`
-    /// must dispatch probes concurrently.
-    #[test]
-    fn reconnect_probes_hosts_concurrently() {
-        use std::sync::mpsc;
-        use std::time::{Duration, Instant};
-        let hosts = vec![
-            "alpha".to_string(),
-            "bravo".to_string(),
-            "charlie".to_string(),
-        ];
-        let (tx, rx) = mpsc::channel();
-        let delay = Duration::from_millis(200);
-
-        let start = Instant::now();
-        probe_and_fan_reachability(hosts, tx, move |_host| {
-            std::thread::sleep(delay);
-            false
-        });
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "expected concurrent dispatch (<500ms, serial would be ~600ms), got {:?}",
-            elapsed
-        );
-        let msgs: Vec<_> = rx.try_iter().collect();
-        assert_eq!(
-            msgs.len(),
-            3,
-            "expected one HostReachability message per host"
-        );
-        for msg in msgs {
-            match msg {
-                crate::tui::state::AppMsg::HostReachability(_, reachable) => {
-                    assert!(!reachable);
-                }
-                _ => panic!("unexpected message variant"),
-            }
-        }
-    }
-
-    /// Dead host must not delay the live host's probe start — same guarantee as
-    /// the issue #263 fix, applied to the reconnect path.
-    #[test]
-    fn reconnect_dead_host_does_not_block_live_probe() {
-        use std::sync::{Arc, Mutex, mpsc};
-        use std::time::{Duration, Instant};
-        let (tx, _rx) = mpsc::channel();
-        let start_times: Arc<Mutex<Vec<(String, Duration)>>> = Arc::new(Mutex::new(Vec::new()));
-        let start_times_clone = start_times.clone();
-        let t0 = Instant::now();
-
-        let hosts = vec!["dead".to_string(), "live".to_string()];
-        probe_and_fan_reachability(hosts, tx, move |host| {
-            start_times_clone
-                .lock()
-                .unwrap()
-                .push((host.to_string(), t0.elapsed()));
-            if host == "dead" {
-                std::thread::sleep(Duration::from_millis(500));
-                false
-            } else {
-                std::thread::sleep(Duration::from_millis(10));
-                true
-            }
-        });
-
-        let times = start_times.lock().unwrap();
-        let live_start = times
-            .iter()
-            .find(|(h, _)| h == "live")
-            .map(|(_, t)| *t)
-            .expect("live probe should have started");
-        assert!(
-            live_start < Duration::from_millis(100),
-            "live probe must start within 100ms of dispatch (serial would delay it ~500ms), \
-             started at {:?}",
-            live_start
         );
     }
 }

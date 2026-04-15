@@ -2665,6 +2665,24 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_unreachable_hosts_all_reachable_sets_warning() {
+        let mut app = App::new_test(vec![]);
+        app.host_reachable.insert("gpu1".to_string(), true);
+        app.reconnect_unreachable_hosts();
+        let warning = app.warning.as_ref().map(|(s, _)| s.as_str());
+        assert_eq!(warning, Some("All hosts reachable"));
+    }
+
+    #[test]
+    fn reconnect_unreachable_hosts_unreachable_sets_reconnecting_warning() {
+        let mut app = App::new_test(vec![]);
+        app.host_reachable.insert("gpu1".to_string(), false);
+        app.reconnect_unreachable_hosts();
+        let warning = app.warning.as_ref().map(|(s, _)| s.as_str());
+        assert_eq!(warning, Some("Reconnecting..."));
+    }
+
+    #[test]
     fn header_renders_host_connectivity() {
         let mut app = App::new_test(vec![]);
         app.host_reachable.insert("gpu1".to_string(), true);
