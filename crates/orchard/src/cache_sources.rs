@@ -1531,6 +1531,22 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
             .cloned();
     }
 
+    // Populate claude_session_ids for restore: map each Claude-running pane's
+    // target → its persistent session_id. For local sessions we read
+    // $TMPDIR/orchard-claude-*.json directly; remote sessions already have the
+    // file fetched via remote_claude_states (parsed from batched SSH output).
+    let local_claude_states: Vec<crate::claude_state::ClaudeStateFile> = if host.is_none() {
+        crate::claude_state::read_all_state_files(&std::env::temp_dir())
+    } else {
+        Vec::new()
+    };
+    let states_pool: &[crate::claude_state::ClaudeStateFile] = if host.is_none() {
+        &local_claude_states
+    } else {
+        &remote_claude_states
+    };
+    populate_claude_session_ids(&mut sessions, states_pool);
+
     cache::write_cache_if_nonempty(&cache_path, &sessions)?;
     LOG.info(&format!(
         "cache_sources: refresh_tmux_sessions(host={:?}): wrote {} entries",
@@ -1557,6 +1573,45 @@ fn split_batched_output(raw: &str) -> (&str, &str) {
         (before, after)
     } else {
         (raw, "")
+    }
+}
+
+/// Populates `CachedTmuxSession::claude_session_ids` for each session's Claude panes.
+///
+/// For each session, finds the matching `ClaudeStateFile` by `tmux_session == session.name`.
+/// If found and its `session_id` is non-empty, inserts an entry into `claude_session_ids`
+/// for every pane whose command or title contains "claude" (case-insensitive). This is
+/// the same detection heuristic used by `PaneInfo::new`.
+///
+/// This is a pure function — it reads from `states` and mutates `sessions` in place.
+/// Suitable for both local (pass `read_all_state_files` result) and remote (pass
+/// `parse_remote_state_output` result) code paths.
+pub fn populate_claude_session_ids(
+    sessions: &mut [CachedTmuxSession],
+    states: &[crate::claude_state::ClaudeStateFile],
+) {
+    for session in sessions {
+        let Some(state) = states.iter().find(|s| s.tmux_session == session.name) else {
+            continue;
+        };
+        if state.session_id.is_empty() {
+            continue;
+        }
+        for i in 0..session.pane_targets.len() {
+            let cmd = session
+                .pane_commands
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let title = session.pane_titles.get(i).map(|s| s.as_str()).unwrap_or("");
+            let has_claude =
+                cmd.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
+            if has_claude && let Some(target) = session.pane_targets.get(i) {
+                session
+                    .claude_session_ids
+                    .insert(target.clone(), state.session_id.clone());
+            }
+        }
     }
 }
 
@@ -3197,5 +3252,99 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         assert_eq!(session.pane_active, vec!["1"]);
         // claude_session_ids is empty until Task #4 populates it.
         assert!(session.claude_session_ids.is_empty());
+    }
+
+    // -- populate_claude_session_ids (Task #190-4) ----------------------------
+
+    fn make_claude_state(
+        tmux_session: &str,
+        session_id: &str,
+    ) -> crate::claude_state::ClaudeStateFile {
+        crate::claude_state::ClaudeStateFile {
+            state: "idle".to_string(),
+            session_id: session_id.to_string(),
+            tmux_session: tmux_session.to_string(),
+            cwd: "/tmp".to_string(),
+            event: "Stop".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            last_tool: None,
+            current_task: None,
+            session_start_ts: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            stop_reason: None,
+            inflight_tool_count: None,
+            state_changed_at: None,
+        }
+    }
+
+    #[test]
+    fn parse_tmux_output_attaches_claude_session_ids_from_remote_states() {
+        // Pane line: target=0.0, command=claude, title=claude
+        let pane_line =
+            "0.0\tmain\t1\teven-horizontal\t/home/user/repo\t1\tclaude:claude".to_string();
+        let sessions_str = "foo:/home/user/repo\n";
+
+        let mut result = parse_tmux_output(
+            sessions_str,
+            Some("ubuntu@10.0.0.1"),
+            |_| pane_line.clone(),
+            |_| vec![],
+        );
+
+        let states = vec![make_claude_state("foo", "sess-xyz")];
+        populate_claude_session_ids(&mut result, &states);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].claude_session_ids.get("0.0").map(|s| s.as_str()),
+            Some("sess-xyz")
+        );
+    }
+
+    #[test]
+    fn populate_claude_session_ids_skips_panes_without_claude() {
+        // Multi-pane: pane 0.0 has bash (no claude), pane 0.1 has claude command,
+        // pane 0.2 has title "claude" but command "bash".
+        let pane_lines = concat!(
+            "0.0\tmain\t1\teven-horizontal\t/home/user\t0\tbash:bash\n",
+            "0.1\tmain\t1\teven-horizontal\t/home/user/repo\t1\tclaude:claude\n",
+            "0.2\tmain\t1\teven-horizontal\t/home/user\t0\tclaude agent:bash\n",
+        );
+        let sessions_str = "my-session:/home/user\n";
+
+        let mut result =
+            parse_tmux_output(sessions_str, None, |_| pane_lines.to_string(), |_| vec![]);
+
+        let states = vec![make_claude_state("my-session", "sess-abc")];
+        populate_claude_session_ids(&mut result, &states);
+
+        let ids = &result[0].claude_session_ids;
+        // 0.0 has no claude — must be absent.
+        assert!(!ids.contains_key("0.0"), "bash pane should not be in map");
+        // 0.1 command is "claude" — must be present.
+        assert_eq!(ids.get("0.1").map(|s| s.as_str()), Some("sess-abc"));
+        // 0.2 title contains "claude" — must be present.
+        assert_eq!(ids.get("0.2").map(|s| s.as_str()), Some("sess-abc"));
+    }
+
+    #[test]
+    fn populate_claude_session_ids_skips_empty_session_id() {
+        let pane_line = "0.0\tmain\t1\teven-horizontal\t/home/user\t1\tclaude:claude".to_string();
+        let sessions_str = "my-session:/home/user\n";
+
+        let mut result = parse_tmux_output(sessions_str, None, |_| pane_line.clone(), |_| vec![]);
+
+        // State file with empty session_id — nothing should be inserted.
+        let states = vec![make_claude_state("my-session", "")];
+        populate_claude_session_ids(&mut result, &states);
+
+        assert!(
+            result[0].claude_session_ids.is_empty(),
+            "empty session_id must not be inserted into the map"
+        );
     }
 }
