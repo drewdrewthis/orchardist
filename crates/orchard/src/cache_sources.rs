@@ -445,65 +445,29 @@ fn derive_ci_state_graphql(
     (ci_code_state, ci_gate_state, ci_checks)
 }
 
-/// Parses the output of `git worktree list --porcelain` into `Vec<CachedWorktree>`.
+/// Parses `git worktree list --porcelain` and resolves `.git/modules/<name>`
+/// submodule paths to their actual working-tree root.
+///
+/// Delegates the pure parse to `git_parse::parse_worktree_porcelain`; the
+/// submodule resolution is IO (shells out to `git rev-parse --show-toplevel`)
+/// and therefore cannot live in the pure parser.
 pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
-    let mut worktrees = Vec::new();
-
-    for block in output.trim().split("\n\n") {
-        let block = block.trim();
-        if block.is_empty() {
-            continue;
-        }
-
-        let mut path = String::new();
-        let mut branch = String::new();
-        let mut is_bare = false;
-        let mut is_locked = false;
-
-        for line in block.lines() {
-            if let Some(rest) = line.strip_prefix("worktree ") {
-                path = rest.to_string();
-            } else if let Some(rest) = line.strip_prefix("branch ") {
-                let name = rest.strip_prefix("refs/heads/").unwrap_or(rest);
-                branch = name.to_string();
-            } else if line == "bare" {
-                is_bare = true;
-            } else if line.starts_with("locked") {
-                is_locked = true;
-            }
-        }
-
-        if path.is_empty() {
-            continue;
-        }
-
+    let mut worktrees = crate::git_parse::parse_worktree_porcelain(output);
+    for wt in &mut worktrees {
         // Git submodules report the main worktree as .git/modules/<name>.
         // Resolve to the actual working directory so session path matching works.
-        if path.contains(".git/modules/")
+        if wt.path.contains(".git/modules/")
             && let Ok(out) = std::process::Command::new("git")
                 .args(["rev-parse", "--show-toplevel"])
-                .current_dir(&path)
+                .current_dir(&wt.path)
                 .output()
         {
             let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !resolved.is_empty() {
-                path = resolved;
+                wt.path = resolved;
             }
         }
-
-        worktrees.push(CachedWorktree {
-            path,
-            branch,
-            is_bare,
-            is_locked,
-            host: None,
-            ahead: None,
-            behind: None,
-            last_commit_at: None,
-            layout: crate::cache::WorktreeLayout::Bare,
-        });
     }
-
     worktrees
 }
 
@@ -1560,21 +1524,35 @@ fn split_batched_output(raw: &str) -> (&str, &str) {
     }
 }
 
-/// Fetches git worktrees from a single remote host and writes to the remote worktrees cache.
+/// Fetches worktrees from a single remote via the appropriate `RemoteAdapter`
+/// and writes them to the `remote_worktrees` cache.
 ///
-/// On failure the error is logged and the existing cache is left intact.
+/// Dispatch is driven by `remote_cfg.kind` (`Remmy`, `BoxdShared`, `BoxdFork`)
+/// through `RemoteAdapter::from_config`. The `BoxdFork` adapter produces one
+/// flat-layout worktree per live fork VM and tags each with its own fork host
+/// (`boxd@<fork>.boxd.sh`), not with `remote_cfg.host`.
+///
+/// Cache merge semantics: entries from the current remote (identified by
+/// exactly `remote_cfg.host`) are replaced; entries from other hosts —
+/// including per-fork hosts under a BoxdFork remote — are preserved in the
+/// merged output.
+///
+/// On SSH or parse failure the error is logged and the existing cache is left
+/// intact (adapters absorb SSH failures as `Ok(vec![])`, so this function only
+/// writes once it has produced at least one entry).
 pub fn refresh_remote_worktrees(
     config: &RepoConfig,
     remote_cfg: &crate::global_config::RemoteConfig,
 ) -> anyhow::Result<()> {
     let cache_path = cache::cache_path(config.owner(), config.repo_name(), "remote_worktrees");
 
-    let cmd = format!(
-        "git -C {} worktree list --porcelain",
-        remote::shell_escape(&remote_cfg.path)
+    let adapter = crate::remote_adapter::RemoteAdapter::from_config(
+        remote_cfg,
+        Box::new(crate::remote_adapter::ProcessSshExec),
     );
 
-    match remote::ssh_exec(&remote_cfg.host, &cmd) {
+    let mut worktrees = match adapter.list_worktrees() {
+        Ok(wts) => wts,
         Err(e) => {
             LOG.warn(&format!(
                 "cache_sources: refresh_remote_worktrees({}, {}): {e}",
@@ -1582,31 +1560,43 @@ pub fn refresh_remote_worktrees(
             ));
             return Ok(());
         }
-        Ok(porcelain) => {
-            let mut worktrees = parse_worktree_porcelain(&porcelain);
-            // Tag each worktree with the host it came from so merge can differentiate.
-            for wt in &mut worktrees {
-                wt.host = Some(remote_cfg.host.clone());
-            }
+    };
 
-            // Merge with any existing cached worktrees from other remotes.
-            let existing: Vec<CachedWorktree> =
-                cache::read_cache::<CachedWorktree>(&cache_path).entries;
-            let from_other_hosts: Vec<CachedWorktree> = existing
-                .into_iter()
-                .filter(|w| w.host.as_deref() != Some(&remote_cfg.host))
-                .collect();
-            worktrees.extend(from_other_hosts);
-
-            cache::write_cache_if_nonempty(&cache_path, &worktrees)?;
-            LOG.info(&format!(
-                "cache_sources: refresh_remote_worktrees({}, {}): wrote {} entries",
-                config.slug,
-                remote_cfg.host,
-                worktrees.len(),
-            ));
+    // Bare-layout adapters (`Remmy`, `BoxdShared`) tag with `remote_cfg.host`;
+    // `BoxdFork` tags with per-fork `boxd@<fork>.host`. For merge-by-host to
+    // work for the bare-layout case, ensure the host is set (the adapter
+    // already does this, but be defensive for empty-list cases).
+    for wt in &mut worktrees {
+        if wt.host.is_none() {
+            wt.host = Some(remote_cfg.host.clone());
         }
     }
+
+    // Collect the set of hosts this refresh is replacing.
+    let replaced_hosts: std::collections::HashSet<String> =
+        worktrees.iter().filter_map(|w| w.host.clone()).collect();
+
+    // Always replace `remote_cfg.host` so an empty list from a reachable host
+    // clears its previous entries (a fork that was live and is now gone would
+    // otherwise linger forever).
+    let existing: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&cache_path).entries;
+    let from_other_hosts: Vec<CachedWorktree> = existing
+        .into_iter()
+        .filter(|w| match &w.host {
+            Some(h) => h != &remote_cfg.host && !replaced_hosts.contains(h),
+            None => false,
+        })
+        .collect();
+    worktrees.extend(from_other_hosts);
+
+    cache::write_cache_if_nonempty(&cache_path, &worktrees)?;
+    LOG.info(&format!(
+        "cache_sources: refresh_remote_worktrees({}, {}): wrote {} entries via {:?} adapter",
+        config.slug,
+        remote_cfg.host,
+        worktrees.len(),
+        remote_cfg.kind,
+    ));
 
     Ok(())
 }

@@ -119,6 +119,7 @@ pub fn derive_worktree_rows(
             sessions: session_infos,
             display_group,
             is_main_worktree,
+            layout: wt.layout,
         });
 
         is_first_non_bare = false;

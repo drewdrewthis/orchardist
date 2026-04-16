@@ -6,9 +6,9 @@
 /// `global_config::RemoteConfig` to carry the required `kind` field.
 ///
 /// Feature file: specs/features/boxd-first-class-backend.feature
+use orchard::global_config::RemoteConfig;
 use orchard::remote_adapter::{
-    BoxdForkAdapter, FakeSshExec, RemmyAdapter, RemoteAdapter, RemoteConfigTyped, RemoteKind,
-    SshExec, SshOutput,
+    BoxdForkAdapter, FakeSshExec, RemmyAdapter, RemoteAdapter, RemoteKind, SshExec, SshOutput,
 };
 
 // ---------------------------------------------------------------------------
@@ -86,6 +86,7 @@ fn port_list_worktrees_returns_ok_for_boxd_fork_variant() {
     // feature.feature:22
     let adapter = RemoteAdapter::BoxdFork(BoxdForkAdapter {
         golden_host: "boxd.sh".to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
         ssh: Box::new(FakeSshExec::new()),
     });
     let result = adapter.list_worktrees();
@@ -147,10 +148,11 @@ fn remmy_adapter_accepts_box_dyn_ssh_exec_seam() {
 #[test]
 fn dispatch_remmy_type_returns_remmy_adapter() {
     // feature.feature:40
-    let cfg = RemoteConfigTyped {
+    let cfg = RemoteConfig {
         name: "my-remote".to_string(),
         host: "ubuntu@10.0.3.56".to_string(),
         path: "~/repo".to_string(),
+        shell: "ssh".to_string(),
         kind: RemoteKind::Remmy,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
@@ -165,10 +167,11 @@ fn dispatch_remmy_type_returns_remmy_adapter() {
 #[test]
 fn dispatch_boxd_shared_type_returns_boxd_shared_adapter() {
     // feature.feature:40
-    let cfg = RemoteConfigTyped {
+    let cfg = RemoteConfig {
         name: "my-boxd".to_string(),
         host: "boxd@orchard-rs.boxd.sh".to_string(),
         path: "~/git-orchard-rs".to_string(),
+        shell: "ssh".to_string(),
         kind: RemoteKind::BoxdShared,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
@@ -183,10 +186,11 @@ fn dispatch_boxd_shared_type_returns_boxd_shared_adapter() {
 #[test]
 fn dispatch_boxd_fork_type_returns_boxd_fork_adapter() {
     // feature.feature:40
-    let cfg = RemoteConfigTyped {
+    let cfg = RemoteConfig {
         name: "boxd-fork-langwatch".to_string(),
         host: "boxd.sh".to_string(),
         path: "~/langwatch".to_string(),
+        shell: "ssh".to_string(),
         kind: RemoteKind::BoxdFork,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
@@ -202,10 +206,10 @@ fn dispatch_boxd_fork_type_returns_boxd_fork_adapter() {
 // Unknown remote type fails fast with actionable error
 // ---------------------------------------------------------------------------
 
-/// Deserializing a `RemoteConfigTyped` with `"type": "gcp-vm"` must fail,
-/// and the serde error must mention the unknown variant name.
+/// Deserializing a `RemoteConfig` with `"type": "gcp-vm"` must fail, and the
+/// serde error must mention the unknown variant name.
 ///
-/// This collapses scenario 4 into the serde layer: once `RemoteKind` is an
+/// This collapses scenario 4 into the serde layer: because `RemoteKind` is an
 /// enum, there is no runtime "unknown type" path — the config is rejected at
 /// parse time with an error that lists supported variants.
 #[test]
@@ -217,7 +221,7 @@ fn unknown_remote_type_rejected_by_serde_with_named_variants() {
         "path": "/home/ubuntu/repo",
         "type": "gcp-vm"
     }"#;
-    let result: Result<RemoteConfigTyped, _> = serde_json::from_str(json);
+    let result: Result<RemoteConfig, _> = serde_json::from_str(json);
     assert!(
         result.is_err(),
         "unknown type 'gcp-vm' must fail deserialization"
@@ -718,8 +722,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         is_main_worktree: true,
         ahead_behind: None,
         last_commit_at: None,
-        // TODO: add layout field when WorktreeState gains it.
-        // layout: orchard::cache::WorktreeLayout::Bare,
+        layout: orchard::cache::WorktreeLayout::Bare,
     };
 
     // Until `WorktreeState.layout` exists, we can still test the version bump.
@@ -814,6 +817,7 @@ branch refs/heads/issue-7/my-feature\n";
     // --- BoxdFork: no SSH responses → fails with no-canned-response error ---
     let fork_adapter = RemoteAdapter::BoxdFork(orchard::remote_adapter::BoxdForkAdapter {
         golden_host: "boxd.sh".to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
         ssh: Box::new(FakeSshExec::new()), // no canned responses
     });
 
@@ -935,6 +939,7 @@ fn boxd_fork_adapter_detached_head_produces_formatted_commit_branch() {
 
     let adapter = orchard::remote_adapter::BoxdForkAdapter {
         golden_host: fork_host.to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
         ssh: Box::new(fake),
     };
 
@@ -1023,6 +1028,7 @@ fn boxd_fork_adapter_flat_clone_produces_single_worktree_at_repo_path() {
 
     let adapter = orchard::remote_adapter::BoxdForkAdapter {
         golden_host: fork_host.to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
         ssh: Box::new(fake),
     };
 
@@ -1102,6 +1108,7 @@ fn boxd_fork_adapter_malformed_list_json_returns_parse_failure_error() {
 
     let adapter = orchard::remote_adapter::BoxdForkAdapter {
         golden_host: fork_host.to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
         ssh: Box::new(fake),
     };
 
@@ -1145,6 +1152,7 @@ fn boxd_fork_adapter_truncated_list_json_returns_parse_failure_error() {
 
     let adapter = orchard::remote_adapter::BoxdForkAdapter {
         golden_host: fork_host.to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
         ssh: Box::new(fake),
     };
 

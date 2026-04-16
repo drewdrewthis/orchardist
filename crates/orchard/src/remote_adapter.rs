@@ -1,16 +1,19 @@
 //! Hexagonal port for remote worktree and session access.
 //!
-//! Defines the `RemoteAdapter` enum (the port), the `SshExec` seam for injection,
-//! and stub adapter types. The coder fills in real implementations; these stubs
-//! compile but return `unimplemented!()` so tests fail red until production code exists.
+//! Defines the `RemoteAdapter` enum (the port), the `SshExec` seam for
+//! injection, and three adapter variants (`RemmyAdapter`, `BoxdSharedAdapter`,
+//! `BoxdForkAdapter`). `RemoteAdapter::from_config` selects the right variant
+//! from a `global_config::RemoteConfig` and the production caller
+//! (`cache_sources::refresh_remote_worktrees`) dispatches through it.
 //!
 //! # Design decision (recorded per feature.feature:30)
 //!
 //! `RemoteAdapter` is an enum, not `Box<dyn Trait>`. CLAUDE.md reserves trait
 //! objects for "genuinely polymorphic behaviour — cases where multiple implementations
 //! exist at runtime". Three adapters known at compile time is textbook enum dispatch.
-//! The `SshExec` seam IS a trait object (`&dyn SshExec`) because that IS polymorphic
-//! at runtime: the real process runner vs. test doubles both implement it.
+//! The `SshExec` seam IS a trait object (`Box<dyn SshExec>`) because that IS
+//! polymorphic at runtime: the real process runner vs. test doubles both
+//! implement it.
 
 use std::collections::HashMap;
 
@@ -30,18 +33,19 @@ use crate::cache::{CachedTmuxSession, CachedWorktree, WorktreeLayout};
 /// syntactically invalid (e.g. malformed JSON from `ssh boxd.sh list --json`).
 /// The caller decides whether to fall back to cached data; the adapter itself
 /// does not make that decision.
+///
+/// SSH failures are currently converted to `Ok(vec![])` inside the adapters so
+/// the TUI retains its last cached state; if a typed SSH variant is needed
+/// once AC6 (hard timeouts) lands, add it alongside `ParseFailure` here.
 #[derive(Debug)]
 pub enum AdapterError {
-    /// The remote SSH command failed or the host was unreachable.
-    SshFailure {
-        /// Human-readable description of the failure.
-        message: String,
-    },
     /// The response from the remote was received but could not be parsed.
     ///
-    /// `raw` holds the first 256 bytes of the offending payload for logging.
+    /// `raw` is sanitized (ASCII-graphic + space only) and truncated at 256
+    /// characters so malicious remotes cannot inject ANSI escapes or
+    /// control bytes into logs or terminals via error messages.
     ParseFailure {
-        /// The raw payload (truncated at 256 bytes if large) for diagnostic logging.
+        /// Sanitized, truncated payload for diagnostic logging.
         raw: String,
     },
 }
@@ -49,7 +53,6 @@ pub enum AdapterError {
 impl std::fmt::Display for AdapterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AdapterError::SshFailure { message } => write!(f, "SSH failure: {message}"),
             AdapterError::ParseFailure { raw } => {
                 write!(f, "boxd.sh list parse failure; raw payload: {raw}")
             }
@@ -66,7 +69,8 @@ impl std::error::Error for AdapterError {}
 /// The kind of remote adapter to use for a configured remote host.
 ///
 /// Serialized as a lowercase-hyphenated string via `serde(rename_all = "kebab-case")`.
-/// The JSON field name on `RemoteConfigTyped` is `"type"` via `serde(rename = "type")`.
+/// The JSON field is `"type"` on `global_config::RemoteConfig`
+/// (`#[serde(rename = "type")] kind: RemoteKind`).
 ///
 /// Serde rejects any value not in this enum, producing an error that names the
 /// unknown value — this covers scenario 4 / feature.feature:52.
@@ -79,24 +83,6 @@ pub enum RemoteKind {
     BoxdShared,
     /// Boxd fork-per-issue adapter: one VM per open issue.
     BoxdFork,
-}
-
-/// A remote config entry that requires an explicit `"type"` field.
-///
-/// This is the target schema for AC4. The coder will migrate `RemoteConfig`
-/// in `global_config.rs` to carry this; until then these tests use
-/// `RemoteConfigTyped` directly to encode the required shape.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteConfigTyped {
-    /// Logical name for this remote (e.g. "remmy", "gpu-box").
-    pub name: String,
-    /// SSH target, e.g. "user@host".
-    pub host: String,
-    /// Absolute path on the remote host.
-    pub path: String,
-    /// The adapter kind. Serialized as the `"type"` field in JSON.
-    #[serde(rename = "type")]
-    pub kind: RemoteKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,15 +113,26 @@ pub trait SshExec: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Real SSH executor (stub — wires to existing remote::ssh_exec later)
+// Real SSH executor
 // ---------------------------------------------------------------------------
 
 /// SSH executor that spawns a real `ssh` subprocess.
+///
+/// Delegates to `crate::remote::ssh_exec`, which applies the orchard-wide
+/// SSH multiplexing flags (`ControlMaster=auto`, `ControlPath`,
+/// `ConnectTimeout=5`, `BatchMode=yes`) already used by the rest of the crate.
+/// `stderr` is surfaced through the returned error rather than as part of
+/// `SshOutput`; successful calls produce `stderr = ""` and `exit_code = 0`.
 pub struct ProcessSshExec;
 
 impl SshExec for ProcessSshExec {
-    fn exec(&self, _host: &str, _cmd: &str) -> Result<SshOutput> {
-        unimplemented!("ProcessSshExec: real implementation not yet wired")
+    fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
+        let stdout = crate::remote::ssh_exec(host, cmd)?;
+        Ok(SshOutput {
+            stdout,
+            stderr: String::new(),
+            exit_code: 0,
+        })
     }
 }
 
@@ -199,7 +196,7 @@ impl RemoteAdapter {
     ///
     /// Dispatch is driven by `cfg.kind`; the serde layer rejects unknown
     /// `"type"` strings before this function is called.
-    pub fn from_config(cfg: &RemoteConfigTyped, ssh: Box<dyn SshExec>) -> Self {
+    pub fn from_config(cfg: &crate::global_config::RemoteConfig, ssh: Box<dyn SshExec>) -> Self {
         match cfg.kind {
             RemoteKind::Remmy => RemoteAdapter::Remmy(RemmyAdapter {
                 host: cfg.host.clone(),
@@ -213,6 +210,7 @@ impl RemoteAdapter {
             }),
             RemoteKind::BoxdFork => RemoteAdapter::BoxdFork(BoxdForkAdapter {
                 golden_host: cfg.host.clone(),
+                fork_repo_path: cfg.path.clone(),
                 ssh,
             }),
         }
@@ -286,19 +284,7 @@ impl RemmyAdapter {
     /// treats an empty result the same as a stale cache, keeping the last known
     /// state visible rather than crashing the dashboard.
     pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
-        let cmd = format!("git -C {} worktree list --porcelain", self.path);
-        let stdout = match self.ssh.exec(&self.host, &cmd) {
-            Ok(output) => output.stdout,
-            Err(_) => return Ok(vec![]),
-        };
-        let mut worktrees: Vec<CachedWorktree> = parse_porcelain(&stdout)
-            .into_iter()
-            .filter(|wt| !wt.is_bare)
-            .collect();
-        for wt in &mut worktrees {
-            wt.host = Some(self.host.clone());
-        }
-        Ok(worktrees)
+        ssh_list_worktrees(self.ssh.as_ref(), &self.host, &self.path)
     }
 
     /// Returns all tmux sessions from the remote.
@@ -347,20 +333,7 @@ impl BoxdSharedAdapter {
     /// Returns `Ok(vec![])` when SSH is unreachable — identical degraded behaviour
     /// to `RemmyAdapter`, so the TUI keeps the last known cache visible.
     pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
-        let cmd = format!("git -C {} worktree list --porcelain", self.path);
-        let stdout = match self.ssh.exec(&self.host, &cmd) {
-            Ok(output) => output.stdout,
-            Err(_) => return Ok(vec![]),
-        };
-        let mut worktrees: Vec<CachedWorktree> = parse_porcelain(&stdout)
-            .into_iter()
-            .filter(|wt| !wt.is_bare)
-            .collect();
-        for wt in &mut worktrees {
-            wt.host = Some(self.host.clone());
-            wt.layout = WorktreeLayout::Bare;
-        }
-        Ok(worktrees)
+        ssh_list_worktrees(self.ssh.as_ref(), &self.host, &self.path)
     }
 
     /// Returns all tmux sessions from the Boxd shared VM.
@@ -387,36 +360,33 @@ impl BoxdSharedAdapter {
 
 /// A single fork VM entry returned by `ssh boxd.sh list --json`.
 ///
-/// `path` is the repo root on the fork VM. It defaults to `"~/langwatch"` via
-/// `serde(default)` when the key is absent from the JSON — this matches the
-/// langwatch boxd convention where every fork clones the repo to `~/langwatch`.
-///
-/// When boxd's `list --json` output includes an explicit `"path"` key, that
-/// value is used instead.
+/// `path` is optional in the JSON payload; when absent, the adapter's
+/// configured `fork_repo_path` is used (derived from `RemoteConfig.path`,
+/// not a hardcoded tenant path).
 #[derive(Debug, Deserialize)]
 struct BoxdForkEntry {
     /// Human-readable fork name, typically the issue slug (e.g. `"issue3155"`).
     name: String,
     /// SSH hostname of the fork VM (e.g. `"issue3155.boxd.sh"`).
     host: String,
-    /// Repo root path on the fork VM. Defaults to `"~/langwatch"` when absent.
-    #[serde(default = "default_fork_repo_path")]
-    path: String,
-}
-
-/// Returns the conventional boxd repo path used as the default when the
-/// `list --json` response does not include an explicit `"path"` key.
-fn default_fork_repo_path() -> String {
-    "~/langwatch".to_string()
+    /// Repo root path on the fork VM. Optional — falls back to the
+    /// adapter's configured path when absent.
+    #[serde(default)]
+    path: Option<String>,
 }
 
 /// Adapter for Boxd fork-per-issue VMs.
 ///
-/// Enumerates live forks via `ssh boxd.sh list --json` then probes each fork
-/// VM individually for its branch and tmux sessions.
+/// Enumerates live forks via `ssh <golden_host> list --json`, then probes each
+/// fork VM individually for its branch and tmux sessions. Forks that advertise
+/// a `"path"` in the list JSON use that value; otherwise the adapter's
+/// `fork_repo_path` (derived from `RemoteConfig.path`) is used.
 pub struct BoxdForkAdapter {
     /// The golden Boxd host used for enumeration (e.g. `"boxd.sh"`).
     pub golden_host: String,
+    /// Repo root path on each fork VM (from `RemoteConfig.path`). Used when
+    /// the `list --json` payload does not carry a per-fork `path` value.
+    pub fork_repo_path: String,
     /// SSH executor (real process or test double).
     pub ssh: Box<dyn SshExec>,
 }
@@ -443,7 +413,7 @@ impl BoxdForkAdapter {
         // Step 2: parse the fork list. Malformed JSON → ParseFailure.
         let entries: Vec<BoxdForkEntry> =
             serde_json::from_str(&list_stdout).map_err(|_| AdapterError::ParseFailure {
-                raw: list_stdout.chars().take(256).collect(),
+                raw: sanitize_raw_payload(&list_stdout),
             })?;
 
         let mut worktrees = Vec::with_capacity(entries.len());
@@ -451,35 +421,20 @@ impl BoxdForkAdapter {
         // Steps 3-5: per-fork branch resolution.
         for entry in entries {
             let fork_host = format!("boxd@{}", entry.host);
-            let branch_cmd = format!("cd {} && git rev-parse --abbrev-ref HEAD", entry.path);
+            let fork_path = entry.path.unwrap_or_else(|| self.fork_repo_path.clone());
+            let escaped_path = crate::remote::shell_escape(&fork_path);
+            let branch_cmd = format!("cd {escaped_path} && git rev-parse --abbrev-ref HEAD");
 
-            let branch = match self.ssh.exec(&fork_host, &branch_cmd) {
-                Ok(out) => {
-                    let raw = out.stdout.trim().to_string();
-                    if raw == "HEAD" {
-                        // Detached HEAD: resolve commit hash.
-                        let commit_cmd = format!("cd {} && git rev-parse --short HEAD", entry.path);
-                        let sha = self
-                            .ssh
-                            .exec(&fork_host, &commit_cmd)
-                            .map(|o| o.stdout.trim().to_string())
-                            .unwrap_or_else(|_| entry.name.clone());
-                        format!("(detached: {sha})")
-                    } else if raw.is_empty() {
-                        // Branch probe returned empty output — use fork name as fallback.
-                        entry.name.clone()
-                    } else {
-                        raw
-                    }
-                }
-                Err(_) => {
-                    // SSH to fork VM failed — emit degraded entry with fork name as branch.
-                    entry.name.clone()
-                }
-            };
+            let branch = resolve_fork_branch(
+                self.ssh.as_ref(),
+                &fork_host,
+                &escaped_path,
+                &branch_cmd,
+                &entry.name,
+            );
 
             worktrees.push(CachedWorktree {
-                path: entry.path,
+                path: fork_path,
                 branch,
                 is_bare: false,
                 is_locked: false,
@@ -513,57 +468,79 @@ impl BoxdForkAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Parses `git worktree list --porcelain` output into `CachedWorktree` entries.
+/// Runs `git -C <path> worktree list --porcelain` on `host` via `ssh`, parses
+/// the porcelain output into non-bare `CachedWorktree` entries tagged with
+/// `host`, and returns `Ok(vec![])` on SSH failure so the TUI retains the
+/// last known cache.
 ///
-/// Mirrors `cache_sources::parse_worktree_porcelain` — kept here to avoid
-/// a circular module dependency (`remote_adapter` → `cache_sources` → `global_config`
-/// → `remote_adapter`). Slice 2 should consolidate into a shared `git_parse` module.
-fn parse_porcelain(output: &str) -> Vec<CachedWorktree> {
-    let mut worktrees = Vec::new();
+/// `path` is shell-escaped before interpolation: config- and JSON-sourced
+/// paths reach this code path and must not be able to inject shell
+/// metacharacters into the command string.
+fn ssh_list_worktrees(ssh: &dyn SshExec, host: &str, path: &str) -> Result<Vec<CachedWorktree>> {
+    let cmd = format!(
+        "git -C {} worktree list --porcelain",
+        crate::remote::shell_escape(path)
+    );
+    let stdout = match ssh.exec(host, &cmd) {
+        Ok(output) => output.stdout,
+        Err(_) => return Ok(vec![]),
+    };
+    let mut worktrees: Vec<CachedWorktree> = crate::git_parse::parse_worktree_porcelain(&stdout)
+        .into_iter()
+        .filter(|wt| !wt.is_bare)
+        .collect();
+    for wt in &mut worktrees {
+        wt.host = Some(host.to_string());
+    }
+    Ok(worktrees)
+}
 
-    for block in output.trim().split("\n\n") {
-        let block = block.trim();
-        if block.is_empty() {
-            continue;
-        }
-
-        let mut path = String::new();
-        let mut branch = String::new();
-        let mut is_bare = false;
-        let mut is_locked = false;
-
-        for line in block.lines() {
-            if let Some(rest) = line.strip_prefix("worktree ") {
-                path = rest.to_string();
-            } else if let Some(rest) = line.strip_prefix("branch ") {
-                let name = rest.strip_prefix("refs/heads/").unwrap_or(rest);
-                branch = name.to_string();
-            } else if line == "bare" {
-                is_bare = true;
-            } else if line.starts_with("locked") {
-                is_locked = true;
+/// Resolves a fork's branch name, handling detached HEAD, empty output, and
+/// SSH failure uniformly. Returns a string suitable for `CachedWorktree.branch`.
+///
+/// - Normal branch: returns the trimmed branch name as-is.
+/// - Detached HEAD (`"HEAD"`): re-queries with `git rev-parse --short HEAD` and
+///   returns `"(detached: <sha>)"`.
+/// - Empty output: falls back to `fork_name`.
+/// - SSH failure: falls back to `fork_name` (degraded entry, still emitted).
+fn resolve_fork_branch(
+    ssh: &dyn SshExec,
+    fork_host: &str,
+    escaped_path: &str,
+    branch_cmd: &str,
+    fork_name: &str,
+) -> String {
+    match ssh.exec(fork_host, branch_cmd) {
+        Ok(out) => {
+            let raw = out.stdout.trim();
+            if raw == "HEAD" {
+                let commit_cmd = format!("cd {escaped_path} && git rev-parse --short HEAD");
+                let sha = ssh
+                    .exec(fork_host, &commit_cmd)
+                    .map(|o| o.stdout.trim().to_string())
+                    .unwrap_or_else(|_| fork_name.to_string());
+                format!("(detached: {sha})")
+            } else if raw.is_empty() {
+                fork_name.to_string()
+            } else {
+                raw.to_string()
             }
         }
-
-        if path.is_empty() {
-            continue;
-        }
-
-        worktrees.push(CachedWorktree {
-            path,
-            branch,
-            is_bare,
-            is_locked,
-            host: None,
-            ahead: None,
-            behind: None,
-            last_commit_at: None,
-            layout: WorktreeLayout::Bare,
-        });
+        Err(_) => fork_name.to_string(),
     }
+}
 
-    worktrees
+/// Sanitizes a remote-sourced raw payload for inclusion in error messages.
+///
+/// Keeps ASCII-printable characters and spaces; drops control bytes,
+/// multibyte sequences, and anything that could inject ANSI escapes or
+/// corrupt structured-log output. Truncates to 256 characters.
+fn sanitize_raw_payload(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(256)
+        .collect()
 }

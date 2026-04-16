@@ -97,6 +97,9 @@ pub struct WorktreeState {
     pub ahead_behind: Option<(u32, u32)>,
     /// ISO 8601 timestamp of the most recent commit in this worktree.
     pub last_commit_at: Option<String>,
+    /// Physical layout of this worktree — `Bare` (bare repo + linked
+    /// worktrees) or `Flat` (single non-bare clone per BoxdFork VM).
+    pub layout: crate::cache::WorktreeLayout,
 }
 
 impl WorktreeState {
@@ -438,6 +441,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             is_main_worktree: row.is_main_worktree,
             ahead_behind,
             last_commit_at: row.worktree_last_commit_at.clone(),
+            layout: row.layout,
         }
     }
 }
@@ -477,6 +481,7 @@ mod tests {
             worktree_ahead: None,
             worktree_behind: None,
             worktree_last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 

@@ -428,6 +428,13 @@ fn claude_info_from_session(c: &crate::session::ClaudeSessionInfo) -> JsonClaude
     }
 }
 
+fn layout_str(l: crate::cache::WorktreeLayout) -> &'static str {
+    match l {
+        crate::cache::WorktreeLayout::Bare => "bare",
+        crate::cache::WorktreeLayout::Flat => "flat",
+    }
+}
+
 fn display_group_str(g: DisplayGroup) -> &'static str {
     match g {
         DisplayGroup::RepoMain => "repo_main",
@@ -568,11 +575,11 @@ impl From<&SessionState> for JsonSession {
 }
 
 impl From<&WorktreeState> for JsonWorktree {
-    /// Converts an internal `WorktreeState` to JSON output format, serializing the display group to a string.
+    /// Converts an internal `WorktreeState` to JSON output format.
     ///
-    /// `layout` defaults to `"bare"` for all worktrees until `WorktreeState` gains
-    /// a layout field (tracked in slice 3 of issue #267). Once that field lands,
-    /// this conversion will forward the value directly.
+    /// `layout` reflects the source worktree's physical layout (`"bare"` for
+    /// Remmy/BoxdShared bare-repo+worktrees, `"flat"` for BoxdFork single
+    /// clones), not a hardcoded default.
     fn from(ws: &WorktreeState) -> Self {
         let ahead_behind = ws
             .ahead_behind
@@ -581,7 +588,7 @@ impl From<&WorktreeState> for JsonWorktree {
             path: ws.path.clone(),
             branch: ws.branch.clone(),
             host: ws.host.clone(),
-            layout: "bare".to_string(),
+            layout: layout_str(ws.layout).to_string(),
             ahead_behind,
             last_commit_at: ws.last_commit_at.clone(),
             issue: ws.issue.as_ref().map(Into::into),
@@ -707,6 +714,7 @@ mod tests {
             is_main_worktree: false,
             ahead_behind: None,
             last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 

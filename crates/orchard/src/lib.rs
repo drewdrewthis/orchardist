@@ -17,6 +17,7 @@ pub mod config;
 pub mod derive;
 pub mod events;
 pub mod git;
+pub mod git_parse;
 pub mod github;
 pub mod global_config;
 pub mod heal;

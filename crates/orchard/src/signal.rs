@@ -718,6 +718,7 @@ mod tests {
             sessions: vec![],
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
+            layout: crate::cache::WorktreeLayout::Bare,
         })
     }
 
