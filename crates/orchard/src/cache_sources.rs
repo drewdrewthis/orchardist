@@ -560,7 +560,9 @@ pub fn parse_tmux_output(
             window_layouts: parsed.window_layouts,
             pane_paths: parsed.pane_paths,
             pane_active: parsed.pane_active,
-            claude_session_ids: HashMap::new(), // populated by Task #4, not yet
+            // Populated downstream by `populate_claude_session_ids` once the
+            // session list and Claude hook state files have been joined.
+            claude_session_ids: HashMap::new(),
             host: host.map(|h| h.to_string()),
             created_at,
             last_activity_at,
@@ -1586,7 +1588,7 @@ fn split_batched_output(raw: &str) -> (&str, &str) {
 /// This is a pure function — it reads from `states` and mutates `sessions` in place.
 /// Suitable for both local (pass `read_all_state_files` result) and remote (pass
 /// `parse_remote_state_output` result) code paths.
-pub fn populate_claude_session_ids(
+pub(crate) fn populate_claude_session_ids(
     sessions: &mut [CachedTmuxSession],
     states: &[crate::claude_state::ClaudeStateFile],
 ) {
@@ -3304,7 +3306,7 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
     }
 
     #[test]
-    fn populate_claude_session_ids_skips_panes_without_claude() {
+    fn populate_claude_session_ids_filters_by_command_or_title_match() {
         // Multi-pane: pane 0.0 has bash (no claude), pane 0.1 has claude command,
         // pane 0.2 has title "claude" but command "bash".
         let pane_lines = concat!(

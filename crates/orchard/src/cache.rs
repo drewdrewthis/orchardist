@@ -356,10 +356,28 @@ pub fn write_cache<T: Serialize>(path: &Path, entries: &[T]) -> anyhow::Result<(
 
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, &json).context("write cache .tmp file")?;
+    // Restrict to owner-only read/write before the rename. The tmux cache now
+    // contains Claude session ids + per-pane cwds + captured stdout; the
+    // `parse_iso8601_to_epoch` issue/PR caches carry GitHub data. None of it
+    // should be world-readable on a shared host.
+    restrict_cache_permissions(&tmp_path);
     std::fs::rename(&tmp_path, path).context("rename .tmp to final cache file")?;
 
     Ok(())
 }
+
+/// Sets 0600 permissions on a cache file (owner read/write only). No-op on
+/// non-Unix platforms. Errors are swallowed — the rename still succeeds, the
+/// cache is still usable, and the umask fallback is acceptable if permission
+/// tightening is unsupported.
+#[cfg(unix)]
+fn restrict_cache_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_cache_permissions(_path: &Path) {}
 
 /// Like `write_cache`, but skips the write when `entries` is empty **and** the
 /// cache file already exists on disk. This prevents a failed API call (which
@@ -1025,5 +1043,28 @@ mod tests {
             entry.claude_session_id.is_none(),
             "claude_session_id should default to None when absent"
         );
+    }
+
+    #[test]
+    fn session_manifest_entry_roundtrips_claude_session_id_some() {
+        // Covers the forward direction: when we DO have an id, it survives a
+        // JSON serialize → deserialize round-trip on SessionManifestEntry.
+        let entry = SessionManifestEntry {
+            session_name: "webapp_main".to_string(),
+            worktree_path: "/home/user/webapp".to_string(),
+            branch: "main".to_string(),
+            had_claude: true,
+            host: None,
+            claude_session_id: Some("sess-abc123".to_string()),
+        };
+
+        let json = serde_json::to_string(&entry).expect("serialize must succeed");
+        assert!(
+            json.contains("sess-abc123"),
+            "serialized form must include the id"
+        );
+        let restored: SessionManifestEntry =
+            serde_json::from_str(&json).expect("roundtrip must deserialize");
+        assert_eq!(restored.claude_session_id.as_deref(), Some("sess-abc123"));
     }
 }

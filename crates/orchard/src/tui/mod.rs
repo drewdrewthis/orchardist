@@ -691,11 +691,6 @@ impl App {
                             branch: row.branch.clone(),
                             had_claude: row.sessions.iter().any(|s| s.claude.is_some()),
                             host: row.worktree_host.clone(),
-                            // Durable backup for restore: the id of the first
-                            // pane flagged `has_claude` that also has a session
-                            // id in the tmux cache. Falls back to None when no
-                            // Claude pane has a known id (e.g., state file on
-                            // disk was cleared since the last refresh).
                             claude_session_id: row.sessions.iter().find_map(|s| {
                                 s.panes
                                     .iter()
