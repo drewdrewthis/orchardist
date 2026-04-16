@@ -4,7 +4,6 @@
 //! atomic JSON file I/O, path conventions under `~/.cache/orchard/`, and
 //! the session manifest that persists worktree-to-session bindings across
 //! cache refreshes.
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -235,15 +234,6 @@ pub struct CachedTmuxSession {
     /// for cache upgrade compat.
     #[serde(default)]
     pub pane_active: Vec<String>,
-    /// Claude session IDs keyed by pane target (e.g. `"0.1"` → `"session-abc123"`).
-    ///
-    /// Populated when a pane has `has_claude` and an accessible Claude hook
-    /// state file (`$TMPDIR/orchard-claude-*.json`). Needed because `$TMPDIR`
-    /// is cleared on reboot, so the ID required for `claude --continue <id>`
-    /// must be durable in the cache file. Uses `serde(default)` for cache
-    /// upgrade compat.
-    #[serde(default)]
-    pub claude_session_ids: HashMap<String, String>,
     /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
     /// Unix timestamp when the tmux session was created.
@@ -407,14 +397,6 @@ pub struct SessionManifestEntry {
     pub had_claude: bool,
     /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
-    /// Claude session ID for the primary Claude pane, if any.
-    ///
-    /// Redundant backup of the `CachedTmuxSession.claude_session_ids` data —
-    /// the manifest is a smaller, higher-level record used by `orchard heal`
-    /// and startup probes, and including the ID here lets restore work even
-    /// if `tmux_sessions.json` is stale or missing. Uses `serde(default)`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claude_session_id: Option<String>,
 }
 
 /// The full session manifest written to `~/.cache/orchard/session_manifest.json`.
@@ -539,7 +521,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -735,7 +716,6 @@ mod tests {
                 branch: "main".to_string(),
                 had_claude: false,
                 host: None,
-                claude_session_id: None,
             }],
         };
         let json = serde_json::to_string(&manifest).unwrap();
@@ -768,7 +748,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -964,11 +943,6 @@ mod tests {
                 "/home/user/repo/src".to_string(),
             ],
             pane_active: vec!["1".to_string(), "0".to_string()],
-            claude_session_ids: {
-                let mut m = HashMap::new();
-                m.insert("0.1".to_string(), "session-abc123".to_string());
-                m
-            },
             host: None,
             created_at: Some(1700000000),
             last_activity_at: Some(1700001000),
@@ -982,13 +956,12 @@ mod tests {
         assert_eq!(parsed.window_layouts, session.window_layouts);
         assert_eq!(parsed.pane_paths, session.pane_paths);
         assert_eq!(parsed.pane_active, session.pane_active);
-        assert_eq!(parsed.claude_session_ids, session.claude_session_ids);
     }
 
     #[test]
     fn cached_tmux_session_deserializes_old_json_without_new_fields() {
         // Simulates a pre-#190 cache file lacking window_layouts, pane_paths,
-        // pane_active, and claude_session_ids — must deserialize with defaults.
+        // and pane_active — must deserialize with defaults.
         let json = r#"{
             "name": "old-session",
             "path": "/home/user/repo",
@@ -1017,54 +990,5 @@ mod tests {
             parsed.pane_active.is_empty(),
             "pane_active should default to empty vec"
         );
-        assert!(
-            parsed.claude_session_ids.is_empty(),
-            "claude_session_ids should default to empty map"
-        );
-    }
-
-    #[test]
-    fn session_manifest_entry_deserializes_without_claude_session_id() {
-        // Old manifest JSON without the claude_session_id field must deserialize
-        // successfully with claude_session_id defaulting to None.
-        let json = r#"{
-            "session_name": "webapp_main",
-            "worktree_path": "/home/user/webapp",
-            "branch": "main",
-            "had_claude": false,
-            "host": null
-        }"#;
-
-        let entry: SessionManifestEntry =
-            serde_json::from_str(json).expect("old manifest entry must deserialize without error");
-
-        assert_eq!(entry.session_name, "webapp_main");
-        assert!(
-            entry.claude_session_id.is_none(),
-            "claude_session_id should default to None when absent"
-        );
-    }
-
-    #[test]
-    fn session_manifest_entry_roundtrips_claude_session_id_some() {
-        // Covers the forward direction: when we DO have an id, it survives a
-        // JSON serialize → deserialize round-trip on SessionManifestEntry.
-        let entry = SessionManifestEntry {
-            session_name: "webapp_main".to_string(),
-            worktree_path: "/home/user/webapp".to_string(),
-            branch: "main".to_string(),
-            had_claude: true,
-            host: None,
-            claude_session_id: Some("sess-abc123".to_string()),
-        };
-
-        let json = serde_json::to_string(&entry).expect("serialize must succeed");
-        assert!(
-            json.contains("sess-abc123"),
-            "serialized form must include the id"
-        );
-        let restored: SessionManifestEntry =
-            serde_json::from_str(&json).expect("roundtrip must deserialize");
-        assert_eq!(restored.claude_session_id.as_deref(), Some("sess-abc123"));
     }
 }

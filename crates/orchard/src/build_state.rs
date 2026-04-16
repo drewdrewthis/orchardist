@@ -148,7 +148,6 @@ fn build_standalone_sessions(
                         &s.pane_paths,
                         &s.pane_active,
                         &s.window_layouts,
-                        &s.claude_session_ids,
                     )
                 })
                 .unwrap_or_default();
@@ -403,7 +402,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -551,7 +549,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: Some("ubuntu@10.0.0.1".to_string()),
             created_at: None,
             last_activity_at: None,
@@ -638,7 +635,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: Some("ubuntu@10.0.0.1".to_string()),
             created_at: None,
             last_activity_at: None,

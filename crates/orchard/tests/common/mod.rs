@@ -206,7 +206,6 @@ pub fn make_session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedT
         window_layouts: vec![],
         pane_paths: vec![],
         pane_active: vec![],
-        claude_session_ids: std::collections::HashMap::new(),
         host: None,
         created_at: None,
         last_activity_at: None,

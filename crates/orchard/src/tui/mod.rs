@@ -691,12 +691,6 @@ impl App {
                             branch: row.branch.clone(),
                             had_claude: row.sessions.iter().any(|s| s.claude.is_some()),
                             host: row.worktree_host.clone(),
-                            claude_session_id: row.sessions.iter().find_map(|s| {
-                                s.panes
-                                    .iter()
-                                    .find(|p| p.has_claude)
-                                    .and_then(|p| p.claude_session_id.clone())
-                            }),
                         })
                         .collect();
                     if !manifest_entries.is_empty() {
@@ -3283,7 +3277,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -4232,7 +4225,6 @@ mod tests {
                 has_claude: i == 0, // first pane has claude
                 cwd: String::new(),
                 is_active: false,
-                claude_session_id: None,
             })
             .collect();
         let windows = vec![crate::session::WindowInfo {
@@ -4275,7 +4267,6 @@ mod tests {
                     has_claude: flat_idx == 0,
                     cwd: String::new(),
                     is_active: false,
-                    claude_session_id: None,
                 };
                 win_panes.push(pane.clone());
                 all_panes.push(pane);

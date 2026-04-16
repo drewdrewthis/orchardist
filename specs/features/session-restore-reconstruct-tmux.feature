@@ -1,17 +1,16 @@
-Feature: Session restore — reconstruct tmux sessions from persisted state (#190)
+Feature: Session restore — reconstruct tmux geometry + cwds (#190)
 
   As a developer who shuts down or reboots their machine
-  I want orchard to auto-reconstruct my tmux sessions on startup
-  So that pane layouts, cwds, and Claude conversations come back without manual effort
+  I want orchard to auto-rebuild my tmux sessions on startup
+  So that window layouts, pane splits, and per-pane working directories come back
+  — the user re-launches their own tools (including `claude`) themselves.
 
   Background:
     Given the tmux cache file at ~/.cache/orchard/tmux_sessions.json captures
       | window layouts          | #{window_layout}        |
       | pane working dirs       | #{pane_current_path}    |
       | pane active flags       | #{pane_active}          |
-      | Claude session IDs      | per-pane map            |
     And CachedTmuxSession deserializes old (pre-#190) cache files without error
-    And the SessionManifestEntry gains a claude_session_id fallback
 
   @unit
   Scenario: The pure classifier skips already-running sessions
@@ -41,31 +40,22 @@ Feature: Session restore — reconstruct tmux sessions from persisted state (#19
 
   @integration
   Scenario: restore_session rebuilds a multi-pane window against live tmux
-    Given a cached session with 1 window and 2 panes at /tmp
+    Given a cached session with 1 window and 2 panes at distinct cwds
     When restore_session() is invoked
     Then tmux has-session returns 0 for the session name
     And tmux list-panes reports 2 panes
-    And each pane's current path is /tmp
-
-  @unit
-  Scenario: Shell-quote passes safe paths unchanged
-    When shell_quote("/home/user/proj") is called
-    Then the result is "/home/user/proj"
-
-  @unit
-  Scenario: Shell-quote wraps paths with spaces
-    When shell_quote("/home/user/my proj") is called
-    Then the result is "'/home/user/my proj'"
-
-  @unit
-  Scenario: Shell-quote escapes embedded single quotes
-    When shell_quote("it's") is called
-    Then the result is "'it'\\''s'"
+    And each pane's current path matches its saved cwd
 
   @unit
   Scenario: Startup restore runs at most once per process
     Given restore_all_local() has already run in this process
     When restore_all_local() is called again
+    Then an empty RestoreReport is returned
+
+  @unit
+  Scenario: Startup restore respects a cross-process cooldown
+    Given the restore-sentinel file was touched under the cooldown
+    When restore_all_local() is called in a fresh process
     Then an empty RestoreReport is returned
     And no tmux subprocess is spawned
 
@@ -82,34 +72,27 @@ Feature: Session restore — reconstruct tmux sessions from persisted state (#19
     Given a tmux_sessions.json written before #190 (no new fields)
     When it is deserialized as CachedTmuxSession
     Then window_layouts, pane_paths, pane_active are empty Vec
-    And claude_session_ids is an empty HashMap
 
   @unit
-  Scenario: populate_claude_session_ids fills only Claude panes
-    Given a session with three panes: one bash, one claude command, one claude-titled
-    And a matching ClaudeStateFile with session_id="sess-xyz"
-    When populate_claude_session_ids is called
-    Then the map contains exactly the two Claude panes
-    And the bash pane is absent
-
-  @unit
-  Scenario: Startup manifest persists claude_session_id as a durable backup
-    Given a task row with one Claude pane carrying claude_session_id=Some("abc")
-    When the TUI writes the session manifest
-    Then the SessionManifestEntry.claude_session_id is Some("abc")
+  Scenario: Input validation rejects shell-unsafe cache values
+    Given a cached session with a pane path containing a newline
+    When restore_session is invoked
+    Then the outcome is Failed(InputValidation)
+    And no tmux subprocess is spawned
 
   @unit
   Scenario: JSON output exposes restore-relevant fields
-    Given a PaneState with cwd, is_active, claude_session_id
+    Given a PaneState with cwd and is_active set
     And a WindowState with a layout string
     When --json is emitted
-    Then the JSON pane object contains "cwd", "isActive"
-    And when claude_session_id is Some, the JSON contains "claudeSessionId"
-    And when claude_session_id is None, the JSON omits "claudeSessionId"
+    Then the JSON pane object contains "cwd" and "isActive"
     And the JSON window object contains "layout"
 
   Out of scope:
     - Remote session restore (tracked separately)
+    - Auto-resuming Claude conversations — the user relaunches `claude` themselves
+    - Persisting Claude session IDs in the cache (the hook files in $TMPDIR
+      remain the live source of truth for telemetry)
     - Shell history replay
     - An explicit `orchard restore` CLI subcommand (restore is automatic)
-    - TUI "restored" badge that fades after first refresh (deferred to follow-up)
+    - TUI "restored" indicator (dropped — user verifies via the session list itself)

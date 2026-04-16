@@ -14,13 +14,9 @@ use crate::logger::LOG;
 use crate::remote::shell_escape;
 use crate::session::build_windows;
 
-const CLAUDE_DETECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const CLAUDE_DETECTION_TIMEOUT: Duration = Duration::from_millis(2000);
-
-/// Max length for an untrusted session name, pane target, pane path, window
-/// layout, or Claude session id read out of the cache. Anything longer is a
-/// sign the cache is malformed or tampered with and is rejected rather than
-/// fed to tmux.
+/// Max length for an untrusted session name, pane target, pane path, or window
+/// layout read out of the cache. Anything longer is a sign the cache is
+/// malformed or tampered with and is rejected rather than fed to tmux.
 const MAX_CACHE_STRING_LEN: usize = 4096;
 
 // ---------------------------------------------------------------------------
@@ -36,9 +32,6 @@ pub enum SessionRestoreOutcome {
         windows: usize,
         /// Number of panes created (including the first pane of each window).
         panes: usize,
-        /// Number of panes where `claude --continue` was sent and a `claude`
-        /// process was subsequently observed within the detection timeout.
-        claude_resumed: usize,
     },
     /// The session did not need restoring.
     Skipped(SkipReason),
@@ -344,20 +337,17 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
         &session.pane_paths,
         &session.pane_active,
         &session.window_layouts,
-        &session.claude_session_ids,
     );
 
     if windows.is_empty() {
         return SessionRestoreOutcome::Restored {
             windows: 0,
             panes: 0,
-            claude_resumed: 0,
         };
     }
 
     let mut windows_created = 0usize;
     let mut panes_created = 0usize;
-    let mut claude_resumed = 0usize;
 
     // Step 3: build windows and panes.
     for (idx, window) in windows.iter().enumerate() {
@@ -409,7 +399,10 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
         }
     }
 
-    // Step 4: cd each pane to its saved working directory.
+    // Step 4: cd each pane to its saved working directory. This is the
+    // highest-value restore step — the user can re-launch their own tools
+    // (including `claude`) from the correct directory. We deliberately do
+    // NOT auto-resume Claude; users handle that themselves.
     for window in &windows {
         for pane in &window.panes {
             if pane.cwd.is_empty() {
@@ -423,44 +416,7 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
         }
     }
 
-    // Step 5: resume Claude in each Claude-enabled pane.
-    for window in &windows {
-        for pane in &window.panes {
-            if !pane.has_claude {
-                continue;
-            }
-            let Some(id) = &pane.claude_session_id else {
-                continue;
-            };
-            if id.is_empty() {
-                continue;
-            }
-
-            let pane_target = format!("{}:{}", session.name, pane.tmux_target);
-            // Pass `--` after `--continue` so a validated-but-unusual session
-            // id (e.g. starting with `-`) cannot be parsed by `claude` as a
-            // flag. Session id itself is validated — see `is_valid_claude_session_id`.
-            let claude_cmd = format!("claude --continue -- {}", shell_escape(id));
-            match run_tmux(&["send-keys", "-t", &pane_target, &claude_cmd, "Enter"]) {
-                Ok(()) => {
-                    if wait_for_claude(&pane_target) {
-                        claude_resumed += 1;
-                    } else {
-                        LOG.warn(&format!(
-                            "restore: claude detection timeout for {pane_target}"
-                        ));
-                    }
-                }
-                Err(e) => {
-                    LOG.warn(&format!(
-                        "restore: send-keys claude {pane_target} failed: {e}"
-                    ));
-                }
-            }
-        }
-    }
-
-    // Step 6: activate the correct window and pane.
+    // Step 5: activate the correct window and pane.
     let active_window = windows.iter().find(|w| w.is_active).or(windows.first());
     if let Some(active) = active_window {
         let win_target = format!("{}:{}", session.name, active.index);
@@ -484,7 +440,6 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
     SessionRestoreOutcome::Restored {
         windows: windows_created,
         panes: panes_created,
-        claude_resumed,
     }
 }
 
@@ -507,33 +462,6 @@ fn run_tmux(args: &[&str]) -> anyhow::Result<()> {
         let err = String::from_utf8_lossy(&out.stderr).into_owned();
         Err(anyhow::anyhow!("tmux {args:?} failed: {err}"))
     }
-}
-
-/// Polls `tmux list-panes` until the pane's current command is `claude` or
-/// the timeout expires.
-fn wait_for_claude(pane_target: &str) -> bool {
-    let start = std::time::Instant::now();
-    while start.elapsed() < CLAUDE_DETECTION_TIMEOUT {
-        let out = Command::new("tmux")
-            .args([
-                "list-panes",
-                "-t",
-                pane_target,
-                "-F",
-                "#{pane_current_command}",
-            ])
-            .output();
-        if let Ok(o) = out
-            && o.status.success()
-        {
-            let cmd = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if cmd == "claude" {
-                return true;
-            }
-        }
-        std::thread::sleep(CLAUDE_DETECTION_POLL_INTERVAL);
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -575,21 +503,6 @@ fn is_valid_pane_target(target: &str) -> bool {
     }
 }
 
-/// Returns true when `id` looks like a plausible Claude session identifier.
-///
-/// Claude emits UUID-like tokens; anything outside `[A-Za-z0-9_-]{1,128}` is
-/// rejected AND a leading `-` is refused. Without the leading-dash ban an id
-/// of `--dangerously-skip-permissions` would pass the char allowlist and be
-/// passed as a flag to the `claude` binary — argument injection.
-fn is_valid_claude_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && !id.starts_with('-')
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-}
-
 /// Validates every cache-sourced string the restore shell will feed to tmux.
 ///
 /// Returns `Err` with a human-readable reason on the first offender. The
@@ -622,14 +535,6 @@ fn validate_session_for_restore(session: &CachedTmuxSession) -> Result<(), Strin
     for name in &session.window_names {
         if !name.is_empty() && !is_safe_cache_string(name) {
             return Err(format!("invalid window name: {name:?}"));
-        }
-    }
-    for (target, id) in &session.claude_session_ids {
-        if !is_valid_pane_target(target) {
-            return Err(format!("invalid claude pane target: {target:?}"));
-        }
-        if !is_valid_claude_session_id(id) {
-            return Err(format!("invalid claude session id for {target:?}"));
         }
     }
     Ok(())
@@ -667,7 +572,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: HashMap::new(),
             created_at: None,
             last_activity_at: None,
             last_output_lines: vec![],
@@ -837,28 +741,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_claude_session_id_that_looks_like_flag() {
-        let mut s = make_cached("ok", "/tmp", None);
-        s.pane_targets = vec!["0.0".to_string()];
-        s.claude_session_ids
-            .insert("0.0".to_string(), "--dangerously-skip".to_string());
-        let err =
-            validate_session_for_restore(&s).expect_err("flag-like session id must be rejected");
-        assert!(err.contains("invalid claude session id"), "got: {err}");
-    }
-
-    #[test]
-    fn validate_accepts_clean_uuid_like_claude_session_id() {
-        let mut s = make_cached("ok", "/tmp", None);
-        s.pane_targets = vec!["0.0".to_string()];
-        s.claude_session_ids.insert(
-            "0.0".to_string(),
-            "a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
-        );
-        validate_session_for_restore(&s).expect("uuid-like id must pass validation");
-    }
-
-    #[test]
     fn validate_rejects_pane_target_with_garbage() {
         let mut s = make_cached("ok", "/tmp", None);
         s.pane_targets = vec!["0.0 extra".to_string()];
@@ -941,7 +823,6 @@ mod tests {
             window_layouts: vec![String::new(), String::new()],
             pane_paths: vec![cwd_a_str.clone(), cwd_b_str.clone()],
             pane_active: vec!["1".to_string(), "0".to_string()],
-            claude_session_ids: HashMap::new(),
             created_at: None,
             last_activity_at: None,
             last_output_lines: vec![],

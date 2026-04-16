@@ -262,8 +262,6 @@ pub struct PaneState {
     pub cwd: String,
     /// Whether this pane is the active (focused) pane in its window.
     pub is_active: bool,
-    /// Claude session ID if this pane was running Claude at snapshot time.
-    pub claude_session_id: Option<String>,
 }
 
 /// Claude enrichment data within a `SessionState`.
@@ -388,7 +386,6 @@ impl From<&EnrichedSession> for SessionState {
                         has_claude: p.has_claude,
                         cwd: p.cwd.clone(),
                         is_active: p.is_active,
-                        claude_session_id: p.claude_session_id.clone(),
                     })
                     .collect(),
             })

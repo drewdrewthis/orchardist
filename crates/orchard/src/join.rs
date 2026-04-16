@@ -215,7 +215,6 @@ pub(crate) fn enrich_session(
         &session.pane_paths,
         &session.pane_active,
         &session.window_layouts,
-        &session.claude_session_ids,
     );
 
     // Hook-first: check if a fresh state file exists for this session.
@@ -364,7 +363,6 @@ mod tests {
             &session.pane_paths,
             &session.pane_active,
             &session.window_layouts,
-            &session.claude_session_ids,
         );
         enrich_session_from_scraping(session, tmux, windows, panes)
     }
@@ -460,7 +458,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -1169,7 +1166,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -1211,7 +1207,6 @@ mod tests {
             window_layouts: vec![],
             pane_paths: vec![],
             pane_active: vec![],
-            claude_session_ids: std::collections::HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,
