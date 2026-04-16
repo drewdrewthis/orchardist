@@ -478,3 +478,672 @@ branch refs/heads/feat-x\n";
         "returned worktree must not be bare"
     );
 }
+
+// ===========================================================================
+// Slice 2 — feature.feature:80, :130, :140, :149, :185, :194, :202
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:80
+// BoxdSharedAdapter preserves current single-VM-with-worktrees behavior
+// ---------------------------------------------------------------------------
+
+/// BoxdSharedAdapter uses the same porcelain SSH path as RemmyAdapter.
+/// It calls `git -C <path> worktree list --porcelain` on the Boxd VM
+/// and returns non-bare worktrees tagged with the boxd host.
+///
+/// Fails red until BoxdSharedAdapter.list_worktrees() is wired up with real
+/// porcelain parsing (currently returns Ok(vec![])).
+#[test]
+fn boxd_shared_adapter_returns_parsed_non_bare_worktrees_with_correct_host_and_branch() {
+    // feature.feature:80
+    use orchard::remote_adapter::BoxdSharedAdapter;
+
+    let host = "boxd@orchard-rs.boxd.sh";
+    let path = "~/git-orchard-rs";
+    let cmd = format!("git -C {path} worktree list --porcelain");
+    let porcelain = "\
+worktree /home/boxd/git-orchard-rs\n\
+bare\n\
+\n\
+worktree /home/boxd/git-orchard-rs/worktrees/issue240\n\
+HEAD def456\n\
+branch refs/heads/issue240/smart-sorting\n";
+
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        host,
+        &cmd,
+        SshOutput {
+            stdout: porcelain.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let adapter = BoxdSharedAdapter {
+        host: host.to_string(),
+        path: path.to_string(),
+        ssh: Box::new(fake),
+    };
+
+    let worktrees = adapter
+        .list_worktrees()
+        .expect("list_worktrees must not error with a valid fake response");
+
+    // Fails red: stub returns Ok(vec![]) — expects 1 parsed worktree.
+    assert_eq!(
+        worktrees.len(),
+        1,
+        "exactly 1 non-bare worktree expected, got {}",
+        worktrees.len()
+    );
+
+    let wt = &worktrees[0];
+
+    assert_eq!(
+        wt.branch, "issue240/smart-sorting",
+        "branch must be 'issue240/smart-sorting', got {:?}",
+        wt.branch
+    );
+
+    assert_eq!(
+        wt.host.as_deref(),
+        Some(host),
+        "host must be {host:?}, got {:?}",
+        wt.host
+    );
+
+    assert!(
+        !wt.is_bare,
+        "returned worktree must not be bare"
+    );
+
+    // BoxdShared uses bare-repo model, so layout must be Bare.
+    assert_eq!(
+        wt.layout,
+        orchard::cache::WorktreeLayout::Bare,
+        "BoxdSharedAdapter worktrees must carry layout=Bare"
+    );
+}
+
+/// BoxdSharedAdapter returns an empty list (not an error) when the SSH runner
+/// returns non-zero exit code — consistent with RemmyAdapter's degraded behavior.
+#[test]
+fn boxd_shared_adapter_returns_empty_on_ssh_failure() {
+    // feature.feature:80 — degraded path
+    use orchard::remote_adapter::BoxdSharedAdapter;
+
+    let host = "boxd@orchard-rs.boxd.sh";
+    let path = "~/git-orchard-rs";
+    // No canned response → FakeSshExec will return Err.
+    let adapter = BoxdSharedAdapter {
+        host: host.to_string(),
+        path: path.to_string(),
+        ssh: Box::new(FakeSshExec::new()),
+    };
+
+    // Per the RemmyAdapter contract: SSH failure returns Ok(vec![]) rather than Err.
+    let result = adapter.list_worktrees();
+    assert!(
+        result.is_ok(),
+        "SSH failure must not propagate as Err; got {result:?}"
+    );
+    // Stub currently returns Ok(vec![]) so this passes already — the real test
+    // is the non-empty assertion in the success case above.
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:140
+// CachedWorktree model carries layout flag
+// ---------------------------------------------------------------------------
+
+/// CachedWorktree now has a `layout` field of type WorktreeLayout.
+/// Fails red for any assertion that requires WorktreeState / JsonOutput to also
+/// carry the field — those are NOT wired yet.
+#[test]
+fn cached_worktree_has_layout_field_defaulting_to_bare() {
+    // feature.feature:140
+    use orchard::cache::{CachedWorktree, WorktreeLayout};
+
+    // Construct a CachedWorktree with explicit layout=Flat.
+    let wt = CachedWorktree {
+        path: "/home/boxd/langwatch".to_string(),
+        branch: "issue3155/foo".to_string(),
+        is_bare: false,
+        is_locked: false,
+        host: Some("boxd@issue3155.boxd.sh".to_string()),
+        ahead: None,
+        behind: None,
+        last_commit_at: None,
+        layout: WorktreeLayout::Flat,
+    };
+
+    assert_eq!(
+        wt.layout,
+        WorktreeLayout::Flat,
+        "CachedWorktree.layout must carry WorktreeLayout::Flat"
+    );
+}
+
+/// Legacy cache JSON without a `layout` key must deserialize with layout=Bare
+/// (serde(default) on the field).
+#[test]
+fn cached_worktree_layout_defaults_to_bare_when_missing_from_json() {
+    // feature.feature:140 — backward compat with on-disk caches
+    use orchard::cache::{CachedWorktree, WorktreeLayout};
+
+    let json = r#"{
+        "path": "/home/ubuntu/langwatch-workspace/worktrees/feat-x",
+        "branch": "feat-x",
+        "is_bare": false,
+        "is_locked": false
+    }"#;
+
+    let wt: CachedWorktree = serde_json::from_str(json)
+        .expect("legacy cache JSON (no layout field) must deserialize without error");
+
+    assert_eq!(
+        wt.layout,
+        WorktreeLayout::Bare,
+        "layout must default to Bare when absent from on-disk cache"
+    );
+}
+
+/// WorktreeLayout round-trips through serde as kebab-case strings.
+#[test]
+fn worktree_layout_serializes_as_kebab_case() {
+    // feature.feature:140
+    use orchard::cache::WorktreeLayout;
+
+    let bare = serde_json::to_string(&WorktreeLayout::Bare).unwrap();
+    let flat = serde_json::to_string(&WorktreeLayout::Flat).unwrap();
+
+    assert_eq!(bare, "\"bare\"", "Bare must serialize as 'bare'");
+    assert_eq!(flat, "\"flat\"", "Flat must serialize as 'flat'");
+
+    // Round-trip.
+    let parsed: WorktreeLayout = serde_json::from_str("\"flat\"").unwrap();
+    assert_eq!(parsed, WorktreeLayout::Flat);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:149
+// JsonOutput version is bumped and layout field documented
+//
+// Current version is 4. Test asserts version == 5.
+// Fails red until the coder bumps the version and adds the layout field.
+// ---------------------------------------------------------------------------
+
+/// Constructing a JsonOutput from an OrchardState with a Flat-layout worktree
+/// must emit version 5 (current+1) and include "layout" on each worktree.
+///
+/// Fails red on two counts:
+/// 1. `version` is currently 4 — must become 5.
+/// 2. `WorktreeState` has no `layout` field yet — `JsonWorktree` has no layout field.
+#[test]
+fn json_output_version_bumped_to_next_and_includes_layout_field() {
+    // feature.feature:149
+    use std::collections::HashMap;
+
+    use orchard::json_output::JsonOutput;
+    use orchard::orchard_state::{OrchardState, RepoState, WorktreeState};
+    use orchard::derive::DisplayGroup;
+
+    // Build a minimal OrchardState with two worktrees — one bare-layout (default),
+    // one flat (BoxdFork). Until WorktreeState has a layout field, the test
+    // fails to compile or asserts the wrong value.
+    let bare_wt = WorktreeState {
+        path: "/repos/local/main".to_string(),
+        branch: "main".to_string(),
+        is_bare: false,
+        host: None,
+        issue: None,
+        pr: None,
+        sessions: vec![],
+        display_group: DisplayGroup::RepoMain,
+        is_main_worktree: true,
+        ahead_behind: None,
+        last_commit_at: None,
+        // TODO: add layout field when WorktreeState gains it.
+        // layout: orchard::cache::WorktreeLayout::Bare,
+    };
+
+    // Until `WorktreeState.layout` exists, we can still test the version bump.
+    let state = OrchardState {
+        repos: vec![RepoState {
+            slug: "owner/repo".to_string(),
+            worktrees: vec![bare_wt],
+            default_branch: None,
+            main_ci_state: None,
+        }],
+        standalone_sessions: vec![],
+        hosts: HashMap::new(),
+    };
+
+    let output = JsonOutput::from(&state);
+    let value = serde_json::to_value(&output).unwrap();
+
+    // Fails red: currently version == 4.
+    let version = value["version"].as_u64().expect("version must be a number");
+    assert_eq!(
+        version, 5,
+        "JsonOutput version must be bumped to 5 (current 4 + 1); got {version}"
+    );
+
+    // Fails red: JsonWorktree has no layout field yet.
+    let wt_value = &value["repos"][0]["worktrees"][0];
+    assert!(
+        wt_value.get("layout").is_some(),
+        "each worktree entry must include a 'layout' field; got: {wt_value}"
+    );
+
+    let layout_str = wt_value["layout"].as_str().expect("layout must be a string");
+    assert!(
+        layout_str == "bare" || layout_str == "flat",
+        "layout must be 'bare' or 'flat', got {layout_str:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:194
+// boxd.sh unreachable only affects the BoxdForkAdapter — other adapters run normally
+// ---------------------------------------------------------------------------
+
+/// When BoxdForkAdapter fails (golden host unreachable), RemmyAdapter and
+/// BoxdSharedAdapter still complete. The failure is contained to the BoxdFork
+/// variant — enum dispatch means each adapter call is independent.
+///
+/// This test verifies the isolation property through enum dispatch:
+/// - RemmyAdapter with valid canned response → Ok with worktrees
+/// - BoxdSharedAdapter with valid canned response → Ok (currently empty stub, passes trivially)
+/// - BoxdForkAdapter with no canned response → Err (or Ok from stub — both acceptable as long
+///   as Remmy/BoxdShared are unaffected)
+///
+/// The key assertion is that calling list_worktrees on the Remmy adapter
+/// still returns parsed results regardless of whether BoxdFork would fail.
+#[test]
+fn boxd_fork_unreachable_does_not_affect_remmy_or_boxd_shared_adapters() {
+    // feature.feature:194
+    use orchard::remote_adapter::BoxdSharedAdapter;
+
+    // --- Remmy: provide real porcelain data ---
+    let remmy_host = "ubuntu@10.0.3.56";
+    let remmy_path = "~/langwatch-workspace";
+    let remmy_cmd = format!("git -C {remmy_path} worktree list --porcelain");
+    let remmy_porcelain = "\
+worktree /home/ubuntu/langwatch-workspace\n\
+bare\n\
+\n\
+worktree /home/ubuntu/langwatch-workspace/worktrees/issue-7\n\
+HEAD aabbcc\n\
+branch refs/heads/issue-7/my-feature\n";
+
+    let mut remmy_fake = FakeSshExec::new();
+    remmy_fake.insert(
+        remmy_host,
+        &remmy_cmd,
+        SshOutput {
+            stdout: remmy_porcelain.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let remmy_adapter = RemoteAdapter::Remmy(orchard::remote_adapter::RemmyAdapter {
+        host: remmy_host.to_string(),
+        path: remmy_path.to_string(),
+        ssh: Box::new(remmy_fake),
+    });
+
+    // --- BoxdFork: no SSH responses → fails with no-canned-response error ---
+    let fork_adapter = RemoteAdapter::BoxdFork(orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: "boxd.sh".to_string(),
+        ssh: Box::new(FakeSshExec::new()), // no canned responses
+    });
+
+    // --- BoxdShared: valid canned response ---
+    let boxd_host = "boxd@orchard-rs.boxd.sh";
+    let boxd_path = "~/git-orchard-rs";
+    let boxd_cmd = format!("git -C {boxd_path} worktree list --porcelain");
+    let mut boxd_fake = FakeSshExec::new();
+    boxd_fake.insert(
+        boxd_host,
+        &boxd_cmd,
+        SshOutput {
+            stdout: "\
+worktree /home/boxd/git-orchard-rs\n\
+bare\n\
+\n\
+worktree /home/boxd/git-orchard-rs/worktrees/issue267\n\
+HEAD 112233\n\
+branch refs/heads/issue267/boxd-backend\n"
+                .to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+    let boxd_adapter = RemoteAdapter::BoxdShared(BoxdSharedAdapter {
+        host: boxd_host.to_string(),
+        path: boxd_path.to_string(),
+        ssh: Box::new(boxd_fake),
+    });
+
+    // Remmy must return worktrees even when BoxdFork would fail.
+    let remmy_result = remmy_adapter.list_worktrees();
+    assert!(
+        remmy_result.is_ok(),
+        "RemmyAdapter must succeed regardless of BoxdFork state; got: {remmy_result:?}"
+    );
+    // Slice 1 already implements porcelain parsing for Remmy.
+    let remmy_wts = remmy_result.unwrap();
+    assert_eq!(
+        remmy_wts.len(),
+        1,
+        "Remmy must return 1 worktree; got {}",
+        remmy_wts.len()
+    );
+
+    // BoxdFork failure (missing SSH canned response) must not prevent other adapters.
+    // Stub currently returns Ok(vec![]) — acceptable for this isolation test.
+    let fork_result = fork_adapter.list_worktrees();
+    // We don't assert Ok/Err — the point is that calling fork_result.is_ok()/is_err()
+    // does NOT affect the Remmy or BoxdShared calls above.
+    let _ = fork_result;
+
+    // BoxdShared must return its worktrees (fails red until real parsing is wired).
+    let boxd_result = boxd_adapter.list_worktrees();
+    assert!(
+        boxd_result.is_ok(),
+        "BoxdSharedAdapter must succeed regardless of BoxdFork state; got: {boxd_result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:202
+// Detached HEAD on flat clone reports commit, not the literal "HEAD"
+// ---------------------------------------------------------------------------
+
+/// When `git rev-parse --abbrev-ref HEAD` returns "HEAD" (detached),
+/// BoxdForkAdapter must fall back to `git rev-parse --short HEAD` and set
+/// the branch to "(detached: <sha>)".
+///
+/// Fails red until BoxdForkAdapter implements the flat-clone parse path with
+/// the detached-HEAD fallback. Currently the stub returns Ok(vec![]).
+#[test]
+fn boxd_fork_adapter_detached_head_produces_formatted_commit_branch() {
+    // feature.feature:202
+    let fork_host = "boxd.sh";
+    let fork_name = "issue3155";
+    let fork_vm_host = "boxd@issue3155.boxd.sh";
+    let repo_path = "~/langwatch";
+
+    // ssh boxd.sh list --json returns one fork.
+    let list_cmd = "list --json";
+    let list_json = format!(
+        r#"[{{"name": "{fork_name}", "host": "{fork_name}.boxd.sh", "status": "running"}}]"#
+    );
+
+    // First branch probe: returns "HEAD" (detached).
+    let branch_cmd = format!("cd {repo_path} && git rev-parse --abbrev-ref HEAD");
+    // Second probe: short commit hash.
+    let commit_cmd = format!("cd {repo_path} && git rev-parse --short HEAD");
+
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        fork_host,
+        list_cmd,
+        SshOutput {
+            stdout: list_json,
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+    fake.insert(
+        fork_vm_host,
+        &branch_cmd,
+        SshOutput {
+            stdout: "HEAD\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+    fake.insert(
+        fork_vm_host,
+        &commit_cmd,
+        SshOutput {
+            stdout: "abc1234\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let adapter = orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: fork_host.to_string(),
+        ssh: Box::new(fake),
+    };
+
+    let worktrees = adapter
+        .list_worktrees()
+        .expect("list_worktrees must not error");
+
+    // Fails red: stub returns Ok(vec![]) — expects 1 worktree.
+    assert_eq!(
+        worktrees.len(),
+        1,
+        "expected 1 flat-clone worktree, got {}",
+        worktrees.len()
+    );
+
+    let wt = &worktrees[0];
+
+    // Branch must use the detached-HEAD format, not the literal "HEAD".
+    assert!(
+        !wt.branch.is_empty() && wt.branch != "HEAD",
+        "branch must not be the literal 'HEAD', got {:?}",
+        wt.branch
+    );
+    assert!(
+        wt.branch.contains("detached") && wt.branch.contains("abc1234"),
+        "branch must contain 'detached' and the commit sha 'abc1234', got {:?}",
+        wt.branch
+    );
+    assert_eq!(
+        wt.branch, "(detached: abc1234)",
+        "branch must be '(detached: abc1234)', got {:?}",
+        wt.branch
+    );
+
+    // Must carry flat layout.
+    assert_eq!(
+        wt.layout,
+        orchard::cache::WorktreeLayout::Flat,
+        "detached-HEAD flat-clone must have layout=Flat"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:130
+// Flat-clone layout parsed without bare-repo assumption
+// ---------------------------------------------------------------------------
+
+/// BoxdForkAdapter retrieves the branch via `git rev-parse --abbrev-ref HEAD`
+/// (a single command), NOT via `git worktree list --porcelain`. The resulting
+/// CachedWorktree must have layout=Flat and path=repo_path (no subdirectory).
+///
+/// Fails red: stub returns Ok(vec![]).
+#[test]
+fn boxd_fork_adapter_flat_clone_produces_single_worktree_at_repo_path() {
+    // feature.feature:130
+    let fork_host = "boxd.sh";
+    let fork_name = "issue3155";
+    let fork_vm_host = "boxd@issue3155.boxd.sh";
+    let repo_path = "~/langwatch";
+
+    let list_cmd = "list --json";
+    let list_json = format!(
+        r#"[{{"name": "{fork_name}", "host": "{fork_name}.boxd.sh", "status": "running"}}]"#
+    );
+    let branch_cmd = format!("cd {repo_path} && git rev-parse --abbrev-ref HEAD");
+
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        fork_host,
+        list_cmd,
+        SshOutput {
+            stdout: list_json,
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+    fake.insert(
+        fork_vm_host,
+        &branch_cmd,
+        SshOutput {
+            stdout: "issue3155/foo\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let adapter = orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: fork_host.to_string(),
+        ssh: Box::new(fake),
+    };
+
+    let worktrees = adapter
+        .list_worktrees()
+        .expect("list_worktrees must not error");
+
+    // Fails red: stub returns Ok(vec![]).
+    assert_eq!(
+        worktrees.len(),
+        1,
+        "expected 1 flat-clone worktree, got {}",
+        worktrees.len()
+    );
+
+    let wt = &worktrees[0];
+
+    // path must be the repo root, not a subdirectory.
+    assert_eq!(
+        wt.path, repo_path,
+        "flat-clone path must be the repo root {repo_path:?}, got {:?}",
+        wt.path
+    );
+
+    assert_eq!(
+        wt.branch, "issue3155/foo",
+        "branch must be 'issue3155/foo', got {:?}",
+        wt.branch
+    );
+
+    assert_eq!(
+        wt.layout,
+        orchard::cache::WorktreeLayout::Flat,
+        "flat clone must have layout=Flat, not Bare"
+    );
+
+    // host must be the per-fork VM host (not the golden host).
+    assert_eq!(
+        wt.host.as_deref(),
+        Some(fork_vm_host),
+        "flat-clone host must be {fork_vm_host:?}, got {:?}",
+        wt.host
+    );
+
+    // is_bare must be false — flat clones are not bare repos.
+    assert!(
+        !wt.is_bare,
+        "flat clone must not be bare"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: feature.feature:185
+// Malformed JSON from `ssh boxd.sh list --json` degrades gracefully
+// ---------------------------------------------------------------------------
+
+/// When `ssh boxd.sh list --json` returns invalid JSON, BoxdForkAdapter must
+/// return Err(AdapterError::ParseFailure) — not panic, not silently return
+/// empty results.
+///
+/// Fails red: stub currently returns Ok(vec![]) rather than propagating
+/// a ParseFailure error.
+#[test]
+fn boxd_fork_adapter_malformed_list_json_returns_parse_failure_error() {
+    // feature.feature:185
+    use orchard::remote_adapter::AdapterError;
+
+    let fork_host = "boxd.sh";
+    let list_cmd = "list --json";
+    let malformed = "{ this is not valid json [[[";
+
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        fork_host,
+        list_cmd,
+        SshOutput {
+            stdout: malformed.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let adapter = orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: fork_host.to_string(),
+        ssh: Box::new(fake),
+    };
+
+    let result = adapter.list_worktrees();
+
+    // Fails red: stub returns Ok(vec![]).
+    // When production code lands, list_worktrees must return Err with
+    // a ParseFailure variant when JSON cannot be decoded.
+    assert!(
+        result.is_err(),
+        "malformed JSON from boxd.sh list must return Err, not Ok(vec![]); \
+         stub returns Ok(vec![]) — implement BoxdForkAdapter.list_worktrees() to parse \
+         `ssh boxd.sh list --json` and return AdapterError::ParseFailure on invalid JSON"
+    );
+
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.to_lowercase().contains("parse") || err_str.to_lowercase().contains("boxd"),
+        "error must identify the parse failure; got: {err_str}"
+    );
+}
+
+/// Truncated-payload variant: a partial JSON array also triggers ParseFailure.
+#[test]
+fn boxd_fork_adapter_truncated_list_json_returns_parse_failure_error() {
+    // feature.feature:185
+    let fork_host = "boxd.sh";
+    let list_cmd = "list --json";
+    let truncated = r#"[{"name": "issue3155", "host":"#; // cut off mid-object
+
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        fork_host,
+        list_cmd,
+        SshOutput {
+            stdout: truncated.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let adapter = orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: fork_host.to_string(),
+        ssh: Box::new(fake),
+    };
+
+    let result = adapter.list_worktrees();
+
+    // Fails red: stub returns Ok(vec![]).
+    assert!(
+        result.is_err(),
+        "truncated JSON from boxd.sh list must return Err; \
+         stub returns Ok(vec![]) — implement BoxdForkAdapter.list_worktrees()"
+    );
+}

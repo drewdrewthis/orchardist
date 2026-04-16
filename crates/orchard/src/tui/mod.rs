@@ -3262,6 +3262,7 @@ mod tests {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: cache::WorktreeLayout::Bare,
         }
     }
 

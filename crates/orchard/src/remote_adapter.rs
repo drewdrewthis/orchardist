@@ -18,7 +18,46 @@ use anyhow::Result;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache::{CachedTmuxSession, CachedWorktree};
+use crate::cache::{CachedTmuxSession, CachedWorktree, WorktreeLayout};
+
+// ---------------------------------------------------------------------------
+// AdapterError — slice 2 (feature.feature:185)
+// ---------------------------------------------------------------------------
+
+/// Errors that a `RemoteAdapter` method can return.
+///
+/// `ParseFailure` is used when an adapter receives a response that is
+/// syntactically invalid (e.g. malformed JSON from `ssh boxd.sh list --json`).
+/// The caller decides whether to fall back to cached data; the adapter itself
+/// does not make that decision.
+#[derive(Debug)]
+pub enum AdapterError {
+    /// The remote SSH command failed or the host was unreachable.
+    SshFailure {
+        /// Human-readable description of the failure.
+        message: String,
+    },
+    /// The response from the remote was received but could not be parsed.
+    ///
+    /// `raw` holds the first 256 bytes of the offending payload for logging.
+    ParseFailure {
+        /// The raw payload (truncated at 256 bytes if large) for diagnostic logging.
+        raw: String,
+    },
+}
+
+impl std::fmt::Display for AdapterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdapterError::SshFailure { message } => write!(f, "SSH failure: {message}"),
+            AdapterError::ParseFailure { raw } => {
+                write!(f, "boxd.sh list parse failure; raw payload: {raw}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AdapterError {}
 
 // ---------------------------------------------------------------------------
 // RemoteKind — the `"type"` field on remote config entries
@@ -283,37 +322,59 @@ impl RemmyAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// BoxdSharedAdapter (stub)
+// BoxdSharedAdapter
 // ---------------------------------------------------------------------------
 
 /// Adapter for a single shared Boxd VM with multiple worktrees.
+///
+/// Uses the same `git worktree list --porcelain` SSH path as `RemmyAdapter`.
+/// All returned worktrees carry `layout = WorktreeLayout::Bare` because the
+/// Boxd shared-VM model uses a bare repo with linked worktrees in subdirectories.
 pub struct BoxdSharedAdapter {
-    /// SSH target host.
+    /// SSH target host (e.g. `"boxd@orchard-rs.boxd.sh"`).
     pub host: String,
-    /// Absolute path to the bare repo on the VM.
+    /// Absolute path to the bare repo on the VM (e.g. `"~/git-orchard-rs"`).
     pub path: String,
-    /// SSH executor.
+    /// SSH executor (real process or test double).
     pub ssh: Box<dyn SshExec>,
 }
 
 impl BoxdSharedAdapter {
     /// Returns all non-bare worktrees from the Boxd shared VM.
     ///
-    /// Slice 1 stub — full implementation in slice 2.
+    /// Runs `git -C <path> worktree list --porcelain` on the Boxd VM via SSH,
+    /// parses porcelain output, and returns non-bare entries tagged with the
+    /// host and `layout = WorktreeLayout::Bare`.
+    ///
+    /// Returns `Ok(vec![])` when SSH is unreachable — identical degraded behaviour
+    /// to `RemmyAdapter`, so the TUI keeps the last known cache visible.
     pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
-        Ok(vec![])
+        let cmd = format!("git -C {} worktree list --porcelain", self.path);
+        let stdout = match self.ssh.exec(&self.host, &cmd) {
+            Ok(output) => output.stdout,
+            Err(_) => return Ok(vec![]),
+        };
+        let mut worktrees: Vec<CachedWorktree> = parse_porcelain(&stdout)
+            .into_iter()
+            .filter(|wt| !wt.is_bare)
+            .collect();
+        for wt in &mut worktrees {
+            wt.host = Some(self.host.clone());
+            wt.layout = WorktreeLayout::Bare;
+        }
+        Ok(worktrees)
     }
 
     /// Returns all tmux sessions from the Boxd shared VM.
     ///
-    /// Slice 1 stub — full implementation in slice 2.
+    /// Slice 2 stub — full implementation in slice 3.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
         Ok(vec![])
     }
 
     /// Probes whether the Boxd shared VM is reachable.
     ///
-    /// Slice 1 stub — full implementation in slice 2.
+    /// Slice 2 stub — full implementation in slice 3.
     pub fn probe(&self) -> Result<ProbeResult> {
         Ok(ProbeResult {
             reachable: true,
@@ -323,8 +384,33 @@ impl BoxdSharedAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// BoxdForkAdapter (stub)
+// BoxdForkAdapter
 // ---------------------------------------------------------------------------
+
+/// A single fork VM entry returned by `ssh boxd.sh list --json`.
+///
+/// `path` is the repo root on the fork VM. It defaults to `"~/langwatch"` via
+/// `serde(default)` when the key is absent from the JSON — this matches the
+/// langwatch boxd convention where every fork clones the repo to `~/langwatch`.
+///
+/// When boxd's `list --json` output includes an explicit `"path"` key, that
+/// value is used instead.
+#[derive(Debug, Deserialize)]
+struct BoxdForkEntry {
+    /// Human-readable fork name, typically the issue slug (e.g. `"issue3155"`).
+    name: String,
+    /// SSH hostname of the fork VM (e.g. `"issue3155.boxd.sh"`).
+    host: String,
+    /// Repo root path on the fork VM. Defaults to `"~/langwatch"` when absent.
+    #[serde(default = "default_fork_repo_path")]
+    path: String,
+}
+
+/// Returns the conventional boxd repo path used as the default when the
+/// `list --json` response does not include an explicit `"path"` key.
+fn default_fork_repo_path() -> String {
+    "~/langwatch".to_string()
+}
 
 /// Adapter for Boxd fork-per-issue VMs.
 ///
@@ -333,28 +419,95 @@ impl BoxdSharedAdapter {
 pub struct BoxdForkAdapter {
     /// The golden Boxd host used for enumeration (e.g. `"boxd.sh"`).
     pub golden_host: String,
-    /// SSH executor.
+    /// SSH executor (real process or test double).
     pub ssh: Box<dyn SshExec>,
 }
 
 impl BoxdForkAdapter {
     /// Returns one `CachedWorktree` per live fork VM.
     ///
-    /// Slice 1 stub — full implementation in slice 2.
+    /// Steps:
+    /// 1. SSH to `golden_host` and run `list --json` to enumerate live forks.
+    /// 2. Parse the JSON array. Return `Err(AdapterError::ParseFailure)` if invalid.
+    /// 3. For each fork, SSH to `boxd@<fork.host>` and run
+    ///    `cd <fork.path> && git rev-parse --abbrev-ref HEAD`.
+    /// 4. If the output is exactly `"HEAD"` (detached HEAD), fall back to
+    ///    `git rev-parse --short HEAD` and format branch as `"(detached: <sha>)"`.
+    /// 5. Return `Ok(vec![])` when `golden_host` is unreachable (SSH failure on
+    ///    the list command) — the TUI keeps the last cached forks visible.
     pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
-        Ok(vec![])
+        // Step 1: enumerate live forks from the golden host.
+        let list_stdout = match self.ssh.exec(&self.golden_host, "list --json") {
+            Ok(output) => output.stdout,
+            Err(_) => return Ok(vec![]),
+        };
+
+        // Step 2: parse the fork list. Malformed JSON → ParseFailure.
+        let entries: Vec<BoxdForkEntry> =
+            serde_json::from_str(&list_stdout).map_err(|_| AdapterError::ParseFailure {
+                raw: list_stdout.chars().take(256).collect(),
+            })?;
+
+        let mut worktrees = Vec::with_capacity(entries.len());
+
+        // Steps 3-5: per-fork branch resolution.
+        for entry in entries {
+            let fork_host = format!("boxd@{}", entry.host);
+            let branch_cmd =
+                format!("cd {} && git rev-parse --abbrev-ref HEAD", entry.path);
+
+            let branch = match self.ssh.exec(&fork_host, &branch_cmd) {
+                Ok(out) => {
+                    let raw = out.stdout.trim().to_string();
+                    if raw == "HEAD" {
+                        // Detached HEAD: resolve commit hash.
+                        let commit_cmd =
+                            format!("cd {} && git rev-parse --short HEAD", entry.path);
+                        let sha = self
+                            .ssh
+                            .exec(&fork_host, &commit_cmd)
+                            .map(|o| o.stdout.trim().to_string())
+                            .unwrap_or_else(|_| entry.name.clone());
+                        format!("(detached: {sha})")
+                    } else if raw.is_empty() {
+                        // Branch probe returned empty output — use fork name as fallback.
+                        entry.name.clone()
+                    } else {
+                        raw
+                    }
+                }
+                Err(_) => {
+                    // SSH to fork VM failed — emit degraded entry with fork name as branch.
+                    entry.name.clone()
+                }
+            };
+
+            worktrees.push(CachedWorktree {
+                path: entry.path,
+                branch,
+                is_bare: false,
+                is_locked: false,
+                host: Some(fork_host),
+                ahead: None,
+                behind: None,
+                last_commit_at: None,
+                layout: WorktreeLayout::Flat,
+            });
+        }
+
+        Ok(worktrees)
     }
 
     /// Returns tmux sessions from all live fork VMs.
     ///
-    /// Slice 1 stub — full implementation in slice 2.
+    /// Slice 2 stub — full implementation in slice 3.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
         Ok(vec![])
     }
 
     /// Probes whether the golden Boxd host is reachable.
     ///
-    /// Slice 1 stub — full implementation in slice 2.
+    /// Slice 2 stub — full implementation in slice 3.
     pub fn probe(&self) -> Result<ProbeResult> {
         Ok(ProbeResult {
             reachable: true,
@@ -412,6 +565,7 @@ fn parse_porcelain(output: &str) -> Vec<CachedWorktree> {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: WorktreeLayout::Bare,
         });
     }
 

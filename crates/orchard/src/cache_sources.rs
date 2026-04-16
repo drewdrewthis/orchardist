@@ -500,6 +500,7 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
         });
     }
 
@@ -1631,6 +1632,7 @@ mod tests {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 

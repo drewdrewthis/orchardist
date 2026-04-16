@@ -14,6 +14,30 @@ use crate::ci_state::CiChecks;
 use crate::claude_state::ClaudeStateFile;
 
 // ---------------------------------------------------------------------------
+// WorktreeLayout — slice 2 stub (feature.feature:140)
+// ---------------------------------------------------------------------------
+
+/// Physical layout of a worktree on the remote host.
+///
+/// `Bare` is the traditional Remmy/BoxdShared model: one bare repo + multiple
+/// linked worktrees in subdirectories, parsed with `git worktree list --porcelain`.
+///
+/// `Flat` is the BoxdFork model: a single regular (non-bare) clone at a fixed
+/// path. No worktree list; branch is obtained via `git rev-parse --abbrev-ref HEAD`.
+///
+/// Defaults to `Bare` via `serde(default)` so existing on-disk cache files
+/// written before this field was added continue to deserialize correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorktreeLayout {
+    /// Bare repo + linked worktrees (traditional Remmy/BoxdShared model).
+    #[default]
+    Bare,
+    /// Single flat clone — no linked worktrees (BoxdFork model).
+    Flat,
+}
+
+// ---------------------------------------------------------------------------
 // Entry types
 // ---------------------------------------------------------------------------
 
@@ -184,6 +208,15 @@ pub struct CachedWorktree {
     /// ISO 8601 timestamp of the last commit on this branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_commit_at: Option<String>,
+    /// Physical layout of this worktree on the host.
+    ///
+    /// Defaults to `Bare` via `serde(default)` so cache files written before
+    /// this field was introduced continue to deserialize correctly, preserving
+    /// the pre-refactor behaviour for all existing Remmy/BoxdShared worktrees.
+    ///
+    /// Set to `Flat` for BoxdFork fork-per-issue clones.
+    #[serde(default)]
+    pub layout: WorktreeLayout,
 }
 
 /// A tmux session entry as stored in the tmux sessions cache file.
@@ -511,6 +544,7 @@ mod tests {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: WorktreeLayout::Bare,
         }
     }
 

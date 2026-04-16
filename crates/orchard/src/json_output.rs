@@ -75,6 +75,9 @@ pub struct JsonWorktree {
     pub branch: String,
     /// Remote SSH host this worktree lives on, or `null` for local.
     pub host: Option<String>,
+    /// Physical layout of the worktree: `"bare"` for Remmy/BoxdShared bare-repo model,
+    /// `"flat"` for BoxdFork single-checkout model. Added in schema v5.
+    pub layout: String,
     /// Commit distance from upstream, if available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ahead_behind: Option<JsonAheadBehind>,
@@ -566,6 +569,10 @@ impl From<&SessionState> for JsonSession {
 
 impl From<&WorktreeState> for JsonWorktree {
     /// Converts an internal `WorktreeState` to JSON output format, serializing the display group to a string.
+    ///
+    /// `layout` defaults to `"bare"` for all worktrees until `WorktreeState` gains
+    /// a layout field (tracked in slice 3 of issue #267). Once that field lands,
+    /// this conversion will forward the value directly.
     fn from(ws: &WorktreeState) -> Self {
         let ahead_behind = ws
             .ahead_behind
@@ -574,6 +581,7 @@ impl From<&WorktreeState> for JsonWorktree {
             path: ws.path.clone(),
             branch: ws.branch.clone(),
             host: ws.host.clone(),
+            layout: "bare".to_string(),
             ahead_behind,
             last_commit_at: ws.last_commit_at.clone(),
             issue: ws.issue.as_ref().map(Into::into),
@@ -650,7 +658,9 @@ impl From<&StandaloneSessionRow> for JsonSession {
 }
 
 impl From<&OrchardState> for JsonOutput {
-    /// Converts the unified `OrchardState` to JSON output, setting version to 4.
+    /// Converts the unified `OrchardState` to JSON output, setting version to 5.
+    ///
+    /// Schema v5 adds the `layout` field to each worktree entry (values: `"bare"` or `"flat"`).
     fn from(state: &OrchardState) -> Self {
         let hosts = state
             .hosts
@@ -666,7 +676,7 @@ impl From<&OrchardState> for JsonOutput {
             .collect();
 
         Self {
-            version: 4,
+            version: 5,
             tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
@@ -701,9 +711,9 @@ mod tests {
     }
 
     #[test]
-    fn from_orchard_state_produces_version_4() {
+    fn from_orchard_state_produces_version_5() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 4);
+        assert_eq!(output.version, 5);
     }
 
     #[test]
@@ -897,9 +907,9 @@ mod tests {
     }
 
     #[test]
-    fn json_version_is_4() {
+    fn json_version_is_5() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 4);
+        assert_eq!(output.version, 5);
     }
 
     #[test]
