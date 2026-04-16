@@ -1597,16 +1597,14 @@ pub fn populate_claude_session_ids(
         if state.session_id.is_empty() {
             continue;
         }
-        for i in 0..session.pane_targets.len() {
+        for (i, target) in session.pane_targets.iter().enumerate() {
             let cmd = session
                 .pane_commands
                 .get(i)
                 .map(|s| s.as_str())
                 .unwrap_or("");
             let title = session.pane_titles.get(i).map(|s| s.as_str()).unwrap_or("");
-            let has_claude =
-                cmd.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
-            if has_claude && let Some(target) = session.pane_targets.get(i) {
+            if crate::session::is_claude_pane(cmd, title) {
                 session
                     .claude_session_ids
                     .insert(target.clone(), state.session_id.clone());

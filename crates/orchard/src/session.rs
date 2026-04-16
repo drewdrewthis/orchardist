@@ -152,6 +152,16 @@ pub struct PaneInfo {
     pub claude_session_id: Option<String>,
 }
 
+/// Returns true when either the command or the title contains "claude"
+/// (case-insensitive).
+///
+/// Single source of truth for "is this pane running Claude?" — used by
+/// [`PaneInfo::new`] and by `cache_sources::populate_claude_session_ids`
+/// so the two sites cannot disagree.
+pub fn is_claude_pane(command: &str, title: &str) -> bool {
+    command.to_lowercase().contains("claude") || title.to_lowercase().contains("claude")
+}
+
 impl PaneInfo {
     /// Constructs a `PaneInfo`, detecting Claude from command and title strings.
     ///
@@ -162,8 +172,7 @@ impl PaneInfo {
     /// to empty/false/None. Use [`PaneInfo::new_with_metadata`] when those fields
     /// are available (e.g., from a `CachedTmuxSession`).
     pub fn new(index: usize, tmux_target: &str, command: &str, title: &str) -> Self {
-        let has_claude =
-            command.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
+        let has_claude = is_claude_pane(command, title);
         PaneInfo {
             index,
             tmux_target: tmux_target.to_string(),
@@ -193,8 +202,7 @@ impl PaneInfo {
         is_active: bool,
         claude_session_id: Option<String>,
     ) -> Self {
-        let has_claude =
-            command.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
+        let has_claude = is_claude_pane(command, title);
         PaneInfo {
             index,
             tmux_target: tmux_target.to_string(),

@@ -150,35 +150,65 @@ where
 
 /// Returns the names of currently-running local tmux sessions.
 ///
-/// Returns an empty vec when tmux is not installed or the daemon is not running.
-pub fn live_local_session_names() -> Vec<String> {
+/// Returns `Some(vec)` on success, including the empty vec when tmux is
+/// running with no sessions. Returns `None` when tmux itself failed (not
+/// installed, daemon errored) — the caller must NOT treat this as "no
+/// sessions alive", since doing so would make [`restore_all_local`] recreate
+/// every cached session on top of the live tmux server.
+pub fn live_local_session_names() -> Option<Vec<String>> {
     let out = Command::new("tmux")
         .args(["list-sessions", "-F", "#{session_name}"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+        .output()
+        .ok()?;
+    // "no server running" exits non-zero on stderr with a specific message; any
+    // other non-zero exit is treated as failure too. Both collapse to None.
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("no server running") || stderr.contains("no current server") {
+            return Some(Vec::new());
+        }
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
             .lines()
             .filter(|l| !l.is_empty())
             .map(|l| l.to_string())
             .collect(),
-        _ => Vec::new(),
-    }
+    )
 }
+
+/// Guard that ensures [`restore_all_local`] runs at most once per process.
+///
+/// The spec for issue #190 requires restore to run "once at startup, before the
+/// first TUI render" — not once per `build_state()` refresh or per `--json`
+/// invocation. A `--json` agent polling every minute would otherwise re-probe
+/// every Claude pane's 2-second detection timeout and risk `kill-session` +
+/// recreate against a session it just failed to list.
+static RESTORE_RAN: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 /// Reads the local tmux cache, partitions cached sessions by [`restore`], runs
 /// [`restore_session`] for each plan, and returns a combined [`RestoreReport`].
 ///
 /// Intended to be called once at application startup before the first render.
-/// Silently returns an empty report on any IO failure so startup is never
-/// blocked.
+/// Subsequent calls within the same process are no-ops (return an empty report)
+/// — see [`RESTORE_RAN`]. Silently returns an empty report on any IO failure so
+/// startup is never blocked.
 pub fn restore_all_local() -> RestoreReport {
+    if RESTORE_RAN.set(()).is_err() {
+        return RestoreReport::default();
+    }
+
     let cached: Vec<CachedTmuxSession> =
         crate::cache::read_cache::<CachedTmuxSession>(&crate::cache::tmux_cache_path(None)).entries;
     if cached.is_empty() {
         return RestoreReport::default();
     }
 
-    let live = live_local_session_names();
+    let Some(live) = live_local_session_names() else {
+        LOG.warn("restore: tmux list-sessions failed; skipping restore to avoid overwriting a running server");
+        return RestoreReport::default();
+    };
     run_restore(&live, &cached)
 }
 

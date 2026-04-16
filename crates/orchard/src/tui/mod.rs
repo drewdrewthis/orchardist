@@ -691,7 +691,17 @@ impl App {
                             branch: row.branch.clone(),
                             had_claude: row.sessions.iter().any(|s| s.claude.is_some()),
                             host: row.worktree_host.clone(),
-                            claude_session_id: None, // populated by Task #4
+                            // Durable backup for restore: the id of the first
+                            // pane flagged `has_claude` that also has a session
+                            // id in the tmux cache. Falls back to None when no
+                            // Claude pane has a known id (e.g., state file on
+                            // disk was cleared since the last refresh).
+                            claude_session_id: row.sessions.iter().find_map(|s| {
+                                s.panes
+                                    .iter()
+                                    .find(|p| p.has_claude)
+                                    .and_then(|p| p.claude_session_id.clone())
+                            }),
                         })
                         .collect();
                     if !manifest_entries.is_empty() {
