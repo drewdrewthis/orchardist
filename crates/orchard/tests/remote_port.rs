@@ -1165,3 +1165,88 @@ fn boxd_fork_adapter_truncated_list_json_returns_parse_failure_error() {
          stub returns Ok(vec![]) — implement BoxdForkAdapter.list_worktrees()"
     );
 }
+
+/// AC7 + review-fix: a transient SSH failure on the BoxdFork golden host
+/// must NOT be reported as `Ok(vec![])` — that would cause
+/// `cache_sources::refresh_remote_worktrees` to walk every previously-
+/// cached fork and emit a `worktree.remote_lost` event for each. Returning
+/// `Err(AdapterError::FetchFailure)` distinguishes "fetch failed" from
+/// "fetch succeeded with zero entries" so the caller preserves the cache.
+#[test]
+fn boxd_fork_adapter_returns_fetch_failure_not_empty_on_golden_host_ssh_failure() {
+    use orchard::remote_adapter::AdapterError;
+
+    let adapter = orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: "boxd.sh".to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
+        // FakeSshExec with no canned response — every exec returns Err.
+        ssh: Box::new(FakeSshExec::new()),
+    };
+
+    let result = adapter.list_worktrees();
+    assert!(
+        result.is_err(),
+        "golden-host SSH failure must propagate as Err, got: {result:?}"
+    );
+
+    // Downcast to AdapterError::FetchFailure to confirm the variant.
+    let err = result.unwrap_err();
+    let downcast = err
+        .downcast_ref::<AdapterError>()
+        .expect("error must be AdapterError");
+    assert!(
+        matches!(downcast, AdapterError::FetchFailure { .. }),
+        "expected FetchFailure variant, got: {downcast:?}"
+    );
+}
+
+/// Hostnames containing shell or ssh-option characters are dropped at
+/// parse time so a compromised boxd controller cannot inject `-o
+/// ProxyCommand=...` into the per-fork SSH argv.
+#[test]
+fn boxd_fork_adapter_rejects_unsafe_host_strings() {
+    let golden_host = "boxd.sh";
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        golden_host,
+        "list --json",
+        SshOutput {
+            // First entry has a malicious host; second has a clean one.
+            stdout: r#"[
+                {"name": "evil",  "host": "evil.host -o ProxyCommand=evil"},
+                {"name": "clean", "host": "clean.boxd.sh"}
+            ]"#
+            .to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+    // Branch resolution for the clean fork: stub the per-fork SSH so it
+    // returns a branch (otherwise resolve_fork_branch falls back to the
+    // fork name, which still produces a valid CachedWorktree).
+    fake.insert(
+        "boxd@clean.boxd.sh",
+        "cd ~/langwatch && git rev-parse --abbrev-ref HEAD",
+        SshOutput {
+            stdout: "main\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+
+    let adapter = orchard::remote_adapter::BoxdForkAdapter {
+        golden_host: golden_host.to_string(),
+        fork_repo_path: "~/langwatch".to_string(),
+        ssh: Box::new(fake),
+    };
+
+    let worktrees = adapter
+        .list_worktrees()
+        .expect("clean entry should still produce a worktree");
+    assert_eq!(
+        worktrees.len(),
+        1,
+        "evil entry must be dropped, clean one kept; got: {worktrees:?}"
+    );
+    assert_eq!(worktrees[0].host.as_deref(), Some("boxd@clean.boxd.sh"));
+}

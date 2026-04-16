@@ -29,14 +29,13 @@ use crate::cache::{CachedTmuxSession, CachedWorktree, WorktreeLayout};
 
 /// Errors that a `RemoteAdapter` method can return.
 ///
-/// `ParseFailure` is used when an adapter receives a response that is
-/// syntactically invalid (e.g. malformed JSON from `ssh boxd.sh list --json`).
-/// The caller decides whether to fall back to cached data; the adapter itself
-/// does not make that decision.
-///
-/// SSH failures are currently converted to `Ok(vec![])` inside the adapters so
-/// the TUI retains its last cached state; if a typed SSH variant is needed
-/// once AC6 (hard timeouts) lands, add it alongside `ParseFailure` here.
+/// - `ParseFailure`: the remote responded but the payload could not be
+///   parsed (e.g. malformed JSON from `ssh boxd.sh list --json`).
+/// - `FetchFailure`: the outbound call itself failed (SSH connect timeout,
+///   subprocess kill, host unreachable). Distinguished from `Ok(vec![])`
+///   so the caller can preserve the prior cache instead of treating an
+///   empty result as authoritative — preventing a flood of false
+///   `worktree.remote_lost` events when `boxd.sh` is briefly unreachable.
 #[derive(Debug)]
 pub enum AdapterError {
     /// The response from the remote was received but could not be parsed.
@@ -48,6 +47,14 @@ pub enum AdapterError {
         /// Sanitized, truncated payload for diagnostic logging.
         raw: String,
     },
+    /// The outbound call failed before any payload was received.
+    ///
+    /// `message` is the underlying error stringified — already sanitized
+    /// at the boundary where the SSH stderr is read.
+    FetchFailure {
+        /// Human-readable description of the failure.
+        message: String,
+    },
 }
 
 impl std::fmt::Display for AdapterError {
@@ -55,6 +62,9 @@ impl std::fmt::Display for AdapterError {
         match self {
             AdapterError::ParseFailure { raw } => {
                 write!(f, "boxd.sh list parse failure; raw payload: {raw}")
+            }
+            AdapterError::FetchFailure { message } => {
+                write!(f, "remote fetch failure: {message}")
             }
         }
     }
@@ -418,10 +428,19 @@ impl BoxdForkAdapter {
     /// 5. Return `Ok(vec![])` when `golden_host` is unreachable (SSH failure on
     ///    the list command) — the TUI keeps the last cached forks visible.
     pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
-        // Step 1: enumerate live forks from the golden host.
+        // Step 1: enumerate live forks from the golden host. SSH failure here
+        // returns `Err(FetchFailure)` so the caller (cache_sources) does NOT
+        // treat zero entries as authoritative — otherwise a transient outage
+        // on `boxd.sh` would emit a `worktree.remote_lost` event for every
+        // previously-cached fork.
         let list_stdout = match self.ssh.exec(&self.golden_host, "list --json") {
             Ok(output) => output.stdout,
-            Err(_) => return Ok(vec![]),
+            Err(e) => {
+                return Err(AdapterError::FetchFailure {
+                    message: e.to_string(),
+                }
+                .into());
+            }
         };
 
         // Step 2: parse the fork list. Malformed JSON → ParseFailure.
@@ -431,10 +450,18 @@ impl BoxdForkAdapter {
             })?;
 
         let mut worktrees = Vec::with_capacity(entries.len());
+        let user_prefix = ssh_user_prefix(&self.golden_host);
 
         // Steps 3-5: per-fork branch resolution.
         for entry in entries {
-            let fork_host = format!("boxd@{}", entry.host);
+            // Defensive: drop entries whose host carries shell- or
+            // ssh-option-injection-relevant characters. A compromised golden
+            // host could otherwise smuggle a value like
+            // `evil.host -o ProxyCommand=...` into the SSH argv.
+            if !is_safe_ssh_host(&entry.host) {
+                continue;
+            }
+            let fork_host = format!("{user_prefix}@{}", entry.host);
             let fork_path = entry.path.unwrap_or_else(|| self.fork_repo_path.clone());
             let escaped_path = crate::remote::shell_escape(&fork_path);
             let branch_cmd = format!("cd {escaped_path} && git rev-parse --abbrev-ref HEAD");
@@ -545,6 +572,34 @@ fn resolve_fork_branch(
         }
         Err(_) => fork_name.to_string(),
     }
+}
+
+/// Returns the SSH user prefix for per-fork hosts derived from the golden
+/// host. If the configured golden host carries a `user@` prefix
+/// (e.g. `"boxd@boxd.sh"`), that user is reused; otherwise the conventional
+/// Boxd default `"boxd"` is used. This avoids hardcoding a tenant-specific
+/// SSH username while preserving the langwatch deployment's defaults.
+fn ssh_user_prefix(golden_host: &str) -> String {
+    golden_host
+        .split_once('@')
+        .map(|(user, _)| user.to_string())
+        .unwrap_or_else(|| "boxd".to_string())
+}
+
+/// Validates that a hostname returned by the boxd controller is safe to use
+/// as the second argument to `ssh`.
+///
+/// `Command::args` does NOT pass strings through a shell, so classic shell
+/// injection (`;`, `&`, backticks) is already prevented at the OS layer.
+/// However, OpenSSH itself parses `-o option=value` style flags from any
+/// argument that begins with `-` or contains spaces — a malicious value
+/// like `evil.host -o ProxyCommand=...` would be honored. Restrict to
+/// hostname-grade characters to block both classes.
+fn is_safe_ssh_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 /// Sanitizes a remote-sourced raw payload for inclusion in error messages.
