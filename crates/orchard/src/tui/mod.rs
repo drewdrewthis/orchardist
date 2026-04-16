@@ -685,6 +685,7 @@ impl App {
                             branch: row.branch.clone(),
                             had_claude: row.sessions.iter().any(|s| s.claude.is_some()),
                             host: row.worktree_host.clone(),
+                            claude_session_id: None, // populated by Task #4
                         })
                         .collect();
                     if !manifest_entries.is_empty() {
@@ -3268,6 +3269,10 @@ mod tests {
             pane_commands: vec![],
             window_names: vec![],
             window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            claude_session_ids: std::collections::HashMap::new(),
             host: None,
             created_at: None,
             last_activity_at: None,

@@ -557,6 +557,10 @@ pub fn parse_tmux_output(
             pane_commands: parsed.commands,
             window_names: parsed.window_names,
             window_active: parsed.window_active,
+            window_layouts: parsed.window_layouts,
+            pane_paths: parsed.pane_paths,
+            pane_active: parsed.pane_active,
+            claude_session_ids: HashMap::new(), // populated by Task #4, not yet
             host: host.map(|h| h.to_string()),
             created_at,
             last_activity_at,
@@ -577,16 +581,10 @@ struct ParsedPaneData {
     /// Window active flags per pane row ("1" or "0").
     window_active: Vec<String>,
     /// Window layout strings per pane row (e.g. "even-horizontal").
-    // Consumed by Task #2 (CachedTmuxSession extension).
-    #[allow(dead_code)]
     window_layouts: Vec<String>,
     /// Current working directory of each pane.
-    // Consumed by Task #2 (CachedTmuxSession extension).
-    #[allow(dead_code)]
     pane_paths: Vec<String>,
     /// Whether this pane is the active pane in its window ("1" or "0").
-    // Consumed by Task #2 (CachedTmuxSession extension).
-    #[allow(dead_code)]
     pane_active: Vec<String>,
     /// Pane titles per pane row.
     titles: Vec<String>,
@@ -3169,5 +3167,34 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
             prs[0].ci_checks.code[0].details_url.as_deref(),
             Some("https://github.com/owner/repo/actions/runs/123")
         );
+    }
+
+    // -- parse_tmux_output new cached fields (Task #190-2) --------------------
+
+    #[test]
+    fn parse_tmux_output_with_extended_panes_populates_new_cached_fields() {
+        // 7-field tab-delimited pane line:
+        // {window}.{pane}\t{window_name}\t{window_active}\t{window_layout}\t{pane_path}\t{pane_active}\t{title}:{command}
+        let layout = "bb62,80x24,0,0{40x24,0,0,1,39x24,41,0,2}";
+        let pane_line = format!(
+            "0.0\tmain\t1\t{layout}\t/home/user/repo\t1\tbash:bash"
+        );
+        let sessions = "my-session:/home/user/repo\n";
+
+        let result = parse_tmux_output(
+            sessions,
+            None,
+            |_| pane_line.clone(),
+            |_| vec![],
+        );
+
+        assert_eq!(result.len(), 1);
+        let session = &result[0];
+
+        assert_eq!(session.window_layouts, vec![layout]);
+        assert_eq!(session.pane_paths, vec!["/home/user/repo"]);
+        assert_eq!(session.pane_active, vec!["1"]);
+        // claude_session_ids is empty until Task #4 populates it.
+        assert!(session.claude_session_ids.is_empty());
     }
 }
