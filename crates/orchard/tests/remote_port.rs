@@ -83,16 +83,30 @@ fn port_list_worktrees_returns_ok_for_boxd_shared_variant() {
 
 #[test]
 fn port_list_worktrees_returns_ok_for_boxd_fork_variant() {
-    // feature.feature:22
+    // feature.feature:22 — port surface check. BoxdFork now returns
+    // Err(FetchFailure) when the golden host is unreachable (so the
+    // caller can distinguish outage from "zero forks"); the surface
+    // check therefore needs a successful list response stub. An empty
+    // JSON array is the simplest valid payload.
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        "boxd.sh",
+        "list --json",
+        SshOutput {
+            stdout: "[]".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
     let adapter = RemoteAdapter::BoxdFork(BoxdForkAdapter {
         golden_host: "boxd.sh".to_string(),
         fork_repo_path: "~/langwatch".to_string(),
-        ssh: Box::new(FakeSshExec::new()),
+        ssh: Box::new(fake),
     });
     let result = adapter.list_worktrees();
     assert!(
         result.is_ok(),
-        "list_worktrees must return Ok; got: {result:?}"
+        "list_worktrees must return Ok on a successful empty list; got: {result:?}"
     );
 }
 
