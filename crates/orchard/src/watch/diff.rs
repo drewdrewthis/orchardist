@@ -303,6 +303,7 @@ mod tests {
             is_main_worktree: false,
             ahead_behind: None,
             last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 

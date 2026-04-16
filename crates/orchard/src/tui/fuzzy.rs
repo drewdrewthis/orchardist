@@ -424,6 +424,7 @@ mod tests {
             worktree_ahead: None,
             worktree_behind: None,
             worktree_last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 

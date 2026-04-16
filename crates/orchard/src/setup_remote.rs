@@ -7,6 +7,8 @@
 
 use crate::global_config::{self, GlobalConfig, RemoteConfig};
 use crate::remote::{shell_escape, ssh_exec};
+#[cfg(test)]
+use crate::remote_adapter::RemoteKind;
 
 // ---------------------------------------------------------------------------
 // ANSI colour helpers
@@ -357,6 +359,7 @@ mod tests {
                     host: host.to_string(),
                     path: path.to_string(),
                     shell: "ssh".to_string(),
+                    kind: RemoteKind::Remmy,
                 }],
             }],
             terminal_app: "com.apple.Terminal".to_string(),

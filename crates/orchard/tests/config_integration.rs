@@ -43,7 +43,7 @@ fn global_config_declares_repos() {
                 "slug": "owner/repo-b",
                 "path": "/workspace/repo-b",
                 "remotes": [
-                    { "name": "gpu", "host": "user@host", "path": "/remote/repo-b", "shell": "ssh" }
+                    { "name": "gpu", "host": "user@host", "path": "/remote/repo-b", "shell": "ssh", "type": "remmy" }
                 ]
             }
         ]
@@ -95,8 +95,8 @@ fn config_with_remotes_array() {
                 "slug": "owner/repo",
                 "path": "/workspace/repo",
                 "remotes": [
-                    { "name": "gpu", "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/repo", "shell": "mosh" },
-                    { "name": "cpu", "host": "ubuntu@10.0.0.2", "path": "/home/ubuntu/repo", "shell": "ssh" }
+                    { "name": "gpu", "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/repo", "shell": "mosh", "type": "remmy" },
+                    { "name": "cpu", "host": "ubuntu@10.0.0.2", "path": "/home/ubuntu/repo", "shell": "ssh", "type": "remmy" }
                 ]
             }
         ]
@@ -125,7 +125,7 @@ fn config_with_path_field_round_trips() {
                 "slug": "owner/repo",
                 "path": "/workspace/repo",
                 "remotes": [
-                    { "name": "remmy", "host": "user@10.0.0.1", "path": "~/webapp-workspace/webapp-bare", "shell": "mosh" }
+                    { "name": "remmy", "host": "user@10.0.0.1", "path": "~/webapp-workspace/webapp-bare", "shell": "mosh", "type": "remmy" }
                 ]
             }
         ]

@@ -189,6 +189,7 @@ pub fn make_worktree(path: &str, branch: &str) -> CachedWorktree {
         ahead: None,
         behind: None,
         last_commit_at: None,
+        layout: orchard::cache::WorktreeLayout::Bare,
     }
 }
 

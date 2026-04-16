@@ -654,6 +654,7 @@ mod tests {
     use crate::orchard_state::WorktreeState;
 
     fn make_worktree_for_labels(path: &str, branch: &str) -> CachedWorktree {
+        use crate::cache::WorktreeLayout;
         CachedWorktree {
             path: path.to_string(),
             branch: branch.to_string(),
@@ -663,6 +664,7 @@ mod tests {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: WorktreeLayout::Bare,
         }
     }
 

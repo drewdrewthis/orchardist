@@ -57,10 +57,87 @@ pub fn ssh_exec(host: &str, command: &str) -> anyhow::Result<String> {
 
     let out = Command::new("ssh").args(&args).output()?;
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let stderr = sanitize_remote_payload(&String::from_utf8_lossy(&out.stderr));
         return Err(anyhow!("ssh command failed: {}", stderr));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Sanitizes an arbitrary remote-sourced byte stream for safe inclusion in
+/// log lines and error messages. Strips control bytes and multibyte
+/// sequences, truncates to 256 chars. Mirrors the policy used by
+/// `remote_adapter::sanitize_raw_payload` so a malicious or misconfigured
+/// remote cannot inject ANSI escapes or break structured-log parsing via
+/// stderr text.
+fn sanitize_remote_payload(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ' || *c == '\n' || *c == '\t')
+        .take(256)
+        .collect()
+}
+
+/// Runs a shell command on a remote host over SSH with a hard wall-clock
+/// timeout, killing the child process when it expires.
+///
+/// `ssh -o ConnectTimeout=5` only bounds the initial TCP/SSH handshake.
+/// Once authenticated, a hung remote command (e.g. a tmux server that
+/// accepts the SSH session but never responds to the command itself) will
+/// block indefinitely. This wrapper spawns the SSH subprocess, waits up to
+/// `timeout`, and kills the child if it has not exited — guaranteeing the
+/// caller never blocks beyond the deadline.
+///
+/// Returns `Err` with `"ssh command timed out after <N>s"` if the deadline
+/// fires, distinguishable from other SSH errors by the `timed out` phrase.
+pub fn ssh_exec_with_timeout(
+    host: &str,
+    command: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<String> {
+    use std::io::Read;
+    use std::time::Instant;
+
+    let flags = ssh_flags();
+    let mut args: Vec<&str> = flags.iter().map(|s| s.as_str()).collect();
+    args.push(host);
+    args.push(command);
+
+    let mut child = Command::new("ssh")
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut o) = child.stdout.take() {
+                    let _ = o.read_to_string(&mut stdout);
+                }
+                if let Some(mut e) = child.stderr.take() {
+                    let _ = e.read_to_string(&mut stderr);
+                }
+                if !status.success() {
+                    let safe = sanitize_remote_payload(&stderr);
+                    return Err(anyhow!("ssh command failed: {safe}"));
+                }
+                return Ok(stdout);
+            }
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!(
+                        "ssh command timed out after {}s",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 /// Returns all git worktrees on the remote machine for the configured repo path.
@@ -435,5 +512,106 @@ mod tests {
     #[test]
     fn shell_escape_wraps_backticks() {
         assert_eq!(shell_escape("`whoami`"), "'`whoami`'");
+    }
+
+    // ---------------------------------------------------------------------
+    // ssh_exec_with_timeout — AC6 (feature.feature:469)
+    //
+    // These tests spawn a real `ssh` subprocess pointed at a deliberately
+    // unroutable host. They are gated behind a helper that skips the test
+    // when no `ssh` binary is available, so CI environments without SSH
+    // (e.g. the Tauri cross-compile shard) still build green.
+    // ---------------------------------------------------------------------
+
+    fn ssh_binary_present() -> bool {
+        std::process::Command::new("ssh").arg("-V").output().is_ok()
+    }
+
+    /// `ssh_exec_with_timeout` returns an error within the configured
+    /// deadline regardless of whether the OS drops or actively refuses
+    /// the connection. The bound that matters for AC6 is wall-clock; the
+    /// specific error phrase ("timed out" vs "Connection refused")
+    /// depends on CI's outbound-network policy and is not asserted.
+    #[test]
+    fn ssh_exec_with_timeout_returns_within_deadline() {
+        if !ssh_binary_present() {
+            eprintln!("SKIP: ssh binary not available");
+            return;
+        }
+
+        // 192.0.2.0/24 is TEST-NET-1 (RFC 5737) — guaranteed unroutable on
+        // the public internet, but a CI firewall may RST the SYN
+        // immediately. Both outcomes are acceptable; AC6 promises only the
+        // wall-clock bound.
+        let start = std::time::Instant::now();
+        let result =
+            ssh_exec_with_timeout("192.0.2.1", "true", std::time::Duration::from_millis(200));
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_err(),
+            "unreachable host must produce Err, got: {:?}",
+            result
+        );
+        // SSH ConnectTimeout would otherwise let this hang for 5s — well
+        // under that proves the wrapper preempted the SSH default.
+        assert!(
+            elapsed < std::time::Duration::from_millis(1500),
+            "timeout must preempt SSH ConnectTimeout; elapsed {:?}",
+            elapsed
+        );
+    }
+
+    /// Pure unit: the polling-deadline loop fires within its budget on a
+    /// genuinely-hung child (cat blocking on stdin). Exercises the same
+    /// loop shape `ssh_exec_with_timeout` uses, without depending on
+    /// network policy or the `ssh` binary being present.
+    #[test]
+    fn timeout_poll_loop_kills_hung_child_within_deadline() {
+        let start = std::time::Instant::now();
+        let mut child = std::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("`cat` is part of POSIX");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+        let killed = loop {
+            match child.try_wait().unwrap() {
+                Some(_) => break false,
+                None => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        };
+
+        assert!(killed, "deadline must fire and reap the hung child");
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(800),
+            "deadline-driven loop must terminate promptly"
+        );
+    }
+
+    #[test]
+    fn sanitize_remote_payload_strips_ansi_escapes() {
+        // \x1b[31m is the ANSI red-foreground escape — common
+        // injection vector via terminal control codes.
+        let evil = "\x1b[31mERROR\x1b[0m: \x07bell";
+        let safe = sanitize_remote_payload(evil);
+        assert!(!safe.contains('\x1b'), "ANSI escapes must be stripped");
+        assert!(!safe.contains('\x07'), "bell character must be stripped");
+        assert!(safe.contains("ERROR"), "printable ASCII must survive");
+    }
+
+    #[test]
+    fn sanitize_remote_payload_caps_at_256_chars() {
+        let long = "x".repeat(1000);
+        assert_eq!(sanitize_remote_payload(&long).len(), 256);
     }
 }

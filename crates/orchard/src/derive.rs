@@ -194,6 +194,9 @@ pub struct WorktreeRow {
     pub display_group: DisplayGroup,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
+    /// Physical layout of this worktree (`Bare` bare-repo+worktrees, or
+    /// `Flat` single-clone-per-VM). Propagated from `CachedWorktree.layout`.
+    pub layout: crate::cache::WorktreeLayout,
 }
 
 // ---------------------------------------------------------------------------

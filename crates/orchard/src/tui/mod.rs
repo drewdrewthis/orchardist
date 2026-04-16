@@ -2188,6 +2188,7 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 
@@ -2760,6 +2761,7 @@ mod tests {
             sessions: vec![],
             display_group: group,
             is_main_worktree: false,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 
@@ -3262,6 +3264,7 @@ mod tests {
             ahead: None,
             behind: None,
             last_commit_at: None,
+            layout: cache::WorktreeLayout::Bare,
         }
     }
 
@@ -4109,6 +4112,7 @@ mod tests {
             }],
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
+            layout: crate::cache::WorktreeLayout::Bare,
         }
     }
 
