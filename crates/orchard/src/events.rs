@@ -180,6 +180,34 @@ pub fn log_session_orphaned(session: &str, path: &str) {
     );
 }
 
+/// Logs a `worktree.remote_lost` event when a previously-cached remote
+/// worktree disappears (e.g. a Boxd fork VM is destroyed between refreshes).
+///
+/// Field shape matches the AC5 spec (feature.feature:323):
+/// `{event, ts, repo, remote_name, remote_type, host, branch, path}`.
+/// Consumers (TUI daemon, monitor) distinguish this from `webhook.*` lines
+/// by the absence of a `"source"` field.
+pub fn log_worktree_remote_lost(
+    repo: &str,
+    remote_name: &str,
+    remote_type: &str,
+    host: &str,
+    branch: &str,
+    path: &str,
+) {
+    log_event(
+        "worktree.remote_lost",
+        &[
+            ("repo", Value::String(repo.to_string())),
+            ("remote_name", Value::String(remote_name.to_string())),
+            ("remote_type", Value::String(remote_type.to_string())),
+            ("host", Value::String(host.to_string())),
+            ("branch", Value::String(branch.to_string())),
+            ("path", Value::String(path.to_string())),
+        ],
+    );
+}
+
 /// Logs a `refresh.complete` event.
 pub fn log_refresh_complete(duration_ms: u64, tasks: usize, sessions: usize, worktrees: usize) {
     log_event(
@@ -510,6 +538,58 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn worktree_remote_lost_event_has_spec_required_fields() {
+        // feature.feature:323 — shape of the worktree.remote_lost event.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        append_event(
+            &path,
+            "worktree.remote_lost",
+            &[
+                ("repo", Value::String("langwatch/langwatch".into())),
+                ("remote_name", Value::String("boxd-fork-langwatch".into())),
+                ("remote_type", Value::String("boxd-fork".into())),
+                ("host", Value::String("boxd@issue3155.boxd.sh".into())),
+                (
+                    "branch",
+                    Value::String("issue3155/custom-evaluator-input-field-race".into()),
+                ),
+                ("path", Value::String("~/langwatch".into())),
+            ],
+        );
+
+        let lines = read_lines(&path);
+        assert_eq!(lines.len(), 1);
+        let parsed: serde_json::Map<String, Value> = serde_json::from_str(&lines[0]).unwrap();
+        for field in [
+            "ts",
+            "event",
+            "repo",
+            "remote_name",
+            "remote_type",
+            "host",
+            "branch",
+            "path",
+        ] {
+            assert!(
+                parsed.contains_key(field),
+                "spec-required field '{field}' missing from worktree.remote_lost event"
+            );
+        }
+        assert_eq!(
+            parsed["event"].as_str().unwrap(),
+            "worktree.remote_lost",
+            "event name follows dotted-namespace convention"
+        );
+        // No `source` field — distinguishes from webhook.* lines.
+        assert!(
+            !parsed.contains_key("source"),
+            "task/session lines must not carry the webhook 'source' field"
+        );
     }
 
     #[test]

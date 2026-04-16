@@ -1638,13 +1638,38 @@ pub fn refresh_remote_worktrees(
     // clears its previous entries (a fork that was live and is now gone would
     // otherwise linger forever).
     let existing: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&cache_path).entries;
-    let from_other_hosts: Vec<CachedWorktree> = existing
-        .into_iter()
-        .filter(|w| match &w.host {
-            Some(h) => h != &remote_cfg.host && !replaced_hosts.contains(h),
-            None => false,
-        })
-        .collect();
+    let mut from_other_hosts: Vec<CachedWorktree> = Vec::new();
+    for w in existing {
+        let Some(host) = &w.host else {
+            continue;
+        };
+        if host == &remote_cfg.host {
+            // Replaced: this is the (single-host) remote we just refreshed.
+            continue;
+        }
+        if replaced_hosts.contains(host) {
+            // Replaced: still present in the new fetch under the same host.
+            continue;
+        }
+        // If this remote is a BoxdFork, a previously-cached host that did
+        // NOT reappear in the new `list --json` is a lost fork VM. Emit a
+        // `worktree.remote_lost` event (AC5 feature.feature:306, AC7 #264).
+        // Other remote kinds are single-host: their `host == remote_cfg.host`
+        // case above already handled them, so this branch doesn't fire.
+        if remote_cfg.kind == crate::remote_adapter::RemoteKind::BoxdFork {
+            crate::events::log_worktree_remote_lost(
+                &config.slug,
+                &remote_cfg.name,
+                kind_str(remote_cfg.kind),
+                host,
+                &w.branch,
+                &w.path,
+            );
+            // Lost forks are NOT re-added to the cache.
+            continue;
+        }
+        from_other_hosts.push(w);
+    }
     worktrees.extend(from_other_hosts);
 
     cache::write_cache_if_nonempty(&cache_path, &worktrees)?;
@@ -1657,6 +1682,17 @@ pub fn refresh_remote_worktrees(
     ));
 
     Ok(())
+}
+
+/// Maps a `RemoteKind` to its on-the-wire kebab-case string, matching the
+/// serde serialization and the `remote_type` field on
+/// `worktree.remote_lost` events.
+fn kind_str(kind: crate::remote_adapter::RemoteKind) -> &'static str {
+    match kind {
+        crate::remote_adapter::RemoteKind::Remmy => "remmy",
+        crate::remote_adapter::RemoteKind::BoxdShared => "boxd-shared",
+        crate::remote_adapter::RemoteKind::BoxdFork => "boxd-fork",
+    }
 }
 
 // ---------------------------------------------------------------------------
