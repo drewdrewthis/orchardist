@@ -430,6 +430,25 @@ mod tests {
         }
     }
 
+    fn remote_worktree(
+        path: &str,
+        branch: &str,
+        host: &str,
+        layout: crate::cache::WorktreeLayout,
+    ) -> CachedWorktree {
+        CachedWorktree {
+            path: path.to_string(),
+            branch: branch.to_string(),
+            is_bare: false,
+            is_locked: false,
+            host: Some(host.to_string()),
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
+            layout,
+        }
+    }
+
     fn session(name: &str, path: &str, pane_commands: Vec<&str>) -> CachedTmuxSession {
         let targets: Vec<String> = (0..pane_commands.len()).map(|i| format!("0.{i}")).collect();
         CachedTmuxSession {
@@ -538,6 +557,61 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let pr = rows[0].pr.as_ref().expect("PR should be present");
         assert_eq!(pr.number, 55);
+    }
+
+    /// AC8 (feature.feature:564): a remote CachedWorktree on an issue
+    /// branch gets its PR enriched identically to a local worktree. The
+    /// join logic is host-agnostic — matching is by branch, never by host.
+    #[test]
+    fn remote_worktree_receives_pr_enrichment_same_as_local() {
+        let branch = "issue240/smart-sorting-priority-indicators";
+        let worktrees = vec![remote_worktree(
+            "/home/boxd/langwatch",
+            branch,
+            "boxd@issue240.boxd.sh",
+            crate::cache::WorktreeLayout::Flat,
+        )];
+        let prs = vec![CachedPr {
+            state: "merged".to_string(),
+            ..pr_for_branch(244, branch)
+        }];
+
+        let rows = derive_worktree_rows(&[], &prs, &worktrees, &[], "owner/repo", &[], &[]);
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.worktree_host.as_deref(), Some("boxd@issue240.boxd.sh"));
+        assert_eq!(row.layout, crate::cache::WorktreeLayout::Flat);
+        let pr = row
+            .pr
+            .as_ref()
+            .expect("remote worktree must match PR by branch");
+        assert_eq!(pr.number, 244);
+        assert_eq!(pr.state.as_deref(), Some("merged"));
+    }
+
+    /// AC8 (feature.feature:556): a remote CachedWorktree on an issue
+    /// branch gets its issue enriched identically to a local worktree.
+    #[test]
+    fn remote_worktree_receives_issue_enrichment_same_as_local() {
+        let branch = "issue240/smart-sorting-priority-indicators";
+        let worktrees = vec![remote_worktree(
+            "/home/boxd/langwatch",
+            branch,
+            "boxd@issue240.boxd.sh",
+            crate::cache::WorktreeLayout::Flat,
+        )];
+        let issues = vec![CachedIssue {
+            state: "closed".to_string(),
+            ..open_issue(240)
+        }];
+
+        let rows = derive_worktree_rows(&issues, &[], &worktrees, &[], "owner/repo", &[], &[]);
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.issue_number, Some(240));
+        assert_eq!(row.issue_state.as_deref(), Some("closed"));
     }
 
     #[test]
