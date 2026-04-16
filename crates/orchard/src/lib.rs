@@ -39,6 +39,7 @@ pub mod setup_remote;
 pub mod shell;
 pub mod signal;
 pub mod sources;
+pub mod swr;
 pub mod tmux;
 pub mod toon_output;
 pub mod tui;
