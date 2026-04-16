@@ -263,6 +263,10 @@ pub fn build_state_with_hosts(
 /// Intended for `--json` mode where the caller wants fresh data before output.
 /// Probes host reachability before attempting remote refreshes.
 pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
+    // Best-effort restore of dead tmux sessions from cache before the first
+    // refresh, so the subsequent tmux listing already reflects them.
+    let _ = crate::restore::restore_all_local();
+
     // Refresh local sources first.
     for repo in &config.repos {
         let _ = sources::worktrees::refresh_local(repo);

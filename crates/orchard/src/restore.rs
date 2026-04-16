@@ -148,6 +148,59 @@ where
     (plans, skipped)
 }
 
+/// Returns the names of currently-running local tmux sessions.
+///
+/// Returns an empty vec when tmux is not installed or the daemon is not running.
+pub fn live_local_session_names() -> Vec<String> {
+    let out = Command::new("tmux")
+        .args(["list-sessions", "-F", "#{session_name}"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Reads the local tmux cache, partitions cached sessions by [`restore`], runs
+/// [`restore_session`] for each plan, and returns a combined [`RestoreReport`].
+///
+/// Intended to be called once at application startup before the first render.
+/// Silently returns an empty report on any IO failure so startup is never
+/// blocked.
+pub fn restore_all_local() -> RestoreReport {
+    let cached: Vec<CachedTmuxSession> =
+        crate::cache::read_cache::<CachedTmuxSession>(&crate::cache::tmux_cache_path(None)).entries;
+    if cached.is_empty() {
+        return RestoreReport::default();
+    }
+
+    let live = live_local_session_names();
+    run_restore(&live, &cached)
+}
+
+/// Folds the pure classifier and the imperative shell into a single
+/// [`RestoreReport`]. Exposed separately from [`restore_all_local`] so tests
+/// can inject a `live` slice and skip the `tmux list-sessions` subprocess.
+fn run_restore(live: &[String], cached: &[CachedTmuxSession]) -> RestoreReport {
+    let (plans, skipped) = restore(live, worktree_exists_default, cached);
+    let mut report = RestoreReport { sessions: skipped };
+    for plan in &plans {
+        let outcome = restore_session(plan);
+        let name = plan.session.name.clone();
+        if matches!(outcome, SessionRestoreOutcome::Restored { .. }) {
+            LOG.info(&format!("restore: {name}: {outcome:?}"));
+        } else {
+            LOG.warn(&format!("restore: {name}: {outcome:?}"));
+        }
+        report.sessions.push((name, outcome));
+    }
+    report
+}
+
 // ---------------------------------------------------------------------------
 // Imperative shell
 // ---------------------------------------------------------------------------
@@ -518,6 +571,49 @@ mod tests {
             skip_map["remote"],
             &SessionRestoreOutcome::Skipped(SkipReason::RemoteNotSupported)
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // run_restore orchestration tests (no tmux required)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn run_restore_returns_empty_report_for_empty_cache() {
+        let report = run_restore(&[], &[]);
+        assert!(report.sessions.is_empty());
+    }
+
+    #[test]
+    fn run_restore_reports_skips_without_calling_tmux() {
+        // All three cached sessions hit a Skipped branch in the pure classifier,
+        // so `restore_session` is never invoked and this test runs without tmux.
+        let cached = vec![
+            make_cached("alive", "/tmp", None),
+            make_cached("remote", "/tmp", Some("host")),
+            make_cached("gone", "/no/such/path/does/not/exist/42", None),
+        ];
+        let live = vec!["alive".to_string()];
+
+        let report = run_restore(&live, &cached);
+
+        assert_eq!(report.sessions.len(), 3);
+        let outcomes: std::collections::HashMap<&str, &SessionRestoreOutcome> = report
+            .sessions
+            .iter()
+            .map(|(n, o)| (n.as_str(), o))
+            .collect();
+        assert!(matches!(
+            outcomes["alive"],
+            SessionRestoreOutcome::Skipped(SkipReason::AlreadyRunning)
+        ));
+        assert!(matches!(
+            outcomes["remote"],
+            SessionRestoreOutcome::Skipped(SkipReason::RemoteNotSupported)
+        ));
+        assert!(matches!(
+            outcomes["gone"],
+            SessionRestoreOutcome::Skipped(SkipReason::WorktreeGone)
+        ));
     }
 
     // -----------------------------------------------------------------------

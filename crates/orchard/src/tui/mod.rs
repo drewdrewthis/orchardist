@@ -174,6 +174,12 @@ impl App {
         let repo_name = git::get_repo_name();
         let mut global_cfg = global_config::load_global_config();
         global_config::register_cwd_repo_if_new(&mut global_cfg);
+
+        // Best-effort restore of dead tmux sessions from the cache before the
+        // first build_state, so the TUI's first paint already reflects any
+        // just-reconstructed sessions. Failures are logged, never block startup.
+        let _ = crate::restore::restore_all_local();
+
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
         let state = crate::build_state::build_state(&global_cfg);
         let standalone_sessions = state.standalone_sessions;
