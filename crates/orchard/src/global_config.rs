@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::logger::LOG;
+use crate::remote_adapter::RemoteKind;
 use crate::session::StandaloneConfig;
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,12 @@ pub struct RemoteConfig {
     /// Connection shell: "ssh" or "mosh".
     #[serde(default = "default_shell")]
     pub shell: String,
+    /// The adapter kind to use for this remote.
+    ///
+    /// Serialized as the `"type"` JSON field. Required — configs without this
+    /// field are rejected at parse time, preventing silent misclassification.
+    #[serde(rename = "type")]
+    pub kind: RemoteKind,
 }
 
 fn default_remote_name() -> String {
@@ -369,6 +376,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
 
     // Use a raw intermediate struct so we can accept both `remote` (singular)
     // and `remotes` (plural) per repo entry, plus the legacy `repoPath` alias.
+    // `kind` is optional here to support legacy configs that predate the `type`
+    // field; entries without `kind` are silently skipped.
     #[derive(Deserialize)]
     struct RawRemote {
         #[serde(default = "default_remote_name")]
@@ -380,6 +389,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         repo_path: Option<String>,
         #[serde(default = "default_shell")]
         shell: String,
+        #[serde(rename = "type", default)]
+        kind: Option<RemoteKind>,
     }
 
     #[derive(Deserialize)]
@@ -432,6 +443,9 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
                     host: r.host,
                     path: r.path.or(r.repo_path).unwrap_or_default(),
                     shell: r.shell,
+                    // Legacy configs predate the `type` field; default to Remmy
+                    // for backward compatibility when loading from disk.
+                    kind: r.kind.unwrap_or(RemoteKind::Remmy),
                 })
                 .collect();
 
@@ -445,6 +459,7 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
                     host: r.host,
                     path: r.path.or(r.repo_path).unwrap_or_default(),
                     shell: r.shell,
+                    kind: r.kind.unwrap_or(RemoteKind::Remmy),
                 });
             }
 
@@ -564,6 +579,8 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
         name: Option<String>,
         #[serde(default)]
         shell: Option<String>,
+        #[serde(rename = "type", default)]
+        kind: Option<RemoteKind>,
     }
 
     #[derive(Deserialize)]
@@ -580,6 +597,7 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
     let mut results = Vec::new();
 
     // Process the `remotes` array first (preferred format).
+    // Legacy per-repo files may omit `"type"`; default to Remmy for back-compat.
     if let Some(entries) = raw.remotes {
         for r in entries {
             if let Some(host) = r.host.filter(|s| !s.is_empty())
@@ -590,6 +608,7 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
                     host,
                     path,
                     shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
+                    kind: r.kind.unwrap_or(RemoteKind::Remmy),
                 });
             }
         }
@@ -606,6 +625,7 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
             host,
             path,
             shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
+            kind: r.kind.unwrap_or(RemoteKind::Remmy),
         });
     }
 
@@ -768,12 +788,14 @@ mod tests {
                     host: "ubuntu@10.0.0.1".to_string(),
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "mosh".to_string(),
+                    kind: RemoteKind::Remmy,
                 },
                 RemoteConfig {
                     name: "cpu".to_string(),
                     host: "ubuntu@10.0.0.2".to_string(),
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "ssh".to_string(),
+                    kind: RemoteKind::Remmy,
                 },
             ],
         };
@@ -804,12 +826,14 @@ mod tests {
                     host: "ubuntu@10.0.0.1".to_string(),
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "mosh".to_string(),
+                    kind: RemoteKind::Remmy,
                 },
                 RemoteConfig {
                     name: "cpu".to_string(),
                     host: "ubuntu@10.0.0.2".to_string(),
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "ssh".to_string(),
+                    kind: RemoteKind::Remmy,
                 },
             ],
         };
