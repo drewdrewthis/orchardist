@@ -335,6 +335,32 @@ mod tests {
     }
 
     #[test]
+    fn classify_cache_file_fresh_within_ttl() {
+        let now = at(50);
+        let file: crate::cache::CacheFile<u32> = crate::cache::CacheFile {
+            last_refreshed: at(20), // 30s old
+            entries: vec![1, 2, 3],
+        };
+        assert_eq!(
+            classify_cache_file(&file, now, cfg(60, 3600)),
+            SwrState::Fresh
+        );
+    }
+
+    #[test]
+    fn classify_cache_file_stale_beyond_ttl() {
+        let now = at(200);
+        let file: crate::cache::CacheFile<u32> = crate::cache::CacheFile {
+            last_refreshed: at(20), // 180s old
+            entries: vec![1],
+        };
+        assert_eq!(
+            classify_cache_file(&file, now, cfg(60, 3600)),
+            SwrState::Stale
+        );
+    }
+
+    #[test]
     fn classify_cache_file_treats_epoch_sentinel_as_missing() {
         let empty: crate::cache::CacheFile<u32> = crate::cache::CacheFile {
             last_refreshed: DateTime::from_timestamp(0, 0).unwrap(),

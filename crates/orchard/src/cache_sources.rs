@@ -700,6 +700,19 @@ fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<Strin
 pub fn refresh_issues(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "issues");
 
+    // SWR fast path: skip the gh api call when the issues cache is Fresh.
+    let cached_file = cache::read_cache::<CachedIssue>(&path);
+    let swr_config = crate::swr::SwrConfig::default_for(crate::swr::SwrKind::GithubIssues);
+    if crate::swr::classify_cache_file(&cached_file, chrono::Utc::now(), swr_config)
+        == crate::swr::SwrState::Fresh
+    {
+        LOG.info(&format!(
+            "cache_sources: refresh_issues({}): swr=Fresh, skipping gh api",
+            config.slug
+        ));
+        return Ok(());
+    }
+
     // Collect issue numbers from PRs cache (closingIssuesReferences).
     let prs_path = cache::cache_path(config.owner(), config.repo_name(), "prs");
     let prs: Vec<CachedPr> = cache::read_cache::<CachedPr>(&prs_path).entries;
@@ -1270,6 +1283,19 @@ pub fn collect_pr_query_branches(
 pub fn refresh_prs(config: &RepoConfig) -> anyhow::Result<()> {
     let path = cache::cache_path(config.owner(), config.repo_name(), "prs");
 
+    // SWR fast path: skip the gh api call when the PRs cache is Fresh.
+    let cached_file = cache::read_cache::<CachedPr>(&path);
+    let swr_config = crate::swr::SwrConfig::default_for(crate::swr::SwrKind::GithubPrs);
+    if crate::swr::classify_cache_file(&cached_file, chrono::Utc::now(), swr_config)
+        == crate::swr::SwrState::Fresh
+    {
+        LOG.info(&format!(
+            "cache_sources: refresh_prs({}): swr=Fresh, skipping gh api",
+            config.slug
+        ));
+        return Ok(());
+    }
+
     // Read both local and remote worktree caches to collect every branch
     // that needs a PR lookup. See `collect_pr_query_branches` for the
     // filtering + dedupe rules.
@@ -1403,6 +1429,23 @@ pub const CLAUDE_STATE_SENTINEL: &str = "---CLAUDE_STATE---";
 /// On failure the error is logged and the existing cache is left intact.
 pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let cache_path = cache::tmux_cache_path(host);
+
+    // SWR fast path — remote tmux list over SSH only. Local tmux is always
+    // fast enough to re-run; skipping it would delay session state updates
+    // with no cost savings.
+    if host.is_some() {
+        let cached_file = cache::read_cache::<CachedTmuxSession>(&cache_path);
+        let swr_config = crate::swr::SwrConfig::default_for(crate::swr::SwrKind::RemoteSessions);
+        if crate::swr::classify_cache_file(&cached_file, chrono::Utc::now(), swr_config)
+            == crate::swr::SwrState::Fresh
+        {
+            LOG.info(&format!(
+                "cache_sources: refresh_tmux_sessions({}): swr=Fresh, skipping ssh",
+                host.unwrap_or("local"),
+            ));
+            return Ok(());
+        }
+    }
 
     // For remote hosts, batch the tmux list-sessions and Claude state cat into
     // a single SSH call to minimise round-trips.
@@ -1545,6 +1588,21 @@ pub fn refresh_remote_worktrees(
     remote_cfg: &crate::global_config::RemoteConfig,
 ) -> anyhow::Result<()> {
     let cache_path = cache::cache_path(config.owner(), config.repo_name(), "remote_worktrees");
+
+    // SWR fast path: skip the adapter call entirely when the cache is Fresh.
+    // Stale → re-fetch (this refresh IS the background revalidation from the
+    // caller's point of view, since `refresh_and_build` already runs remotes
+    // concurrently off the main thread). Missing / Expired → re-fetch.
+    let cached_file = cache::read_cache::<CachedWorktree>(&cache_path);
+    let swr_config = crate::swr::SwrConfig::default_for(crate::swr::SwrKind::RemoteWorktrees);
+    let state = crate::swr::classify_cache_file(&cached_file, chrono::Utc::now(), swr_config);
+    if state == crate::swr::SwrState::Fresh {
+        LOG.info(&format!(
+            "cache_sources: refresh_remote_worktrees({}, {}): swr=Fresh, skipping adapter",
+            config.slug, remote_cfg.host,
+        ));
+        return Ok(());
+    }
 
     let adapter = crate::remote_adapter::RemoteAdapter::from_config(
         remote_cfg,
