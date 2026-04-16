@@ -12,7 +12,7 @@ use std::time::Duration;
 use crate::cache::CachedTmuxSession;
 use crate::logger::LOG;
 use crate::remote::shell_escape;
-use crate::session::build_windows;
+use crate::session::{PaneColumns, WindowInfo, build_windows};
 
 /// Max length for an untrusted session name, pane target, pane path, or window
 /// layout read out of the cache. Anything longer is a sign the cache is
@@ -60,8 +60,8 @@ pub enum SkipReason {
 ///
 /// Only unrecoverable failures surface here. All subordinate steps
 /// (`new-window`, `split-window`, `select-layout`, `send-keys cd`,
-/// `claude --continue`, `select-window`, `select-pane`) are best-effort:
-/// on failure they log a warning and the session is still reported as
+/// `select-window`, `select-pane`) are best-effort: on failure they log a
+/// warning and the session is still reported as
 /// [`SessionRestoreOutcome::Restored`] with accurate partial counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestoreStep {
@@ -177,8 +177,8 @@ pub fn live_local_session_names() -> Option<Vec<String>> {
 
 /// Minimum interval between two consecutive restore attempts across orchard
 /// processes. A cron-polling `orchard --json` every minute would otherwise
-/// re-probe every Claude pane's 2 s detection timeout and risk
-/// `kill-session` + recreate against sessions tmux just failed to list.
+/// keep re-probing tmux and risk `kill-session` + recreate against sessions
+/// tmux just failed to list.
 const RESTORE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 /// Filename for the sentinel that records the last restore attempt. Lives in
@@ -189,6 +189,11 @@ const RESTORE_SENTINEL: &str = "restore_last_run";
 /// Guard that ensures [`restore_all_local`] runs at most once per process,
 /// backstopping the file-based cooldown for the double-call-within-one-binary
 /// case (TUI boot + manual `refresh_and_build`).
+///
+/// **Testing note:** this is a process-global `OnceLock`. Tests that want to
+/// exercise the restore orchestration must call [`run_restore`] directly —
+/// calling [`restore_all_local`] from a test leaks state across test cases in
+/// the same process (and racy-shares it across threads).
 static RESTORE_RAN: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 /// Reads the local tmux cache, partitions cached sessions by [`restore`], runs
@@ -209,7 +214,7 @@ pub fn restore_all_local() -> RestoreReport {
     if RESTORE_RAN.set(()).is_err() {
         return RestoreReport::default();
     }
-    if recently_attempted_restore(RESTORE_COOLDOWN) {
+    if recently_attempted_restore_at(&sentinel_path(), RESTORE_COOLDOWN) {
         return RestoreReport::default();
     }
 
@@ -230,10 +235,13 @@ pub fn restore_all_local() -> RestoreReport {
     run_restore(&live, &cached)
 }
 
-/// Returns true when the restore-sentinel file exists and was written less
+/// Returns true when the sentinel file at `path` exists and was modified less
 /// than `cooldown` ago. Missing or stale sentinels return false.
-fn recently_attempted_restore(cooldown: Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(sentinel_path()) else {
+///
+/// Path is injected so unit tests can point at a tempfile instead of the
+/// real per-user cache dir.
+fn recently_attempted_restore_at(path: &Path, cooldown: Duration) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
     let Ok(modified) = metadata.modified() else {
@@ -245,8 +253,9 @@ fn recently_attempted_restore(cooldown: Duration) -> bool {
         .unwrap_or(false)
 }
 
-/// Touches the restore sentinel file so the next process's `recently_attempted_restore`
-/// check can see the timestamp. Failure is non-fatal (restore proceeds regardless).
+/// Touches the restore sentinel file so the next process's
+/// [`recently_attempted_restore_at`] check can see the timestamp. Failure is
+/// non-fatal (restore proceeds regardless).
 fn record_restore_attempt() {
     let path = sentinel_path();
     if let Some(parent) = path.parent() {
@@ -285,25 +294,28 @@ fn run_restore(live: &[String], cached: &[CachedTmuxSession]) -> RestoreReport {
 
 /// Runs the tmux commands to reconstruct a single session from cache.
 ///
-/// Implements the full orchestration:
-/// 1. `tmux new-session` (with kill-and-retry on first failure)
-/// 2. Build structured window/pane view via [`build_windows`]
-/// 3. Create additional windows (`new-window`), rename, split panes
-/// 4. Apply saved layout (`select-layout`) — non-fatal
-/// 5. `cd` each pane to its saved working directory — non-fatal
-/// 6. Resume Claude sessions (`claude --continue`) — non-fatal, polls for
-///    confirmation up to [`CLAUDE_DETECTION_TIMEOUT`]
-/// 7. Activate the previously-active window and pane
+/// Implements the orchestration:
+/// 1. Validate every cache-sourced string that will reach a tmux command line
+/// 2. `tmux new-session` (with kill-and-retry on first failure)
+/// 3. Build structured window/pane view via [`build_windows`]
+/// 4. Create additional windows (`new-window`), rename, split panes, apply layouts
+/// 5. `cd` any pane whose saved cwd differs from what it was created with
+/// 6. Activate the previously-active window and pane
 ///
-/// Only `new-session` failure produces [`SessionRestoreOutcome::Failed`].
-/// All other failures are logged as warnings and the session is returned as
-/// [`SessionRestoreOutcome::Restored`] with accurate partial counts.
+/// Only `new-session` or `InputValidation` failure produces
+/// [`SessionRestoreOutcome::Failed`]. All other failures are logged as warnings
+/// and the session is returned as [`SessionRestoreOutcome::Restored`] with
+/// accurate partial counts.
+///
+/// Known limitation: `send-keys "cd"` fires against a freshly-spawned shell.
+/// If the shell is slow to initialise (heavy rc-file, `nvm`, `starship`), the
+/// keystrokes may land before the prompt is ready. Rare in practice; the
+/// common case is avoided entirely — the `-c <cwd>` arguments on
+/// `new-session` / `new-window` / `split-window` mean most panes never need
+/// a `cd` at all.
 pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
     let session = plan.session;
 
-    // Step 0: validate every cache-sourced string that will reach a tmux
-    // command line. A tampered or corrupted cache file is untrusted input;
-    // we refuse rather than feed it to `tmux` or `send-keys`.
     if let Err(e) = validate_session_for_restore(session) {
         LOG.warn(&format!("restore: refusing {}: {}", session.name, e));
         return SessionRestoreOutcome::Failed {
@@ -312,32 +324,14 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
         };
     }
 
-    // Step 1: create the session (with kill-retry on first failure).
-    if let Err(e) = create_session(&session.name, &session.path) {
-        LOG.warn(&format!(
-            "restore: new-session {} failed: {}; retrying after kill-session",
-            session.name, e
-        ));
-        let _ = run_tmux(&["kill-session", "-t", &session.name]);
-        if let Err(e2) = create_session(&session.name, &session.path) {
-            return SessionRestoreOutcome::Failed {
-                step: RestoreStep::NewSession,
-                error: format!("{e}; retry after kill-session: {e2}"),
-            };
-        }
+    if let Err(e) = create_session_with_retry(&session.name, &session.path) {
+        return SessionRestoreOutcome::Failed {
+            step: RestoreStep::NewSession,
+            error: e,
+        };
     }
 
-    // Step 2: build structured view.
-    let windows = build_windows(
-        &session.pane_targets,
-        &session.pane_commands,
-        &session.pane_titles,
-        &session.window_names,
-        &session.window_active,
-        &session.pane_paths,
-        &session.pane_active,
-        &session.window_layouts,
-    );
+    let windows = build_windows(PaneColumns::from_cached(session));
 
     if windows.is_empty() {
         return SessionRestoreOutcome::Restored {
@@ -346,52 +340,130 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
         };
     }
 
-    let mut windows_created = 0usize;
-    let mut panes_created = 0usize;
+    let built = build_session_windows(&session.name, &session.path, &windows);
+    cd_panes_that_need_it(&session.name, &built);
+    activate_focus(&session.name, &windows);
 
-    // Step 3: build windows and panes.
+    SessionRestoreOutcome::Restored {
+        windows: built.windows_created,
+        panes: built.panes_created,
+    }
+}
+
+/// Records the cwd each pane was created with, so we can skip a redundant
+/// `send-keys cd` when the creation-time cwd already matches `pane.cwd`.
+struct BuiltPane {
+    tmux_target: String,
+    desired_cwd: String,
+    /// The cwd actually passed to `new-session -c` / `new-window -c` /
+    /// `split-window -c`. Empty if creation of this pane failed.
+    created_with_cwd: String,
+}
+
+/// Aggregated outcome of building all windows/panes for a session.
+struct BuiltSession {
+    windows_created: usize,
+    panes_created: usize,
+    panes: Vec<BuiltPane>,
+}
+
+/// Runs `tmux new-session` with a kill-session retry on first failure.
+///
+/// Returns `Err(message)` if even the kill-and-retry pass fails — the caller
+/// should surface that as [`RestoreStep::NewSession`]. All other steps in
+/// [`restore_session`] are best-effort.
+fn create_session_with_retry(name: &str, path: &str) -> Result<(), String> {
+    if let Err(e) = create_session(name, path) {
+        LOG.warn(&format!(
+            "restore: new-session {name} failed: {e}; retrying after kill-session"
+        ));
+        let _ = run_tmux(&["kill-session", "-t", name]);
+        if let Err(e2) = create_session(name, path) {
+            return Err(format!("{e}; retry after kill-session: {e2}"));
+        }
+    }
+    Ok(())
+}
+
+/// Recreates each window's panes, tracks which cwd each was created with,
+/// and applies the saved layout.
+///
+/// The implicit first pane of window 0 was created by `new-session` with
+/// `-c session.path`; windows 1+ get their first pane from `new-window -c`;
+/// subsequent panes come from `split-window -c`.
+fn build_session_windows(
+    session_name: &str,
+    session_path: &str,
+    windows: &[WindowInfo],
+) -> BuiltSession {
+    let mut out = BuiltSession {
+        windows_created: 0,
+        panes_created: 0,
+        panes: Vec::new(),
+    };
+
     for (idx, window) in windows.iter().enumerate() {
-        let is_first = idx == 0;
-        let first_pane_cwd = window
+        let is_first_window = idx == 0;
+        let target = format!("{session_name}:{}", window.index);
+
+        // cwd passed to new-window / new-session for the first pane of this window.
+        let first_pane_creation_cwd = window
             .panes
             .first()
             .map(|p| p.cwd.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(session.path.as_str());
+            .unwrap_or(session_path)
+            .to_string();
 
-        if !is_first {
-            let target = format!("{}:{}", session.name, window.index);
-            if let Err(e) = run_tmux(&["new-window", "-t", &target, "-c", first_pane_cwd]) {
-                LOG.warn(&format!("restore: new-window {target} failed: {e}"));
-                continue;
-            }
+        if !is_first_window
+            && let Err(e) = run_tmux(&["new-window", "-t", &target, "-c", &first_pane_creation_cwd])
+        {
+            LOG.warn(&format!("restore: new-window {target} failed: {e}"));
+            continue;
         }
-        windows_created += 1;
+        out.windows_created += 1;
 
-        let target = format!("{}:{}", session.name, window.index);
-
-        // Rename window (non-fatal).
         if let Err(e) = run_tmux(&["rename-window", "-t", &target, &window.name]) {
             LOG.warn(&format!("restore: rename-window {target} failed: {e}"));
         }
 
-        // First pane is implicit; split for each subsequent pane.
-        panes_created += 1;
-        for pane in window.panes.iter().skip(1) {
-            let cwd = if pane.cwd.is_empty() {
-                session.path.as_str()
+        if let Some(pane) = window.panes.first() {
+            // Window 0's implicit first pane was created by `new-session -c
+            // session_path`; all other first panes by `new-window -c
+            // first_pane_creation_cwd`.
+            let created_with = if is_first_window {
+                session_path.to_string()
             } else {
-                pane.cwd.as_str()
+                first_pane_creation_cwd.clone()
             };
-            if let Err(e) = run_tmux(&["split-window", "-t", &target, "-c", cwd]) {
+            out.panes_created += 1;
+            out.panes.push(BuiltPane {
+                tmux_target: format!("{session_name}:{}", pane.tmux_target),
+                desired_cwd: pane.cwd.clone(),
+                created_with_cwd: created_with,
+            });
+        }
+
+        for pane in window.panes.iter().skip(1) {
+            let split_cwd = if pane.cwd.is_empty() {
+                session_path.to_string()
+            } else {
+                pane.cwd.clone()
+            };
+            if let Err(e) = run_tmux(&["split-window", "-t", &target, "-c", &split_cwd]) {
                 LOG.warn(&format!("restore: split-window {target} failed: {e}"));
                 continue;
             }
-            panes_created += 1;
+            out.panes_created += 1;
+            out.panes.push(BuiltPane {
+                tmux_target: format!("{session_name}:{}", pane.tmux_target),
+                desired_cwd: pane.cwd.clone(),
+                created_with_cwd: split_cwd,
+            });
         }
 
-        // Apply layout (non-fatal). `--` prevents tmux from parsing a layout
-        // string that happens to start with `-` as an option flag.
+        // `--` prevents tmux from parsing a layout string that happens to
+        // start with `-` as an option flag.
         if !window.layout.is_empty()
             && let Err(e) = run_tmux(&["select-layout", "-t", &target, "--", &window.layout])
         {
@@ -399,47 +471,48 @@ pub fn restore_session(plan: &RestorePlan<'_>) -> SessionRestoreOutcome {
         }
     }
 
-    // Step 4: cd each pane to its saved working directory. This is the
-    // highest-value restore step — the user can re-launch their own tools
-    // (including `claude`) from the correct directory. We deliberately do
-    // NOT auto-resume Claude; users handle that themselves.
-    for window in &windows {
-        for pane in &window.panes {
-            if pane.cwd.is_empty() {
-                continue;
-            }
-            let pane_target = format!("{}:{}", session.name, pane.tmux_target);
-            let cmd_str = format!("cd {}", shell_escape(&pane.cwd));
-            if let Err(e) = run_tmux(&["send-keys", "-t", &pane_target, &cmd_str, "Enter"]) {
-                LOG.warn(&format!("restore: send-keys cd {pane_target} failed: {e}"));
-            }
+    out
+}
+
+/// Sends `cd <path>` to any pane whose saved cwd differs from the cwd it was
+/// created with. Skips the common case where `-c <cwd>` already put the shell
+/// in the right place — avoids visible `cd` garbage in the scrollback and
+/// sidesteps the shell-prompt race.
+fn cd_panes_that_need_it(session_name: &str, built: &BuiltSession) {
+    for pane in &built.panes {
+        if pane.desired_cwd.is_empty() || pane.desired_cwd == pane.created_with_cwd {
+            continue;
+        }
+        let cmd_str = format!("cd {}", shell_escape(&pane.desired_cwd));
+        if let Err(e) = run_tmux(&["send-keys", "-t", &pane.tmux_target, &cmd_str, "Enter"]) {
+            LOG.warn(&format!(
+                "restore: send-keys cd {}:{} failed: {e}",
+                session_name, pane.tmux_target
+            ));
         }
     }
+}
 
-    // Step 5: activate the correct window and pane.
-    let active_window = windows.iter().find(|w| w.is_active).or(windows.first());
-    if let Some(active) = active_window {
-        let win_target = format!("{}:{}", session.name, active.index);
-        if let Err(e) = run_tmux(&["select-window", "-t", &win_target]) {
-            LOG.warn(&format!("restore: select-window {win_target} failed: {e}"));
-        }
-
-        let active_pane = active
-            .panes
-            .iter()
-            .find(|p| p.is_active)
-            .or(active.panes.first());
-        if let Some(pane) = active_pane {
-            let pane_target = format!("{}:{}", session.name, pane.tmux_target);
-            if let Err(e) = run_tmux(&["select-pane", "-t", &pane_target]) {
-                LOG.warn(&format!("restore: select-pane {pane_target} failed: {e}"));
-            }
-        }
+/// Activates the previously-focused window and pane. Non-fatal on failure.
+fn activate_focus(session_name: &str, windows: &[WindowInfo]) {
+    let Some(active_window) = windows.iter().find(|w| w.is_active).or(windows.first()) else {
+        return;
+    };
+    let win_target = format!("{session_name}:{}", active_window.index);
+    if let Err(e) = run_tmux(&["select-window", "-t", &win_target]) {
+        LOG.warn(&format!("restore: select-window {win_target} failed: {e}"));
     }
 
-    SessionRestoreOutcome::Restored {
-        windows: windows_created,
-        panes: panes_created,
+    let active_pane = active_window
+        .panes
+        .iter()
+        .find(|p| p.is_active)
+        .or(active_window.panes.first());
+    if let Some(pane) = active_pane {
+        let pane_target = format!("{session_name}:{}", pane.tmux_target);
+        if let Err(e) = run_tmux(&["select-pane", "-t", &pane_target]) {
+            LOG.warn(&format!("restore: select-pane {pane_target} failed: {e}"));
+        }
     }
 }
 
@@ -765,15 +838,52 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Cooldown guard tests (no tmux required, no filesystem dependencies)
+    // Cooldown guard tests (no tmux required — sentinel path is injected)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn recently_attempted_restore_is_false_when_sentinel_missing() {
-        // The sentinel path lives in the user's cache dir which this test
-        // can't isolate without dependency injection, but a zero cooldown
-        // trivially returns false regardless of mtime.
-        assert!(!recently_attempted_restore(Duration::from_secs(0)));
+    fn recently_attempted_restore_at_is_false_when_sentinel_missing() {
+        let missing = std::env::temp_dir().join(format!(
+            "orchard-test-missing-sentinel-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        assert!(!missing.exists(), "precondition: sentinel must not exist");
+        assert!(!recently_attempted_restore_at(
+            &missing,
+            Duration::from_secs(300)
+        ));
+    }
+
+    #[test]
+    fn recently_attempted_restore_at_is_true_when_sentinel_is_recent() {
+        let path = std::env::temp_dir().join(format!(
+            "orchard-test-recent-sentinel-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"").unwrap();
+        let result = recently_attempted_restore_at(&path, Duration::from_secs(300));
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            result,
+            "a just-written sentinel must register as recent under a 5-min cooldown"
+        );
+    }
+
+    #[test]
+    fn recently_attempted_restore_at_is_false_when_cooldown_is_zero() {
+        // Zero cooldown ⇒ nothing is "recent" by definition — the elapsed
+        // time is always >= 0, so the `elapsed < cooldown` check fails.
+        let path = std::env::temp_dir().join(format!(
+            "orchard-test-zero-cooldown-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"").unwrap();
+        let result = recently_attempted_restore_at(&path, Duration::from_secs(0));
+        let _ = std::fs::remove_file(&path);
+        assert!(!result, "zero cooldown must treat every sentinel as stale");
     }
 
     // -----------------------------------------------------------------------

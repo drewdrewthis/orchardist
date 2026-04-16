@@ -346,10 +346,10 @@ pub fn write_cache<T: Serialize>(path: &Path, entries: &[T]) -> anyhow::Result<(
 
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, &json).context("write cache .tmp file")?;
-    // Restrict to owner-only read/write before the rename. The tmux cache now
-    // contains Claude session ids + per-pane cwds + captured stdout; the
-    // `parse_iso8601_to_epoch` issue/PR caches carry GitHub data. None of it
-    // should be world-readable on a shared host.
+    // Restrict to owner-only read/write before the rename. The tmux cache
+    // carries per-pane cwds, window layouts, and captured stdout lines; the
+    // issue/PR caches carry GitHub data. None of it should be world-readable
+    // on a shared host.
     restrict_cache_permissions(&tmp_path);
     std::fs::rename(&tmp_path, path).context("rename .tmp to final cache file")?;
 
@@ -429,6 +429,10 @@ pub fn read_manifest() -> SessionManifest {
 }
 
 /// Writes the session manifest to disk atomically (via a `.tmp` sibling file).
+///
+/// Applies 0600 permissions on Unix — the manifest records which worktrees
+/// had active tmux/Claude sessions, which is metadata that should not be
+/// world-readable on a shared host (same reasoning as [`write_cache`]).
 pub fn write_manifest(manifest: &SessionManifest) -> anyhow::Result<()> {
     let path = manifest_path();
     let dir = path
@@ -438,6 +442,7 @@ pub fn write_manifest(manifest: &SessionManifest) -> anyhow::Result<()> {
     let data = serde_json::to_string_pretty(manifest).context("serialize manifest")?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &data).context("write manifest .tmp file")?;
+    restrict_cache_permissions(&tmp);
     std::fs::rename(&tmp, &path).context("rename .tmp to final manifest file")?;
     Ok(())
 }

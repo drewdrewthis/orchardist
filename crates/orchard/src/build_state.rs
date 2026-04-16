@@ -12,8 +12,8 @@ use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
 use crate::orchard_state::{HostState, OrchardState, RepoState, WorktreeState};
 use crate::session::{
-    ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, StandaloneSessionRow, TmuxSessionInfo,
-    build_windows_and_panes,
+    ClaudeSessionInfo, EnrichedSession, Host, PaneColumns, SessionStatus, StandaloneSessionRow,
+    TmuxSessionInfo, build_windows_and_panes,
 };
 use crate::sources;
 
@@ -138,18 +138,7 @@ fn build_standalone_sessions(
                 .and_then(ClaudeSessionInfo::from_state_file);
 
             let (windows, panes) = live
-                .map(|s| {
-                    build_windows_and_panes(
-                        &s.pane_targets,
-                        &s.pane_commands,
-                        &s.pane_titles,
-                        &s.window_names,
-                        &s.window_active,
-                        &s.pane_paths,
-                        &s.pane_active,
-                        &s.window_layouts,
-                    )
-                })
+                .map(|s| build_windows_and_panes(PaneColumns::from_cached(s)))
                 .unwrap_or_default();
 
             let started_at = live.and_then(|s| s.created_at);

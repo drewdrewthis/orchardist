@@ -8,8 +8,8 @@ use crate::classify::derive_display_group;
 use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
 use crate::github;
 use crate::session::{
-    ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
-    build_windows_and_panes,
+    ClaudeSessionInfo, EnrichedSession, Host, PaneColumns, PaneInfo, SessionStatus,
+    TmuxSessionInfo, WindowInfo, build_windows_and_panes,
 };
 
 /// Tuple type for per-repo cache data passed to [`derive_all_repos`].
@@ -206,16 +206,7 @@ pub(crate) fn enrich_session(
         status: SessionStatus::Running { attached: false },
     };
 
-    let (windows, panes) = build_windows_and_panes(
-        &session.pane_targets,
-        &session.pane_commands,
-        &session.pane_titles,
-        &session.window_names,
-        &session.window_active,
-        &session.pane_paths,
-        &session.pane_active,
-        &session.window_layouts,
-    );
+    let (windows, panes) = build_windows_and_panes(PaneColumns::from_cached(session));
 
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
@@ -354,16 +345,7 @@ mod tests {
             name: session.name.clone(),
             status: SessionStatus::Running { attached: false },
         };
-        let (windows, panes) = build_windows_and_panes(
-            &session.pane_targets,
-            &session.pane_commands,
-            &session.pane_titles,
-            &session.window_names,
-            &session.window_active,
-            &session.pane_paths,
-            &session.pane_active,
-            &session.window_layouts,
-        );
+        let (windows, panes) = build_windows_and_panes(PaneColumns::from_cached(session));
         enrich_session_from_scraping(session, tmux, windows, panes)
     }
 
