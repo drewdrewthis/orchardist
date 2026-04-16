@@ -171,9 +171,7 @@ impl SshExec for FakeSshExec {
             .get(&(host.to_string(), cmd.to_string()))
             .cloned()
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "FakeSshExec: no canned response for ({host:?}, {cmd:?})"
-                )
+                anyhow::anyhow!("FakeSshExec: no canned response for ({host:?}, {cmd:?})")
             })
     }
 }
@@ -453,16 +451,14 @@ impl BoxdForkAdapter {
         // Steps 3-5: per-fork branch resolution.
         for entry in entries {
             let fork_host = format!("boxd@{}", entry.host);
-            let branch_cmd =
-                format!("cd {} && git rev-parse --abbrev-ref HEAD", entry.path);
+            let branch_cmd = format!("cd {} && git rev-parse --abbrev-ref HEAD", entry.path);
 
             let branch = match self.ssh.exec(&fork_host, &branch_cmd) {
                 Ok(out) => {
                     let raw = out.stdout.trim().to_string();
                     if raw == "HEAD" {
                         // Detached HEAD: resolve commit hash.
-                        let commit_cmd =
-                            format!("cd {} && git rev-parse --short HEAD", entry.path);
+                        let commit_cmd = format!("cd {} && git rev-parse --short HEAD", entry.path);
                         let sha = self
                             .ssh
                             .exec(&fork_host, &commit_cmd)

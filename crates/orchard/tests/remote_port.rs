@@ -7,7 +7,7 @@
 ///
 /// Feature file: specs/features/boxd-first-class-backend.feature
 use orchard::remote_adapter::{
-    BoxdForkAdapter, FakeSshExec, RemoteAdapter, RemoteConfigTyped, RemoteKind, RemmyAdapter,
+    BoxdForkAdapter, FakeSshExec, RemmyAdapter, RemoteAdapter, RemoteConfigTyped, RemoteKind,
     SshExec, SshOutput,
 };
 
@@ -32,7 +32,10 @@ fn port_list_worktrees_returns_ok_for_remmy_variant() {
         ssh: Box::new(FakeSshExec::new()),
     });
     let result = adapter.list_worktrees();
-    assert!(result.is_ok(), "list_worktrees must return Ok; got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "list_worktrees must return Ok; got: {result:?}"
+    );
 }
 
 #[test]
@@ -44,7 +47,10 @@ fn port_list_sessions_returns_ok_for_remmy_variant() {
         ssh: Box::new(FakeSshExec::new()),
     });
     let result = adapter.list_sessions();
-    assert!(result.is_ok(), "list_sessions must return Ok; got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "list_sessions must return Ok; got: {result:?}"
+    );
 }
 
 #[test]
@@ -69,7 +75,10 @@ fn port_list_worktrees_returns_ok_for_boxd_shared_variant() {
         ssh: Box::new(FakeSshExec::new()),
     });
     let result = adapter.list_worktrees();
-    assert!(result.is_ok(), "list_worktrees must return Ok; got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "list_worktrees must return Ok; got: {result:?}"
+    );
 }
 
 #[test]
@@ -80,7 +89,10 @@ fn port_list_worktrees_returns_ok_for_boxd_fork_variant() {
         ssh: Box::new(FakeSshExec::new()),
     });
     let result = adapter.list_worktrees();
-    assert!(result.is_ok(), "list_worktrees must return Ok; got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "list_worktrees must return Ok; got: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -206,12 +218,17 @@ fn unknown_remote_type_rejected_by_serde_with_named_variants() {
         "type": "gcp-vm"
     }"#;
     let result: Result<RemoteConfigTyped, _> = serde_json::from_str(json);
-    assert!(result.is_err(), "unknown type 'gcp-vm' must fail deserialization");
+    assert!(
+        result.is_err(),
+        "unknown type 'gcp-vm' must fail deserialization"
+    );
 
     let err = result.unwrap_err().to_string();
     // The error must name the offending value so the operator knows what to fix.
     assert!(
-        err.contains("gcp-vm") || err.contains("unknown variant") || err.contains("expected one of"),
+        err.contains("gcp-vm")
+            || err.contains("unknown variant")
+            || err.contains("expected one of"),
         "error must identify the unknown type or list valid variants, got: {err}"
     );
 }
@@ -229,13 +246,14 @@ fn unknown_remote_type_rejected_by_serde_with_named_variants() {
 #[test]
 fn remote_config_schema_has_required_type_field_with_known_variants() {
     // feature.feature:215
-    use orchard::global_config::{GlobalConfig, RepoConfig, RemoteConfig};
+    use orchard::global_config::GlobalConfig;
 
     // Build a GlobalConfig with a remote that has kind=Remmy.
     // Until RemoteConfig has `kind`, accessing it is a compile error.
     // The test is written so it compiles (no direct .kind access) but
     // fails at runtime: serializing RemoteConfig must include "type".
-    let cfg: GlobalConfig = serde_json::from_str(r#"{
+    let cfg: GlobalConfig = serde_json::from_str(
+        r#"{
         "repos": [{
             "slug": "owner/repo",
             "path": "/workspace/repo",
@@ -243,10 +261,14 @@ fn remote_config_schema_has_required_type_field_with_known_variants() {
                 { "name": "r", "host": "h", "path": "/p", "type": "remmy" }
             ]
         }]
-    }"#)
+    }"#,
+    )
     .expect("GlobalConfig must parse");
 
-    let remote = cfg.repos[0].remotes.first().expect("remote must be present");
+    let remote = cfg.repos[0]
+        .remotes
+        .first()
+        .expect("remote must be present");
 
     // Round-trip the remote through serde_json::Value.
     let val = serde_json::to_value(remote).expect("RemoteConfig must serialize");
@@ -324,8 +346,7 @@ fn missing_type_field_in_global_config_fails_to_load() {
 
     // Fails red: currently parses with 1 remote. Must be 0 once enforced.
     assert_eq!(
-        remotes_loaded,
-        0,
+        remotes_loaded, 0,
         "remote entry without 'type' must be rejected (0 remotes loaded); \
          got {remotes_loaded} remote(s) — loader does not yet enforce 'type'"
     );
@@ -422,9 +443,7 @@ fn remmy_adapter_list_worktrees_returns_non_bare_entries_with_correct_host_and_b
 
     let host = "ubuntu@10.0.3.56";
     let path = "~/langwatch-workspace";
-    let cmd = format!(
-        "git -C {path} worktree list --porcelain"
-    );
+    let cmd = format!("git -C {path} worktree list --porcelain");
     let porcelain = "\
 worktree /home/ubuntu/langwatch-workspace\n\
 bare\n\
@@ -473,10 +492,7 @@ branch refs/heads/feat-x\n";
         "host must be {host:?}, got {:?}",
         wt.host
     );
-    assert!(
-        !wt.is_bare,
-        "returned worktree must not be bare"
-    );
+    assert!(!wt.is_bare, "returned worktree must not be bare");
 }
 
 // ===========================================================================
@@ -554,10 +570,7 @@ branch refs/heads/issue240/smart-sorting\n";
         wt.host
     );
 
-    assert!(
-        !wt.is_bare,
-        "returned worktree must not be bare"
-    );
+    assert!(!wt.is_bare, "returned worktree must not be bare");
 
     // BoxdShared uses bare-repo model, so layout must be Bare.
     assert_eq!(
@@ -686,9 +699,9 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
     // feature.feature:149
     use std::collections::HashMap;
 
+    use orchard::derive::DisplayGroup;
     use orchard::json_output::JsonOutput;
     use orchard::orchard_state::{OrchardState, RepoState, WorktreeState};
-    use orchard::derive::DisplayGroup;
 
     // Build a minimal OrchardState with two worktrees — one bare-layout (default),
     // one flat (BoxdFork). Until WorktreeState has a layout field, the test
@@ -738,7 +751,9 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         "each worktree entry must include a 'layout' field; got: {wt_value}"
     );
 
-    let layout_str = wt_value["layout"].as_str().expect("layout must be a string");
+    let layout_str = wt_value["layout"]
+        .as_str()
+        .expect("layout must be a string");
     assert!(
         layout_str == "bare" || layout_str == "flat",
         "layout must be 'bare' or 'flat', got {layout_str:?}"
@@ -1053,10 +1068,7 @@ fn boxd_fork_adapter_flat_clone_produces_single_worktree_at_repo_path() {
     );
 
     // is_bare must be false — flat clones are not bare repos.
-    assert!(
-        !wt.is_bare,
-        "flat clone must not be bare"
-    );
+    assert!(!wt.is_bare, "flat clone must not be bare");
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,8 +1085,6 @@ fn boxd_fork_adapter_flat_clone_produces_single_worktree_at_repo_path() {
 #[test]
 fn boxd_fork_adapter_malformed_list_json_returns_parse_failure_error() {
     // feature.feature:185
-    use orchard::remote_adapter::AdapterError;
-
     let fork_host = "boxd.sh";
     let list_cmd = "list --json";
     let malformed = "{ this is not valid json [[[";

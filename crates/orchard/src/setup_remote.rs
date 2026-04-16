@@ -6,9 +6,9 @@
 //! on failure.
 
 use crate::global_config::{self, GlobalConfig, RemoteConfig};
+use crate::remote::{shell_escape, ssh_exec};
 #[cfg(test)]
 use crate::remote_adapter::RemoteKind;
-use crate::remote::{shell_escape, ssh_exec};
 
 // ---------------------------------------------------------------------------
 // ANSI colour helpers
