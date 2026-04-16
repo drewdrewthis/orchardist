@@ -63,6 +63,69 @@ pub fn ssh_exec(host: &str, command: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Runs a shell command on a remote host over SSH with a hard wall-clock
+/// timeout, killing the child process when it expires.
+///
+/// `ssh -o ConnectTimeout=5` only bounds the initial TCP/SSH handshake.
+/// Once authenticated, a hung remote command (e.g. a tmux server that
+/// accepts the SSH session but never responds to the command itself) will
+/// block indefinitely. This wrapper spawns the SSH subprocess, waits up to
+/// `timeout`, and kills the child if it has not exited — guaranteeing the
+/// caller never blocks beyond the deadline.
+///
+/// Returns `Err` with `"ssh command timed out after <N>s"` if the deadline
+/// fires, distinguishable from other SSH errors by the `timed out` phrase.
+pub fn ssh_exec_with_timeout(
+    host: &str,
+    command: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<String> {
+    use std::io::Read;
+    use std::time::Instant;
+
+    let flags = ssh_flags();
+    let mut args: Vec<&str> = flags.iter().map(|s| s.as_str()).collect();
+    args.push(host);
+    args.push(command);
+
+    let mut child = Command::new("ssh")
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut o) = child.stdout.take() {
+                    let _ = o.read_to_string(&mut stdout);
+                }
+                if let Some(mut e) = child.stderr.take() {
+                    let _ = e.read_to_string(&mut stderr);
+                }
+                if !status.success() {
+                    return Err(anyhow!("ssh command failed: {stderr}"));
+                }
+                return Ok(stdout);
+            }
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!(
+                        "ssh command timed out after {}s",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+
 /// Returns all git worktrees on the remote machine for the configured repo path.
 /// Returns an empty `Vec` on any error.
 pub fn list_remote_worktrees(remote: &RemoteConfig) -> Vec<Worktree> {
@@ -435,5 +498,50 @@ mod tests {
     #[test]
     fn shell_escape_wraps_backticks() {
         assert_eq!(shell_escape("`whoami`"), "'`whoami`'");
+    }
+
+    // ---------------------------------------------------------------------
+    // ssh_exec_with_timeout — AC6 (feature.feature:469)
+    //
+    // These tests spawn a real `ssh` subprocess pointed at a deliberately
+    // unroutable host. They are gated behind a helper that skips the test
+    // when no `ssh` binary is available, so CI environments without SSH
+    // (e.g. the Tauri cross-compile shard) still build green.
+    // ---------------------------------------------------------------------
+
+    fn ssh_binary_present() -> bool {
+        std::process::Command::new("ssh").arg("-V").output().is_ok()
+    }
+
+    /// When the wrapped command cannot complete within the deadline, the
+    /// function returns an error whose message contains `"timed out"` and
+    /// the child is reaped — no zombie, no blocked caller.
+    #[test]
+    fn ssh_exec_with_timeout_kills_runaway_child_and_returns_timed_out_error() {
+        if !ssh_binary_present() {
+            eprintln!("SKIP: ssh binary not available");
+            return;
+        }
+
+        // 192.0.2.0/24 is TEST-NET-1 (RFC 5737) — guaranteed unroutable.
+        // Combined with `ConnectTimeout=5` in `ssh_flags`, ssh will hang on
+        // TCP SYN until the system-level timeout; we preempt it at 200ms.
+        let start = std::time::Instant::now();
+        let result =
+            ssh_exec_with_timeout("192.0.2.1", "true", std::time::Duration::from_millis(200));
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "expected timeout error, got: {:?}", result);
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("timed out"),
+            "error must mention 'timed out'; got: {err_msg}"
+        );
+        // 200ms timeout + small slack for process cleanup.
+        assert!(
+            elapsed < std::time::Duration::from_millis(1500),
+            "timeout must preempt SSH ConnectTimeout; elapsed {:?}",
+            elapsed
+        );
     }
 }

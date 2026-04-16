@@ -116,18 +116,32 @@ pub trait SshExec: Send + Sync {
 // Real SSH executor
 // ---------------------------------------------------------------------------
 
-/// SSH executor that spawns a real `ssh` subprocess.
+/// SSH executor that spawns a real `ssh` subprocess with a hard wall-clock
+/// timeout.
 ///
-/// Delegates to `crate::remote::ssh_exec`, which applies the orchard-wide
-/// SSH multiplexing flags (`ControlMaster=auto`, `ControlPath`,
-/// `ConnectTimeout=5`, `BatchMode=yes`) already used by the rest of the crate.
+/// Delegates to `crate::remote::ssh_exec_with_timeout`, which applies the
+/// orchard-wide SSH multiplexing flags (`ControlMaster=auto`, `ControlPath`,
+/// `ConnectTimeout=5`, `BatchMode=yes`) and, critically, kills the child if
+/// the command does not exit within `DEFAULT_ADAPTER_TIMEOUT`. This bounds
+/// `orchard --json` latency when a remote VM accepts SSH but hangs on the
+/// actual command — AC6.
+///
 /// `stderr` is surfaced through the returned error rather than as part of
 /// `SshOutput`; successful calls produce `stderr = ""` and `exit_code = 0`.
 pub struct ProcessSshExec;
 
+/// Hard wall-clock bound enforced by `ProcessSshExec` on every adapter call.
+///
+/// 5 seconds matches the SSH `ConnectTimeout` in `remote::ssh_flags()`, so a
+/// fully-wedged host is bounded to ~5s per call end-to-end. Refresh
+/// pipelines running 3+ remotes concurrently therefore stay under the
+/// 5-second wall-clock bound that the feature file (AC6 @e2e, line 487)
+/// requires when every host is unreachable.
+pub const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl SshExec for ProcessSshExec {
     fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
-        let stdout = crate::remote::ssh_exec(host, cmd)?;
+        let stdout = crate::remote::ssh_exec_with_timeout(host, cmd, DEFAULT_ADAPTER_TIMEOUT)?;
         Ok(SshOutput {
             stdout,
             stderr: String::new(),
