@@ -637,12 +637,14 @@ mod tests {
                     PaneInfo::new(0, "0.0", "bash", "bash"),
                     PaneInfo::new(1, "0.1", "nvim", "nvim"),
                 ],
+                layout: String::new(),
             },
             WindowInfo {
                 index: 1,
                 name: "editor".to_string(),
                 is_active: false,
                 panes: vec![PaneInfo::new(2, "1.0", "claude", "claude")],
+                layout: String::new(),
             },
         ];
         let enriched = make_enriched_session(windows);

@@ -145,6 +145,10 @@ fn build_standalone_sessions(
                         &s.pane_titles,
                         &s.window_names,
                         &s.window_active,
+                        &s.pane_paths,
+                        &s.pane_active,
+                        &s.window_layouts,
+                        &s.claude_session_ids,
                     )
                 })
                 .unwrap_or_default();

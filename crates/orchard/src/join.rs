@@ -212,6 +212,10 @@ pub(crate) fn enrich_session(
         &session.pane_titles,
         &session.window_names,
         &session.window_active,
+        &session.pane_paths,
+        &session.pane_active,
+        &session.window_layouts,
+        &session.claude_session_ids,
     );
 
     // Hook-first: check if a fresh state file exists for this session.
@@ -357,6 +361,10 @@ mod tests {
             &session.pane_titles,
             &session.window_names,
             &session.window_active,
+            &session.pane_paths,
+            &session.pane_active,
+            &session.window_layouts,
+            &session.claude_session_ids,
         );
         enrich_session_from_scraping(session, tmux, windows, panes)
     }

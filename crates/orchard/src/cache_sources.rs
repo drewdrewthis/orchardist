@@ -622,7 +622,15 @@ fn parse_pane_lines(output: &str) -> ParsedPaneData {
         // Split into at most 7 fields; match on slice length to pick format generation.
         let parts: Vec<&str> = line.splitn(7, '\t').collect();
         match parts.as_slice() {
-            [target, win_name, win_active, win_layout, pane_path, p_active, rest] => {
+            [
+                target,
+                win_name,
+                win_active,
+                win_layout,
+                pane_path,
+                p_active,
+                rest,
+            ] => {
                 // New 7-field format.
                 targets.push(target.to_string());
                 window_names.push(win_name.to_string());
@@ -3176,17 +3184,10 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         // 7-field tab-delimited pane line:
         // {window}.{pane}\t{window_name}\t{window_active}\t{window_layout}\t{pane_path}\t{pane_active}\t{title}:{command}
         let layout = "bb62,80x24,0,0{40x24,0,0,1,39x24,41,0,2}";
-        let pane_line = format!(
-            "0.0\tmain\t1\t{layout}\t/home/user/repo\t1\tbash:bash"
-        );
+        let pane_line = format!("0.0\tmain\t1\t{layout}\t/home/user/repo\t1\tbash:bash");
         let sessions = "my-session:/home/user/repo\n";
 
-        let result = parse_tmux_output(
-            sessions,
-            None,
-            |_| pane_line.clone(),
-            |_| vec![],
-        );
+        let result = parse_tmux_output(sessions, None, |_| pane_line.clone(), |_| vec![]);
 
         assert_eq!(result.len(), 1);
         let session = &result[0];

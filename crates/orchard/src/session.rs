@@ -139,6 +139,17 @@ pub struct PaneInfo {
     pub title: String,
     /// True when the pane is running a Claude process (detected from command or title).
     pub has_claude: bool,
+    /// Working directory of this pane at snapshot time (from `#{pane_current_path}`).
+    ///
+    /// Needed during session restore so each pane is `cd`'d back to its last dir.
+    pub cwd: String,
+    /// Whether this pane is the active (focused) pane in its window.
+    pub is_active: bool,
+    /// Claude session ID if this pane was running Claude at snapshot time.
+    ///
+    /// Keyed off the pane's tmux target in `CachedTmuxSession.claude_session_ids`.
+    /// When `Some`, restore can resume the conversation via `claude --continue`.
+    pub claude_session_id: Option<String>,
 }
 
 impl PaneInfo {
@@ -146,6 +157,10 @@ impl PaneInfo {
     ///
     /// Detection is case-insensitive: any occurrence of "claude" in either
     /// the command or title marks `has_claude` as true.
+    ///
+    /// The new metadata fields (`cwd`, `is_active`, `claude_session_id`) default
+    /// to empty/false/None. Use [`PaneInfo::new_with_metadata`] when those fields
+    /// are available (e.g., from a `CachedTmuxSession`).
     pub fn new(index: usize, tmux_target: &str, command: &str, title: &str) -> Self {
         let has_claude =
             command.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
@@ -155,19 +170,63 @@ impl PaneInfo {
             command: command.to_string(),
             title: title.to_string(),
             has_claude,
+            cwd: String::new(),
+            is_active: false,
+            claude_session_id: None,
+        }
+    }
+
+    /// Constructs a `PaneInfo` including restore-time metadata.
+    ///
+    /// Identical to [`PaneInfo::new`] but also sets `cwd`, `is_active`, and
+    /// `claude_session_id`. Use this from `build_pane_infos` / `build_windows`
+    /// where `CachedTmuxSession` parallel vecs supply the extra data.
+    ///
+    /// An empty `claude_session_id` string is normalised to `None` — the empty
+    /// string is the sentinel value used when no Claude session was running.
+    pub fn new_with_metadata(
+        index: usize,
+        tmux_target: &str,
+        command: &str,
+        title: &str,
+        cwd: String,
+        is_active: bool,
+        claude_session_id: Option<String>,
+    ) -> Self {
+        let has_claude =
+            command.to_lowercase().contains("claude") || title.to_lowercase().contains("claude");
+        PaneInfo {
+            index,
+            tmux_target: tmux_target.to_string(),
+            command: command.to_string(),
+            title: title.to_string(),
+            has_claude,
+            cwd,
+            is_active,
+            claude_session_id,
         }
     }
 }
 
-/// Builds a `Vec<PaneInfo>` from parallel slices of pane targets, commands, and titles.
+/// Builds a `Vec<PaneInfo>` from parallel slices of pane targets, commands, titles,
+/// working directory paths, active flags, and Claude session ID map.
 ///
 /// When input slices have different lengths, the shorter ones are padded with
 /// empty strings or fallback indices. This handles edge cases where tmux
 /// reports an unequal number of entries across fields.
+///
+/// - `pane_paths`: working directory per pane (`#{pane_current_path}`). Missing
+///   entries default to empty string.
+/// - `pane_active`: "1" → active, anything else → inactive. Missing → inactive.
+/// - `claude_session_ids`: maps pane tmux target to Claude session ID. A target
+///   present in the map with an empty string value is treated as `None`.
 pub fn build_pane_infos(
     pane_targets: &[String],
     pane_commands: &[String],
     pane_titles: &[String],
+    pane_paths: &[String],
+    pane_active: &[String],
+    claude_session_ids: &std::collections::HashMap<String, String>,
 ) -> Vec<PaneInfo> {
     let len = pane_targets
         .len()
@@ -188,7 +247,22 @@ pub fn build_pane_infos(
             };
             let cmd = pane_commands.get(i).unwrap_or(&empty);
             let title = pane_titles.get(i).unwrap_or(&empty);
-            PaneInfo::new(i, &effective_target, cmd, title)
+            let cwd = pane_paths.get(i).cloned().unwrap_or_default();
+            let is_active = pane_active.get(i).map(|s| s == "1").unwrap_or(false);
+            // Empty string sentinel → None.
+            let claude_session_id = claude_session_ids
+                .get(&effective_target)
+                .cloned()
+                .filter(|s| !s.is_empty());
+            PaneInfo::new_with_metadata(
+                i,
+                &effective_target,
+                cmd,
+                title,
+                cwd,
+                is_active,
+                claude_session_id,
+            )
         })
         .collect()
 }
@@ -212,6 +286,12 @@ pub struct WindowInfo {
     pub is_active: bool,
     /// Panes belonging to this window.
     pub panes: Vec<PaneInfo>,
+    /// Tmux layout string for this window (from `#{window_layout}`).
+    ///
+    /// Applied via `tmux select-layout` during session restore, after all
+    /// panes for the window exist. Best-effort: actual layout depends on
+    /// terminal size at restore time.
+    pub layout: String,
 }
 
 /// Parses the window index from a tmux pane target like "1.2" → 1.
@@ -233,15 +313,31 @@ fn parse_window_index(target: &str) -> usize {
 ///   synthetic names like `"window:0"` are derived from the window index.
 /// - `window_active`: "1" means active window, anything else means inactive
 ///   (parallel to targets). When empty, all windows are marked inactive.
+/// - `pane_paths`: working directory per pane. Empty slice → all cwds empty.
+/// - `pane_active_flags`: "1" = active pane. Empty slice → all inactive.
+/// - `window_layouts`: tmux layout string per pane row (parallel to targets).
+///   The layout for a window is taken from the **first** pane row belonging to
+///   that window. Empty slice → all layouts empty string.
+/// - `claude_session_ids`: maps pane tmux target → Claude session ID. An empty
+///   string value is treated as `None`.
 ///
 /// Windows are returned sorted by their tmux window index. Within each window,
 /// panes appear in the order they were encountered in `pane_targets`.
+//
+// Nine slices by design: tmux reports every pane attribute as its own parallel
+// column. Bundling into a struct would just rename this problem without
+// clarifying it — the parameters are already the minimal data needed.
+#[allow(clippy::too_many_arguments)]
 pub fn build_windows(
     pane_targets: &[String],
     pane_commands: &[String],
     pane_titles: &[String],
     window_names: &[String],
     window_active: &[String],
+    pane_paths: &[String],
+    pane_active_flags: &[String],
+    window_layouts: &[String],
+    claude_session_ids: &std::collections::HashMap<String, String>,
 ) -> Vec<WindowInfo> {
     if pane_targets.is_empty() {
         return Vec::new();
@@ -259,8 +355,26 @@ pub fn build_windows(
         let win_idx = parse_window_index(target);
         let cmd = pane_commands.get(flat_idx).unwrap_or(&empty);
         let title = pane_titles.get(flat_idx).unwrap_or(&empty);
+        let cwd = pane_paths.get(flat_idx).cloned().unwrap_or_default();
+        let is_active_pane = pane_active_flags
+            .get(flat_idx)
+            .map(|s| s == "1")
+            .unwrap_or(false);
+        // Empty string sentinel → None.
+        let claude_session_id = claude_session_ids
+            .get(target)
+            .cloned()
+            .filter(|s| !s.is_empty());
 
-        let pane = PaneInfo::new(flat_idx, target, cmd, title);
+        let pane = PaneInfo::new_with_metadata(
+            flat_idx,
+            target,
+            cmd,
+            title,
+            cwd,
+            is_active_pane,
+            claude_session_id,
+        );
 
         if let Some(window) = window_map.get_mut(&win_idx) {
             window.panes.push(pane);
@@ -281,6 +395,9 @@ pub fn build_windows(
                 .map(|s| s == "1")
                 .unwrap_or(false);
 
+            // Layout: taken from the first pane row belonging to this window.
+            let layout = window_layouts.get(flat_idx).cloned().unwrap_or_default();
+
             window_order.push(win_idx);
             window_map.insert(
                 win_idx,
@@ -289,6 +406,7 @@ pub fn build_windows(
                     name,
                     is_active,
                     panes: vec![pane],
+                    layout,
                 },
             );
         }
@@ -315,12 +433,21 @@ pub fn build_windows(
 /// - `pane_titles`: title for each pane
 /// - `window_names`: window name per pane row; empty → synthetic names
 /// - `window_active`: "1" or "0" per pane row; empty → all inactive
+/// - `pane_paths`: working directory per pane; empty → all cwds empty
+/// - `pane_active_flags`: "1" = active pane; empty → all inactive
+/// - `window_layouts`: layout string per pane row (first pane wins per window); empty → ""
+/// - `claude_session_ids`: maps pane target → Claude session ID; empty map → all None
+#[allow(clippy::too_many_arguments)]
 pub fn build_windows_and_panes(
     pane_targets: &[String],
     pane_commands: &[String],
     pane_titles: &[String],
     window_names: &[String],
     window_active: &[String],
+    pane_paths: &[String],
+    pane_active_flags: &[String],
+    window_layouts: &[String],
+    claude_session_ids: &std::collections::HashMap<String, String>,
 ) -> (Vec<WindowInfo>, Vec<PaneInfo>) {
     let windows = build_windows(
         pane_targets,
@@ -328,6 +455,10 @@ pub fn build_windows_and_panes(
         pane_titles,
         window_names,
         window_active,
+        pane_paths,
+        pane_active_flags,
+        window_layouts,
+        claude_session_ids,
     );
     let panes = windows.iter().flat_map(|w| w.panes.clone()).collect();
     (windows, panes)
@@ -517,7 +648,7 @@ mod tests {
             "nvim".to_string(),
             "cargo".to_string(),
         ];
-        let panes = build_pane_infos(&targets, &cmds, &titles);
+        let panes = build_pane_infos(&targets, &cmds, &titles, &[], &[], &Default::default());
         assert_eq!(panes.len(), 3);
         assert_eq!(panes[0].index, 0);
         assert_eq!(panes[0].tmux_target, "0.0");
@@ -534,7 +665,7 @@ mod tests {
 
     #[test]
     fn build_pane_infos_empty_inputs() {
-        let panes = build_pane_infos(&[], &[], &[]);
+        let panes = build_pane_infos(&[], &[], &[], &[], &[], &Default::default());
         assert!(panes.is_empty());
     }
 
@@ -543,7 +674,7 @@ mod tests {
         let targets = vec!["0.0".to_string(), "0.1".to_string()];
         let cmds = vec!["claude".to_string(), "nvim".to_string()];
         let titles = vec!["bash".to_string()];
-        let panes = build_pane_infos(&targets, &cmds, &titles);
+        let panes = build_pane_infos(&targets, &cmds, &titles, &[], &[], &Default::default());
         assert_eq!(panes.len(), 2);
         assert!(panes[0].has_claude);
         // Second pane has no title (empty string padded)
@@ -554,7 +685,7 @@ mod tests {
     fn build_pane_infos_missing_targets_uses_fallback() {
         let cmds = vec!["claude".to_string(), "nvim".to_string()];
         let titles = vec!["bash".to_string(), "nvim".to_string()];
-        let panes = build_pane_infos(&[], &cmds, &titles);
+        let panes = build_pane_infos(&[], &cmds, &titles, &[], &[], &Default::default());
         assert_eq!(panes.len(), 2);
         assert_eq!(panes[0].tmux_target, "0.0");
         assert_eq!(panes[1].tmux_target, "0.1");
@@ -574,7 +705,17 @@ mod tests {
         let names = svec(&["main", "main", "editor", "editor"]);
         let active = svec(&["1", "1", "0", "0"]);
 
-        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+        let windows = build_windows(
+            &targets,
+            &cmds,
+            &titles,
+            &names,
+            &active,
+            &[],
+            &[],
+            &[],
+            &Default::default(),
+        );
 
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].index, 0);
@@ -595,7 +736,17 @@ mod tests {
         let names = svec(&["shell", "shell", "code"]);
         let active = svec(&["1", "1", "0"]);
 
-        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+        let windows = build_windows(
+            &targets,
+            &cmds,
+            &titles,
+            &names,
+            &active,
+            &[],
+            &[],
+            &[],
+            &Default::default(),
+        );
 
         assert_eq!(windows[0].panes[0].tmux_target, "0.0");
         assert_eq!(windows[0].panes[1].tmux_target, "0.1");
@@ -610,7 +761,17 @@ mod tests {
         let names = svec(&["main", "main"]);
         let active = svec(&["1", "1"]);
 
-        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+        let windows = build_windows(
+            &targets,
+            &cmds,
+            &titles,
+            &names,
+            &active,
+            &[],
+            &[],
+            &[],
+            &Default::default(),
+        );
 
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].panes.len(), 2);
@@ -618,7 +779,7 @@ mod tests {
 
     #[test]
     fn build_windows_empty_input_returns_empty() {
-        let windows = build_windows(&[], &[], &[], &[], &[]);
+        let windows = build_windows(&[], &[], &[], &[], &[], &[], &[], &[], &Default::default());
         assert!(windows.is_empty());
     }
 
@@ -629,7 +790,17 @@ mod tests {
         let titles = svec(&["bash", "vim", "nvim"]);
 
         // Pass empty window_names and window_active
-        let windows = build_windows(&targets, &cmds, &titles, &[], &[]);
+        let windows = build_windows(
+            &targets,
+            &cmds,
+            &titles,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &Default::default(),
+        );
 
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].name, "window:0");
@@ -646,7 +817,17 @@ mod tests {
         let names = svec(&["main", "editor", "logs"]);
         let active = svec(&["0", "1", "0"]);
 
-        let windows = build_windows(&targets, &cmds, &titles, &names, &active);
+        let windows = build_windows(
+            &targets,
+            &cmds,
+            &titles,
+            &names,
+            &active,
+            &[],
+            &[],
+            &[],
+            &Default::default(),
+        );
 
         assert_eq!(windows.len(), 3);
         assert_eq!(windows[0].index, 0);
@@ -662,7 +843,17 @@ mod tests {
         let names = svec(&["main", "main", "editor"]);
         let active = svec(&["1", "1", "0"]);
 
-        let (windows, panes) = build_windows_and_panes(&targets, &cmds, &titles, &names, &active);
+        let (windows, panes) = build_windows_and_panes(
+            &targets,
+            &cmds,
+            &titles,
+            &names,
+            &active,
+            &[],
+            &[],
+            &[],
+            &Default::default(),
+        );
 
         let expected: Vec<PaneInfo> = windows.iter().flat_map(|w| w.panes.clone()).collect();
 
@@ -832,6 +1023,83 @@ mod tests {
         // state_changed_at is None in the fixture
         let info = ClaudeSessionInfo::from_state_file(&sf).unwrap();
         assert!(info.state_changed_at.is_none());
+    }
+
+    // -- New metadata fields: cwd, is_active, claude_session_id ----------------
+
+    #[test]
+    fn build_pane_infos_populates_cwd_is_active_claude_session_id() {
+        let targets = svec(&["0.0", "0.1", "0.2"]);
+        let cmds = svec(&["bash", "nvim", "claude"]);
+        let titles = svec(&["bash", "nvim", "claude"]);
+        let paths = svec(&["/home/user/proj", "/home/user/proj/src", "/home/user/proj"]);
+        let active_flags = svec(&["0", "1", "0"]);
+        let mut ids = std::collections::HashMap::new();
+        ids.insert("0.2".to_string(), "sess-abc123".to_string());
+
+        let panes = build_pane_infos(&targets, &cmds, &titles, &paths, &active_flags, &ids);
+
+        assert_eq!(panes.len(), 3);
+        assert_eq!(panes[0].cwd, "/home/user/proj");
+        assert!(!panes[0].is_active);
+        assert!(panes[0].claude_session_id.is_none());
+
+        assert_eq!(panes[1].cwd, "/home/user/proj/src");
+        assert!(panes[1].is_active);
+        assert!(panes[1].claude_session_id.is_none());
+
+        assert_eq!(panes[2].cwd, "/home/user/proj");
+        assert!(!panes[2].is_active);
+        assert_eq!(panes[2].claude_session_id, Some("sess-abc123".to_string()));
+    }
+
+    #[test]
+    fn build_pane_infos_empty_claude_session_id_becomes_none() {
+        let targets = svec(&["0.0"]);
+        let cmds = svec(&["claude"]);
+        let titles = svec(&["claude"]);
+        // Map contains target but with empty string → should normalise to None.
+        let mut ids = std::collections::HashMap::new();
+        ids.insert("0.0".to_string(), String::new());
+
+        let panes = build_pane_infos(&targets, &cmds, &titles, &[], &[], &ids);
+
+        assert_eq!(panes.len(), 1);
+        assert!(
+            panes[0].claude_session_id.is_none(),
+            "empty string sentinel must be None"
+        );
+    }
+
+    #[test]
+    fn build_windows_threads_layout_string_from_first_pane_of_window() {
+        // Two windows: window 0 has 2 panes, window 1 has 1 pane.
+        // window_layouts parallel to pane rows: first pane of each window carries
+        // the layout; subsequent panes of the same window are ignored.
+        let targets = svec(&["0.0", "0.1", "1.0"]);
+        let cmds = svec(&["bash", "vim", "nvim"]);
+        let titles = svec(&["bash", "vim", "nvim"]);
+        let names = svec(&["main", "main", "editor"]);
+        let win_active = svec(&["1", "1", "0"]);
+        let layouts = svec(&["8f3a,220x50,0,0", "ignored", "a1b2,220x50,0,0"]);
+
+        let windows = build_windows(
+            &targets,
+            &cmds,
+            &titles,
+            &names,
+            &win_active,
+            &[],
+            &[],
+            &layouts,
+            &Default::default(),
+        );
+
+        assert_eq!(windows.len(), 2);
+        // Layout taken from the first pane row belonging to window 0 (flat_idx=0).
+        assert_eq!(windows[0].layout, "8f3a,220x50,0,0");
+        // Layout taken from the first pane row belonging to window 1 (flat_idx=2).
+        assert_eq!(windows[1].layout, "a1b2,220x50,0,0");
     }
 }
 

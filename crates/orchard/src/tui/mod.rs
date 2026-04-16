@@ -4219,6 +4219,9 @@ mod tests {
                 command: format!("cmd{}", i),
                 title: format!("pane{}", i),
                 has_claude: i == 0, // first pane has claude
+                cwd: String::new(),
+                is_active: false,
+                claude_session_id: None,
             })
             .collect();
         let windows = vec![crate::session::WindowInfo {
@@ -4226,6 +4229,7 @@ mod tests {
             name: "main".to_string(),
             is_active: true,
             panes: panes.clone(),
+            layout: String::new(),
         }];
         WorktreeRow {
             sessions: vec![EnrichedSession {
@@ -4258,6 +4262,9 @@ mod tests {
                     command: format!("cmd{flat_idx}"),
                     title: format!("pane{flat_idx}"),
                     has_claude: flat_idx == 0,
+                    cwd: String::new(),
+                    is_active: false,
+                    claude_session_id: None,
                 };
                 win_panes.push(pane.clone());
                 all_panes.push(pane);
@@ -4268,6 +4275,7 @@ mod tests {
                 name: name.to_string(),
                 is_active: wi == 0,
                 panes: win_panes,
+                layout: String::new(),
             });
         }
         WorktreeRow {
