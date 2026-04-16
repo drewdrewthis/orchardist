@@ -557,6 +557,9 @@ pub fn parse_tmux_output(
             pane_commands: parsed.commands,
             window_names: parsed.window_names,
             window_active: parsed.window_active,
+            window_layouts: parsed.window_layouts,
+            pane_paths: parsed.pane_paths,
+            pane_active: parsed.pane_active,
             host: host.map(|h| h.to_string()),
             created_at,
             last_activity_at,
@@ -576,6 +579,12 @@ struct ParsedPaneData {
     window_names: Vec<String>,
     /// Window active flags per pane row ("1" or "0").
     window_active: Vec<String>,
+    /// Window layout strings per pane row (e.g. "even-horizontal").
+    window_layouts: Vec<String>,
+    /// Current working directory of each pane.
+    pane_paths: Vec<String>,
+    /// Whether this pane is the active pane in its window ("1" or "0").
+    pane_active: Vec<String>,
     /// Pane titles per pane row.
     titles: Vec<String>,
     /// Commands running in each pane.
@@ -584,16 +593,24 @@ struct ParsedPaneData {
 
 /// Parses pane info lines into structured pane data.
 ///
-/// New format: `{window}.{pane}\t{window_name}\t{window_active}\t{pane_title}:{pane_current_command}`
+/// New (7-field) format:
+/// `{window}.{pane}\t{window_name}\t{window_active}\t{window_layout}\t{pane_current_path}\t{pane_active}\t{pane_title}:{pane_current_command}`
 ///
-/// Old format (backward compat): `{window}.{pane}\t{pane_title}:{pane_current_command}`
+/// Legacy #184 (4-field) format:
+/// `{window}.{pane}\t{window_name}\t{window_active}\t{pane_title}:{pane_current_command}`
+/// — `window_layouts`, `pane_paths` default to empty string, `pane_active` defaults to "0".
 ///
-/// Old-format lines (only one tab field after the target) are handled gracefully:
-/// `window_name` is set to empty string and `window_active` to "0".
+/// Oldest (2-field) format (backward compat):
+/// `{window}.{pane}\t{pane_title}:{pane_current_command}`
+/// — `window_names`, `window_layouts`, `pane_paths` default to empty string,
+///   `window_active` and `pane_active` default to "0".
 fn parse_pane_lines(output: &str) -> ParsedPaneData {
     let mut targets = Vec::new();
     let mut window_names = Vec::new();
     let mut window_active = Vec::new();
+    let mut window_layouts = Vec::new();
+    let mut pane_paths = Vec::new();
+    let mut pane_active = Vec::new();
     let mut titles = Vec::new();
     let mut commands = Vec::new();
 
@@ -601,14 +618,41 @@ fn parse_pane_lines(output: &str) -> ParsedPaneData {
         if line.is_empty() {
             continue;
         }
-        // Split on tabs; new format has 4 fields, old format has 2.
-        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        // Split into at most 7 fields; match on slice length to pick format generation.
+        let parts: Vec<&str> = line.splitn(7, '\t').collect();
         match parts.as_slice() {
-            [target, win_name, win_active, rest] => {
-                // New format: target, window_name, window_active, title:command
+            [
+                target,
+                win_name,
+                win_active,
+                win_layout,
+                pane_path,
+                p_active,
+                rest,
+            ] => {
+                // New 7-field format.
                 targets.push(target.to_string());
                 window_names.push(win_name.to_string());
                 window_active.push(win_active.to_string());
+                window_layouts.push(win_layout.to_string());
+                pane_paths.push(pane_path.to_string());
+                pane_active.push(p_active.to_string());
+                if let Some((title, cmd)) = rest.split_once(':') {
+                    titles.push(title.to_string());
+                    commands.push(cmd.to_string());
+                } else {
+                    titles.push(rest.to_string());
+                    commands.push(String::new());
+                }
+            }
+            [target, win_name, win_active, rest] => {
+                // Legacy #184 4-field format: no layout/path/pane_active.
+                targets.push(target.to_string());
+                window_names.push(win_name.to_string());
+                window_active.push(win_active.to_string());
+                window_layouts.push(String::new());
+                pane_paths.push(String::new());
+                pane_active.push("0".to_string());
                 if let Some((title, cmd)) = rest.split_once(':') {
                     titles.push(title.to_string());
                     commands.push(cmd.to_string());
@@ -618,10 +662,13 @@ fn parse_pane_lines(output: &str) -> ParsedPaneData {
                 }
             }
             [target, rest] => {
-                // Old format: target, title:command
+                // Oldest 2-field format: target, title:command only.
                 targets.push(target.to_string());
                 window_names.push(String::new());
                 window_active.push("0".to_string());
+                window_layouts.push(String::new());
+                pane_paths.push(String::new());
+                pane_active.push("0".to_string());
                 if let Some((title, cmd)) = rest.split_once(':') {
                     titles.push(title.to_string());
                     commands.push(cmd.to_string());
@@ -640,6 +687,9 @@ fn parse_pane_lines(output: &str) -> ParsedPaneData {
         targets,
         window_names,
         window_active,
+        window_layouts,
+        pane_paths,
+        pane_active,
         titles,
         commands,
     }
@@ -1436,7 +1486,7 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         |session_name| {
             // -s lists panes across ALL windows in the session.
             // Format: "window.pane\ttitle:command" for parse_pane_lines.
-            let pane_fmt = "#{window_index}.#{pane_index}\t#{window_name}\t#{window_active}\t#{pane_title}:#{pane_current_command}";
+            let pane_fmt = "#{window_index}.#{pane_index}\t#{window_name}\t#{window_active}\t#{window_layout}\t#{pane_current_path}\t#{pane_active}\t#{pane_title}:#{pane_current_command}";
             match host {
                 None => run_local(
                     "tmux",
@@ -2480,8 +2530,53 @@ mod tests {
         assert!(parsed.targets.is_empty());
         assert!(parsed.window_names.is_empty());
         assert!(parsed.window_active.is_empty());
+        assert!(parsed.window_layouts.is_empty());
+        assert!(parsed.pane_paths.is_empty());
+        assert!(parsed.pane_active.is_empty());
         assert!(parsed.titles.is_empty());
         assert!(parsed.commands.is_empty());
+    }
+
+    #[test]
+    fn parse_pane_lines_extended_format_extracts_layout_path_active() {
+        // 7-field format: target, window_name, window_active, window_layout,
+        // pane_current_path, pane_active, title:command
+        let output = concat!(
+            "0.0\tmain\t1\teven-horizontal\t/home/user/proj\t1\tbash:bash\n",
+            "0.1\tmain\t1\teven-horizontal\t/home/user/proj\t0\tclaude:claude\n",
+            "1.0\teditor\t0\tmain-vertical\t/tmp\t1\tnvim:nvim\n",
+        );
+        let parsed = parse_pane_lines(output);
+        assert_eq!(parsed.targets, vec!["0.0", "0.1", "1.0"]);
+        assert_eq!(parsed.window_names, vec!["main", "main", "editor"]);
+        assert_eq!(parsed.window_active, vec!["1", "1", "0"]);
+        assert_eq!(
+            parsed.window_layouts,
+            vec!["even-horizontal", "even-horizontal", "main-vertical"]
+        );
+        assert_eq!(
+            parsed.pane_paths,
+            vec!["/home/user/proj", "/home/user/proj", "/tmp"]
+        );
+        assert_eq!(parsed.pane_active, vec!["1", "0", "1"]);
+        assert_eq!(parsed.titles, vec!["bash", "claude", "nvim"]);
+        assert_eq!(parsed.commands, vec!["bash", "claude", "nvim"]);
+    }
+
+    #[test]
+    fn parse_pane_lines_legacy_four_field_format_fills_defaults() {
+        // Legacy #184 4-field format: new fields default to empty/"0".
+        let output = "0.0\tmain\t1\tbash:bash\n0.1\tmain\t1\tclaude:claude\n";
+        let parsed = parse_pane_lines(output);
+        assert_eq!(parsed.targets, vec!["0.0", "0.1"]);
+        assert_eq!(parsed.window_names, vec!["main", "main"]);
+        assert_eq!(parsed.window_active, vec!["1", "1"]);
+        // New fields default to empty string for layout/path, "0" for pane_active.
+        assert_eq!(parsed.window_layouts, vec!["", ""]);
+        assert_eq!(parsed.pane_paths, vec!["", ""]);
+        assert_eq!(parsed.pane_active, vec!["0", "0"]);
+        assert_eq!(parsed.titles, vec!["bash", "claude"]);
+        assert_eq!(parsed.commands, vec!["bash", "claude"]);
     }
 
     #[test]
@@ -3079,5 +3174,25 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
             prs[0].ci_checks.code[0].details_url.as_deref(),
             Some("https://github.com/owner/repo/actions/runs/123")
         );
+    }
+
+    // -- parse_tmux_output new cached fields (Task #190-2) --------------------
+
+    #[test]
+    fn parse_tmux_output_with_extended_panes_populates_new_cached_fields() {
+        // 7-field tab-delimited pane line:
+        // {window}.{pane}\t{window_name}\t{window_active}\t{window_layout}\t{pane_path}\t{pane_active}\t{title}:{command}
+        let layout = "bb62,80x24,0,0{40x24,0,0,1,39x24,41,0,2}";
+        let pane_line = format!("0.0\tmain\t1\t{layout}\t/home/user/repo\t1\tbash:bash");
+        let sessions = "my-session:/home/user/repo\n";
+
+        let result = parse_tmux_output(sessions, None, |_| pane_line.clone(), |_| vec![]);
+
+        assert_eq!(result.len(), 1);
+        let session = &result[0];
+
+        assert_eq!(session.window_layouts, vec![layout]);
+        assert_eq!(session.pane_paths, vec!["/home/user/repo"]);
+        assert_eq!(session.pane_active, vec!["1"]);
     }
 }

@@ -212,6 +212,28 @@ pub struct CachedTmuxSession {
     /// anything else means inactive. Uses `serde(default)` for cache upgrade compat.
     #[serde(default)]
     pub window_active: Vec<String>,
+    /// Tmux window layout strings per pane row, parallel to `pane_targets`.
+    ///
+    /// A layout string (e.g. "bb62,80x24,0,0{40x24,0,0,1,39x24,41,0,2}") is
+    /// passed to `tmux select-layout` during session restore. All panes in the
+    /// same window share the same layout string — deduplicate at restore time.
+    /// Uses `serde(default)` for cache upgrade compat.
+    #[serde(default)]
+    pub window_layouts: Vec<String>,
+    /// Working directory per pane, parallel to `pane_targets`.
+    ///
+    /// Captured from `#{pane_current_path}` so session restore can `cd` each
+    /// pane back to its last directory (the session-level `path` only seeds
+    /// the first window). Uses `serde(default)` for cache upgrade compat.
+    #[serde(default)]
+    pub pane_paths: Vec<String>,
+    /// Active-pane flag per pane row (`"1"` = active), parallel to `pane_targets`.
+    ///
+    /// Mirrors the `window_active` pattern so restore can select the focused
+    /// pane within each window via `tmux select-pane`. Uses `serde(default)`
+    /// for cache upgrade compat.
+    #[serde(default)]
+    pub pane_active: Vec<String>,
     /// Remote host identifier if this session is on a remote machine.
     pub host: Option<String>,
     /// Unix timestamp when the tmux session was created.
@@ -324,10 +346,28 @@ pub fn write_cache<T: Serialize>(path: &Path, entries: &[T]) -> anyhow::Result<(
 
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, &json).context("write cache .tmp file")?;
+    // Restrict to owner-only read/write before the rename. The tmux cache
+    // carries per-pane cwds, window layouts, and captured stdout lines; the
+    // issue/PR caches carry GitHub data. None of it should be world-readable
+    // on a shared host.
+    restrict_cache_permissions(&tmp_path);
     std::fs::rename(&tmp_path, path).context("rename .tmp to final cache file")?;
 
     Ok(())
 }
+
+/// Sets 0600 permissions on a cache file (owner read/write only). No-op on
+/// non-Unix platforms. Errors are swallowed — the rename still succeeds, the
+/// cache is still usable, and the umask fallback is acceptable if permission
+/// tightening is unsupported.
+#[cfg(unix)]
+fn restrict_cache_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_cache_permissions(_path: &Path) {}
 
 /// Like `write_cache`, but skips the write when `entries` is empty **and** the
 /// cache file already exists on disk. This prevents a failed API call (which
@@ -389,6 +429,10 @@ pub fn read_manifest() -> SessionManifest {
 }
 
 /// Writes the session manifest to disk atomically (via a `.tmp` sibling file).
+///
+/// Applies 0600 permissions on Unix — the manifest records which worktrees
+/// had active tmux/Claude sessions, which is metadata that should not be
+/// world-readable on a shared host (same reasoning as [`write_cache`]).
 pub fn write_manifest(manifest: &SessionManifest) -> anyhow::Result<()> {
     let path = manifest_path();
     let dir = path
@@ -398,6 +442,7 @@ pub fn write_manifest(manifest: &SessionManifest) -> anyhow::Result<()> {
     let data = serde_json::to_string_pretty(manifest).context("serialize manifest")?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &data).context("write manifest .tmp file")?;
+    restrict_cache_permissions(&tmp);
     std::fs::rename(&tmp, &path).context("rename .tmp to final manifest file")?;
     Ok(())
 }
@@ -478,6 +523,9 @@ mod tests {
             pane_commands: vec!["vim".to_string()],
             window_names: vec![],
             window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -702,6 +750,9 @@ mod tests {
             pane_commands: vec!["bash".to_string(), "nvim".to_string()],
             window_names: vec!["main".to_string(), "editor".to_string()],
             window_active: vec!["1".to_string(), "0".to_string()],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -874,5 +925,75 @@ mod tests {
         let issue: CachedIssue =
             serde_json::from_str(json).expect("deserialization should succeed");
         assert_eq!(issue.labels, vec!["enhancement"]);
+    }
+
+    // -- CachedTmuxSession new fields (Task #190-2) ----------------------------
+
+    #[test]
+    fn cached_tmux_session_roundtrip_with_new_fields() {
+        let session = CachedTmuxSession {
+            name: "dev".to_string(),
+            path: "/home/user/repo".to_string(),
+            pane_targets: vec!["0.0".to_string(), "0.1".to_string()],
+            pane_titles: vec!["bash".to_string(), "nvim".to_string()],
+            pane_commands: vec!["bash".to_string(), "nvim".to_string()],
+            window_names: vec!["main".to_string(), "main".to_string()],
+            window_active: vec!["1".to_string(), "1".to_string()],
+            window_layouts: vec![
+                "bb62,80x24,0,0{40x24,0,0,1,39x24,41,0,2}".to_string(),
+                "bb62,80x24,0,0{40x24,0,0,1,39x24,41,0,2}".to_string(),
+            ],
+            pane_paths: vec![
+                "/home/user/repo".to_string(),
+                "/home/user/repo/src".to_string(),
+            ],
+            pane_active: vec!["1".to_string(), "0".to_string()],
+            host: None,
+            created_at: Some(1700000000),
+            last_activity_at: Some(1700001000),
+            last_output_lines: vec!["line1".to_string()],
+            claude_state_raw: None,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: CachedTmuxSession = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.window_layouts, session.window_layouts);
+        assert_eq!(parsed.pane_paths, session.pane_paths);
+        assert_eq!(parsed.pane_active, session.pane_active);
+    }
+
+    #[test]
+    fn cached_tmux_session_deserializes_old_json_without_new_fields() {
+        // Simulates a pre-#190 cache file lacking window_layouts, pane_paths,
+        // and pane_active — must deserialize with defaults.
+        let json = r#"{
+            "name": "old-session",
+            "path": "/home/user/repo",
+            "pane_targets": ["0.0"],
+            "pane_titles": ["bash"],
+            "pane_commands": ["bash"],
+            "window_names": [],
+            "window_active": [],
+            "host": null,
+            "last_output_lines": [],
+            "claude_state_raw": null
+        }"#;
+
+        let parsed: CachedTmuxSession =
+            serde_json::from_str(json).expect("old cache file must deserialize without error");
+
+        assert!(
+            parsed.window_layouts.is_empty(),
+            "window_layouts should default to empty vec"
+        );
+        assert!(
+            parsed.pane_paths.is_empty(),
+            "pane_paths should default to empty vec"
+        );
+        assert!(
+            parsed.pane_active.is_empty(),
+            "pane_active should default to empty vec"
+        );
     }
 }

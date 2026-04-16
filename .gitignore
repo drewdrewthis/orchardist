@@ -3,3 +3,7 @@
 .worktrees/
 node_modules/
 .gitnexus
+
+# Claude Code session-local state
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json

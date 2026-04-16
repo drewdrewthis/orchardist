@@ -31,6 +31,7 @@ pub mod orchard_state;
 pub mod paths;
 pub mod priority;
 pub mod remote;
+pub mod restore;
 pub mod session;
 pub mod setup_remote;
 pub mod shell;

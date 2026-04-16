@@ -174,6 +174,12 @@ impl App {
         let repo_name = git::get_repo_name();
         let mut global_cfg = global_config::load_global_config();
         global_config::register_cwd_repo_if_new(&mut global_cfg);
+
+        // Best-effort restore of dead tmux sessions from the cache before the
+        // first build_state, so the TUI's first paint already reflects any
+        // just-reconstructed sessions. Failures are logged, never block startup.
+        let _ = crate::restore::restore_all_local();
+
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
         let state = crate::build_state::build_state(&global_cfg);
         let standalone_sessions = state.standalone_sessions;
@@ -3268,6 +3274,9 @@ mod tests {
             pane_commands: vec![],
             window_names: vec![],
             window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -4214,6 +4223,8 @@ mod tests {
                 command: format!("cmd{}", i),
                 title: format!("pane{}", i),
                 has_claude: i == 0, // first pane has claude
+                cwd: String::new(),
+                is_active: false,
             })
             .collect();
         let windows = vec![crate::session::WindowInfo {
@@ -4221,6 +4232,7 @@ mod tests {
             name: "main".to_string(),
             is_active: true,
             panes: panes.clone(),
+            layout: String::new(),
         }];
         WorktreeRow {
             sessions: vec![EnrichedSession {
@@ -4253,6 +4265,8 @@ mod tests {
                     command: format!("cmd{flat_idx}"),
                     title: format!("pane{flat_idx}"),
                     has_claude: flat_idx == 0,
+                    cwd: String::new(),
+                    is_active: false,
                 };
                 win_panes.push(pane.clone());
                 all_panes.push(pane);
@@ -4263,6 +4277,7 @@ mod tests {
                 name: name.to_string(),
                 is_active: wi == 0,
                 panes: win_panes,
+                layout: String::new(),
             });
         }
         WorktreeRow {

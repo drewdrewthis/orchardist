@@ -237,6 +237,10 @@ pub struct WindowState {
     pub is_active: bool,
     /// Panes belonging to this window.
     pub panes: Vec<PaneState>,
+    /// Tmux layout string for this window (from `#{window_layout}`).
+    ///
+    /// Applied via `tmux select-layout` during session restore.
+    pub layout: String,
 }
 
 /// Individual pane within a window.
@@ -254,6 +258,10 @@ pub struct PaneState {
     pub title: String,
     /// True when the pane is running a Claude process.
     pub has_claude: bool,
+    /// Working directory of this pane at snapshot time (from `#{pane_current_path}`).
+    pub cwd: String,
+    /// Whether this pane is the active (focused) pane in its window.
+    pub is_active: bool,
 }
 
 /// Claude enrichment data within a `SessionState`.
@@ -366,6 +374,7 @@ impl From<&EnrichedSession> for SessionState {
                 index: w.index,
                 name: w.name.clone(),
                 is_active: w.is_active,
+                layout: w.layout.clone(),
                 panes: w
                     .panes
                     .iter()
@@ -375,6 +384,8 @@ impl From<&EnrichedSession> for SessionState {
                         command: p.command.clone(),
                         title: p.title.clone(),
                         has_claude: p.has_claude,
+                        cwd: p.cwd.clone(),
+                        is_active: p.is_active,
                     })
                     .collect(),
             })
@@ -637,12 +648,14 @@ mod tests {
                     PaneInfo::new(0, "0.0", "bash", "bash"),
                     PaneInfo::new(1, "0.1", "nvim", "nvim"),
                 ],
+                layout: String::new(),
             },
             WindowInfo {
                 index: 1,
                 name: "editor".to_string(),
                 is_active: false,
                 panes: vec![PaneInfo::new(2, "1.0", "claude", "claude")],
+                layout: String::new(),
             },
         ];
         let enriched = make_enriched_session(windows);

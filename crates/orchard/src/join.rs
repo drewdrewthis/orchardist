@@ -8,8 +8,8 @@ use crate::classify::derive_display_group;
 use crate::derive::{DisplayGroup, PrInfo, WorktreeRow};
 use crate::github;
 use crate::session::{
-    ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus, TmuxSessionInfo, WindowInfo,
-    build_windows_and_panes,
+    ClaudeSessionInfo, EnrichedSession, Host, PaneColumns, PaneInfo, SessionStatus,
+    TmuxSessionInfo, WindowInfo, build_windows_and_panes,
 };
 
 /// Tuple type for per-repo cache data passed to [`derive_all_repos`].
@@ -206,13 +206,7 @@ pub(crate) fn enrich_session(
         status: SessionStatus::Running { attached: false },
     };
 
-    let (windows, panes) = build_windows_and_panes(
-        &session.pane_targets,
-        &session.pane_commands,
-        &session.pane_titles,
-        &session.window_names,
-        &session.window_active,
-    );
+    let (windows, panes) = build_windows_and_panes(PaneColumns::from_cached(session));
 
     // Hook-first: check if a fresh state file exists for this session.
     let hook_state = state_for_session(claude_states, &session.name);
@@ -351,13 +345,7 @@ mod tests {
             name: session.name.clone(),
             status: SessionStatus::Running { attached: false },
         };
-        let (windows, panes) = build_windows_and_panes(
-            &session.pane_targets,
-            &session.pane_commands,
-            &session.pane_titles,
-            &session.window_names,
-            &session.window_active,
-        );
+        let (windows, panes) = build_windows_and_panes(PaneColumns::from_cached(session));
         enrich_session_from_scraping(session, tmux, windows, panes)
     }
 
@@ -449,6 +437,9 @@ mod tests {
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
             window_names: vec![],
             window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -1154,6 +1145,9 @@ mod tests {
             pane_commands: pane_commands.into_iter().map(|s| s.to_string()).collect(),
             window_names: vec![],
             window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
             host: None,
             created_at: None,
             last_activity_at: None,
@@ -1192,6 +1186,9 @@ mod tests {
             pane_commands: vec![],
             window_names: vec![],
             window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
             host: None,
             created_at: None,
             last_activity_at: None,

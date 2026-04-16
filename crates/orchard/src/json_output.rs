@@ -265,6 +265,8 @@ pub struct JsonWindow {
     pub name: String,
     /// Whether this is the active window in the session.
     pub is_active: bool,
+    /// Tmux layout string, usable with `tmux select-layout` during restore.
+    pub layout: String,
     /// Panes belonging to this window.
     pub panes: Vec<JsonPane>,
 }
@@ -285,6 +287,10 @@ pub struct JsonPane {
     pub title: String,
     /// True when the pane is running a Claude process.
     pub has_claude: bool,
+    /// Working directory at the time of snapshot (from `#{pane_current_path}`).
+    pub cwd: String,
+    /// Whether this pane is the focused/active pane in its window.
+    pub is_active: bool,
 }
 
 /// Claude enrichment data in JSON output.
@@ -520,6 +526,7 @@ impl From<&WindowState> for JsonWindow {
             index: w.index,
             name: w.name.clone(),
             is_active: w.is_active,
+            layout: w.layout.clone(),
             panes: w
                 .panes
                 .iter()
@@ -529,6 +536,8 @@ impl From<&WindowState> for JsonWindow {
                     command: p.command.clone(),
                     title: p.title.clone(),
                     has_claude: p.has_claude,
+                    cwd: p.cwd.clone(),
+                    is_active: p.is_active,
                 })
                 .collect(),
         }
@@ -612,6 +621,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
                 index: w.index,
                 name: w.name.clone(),
                 is_active: w.is_active,
+                layout: w.layout.clone(),
                 panes: w
                     .panes
                     .iter()
@@ -621,6 +631,8 @@ impl From<&StandaloneSessionRow> for JsonSession {
                         command: p.command.clone(),
                         title: p.title.clone(),
                         has_claude: p.has_claude,
+                        cwd: p.cwd.clone(),
+                        is_active: p.is_active,
                     })
                     .collect(),
             })
@@ -854,24 +866,30 @@ mod tests {
                     index: 0,
                     name: "main".to_string(),
                     is_active: true,
+                    layout: String::new(),
                     panes: vec![PaneState {
                         index: 0,
                         tmux_target: "0.0".to_string(),
                         command: "bash".to_string(),
                         title: "bash".to_string(),
                         has_claude: false,
+                        cwd: String::new(),
+                        is_active: false,
                     }],
                 },
                 WindowState {
                     index: 1,
                     name: "editor".to_string(),
                     is_active: false,
+                    layout: String::new(),
                     panes: vec![PaneState {
                         index: 1,
                         tmux_target: "1.0".to_string(),
                         command: "claude".to_string(),
                         title: "claude".to_string(),
                         has_claude: true,
+                        cwd: String::new(),
+                        is_active: false,
                     }],
                 },
             ],
@@ -939,6 +957,7 @@ mod tests {
                 index: 0,
                 name: "main".to_string(),
                 is_active: true,
+                layout: String::new(),
                 panes: vec![],
             }],
         };
@@ -1748,6 +1767,58 @@ mod tests {
             v["labels"],
             serde_json::json!(["z-label", "a-label", "m-label"])
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-pane cwd/is_active and per-window layout (restore-visible fields)
+    // -----------------------------------------------------------------------
+
+    fn make_pane_state_with_metadata(cwd: &str, is_active: bool) -> PaneState {
+        PaneState {
+            index: 0,
+            tmux_target: "0.0".to_string(),
+            command: "bash".to_string(),
+            title: "bash".to_string(),
+            has_claude: false,
+            cwd: cwd.to_string(),
+            is_active,
+        }
+    }
+
+    fn make_session_with_pane(pane: PaneState) -> SessionState {
+        SessionState {
+            name: "restore-test".to_string(),
+            host: None,
+            claude: None,
+            started_at: None,
+            last_activity_at: None,
+            windows: vec![WindowState {
+                index: 0,
+                name: "main".to_string(),
+                is_active: true,
+                layout: "abc1,80x24,0,0".to_string(),
+                panes: vec![pane],
+            }],
+        }
+    }
+
+    #[test]
+    fn json_pane_includes_cwd_and_is_active() {
+        let pane = make_pane_state_with_metadata("/tmp/foo", true);
+        let session = make_session_with_pane(pane);
+        let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
+        let p = &value["windows"][0]["panes"][0];
+        assert_eq!(p["cwd"], "/tmp/foo");
+        assert_eq!(p["isActive"], true);
+    }
+
+    #[test]
+    fn json_window_includes_layout() {
+        let pane = make_pane_state_with_metadata("/tmp/baz", false);
+        let session = make_session_with_pane(pane);
+        let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
+        let win = &value["windows"][0];
+        assert_eq!(win["layout"], "abc1,80x24,0,0");
     }
 
     #[test]
