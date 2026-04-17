@@ -125,12 +125,10 @@ fn build_standalone_sessions(
     config: &GlobalConfig,
     local_sessions: &[cache::CachedTmuxSession],
     claude_states: &[crate::claude_state::ClaudeStateFile],
-    all_worktrees: &[cache::CachedWorktree],
+    worktree_paths: &[&str],
 ) -> Vec<StandaloneSessionRow> {
     let configured_names: std::collections::HashSet<&str> =
         config.tmux_sessions.iter().map(|c| c.name.as_str()).collect();
-
-    let worktree_paths: Vec<&str> = all_worktrees.iter().map(|w| w.path.as_str()).collect();
 
     let mut rows: Vec<StandaloneSessionRow> = config
         .tmux_sessions
@@ -179,12 +177,9 @@ fn build_standalone_sessions(
         if configured_names.contains(session.name.as_str()) {
             continue;
         }
-        // A session "belongs" to a worktree if the session path equals the
-        // worktree path or is a subdirectory of it.
-        let inside_worktree = worktree_paths.iter().any(|wt_path| {
-            session.path == *wt_path
-                || session.path.starts_with(&format!("{}/", wt_path))
-        });
+        let inside_worktree = worktree_paths
+            .iter()
+            .any(|wt_path| crate::paths::session_belongs_to_worktree(&session.path, wt_path));
         if inside_worktree {
             continue;
         }
@@ -297,15 +292,15 @@ pub fn build_state_with_hosts(
         .collect();
 
     // Collect all worktree paths from all repos for the standalone-session filter.
-    let all_worktrees: Vec<cache::CachedWorktree> = repo_caches
+    let all_worktree_paths: Vec<&str> = repo_caches
         .iter()
-        .flat_map(|(_, _, _, worktrees, _)| worktrees.iter().cloned())
+        .flat_map(|(_, _, _, worktrees, _)| worktrees.iter().map(|w| w.path.as_str()))
         .collect();
 
     // Build standalone sessions from config and any discovered sessions outside
     // all known worktree paths. Reuses local_sessions already read above.
     let standalone_sessions =
-        build_standalone_sessions(config, &local_sessions, &claude_states, &all_worktrees);
+        build_standalone_sessions(config, &local_sessions, &claude_states, &all_worktree_paths);
 
     OrchardState {
         repos,
@@ -714,49 +709,36 @@ mod tests {
     // issue #275: sessions outside worktrees go to standalone bucket
     // -----------------------------------------------------------------------
 
-    /// Any live tmux session whose active-pane cwd is NOT inside any configured
-    /// worktree path must appear in `state.standalone_sessions`.
-    ///
-    /// Currently `build_standalone_sessions` only materialises sessions declared
-    /// in `config.tmux_sessions`. This test is marked ignored until the
-    /// implementer widens that function (or adds a complementary pass) to
-    /// include "discovered" sessions — i.e. any live tmux session whose path
-    /// does not match any worktree.
-    ///
-    /// Acceptance criterion: s2 (at /tmp/random-dir) must be present in
-    /// `standalone_sessions` even though it has no entry in `config.tmux_sessions`.
+    /// Any live tmux session whose active-pane cwd is not inside any configured
+    /// worktree path appears in `state.standalone_sessions`. Sessions at or
+    /// inside a worktree path attach to their worktree row instead (via the
+    /// prefix-match in `paths::session_belongs_to_worktree`).
     #[test]
     fn session_outside_all_worktrees_goes_to_standalone() {
-        // s1 sits inside the repo worktree — expect it on a worktree row, not standalone.
-        let s1 = make_cached_session_at("repo_main", "/work/repo");
-        // s2 sits in an unrelated dir — expect it in standalone bucket.
-        let s2 = make_cached_session_at("stray", "/tmp/random-dir");
+        // at_root sits inside the repo worktree — attaches to a worktree row.
+        let at_root = make_cached_session_at("repo_main", "/work/repo");
+        // in_subdir sits in a subdirectory of a worktree — also attaches.
+        let in_subdir = make_cached_session_at("repo_sub", "/work/repo/src/foo");
+        // stray sits in an unrelated dir — discovered standalone.
+        let stray = make_cached_session_at("stray", "/tmp/random-dir");
 
-        let config = GlobalConfig::default(); // no tmux_sessions configured
-        let worktrees_in_scope = vec![
-            make_cached_worktree("/work/repo"),
-            make_cached_worktree("/work/repo-feat"),
-        ];
-        let all_sessions = vec![s1.clone(), s2.clone()];
+        let config = GlobalConfig::default();
+        let worktree_paths = ["/work/repo", "/work/repo-feat"];
+        let sessions = vec![at_root, in_subdir, stray];
 
-        let rows = build_standalone_sessions(&config, &all_sessions, &[], &worktrees_in_scope);
+        let rows = build_standalone_sessions(&config, &sessions, &[], &worktree_paths);
 
-        let stray_row = rows.iter().find(|r| r.session.tmux.name == "stray");
         assert!(
-            stray_row.is_some(),
-            "session 'stray' at /tmp/random-dir should appear in standalone bucket \
-             because its path is not inside any worktree; worktrees in scope: {:?}",
-            worktrees_in_scope
-                .iter()
-                .map(|w| &w.path)
-                .collect::<Vec<_>>()
+            rows.iter().any(|r| r.session.tmux.name == "stray"),
+            "session outside all worktrees must land in standalone bucket"
         );
-
-        let repo_row = rows.iter().find(|r| r.session.tmux.name == "repo_main");
         assert!(
-            repo_row.is_none(),
-            "session 'repo_main' at /work/repo should NOT appear in standalone bucket \
-             because it matches a worktree path"
+            !rows.iter().any(|r| r.session.tmux.name == "repo_main"),
+            "session at worktree root must not appear in standalone bucket"
+        );
+        assert!(
+            !rows.iter().any(|r| r.session.tmux.name == "repo_sub"),
+            "session in worktree subdirectory must not appear in standalone bucket"
         );
     }
 
@@ -777,21 +759,6 @@ mod tests {
             last_activity_at: None,
             last_output_lines: vec![],
             claude_state_raw: None,
-        }
-    }
-
-    fn make_cached_worktree(path: &str) -> cache::CachedWorktree {
-        use crate::cache::WorktreeLayout;
-        cache::CachedWorktree {
-            path: path.to_string(),
-            branch: "main".to_string(),
-            is_bare: false,
-            is_locked: false,
-            host: None,
-            ahead: None,
-            behind: None,
-            last_commit_at: None,
-            layout: WorktreeLayout::Bare,
         }
     }
 

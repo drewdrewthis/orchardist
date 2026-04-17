@@ -64,7 +64,7 @@ pub fn derive_worktree_rows(
 
         let session_infos: Vec<EnrichedSession> = sessions
             .iter()
-            .filter(|s| s.path == wt.path)
+            .filter(|s| crate::paths::session_belongs_to_worktree(&s.path, &wt.path))
             .map(|s| enrich_session(s, claude_states, statusline_files))
             .collect();
 
@@ -1463,6 +1463,22 @@ mod tests {
                 row.worktree_path
             );
         }
+    }
+
+    /// A session whose active pane has `cd`'d into a subdirectory of a worktree
+    /// still belongs to that worktree row. Without this, `cd src/foo` would
+    /// make the session vanish from the TUI — re-creating the exact bug #275
+    /// was filed to fix.
+    #[test]
+    fn session_in_worktree_subdirectory_attaches_to_worktree_row() {
+        let worktrees = vec![worktree("/work/repo", "main")];
+        let sess = session("repo_main", "/work/repo/src/foo", vec!["bash"]);
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &[sess], "owner/repo", &[], &[]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sessions.len(), 1);
+        assert_eq!(rows[0].sessions[0].tmux.name, "repo_main");
     }
 
     // -----------------------------------------------------------------------

@@ -63,6 +63,18 @@ pub(crate) fn sanitize_branch_slug(branch: &str) -> String {
     non_slug_re().replace_all(&replaced, "").into_owned()
 }
 
+/// True when `session_path` is inside `worktree_path` — either equal or a
+/// descendant directory. Both paths are compared as strings; a trailing `/`
+/// on `worktree_path` is ignored so `/work/repo` and `/work/repo/` match
+/// identically.
+///
+/// Used to decide whether a tmux session's active-pane cwd belongs to a
+/// given worktree row or should fall through to the standalone bucket.
+pub fn session_belongs_to_worktree(session_path: &str, worktree_path: &str) -> bool {
+    let wt = worktree_path.trim_end_matches('/');
+    session_path == wt || session_path.starts_with(&format!("{}/", wt))
+}
+
 /// Returns the absolute conventional path for a local worktree:
 /// `parent(repo_root)/worktrees/worktree-SLUG`.
 pub(crate) fn derive_local_worktree_path(repo_root: &str, branch: &str) -> String {
@@ -195,5 +207,37 @@ mod tests {
             "got: {}",
             result
         );
+    }
+
+    #[test]
+    fn session_belongs_exact_equality() {
+        assert!(session_belongs_to_worktree("/work/repo", "/work/repo"));
+    }
+
+    #[test]
+    fn session_belongs_subdirectory() {
+        assert!(session_belongs_to_worktree("/work/repo/src/foo", "/work/repo"));
+    }
+
+    #[test]
+    fn session_belongs_ignores_trailing_slash_on_worktree() {
+        assert!(session_belongs_to_worktree("/work/repo", "/work/repo/"));
+        assert!(session_belongs_to_worktree(
+            "/work/repo/src",
+            "/work/repo/"
+        ));
+    }
+
+    #[test]
+    fn session_belongs_rejects_sibling_with_shared_prefix() {
+        assert!(!session_belongs_to_worktree(
+            "/work/repo-feat",
+            "/work/repo"
+        ));
+    }
+
+    #[test]
+    fn session_belongs_rejects_outside_path() {
+        assert!(!session_belongs_to_worktree("/tmp/scratch", "/work/repo"));
     }
 }
