@@ -231,6 +231,25 @@ pub(crate) fn enrich_session(
     enrich_session_from_scraping(session, tmux, windows, panes)
 }
 
+/// Detects Claude Code's TUI in captured terminal output lines.
+///
+/// Claude Code's TUI has stable visual markers — detecting them lets us recognize
+/// sessions where pane_current_command reports a subshell (e.g. claude-remote wrapping
+/// claude with a custom SHELL). See issue #238.
+///
+/// Returns true if ANY ONE of these distinctive markers appears in `lines`:
+/// - `"? for shortcuts"` — the footer hint always shown in Claude's TUI
+/// - `"tokens)"` — the working-state spinner suffix (e.g. "↑ 1.9k tokens)")
+/// - A line whose trimmed form starts with `"│ >"` — Claude's input box prompt
+fn has_claude_tui_in_output(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        let trimmed = line.trim();
+        line.contains("? for shortcuts")
+            || line.contains("tokens)")
+            || trimmed.starts_with("\u{2502} >")
+    })
+}
+
 /// Derives session info by scraping terminal output (fallback when no hook state).
 pub(crate) fn enrich_session_from_scraping(
     session: &CachedTmuxSession,
@@ -247,7 +266,8 @@ pub(crate) fn enrich_session_from_scraping(
         || session
             .pane_titles
             .iter()
-            .any(|t| t.to_lowercase().contains("claude"));
+            .any(|t| t.to_lowercase().contains("claude"))
+        || has_claude_tui_in_output(&session.last_output_lines);
 
     let last_content: Vec<&str> = session
         .last_output_lines
@@ -1381,6 +1401,104 @@ mod tests {
             pr_info.checks_state.as_deref(),
             Some("passing"),
             "legacy checks_state must mirror ci_code_state (not union)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // has_claude_tui_in_output unit tests (issue #238)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_claude_tui_in_output_detects_shortcuts_footer() {
+        let lines = vec![
+            "  ? for shortcuts".to_string(),
+            "some other line".to_string(),
+        ];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "'? for shortcuts' footer must be recognized as a Claude TUI marker"
+        );
+    }
+
+    #[test]
+    fn has_claude_tui_in_output_detects_tokens_indicator() {
+        let lines = vec![
+            "✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string(),
+        ];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "working-state 'tokens)' suffix must be recognized as a Claude TUI marker"
+        );
+    }
+
+    #[test]
+    fn has_claude_tui_in_output_detects_prompt_box() {
+        let lines = vec![
+            "╭─────────────────────────────────────────────────╮".to_string(),
+            "│ >                                               │".to_string(),
+            "╰─────────────────────────────────────────────────╯".to_string(),
+        ];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "input box prompt line starting with '│ >' must be recognized as a Claude TUI marker"
+        );
+    }
+
+    #[test]
+    fn has_claude_tui_in_output_returns_false_for_normal_shell() {
+        let lines = vec![
+            "$ ls".to_string(),
+            "foo bar".to_string(),
+            "$ ".to_string(),
+        ];
+        assert!(
+            !has_claude_tui_in_output(&lines),
+            "plain shell output must not be misidentified as Claude TUI"
+        );
+    }
+
+    #[test]
+    fn enrich_session_from_scraping_still_detects_claude_from_pane_command() {
+        let sess = session("claude-sess", "/workspace/repo", vec!["claude"]);
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.claude.is_some(),
+            "pane_command='claude' must still be detected by the existing path"
+        );
+    }
+
+    #[test]
+    fn enrich_session_from_scraping_working_state_detected_via_output() {
+        use crate::claude_state::ClaudeState;
+
+        let sess = CachedTmuxSession {
+            name: "issue238-working".to_string(),
+            path: "/workspace/repo".to_string(),
+            pane_targets: vec!["0.0".to_string()],
+            pane_titles: vec!["zsh".to_string()],
+            pane_commands: vec!["zsh".to_string()],
+            window_names: vec![],
+            window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            host: None,
+            created_at: None,
+            last_activity_at: None,
+            last_output_lines: vec![
+                "✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string(),
+            ],
+            claude_state_raw: None,
+        };
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.claude.is_some(),
+            "working-state output must trigger claude detection"
+        );
+        assert_eq!(
+            enriched.claude.as_ref().unwrap().status,
+            ClaudeState::Working,
+            "session with 'tokens)' in output must be detected as Working"
         );
     }
 }
