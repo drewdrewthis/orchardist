@@ -3308,10 +3308,7 @@ mod tests {
 
     #[test]
     fn has_animated_visible_row_false_when_no_claude_sessions() {
-        let app = App::new_test(vec![make_worktree_row(
-            "feat/none",
-            DisplayGroup::Other,
-        )]);
+        let app = App::new_test(vec![make_worktree_row("feat/none", DisplayGroup::Other)]);
         assert!(!app.has_animated_visible_row());
     }
 

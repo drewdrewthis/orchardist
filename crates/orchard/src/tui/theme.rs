@@ -276,10 +276,7 @@ mod tests {
 
     #[test]
     fn default_claude_idle_pulse_is_orange() {
-        assert_eq!(
-            Theme::default().claude_idle_pulse,
-            Color::Rgb(255, 165, 0)
-        );
+        assert_eq!(Theme::default().claude_idle_pulse, Color::Rgb(255, 165, 0));
     }
 
     #[test]
