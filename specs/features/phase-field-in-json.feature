@@ -14,8 +14,8 @@ Feature: Phase field on PRs and issues in orchard --json
       | in-ai-review  |
       | pr-ready      |
       | blocked       |
-    And these labels are mirrored in a hardcoded `PHASE_PRIORITY` constant in `crates/orchard/src/derive.rs` that also encodes the priority order
-    And `phase` is computed from the `labels` array by a pure function `phase_from_labels`
+    And these labels are mirrored by the `WorkflowPhase` enum in `crates/orchard/src/derive.rs` whose variant declaration order encodes the priority
+    And `phase` is computed from the `labels` array by a pure function `phase_from_labels(&[String]) -> Option<WorkflowPhase>`
     And when multiple phase labels are present, resolution follows a priority order:
       | rank | label         |
       | 1    | blocked       |
@@ -28,7 +28,9 @@ Feature: Phase field on PRs and issues in orchard --json
       | 8    | planned       |
 
   # ===================================================================
-  # Parser — pure function `phase_from_labels(&[String]) -> Option<&'static str>`
+  # Parser — pure function `phase_from_labels(&[String]) -> Option<WorkflowPhase>`
+  # (Each `WorkflowPhase` variant serializes to its kebab-case label, so the
+  # `Some("in-progress")` expectations below describe the serialized form.)
   # ===================================================================
 
   @unit

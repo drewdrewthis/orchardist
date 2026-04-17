@@ -1,6 +1,8 @@
 //! Canonical issue type, collapsing CachedIssue / IssueInfo / JsonIssue into one.
 use serde::{Deserialize, Serialize};
 
+use crate::derive::WorkflowPhase;
+
 /// A child issue in a parent-sub-issue relationship.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,5 +43,5 @@ pub struct Issue {
     pub parent: Option<u32>,
     /// Workflow phase derived from labels at join time. Not stored in cache.
     #[serde(skip_deserializing)]
-    pub phase: Option<&'static str>,
+    pub phase: Option<WorkflowPhase>,
 }

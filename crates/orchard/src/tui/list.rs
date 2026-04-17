@@ -2431,9 +2431,9 @@ fn group_header_row(group: DisplayGroup, num_columns: usize, theme: &Theme) -> R
 
 /// Builds dimmed `[label]` badge spans for non-phase issue labels.
 ///
-/// Filters out any labels that appear in [`crate::derive::PHASE_PRIORITY`] (those are
-/// already represented by the display group) and formats the remainder as ` [label]`
-/// spans with a dimmed style.  When the accumulated badge text would exceed
+/// Filters out any workflow phase labels (recognized by [`crate::derive::WorkflowPhase::from_label`])
+/// since those are already represented by the display group, and formats the remainder
+/// as ` [label]` spans with a dimmed style. When the accumulated badge text would exceed
 /// `available_width`, the remaining labels are collapsed into a ` +N` span.
 /// Returns an empty `Vec` when there are no non-phase labels or no space is available.
 pub(crate) fn label_badges(labels: &[&str], available_width: usize) -> Vec<Span<'static>> {
@@ -2444,7 +2444,7 @@ pub(crate) fn label_badges(labels: &[&str], available_width: usize) -> Vec<Span<
     let non_phase: Vec<&str> = labels
         .iter()
         .copied()
-        .filter(|l| !crate::derive::PHASE_PRIORITY.contains(l))
+        .filter(|l| crate::derive::WorkflowPhase::from_label(l).is_none())
         .collect();
 
     if non_phase.is_empty() {
