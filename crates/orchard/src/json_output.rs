@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::claude_state::ClaudeState;
-use crate::derive::{DisplayGroup, Phase, phase_from_labels};
+use crate::derive::{DisplayGroup, WorkflowPhase, phase_from_labels};
 use crate::orchard_state::{
     IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState, WorktreeState,
 };
@@ -140,7 +140,7 @@ pub struct JsonIssue {
     pub labels: Vec<String>,
     /// Workflow phase derived from labels (e.g. `"in-progress"`, `"blocked"`).
     /// Always present: `null` when no phase label is set.
-    pub phase: Option<Phase>,
+    pub phase: Option<WorkflowPhase>,
 }
 
 /// A single review on a pull request in JSON output.
@@ -228,7 +228,7 @@ pub struct JsonPr {
     pub last_commit_pushed_at: Option<String>,
     /// Workflow phase derived from labels (e.g. `"pr-ready"`, `"blocked"`).
     /// Always present: `null` when no phase label is set.
-    pub phase: Option<Phase>,
+    pub phase: Option<WorkflowPhase>,
 }
 
 /// Session information in JSON output using the EnrichedSession shape.
@@ -1041,7 +1041,7 @@ mod tests {
     fn json_issue_phase_serializes_matched_label() {
         let issue = make_issue_info(2, "work item", "open", vec!["in-progress", "bug"]);
         let ji = JsonIssue::from(&issue);
-        assert_eq!(ji.phase, Some(Phase::InProgress));
+        assert_eq!(ji.phase, Some(WorkflowPhase::InProgress));
         let v = serde_json::to_value(&ji).unwrap();
         assert_eq!(v["phase"], "in-progress");
     }
@@ -1059,7 +1059,7 @@ mod tests {
     fn json_pr_phase_serializes_matched_label() {
         let pr = make_pr_state_with_labels(10, "feat/branch", vec!["pr-ready"]);
         let jp = JsonPr::from(&pr);
-        assert_eq!(jp.phase, Some(Phase::PrReady));
+        assert_eq!(jp.phase, Some(WorkflowPhase::PrReady));
         let v = serde_json::to_value(&jp).unwrap();
         assert_eq!(v["phase"], "pr-ready");
     }
@@ -1068,7 +1068,7 @@ mod tests {
     fn json_pr_phase_resolves_multi_label_by_priority() {
         let pr = make_pr_state_with_labels(10, "feat/branch", vec!["in-progress", "blocked"]);
         let jp = JsonPr::from(&pr);
-        assert_eq!(jp.phase, Some(Phase::Blocked));
+        assert_eq!(jp.phase, Some(WorkflowPhase::Blocked));
         let v = serde_json::to_value(&jp).unwrap();
         assert_eq!(v["phase"], "blocked");
     }
@@ -1845,7 +1845,7 @@ mod tests {
         // AND labels must contain both values.
         let pr = make_pr_state_with_labels(13, "feat/both", vec!["blocked", "in-progress"]);
         let jp = JsonPr::from(&pr);
-        assert_eq!(jp.phase, Some(Phase::Blocked));
+        assert_eq!(jp.phase, Some(WorkflowPhase::Blocked));
         assert_eq!(jp.labels, vec!["blocked", "in-progress"]);
         let v = serde_json::to_value(&jp).unwrap();
         assert_eq!(v["phase"], "blocked");

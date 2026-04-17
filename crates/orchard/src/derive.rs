@@ -19,7 +19,7 @@ pub use crate::join::{derive_all_repos, derive_worktree_rows};
 ///
 /// Variants are declared highest-priority first: `Blocked` wins over everything
 /// so a blocked PR never silently vanishes from filters when multiple phase
-/// labels coexist. Iteration via [`Phase::VARIANTS`] preserves this order.
+/// labels coexist. Iteration via [`WorkflowPhase::VARIANTS`] preserves this order.
 ///
 /// Serde uses kebab-case, so serialized names match the GitHub label strings
 /// (`"blocked"`, `"in-ai-review"`, etc.) exactly.
@@ -37,7 +37,7 @@ pub use crate::join::{derive_all_repos, derive_worktree_rows};
     serde::Deserialize,
 )]
 #[serde(rename_all = "kebab-case")]
-pub enum Phase {
+pub enum WorkflowPhase {
     /// Work halted, waiting on external resolution (highest priority).
     Blocked,
     /// Implementation complete, awaiting automated/AI review.
@@ -56,38 +56,38 @@ pub enum Phase {
     Planned,
 }
 
-impl Phase {
+impl WorkflowPhase {
     /// All phase variants in priority order (highest first).
-    pub const VARIANTS: &'static [Phase] = &[
-        Phase::Blocked,
-        Phase::InAiReview,
-        Phase::PrReady,
-        Phase::InProgress,
-        Phase::NeedsRepro,
-        Phase::NeedsPlan,
-        Phase::Investigating,
-        Phase::Planned,
+    pub const VARIANTS: &'static [WorkflowPhase] = &[
+        WorkflowPhase::Blocked,
+        WorkflowPhase::InAiReview,
+        WorkflowPhase::PrReady,
+        WorkflowPhase::InProgress,
+        WorkflowPhase::NeedsRepro,
+        WorkflowPhase::NeedsPlan,
+        WorkflowPhase::Investigating,
+        WorkflowPhase::Planned,
     ];
 
     /// Returns the kebab-case label string for this phase — matches the
     /// GitHub label name applied by `/gh-tag` and the serialized JSON value.
     pub const fn as_label(self) -> &'static str {
         match self {
-            Phase::Blocked => "blocked",
-            Phase::InAiReview => "in-ai-review",
-            Phase::PrReady => "pr-ready",
-            Phase::InProgress => "in-progress",
-            Phase::NeedsRepro => "needs-repro",
-            Phase::NeedsPlan => "needs-plan",
-            Phase::Investigating => "investigating",
-            Phase::Planned => "planned",
+            WorkflowPhase::Blocked => "blocked",
+            WorkflowPhase::InAiReview => "in-ai-review",
+            WorkflowPhase::PrReady => "pr-ready",
+            WorkflowPhase::InProgress => "in-progress",
+            WorkflowPhase::NeedsRepro => "needs-repro",
+            WorkflowPhase::NeedsPlan => "needs-plan",
+            WorkflowPhase::Investigating => "investigating",
+            WorkflowPhase::Planned => "planned",
         }
     }
 
-    /// Parses a label string into a `Phase`. Case-sensitive; returns `None` for
+    /// Parses a label string into a `WorkflowPhase`. Case-sensitive; returns `None` for
     /// unknown labels.
-    pub fn from_label(label: &str) -> Option<Phase> {
-        Phase::VARIANTS
+    pub fn from_label(label: &str) -> Option<WorkflowPhase> {
+        WorkflowPhase::VARIANTS
             .iter()
             .copied()
             .find(|p| p.as_label() == label)
@@ -96,25 +96,25 @@ impl Phase {
 
 /// Derives the workflow phase from a slice of label strings.
 ///
-/// Iterates [`Phase::VARIANTS`] in priority order and returns the first variant
+/// Iterates [`WorkflowPhase::VARIANTS`] in priority order and returns the first variant
 /// whose label appears anywhere in the input slice. Returns `None` if no phase
 /// label is present. Matching is case-sensitive and exact.
 ///
 /// # Examples
 ///
 /// ```
-/// use orchard::derive::{phase_from_labels, Phase};
+/// use orchard::derive::{phase_from_labels, WorkflowPhase};
 ///
 /// assert_eq!(phase_from_labels(&[]), None);
 /// assert_eq!(phase_from_labels(&["bug".to_string()]), None);
-/// assert_eq!(phase_from_labels(&["in-progress".to_string()]), Some(Phase::InProgress));
+/// assert_eq!(phase_from_labels(&["in-progress".to_string()]), Some(WorkflowPhase::InProgress));
 /// assert_eq!(
 ///     phase_from_labels(&["in-progress".to_string(), "blocked".to_string()]),
-///     Some(Phase::Blocked),
+///     Some(WorkflowPhase::Blocked),
 /// );
 /// ```
-pub fn phase_from_labels(labels: &[String]) -> Option<Phase> {
-    Phase::VARIANTS
+pub fn phase_from_labels(labels: &[String]) -> Option<WorkflowPhase> {
+    WorkflowPhase::VARIANTS
         .iter()
         .copied()
         .find(|p| labels.iter().any(|l| l == p.as_label()))
@@ -444,7 +444,7 @@ mod tests {
     fn phase_from_labels_single_phase_label_returns_it() {
         assert_eq!(
             phase_from_labels(&ls(&["in-progress"])),
-            Some(Phase::InProgress)
+            Some(WorkflowPhase::InProgress)
         );
     }
 
@@ -452,7 +452,7 @@ mod tests {
     fn phase_from_labels_mixed_with_unrelated_returns_phase() {
         assert_eq!(
             phase_from_labels(&ls(&["bug", "planned", "priority-high"])),
-            Some(Phase::Planned)
+            Some(WorkflowPhase::Planned)
         );
     }
 
@@ -461,7 +461,7 @@ mod tests {
         // in-progress (rank 4) beats planned (rank 8)
         assert_eq!(
             phase_from_labels(&ls(&["planned", "in-progress"])),
-            Some(Phase::InProgress)
+            Some(WorkflowPhase::InProgress)
         );
     }
 
@@ -469,7 +469,7 @@ mod tests {
     fn phase_from_labels_blocked_wins_over_in_progress() {
         assert_eq!(
             phase_from_labels(&ls(&["in-progress", "blocked"])),
-            Some(Phase::Blocked)
+            Some(WorkflowPhase::Blocked)
         );
     }
 
@@ -477,7 +477,7 @@ mod tests {
     fn phase_from_labels_blocked_wins_over_in_ai_review() {
         assert_eq!(
             phase_from_labels(&ls(&["in-ai-review", "blocked"])),
-            Some(Phase::Blocked)
+            Some(WorkflowPhase::Blocked)
         );
     }
 
@@ -485,7 +485,7 @@ mod tests {
     fn phase_from_labels_priority_resolves_three_labels() {
         assert_eq!(
             phase_from_labels(&ls(&["investigating", "needs-plan", "blocked"])),
-            Some(Phase::Blocked)
+            Some(WorkflowPhase::Blocked)
         );
     }
 
@@ -493,7 +493,7 @@ mod tests {
     fn phase_from_labels_in_ai_review_wins_over_pr_ready() {
         assert_eq!(
             phase_from_labels(&ls(&["pr-ready", "in-ai-review"])),
-            Some(Phase::InAiReview)
+            Some(WorkflowPhase::InAiReview)
         );
     }
 
@@ -501,7 +501,7 @@ mod tests {
     fn phase_from_labels_recognizes_investigating() {
         assert_eq!(
             phase_from_labels(&ls(&["investigating"])),
-            Some(Phase::Investigating)
+            Some(WorkflowPhase::Investigating)
         );
     }
 
@@ -509,7 +509,7 @@ mod tests {
     fn phase_from_labels_recognizes_needs_plan() {
         assert_eq!(
             phase_from_labels(&ls(&["needs-plan"])),
-            Some(Phase::NeedsPlan)
+            Some(WorkflowPhase::NeedsPlan)
         );
     }
 
@@ -517,20 +517,20 @@ mod tests {
     fn phase_from_labels_recognizes_needs_repro() {
         assert_eq!(
             phase_from_labels(&ls(&["needs-repro"])),
-            Some(Phase::NeedsRepro)
+            Some(WorkflowPhase::NeedsRepro)
         );
     }
 
     #[test]
     fn phase_from_labels_recognizes_planned() {
-        assert_eq!(phase_from_labels(&ls(&["planned"])), Some(Phase::Planned));
+        assert_eq!(phase_from_labels(&ls(&["planned"])), Some(WorkflowPhase::Planned));
     }
 
     #[test]
     fn phase_from_labels_recognizes_in_progress() {
         assert_eq!(
             phase_from_labels(&ls(&["in-progress"])),
-            Some(Phase::InProgress)
+            Some(WorkflowPhase::InProgress)
         );
     }
 
@@ -538,7 +538,7 @@ mod tests {
     fn phase_from_labels_recognizes_in_ai_review() {
         assert_eq!(
             phase_from_labels(&ls(&["in-ai-review"])),
-            Some(Phase::InAiReview)
+            Some(WorkflowPhase::InAiReview)
         );
     }
 
@@ -546,13 +546,13 @@ mod tests {
     fn phase_from_labels_recognizes_pr_ready() {
         assert_eq!(
             phase_from_labels(&ls(&["pr-ready"])),
-            Some(Phase::PrReady)
+            Some(WorkflowPhase::PrReady)
         );
     }
 
     #[test]
     fn phase_from_labels_recognizes_blocked() {
-        assert_eq!(phase_from_labels(&ls(&["blocked"])), Some(Phase::Blocked));
+        assert_eq!(phase_from_labels(&ls(&["blocked"])), Some(WorkflowPhase::Blocked));
     }
 
     #[test]
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn phase_serialize_matches_kebab_case_label() {
-        for &phase in Phase::VARIANTS {
+        for &phase in WorkflowPhase::VARIANTS {
             let json = serde_json::to_string(&phase).unwrap();
             assert_eq!(json, format!("\"{}\"", phase.as_label()));
         }
@@ -582,15 +582,15 @@ mod tests {
 
     #[test]
     fn phase_from_label_round_trips_every_variant() {
-        for &phase in Phase::VARIANTS {
-            assert_eq!(Phase::from_label(phase.as_label()), Some(phase));
+        for &phase in WorkflowPhase::VARIANTS {
+            assert_eq!(WorkflowPhase::from_label(phase.as_label()), Some(phase));
         }
     }
 
     #[test]
     fn phase_from_label_rejects_unknown() {
-        assert_eq!(Phase::from_label("wontfix"), None);
-        assert_eq!(Phase::from_label("In-Progress"), None);
+        assert_eq!(WorkflowPhase::from_label("wontfix"), None);
+        assert_eq!(WorkflowPhase::from_label("In-Progress"), None);
     }
 
     // -----------------------------------------------------------------------

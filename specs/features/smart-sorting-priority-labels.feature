@@ -124,7 +124,7 @@ Feature: Smart sorting, priority indicators, and label badges
   @unit
   Scenario: Phase labels are excluded from badge rendering
     Given a worktree row with issue_labels ["bug", "in-progress", "planned"]
-    And phase labels are those in the PHASE_PRIORITY constant from derive.rs
+    And phase labels are those recognized by WorkflowPhase::from_label in derive.rs
     When the row is rendered in the TUI
     Then only "[bug]" badge renders (phase labels are already shown via display_group)
 

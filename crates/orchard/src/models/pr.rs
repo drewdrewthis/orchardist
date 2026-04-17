@@ -1,7 +1,7 @@
 //! Canonical PR type, collapsing CachedPr / PrInfo / PrState / JsonPr into one.
 use serde::{Deserialize, Serialize};
 
-use crate::derive::Phase;
+use crate::derive::WorkflowPhase;
 use crate::models::check::CiChecks;
 
 /// A single reviewer's response to a PR.
@@ -75,5 +75,5 @@ pub struct Pr {
     pub last_commit_pushed_at: Option<String>,
     /// Workflow phase derived from labels at join time. Not stored in cache.
     #[serde(skip_deserializing)]
-    pub phase: Option<Phase>,
+    pub phase: Option<WorkflowPhase>,
 }
