@@ -173,16 +173,9 @@ pub struct App {
     ///
     /// All animated glyphs in a single frame read this field rather than calling
     /// [`crate::signal::pulse_tick`] directly — that way a render that straddles
-    /// a second boundary still produces a coherent frame.
+    /// a second boundary still produces a coherent frame. The run loop writes
+    /// this just before [`App::render`]; tests override it to pin a frame.
     pulse_tick: Cell<u8>,
-
-    /// Last pulse tick that the run loop forced a redraw on (issue #281).
-    ///
-    /// `run_loop` compares the current `pulse_tick()` against this after each
-    /// event-poll interval; when they differ AND at least one visible row is
-    /// animated, the loop forces `terminal.draw` and stores the new tick here.
-    /// When nothing animates, no forced redraw happens — idle terminals stay quiet.
-    last_pulse_tick: Cell<u8>,
 
     /// Expanded rows keyed by worktree path or standalone session name.
     ///
@@ -296,7 +289,6 @@ impl App {
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
             pulse_tick: Cell::new(crate::signal::pulse_tick()),
-            last_pulse_tick: Cell::new(crate::signal::pulse_tick()),
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
@@ -1887,37 +1879,35 @@ impl App {
         }
     }
 
-    /// Returns `true` when any visible row has a rollup activity that animates
+    /// Returns `true` when any row has a rollup activity that animates
     /// (`Activity::Idle` or `Activity::Input`) (issue #281).
     ///
-    /// The run loop uses this to decide whether a pulse-tick boundary warrants
-    /// a forced redraw. When nothing animates, the 100ms event-driven repaint
-    /// carries the UI on its own — no extra CPU burned on idle terminals.
+    /// The run loop uses this to pick its event-poll cadence: fast (100ms)
+    /// while any animation is on screen, slower otherwise. Called on every
+    /// poll-timeout calculation, so the scan is kept cheap — we short-circuit
+    /// as soon as the first animated row is seen, and we delegate the full
+    /// exhaustion/rollup check to [`crate::signal::activity_from_claude`] only
+    /// when a session's raw status is already in the animated set.
     pub(crate) fn has_animated_visible_row(&self) -> bool {
         use crate::signal::Activity;
 
+        // Cheap pre-check for standalone sessions: if the raw ClaudeState is
+        // already not Idle/Input, no need to build the enrichment at all.
         let standalone_animated = self.standalone_sessions.iter().any(|ss| {
             ss.session.claude.as_ref().is_some_and(|c| {
-                let ce = crate::orchard_state::ClaudeEnrichment {
-                    status: c.status,
-                    model: c.model.clone(),
-                    last_tool: c.last_tool.clone(),
-                    current_task: c.current_task.clone(),
-                    session_start_ts: c.session_start_ts,
-                    input_tokens: c.input_tokens,
-                    output_tokens: c.output_tokens,
-                    cache_creation_input_tokens: c.cache_creation_input_tokens,
-                    cache_read_input_tokens: c.cache_read_input_tokens,
-                    context_window_pct: c.context_window_pct,
-                    cost_usd: c.cost_usd,
-                    total_duration_ms: c.total_duration_ms,
-                    rate_limits: c.rate_limits.clone(),
-                    stop_reason: c.stop_reason.clone(),
-                    turn_count: c.turn_count,
-                    state_changed_at: c.state_changed_at,
-                };
+                if !matches!(
+                    c.status,
+                    crate::claude_state::ClaudeState::Idle
+                        | crate::claude_state::ClaudeState::Input
+                ) {
+                    return false;
+                }
+                // Context-window or rate-limit exhaustion could escalate this
+                // to Activity::Exhausted — a static glyph, not animated. Fall
+                // through to the full resolver to respect that escalation.
+                let enrichment = crate::orchard_state::ClaudeEnrichment::from(c);
                 matches!(
-                    crate::signal::activity_from_claude(&ce),
+                    crate::signal::activity_from_claude(&enrichment),
                     Activity::Idle | Activity::Input
                 )
             })
@@ -2118,7 +2108,6 @@ impl App {
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
             pulse_tick: Cell::new(crate::signal::pulse_tick()),
-            last_pulse_tick: Cell::new(crate::signal::pulse_tick()),
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
@@ -2202,6 +2191,31 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     result
 }
 
+/// Idle-screen poll timeout (issue #281). Chosen to balance:
+/// - input latency: a keypress blocks for at most this long before reaching
+///   the event loop,
+/// - CPU: render cost is dominated by `has_animated_visible_row` + ratatui's
+///   diff render, so stretching past ~500ms past diminishing returns.
+///
+/// 500ms keeps keystrokes feeling snappy (users struggle to notice <500ms
+/// of delay on a single key) while cutting wasted renders ~5× vs the fast
+/// path. Exposed as `const` so it's obvious at the call site and tunable.
+pub(crate) const IDLE_POLL_TIMEOUT_MS: u64 = 500;
+
+/// Picks the event-poll cadence based on what's visible on screen (issue #281).
+///
+/// When any row animates (Idle/Input pulse) or a full-refresh spinner is
+/// running, we need the fast cadence so the animation appears at ~10Hz and
+/// the 1s pulse boundary is caught within 100ms. Otherwise, the idle cadence
+/// saves CPU on long-running screens with nothing to update.
+pub(crate) fn poll_cadence(animated_visible: bool, refreshing: bool) -> Duration {
+    if animated_visible || refreshing {
+        Duration::from_millis(POLL_TIMEOUT_MS)
+    } else {
+        Duration::from_millis(IDLE_POLL_TIMEOUT_MS)
+    }
+}
+
 fn run_loop(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::fs::File>>,
     app: &mut App,
@@ -2217,23 +2231,9 @@ fn run_loop(
 
         terminal.draw(|f| app.render(f))?;
 
-        // Record the tick we just rendered at (issue #281). Lets the next
-        // iteration detect whether a 1s boundary has crossed.
-        app.last_pulse_tick.set(app.pulse_tick.get());
-
-        // Poll cadence adapts to visible animation (issue #281):
-        // - 100ms when the spinner/throbber or an Idle/Input row is visible —
-        //   snappy input + 1s pulse arrive within one frame of their boundary.
-        // - 1s otherwise — idle screens don't redraw 10× per second just to
-        //   diff an unchanged buffer.
-        // `throbber_animating` and `refreshing` gate the fast cadence for
-        // non-pulse animations (full-refresh spinner) that already rely on it.
-        let fast_cadence = app.has_animated_visible_row() || app.refreshing;
-        let poll_timeout = if fast_cadence {
-            Duration::from_millis(POLL_TIMEOUT_MS)
-        } else {
-            Duration::from_secs(1)
-        };
+        // Poll cadence adapts to visible animation (issue #281); see
+        // [`poll_cadence`] for the policy and its rationale.
+        let poll_timeout = poll_cadence(app.has_animated_visible_row(), app.refreshing);
 
         if event::poll(poll_timeout)? {
             let event = event::read()?;
@@ -3313,6 +3313,48 @@ mod tests {
             DisplayGroup::Other,
         )]);
         assert!(!app.has_animated_visible_row());
+    }
+
+    // -- issue #281: adaptive poll cadence ----------------------------------
+
+    #[test]
+    fn poll_cadence_fast_when_animated_visible() {
+        assert_eq!(
+            poll_cadence(true, false),
+            Duration::from_millis(POLL_TIMEOUT_MS),
+            "animated row visible must use the fast cadence"
+        );
+    }
+
+    #[test]
+    fn poll_cadence_fast_when_refreshing() {
+        assert_eq!(
+            poll_cadence(false, true),
+            Duration::from_millis(POLL_TIMEOUT_MS),
+            "full-refresh spinner must stay on the fast cadence"
+        );
+    }
+
+    #[test]
+    fn poll_cadence_idle_when_nothing_animates() {
+        assert_eq!(
+            poll_cadence(false, false),
+            Duration::from_millis(IDLE_POLL_TIMEOUT_MS),
+            "idle screens must stretch to the idle timeout"
+        );
+    }
+
+    #[test]
+    fn idle_poll_timeout_is_user_acceptable() {
+        // Sanity guard: the idle timeout must stay below a threshold where
+        // keystroke latency becomes perceptible. 600ms is the cited threshold;
+        // we hold well below it. Tripwire for accidental bumps.
+        const {
+            assert!(
+                IDLE_POLL_TIMEOUT_MS <= 600,
+                "idle poll timeout risks perceptible input lag above 600ms"
+            );
+        }
     }
 
     #[test]

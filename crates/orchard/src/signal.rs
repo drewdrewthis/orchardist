@@ -214,21 +214,30 @@ impl Activity {
 // Pulse animation (issue #281)
 // ---------------------------------------------------------------------------
 
+/// Pulse phase for a specific instant (pure, testable).
+///
+/// Returns `0` or `1`; flips every second. Taking `SystemTime` as an argument
+/// keeps the function pure and deterministic — the `run_loop` wrapper passes
+/// `SystemTime::now()` in production while tests pass a fixed `UNIX_EPOCH + Δ`.
+pub fn pulse_tick_from(now: std::time::SystemTime) -> u8 {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() & 1) as u8)
+        .unwrap_or(0)
+}
+
 /// Current pulse phase, derived from wall-clock seconds.
 ///
+/// Thin wrapper over [`pulse_tick_from`] that samples `SystemTime::now()`.
 /// Returns `0` or `1`; flips every second. Stateless by design — all callers
 /// sample the same tick within the same second, so every animated row in a
 /// frame stays in unison without any shared counter.
 ///
-/// The TUI samples this **once per render** and threads the value through to
-/// row builders. Sampling it again per-row would risk producing a torn frame
-/// when a render straddles a second boundary.
+/// The TUI samples this **once per render** (the run loop writes it to
+/// `App.pulse_tick`) and threads that value through to row builders. Sampling
+/// again per-row would risk a torn frame when a render straddles a second
+/// boundary.
 pub fn pulse_tick() -> u8 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| (d.as_secs() & 1) as u8)
-        .unwrap_or(0)
+    pulse_tick_from(std::time::SystemTime::now())
 }
 
 /// Glyph for the STATUS column at a specific pulse tick.
@@ -552,11 +561,7 @@ pub fn rollup_activity_row(row: &WorktreeRow) -> Activity {
     row.sessions
         .iter()
         .filter_map(|s| s.claude.as_ref())
-        .map(|c| {
-            // Bridge from session::ClaudeSessionInfo through the enrichment shape.
-            let ce = ClaudeEnrichment::from(c);
-            activity_from_claude(&ce)
-        })
+        .map(|c| activity_from_claude(&ClaudeEnrichment::from(c)))
         .max()
         .unwrap_or(Activity::None)
 }
@@ -976,14 +981,18 @@ mod tests {
     }
 
     #[test]
-    fn pulse_tick_is_stable_within_same_second() {
-        // Two calls back-to-back are overwhelmingly likely to land in the same
-        // second. This test could theoretically flake if it straddles a second
-        // boundary; the flake rate is on the order of a few microseconds per
-        // second (well under 0.001%).
-        let a = pulse_tick();
-        let b = pulse_tick();
-        assert_eq!(a, b);
+    fn pulse_tick_from_is_pure_and_flips_every_second() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // Even second → 0, odd second → 1.
+        assert_eq!(pulse_tick_from(UNIX_EPOCH), 0);
+        assert_eq!(pulse_tick_from(UNIX_EPOCH + Duration::from_secs(1)), 1);
+        assert_eq!(pulse_tick_from(UNIX_EPOCH + Duration::from_secs(2)), 0);
+        assert_eq!(pulse_tick_from(UNIX_EPOCH + Duration::from_secs(3)), 1);
+        // Sub-second offsets within the same second collapse to the same tick.
+        assert_eq!(
+            pulse_tick_from(UNIX_EPOCH + Duration::from_millis(1_200)),
+            pulse_tick_from(UNIX_EPOCH + Duration::from_millis(1_999))
+        );
     }
 
     // -- status_glyph_at -----------------------------------------------------
