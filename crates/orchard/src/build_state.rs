@@ -264,12 +264,14 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
     let _ = sources::tmux::refresh_local();
 
     // Probe remote hosts concurrently so a dead VM can't block healthy ones.
-    let all_hosts: Vec<String> = config
+    // Use the kind-aware variant: boxd-fork golden hosts reject `true` as a
+    // subcommand, so the default probe would mark them unreachable.
+    let all_remotes: Vec<crate::global_config::RemoteConfig> = config
         .repos
         .iter()
-        .flat_map(|r| r.remotes.iter().map(|rm| rm.host.clone()))
+        .flat_map(|r| r.remotes.iter().cloned())
         .collect();
-    let probe_results = sources::hosts::probe_reachability_all(all_hosts);
+    let probe_results = sources::hosts::probe_reachability_all_for_remotes(&all_remotes);
 
     let hosts: HashMap<String, HostState> = probe_results
         .iter()
