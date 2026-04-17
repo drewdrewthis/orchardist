@@ -645,6 +645,7 @@ mod tests {
             path: path.to_string(),
             attached: false,
             pane_title: None,
+            active_pane_cwd: None,
         }
     }
 
@@ -1031,6 +1032,58 @@ mod tests {
     fn extract_repo_slug_returns_none_for_too_few_parts() {
         let slug = extract_repo_slug_from_cache_filename("something.json");
         assert!(slug.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Live active-pane cwd rescues session with stale frozen path (issue #297)
+    // -----------------------------------------------------------------------
+
+    /// Regression test: a session whose frozen `session.path` does not exist on
+    /// disk but whose live active-pane cwd IS a known worktree path must be
+    /// classified as healthy — not DeadSessionDirectory or OrphanedSession.
+    ///
+    /// This test MUST FAIL until `check_sessions` (or `TmuxSession`) is updated
+    /// to consult `active_pane_cwd` before `path` when classifying sessions.
+    #[test]
+    fn live_active_pane_cwd_rescues_session_with_stale_frozen_path() {
+        let worktree_path = std::env::temp_dir()
+            .join("orchard-test-worktree-297")
+            .to_string_lossy()
+            .to_string();
+        // Ensure the directory actually exists so path_exists check passes.
+        std::fs::create_dir_all(&worktree_path).unwrap();
+
+        // Frozen session.path is stale/non-existent.
+        let stale_path = "/tmp/orchard-nonexistent-stale-session-path-xyz".to_string();
+        assert!(
+            !std::path::Path::new(&stale_path).exists(),
+            "stale path must not exist for this test to be valid"
+        );
+
+        let session = TmuxSession {
+            name: "myrepo_issue297".to_string(),
+            path: stale_path,
+            attached: false,
+            pane_title: None,
+            // The live active-pane cwd points to the real worktree.
+            active_pane_cwd: Some(worktree_path.clone()),
+        };
+
+        let worktrees = vec![make_worktree(&worktree_path, "issue297/fix")];
+        let report = diagnose(&[session], &worktrees, &[], &[], &[]);
+
+        let bad = report.findings.iter().find(|f| {
+            matches!(
+                f.category,
+                HealCategory::DeadSessionDirectory | HealCategory::OrphanedSession
+            )
+        });
+        assert!(
+            bad.is_none(),
+            "session with live active-pane cwd matching a worktree must be healthy, \
+             but got finding: {:?}",
+            bad
+        );
     }
 
     // -----------------------------------------------------------------------
