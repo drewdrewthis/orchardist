@@ -1,8 +1,9 @@
 //! SSH host reachability probes.
 //!
 //! Simple SSH connectivity checks for remote hosts. Used to determine if a host is
-//! reachable before attempting worktree or tmux operations on it. Probes run with a
-//! 5-second connect timeout (set in `remote::ssh_flags()`), so dead hosts fail fast.
+//! reachable before attempting worktree or tmux operations on it. Probes enforce a
+//! hard 5-second wall-clock deadline via [`crate::remote::ssh_exec_with_timeout`],
+//! so a frozen handshake or post-auth hang can't exceed the budget.
 //!
 //! The concurrent entry point is [`probe_reachability_all_for_remotes`], which
 //! accepts full `RemoteConfig` entries so each host is probed with the correct
@@ -12,6 +13,15 @@
 use crate::global_config::{GlobalConfig, RemoteConfig};
 use std::collections::HashMap;
 use std::thread;
+use std::time::Duration;
+
+/// Hard wall-clock deadline for a single host reachability probe.
+///
+/// `ssh -o ConnectTimeout=5` alone is unreliable: a silently-dropping VM or a
+/// hung remote sshd can let the probe run well past the intended budget.
+/// Wrapping the probe in [`crate::remote::ssh_exec_with_timeout`] forces a
+/// kill after this deadline regardless of SSH's internal state.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns every `RemoteConfig` configured across all repos in `config`.
 ///
@@ -35,13 +45,16 @@ pub fn remotes_from_config(config: &GlobalConfig) -> Vec<RemoteConfig> {
 /// `list --json` is the canonical health check there. Using the wrong probe
 /// would mark a perfectly healthy golden host as unreachable and silence
 /// every fork behind it.
-pub(crate) fn probe_reachability_for_remote(remote: &RemoteConfig) -> bool {
+///
+/// Returns `true` if the host responds within [`PROBE_TIMEOUT`], `false` if
+/// the host is unreachable, SSH fails, or the wall-clock deadline expires.
+pub fn probe_reachability_for_remote(remote: &RemoteConfig) -> bool {
     let cmd = match remote.kind {
         crate::remote_adapter::RemoteKind::BoxdFork => "list --json",
         crate::remote_adapter::RemoteKind::Remmy
         | crate::remote_adapter::RemoteKind::BoxdShared => "true",
     };
-    crate::remote::ssh_exec(&remote.host, cmd).is_ok()
+    crate::remote::ssh_exec_with_timeout(&remote.host, cmd, PROBE_TIMEOUT).is_ok()
 }
 
 /// Probes many (host, kind-aware) remotes concurrently.
@@ -115,6 +128,10 @@ mod tests {
         }
     }
 
+    fn ssh_binary_present() -> bool {
+        std::process::Command::new("ssh").arg("-V").output().is_ok()
+    }
+
     /// Locks in the documented contract: `remotes_from_config` returns remotes
     /// in config-iteration order and *preserves duplicates across repos*. Dedup
     /// is the responsibility of `probe_reachability_all_for_remotes`, not this
@@ -139,6 +156,40 @@ mod tests {
         cfg.repos.push(repo("a/one", &[]));
 
         assert!(remotes_from_config(&cfg).is_empty());
+    }
+
+    /// Regression test for issue #246: `probe_reachability_for_remote` must
+    /// enforce a hard wall-clock deadline, not trust SSH's `ConnectTimeout=5`
+    /// alone. A frozen handshake or a post-auth hang previously let a single
+    /// probe exceed 15s. With `ssh_exec_with_timeout`, the probe returns
+    /// within `PROBE_TIMEOUT` + small jitter regardless of the underlying SSH
+    /// state. 192.0.2.1 (TEST-NET-1, RFC 5737) is guaranteed unroutable.
+    #[test]
+    fn probe_reachability_enforces_hard_deadline() {
+        if !ssh_binary_present() {
+            eprintln!("SKIP: ssh binary not available");
+            return;
+        }
+
+        let remote = crate::global_config::RemoteConfig {
+            name: "test".to_string(),
+            host: "192.0.2.1".to_string(),
+            path: "/tmp".to_string(),
+            shell: "ssh".to_string(),
+            kind: crate::remote_adapter::RemoteKind::Remmy,
+        };
+
+        let start = Instant::now();
+        let reachable = probe_reachability_for_remote(&remote);
+        let elapsed = start.elapsed();
+
+        assert!(!reachable, "unroutable host must probe as unreachable");
+        assert!(
+            elapsed < PROBE_TIMEOUT + Duration::from_millis(1500),
+            "probe must respect PROBE_TIMEOUT ({:?}); got {:?}",
+            PROBE_TIMEOUT,
+            elapsed
+        );
     }
 
     /// Regression test for issue #263: serial probing lets one dead host block
