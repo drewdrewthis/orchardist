@@ -329,32 +329,28 @@ impl App {
         !self.host_reachable.is_empty()
     }
 
-    /// Returns true if any probed host is currently [`Reachability::Unreachable`].
-    pub(crate) fn has_unreachable_host(&self) -> bool {
-        self.host_reachable.values().any(|reachable| !*reachable)
-    }
-
     /// Yields the names of all hosts currently known to be unreachable.
     pub(crate) fn unreachable_hosts(&self) -> impl Iterator<Item = &str> {
-        self.host_reachable
-            .iter()
-            .filter_map(|(host, reachable)| (!*reachable).then_some(host.as_str()))
+        self.host_reachable.iter().filter_map(|(host, _)| {
+            matches!(self.reachability(host), Reachability::Unreachable).then_some(host.as_str())
+        })
+    }
+
+    /// Returns true if any probed host is currently [`Reachability::Unreachable`].
+    pub(crate) fn has_unreachable_host(&self) -> bool {
+        self.unreachable_hosts().next().is_some()
     }
 
     /// Returns every probed host paired with its [`Reachability`], sorted by
-    /// host name for stable rendering order.
+    /// host name for stable rendering order. Probed hosts are always
+    /// [`Reachability::Reachable`] or [`Reachability::Unreachable`];
+    /// [`Reachability::Unknown`] is unreachable in this return type by
+    /// construction.
     pub(crate) fn probed_hosts_sorted(&self) -> Vec<(&str, Reachability)> {
         let mut entries: Vec<(&str, Reachability)> = self
             .host_reachable
-            .iter()
-            .map(|(host, reachable)| {
-                let rb = if *reachable {
-                    Reachability::Reachable
-                } else {
-                    Reachability::Unreachable
-                };
-                (host.as_str(), rb)
-            })
+            .keys()
+            .map(|host| (host.as_str(), self.reachability(host)))
             .collect();
         entries.sort_by_key(|(host, _)| *host);
         entries
@@ -2823,6 +2819,52 @@ mod tests {
         let mut app = App::new_test(vec![]);
         app.host_reachable.insert("gpu1".to_string(), false);
         assert_eq!(app.reachability("gpu1"), Reachability::Unreachable);
+    }
+
+    #[test]
+    fn has_probe_results_tracks_map_population() {
+        let mut app = App::new_test(vec![]);
+        assert!(!app.has_probe_results());
+        app.host_reachable.insert("gpu1".to_string(), true);
+        assert!(app.has_probe_results());
+    }
+
+    #[test]
+    fn has_unreachable_host_true_only_when_any_probe_failed() {
+        let mut app = App::new_test(vec![]);
+        assert!(!app.has_unreachable_host());
+        app.host_reachable.insert("gpu1".to_string(), true);
+        assert!(!app.has_unreachable_host());
+        app.host_reachable.insert("dev2".to_string(), false);
+        assert!(app.has_unreachable_host());
+    }
+
+    #[test]
+    fn unreachable_hosts_yields_only_failed_probes() {
+        let mut app = App::new_test(vec![]);
+        app.host_reachable.insert("gpu1".to_string(), true);
+        app.host_reachable.insert("dev2".to_string(), false);
+        app.host_reachable.insert("box3".to_string(), false);
+        let mut names: Vec<&str> = app.unreachable_hosts().collect();
+        names.sort();
+        assert_eq!(names, vec!["box3", "dev2"]);
+    }
+
+    #[test]
+    fn probed_hosts_sorted_is_alphabetical_with_typed_reachability() {
+        let mut app = App::new_test(vec![]);
+        app.host_reachable.insert("gpu1".to_string(), true);
+        app.host_reachable.insert("box3".to_string(), false);
+        app.host_reachable.insert("alpha".to_string(), true);
+        let entries = app.probed_hosts_sorted();
+        assert_eq!(
+            entries,
+            vec![
+                ("alpha", Reachability::Reachable),
+                ("box3", Reachability::Unreachable),
+                ("gpu1", Reachability::Reachable),
+            ]
+        );
     }
 
     #[test]
