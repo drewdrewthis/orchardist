@@ -26,16 +26,7 @@ pub use crate::join::{derive_all_repos, derive_worktree_rows};
 ///
 /// Source of truth for the label set: `~/.claude/skills/gh-tag/tag.sh`.
 /// Keep in sync manually when new phase labels are added to that skill.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkflowPhase {
     /// Work halted, waiting on external resolution (highest priority).
@@ -523,7 +514,10 @@ mod tests {
 
     #[test]
     fn phase_from_labels_recognizes_planned() {
-        assert_eq!(phase_from_labels(&ls(&["planned"])), Some(WorkflowPhase::Planned));
+        assert_eq!(
+            phase_from_labels(&ls(&["planned"])),
+            Some(WorkflowPhase::Planned)
+        );
     }
 
     #[test]
@@ -552,7 +546,10 @@ mod tests {
 
     #[test]
     fn phase_from_labels_recognizes_blocked() {
-        assert_eq!(phase_from_labels(&ls(&["blocked"])), Some(WorkflowPhase::Blocked));
+        assert_eq!(
+            phase_from_labels(&ls(&["blocked"])),
+            Some(WorkflowPhase::Blocked)
+        );
     }
 
     #[test]
