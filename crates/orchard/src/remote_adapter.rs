@@ -384,19 +384,35 @@ impl BoxdSharedAdapter {
 
 /// A single fork VM entry returned by `ssh boxd.sh list --json`.
 ///
-/// `path` is optional in the JSON payload; when absent, the adapter's
+/// The real boxd payload uses `url` for the fork hostname and includes a
+/// `status` field (`"running"` / `"stopped"` / …). Only running forks are
+/// treated as live. `host` is accepted as an alias for forward-compatibility
+/// with the earlier schema. `path` is optional; when absent, the adapter's
 /// configured `fork_repo_path` is used (derived from `RemoteConfig.path`,
 /// not a hardcoded tenant path).
 #[derive(Debug, Deserialize)]
 struct BoxdForkEntry {
     /// Human-readable fork name, typically the issue slug (e.g. `"issue3155"`).
     name: String,
-    /// SSH hostname of the fork VM (e.g. `"issue3155.boxd.sh"`).
-    host: String,
+    /// SSH hostname of the fork VM (e.g. `"issue3155.boxd.sh"`). The real
+    /// boxd controller emits `url`; `host` is kept as an alias so older
+    /// fixtures and the existing tests still parse.
+    #[serde(alias = "host")]
+    url: String,
+    /// VM lifecycle status. Missing or non-`"running"` values are treated
+    /// as not-live and filtered out before any per-fork SSH.
+    #[serde(default)]
+    status: Option<String>,
     /// Repo root path on the fork VM. Optional — falls back to the
     /// adapter's configured path when absent.
     #[serde(default)]
     path: Option<String>,
+}
+
+impl BoxdForkEntry {
+    fn is_running(&self) -> bool {
+        self.status.as_deref() == Some("running")
+    }
 }
 
 /// Adapter for Boxd fork-per-issue VMs.
@@ -454,14 +470,19 @@ impl BoxdForkAdapter {
 
         // Steps 3-5: per-fork branch resolution.
         for entry in entries {
-            // Defensive: drop entries whose host carries shell- or
+            // Skip non-running forks: stopped VMs are unreachable and would
+            // otherwise burn an SSH timeout on every refresh.
+            if entry.status.is_some() && !entry.is_running() {
+                continue;
+            }
+            // Defensive: drop entries whose url carries shell- or
             // ssh-option-injection-relevant characters. A compromised golden
             // host could otherwise smuggle a value like
             // `evil.host -o ProxyCommand=...` into the SSH argv.
-            if !is_safe_ssh_host(&entry.host) {
+            if !is_safe_ssh_host(&entry.url) {
                 continue;
             }
-            let fork_host = format!("{user_prefix}@{}", entry.host);
+            let fork_host = format!("{user_prefix}@{}", entry.url);
             let fork_path = entry.path.unwrap_or_else(|| self.fork_repo_path.clone());
             let escaped_path = crate::remote::shell_escape(&fork_path);
             let branch_cmd = format!("cd {escaped_path} && git rev-parse --abbrev-ref HEAD");
@@ -529,10 +550,15 @@ impl BoxdForkAdapter {
 
         // Step 3-4: per-fork session collection.
         for entry in entries {
-            if !is_safe_ssh_host(&entry.host) {
+            // Skip non-running forks: stopped VMs are unreachable and would
+            // otherwise burn an SSH timeout on every refresh.
+            if entry.status.is_some() && !entry.is_running() {
                 continue;
             }
-            let fork_host = format!("{user_prefix}@{}", entry.host);
+            if !is_safe_ssh_host(&entry.url) {
+                continue;
+            }
+            let fork_host = format!("{user_prefix}@{}", entry.url);
 
             let stdout = match self.ssh.exec(&fork_host, TMUX_LIST_CMD) {
                 Ok(output) => output.stdout,
@@ -757,5 +783,56 @@ mod tests {
             session.name, "issue3155",
             "session name should match the tmux session returned by the fork VM"
         );
+    }
+
+    /// The real `ssh boxd.sh list --json` payload uses `url` (not `host`)
+    /// and includes a `status` field — only entries with `status == "running"`
+    /// are live. A regression here would silently hide every boxd fork even
+    /// though the adapter "works".
+    #[test]
+    fn boxd_fork_adapter_filters_non_running_forks_and_parses_url_field() {
+        let mut fake = FakeSshExec::new();
+
+        // Payload shape as emitted by the real boxd controller.
+        fake.insert(
+            "boxd.sh",
+            "list --json",
+            SshOutput {
+                stdout: r#"[
+                    {"name":"issue3155","url":"issue3155.boxd.sh","status":"running","vm_id":"a"},
+                    {"name":"session-fix","url":"session-fix.boxd.sh","status":"stopped","vm_id":"b"}
+                ]"#.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        fake.insert(
+            "boxd@issue3155.boxd.sh",
+            "cd /workspace/langwatch && git rev-parse --abbrev-ref HEAD",
+            SshOutput {
+                stdout: "issue3155/some-branch\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdForkAdapter {
+            golden_host: "boxd.sh".to_string(),
+            fork_repo_path: "/workspace/langwatch".to_string(),
+            ssh: Box::new(fake),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("list_worktrees must not error");
+
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "stopped fork should be filtered out; only the running one is emitted"
+        );
+        assert_eq!(worktrees[0].host.as_deref(), Some("boxd@issue3155.boxd.sh"));
+        assert_eq!(worktrees[0].branch, "issue3155/some-branch");
     }
 }
