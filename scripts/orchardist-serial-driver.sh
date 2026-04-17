@@ -34,7 +34,7 @@ STATE_FILE="${TMPDIR:-/tmp}/orchardist-driver-state-${FOCUS_PR}.txt"
 cleanup() {
   rm -f "${STATE_FILE}"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
 # Notify helper — send to orchardist pane if configured; never fatal if pane gone
@@ -50,9 +50,14 @@ notify() {
 }
 
 # ---------------------------------------------------------------------------
-# Initialise state file
+# Fail fast if the target session is already gone before we advertise startup.
 # ---------------------------------------------------------------------------
-echo "DRIVING #${FOCUS_PR} via ${FOCUS_SESSION}" > "${STATE_FILE}"
+if ! tmux has-session -t "${FOCUS_SESSION}" 2>/dev/null; then
+  echo "[driver] session ${FOCUS_SESSION} does not exist — nothing to drive" >&2
+  exit 0
+fi
+
+: > "${STATE_FILE}"
 notify "started — watching PR #${FOCUS_PR} in session ${FOCUS_SESSION}"
 
 # ---------------------------------------------------------------------------
@@ -61,10 +66,7 @@ notify "started — watching PR #${FOCUS_PR} in session ${FOCUS_SESSION}"
 err_count=0
 
 while true; do
-  # Sleep first so the process is observable before any liveness check fires.
-  sleep "${POLL_INTERVAL}"
-
-  # Session liveness check — prevents zombie drivers (#243)
+  # Liveness check first — prevents zombie drivers if the session died mid-poll (#243)
   if ! tmux has-session -t "${FOCUS_SESSION}" 2>/dev/null; then
     notify "session ${FOCUS_SESSION} gone — exiting"
     exit 0
@@ -74,7 +76,9 @@ while true; do
   raw=$(gh pr view "${FOCUS_PR}" -R "${REPO}" \
         --json statusCheckRollup,state 2>/dev/null) || raw=""
 
-  # Pass JSON via env var (not stdin) so the heredoc below is the only stdin
+  # Pass JSON via env var (not stdin) so the heredoc below is the only stdin.
+  # python3 always prints + exits 0, so $() always succeeds with a non-empty result;
+  # checks with neither conclusion nor status fall into PENDING.
   result=$(DRIVER_RAW="${raw}" python3 - <<'PYEOF'
 import json, os, sys
 
@@ -106,11 +110,7 @@ elif all(s in ("SUCCESS", "SKIPPED", "NEUTRAL") for s in statuses):
 else:
     print("PENDING")
 PYEOF
-  ) || result="ERR"
-
-  if [[ -z "${result}" ]]; then
-    result="ERR"
-  fi
+)
 
   # Track consecutive ERR — network-blip zombie prevention (#243)
   if [[ "${result}" == "ERR" ]]; then
@@ -137,4 +137,6 @@ PYEOF
       exit 0
       ;;
   esac
+
+  sleep "${POLL_INTERVAL}"
 done

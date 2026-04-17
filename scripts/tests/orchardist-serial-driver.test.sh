@@ -21,21 +21,21 @@ SESSION_NAME="test_driver_$$"
 FAKE_BIN_DIR="$(mktemp -d)"
 DRIVER_PID=""
 DRIVER_LOG="$(mktemp)"
+SESSIONS=("${SESSION_NAME}")
 
 # ---------------------------------------------------------------------------
-# Cleanup
+# Cleanup — tracks every session created so mid-test failures don't leak
 # ---------------------------------------------------------------------------
 cleanup() {
-  # Kill the driver if still alive
   if [[ -n "${DRIVER_PID}" ]] && kill -0 "${DRIVER_PID}" 2>/dev/null; then
     kill "${DRIVER_PID}" 2>/dev/null || true
   fi
-  # Kill the test tmux session if still alive
-  tmux kill-session -t "${SESSION_NAME}" 2>/dev/null || true
-  # Remove temp dirs/files
+  for s in "${SESSIONS[@]}"; do
+    tmux kill-session -t "${s}" 2>/dev/null || true
+  done
   rm -rf "${FAKE_BIN_DIR}" "${DRIVER_LOG}"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,6 +135,7 @@ pass "driver exited within ${ELAPSED}s of session death (issue #243 AC#1)"
 # AC#2: driver exits when PR state is CLOSED
 # ---------------------------------------------------------------------------
 SESSION_NAME="test_driver_closed_$$"
+SESSIONS+=("${SESSION_NAME}")
 DRIVER_PID=""
 tmux new-session -d -s "${SESSION_NAME}" -x 80 -y 24
 
@@ -169,6 +170,7 @@ pass "driver exited on PR CLOSED within ${ELAPSED}s (issue #243 AC#2)"
 # AC#3: driver exits after MAX_ERR consecutive parse failures
 # ---------------------------------------------------------------------------
 SESSION_NAME="test_driver_err_$$"
+SESSIONS+=("${SESSION_NAME}")
 DRIVER_PID=""
 tmux new-session -d -s "${SESSION_NAME}" -x 80 -y 24
 
