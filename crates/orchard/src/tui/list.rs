@@ -283,87 +283,53 @@ pub(crate) fn since_text(
     }
 }
 
-/// Returns a single PR status string for the task row.
+/// Returns a single PR status string and its `Style` for the task row.
+///
+/// Thin wrapper over [`crate::tui::fuzzy::pr_status_string`] — the string
+/// content is defined once there and reused by fuzzy highlighting. This
+/// function only resolves the theme color for each state.
 ///
 /// Retained for the legacy `column_order_claude_after_number` smoke test path.
 /// Callers outside tests use the signal-lexicon helpers above; this function
 /// may be removed when those tests are rewritten to the new layout.
 #[cfg(test)]
 fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
-    let Some(ref pr) = row.pr else {
-        // No PR — check if the linked issue is closed/completed (stale worktree)
-        if let Some(ref state) = row.issue_state
-            && (state == "closed" || state == "completed")
-        {
-            return (
-                format!("\u{2716} issue {}", state),
-                Style::default().fg(theme.error),
-            );
+    let text = crate::tui::fuzzy::pr_status_string(row);
+    let color = match row.pr {
+        None => {
+            if row
+                .issue_state
+                .as_deref()
+                .is_some_and(|s| s == "closed" || s == "completed")
+            {
+                theme.error
+            } else {
+                theme.dimmed
+            }
         }
-        return ("no PR".to_string(), Style::default().fg(theme.dimmed));
+        Some(ref pr) => {
+            if pr.state.as_deref() == Some("merged") {
+                theme.pr_merged
+            } else if pr.state.as_deref() == Some("closed")
+                || pr.review_decision.as_deref() == Some("changes_requested")
+            {
+                theme.error
+            } else if pr.review_decision.as_deref() == Some("approved") {
+                theme.success
+            } else if pr.has_conflicts {
+                theme.merge_conflict
+            } else if pr.unresolved_threads > 0 {
+                theme.warning
+            } else if pr.ci_code_state.as_deref() == Some("failing") {
+                theme.error
+            } else if pr.ci_code_state.as_deref() == Some("pending") {
+                theme.warning
+            } else {
+                theme.dimmed
+            }
+        }
     };
-
-    let prefix = format!("#{} ", pr.number);
-
-    // Merged or closed PR = stale worktree
-    if pr.state.as_deref() == Some("merged") {
-        return (
-            format!("{}\u{2713} merged", prefix),
-            Style::default().fg(theme.pr_merged),
-        );
-    }
-    if pr.state.as_deref() == Some("closed") {
-        return (
-            format!("{}\u{2716} closed", prefix),
-            Style::default().fg(theme.error),
-        );
-    }
-
-    if pr.review_decision.as_deref() == Some("approved") {
-        return (
-            format!("{}\u{2713} approved", prefix),
-            Style::default().fg(theme.success),
-        );
-    }
-    if pr.review_decision.as_deref() == Some("changes_requested") {
-        return (
-            format!("{}\u{2716} changes req", prefix),
-            Style::default().fg(theme.error),
-        );
-    }
-    if pr.has_conflicts {
-        return (
-            format!("{}\u{2716} conflict", prefix),
-            Style::default().fg(theme.merge_conflict),
-        );
-    }
-    if pr.unresolved_threads > 0 {
-        return (
-            format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads),
-            Style::default().fg(theme.warning),
-        );
-    }
-    // Prefer the split `ci_code_state` introduced in #218. A code-green
-    // gate-blocked PR (e.g. waiting on `check-approval-or-label`) intentionally
-    // does NOT surface as "failing" here — that's the regression this
-    // feature fixes. A future PR will add a dedicated "gate blocked" label.
-    if pr.ci_code_state.as_deref() == Some("failing") {
-        return (
-            format!("{}\u{2716} failing", prefix),
-            Style::default().fg(theme.error),
-        );
-    }
-    if pr.ci_code_state.as_deref() == Some("pending") {
-        return (
-            format!("{}\u{25d0} pending CI", prefix),
-            Style::default().fg(theme.warning),
-        );
-    }
-    // Default for open PR with no special state
-    (
-        format!("{}\u{25cb} needs review", prefix),
-        Style::default().fg(theme.dimmed),
-    )
+    (text, Style::default().fg(color))
 }
 
 /// Formats an elapsed-seconds value into a compact duration string.

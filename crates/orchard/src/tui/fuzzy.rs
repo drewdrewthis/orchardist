@@ -43,7 +43,8 @@ pub struct RowHaystack {
 /// 2. `branch`
 /// 3. Issue number (e.g. "#42")
 /// 4. Issue title
-/// 5. PR status text (mirrors `pr_status_text` output without Theme)
+/// 5. PR status text (from `pr_status_string`, the same generator that feeds
+///    `pr_status_text` in list.rs)
 /// 6. Session status text
 /// 7. Display group label
 pub fn row_haystack_fields(row: &WorktreeRow) -> Vec<String> {
@@ -54,7 +55,7 @@ pub fn row_haystack_fields(row: &WorktreeRow) -> Vec<String> {
             .map(|n| format!("#{}", n))
             .unwrap_or_default(),
         row.issue_title.clone().unwrap_or_default(),
-        pr_status_haystack(row),
+        pr_status_string(row),
         session_status_haystack(row),
         display_group_label(row.display_group),
     ]
@@ -86,12 +87,16 @@ pub fn row_haystack(row: &WorktreeRow) -> RowHaystack {
     }
 }
 
-/// Returns PR status text without a Theme dependency.
+/// Returns the PR status text for a worktree row.
 ///
-/// Mirrors the logic of `pr_status_text` in `list.rs` exactly — including the
-/// same Unicode symbols — so that fuzzy match byte offsets align with the
-/// displayed text in each cell.
-fn pr_status_haystack(row: &WorktreeRow) -> String {
+/// Single source of truth for the PR status string shown in the task list and
+/// searched by fuzzy match. Callers that also need a color wrap this in
+/// `pr_status_text` (list.rs) to attach a `Style`.
+///
+/// Keeping a single string generator ensures fuzzy match byte offsets align
+/// with the displayed text — adding or changing a PR state only requires
+/// editing one place.
+pub(crate) fn pr_status_string(row: &WorktreeRow) -> String {
     let Some(ref pr) = row.pr else {
         if let Some(ref state) = row.issue_state
             && (state == "closed" || state == "completed")
