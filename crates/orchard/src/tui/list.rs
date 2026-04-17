@@ -16,7 +16,7 @@ use crate::remote;
 use crate::tmux;
 use crate::tui::state::{CleanupState, InputPhase, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color, repo_color};
-use crate::tui::{ATTRIBUTION_URL, App, WARNING_DURATION_SECS, Reachability, filter_stale};
+use crate::tui::{ATTRIBUTION_URL, App, Reachability, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -558,11 +558,15 @@ impl App {
                         match self.reachability(h) {
                             Reachability::Reachable => {}
                             Reachability::Unreachable => {
-                                self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                                self.warning =
+                                    Some((format!("@{} is unreachable", h), Instant::now()));
                                 return false;
                             }
                             Reachability::Unknown => {
-                                self.warning = Some((format!("@{} -- checking connectivity...", h), Instant::now()));
+                                self.warning = Some((
+                                    format!("@{} -- checking connectivity...", h),
+                                    Instant::now(),
+                                ));
                                 return false;
                             }
                         }
@@ -639,7 +643,10 @@ impl App {
                             return false;
                         }
                         Reachability::Unknown => {
-                            self.warning = Some((format!("@{} -- checking connectivity...", h), Instant::now()));
+                            self.warning = Some((
+                                format!("@{} -- checking connectivity...", h),
+                                Instant::now(),
+                            ));
                             return false;
                         }
                     }
@@ -672,7 +679,10 @@ impl App {
                             return false;
                         }
                         Reachability::Unknown => {
-                            self.warning = Some((format!("@{} -- checking connectivity...", h), Instant::now()));
+                            self.warning = Some((
+                                format!("@{} -- checking connectivity...", h),
+                                Instant::now(),
+                            ));
                             return false;
                         }
                     }
