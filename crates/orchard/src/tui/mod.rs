@@ -460,8 +460,7 @@ impl App {
         for ss in &self.standalone_sessions {
             if self.expanded.contains(&ss.session.tmux.name) && ss.session.windows.len() > 1 {
                 for (i, _) in ss.session.windows.iter().enumerate() {
-                    valid_window_keys
-                        .insert(Self::window_expansion_key(&ss.session.tmux.name, i));
+                    valid_window_keys.insert(Self::window_expansion_key(&ss.session.tmux.name, i));
                 }
             }
         }
