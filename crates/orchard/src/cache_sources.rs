@@ -1554,13 +1554,13 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         }
     }
 
-    // For remote hosts, batch the tmux list-sessions and Claude state cat into
+    // For remote hosts, batch the tmux list-panes and Claude state cat into
     // a single SSH call to minimise round-trips.
     let sessions_out = match host {
-        None => run_local("tmux", &["list-sessions", "-F", TMUX_SESSION_FORMAT]),
+        None => run_local("tmux", &["list-panes", "-a", "-F", TMUX_SESSION_FORMAT]),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '{}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                "tmux list-panes -a -F '{}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
                 TMUX_SESSION_FORMAT, CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)
@@ -1588,7 +1588,7 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
 
     let remote_claude_states = crate::claude_state::parse_remote_state_output(claude_state_raw);
 
-    let mut sessions = parse_tmux_output(
+    let mut sessions = parse_tmux_sessions_from_panes(
         sessions_output,
         host,
         |session_name| {
@@ -2675,7 +2675,7 @@ mod tests {
     fn remote_ssh_command_includes_sentinel() {
         // The batched command must contain the sentinel string.
         let cmd = format!(
-            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
             CLAUDE_STATE_SENTINEL
         );
         assert!(cmd.contains(CLAUDE_STATE_SENTINEL));
@@ -2685,7 +2685,7 @@ mod tests {
     fn remote_ssh_command_uses_single_quoted_tmpdir() {
         // The TMPDIR variable must be single-quoted so it expands on the remote shell.
         let cmd = format!(
-            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
             CLAUDE_STATE_SENTINEL
         );
         assert!(
@@ -2701,7 +2701,7 @@ mod tests {
         // On Linux CI, std::env::temp_dir() == "/tmp" which legitimately appears
         // in the fallback, so we check for the shell variable pattern instead.
         let cmd = format!(
-            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
             CLAUDE_STATE_SENTINEL
         );
         assert!(
@@ -2714,10 +2714,38 @@ mod tests {
     fn remote_ssh_command_ends_with_semicolon_true() {
         // The "; true" suffix ensures cat failure (no files) doesn't fail the overall command.
         let cmd = format!(
-            "tmux list-sessions -F '#{{session_name}}:#{{session_path}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
             CLAUDE_STATE_SENTINEL
         );
         assert!(cmd.ends_with("; true"), "command must end with '; true'");
+    }
+
+    #[test]
+    fn local_and_remote_parse_identically_except_for_host() {
+        // AC #5: local and remote fetch paths feed identical raw output shape
+        // into parse_tmux_sessions_from_panes; the only per-row difference
+        // should be the `host` tag.
+        let raw = "repo_main\t1\t/work/repo\t1700000000\t1700001000\n\
+                   repo_main\t0\t/inactive\t1700000000\t1700001000\n\
+                   feat_sess\t1\t/work/repo-feat\t1700000100\t1700002000\n";
+
+        let local = parse_tmux_sessions_from_panes(raw, None, |_| String::new(), |_| vec![]);
+        let remote = parse_tmux_sessions_from_panes(
+            raw,
+            Some("user@host"),
+            |_| String::new(),
+            |_| vec![],
+        );
+
+        assert_eq!(local.len(), remote.len());
+        for (l, r) in local.iter().zip(remote.iter()) {
+            assert_eq!(l.name, r.name);
+            assert_eq!(l.path, r.path);
+            assert_eq!(l.created_at, r.created_at);
+            assert_eq!(l.last_activity_at, r.last_activity_at);
+        }
+        assert!(local.iter().all(|s| s.host.is_none()));
+        assert!(remote.iter().all(|s| s.host.as_deref() == Some("user@host")));
     }
 
     #[test]

@@ -113,14 +113,26 @@ fn collect_repo_caches(
     (repo_caches, remote_claude_states)
 }
 
-/// Builds `StandaloneSessionRow`s from config, matching against live tmux sessions
-/// and Claude state files.
+/// Builds `StandaloneSessionRow`s from config and discovered sessions.
+///
+/// Returns configured standalones first (in config order), followed by any
+/// live local tmux session whose path is not inside any known worktree path
+/// and whose name does not already appear in `config.tmux_sessions`.
+///
+/// Only local sessions are considered — remote sessions are handled per-host
+/// and must not appear here.
 fn build_standalone_sessions(
     config: &GlobalConfig,
     local_sessions: &[cache::CachedTmuxSession],
     claude_states: &[crate::claude_state::ClaudeStateFile],
+    all_worktrees: &[cache::CachedWorktree],
 ) -> Vec<StandaloneSessionRow> {
-    config
+    let configured_names: std::collections::HashSet<&str> =
+        config.tmux_sessions.iter().map(|c| c.name.as_str()).collect();
+
+    let worktree_paths: Vec<&str> = all_worktrees.iter().map(|w| w.path.as_str()).collect();
+
+    let mut rows: Vec<StandaloneSessionRow> = config
         .tmux_sessions
         .iter()
         .map(|cfg| {
@@ -159,7 +171,55 @@ fn build_standalone_sessions(
                 config: cfg.clone(),
             }
         })
-        .collect()
+        .collect();
+
+    // Append discovered standalones: local sessions whose active-pane cwd is
+    // not inside any known worktree path and are not already configured.
+    for session in local_sessions {
+        if configured_names.contains(session.name.as_str()) {
+            continue;
+        }
+        // A session "belongs" to a worktree if the session path equals the
+        // worktree path or is a subdirectory of it.
+        let inside_worktree = worktree_paths.iter().any(|wt_path| {
+            session.path == *wt_path
+                || session.path.starts_with(&format!("{}/", wt_path))
+        });
+        if inside_worktree {
+            continue;
+        }
+
+        let claude = claude_states
+            .iter()
+            .find(|cs| cs.tmux_session == session.name)
+            .filter(|cs| !crate::derive::is_state_stale_default(&cs.timestamp))
+            .and_then(ClaudeSessionInfo::from_state_file);
+
+        let (windows, panes) = build_windows_and_panes(PaneColumns::from_cached(session));
+
+        rows.push(StandaloneSessionRow {
+            session: EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: session.name.clone(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude,
+                windows,
+                panes,
+                started_at: session.created_at,
+                last_activity_at: session.last_activity_at,
+            },
+            config: crate::session::StandaloneConfig {
+                name: session.name.clone(),
+                command: String::new(),
+                cwd: session.path.clone(),
+                start_on_launch: false,
+            },
+        });
+    }
+
+    rows
 }
 
 // ---------------------------------------------------------------------------
@@ -236,8 +296,16 @@ pub fn build_state_with_hosts(
         })
         .collect();
 
-    // Build standalone sessions from config (reuses local_sessions already read).
-    let standalone_sessions = build_standalone_sessions(config, &local_sessions, &claude_states);
+    // Collect all worktree paths from all repos for the standalone-session filter.
+    let all_worktrees: Vec<cache::CachedWorktree> = repo_caches
+        .iter()
+        .flat_map(|(_, _, _, worktrees, _)| worktrees.iter().cloned())
+        .collect();
+
+    // Build standalone sessions from config and any discovered sessions outside
+    // all known worktree paths. Reuses local_sessions already read above.
+    let standalone_sessions =
+        build_standalone_sessions(config, &local_sessions, &claude_states, &all_worktrees);
 
     OrchardState {
         repos,
@@ -408,7 +476,7 @@ mod tests {
             ..GlobalConfig::default()
         };
         let live = vec![make_cached_session("shepherd")];
-        let rows = build_standalone_sessions(&config, &live, &[]);
+        let rows = build_standalone_sessions(&config, &live, &[], &[]);
         assert_eq!(rows.len(), 1);
         assert!(matches!(
             rows[0].session.tmux.status,
@@ -422,7 +490,7 @@ mod tests {
             tmux_sessions: vec![make_standalone_config("shepherd")],
             ..GlobalConfig::default()
         };
-        let rows = build_standalone_sessions(&config, &[], &[]);
+        let rows = build_standalone_sessions(&config, &[], &[], &[]);
         assert_eq!(rows.len(), 1);
         assert!(matches!(rows[0].session.tmux.status, SessionStatus::Dead));
     }
@@ -433,7 +501,7 @@ mod tests {
             tmux_sessions: vec![make_standalone_config("shepherd")],
             ..GlobalConfig::default()
         };
-        let rows = build_standalone_sessions(&config, &[], &[]);
+        let rows = build_standalone_sessions(&config, &[], &[], &[]);
         assert!(rows[0].session.claude.is_none());
     }
 
@@ -462,7 +530,7 @@ mod tests {
             inflight_tool_count: None,
             state_changed_at: None,
         }];
-        let rows = build_standalone_sessions(&config, &[], &claude_states);
+        let rows = build_standalone_sessions(&config, &[], &claude_states, &[]);
         let claude = rows[0].session.claude.as_ref().unwrap();
         assert_eq!(claude.status, ClaudeState::Working);
         assert_eq!(claude.model.as_deref(), Some("claude-opus-4-6"));
@@ -480,7 +548,7 @@ mod tests {
             ],
             ..GlobalConfig::default()
         };
-        let rows = build_standalone_sessions(&config, &[], &[]);
+        let rows = build_standalone_sessions(&config, &[], &[], &[]);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].config.name, "shepherd");
         assert_eq!(rows[1].config.name, "monitor");
@@ -490,7 +558,7 @@ mod tests {
     #[test]
     fn standalone_session_empty_config_returns_empty() {
         let config = GlobalConfig::default();
-        let rows = build_standalone_sessions(&config, &[], &[]);
+        let rows = build_standalone_sessions(&config, &[], &[], &[]);
         assert!(rows.is_empty());
     }
 
@@ -657,23 +725,13 @@ mod tests {
     ///
     /// Acceptance criterion: s2 (at /tmp/random-dir) must be present in
     /// `standalone_sessions` even though it has no entry in `config.tmux_sessions`.
-    #[ignore = "AC #3 issue #275: build_standalone_sessions must include sessions outside all worktrees"]
     #[test]
     fn session_outside_all_worktrees_goes_to_standalone() {
-        // TODO (issue #275): remove #[ignore] once build_standalone_sessions is
-        // widened to include sessions whose active-pane cwd is outside every
-        // configured worktree path. The implementer should:
-        //   1. Accept `&[CachedTmuxSession]` and `&[CachedWorktree]` (all repos).
-        //   2. Collect sessions whose path is not a prefix of any worktree path.
-        //   3. Emit them as StandaloneSessionRow with a synthetic StandaloneConfig.
-
-        // s1 sits inside the repo worktree — expect it on a worktree row.
+        // s1 sits inside the repo worktree — expect it on a worktree row, not standalone.
         let s1 = make_cached_session_at("repo_main", "/work/repo");
         // s2 sits in an unrelated dir — expect it in standalone bucket.
         let s2 = make_cached_session_at("stray", "/tmp/random-dir");
 
-        // Use build_standalone_sessions directly (it is pub(crate) — accessible
-        // here because we are inside the same crate).
         let config = GlobalConfig::default(); // no tmux_sessions configured
         let worktrees_in_scope = vec![
             make_cached_worktree("/work/repo"),
@@ -681,9 +739,7 @@ mod tests {
         ];
         let all_sessions = vec![s1.clone(), s2.clone()];
 
-        // Call the function under test.  When the implementer adds the
-        // worktrees parameter, update the call site accordingly.
-        let rows = build_standalone_sessions(&config, &all_sessions, &[]);
+        let rows = build_standalone_sessions(&config, &all_sessions, &[], &worktrees_in_scope);
 
         let stray_row = rows.iter().find(|r| r.session.tmux.name == "stray");
         assert!(

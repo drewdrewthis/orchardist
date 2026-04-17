@@ -4,13 +4,11 @@
 //! connections, list remote git worktrees and tmux sessions, and create or
 //! attach to sessions on the remote machine. Consumed by `cache_sources` and
 //! the TUI delete flow.
-use std::path::Path;
 use std::process::Command;
 
 use anyhow::anyhow;
 
 use crate::logger::LOG;
-use crate::types::{RemoteConfig, TmuxSession, Worktree};
 
 /// Shell-escape a string for safe use in SSH command strings.
 pub fn shell_escape(s: &str) -> String {
@@ -138,122 +136,6 @@ pub fn ssh_exec_with_timeout(
             }
         }
     }
-}
-
-/// Returns all git worktrees on the remote machine for the configured repo path.
-/// Returns an empty `Vec` on any error.
-pub fn list_remote_worktrees(remote: &RemoteConfig) -> Vec<Worktree> {
-    let cmd = format!(
-        "cd {} && git worktree list --porcelain",
-        shell_escape(&remote.repo_path)
-    );
-    let out = match ssh_exec(&remote.host, &cmd) {
-        Ok(o) => o,
-        Err(err) => {
-            LOG.warn(&format!(
-                "remote[{}]: failed to list worktrees: {}",
-                remote.host, err
-            ));
-            return Vec::new();
-        }
-    };
-
-    let mut worktrees = crate::git::parse_porcelain(&out);
-    for wt in &mut worktrees {
-        wt.remote = Some(remote.host.clone());
-    }
-    LOG.info(&format!(
-        "remote[{}]: {} worktrees",
-        remote.host,
-        worktrees.len()
-    ));
-    worktrees
-}
-
-/// Returns all tmux sessions on the remote machine.
-/// Returns an empty `Vec` on any error.
-pub fn list_remote_tmux_sessions(remote: &RemoteConfig) -> Vec<TmuxSession> {
-    let cmd = "tmux list-sessions -F '#{session_name}\t#{session_path}\t#{session_attached}'";
-    let out = match ssh_exec(&remote.host, cmd) {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
-    };
-    let sessions = parse_tmux_output(&out);
-    LOG.info(&format!(
-        "remote[{}]: {} tmux sessions",
-        remote.host,
-        sessions.len()
-    ));
-    sessions
-}
-
-fn parse_tmux_output(out: &str) -> Vec<TmuxSession> {
-    let mut sessions = Vec::new();
-    for line in out.trim().lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        sessions.push(TmuxSession {
-            name: parts[0].to_string(),
-            path: parts[1].to_string(),
-            attached: parts[2] == "1",
-            pane_title: None,
-            active_pane_cwd: None,
-        });
-    }
-    sessions
-}
-
-/// Fetches worktrees and tmux sessions from the remote in parallel using threads,
-/// then attaches matching sessions to their worktrees.
-pub fn fetch_remote_worktrees(remote: &RemoteConfig) -> Vec<Worktree> {
-    let remote_wt = remote.clone();
-    let remote_tmux = remote.clone();
-
-    let wt_handle = std::thread::spawn(move || list_remote_worktrees(&remote_wt));
-    let tmux_handle = std::thread::spawn(move || list_remote_tmux_sessions(&remote_tmux));
-
-    let mut worktrees = wt_handle.join().unwrap_or_default();
-    let sessions = tmux_handle.join().unwrap_or_default();
-
-    for wt in &mut worktrees {
-        if let Some(sess) = match_session(&sessions, &wt.path, wt.branch.as_deref()) {
-            wt.tmux_session = Some(sess.name.clone());
-            wt.tmux_attached = sess.attached;
-        }
-    }
-    worktrees
-}
-
-fn match_session<'a>(
-    sessions: &'a [TmuxSession],
-    path: &str,
-    branch: Option<&str>,
-) -> Option<&'a TmuxSession> {
-    let dir_name = Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let branch_slug = branch.map(|b| b.replace('/', "-"));
-
-    for s in sessions {
-        if s.path == path {
-            return Some(s);
-        }
-        if s.name == dir_name {
-            return Some(s);
-        }
-        if let Some(ref slug) = branch_slug
-            && &s.name == slug
-        {
-            return Some(s);
-        }
-    }
-    None
 }
 
 /// Kills the named tmux session on the remote host.
