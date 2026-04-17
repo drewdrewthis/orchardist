@@ -463,24 +463,7 @@ pub fn rollup_activity_row(row: &WorktreeRow) -> Activity {
         .filter_map(|s| s.claude.as_ref())
         .map(|c| {
             // Bridge from session::ClaudeSessionInfo through the enrichment shape.
-            let ce = ClaudeEnrichment {
-                status: c.status,
-                model: c.model.clone(),
-                last_tool: c.last_tool.clone(),
-                current_task: c.current_task.clone(),
-                session_start_ts: c.session_start_ts,
-                input_tokens: c.input_tokens,
-                output_tokens: c.output_tokens,
-                cache_creation_input_tokens: c.cache_creation_input_tokens,
-                cache_read_input_tokens: c.cache_read_input_tokens,
-                context_window_pct: c.context_window_pct,
-                cost_usd: c.cost_usd,
-                total_duration_ms: c.total_duration_ms,
-                rate_limits: c.rate_limits.clone(),
-                stop_reason: c.stop_reason.clone(),
-                turn_count: c.turn_count,
-                state_changed_at: c.state_changed_at,
-            };
+            let ce = ClaudeEnrichment::from(c);
             activity_from_claude(&ce)
         })
         .max()
