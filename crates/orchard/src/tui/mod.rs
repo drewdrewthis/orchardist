@@ -2764,9 +2764,20 @@ mod tests {
         let msg = app.handle_event(key);
         app.update(msg.unwrap());
 
-        // The "checking connectivity..." placeholder must not be shown for a
-        // not-yet-probed host — that was the silent block.
+        // Positive assertion: the action must have been attempted. In the
+        // test environment the SSH call to "gpu1" will fail, so
+        // join_or_create_session surfaces a "remote session error: …"
+        // warning. Either that error is present, or switch_target was set
+        // (action succeeded against something mocked). What must NOT happen:
+        // a silent bail-out that leaves both fields untouched.
         let warning = app.warning.as_ref().map(|(s, _)| s.as_str());
+        let attempted =
+            app.switch_target.is_some() || warning.is_some_and(|w| w.contains("remote session"));
+        assert!(
+            attempted,
+            "Enter on not-yet-probed host must attempt the action; warning={warning:?}, switch_target={:?}",
+            app.switch_target
+        );
         assert!(
             warning != Some("@gpu1 -- checking connectivity..."),
             "missing host entry must not surface the 'checking connectivity...' block; got {warning:?}"
