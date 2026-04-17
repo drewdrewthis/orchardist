@@ -283,7 +283,6 @@ pub(crate) fn since_text(
     }
 }
 
-
 /// Formats an elapsed-seconds value into a compact duration string.
 ///
 /// - `< 60` → `"0m"`
