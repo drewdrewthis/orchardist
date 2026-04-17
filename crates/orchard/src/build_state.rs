@@ -127,8 +127,11 @@ fn build_standalone_sessions(
     claude_states: &[crate::claude_state::ClaudeStateFile],
     worktree_paths: &[&str],
 ) -> Vec<StandaloneSessionRow> {
-    let configured_names: std::collections::HashSet<&str> =
-        config.tmux_sessions.iter().map(|c| c.name.as_str()).collect();
+    let configured_names: std::collections::HashSet<&str> = config
+        .tmux_sessions
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
 
     let mut rows: Vec<StandaloneSessionRow> = config
         .tmux_sessions

@@ -499,8 +499,7 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
 /// All three callers MUST use this constant so that
 /// `parse_tmux_sessions_from_panes` always receives identically-structured
 /// lines regardless of the code path that produced them.
-pub(crate) const TMUX_SESSION_FORMAT: &str =
-    "#{session_name}\t#{pane_active}\t#{pane_current_path}\t#{session_created}\t#{session_activity}";
+pub(crate) const TMUX_SESSION_FORMAT: &str = "#{session_name}\t#{pane_active}\t#{pane_current_path}\t#{session_created}\t#{session_activity}";
 
 /// Parses the output of `tmux list-panes -a -F '#{session_name}\t#{pane_active}\t#{pane_current_path}\t#{session_created}\t#{session_activity}'`
 /// into `Vec<CachedTmuxSession>`, one entry per session.
@@ -2730,12 +2729,8 @@ mod tests {
                    feat_sess\t1\t/work/repo-feat\t1700000100\t1700002000\n";
 
         let local = parse_tmux_sessions_from_panes(raw, None, |_| String::new(), |_| vec![]);
-        let remote = parse_tmux_sessions_from_panes(
-            raw,
-            Some("user@host"),
-            |_| String::new(),
-            |_| vec![],
-        );
+        let remote =
+            parse_tmux_sessions_from_panes(raw, Some("user@host"), |_| String::new(), |_| vec![]);
 
         assert_eq!(local.len(), remote.len());
         for (l, r) in local.iter().zip(remote.iter()) {
@@ -2745,7 +2740,11 @@ mod tests {
             assert_eq!(l.last_activity_at, r.last_activity_at);
         }
         assert!(local.iter().all(|s| s.host.is_none()));
-        assert!(remote.iter().all(|s| s.host.as_deref() == Some("user@host")));
+        assert!(
+            remote
+                .iter()
+                .all(|s| s.host.as_deref() == Some("user@host"))
+        );
     }
 
     #[test]
@@ -3642,7 +3641,13 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         let input = format!(
             "{}\n{}",
             pane_line("myrepo", "0", "/work/repo", 1_700_000_000, 1_700_001_000),
-            pane_line("myrepo", "1", "/work/repo-feat", 1_700_000_000, 1_700_001_000),
+            pane_line(
+                "myrepo",
+                "1",
+                "/work/repo-feat",
+                1_700_000_000,
+                1_700_001_000
+            ),
         );
 
         let sessions = parse_tmux_sessions_from_panes(&input, None, |_| String::new(), |_| vec![]);

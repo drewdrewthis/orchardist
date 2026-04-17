@@ -216,16 +216,16 @@ mod tests {
 
     #[test]
     fn session_belongs_subdirectory() {
-        assert!(session_belongs_to_worktree("/work/repo/src/foo", "/work/repo"));
+        assert!(session_belongs_to_worktree(
+            "/work/repo/src/foo",
+            "/work/repo"
+        ));
     }
 
     #[test]
     fn session_belongs_ignores_trailing_slash_on_worktree() {
         assert!(session_belongs_to_worktree("/work/repo", "/work/repo/"));
-        assert!(session_belongs_to_worktree(
-            "/work/repo/src",
-            "/work/repo/"
-        ));
+        assert!(session_belongs_to_worktree("/work/repo/src", "/work/repo/"));
     }
 
     #[test]

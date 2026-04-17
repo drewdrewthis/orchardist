@@ -664,8 +664,7 @@ mod tests {
             "boxd@issue3155.boxd.sh",
             &tmux_cmd,
             SshOutput {
-                stdout: "issue3155\t1\t/workspace/langwatch\t1713000000\t1713000060\n"
-                    .to_string(),
+                stdout: "issue3155\t1\t/workspace/langwatch\t1713000000\t1713000060\n".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
             },

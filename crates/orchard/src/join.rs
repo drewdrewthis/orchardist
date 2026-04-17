@@ -1402,7 +1402,11 @@ mod tests {
             .iter()
             .find(|r| r.branch == "issue275/feat-path")
             .unwrap();
-        assert_eq!(main_row.sessions.len(), 1, "session starts at main worktree");
+        assert_eq!(
+            main_row.sessions.len(),
+            1,
+            "session starts at main worktree"
+        );
         assert_eq!(
             feat_row.sessions.len(),
             0,
