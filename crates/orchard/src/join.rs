@@ -1289,6 +1289,40 @@ mod tests {
         assert!(enriched.panes[0].has_claude);
     }
 
+    /// When claude-remote wraps the Claude binary, tmux reports
+    /// `pane_current_command="zsh"` and a shell-prompt title (see issue #238).
+    /// The scraping fallback must detect Claude from `last_output_lines` alone.
+    #[test]
+    fn enrich_session_from_scraping_detects_claude_from_tui_output_when_command_is_subshell() {
+        let sess = CachedTmuxSession {
+            name: "issue238".to_string(),
+            path: "/workspace/repo".to_string(),
+            pane_targets: vec!["0.0".to_string()],
+            pane_titles: vec!["drudrukungfu".to_string()],
+            pane_commands: vec!["zsh".to_string()],
+            window_names: vec![],
+            window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            host: None,
+            created_at: None,
+            last_activity_at: None,
+            last_output_lines: vec![
+                "╭─────────────────────────────────────────────────╮".to_string(),
+                "│ >                                               │".to_string(),
+                "╰─────────────────────────────────────────────────╯".to_string(),
+                "  ? for shortcuts".to_string(),
+            ],
+            claude_state_raw: None,
+        };
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.claude.is_some(),
+            "Claude TUI visible in last_output_lines must be detected even when pane_command is 'zsh'"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // pr_info_from: split CI state propagation (task #24)
     // -----------------------------------------------------------------------
