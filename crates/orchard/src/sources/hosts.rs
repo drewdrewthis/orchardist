@@ -9,8 +9,22 @@
 //! command for its kind. Each probe runs on its own thread so a stopped VM
 //! can't block probes for healthy hosts behind it.
 
+use crate::global_config::{GlobalConfig, RemoteConfig};
 use std::collections::HashMap;
 use std::thread;
+
+/// Returns every `RemoteConfig` configured across all repos in `config`.
+///
+/// Order follows config iteration order; duplicates across repos are preserved
+/// in the returned `Vec` (callers that need uniqueness should pass through
+/// [`probe_reachability_all_for_remotes`], which dedupes internally by host).
+pub fn remotes_from_config(config: &GlobalConfig) -> Vec<RemoteConfig> {
+    config
+        .repos
+        .iter()
+        .flat_map(|r| r.remotes.iter().cloned())
+        .collect()
+}
 
 /// Probes whether a remote is reachable, using a probe command appropriate
 /// for the remote's kind.
@@ -21,7 +35,7 @@ use std::thread;
 /// `list --json` is the canonical health check there. Using the wrong probe
 /// would mark a perfectly healthy golden host as unreachable and silence
 /// every fork behind it.
-pub fn probe_reachability_for_remote(remote: &crate::global_config::RemoteConfig) -> bool {
+pub(crate) fn probe_reachability_for_remote(remote: &RemoteConfig) -> bool {
     let cmd = match remote.kind {
         crate::remote_adapter::RemoteKind::BoxdFork => "list --json",
         crate::remote_adapter::RemoteKind::Remmy
@@ -35,75 +49,112 @@ pub fn probe_reachability_for_remote(remote: &crate::global_config::RemoteConfig
 /// Deduplicates by host, spawns one thread per unique remote, and returns
 /// a `host -> reachable` map. Each remote is probed with the command
 /// appropriate for its kind (see `probe_reachability_for_remote`).
-pub fn probe_reachability_all_for_remotes(
-    remotes: &[crate::global_config::RemoteConfig],
-) -> HashMap<String, bool> {
-    let mut seen = std::collections::HashSet::new();
-    let unique: Vec<crate::global_config::RemoteConfig> = remotes
-        .iter()
-        .filter(|r| seen.insert(r.host.clone()))
-        .cloned()
-        .collect();
-
-    let handles: Vec<_> = unique
-        .into_iter()
-        .map(|remote| {
-            thread::spawn(move || {
-                let reachable = probe_reachability_for_remote(&remote);
-                (remote.host, reachable)
-            })
-        })
-        .collect();
-
-    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+pub fn probe_reachability_all_for_remotes(remotes: &[RemoteConfig]) -> HashMap<String, bool> {
+    probe_with(remotes.iter().cloned(), probe_reachability_for_remote)
 }
 
-#[cfg(test)]
-fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
+fn probe_with<I, F>(remotes: I, probe: F) -> HashMap<String, bool>
 where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-    F: Fn(&str) -> bool + Clone + Send + 'static,
+    I: IntoIterator<Item = RemoteConfig>,
+    F: Fn(&RemoteConfig) -> bool + Clone + Send + 'static,
 {
     let mut seen = std::collections::HashSet::new();
-    let unique: Vec<String> = hosts
+    let unique: Vec<RemoteConfig> = remotes
         .into_iter()
-        .map(Into::into)
-        .filter(|h| seen.insert(h.clone()))
+        .filter(|r| seen.insert(r.host.clone()))
         .collect();
 
-    let handles: Vec<_> = unique
+    let handles: Vec<(String, _)> = unique
         .into_iter()
-        .map(|host| {
+        .map(|remote| {
             let probe = probe.clone();
-            thread::spawn(move || {
-                let reachable = probe(&host);
-                (host, reachable)
-            })
+            let host = remote.host.clone();
+            let handle = thread::spawn(move || probe(&remote));
+            (host, handle)
         })
         .collect();
 
-    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    handles
+        .into_iter()
+        .filter_map(|(host, handle)| match handle.join() {
+            Ok(reachable) => Some((host, reachable)),
+            Err(_) => {
+                crate::logger::LOG.warn(&format!(
+                    "hosts: probe thread for {host} panicked; treating as unreachable"
+                ));
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_config::{RemoteConfig, RepoConfig};
+    use crate::remote_adapter::RemoteKind;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
+    fn remote(host: &str) -> RemoteConfig {
+        RemoteConfig {
+            name: "default".to_string(),
+            host: host.to_string(),
+            path: "/tmp/repo".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::Remmy,
+        }
+    }
+
+    fn repo(slug: &str, hosts: &[&str]) -> RepoConfig {
+        RepoConfig {
+            slug: slug.to_string(),
+            path: format!("/tmp/{slug}"),
+            remotes: hosts.iter().copied().map(remote).collect(),
+        }
+    }
+
+    /// Locks in the documented contract: `remotes_from_config` returns remotes
+    /// in config-iteration order and *preserves duplicates across repos*. Dedup
+    /// is the responsibility of `probe_reachability_all_for_remotes`, not this
+    /// collector.
+    #[test]
+    fn remotes_from_config_preserves_order_and_cross_repo_duplicates() {
+        let mut cfg = GlobalConfig::default();
+        cfg.repos.push(repo("a/one", &["alpha", "bravo"]));
+        cfg.repos.push(repo("b/two", &["charlie", "alpha"]));
+
+        let hosts: Vec<String> = remotes_from_config(&cfg)
+            .into_iter()
+            .map(|r| r.host)
+            .collect();
+
+        assert_eq!(hosts, vec!["alpha", "bravo", "charlie", "alpha"]);
+    }
+
+    #[test]
+    fn remotes_from_config_returns_empty_when_no_remotes() {
+        let mut cfg = GlobalConfig::default();
+        cfg.repos.push(repo("a/one", &[]));
+
+        assert!(remotes_from_config(&cfg).is_empty());
+    }
+
     /// Regression test for issue #263: serial probing lets one dead host block
-    /// every probe behind it. Three probes × 200ms = 600ms if serial, but
-    /// parallel dispatch finishes near the slowest (~200ms). Budget of 500ms
-    /// catches serialization while tolerating CI scheduler jitter.
+    /// every probe behind it. Three probes × 200ms ≈ 200ms in parallel and
+    /// ≈ 600ms strictly serial. Budget is `delay * 2` so the test still fails
+    /// on *partial* serialization (e.g. 2-of-3 parallel + 1 serial ≈ 400ms),
+    /// not just on fully-serial regressions, while leaving ~200ms of headroom
+    /// for CI scheduler jitter.
     #[test]
     fn probes_run_concurrently() {
-        let hosts = vec!["alpha", "bravo", "charlie"];
+        let remotes = vec![remote("alpha"), remote("bravo"), remote("charlie")];
         let delay = Duration::from_millis(200);
+        let budget = delay * 2;
 
         let start = Instant::now();
-        let result = probe_with(hosts, move |_host| {
+        let result = probe_with(remotes, move |_remote| {
             thread::sleep(delay);
             true
         });
@@ -111,8 +162,9 @@ mod tests {
 
         assert_eq!(result.len(), 3);
         assert!(
-            elapsed < Duration::from_millis(500),
-            "expected concurrent dispatch (<500ms, serial would be ~600ms), got {:?}",
+            elapsed < budget,
+            "expected concurrent dispatch (<{:?}); partial serialization would push past this, got {:?}",
+            budget,
             elapsed
         );
     }
@@ -122,8 +174,13 @@ mod tests {
         let probe_calls = Arc::new(AtomicUsize::new(0));
         let probe_calls_clone = probe_calls.clone();
 
-        let hosts = vec!["alpha", "alpha", "bravo", "alpha"];
-        let result = probe_with(hosts, move |_host| {
+        let remotes = vec![
+            remote("alpha"),
+            remote("alpha"),
+            remote("bravo"),
+            remote("alpha"),
+        ];
+        let result = probe_with(remotes, move |_remote| {
             probe_calls_clone.fetch_add(1, Ordering::SeqCst);
             true
         });
@@ -137,10 +194,11 @@ mod tests {
     }
 
     /// Records when each probe *starts*. In a serial implementation the second
-    /// probe cannot start until the first finishes, so start times are ≥500ms
-    /// apart. In a parallel implementation both start within a few ms of each
-    /// other. This distinction catches serial execution even when the total
-    /// wall time is similar.
+    /// probe cannot start until the first finishes, so the live probe would
+    /// start ~500ms after the dead one. In a parallel implementation both start
+    /// within a few ms of each other. Asserting on the *relative* delay between
+    /// the earliest start and the live start catches serial execution without
+    /// depending on absolute dispatch latency (which varies on loaded CI).
     #[test]
     fn dead_host_does_not_delay_live_host_probe() {
         use std::sync::Mutex;
@@ -148,13 +206,13 @@ mod tests {
         let start_times_clone = start_times.clone();
         let t0 = Instant::now();
 
-        let hosts = vec!["dead", "live"];
-        let result = probe_with(hosts, move |host| {
+        let remotes = vec![remote("dead"), remote("live")];
+        let result = probe_with(remotes, move |r| {
             start_times_clone
                 .lock()
                 .unwrap()
-                .push((host.to_string(), t0.elapsed()));
-            if host == "dead" {
+                .push((r.host.clone(), t0.elapsed()));
+            if r.host == "dead" {
                 thread::sleep(Duration::from_millis(500));
                 false
             } else {
@@ -167,16 +225,22 @@ mod tests {
         assert_eq!(result.get("dead"), Some(&false));
 
         let times = start_times.lock().unwrap();
+        let earliest_start = times
+            .iter()
+            .map(|(_, t)| *t)
+            .min()
+            .expect("at least one probe should have started");
         let live_start = times
             .iter()
             .find(|(h, _)| h == "live")
             .map(|(_, t)| *t)
             .expect("live probe should have started");
+        let dispatch_gap = live_start.saturating_sub(earliest_start);
         assert!(
-            live_start < Duration::from_millis(100),
-            "live probe must start within 100ms of dispatch (serial would delay it ~500ms), \
-             started at {:?}",
-            live_start
+            dispatch_gap < Duration::from_millis(100),
+            "live probe must dispatch within 100ms of the earliest probe \
+             (serial would delay it ~500ms), gap was {:?}",
+            dispatch_gap
         );
     }
 }

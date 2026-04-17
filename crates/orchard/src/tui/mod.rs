@@ -633,11 +633,7 @@ impl App {
             // operations. One dead VM must not block probes for healthy hosts.
             // Use the kind-aware variant so `boxd-fork` golden hosts (which
             // reject `true` as a subcommand) are probed with `list --json`.
-            let remotes: Vec<crate::global_config::RemoteConfig> = config
-                .repos
-                .iter()
-                .flat_map(|r| r.remotes.iter().cloned())
-                .collect();
+            let remotes = crate::sources::hosts::remotes_from_config(&config);
             let probe_results = crate::sources::hosts::probe_reachability_all_for_remotes(&remotes);
 
             let mut reachable_hosts: std::collections::HashSet<String> =
