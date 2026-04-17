@@ -166,6 +166,18 @@ pub struct App {
     ///
     /// When a key is present, the window's pane sub-rows are rendered below it.
     window_expanded: HashSet<String>,
+
+    /// Keys that have been seen as expandable in a prior refresh.
+    ///
+    /// Used to distinguish "new row, auto-expand on first sight" from
+    /// "user explicitly collapsed, preserve across refreshes". A key present
+    /// here but absent from `expanded` means the user collapsed it — the next
+    /// `prune_expansion_state` call must not re-insert it.
+    seen_expandable_keys: HashSet<String>,
+
+    /// Window keys that have been seen in a prior refresh. Parallel to
+    /// `seen_expandable_keys` for `window_expanded`.
+    seen_window_keys: HashSet<String>,
 }
 
 impl App {
@@ -251,6 +263,8 @@ impl App {
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
+            seen_expandable_keys: HashSet::new(),
+            seen_window_keys: HashSet::new(),
         };
         // Default-expanded: issue #251 requires the hierarchy visible from
         // first paint without a data-refresh round-trip. `prune_expansion_state`
@@ -402,10 +416,16 @@ impl App {
 
         self.expanded.retain(|k| valid_keys.contains(k));
 
-        // Auto-expand all expandable rows so hierarchy is visible by default.
+        // Auto-expand only keys that are new (first-time sightings).
+        // Keys already in `seen_expandable_keys` were visible on a prior refresh;
+        // if they are absent from `expanded` now, the user collapsed them — preserve that.
         for key in &valid_keys {
-            self.expanded.insert(key.clone());
+            if !self.seen_expandable_keys.contains(key) {
+                self.expanded.insert(key.clone());
+            }
         }
+        // Update the seen set to match the current valid keys.
+        self.seen_expandable_keys = valid_keys.clone();
 
         // Also prune window_expanded: remove entries for sessions that are no longer expanded.
         let expanded_ref = &self.expanded;
@@ -435,11 +455,12 @@ impl App {
             }
         });
 
-        // Auto-expand windows for sessions with >1 window.
+        // Compute valid window keys for sessions with >1 window.
+        let mut valid_window_keys: HashSet<String> = HashSet::new();
         for ss in &self.standalone_sessions {
             if self.expanded.contains(&ss.session.tmux.name) && ss.session.windows.len() > 1 {
                 for (i, _) in ss.session.windows.iter().enumerate() {
-                    self.window_expanded
+                    valid_window_keys
                         .insert(Self::window_expansion_key(&ss.session.tmux.name, i));
                 }
             }
@@ -450,11 +471,19 @@ impl App {
                 && s.windows.len() > 1
             {
                 for (i, _) in s.windows.iter().enumerate() {
-                    self.window_expanded
-                        .insert(Self::window_expansion_key(&s.tmux.name, i));
+                    valid_window_keys.insert(Self::window_expansion_key(&s.tmux.name, i));
                 }
             }
         }
+
+        // Auto-expand only window keys that are new (not yet seen), preserving
+        // any user-collapsed windows from prior refreshes.
+        for key in &valid_window_keys {
+            if !self.seen_window_keys.contains(key) {
+                self.window_expanded.insert(key.clone());
+            }
+        }
+        self.seen_window_keys = valid_window_keys;
     }
 
     // -------------------------------------------------------------------
@@ -1988,6 +2017,8 @@ impl App {
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
+            seen_expandable_keys: HashSet::new(),
+            seen_window_keys: HashSet::new(),
         };
         // Mirror production: auto-expand multi-child rows so tests see
         // hierarchy by default (issue #251).
@@ -4541,13 +4572,15 @@ mod tests {
             app.expanded.contains("/workspace/repo-1"),
             "multi-pane row should be auto-expanded by default"
         );
-        // Clearing + re-pruning must re-seed the same state — proves the
-        // auto-expand behavior is idempotent, not a one-time init quirk.
+        // After the first prune the key is in `seen_expandable_keys`. Subsequent
+        // prune calls must NOT re-expand a key that is absent from `expanded` —
+        // that would stomp user collapses (issue #261). Verify the key stays
+        // absent after manually clearing it and re-pruning.
         app.expanded.clear();
         app.prune_expansion_state();
         assert!(
-            app.expanded.contains("/workspace/repo-1"),
-            "multi-pane row should be re-expanded by prune"
+            !app.expanded.contains("/workspace/repo-1"),
+            "prune must not re-expand a previously-seen key (would stomp user collapse)"
         );
     }
 
