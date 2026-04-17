@@ -1459,15 +1459,11 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     // For remote hosts, batch the tmux list-sessions and Claude state cat into
     // a single SSH call to minimise round-trips.
     let sessions_out = match host {
-        None => run_local(
-            "tmux",
-            &["list-sessions", "-F", TMUX_SESSION_FORMAT],
-        ),
+        None => run_local("tmux", &["list-sessions", "-F", TMUX_SESSION_FORMAT]),
         Some(h) => {
             let cmd = format!(
                 "tmux list-sessions -F '{}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-                TMUX_SESSION_FORMAT,
-                CLAUDE_STATE_SENTINEL
+                TMUX_SESSION_FORMAT, CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)
         }

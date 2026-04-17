@@ -488,9 +488,8 @@ impl BoxdForkAdapter {
             let stdout = match self.ssh.exec(&fork_host, &tmux_list_cmd) {
                 Ok(output) => output.stdout,
                 Err(e) => {
-                    crate::logger::LOG.warn(&format!(
-                        "list_sessions: skipping fork {fork_host}: {e}"
-                    ));
+                    crate::logger::LOG
+                        .warn(&format!("list_sessions: skipping fork {fork_host}: {e}"));
                     continue;
                 }
             };
@@ -678,7 +677,9 @@ mod tests {
         };
 
         // Act
-        let sessions = adapter.list_sessions().expect("list_sessions must not error");
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
 
         // Assert — must return at least one session whose host matches the fork
         // VM and whose name matches what the fake returned.

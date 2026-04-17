@@ -579,8 +579,7 @@ impl App {
                 .iter()
                 .flat_map(|r| r.remotes.iter().cloned())
                 .collect();
-            let probe_results =
-                crate::sources::hosts::probe_reachability_all_for_remotes(&remotes);
+            let probe_results = crate::sources::hosts::probe_reachability_all_for_remotes(&remotes);
 
             let mut reachable_hosts: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
