@@ -1714,8 +1714,15 @@ impl App {
                     crate::session::Host::Local => None,
                 })
                 .or(vt.row.worktree_host.as_deref());
+            // Dim rows whose host is not confirmed reachable — Unknown is
+            // treated as "not yet reachable" during startup.
             let host_unreachable = task_host
-                .map(|h| !matches!(self.reachability(h), Reachability::Reachable))
+                .map(|h| {
+                    matches!(
+                        self.reachability(h),
+                        Reachability::Unreachable | Reachability::Unknown
+                    )
+                })
                 .unwrap_or(false);
 
             // Base row style: dim merged rows and unreachable hosts.
