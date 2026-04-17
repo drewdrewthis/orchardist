@@ -64,7 +64,7 @@ pub fn derive_worktree_rows(
 
         let session_infos: Vec<EnrichedSession> = sessions
             .iter()
-            .filter(|s| s.path == wt.path)
+            .filter(|s| crate::paths::session_belongs_to_worktree(&s.path, &wt.path))
             .map(|s| enrich_session(s, claude_states, statusline_files))
             .collect();
 
@@ -1365,6 +1365,124 @@ mod tests {
             enriched.claude.is_some(),
             "Claude TUI visible in last_output_lines must be detected even when pane_command is 'zsh'"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // issue #275: session matching by live active-pane cwd
+    // -----------------------------------------------------------------------
+
+    /// Simulates the user `cd`ing inside an existing tmux session and verifies
+    /// that re-running the join re-associates the session with the new worktree.
+    ///
+    /// This test exercises the join logic directly, showing that once
+    /// `CachedTmuxSession.path` is updated (as `parse_tmux_sessions_from_panes`
+    /// will do) the session moves to the correct worktree row without any
+    /// other code changes.
+    #[test]
+    fn session_rejoins_when_path_tracks_cd() {
+        let main_wt = worktree("/work/repo", "main");
+        let feat_wt = worktree("/work/repo-feat", "issue275/feat-path");
+        let worktrees = vec![main_wt, feat_wt];
+
+        // Initial state: session sits at /work/repo.
+        let initial_session = session("repo_main", "/work/repo", vec!["bash"]);
+        let rows_before = derive_worktree_rows(
+            &[],
+            &[],
+            &worktrees,
+            &[initial_session],
+            "owner/repo",
+            &[],
+            &[],
+        );
+
+        // Verify initial join: session on main, none on feat.
+        let main_row = rows_before.iter().find(|r| r.branch == "main").unwrap();
+        let feat_row = rows_before
+            .iter()
+            .find(|r| r.branch == "issue275/feat-path")
+            .unwrap();
+        assert_eq!(
+            main_row.sessions.len(),
+            1,
+            "session starts at main worktree"
+        );
+        assert_eq!(
+            feat_row.sessions.len(),
+            0,
+            "feat worktree has no session initially"
+        );
+
+        // Simulate cd: session.path now reflects the active pane's live cwd.
+        let after_cd_session = session("repo_main", "/work/repo-feat", vec!["bash"]);
+        let rows_after = derive_worktree_rows(
+            &[],
+            &[],
+            &worktrees,
+            &[after_cd_session],
+            "owner/repo",
+            &[],
+            &[],
+        );
+
+        let main_row_after = rows_after.iter().find(|r| r.branch == "main").unwrap();
+        let feat_row_after = rows_after
+            .iter()
+            .find(|r| r.branch == "issue275/feat-path")
+            .unwrap();
+        assert_eq!(
+            main_row_after.sessions.len(),
+            0,
+            "after cd, session leaves main worktree"
+        );
+        assert_eq!(
+            feat_row_after.sessions.len(),
+            1,
+            "after cd, session joins feat worktree"
+        );
+        assert_eq!(feat_row_after.sessions[0].tmux.name, "repo_main");
+    }
+
+    /// Sessions whose active-pane cwd is outside every configured worktree path
+    /// must not appear on any worktree row — they belong in the standalone bucket.
+    ///
+    /// This test verifies the join-layer half of that guarantee: `derive_worktree_rows`
+    /// must not attach an unrelated session to any row.
+    #[test]
+    fn session_outside_all_worktrees_not_in_any_row() {
+        let worktrees = vec![
+            worktree("/work/repo", "main"),
+            worktree("/work/repo-feat", "issue275/feat-path"),
+        ];
+        // Session is sitting in /tmp/scratch — not inside any worktree.
+        let stray = session("stray_session", "/tmp/scratch", vec!["bash"]);
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &[stray], "owner/repo", &[], &[]);
+
+        for row in &rows {
+            assert_eq!(
+                row.sessions.len(),
+                0,
+                "worktree '{}' must not capture the stray session (path=/tmp/scratch)",
+                row.worktree_path
+            );
+        }
+    }
+
+    /// A session whose active pane has `cd`'d into a subdirectory of a worktree
+    /// still belongs to that worktree row. Without this, `cd src/foo` would
+    /// make the session vanish from the TUI — re-creating the exact bug #275
+    /// was filed to fix.
+    #[test]
+    fn session_in_worktree_subdirectory_attaches_to_worktree_row() {
+        let worktrees = vec![worktree("/work/repo", "main")];
+        let sess = session("repo_main", "/work/repo/src/foo", vec!["bash"]);
+
+        let rows = derive_worktree_rows(&[], &[], &worktrees, &[sess], "owner/repo", &[], &[]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sessions.len(), 1);
+        assert_eq!(rows[0].sessions[0].tmux.name, "repo_main");
     }
 
     // -----------------------------------------------------------------------

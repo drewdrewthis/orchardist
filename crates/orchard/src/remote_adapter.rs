@@ -471,15 +471,15 @@ impl BoxdForkAdapter {
     ///
     /// Calls `list_live_forks` to enumerate running forks, then SSHes each
     /// fork VM with the standard `-F` template consumed by
-    /// `cache_sources::parse_tmux_output`. A single dead fork is skipped
-    /// (warning logged); one bad VM does not silence sessions from others.
-    /// SSH failure on the golden host returns `Err(FetchFailure)` so callers
-    /// can preserve prior cache rather than treating an empty result as
-    /// authoritative.
+    /// `cache_sources::parse_tmux_sessions_from_panes`. A single dead fork
+    /// is skipped (warning logged); one bad VM does not silence sessions from
+    /// others. SSH failure on the golden host returns `Err(FetchFailure)` so
+    /// callers can preserve prior cache rather than treating an empty result
+    /// as authoritative.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
         let live_forks = self.list_live_forks()?;
         let tmux_list_cmd = format!(
-            "tmux list-sessions -F '{}'",
+            "tmux list-panes -a -F '{}'",
             crate::cache_sources::TMUX_SESSION_FORMAT
         );
         let mut all_sessions: Vec<CachedTmuxSession> = Vec::new();
@@ -494,15 +494,15 @@ impl BoxdForkAdapter {
                 }
             };
 
-            let mut sessions = crate::cache_sources::parse_tmux_output(
+            let mut sessions = crate::cache_sources::parse_tmux_sessions_from_panes(
                 &stdout,
                 Some(&fork_host),
                 |_| String::new(),
                 |_| vec![],
             );
 
-            // parse_tmux_output sets host from the `host` argument, but
-            // ensure every entry carries the fork host for downstream joins.
+            // parse_tmux_sessions_from_panes sets host from the `host` argument,
+            // but ensure every entry carries the fork host for downstream joins.
             for s in &mut sessions {
                 if s.host.is_none() {
                     s.host = Some(fork_host.clone());
@@ -637,9 +637,9 @@ mod tests {
         // Arrange — wire up a FakeSshExec with two canned responses:
         //
         // 1. golden-host "list --json" → one fork entry
-        // 2. fork-host tmux list-sessions → one session line using the template
+        // 2. fork-host tmux list-panes → one active-pane line using the template
         //    defined as `cache_sources::TMUX_SESSION_FORMAT` and consumed by
-        //    `cache_sources::parse_tmux_output`.
+        //    `cache_sources::parse_tmux_sessions_from_panes`.
         let mut fake = FakeSshExec::new();
 
         // Response 1: fork enumeration from the golden Boxd controller.
@@ -654,17 +654,17 @@ mod tests {
             },
         );
 
-        // Response 2: tmux session list on the fork VM, using the same `-F`
-        // template consumed by `cache_sources::parse_tmux_output`.
+        // Response 2: tmux list-panes on the fork VM, using the same `-F`
+        // template consumed by `cache_sources::parse_tmux_sessions_from_panes`.
         let tmux_cmd = format!(
-            "tmux list-sessions -F '{}'",
+            "tmux list-panes -a -F '{}'",
             crate::cache_sources::TMUX_SESSION_FORMAT
         );
         fake.insert(
             "boxd@issue3155.boxd.sh",
             &tmux_cmd,
             SshOutput {
-                stdout: "issue3155:/workspace/langwatch|1713000000|1713000060\n".to_string(),
+                stdout: "issue3155\t1\t/workspace/langwatch\t1713000000\t1713000060\n".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
             },
