@@ -257,28 +257,6 @@ impl RemoteAdapter {
             RemoteAdapter::BoxdFork(a) => a.list_sessions(),
         }
     }
-
-    /// Probes reachability and returns optional metadata.
-    pub fn probe(&self) -> Result<ProbeResult> {
-        match self {
-            RemoteAdapter::Remmy(a) => a.probe(),
-            RemoteAdapter::BoxdShared(a) => a.probe(),
-            RemoteAdapter::BoxdFork(a) => a.probe(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Probe result
-// ---------------------------------------------------------------------------
-
-/// Outcome of a reachability probe.
-#[derive(Debug)]
-pub struct ProbeResult {
-    /// Whether the remote host responded.
-    pub reachable: bool,
-    /// Optional metadata returned by the adapter (e.g. version string).
-    pub metadata: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -316,16 +294,6 @@ impl RemmyAdapter {
     /// Slice 1 stub — full implementation in slice 2.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
         Ok(vec![])
-    }
-
-    /// Probes whether the remote host is reachable.
-    ///
-    /// Slice 1 stub — full implementation in slice 2.
-    pub fn probe(&self) -> Result<ProbeResult> {
-        Ok(ProbeResult {
-            reachable: true,
-            metadata: None,
-        })
     }
 }
 
@@ -366,16 +334,6 @@ impl BoxdSharedAdapter {
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
         Ok(vec![])
     }
-
-    /// Probes whether the Boxd shared VM is reachable.
-    ///
-    /// Slice 2 stub — full implementation in slice 3.
-    pub fn probe(&self) -> Result<ProbeResult> {
-        Ok(ProbeResult {
-            reachable: true,
-            metadata: None,
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -384,19 +342,35 @@ impl BoxdSharedAdapter {
 
 /// A single fork VM entry returned by `ssh boxd.sh list --json`.
 ///
-/// `path` is optional in the JSON payload; when absent, the adapter's
+/// The real boxd payload uses `url` for the fork hostname and includes a
+/// `status` field (`"running"` / `"stopped"` / …). Only running forks are
+/// treated as live. `host` is accepted as an alias for forward-compatibility
+/// with the earlier schema. `path` is optional; when absent, the adapter's
 /// configured `fork_repo_path` is used (derived from `RemoteConfig.path`,
 /// not a hardcoded tenant path).
 #[derive(Debug, Deserialize)]
 struct BoxdForkEntry {
     /// Human-readable fork name, typically the issue slug (e.g. `"issue3155"`).
     name: String,
-    /// SSH hostname of the fork VM (e.g. `"issue3155.boxd.sh"`).
-    host: String,
+    /// SSH hostname of the fork VM (e.g. `"issue3155.boxd.sh"`). The real
+    /// boxd controller emits `url`; `host` is kept as an alias so older
+    /// fixtures and the existing tests still parse.
+    #[serde(alias = "host")]
+    url: String,
+    /// VM lifecycle status. Missing or non-`"running"` values are treated
+    /// as not-live and filtered out before any per-fork SSH.
+    #[serde(default)]
+    status: Option<String>,
     /// Repo root path on the fork VM. Optional — falls back to the
     /// adapter's configured path when absent.
     #[serde(default)]
     path: Option<String>,
+}
+
+impl BoxdForkEntry {
+    fn is_running(&self) -> bool {
+        self.status.as_deref() == Some("running")
+    }
 }
 
 /// Adapter for Boxd fork-per-issue VMs.
@@ -416,23 +390,16 @@ pub struct BoxdForkAdapter {
 }
 
 impl BoxdForkAdapter {
-    /// Returns one `CachedWorktree` per live fork VM.
+    /// Enumerates live fork VMs from the golden host.
     ///
-    /// Steps:
-    /// 1. SSH to `golden_host` and run `list --json` to enumerate live forks.
-    /// 2. Parse the JSON array. Return `Err(AdapterError::ParseFailure)` if invalid.
-    /// 3. For each fork, SSH to `boxd@<fork.host>` and run
-    ///    `cd <fork.path> && git rev-parse --abbrev-ref HEAD`.
-    /// 4. If the output is exactly `"HEAD"` (detached HEAD), fall back to
-    ///    `git rev-parse --short HEAD` and format branch as `"(detached: <sha>)"`.
-    /// 5. Return `Ok(vec![])` when `golden_host` is unreachable (SSH failure on
-    ///    the list command) — the TUI keeps the last cached forks visible.
-    pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
-        // Step 1: enumerate live forks from the golden host. SSH failure here
-        // returns `Err(FetchFailure)` so the caller (cache_sources) does NOT
-        // treat zero entries as authoritative — otherwise a transient outage
-        // on `boxd.sh` would emit a `worktree.remote_lost` event for every
-        // previously-cached fork.
+    /// Returns `(fork_host, entry)` tuples for each entry that is `running`
+    /// (or has no status field) and whose URL passes `is_safe_ssh_host`. The
+    /// `fork_host` is the `<user>@<url>` form ready to pass to SSH.
+    ///
+    /// SSH failure on the golden host returns `Err(FetchFailure)` so callers
+    /// can preserve prior cache rather than treating an empty list as
+    /// authoritative; malformed JSON returns `Err(ParseFailure)`.
+    fn list_live_forks(&self) -> Result<Vec<(String, BoxdForkEntry)>> {
         let list_stdout = match self.ssh.exec(&self.golden_host, "list --json") {
             Ok(output) => output.stdout,
             Err(e) => {
@@ -443,25 +410,35 @@ impl BoxdForkAdapter {
             }
         };
 
-        // Step 2: parse the fork list. Malformed JSON → ParseFailure.
         let entries: Vec<BoxdForkEntry> =
             serde_json::from_str(&list_stdout).map_err(|_| AdapterError::ParseFailure {
                 raw: sanitize_raw_payload(&list_stdout),
             })?;
 
-        let mut worktrees = Vec::with_capacity(entries.len());
         let user_prefix = ssh_user_prefix(&self.golden_host);
+        let live: Vec<(String, BoxdForkEntry)> = entries
+            .into_iter()
+            .filter(|e| e.status.is_none() || e.is_running())
+            .filter(|e| is_safe_ssh_host(&e.url))
+            .map(|e| (format!("{user_prefix}@{}", e.url), e))
+            .collect();
 
-        // Steps 3-5: per-fork branch resolution.
-        for entry in entries {
-            // Defensive: drop entries whose host carries shell- or
-            // ssh-option-injection-relevant characters. A compromised golden
-            // host could otherwise smuggle a value like
-            // `evil.host -o ProxyCommand=...` into the SSH argv.
-            if !is_safe_ssh_host(&entry.host) {
-                continue;
-            }
-            let fork_host = format!("{user_prefix}@{}", entry.host);
+        Ok(live)
+    }
+
+    /// Returns one `CachedWorktree` per live fork VM.
+    ///
+    /// Calls `list_live_forks` to enumerate running forks, then SSHes each
+    /// fork VM to resolve its branch via `git rev-parse --abbrev-ref HEAD`.
+    /// SSH failure on the golden host returns `Err(FetchFailure)` so the
+    /// caller can preserve prior cache rather than emitting spurious
+    /// `worktree.remote_lost` events. Detached HEAD falls back to
+    /// `git rev-parse --short HEAD` formatted as `"(detached: <sha>)"`.
+    pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
+        let live_forks = self.list_live_forks()?;
+        let mut worktrees = Vec::with_capacity(live_forks.len());
+
+        for (fork_host, entry) in live_forks {
             let fork_path = entry.path.unwrap_or_else(|| self.fork_repo_path.clone());
             let escaped_path = crate::remote::shell_escape(&fork_path);
             let branch_cmd = format!("cd {escaped_path} && git rev-parse --abbrev-ref HEAD");
@@ -492,19 +469,50 @@ impl BoxdForkAdapter {
 
     /// Returns tmux sessions from all live fork VMs.
     ///
-    /// Slice 2 stub — full implementation in slice 3.
+    /// Calls `list_live_forks` to enumerate running forks, then SSHes each
+    /// fork VM with the standard `-F` template consumed by
+    /// `cache_sources::parse_tmux_output`. A single dead fork is skipped
+    /// (warning logged); one bad VM does not silence sessions from others.
+    /// SSH failure on the golden host returns `Err(FetchFailure)` so callers
+    /// can preserve prior cache rather than treating an empty result as
+    /// authoritative.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
-        Ok(vec![])
-    }
+        let live_forks = self.list_live_forks()?;
+        let tmux_list_cmd = format!(
+            "tmux list-sessions -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        let mut all_sessions: Vec<CachedTmuxSession> = Vec::new();
 
-    /// Probes whether the golden Boxd host is reachable.
-    ///
-    /// Slice 2 stub — full implementation in slice 3.
-    pub fn probe(&self) -> Result<ProbeResult> {
-        Ok(ProbeResult {
-            reachable: true,
-            metadata: None,
-        })
+        for (fork_host, _entry) in live_forks {
+            let stdout = match self.ssh.exec(&fork_host, &tmux_list_cmd) {
+                Ok(output) => output.stdout,
+                Err(e) => {
+                    crate::logger::LOG
+                        .warn(&format!("list_sessions: skipping fork {fork_host}: {e}"));
+                    continue;
+                }
+            };
+
+            let mut sessions = crate::cache_sources::parse_tmux_output(
+                &stdout,
+                Some(&fork_host),
+                |_| String::new(),
+                |_| vec![],
+            );
+
+            // parse_tmux_output sets host from the `host` argument, but
+            // ensure every entry carries the fork host for downstream joins.
+            for s in &mut sessions {
+                if s.host.is_none() {
+                    s.host = Some(fork_host.clone());
+                }
+            }
+
+            all_sessions.extend(sessions);
+        }
+
+        Ok(all_sessions)
     }
 }
 
@@ -612,4 +620,134 @@ fn sanitize_raw_payload(raw: &str) -> String {
         .filter(|c| c.is_ascii_graphic() || *c == ' ')
         .take(256)
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for #264: the BoxdFork adapter must SSH each live fork
+    /// to collect its tmux sessions, not silently return an empty vec.
+    #[test]
+    fn boxd_fork_adapter_list_sessions_returns_sessions_from_each_live_fork() {
+        // Arrange — wire up a FakeSshExec with two canned responses:
+        //
+        // 1. golden-host "list --json" → one fork entry
+        // 2. fork-host tmux list-sessions → one session line using the template
+        //    defined as `cache_sources::TMUX_SESSION_FORMAT` and consumed by
+        //    `cache_sources::parse_tmux_output`.
+        let mut fake = FakeSshExec::new();
+
+        // Response 1: fork enumeration from the golden Boxd controller.
+        fake.insert(
+            "boxd.sh",
+            "list --json",
+            SshOutput {
+                stdout: r#"[{"name":"issue3155","host":"issue3155.boxd.sh","path":"/workspace/langwatch"}]"#
+                    .to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        // Response 2: tmux session list on the fork VM, using the same `-F`
+        // template consumed by `cache_sources::parse_tmux_output`.
+        let tmux_cmd = format!(
+            "tmux list-sessions -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        fake.insert(
+            "boxd@issue3155.boxd.sh",
+            &tmux_cmd,
+            SshOutput {
+                stdout: "issue3155:/workspace/langwatch|1713000000|1713000060\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdForkAdapter {
+            golden_host: "boxd.sh".to_string(),
+            fork_repo_path: "/workspace/langwatch".to_string(),
+            ssh: Box::new(fake),
+        };
+
+        // Act
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        // Assert — must return at least one session whose host matches the fork
+        // VM and whose name matches what the fake returned.
+        assert!(
+            !sessions.is_empty(),
+            "list_sessions must return sessions from each live fork"
+        );
+
+        let session = &sessions[0];
+        assert_eq!(
+            session.host.as_deref(),
+            Some("boxd@issue3155.boxd.sh"),
+            "session host should identify the fork VM"
+        );
+        assert_eq!(
+            session.name, "issue3155",
+            "session name should match the tmux session returned by the fork VM"
+        );
+    }
+
+    /// The real `ssh boxd.sh list --json` payload uses `url` (not `host`)
+    /// and includes a `status` field — only entries with `status == "running"`
+    /// are live. A regression here would silently hide every boxd fork even
+    /// though the adapter "works".
+    #[test]
+    fn boxd_fork_adapter_filters_non_running_forks_and_parses_url_field() {
+        let mut fake = FakeSshExec::new();
+
+        // Payload shape as emitted by the real boxd controller.
+        fake.insert(
+            "boxd.sh",
+            "list --json",
+            SshOutput {
+                stdout: r#"[
+                    {"name":"issue3155","url":"issue3155.boxd.sh","status":"running","vm_id":"a"},
+                    {"name":"session-fix","url":"session-fix.boxd.sh","status":"stopped","vm_id":"b"}
+                ]"#.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        fake.insert(
+            "boxd@issue3155.boxd.sh",
+            "cd /workspace/langwatch && git rev-parse --abbrev-ref HEAD",
+            SshOutput {
+                stdout: "issue3155/some-branch\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdForkAdapter {
+            golden_host: "boxd.sh".to_string(),
+            fork_repo_path: "/workspace/langwatch".to_string(),
+            ssh: Box::new(fake),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("list_worktrees must not error");
+
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "stopped fork should be filtered out; only the running one is emitted"
+        );
+        assert_eq!(worktrees[0].host.as_deref(), Some("boxd@issue3155.boxd.sh"));
+        assert_eq!(worktrees[0].branch, "issue3155/some-branch");
+    }
 }

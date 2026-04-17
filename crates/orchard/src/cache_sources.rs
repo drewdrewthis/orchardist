@@ -471,6 +471,15 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
     worktrees
 }
 
+/// The `-F` format string passed to `tmux list-sessions` for all session
+/// enumeration — local, remote (Remmy/BoxdShared), and per-fork (BoxdFork).
+///
+/// All three callers MUST use this constant so that `parse_tmux_output` always
+/// receives identically-structured lines regardless of the code path that
+/// produced them.
+pub(crate) const TMUX_SESSION_FORMAT: &str =
+    "#{session_name}:#{session_path}|#{session_created}|#{session_activity}";
+
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
 ///
@@ -1450,18 +1459,11 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     // For remote hosts, batch the tmux list-sessions and Claude state cat into
     // a single SSH call to minimise round-trips.
     let sessions_out = match host {
-        None => run_local(
-            "tmux",
-            &[
-                "list-sessions",
-                "-F",
-                "#{session_name}:#{session_path}|#{session_created}|#{session_activity}",
-            ],
-        ),
+        None => run_local("tmux", &["list-sessions", "-F", TMUX_SESSION_FORMAT]),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}|#{{session_created}}|#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-                CLAUDE_STATE_SENTINEL
+                "tmux list-sessions -F '{}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                TMUX_SESSION_FORMAT, CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)
         }
@@ -1679,6 +1681,79 @@ pub fn refresh_remote_worktrees(
         remote_cfg.host,
         worktrees.len(),
         remote_cfg.kind,
+    ));
+
+    Ok(())
+}
+
+/// Fetches tmux sessions from a single remote and writes them to per-host caches.
+///
+/// Dispatch is driven by `remote_cfg.kind`:
+/// - `Remmy` and `BoxdShared` delegate to the legacy `refresh_tmux_sessions`
+///   path (raw SSH `tmux list-sessions` + pane/capture batching against
+///   `remote_cfg.host`). Their adapters' `list_sessions` methods are still
+///   Slice-1/2 stubs; swapping them in would regress pane and capture enrichment.
+/// - `BoxdFork` routes through `RemoteAdapter::from_config` so enumeration
+///   fans out from the golden host to each live fork and writes one cache
+///   file per fork host.
+///
+/// The fork path intentionally skips `tmux list-panes` / `capture-pane` per
+/// session — only the session roster is required to make forks visible in
+/// `orchard --json` and the TUI (issue #264 AC). Pane and capture enrichment
+/// for forks is a follow-up.
+///
+/// On adapter error the error is logged and existing caches are left intact.
+pub fn refresh_remote_tmux_sessions(
+    config: &RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+) -> anyhow::Result<()> {
+    // Remmy and BoxdShared: keep the legacy single-host path so pane details
+    // and capture-pane payloads continue to land in the cache. Their adapter
+    // `list_sessions` methods are still stubs returning `Ok(vec![])`.
+    if remote_cfg.kind != crate::remote_adapter::RemoteKind::BoxdFork {
+        return refresh_tmux_sessions(Some(&remote_cfg.host));
+    }
+
+    let adapter = crate::remote_adapter::RemoteAdapter::from_config(
+        remote_cfg,
+        Box::new(crate::remote_adapter::ProcessSshExec),
+    );
+
+    let sessions = match adapter.list_sessions() {
+        Ok(s) => s,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: refresh_remote_tmux_sessions({}, {}): {e}",
+                config.slug, remote_cfg.host,
+            ));
+            return Ok(());
+        }
+    };
+
+    // Group by host and write one cache file per distinct fork host.
+    // `BoxdFork` adapter tags every session with its fork host; unknown-host
+    // entries fall back to `remote_cfg.host` defensively.
+    let mut by_host: std::collections::HashMap<String, Vec<CachedTmuxSession>> =
+        std::collections::HashMap::new();
+    for mut s in sessions {
+        let host = s.host.clone().unwrap_or_else(|| remote_cfg.host.clone());
+        if s.host.is_none() {
+            s.host = Some(host.clone());
+        }
+        by_host.entry(host).or_default().push(s);
+    }
+
+    let host_count = by_host.len();
+    let total: usize = by_host.values().map(|v| v.len()).sum();
+
+    for (host, group) in &by_host {
+        let cache_path = cache::tmux_cache_path(Some(host));
+        cache::write_cache_if_nonempty(&cache_path, group)?;
+    }
+
+    LOG.info(&format!(
+        "cache_sources: refresh_remote_tmux_sessions({}, {}): wrote {} entries across {} fork hosts",
+        config.slug, remote_cfg.host, total, host_count,
     ));
 
     Ok(())

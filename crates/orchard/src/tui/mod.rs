@@ -605,12 +605,14 @@ impl App {
         std::thread::spawn(move || {
             // Probe each unique remote host concurrently before attempting remote
             // operations. One dead VM must not block probes for healthy hosts.
-            let hosts: Vec<String> = config
+            // Use the kind-aware variant so `boxd-fork` golden hosts (which
+            // reject `true` as a subcommand) are probed with `list --json`.
+            let remotes: Vec<crate::global_config::RemoteConfig> = config
                 .repos
                 .iter()
-                .flat_map(|r| r.remotes.iter().map(|rm| rm.host.clone()))
+                .flat_map(|r| r.remotes.iter().cloned())
                 .collect();
-            let probe_results = crate::sources::hosts::probe_reachability_all(hosts);
+            let probe_results = crate::sources::hosts::probe_reachability_all_for_remotes(&remotes);
 
             let mut reachable_hosts: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
@@ -641,7 +643,7 @@ impl App {
                     if reachable_hosts.contains(&remote.host)
                         && tmux_hosts_refreshed.insert(remote.host.clone())
                     {
-                        let _ = cache_sources::refresh_tmux_sessions(Some(&remote.host));
+                        let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote);
                     }
                 }
             }

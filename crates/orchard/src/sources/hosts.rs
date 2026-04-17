@@ -4,33 +4,61 @@
 //! reachable before attempting worktree or tmux operations on it. Probes run with a
 //! 5-second connect timeout (set in `remote::ssh_flags()`), so dead hosts fail fast.
 //!
-//! When probing multiple hosts, always use [`probe_reachability_all`] — it runs one
-//! thread per host so a stopped VM can't block probes for healthy hosts behind it.
+//! The concurrent entry point is [`probe_reachability_all_for_remotes`], which
+//! accepts full `RemoteConfig` entries so each host is probed with the correct
+//! command for its kind. Each probe runs on its own thread so a stopped VM
+//! can't block probes for healthy hosts behind it.
 
 use std::collections::HashMap;
 use std::thread;
 
-/// Probes whether a remote host is reachable via SSH.
+/// Probes whether a remote is reachable, using a probe command appropriate
+/// for the remote's kind.
 ///
-/// Returns `true` if the host responds, `false` if unreachable or if the
-/// SSH connection times out.
-pub fn probe_reachability(host: &str) -> bool {
-    crate::remote::ssh_exec(host, "true").is_ok()
+/// `Remmy` and `BoxdShared` reach a general-purpose shell on the remote host,
+/// so `true` is a valid probe. `BoxdFork` targets the Boxd controller
+/// (e.g. `boxd.sh`), which is a restricted CLI that rejects `true` —
+/// `list --json` is the canonical health check there. Using the wrong probe
+/// would mark a perfectly healthy golden host as unreachable and silence
+/// every fork behind it.
+pub fn probe_reachability_for_remote(remote: &crate::global_config::RemoteConfig) -> bool {
+    let cmd = match remote.kind {
+        crate::remote_adapter::RemoteKind::BoxdFork => "list --json",
+        crate::remote_adapter::RemoteKind::Remmy
+        | crate::remote_adapter::RemoteKind::BoxdShared => "true",
+    };
+    crate::remote::ssh_exec(&remote.host, cmd).is_ok()
 }
 
-/// Probes many hosts concurrently, one thread per unique host.
+/// Probes many (host, kind-aware) remotes concurrently.
 ///
-/// Deduplicates the input, spawns one probe thread per host, joins them all,
-/// and returns a `host -> reachable` map. Dead hosts can't block healthy
-/// ones because each probe runs on its own thread.
-pub fn probe_reachability_all<I, S>(hosts: I) -> HashMap<String, bool>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    probe_with(hosts, probe_reachability)
+/// Deduplicates by host, spawns one thread per unique remote, and returns
+/// a `host -> reachable` map. Each remote is probed with the command
+/// appropriate for its kind (see `probe_reachability_for_remote`).
+pub fn probe_reachability_all_for_remotes(
+    remotes: &[crate::global_config::RemoteConfig],
+) -> HashMap<String, bool> {
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<crate::global_config::RemoteConfig> = remotes
+        .iter()
+        .filter(|r| seen.insert(r.host.clone()))
+        .cloned()
+        .collect();
+
+    let handles: Vec<_> = unique
+        .into_iter()
+        .map(|remote| {
+            thread::spawn(move || {
+                let reachable = probe_reachability_for_remote(&remote);
+                (remote.host, reachable)
+            })
+        })
+        .collect();
+
+    handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
 
+#[cfg(test)]
 fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
 where
     I: IntoIterator<Item = S>,

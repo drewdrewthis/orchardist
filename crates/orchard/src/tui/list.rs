@@ -835,7 +835,7 @@ impl App {
     /// spawns a background thread to probe each unreachable host and send results
     /// back via the App message channel.
     pub(crate) fn reconnect_unreachable_hosts(&mut self) {
-        let unreachable: Vec<String> = self
+        let unreachable: std::collections::HashSet<String> = self
             .host_reachable
             .iter()
             .filter(|(_, v)| !*v)
@@ -843,16 +843,31 @@ impl App {
             .collect();
         if unreachable.is_empty() {
             self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
-        } else {
-            let tx = self.tx.clone();
-            std::thread::spawn(move || {
-                let results = crate::sources::hosts::probe_reachability_all(unreachable);
-                for (host, reachable) in results {
-                    let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
-                }
-            });
-            self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
+            return;
         }
+
+        // Resolve each unreachable host back to its configured RemoteConfig so
+        // the probe uses the kind-appropriate command. Hosts present in the
+        // reachability map but no longer in config are dropped; probing an
+        // orphan host with a default `true` probe would silently hide boxd
+        // controllers, and there is no adapter kind to route to anyway.
+        let remotes: Vec<crate::global_config::RemoteConfig> = self
+            .global_config
+            .repos
+            .iter()
+            .flat_map(|r| r.remotes.iter())
+            .filter(|r| unreachable.contains(&r.host))
+            .cloned()
+            .collect();
+
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let results = crate::sources::hosts::probe_reachability_all_for_remotes(&remotes);
+            for (host, reachable) in results {
+                let _ = tx.send(crate::tui::state::AppMsg::HostReachability(host, reachable));
+            }
+        });
+        self.warning = Some(("Reconnecting...".to_string(), Instant::now()));
     }
 
     pub(crate) fn render_list(&self, f: &mut Frame) {
