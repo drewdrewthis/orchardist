@@ -736,12 +736,8 @@ impl App {
     /// spawns a background thread to probe each unreachable host and send results
     /// back via the App message channel.
     pub(crate) fn reconnect_unreachable_hosts(&mut self) {
-        let unreachable: std::collections::HashSet<String> = self
-            .host_reachable
-            .iter()
-            .filter(|(_, v)| !*v)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let unreachable: std::collections::HashSet<String> =
+            self.unreachable_hosts().map(String::from).collect();
         if unreachable.is_empty() {
             self.warning = Some(("All hosts reachable".to_string(), Instant::now()));
             return;
@@ -836,17 +832,22 @@ impl App {
         let red_style = Style::default().fg(theme.error);
 
         // Build host status spans (sorted by host name for stable display).
+        // Probed entries are always Reachable or Unreachable; the Unknown arm
+        // is defensive and unreachable in practice.
+        let sorted_hosts = self.probed_hosts_sorted();
         let mut host_spans: Vec<Span> = Vec::new();
-        let mut sorted_hosts: Vec<(&String, &bool)> = self.host_reachable.iter().collect();
-        sorted_hosts.sort_by_key(|(h, _)| h.as_str());
-        for &(host, reachable) in &sorted_hosts {
-            if *reachable {
-                host_spans.push(Span::styled(format!("  @{}", host), green_style));
-                host_spans.push(Span::styled(" \u{25cf}", green_style)); // ●
-            } else {
-                host_spans.push(Span::styled(format!("  @{}", host), red_style));
-                host_spans.push(Span::styled(" \u{2717}", red_style)); // ✗
-                host_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
+        for &(host, reachability) in &sorted_hosts {
+            match reachability {
+                Reachability::Reachable => {
+                    host_spans.push(Span::styled(format!("  @{}", host), green_style));
+                    host_spans.push(Span::styled(" \u{25cf}", green_style)); // ●
+                }
+                Reachability::Unreachable => {
+                    host_spans.push(Span::styled(format!("  @{}", host), red_style));
+                    host_spans.push(Span::styled(" \u{2717}", red_style)); // ✗
+                    host_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
+                }
+                Reachability::Unknown => {}
             }
         }
 
@@ -893,14 +894,19 @@ impl App {
 
         // Full header (height == 7): show host indicators on second line.
         let mut host_line_spans: Vec<Span> = Vec::new();
-        for &(host, reachable) in &sorted_hosts {
-            if *reachable {
-                host_line_spans.push(Span::styled(format!(" @{} ", host), green_style));
-                host_line_spans.push(Span::styled("\u{25cf}", green_style));
-            } else {
-                host_line_spans.push(Span::styled(format!(" @{} ", host), red_style));
-                host_line_spans.push(Span::styled("\u{2717}", red_style));
-                host_line_spans.push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
+        for &(host, reachability) in &sorted_hosts {
+            match reachability {
+                Reachability::Reachable => {
+                    host_line_spans.push(Span::styled(format!(" @{} ", host), green_style));
+                    host_line_spans.push(Span::styled("\u{25cf}", green_style));
+                }
+                Reachability::Unreachable => {
+                    host_line_spans.push(Span::styled(format!(" @{} ", host), red_style));
+                    host_line_spans.push(Span::styled("\u{2717}", red_style));
+                    host_line_spans
+                        .push(Span::styled(" (stale)", Style::default().fg(theme.dimmed)));
+                }
+                Reachability::Unknown => {}
             }
         }
 
@@ -926,7 +932,7 @@ impl App {
         if !host_line_spans.is_empty() {
             header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
         }
-        if !self.host_reachable.is_empty() || self.refreshing {
+        if self.has_probe_results() || self.refreshing {
             header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));
         }
         let header = Paragraph::new(header_text)
@@ -2245,8 +2251,7 @@ impl App {
             spans.push(Span::raw(" refresh"));
         }
 
-        let has_unreachable = self.host_reachable.values().any(|&v| !v);
-        if has_unreachable {
+        if self.has_unreachable_host() {
             spans.push(sep.clone());
             spans.push(Span::styled("R", key_style));
             spans.push(Span::raw(" reconnect"));
