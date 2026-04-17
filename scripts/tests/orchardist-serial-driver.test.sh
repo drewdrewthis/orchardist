@@ -129,4 +129,74 @@ if kill -0 "${DRIVER_PID}" 2>/dev/null; then
   fail "driver process is still alive after wait loop — this should not happen"
 fi
 
-pass "driver exited within ${ELAPSED}s of session death (issue #243 not present)"
+pass "driver exited within ${ELAPSED}s of session death (issue #243 AC#1)"
+
+# ---------------------------------------------------------------------------
+# AC#2: driver exits when PR state is CLOSED
+# ---------------------------------------------------------------------------
+SESSION_NAME="test_driver_closed_$$"
+DRIVER_PID=""
+tmux new-session -d -s "${SESSION_NAME}" -x 80 -y 24
+
+# Swap the fake gh to one that returns CLOSED
+cat > "${FAKE_BIN_DIR}/gh" <<'EOF'
+#!/usr/bin/env bash
+echo '{"state":"CLOSED","statusCheckRollup":[]}'
+EOF
+chmod +x "${FAKE_BIN_DIR}/gh"
+
+POLL_INTERVAL=1 \
+REPO="drewdrewthis/git-orchard-rs" \
+  "${DRIVER}" 999998 "${SESSION_NAME}" >"${DRIVER_LOG}" 2>&1 &
+DRIVER_PID=$!
+
+# Driver should hit CLOSED on its first poll (~1s) and exit
+TIMEOUT=4
+ELAPSED=0
+while kill -0 "${DRIVER_PID}" 2>/dev/null; do
+  if [[ ${ELAPSED} -ge ${TIMEOUT} ]]; then
+    cat "${DRIVER_LOG}" >&2
+    tmux kill-session -t "${SESSION_NAME}" 2>/dev/null || true
+    fail "driver did not exit on PR CLOSED within ${TIMEOUT}s"
+  fi
+  sleep 1
+  ELAPSED=$(( ELAPSED + 1 ))
+done
+tmux kill-session -t "${SESSION_NAME}" 2>/dev/null || true
+pass "driver exited on PR CLOSED within ${ELAPSED}s (issue #243 AC#2)"
+
+# ---------------------------------------------------------------------------
+# AC#3: driver exits after MAX_ERR consecutive parse failures
+# ---------------------------------------------------------------------------
+SESSION_NAME="test_driver_err_$$"
+DRIVER_PID=""
+tmux new-session -d -s "${SESSION_NAME}" -x 80 -y 24
+
+cat > "${FAKE_BIN_DIR}/gh" <<'EOF'
+#!/usr/bin/env bash
+echo 'not-json'
+EOF
+chmod +x "${FAKE_BIN_DIR}/gh"
+
+POLL_INTERVAL=1 \
+MAX_ERR=3 \
+REPO="drewdrewthis/git-orchard-rs" \
+  "${DRIVER}" 999997 "${SESSION_NAME}" >"${DRIVER_LOG}" 2>&1 &
+DRIVER_PID=$!
+
+# 3 ERRs at 1s each → exit by ~3s; allow 6s
+TIMEOUT=6
+ELAPSED=0
+while kill -0 "${DRIVER_PID}" 2>/dev/null; do
+  if [[ ${ELAPSED} -ge ${TIMEOUT} ]]; then
+    cat "${DRIVER_LOG}" >&2
+    tmux kill-session -t "${SESSION_NAME}" 2>/dev/null || true
+    fail "driver did not exit after MAX_ERR=3 consecutive errors within ${TIMEOUT}s"
+  fi
+  sleep 1
+  ELAPSED=$(( ELAPSED + 1 ))
+done
+tmux kill-session -t "${SESSION_NAME}" 2>/dev/null || true
+pass "driver exited after MAX_ERR consecutive errors within ${ELAPSED}s (issue #243 AC#3)"
+
+echo "All issue #243 ACs verified."
