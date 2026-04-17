@@ -283,89 +283,6 @@ pub(crate) fn since_text(
     }
 }
 
-/// Returns a single PR status string for the task row.
-///
-/// Retained for the legacy `column_order_claude_after_number` smoke test path.
-/// Callers outside tests use the signal-lexicon helpers above; this function
-/// may be removed when those tests are rewritten to the new layout.
-#[cfg(test)]
-fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
-    let Some(ref pr) = row.pr else {
-        // No PR — check if the linked issue is closed/completed (stale worktree)
-        if let Some(ref state) = row.issue_state
-            && (state == "closed" || state == "completed")
-        {
-            return (
-                format!("\u{2716} issue {}", state),
-                Style::default().fg(theme.error),
-            );
-        }
-        return ("no PR".to_string(), Style::default().fg(theme.dimmed));
-    };
-
-    let prefix = format!("#{} ", pr.number);
-
-    // Merged or closed PR = stale worktree
-    if pr.state.as_deref() == Some("merged") {
-        return (
-            format!("{}\u{2713} merged", prefix),
-            Style::default().fg(theme.pr_merged),
-        );
-    }
-    if pr.state.as_deref() == Some("closed") {
-        return (
-            format!("{}\u{2716} closed", prefix),
-            Style::default().fg(theme.error),
-        );
-    }
-
-    if pr.review_decision.as_deref() == Some("approved") {
-        return (
-            format!("{}\u{2713} approved", prefix),
-            Style::default().fg(theme.success),
-        );
-    }
-    if pr.review_decision.as_deref() == Some("changes_requested") {
-        return (
-            format!("{}\u{2716} changes req", prefix),
-            Style::default().fg(theme.error),
-        );
-    }
-    if pr.has_conflicts {
-        return (
-            format!("{}\u{2716} conflict", prefix),
-            Style::default().fg(theme.merge_conflict),
-        );
-    }
-    if pr.unresolved_threads > 0 {
-        return (
-            format!("{}\u{25cb} unresolved ({})", prefix, pr.unresolved_threads),
-            Style::default().fg(theme.warning),
-        );
-    }
-    // Prefer the split `ci_code_state` introduced in #218. A code-green
-    // gate-blocked PR (e.g. waiting on `check-approval-or-label`) intentionally
-    // does NOT surface as "failing" here — that's the regression this
-    // feature fixes. A future PR will add a dedicated "gate blocked" label.
-    if pr.ci_code_state.as_deref() == Some("failing") {
-        return (
-            format!("{}\u{2716} failing", prefix),
-            Style::default().fg(theme.error),
-        );
-    }
-    if pr.ci_code_state.as_deref() == Some("pending") {
-        return (
-            format!("{}\u{25d0} pending CI", prefix),
-            Style::default().fg(theme.warning),
-        );
-    }
-    // Default for open PR with no special state
-    (
-        format!("{}\u{25cb} needs review", prefix),
-        Style::default().fg(theme.dimmed),
-    )
-}
-
 /// Formats an elapsed-seconds value into a compact duration string.
 ///
 /// - `< 60` → `"0m"`
@@ -2801,7 +2718,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.starts_with("#42 "),
             "expected '#42 ' prefix in: {}",
@@ -2817,7 +2734,7 @@ mod tests {
     #[test]
     fn pr_status_no_pr() {
         let row = make_task_row(1, DisplayGroup::Other);
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert_eq!(text, "no PR");
     }
 
@@ -2933,7 +2850,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.contains("changes req"),
             "expected 'changes req' in: {}",
@@ -2960,7 +2877,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.contains("conflict"),
             "expected 'conflict' in: {}",
@@ -2987,7 +2904,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.contains("unresolved"),
             "expected 'unresolved' in: {}",
@@ -3015,7 +2932,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
     }
 
@@ -3159,7 +3076,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::Other)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(text.contains("pending"), "expected 'pending' in: {}", text);
     }
 
@@ -3456,7 +3373,7 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_pr_status_text() {
+    fn search_matches_pr_status_string() {
         let row_approved = WorktreeRow {
             pr: Some(crate::derive::PrInfo {
                 number: 55,
@@ -3476,7 +3393,7 @@ mod tests {
         };
         let row_no_pr = make_task_row(2, DisplayGroup::Other);
         let rows = vec![row_approved, row_no_pr];
-        // "approved" is in the haystack for row_approved via pr_status_haystack.
+        // "approved" is in the haystack for row_approved via pr_status_string.
         let visible = visible_tasks(&rows, "approved");
         assert_eq!(visible.len(), 1, "only the approved-PR row should match");
         assert_eq!(visible[0].row.issue_number, Some(1));
