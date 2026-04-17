@@ -206,7 +206,9 @@ fn normalize_issues(
         _ => return NormalizeResult::Unsupported,
     };
     let issue = u64_field(payload, &["issue", "number"]);
-    NormalizeResult::Event(Box::new(build_event(kind, repo, None, issue, actor, payload)))
+    NormalizeResult::Event(Box::new(build_event(
+        kind, repo, None, issue, actor, payload,
+    )))
 }
 
 fn normalize_push(payload: &Value, repo: Option<String>, actor: Option<String>) -> NormalizeResult {
@@ -231,7 +233,9 @@ fn normalize_ci_event(
         return NormalizeResult::Unsupported;
     }
     let kind = format!("{}.completed", event_type);
-    NormalizeResult::Event(Box::new(build_event(kind, repo, None, None, actor, payload)))
+    NormalizeResult::Event(Box::new(build_event(
+        kind, repo, None, None, actor, payload,
+    )))
 }
 
 // ---------------------------------------------------------------------------
