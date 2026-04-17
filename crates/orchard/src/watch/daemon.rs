@@ -163,6 +163,11 @@ fn refresh_all_sources(config: &GlobalConfig) {
 }
 
 /// Refreshes only local (fast) sources: worktrees and tmux sessions.
+///
+/// Intentionally serial: each `refresh_worktrees` is a local `git worktree
+/// list` — single-digit milliseconds. Thread-spawn overhead would cost more
+/// than it would save. `refresh_all_sources` is the hot path that needs
+/// parallelism.
 fn refresh_local_sources(config: &GlobalConfig) {
     for repo in &config.repos {
         if let Err(e) = cache_sources::refresh_worktrees(repo) {

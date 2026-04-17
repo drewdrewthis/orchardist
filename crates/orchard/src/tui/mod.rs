@@ -742,6 +742,10 @@ impl App {
         let config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            // Local-only refresh runs `git worktree list` per repo — no SSH,
+            // no GitHub API. Each call is single-digit milliseconds, so
+            // parallel dispatch would add thread-spawn overhead without a
+            // measurable win. Stay serial.
             for repo in &config.repos {
                 let _ = cache_sources::refresh_worktrees(repo);
             }
