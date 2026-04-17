@@ -321,12 +321,18 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
     // refresh, so the subsequent tmux listing already reflects them.
     let _ = crate::restore::restore_all_local();
 
-    // Refresh local sources first.
-    for repo in &config.repos {
-        let _ = sources::worktrees::refresh_local(repo);
-        let _ = sources::github::refresh_issues(repo);
-        let _ = sources::github::refresh_prs(repo);
-    }
+    // Refresh local sources. Per-repo refreshes fan out concurrently so
+    // GitHub API latency for one repo can't block another. Each repo writes
+    // its own cache files, so there's no shared mutable state to guard.
+    std::thread::scope(|s| {
+        for repo in &config.repos {
+            s.spawn(move || {
+                let _ = sources::worktrees::refresh_local(repo);
+                let _ = sources::github::refresh_issues(repo);
+                let _ = sources::github::refresh_prs(repo);
+            });
+        }
+    });
     let _ = sources::tmux::refresh_local();
 
     // Probe remote hosts concurrently so a dead VM can't block healthy ones.
@@ -339,23 +345,46 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
         .iter()
         .map(|(h, r)| (h.clone(), HostState { reachable: *r }))
         .collect();
-    let reachable_hosts: HashSet<String> = probe_results
-        .iter()
-        .filter_map(|(h, r)| if *r { Some(h.clone()) } else { None })
-        .collect();
 
-    // Refresh remote sources for every reachable host, once per (repo, remote) pair.
-    let mut tmux_refreshed: HashSet<String> = HashSet::new();
-    for repo in &config.repos {
-        for remote in &repo.remotes {
-            if reachable_hosts.contains(&remote.host) {
-                let _ = sources::worktrees::refresh_remote(repo, remote);
-                if tmux_refreshed.insert(remote.host.clone()) {
-                    let _ = sources::tmux::refresh_remote_adapter(repo, remote);
+    // Refresh remote sources in parallel. Worktree refreshes fan out by
+    // (repo, remote) pair; adapter-routed tmux refreshes fan out once per
+    // unique host (picking any (repo, remote) whose host matches). Each
+    // writes its own cache file so no coordination is needed.
+    let tmux_dispatch: Vec<(
+        &crate::global_config::RepoConfig,
+        &crate::global_config::RemoteConfig,
+    )> = {
+        let mut seen = HashSet::new();
+        config
+            .repos
+            .iter()
+            .flat_map(|r| r.remotes.iter().map(move |rm| (r, rm)))
+            .filter(|(_, rm)| {
+                hosts.get(&rm.host).map(|s| s.reachable).unwrap_or(false)
+                    && seen.insert(rm.host.clone())
+            })
+            .collect()
+    };
+    std::thread::scope(|s| {
+        for repo in &config.repos {
+            for remote in &repo.remotes {
+                let reachable = hosts
+                    .get(&remote.host)
+                    .map(|st| st.reachable)
+                    .unwrap_or(false);
+                if reachable {
+                    s.spawn(move || {
+                        let _ = sources::worktrees::refresh_remote(repo, remote);
+                    });
                 }
             }
         }
-    }
+        for (repo, remote) in &tmux_dispatch {
+            s.spawn(move || {
+                let _ = sources::tmux::refresh_remote_adapter(repo, remote);
+            });
+        }
+    });
 
     build_state_with_hosts(config, &hosts)
 }
