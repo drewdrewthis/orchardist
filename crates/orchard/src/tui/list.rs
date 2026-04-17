@@ -283,54 +283,6 @@ pub(crate) fn since_text(
     }
 }
 
-/// Returns a single PR status string and its `Style` for the task row.
-///
-/// Thin wrapper over [`crate::tui::fuzzy::pr_status_string`] — the string
-/// content is defined once there and reused by fuzzy highlighting. This
-/// function only resolves the theme color for each state.
-///
-/// Retained for the legacy `column_order_claude_after_number` smoke test path.
-/// Callers outside tests use the signal-lexicon helpers above; this function
-/// may be removed when those tests are rewritten to the new layout.
-#[cfg(test)]
-fn pr_status_text(row: &WorktreeRow, theme: &Theme) -> (String, Style) {
-    let text = crate::tui::fuzzy::pr_status_string(row);
-    let color = match row.pr {
-        None => {
-            if row
-                .issue_state
-                .as_deref()
-                .is_some_and(|s| s == "closed" || s == "completed")
-            {
-                theme.error
-            } else {
-                theme.dimmed
-            }
-        }
-        Some(ref pr) => {
-            if pr.state.as_deref() == Some("merged") {
-                theme.pr_merged
-            } else if pr.state.as_deref() == Some("closed")
-                || pr.review_decision.as_deref() == Some("changes_requested")
-            {
-                theme.error
-            } else if pr.review_decision.as_deref() == Some("approved") {
-                theme.success
-            } else if pr.has_conflicts {
-                theme.merge_conflict
-            } else if pr.unresolved_threads > 0 {
-                theme.warning
-            } else if pr.ci_code_state.as_deref() == Some("failing") {
-                theme.error
-            } else if pr.ci_code_state.as_deref() == Some("pending") {
-                theme.warning
-            } else {
-                theme.dimmed
-            }
-        }
-    };
-    (text, Style::default().fg(color))
-}
 
 /// Formats an elapsed-seconds value into a compact duration string.
 ///
@@ -2728,7 +2680,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::ReadyToMerge)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.starts_with("#42 "),
             "expected '#42 ' prefix in: {}",
@@ -2744,7 +2696,7 @@ mod tests {
     #[test]
     fn pr_status_no_pr() {
         let row = make_task_row(1, DisplayGroup::Other);
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert_eq!(text, "no PR");
     }
 
@@ -2860,7 +2812,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.contains("changes req"),
             "expected 'changes req' in: {}",
@@ -2887,7 +2839,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.contains("conflict"),
             "expected 'conflict' in: {}",
@@ -2914,7 +2866,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(
             text.contains("unresolved"),
             "expected 'unresolved' in: {}",
@@ -2942,7 +2894,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::NeedsAttention)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(text.contains("failing"), "expected 'failing' in: {}", text);
     }
 
@@ -3086,7 +3038,7 @@ mod tests {
             }),
             ..make_task_row(1, DisplayGroup::Other)
         };
-        let (text, _) = pr_status_text(&row, &Theme::default());
+        let text = crate::tui::fuzzy::pr_status_string(&row);
         assert!(text.contains("pending"), "expected 'pending' in: {}", text);
     }
 
@@ -3383,7 +3335,7 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_pr_status_text() {
+    fn search_matches_pr_status_string() {
         let row_approved = WorktreeRow {
             pr: Some(crate::derive::PrInfo {
                 number: 55,
@@ -3403,7 +3355,7 @@ mod tests {
         };
         let row_no_pr = make_task_row(2, DisplayGroup::Other);
         let rows = vec![row_approved, row_no_pr];
-        // "approved" is in the haystack for row_approved via pr_status_haystack.
+        // "approved" is in the haystack for row_approved via pr_status_string.
         let visible = visible_tasks(&rows, "approved");
         assert_eq!(visible.len(), 1, "only the approved-PR row should match");
         assert_eq!(visible[0].row.issue_number, Some(1));
