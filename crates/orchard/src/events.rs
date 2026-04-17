@@ -208,6 +208,25 @@ pub fn log_worktree_remote_lost(
     );
 }
 
+/// Logs a `session.remote_lost` event when a previously-cached fork's tmux
+/// session cache is deleted because the fork VM is no longer enumerated by
+/// the golden Boxd host.
+///
+/// Field shape mirrors `worktree.remote_lost` (feature.feature:323) so
+/// consumers can handle both events with the same destructure.
+/// `{event, ts, repo, remote_name, remote_type, host}`.
+pub fn log_session_remote_lost(repo: &str, remote_name: &str, remote_type: &str, host: &str) {
+    log_event(
+        "session.remote_lost",
+        &[
+            ("repo", Value::String(repo.to_string())),
+            ("remote_name", Value::String(remote_name.to_string())),
+            ("remote_type", Value::String(remote_type.to_string())),
+            ("host", Value::String(host.to_string())),
+        ],
+    );
+}
+
 /// Logs a `refresh.complete` event.
 pub fn log_refresh_complete(duration_ms: u64, tasks: usize, sessions: usize, worktrees: usize) {
     log_event(
