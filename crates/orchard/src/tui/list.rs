@@ -1818,25 +1818,9 @@ impl App {
             let since_cell = Cell::from(since_str).style(Style::default().fg(theme.dimmed));
 
             // LABELS cell — unified issue + PR labels, deduped (case-insensitive).
-            // Inline the merge so we don't allocate wrapper structs just to
-            // satisfy the signal::unified_labels signature.
-            let unified: Vec<String> = {
-                let mut out: Vec<String> = Vec::new();
-                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-                for l in &vt.row.issue_labels {
-                    if seen.insert(l.to_ascii_lowercase()) {
-                        out.push(l.clone());
-                    }
-                }
-                if let Some(pr) = vt.row.pr.as_ref() {
-                    for l in &pr.labels {
-                        if seen.insert(l.to_ascii_lowercase()) {
-                            out.push(l.clone());
-                        }
-                    }
-                }
-                out
-            };
+            let pr_labels: &[String] = vt.row.pr.as_ref().map_or(&[], |p| &p.labels);
+            let unified =
+                crate::signal::unified_labels(&vt.row.issue_labels, pr_labels);
             let unified_refs: Vec<&str> = unified.iter().map(|s| s.as_str()).collect();
             let labels_cell = {
                 let spans = label_badges(&unified_refs, labels_width);
