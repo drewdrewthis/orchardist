@@ -319,12 +319,42 @@ pub fn cache_dir() -> PathBuf {
         .join(".cache/orchard")
 }
 
+/// Returns the cache file path for a per-repo source, resolved under
+/// `cache_dir`.
+///
+/// The `source` parameter is the file suffix, e.g. `"issues"`, `"prs"`,
+/// `"worktrees"`, or `"remote_worktrees"`.
+///
+/// Prefer [`cache_path`] for production code. Use this variant in tests to
+/// redirect writes to a `TempDir`.
+pub fn cache_path_in(owner: &str, repo: &str, source: &str, cache_dir: &Path) -> PathBuf {
+    cache_dir.join(format!("{}_{}_{}.json", owner, repo, source))
+}
+
 /// Returns the cache file path for a per-repo source.
 ///
 /// The `source` parameter is the file suffix, e.g. `"issues"`, `"prs"`,
 /// `"worktrees"`, or `"remote_worktrees"`.
 pub fn cache_path(owner: &str, repo: &str, source: &str) -> PathBuf {
-    cache_dir().join(format!("{}_{}_{}.json", owner, repo, source))
+    cache_path_in(owner, repo, source, &cache_dir())
+}
+
+/// Returns the cache file path for tmux sessions, resolved under `cache_dir`.
+///
+/// Pass `None` for local sessions (`tmux_sessions.json`) or `Some("user@host")`
+/// for a remote host. In the remote case, `@` and `.` in the host string are
+/// replaced with `_` to produce a safe filename.
+///
+/// Prefer [`tmux_cache_path`] for production code (uses the default cache
+/// directory). Use this variant in tests to redirect writes to a `TempDir`.
+pub fn tmux_cache_path_in(host: Option<&str>, cache_dir: &Path) -> PathBuf {
+    match host {
+        None => cache_dir.join("tmux_sessions.json"),
+        Some(h) => {
+            let safe = h.replace(['@', '.'], "_");
+            cache_dir.join(format!("{}_tmux_sessions.json", safe))
+        }
+    }
 }
 
 /// Returns the cache file path for tmux sessions.
@@ -333,13 +363,7 @@ pub fn cache_path(owner: &str, repo: &str, source: &str) -> PathBuf {
 /// for a remote host. In the remote case, `@` and `.` in the host string are
 /// replaced with `_` to produce a safe filename.
 pub fn tmux_cache_path(host: Option<&str>) -> PathBuf {
-    match host {
-        None => cache_dir().join("tmux_sessions.json"),
-        Some(h) => {
-            let safe = h.replace(['@', '.'], "_");
-            cache_dir().join(format!("{}_tmux_sessions.json", safe))
-        }
-    }
+    tmux_cache_path_in(host, &cache_dir())
 }
 
 // ---------------------------------------------------------------------------

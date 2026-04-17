@@ -1715,7 +1715,7 @@ pub fn refresh_remote_worktrees(
                 "cache_sources: refresh_remote_worktrees({}, {}): {e}",
                 config.slug, remote_cfg.host,
             ));
-            return Ok(());
+            return Err(e);
         }
     };
 
@@ -1783,88 +1783,262 @@ pub fn refresh_remote_worktrees(
     Ok(())
 }
 
-/// Fetches tmux sessions from a single remote and writes them to per-host caches.
-///
-/// Dispatch is driven by `remote_cfg.kind`:
-/// - `Remmy` and `BoxdShared` delegate to the legacy `refresh_tmux_sessions`
-///   path (raw SSH `tmux list-sessions` + pane/capture batching against
-///   `remote_cfg.host`). Their adapters' `list_sessions` methods are still
-///   Slice-1/2 stubs; swapping them in would regress pane and capture enrichment.
-/// - `BoxdFork` routes through `RemoteAdapter::from_config` so enumeration
-///   fans out from the golden host to each live fork and writes one cache
-///   file per fork host.
-///
-/// The fork path intentionally skips `tmux list-panes` / `capture-pane` per
-/// session — only the session roster is required to make forks visible in
-/// `orchard --json` and the TUI (issue #264 AC). Pane and capture enrichment
-/// for forks is a follow-up.
-///
-/// On adapter error the error is logged and existing caches are left intact.
-pub fn refresh_remote_tmux_sessions(
-    config: &RepoConfig,
-    remote_cfg: &crate::global_config::RemoteConfig,
-) -> anyhow::Result<()> {
-    // Remmy and BoxdShared: keep the legacy single-host path so pane details
-    // and capture-pane payloads continue to land in the cache. Their adapter
-    // `list_sessions` methods are still stubs returning `Ok(vec![])`.
-    if remote_cfg.kind != crate::remote_adapter::RemoteKind::BoxdFork {
-        return refresh_tmux_sessions(Some(&remote_cfg.host));
-    }
-
-    let adapter = crate::remote_adapter::RemoteAdapter::from_config(
-        remote_cfg,
-        Box::new(crate::remote_adapter::ProcessSshExec),
-    );
-
-    let sessions = match adapter.list_sessions() {
-        Ok(s) => s,
-        Err(e) => {
-            LOG.warn(&format!(
-                "cache_sources: refresh_remote_tmux_sessions({}, {}): {e}",
-                config.slug, remote_cfg.host,
-            ));
-            return Ok(());
-        }
-    };
-
-    // Group by host and write one cache file per distinct fork host.
-    // `BoxdFork` adapter tags every session with its fork host; unknown-host
-    // entries fall back to `remote_cfg.host` defensively.
-    let mut by_host: std::collections::HashMap<String, Vec<CachedTmuxSession>> =
-        std::collections::HashMap::new();
-    for mut s in sessions {
-        let host = s.host.clone().unwrap_or_else(|| remote_cfg.host.clone());
-        if s.host.is_none() {
-            s.host = Some(host.clone());
-        }
-        by_host.entry(host).or_default().push(s);
-    }
-
-    let host_count = by_host.len();
-    let total: usize = by_host.values().map(|v| v.len()).sum();
-
-    for (host, group) in &by_host {
-        let cache_path = cache::tmux_cache_path(Some(host));
-        cache::write_cache_if_nonempty(&cache_path, group)?;
-    }
-
-    LOG.info(&format!(
-        "cache_sources: refresh_remote_tmux_sessions({}, {}): wrote {} entries across {} fork hosts",
-        config.slug, remote_cfg.host, total, host_count,
-    ));
-
-    Ok(())
-}
-
 /// Maps a `RemoteKind` to its on-the-wire kebab-case string, matching the
 /// serde serialization and the `remote_type` field on
 /// `worktree.remote_lost` events.
-fn kind_str(kind: crate::remote_adapter::RemoteKind) -> &'static str {
+pub(crate) fn kind_str(kind: crate::remote_adapter::RemoteKind) -> &'static str {
     match kind {
         crate::remote_adapter::RemoteKind::Remmy => "remmy",
         crate::remote_adapter::RemoteKind::BoxdShared => "boxd-shared",
         crate::remote_adapter::RemoteKind::BoxdFork => "boxd-fork",
     }
+}
+
+/// Returns fork hosts present in `old` but absent from `live`.
+///
+/// Pure helper — no IO. Extracted so the vanished-fork detection logic
+/// is unit-testable without touching the filesystem.
+///
+/// Result is sorted.
+pub fn vanished_hosts(
+    old: &std::collections::HashSet<String>,
+    live: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = old.difference(live).cloned().collect();
+    out.sort();
+    out
+}
+
+/// Returns `true` if `host` (bare hostname, no `user@`) is either exactly the
+/// `golden` host, or a subdomain of it separated by a `.` boundary.
+///
+/// This prevents a suffix-only match such as `"myboxd.sh"` passing for
+/// golden `"boxd.sh"`.
+///
+/// # Examples
+///
+/// ```
+/// # use orchard::cache_sources::is_fork_of_golden;
+/// assert!(is_fork_of_golden("issue1.boxd.sh", "boxd.sh"));
+/// assert!(is_fork_of_golden("boxd.sh", "boxd.sh"));
+/// assert!(!is_fork_of_golden("myboxd.sh", "boxd.sh"));
+/// assert!(!is_fork_of_golden("xboxd.sh", "boxd.sh"));
+/// ```
+pub fn is_fork_of_golden(host: &str, golden: &str) -> bool {
+    host == golden || host.ends_with(&format!(".{}", golden))
+}
+
+/// Reads fork hosts for a `BoxdFork` remote from the `remote_worktrees` cache
+/// file under `cache_dir`, applying the [`is_fork_of_golden`] filter.
+///
+/// Returns the set of full host strings (e.g. `"boxd@issue1.boxd.sh"`) whose
+/// bare hostname (the part after `@`) is a subdomain of the golden host.
+/// For non-`BoxdFork` remotes, returns an empty set immediately.
+///
+/// When the cache file does not exist (cold start) or is unreadable, returns
+/// an empty set. When `refresh_remote_worktrees` was skipped because its SWR
+/// window was still Fresh, the cache reflects the most recent successful fetch
+/// — which is accurate enough for tmux vanished-fork detection.
+pub(crate) fn fork_hosts_from_cache_in(
+    config: &crate::global_config::RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+    cache_dir: &std::path::Path,
+) -> std::collections::HashSet<String> {
+    use crate::remote_adapter::RemoteKind;
+
+    if remote_cfg.kind != RemoteKind::BoxdFork {
+        return std::collections::HashSet::new();
+    }
+
+    let cache_path = cache::cache_path_in(
+        config.owner(),
+        config.repo_name(),
+        "remote_worktrees",
+        cache_dir,
+    );
+    let entries: Vec<CachedWorktree> = cache::read_cache::<CachedWorktree>(&cache_path).entries;
+
+    let golden = &remote_cfg.host;
+    entries
+        .into_iter()
+        .filter_map(|w| w.host)
+        .filter(|h| {
+            h.split('@')
+                .nth(1)
+                .map(|after_at| is_fork_of_golden(after_at, golden.as_str()))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Reads fork hosts for a `BoxdFork` remote from the production
+/// `remote_worktrees` cache file, applying the [`is_fork_of_golden`] boundary
+/// check.
+///
+/// See [`fork_hosts_from_cache_in`] for full semantics.
+pub(crate) fn fork_hosts_from_cache(
+    config: &crate::global_config::RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+) -> std::collections::HashSet<String> {
+    fork_hosts_from_cache_in(config, remote_cfg, &cache::cache_dir())
+}
+
+/// Snapshots the fork hosts for a `BoxdFork` remote by reading the current
+/// `remote_worktrees` cache — before any mutation by `refresh_remote_worktrees`.
+///
+/// Returns the set of host strings (e.g. `"boxd@issue1.boxd.sh"`) that were
+/// cached from prior refreshes of this remote. For non-`BoxdFork` remotes,
+/// returns an empty set — single-host remotes do not need per-fork tracking.
+///
+/// Callers must invoke this **before** `refresh_remote_worktrees` so the
+/// snapshot reflects the pre-mutation state used to detect vanished forks.
+pub fn snapshot_fork_hosts_for_remote(
+    config: &crate::global_config::RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+) -> std::collections::HashSet<String> {
+    snapshot_fork_hosts_for_remote_in(config, remote_cfg, &cache::cache_dir())
+}
+
+/// Like [`snapshot_fork_hosts_for_remote`] but takes an explicit `cache_dir`
+/// so tests can redirect file I/O to a `TempDir` without mutating `HOME`.
+pub(crate) fn snapshot_fork_hosts_for_remote_in(
+    config: &crate::global_config::RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+    cache_dir: &std::path::Path,
+) -> std::collections::HashSet<String> {
+    fork_hosts_from_cache_in(config, remote_cfg, cache_dir)
+}
+
+/// Deletes tmux caches for `vanished_hosts` and emits `session.remote_lost`
+/// events with the real host strings (not derived from filenames).
+///
+/// For each host in `vanished_hosts`, removes the file at
+/// `cache::tmux_cache_path(Some(host))` and emits the event. File-not-found
+/// errors are silently ignored (idempotent).
+pub fn delete_vanished_fork_caches(
+    vanished: &[String],
+    slug: &str,
+    remote_name: &str,
+    remote_kind: crate::remote_adapter::RemoteKind,
+) {
+    delete_vanished_fork_caches_in(
+        vanished,
+        slug,
+        remote_name,
+        remote_kind,
+        &cache::cache_dir(),
+    );
+}
+
+/// Like [`delete_vanished_fork_caches`] but takes an explicit `cache_dir` so
+/// tests can redirect file I/O to a `TempDir` without mutating `HOME`.
+pub(crate) fn delete_vanished_fork_caches_in(
+    vanished: &[String],
+    slug: &str,
+    remote_name: &str,
+    remote_kind: crate::remote_adapter::RemoteKind,
+    cache_dir: &std::path::Path,
+) {
+    for host in vanished {
+        let path = cache::tmux_cache_path_in(Some(host), cache_dir);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                LOG.info(&format!(
+                    "cache_sources: delete_vanished_fork_caches: \
+                     removed stale tmux cache for vanished fork: {host}"
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Already gone — idempotent.
+            }
+            Err(e) => {
+                LOG.warn(&format!(
+                    "cache_sources: delete_vanished_fork_caches: \
+                     failed to remove stale cache for {host}: {e}"
+                ));
+            }
+        }
+        crate::events::log_session_remote_lost(slug, remote_name, kind_str(remote_kind), host);
+    }
+}
+
+/// Refreshes tmux session caches for a single remote, dispatching per-fork
+/// for `BoxdFork` remotes and falling back to a single-host call for
+/// `Remmy` / `BoxdShared`.
+///
+/// For `BoxdFork`:
+/// 1. Uses `old_hosts` (a pre-mutation snapshot from the caller, taken before
+///    `refresh_remote_worktrees` was called) as the authoritative "previously
+///    known" fork set. This avoids lossy filename reverse-engineering and the
+///    cross-golden suffix ambiguity of the filesystem-scan approach.
+/// 2. Calls the adapter to enumerate live fork hosts. Returns `Err` if the
+///    golden host is unreachable (prevents false mass-deletion of caches on
+///    a transient outage).
+/// 3. Calls `refresh_tmux_sessions(Some(&fork_host))` per live fork. Per-fork
+///    failures are logged and skipped — one unreachable fork doesn't abort the
+///    whole remote.
+/// 4. Detects forks in `old_hosts` that are absent from the live set; unlinks
+///    the stale cache and emits `session.remote_lost` with the real host string.
+///
+/// For `Remmy` / `BoxdShared`: thin wrapper around
+/// `refresh_tmux_sessions(Some(&remote_cfg.host))`, propagating its result.
+/// The `old_hosts` parameter is ignored for these kinds.
+pub fn refresh_remote_tmux_sessions(
+    config: &crate::global_config::RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+    old_hosts: &std::collections::HashSet<String>,
+) -> anyhow::Result<()> {
+    use crate::remote_adapter::RemoteKind;
+
+    match remote_cfg.kind {
+        RemoteKind::Remmy | RemoteKind::BoxdShared => refresh_tmux_sessions(Some(&remote_cfg.host)),
+        RemoteKind::BoxdFork => refresh_boxd_fork_tmux_sessions(config, remote_cfg, old_hosts),
+    }
+}
+
+/// Inner implementation for `BoxdFork` tmux session refresh.
+///
+/// Separated from `refresh_remote_tmux_sessions` to keep the match arm thin
+/// and keep this logic testable.
+///
+/// Uses `old_hosts` (pre-mutation snapshot) rather than a filesystem scan, so
+/// the authoritative "previously known" set is derived from real host strings
+/// rather than reverse-engineered filenames. This eliminates the cross-golden
+/// suffix ambiguity described in the PR #315 review.
+///
+/// Derives `live_hosts` from the `remote_worktrees` cache written by the
+/// preceding `refresh_remote_worktrees` call — no second SSH round-trip.
+/// If `refresh_remote_worktrees` was skipped because its SWR window was still
+/// Fresh, the cache reflects the most recent successful fetch, which is equally
+/// authoritative for tmux cleanup purposes.
+fn refresh_boxd_fork_tmux_sessions(
+    config: &crate::global_config::RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+    old_hosts: &std::collections::HashSet<String>,
+) -> anyhow::Result<()> {
+    // Derive live fork hosts from the remote_worktrees cache that was just
+    // written (or left in place when SWR Fresh) by refresh_remote_worktrees.
+    // This avoids a second SSH round-trip to the golden host.
+    let live_hosts = fork_hosts_from_cache(config, remote_cfg);
+
+    // Refresh tmux sessions for each live fork. Individual failures are
+    // logged + skipped — a single unreachable fork shouldn't kill the rest.
+    for fork_host in &live_hosts {
+        if let Err(e) = refresh_tmux_sessions(Some(fork_host)) {
+            LOG.warn(&format!(
+                "cache_sources: refresh_boxd_fork_tmux_sessions: fork {fork_host}: {e}"
+            ));
+        }
+    }
+
+    // Delete caches for forks that were known before this cycle but have
+    // now vanished from the live set. `old_hosts` is the pre-mutation
+    // snapshot passed by the caller (taken before `refresh_remote_worktrees`
+    // overwrote the cache), preserving the real host strings.
+    let gone = vanished_hosts(old_hosts, &live_hosts);
+    delete_vanished_fork_caches(&gone, &config.slug, &remote_cfg.name, remote_cfg.kind);
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1875,6 +2049,7 @@ fn kind_str(kind: crate::remote_adapter::RemoteKind) -> &'static str {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashSet;
 
     // -- collect_pr_query_branches -----------------------------------------
 
@@ -3722,5 +3897,280 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
     fn parse_tmux_output_new_format_empty_input_returns_empty() {
         let sessions = parse_tmux_sessions_from_panes("", None, |_| String::new(), |_| vec![]);
         assert!(sessions.is_empty());
+    }
+
+    // -- vanished_hosts -------------------------------------------------------
+
+    #[test]
+    fn vanished_hosts_returns_hosts_in_old_but_not_live() {
+        let old: HashSet<String> = ["A", "B", "C"].iter().map(|s| s.to_string()).collect();
+        let live: HashSet<String> = ["A", "C"].iter().map(|s| s.to_string()).collect();
+        // vanished_hosts guarantees a sorted result — no manual sort needed.
+        let result = vanished_hosts(&old, &live);
+        assert_eq!(result, vec!["B"]);
+    }
+
+    #[test]
+    fn vanished_hosts_empty_when_all_live() {
+        let old: HashSet<String> = ["A", "B"].iter().map(|s| s.to_string()).collect();
+        let live: HashSet<String> = ["A", "B"].iter().map(|s| s.to_string()).collect();
+        assert!(vanished_hosts(&old, &live).is_empty());
+    }
+
+    #[test]
+    fn vanished_hosts_all_vanished_when_live_empty() {
+        let old: HashSet<String> = ["A", "B"].iter().map(|s| s.to_string()).collect();
+        let live: HashSet<String> = HashSet::new();
+        // vanished_hosts guarantees a sorted result — no manual sort needed.
+        let result = vanished_hosts(&old, &live);
+        assert_eq!(result, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn vanished_hosts_empty_when_both_empty() {
+        let old: HashSet<String> = HashSet::new();
+        let live: HashSet<String> = HashSet::new();
+        assert!(vanished_hosts(&old, &live).is_empty());
+    }
+
+    // -- tmux_cache_path for fork hosts ---------------------------------------
+
+    #[test]
+    fn tmux_cache_path_for_boxd_fork_host() {
+        let path = cache::tmux_cache_path(Some("boxd@issue1.boxd.sh"));
+        let name = path.file_name().unwrap().to_str().unwrap();
+        // '@' and '.' replaced with '_'
+        assert_eq!(name, "boxd_issue1_boxd_sh_tmux_sessions.json");
+    }
+
+    // -- snapshot_fork_hosts_for_remote ---------------------------------------
+
+    #[test]
+    fn snapshot_fork_hosts_for_remote_returns_empty_for_non_boxd_fork() {
+        use crate::global_config::RemoteConfig;
+        use crate::remote_adapter::RemoteKind;
+
+        let config = crate::global_config::RepoConfig {
+            slug: "acme/myrepo".to_string(),
+            path: "/workspace/myrepo".to_string(),
+            remotes: vec![],
+        };
+        let remote = RemoteConfig {
+            name: "remmy".to_string(),
+            host: "ubuntu@myhost".to_string(),
+            path: "/workspace".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::Remmy,
+        };
+
+        let result = snapshot_fork_hosts_for_remote(&config, &remote);
+        assert!(result.is_empty(), "non-BoxdFork remotes return empty set");
+    }
+
+    // -- is_fork_of_golden ----------------------------------------------------
+
+    #[test]
+    fn is_fork_of_golden_accepts_direct_subdomain() {
+        assert!(
+            is_fork_of_golden("issue1.boxd.sh", "boxd.sh"),
+            "issue1.boxd.sh is a subdomain of boxd.sh separated by a dot"
+        );
+    }
+
+    #[test]
+    fn is_fork_of_golden_rejects_suffix_without_dot_boundary() {
+        assert!(
+            !is_fork_of_golden("xboxd.sh", "boxd.sh"),
+            "xboxd.sh must not match golden boxd.sh — no dot boundary"
+        );
+        assert!(
+            !is_fork_of_golden("myboxd.sh", "boxd.sh"),
+            "myboxd.sh must not match golden boxd.sh — no dot boundary"
+        );
+    }
+
+    #[test]
+    fn snapshot_fork_hosts_filters_by_golden_host() {
+        use crate::global_config::RemoteConfig;
+        use crate::remote_adapter::RemoteKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path();
+        std::fs::create_dir_all(cache_dir).unwrap();
+
+        let config = crate::global_config::RepoConfig {
+            slug: "acme/myrepo".to_string(),
+            path: "/workspace/myrepo".to_string(),
+            remotes: vec![],
+        };
+        let remote = RemoteConfig {
+            name: "boxd".to_string(),
+            host: "boxd.sh".to_string(),
+            path: "/workspace".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::BoxdFork,
+        };
+
+        // Write a remote_worktrees cache containing a mix of:
+        //   - a fork of THIS golden (boxd@issue1.boxd.sh)          → included
+        //   - a fork of a DIFFERENT golden (boxd@issue1.other.sh)  → excluded
+        //   - a local entry (no host)                              → excluded
+        //   - a suffix-match without dot boundary (boxd@myboxd.sh) → excluded
+        let cache_path = cache::cache_path_in(
+            config.owner(),
+            config.repo_name(),
+            "remote_worktrees",
+            cache_dir,
+        );
+        let entries = vec![
+            wt(
+                "/fork/issue1",
+                "issue1/branch",
+                false,
+                Some("boxd@issue1.boxd.sh"),
+            ),
+            wt(
+                "/fork/other",
+                "other/branch",
+                false,
+                Some("boxd@issue1.other.sh"),
+            ),
+            wt("/local/wt", "local/branch", false, None),
+            wt(
+                "/fork/suffix",
+                "suffix/branch",
+                false,
+                Some("boxd@myboxd.sh"),
+            ),
+        ];
+        cache::write_cache(&cache_path, &entries).unwrap();
+
+        let result = snapshot_fork_hosts_for_remote_in(&config, &remote, cache_dir);
+
+        assert_eq!(
+            result,
+            std::collections::HashSet::from(["boxd@issue1.boxd.sh".to_string()]),
+            "only the fork of this golden host must appear in the snapshot"
+        );
+    }
+
+    // -- delete_vanished_fork_caches ------------------------------------------
+
+    /// Proves that a stale fork cache is deleted and a live fork's cache is
+    /// preserved.
+    ///
+    /// This is the canonical AC1 regression test: the snapshot approach
+    /// correctly identifies vanished forks via real host strings and removes
+    /// their caches without any filename reverse-engineering.
+    #[test]
+    fn e2e_vanished_fork_cache_deleted_live_fork_preserved() {
+        use crate::remote_adapter::RemoteKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path();
+        std::fs::create_dir_all(cache_dir).unwrap();
+
+        let fork1_host = "boxd@issue1.boxd.sh";
+        let fork2_host = "boxd@issue2.boxd.sh";
+
+        // Pre-populate cache files for both forks (state before this cycle).
+        let fork1_path = cache::tmux_cache_path_in(Some(fork1_host), cache_dir);
+        let fork2_path = cache::tmux_cache_path_in(Some(fork2_host), cache_dir);
+        std::fs::write(
+            &fork1_path,
+            r#"{"last_refreshed":"2026-01-01T00:00:00Z","entries":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &fork2_path,
+            r#"{"last_refreshed":"2026-01-01T00:00:00Z","entries":[]}"#,
+        )
+        .unwrap();
+
+        // Snapshot: both forks were known before mutation.
+        let old_hosts: HashSet<String> = [fork1_host.to_string(), fork2_host.to_string()].into();
+        // Live: only fork2 remains.
+        let live_hosts: HashSet<String> = [fork2_host.to_string()].into();
+
+        let gone = vanished_hosts(&old_hosts, &live_hosts);
+        delete_vanished_fork_caches_in(
+            &gone,
+            "acme/myrepo",
+            "boxd-fork-remote",
+            RemoteKind::BoxdFork,
+            cache_dir,
+        );
+
+        assert!(
+            !fork1_path.exists(),
+            "issue1 cache must be deleted — it vanished from the live set"
+        );
+        assert!(
+            fork2_path.exists(),
+            "issue2 cache must be preserved — it is still live"
+        );
+    }
+
+    /// Proves all stale caches are deleted when the live set is empty.
+    #[test]
+    fn delete_vanished_fork_caches_deletes_all_when_live_empty() {
+        use crate::remote_adapter::RemoteKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path();
+        std::fs::create_dir_all(cache_dir).unwrap();
+
+        let fork1_host = "boxd@issue1.boxd.sh";
+        let fork2_host = "boxd@issue2.boxd.sh";
+        let fork1_path = cache::tmux_cache_path_in(Some(fork1_host), cache_dir);
+        let fork2_path = cache::tmux_cache_path_in(Some(fork2_host), cache_dir);
+        std::fs::write(&fork1_path, "{}").unwrap();
+        std::fs::write(&fork2_path, "{}").unwrap();
+
+        let old_hosts: HashSet<String> = [fork1_host.to_string(), fork2_host.to_string()].into();
+        let live_hosts: HashSet<String> = HashSet::new();
+        let gone = vanished_hosts(&old_hosts, &live_hosts);
+
+        delete_vanished_fork_caches_in(
+            &gone,
+            "acme/myrepo",
+            "boxd",
+            RemoteKind::BoxdFork,
+            cache_dir,
+        );
+
+        assert!(!fork1_path.exists(), "fork1 must be deleted");
+        assert!(!fork2_path.exists(), "fork2 must be deleted");
+    }
+
+    /// Proves no caches are deleted when all previously-known forks are still live.
+    #[test]
+    fn delete_vanished_fork_caches_keeps_all_when_all_live() {
+        use crate::remote_adapter::RemoteKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path();
+        std::fs::create_dir_all(cache_dir).unwrap();
+
+        let fork1_host = "boxd@issue1.boxd.sh";
+        let fork1_path = cache::tmux_cache_path_in(Some(fork1_host), cache_dir);
+        std::fs::write(&fork1_path, "{}").unwrap();
+
+        let old_hosts: HashSet<String> = [fork1_host.to_string()].into();
+        let live_hosts: HashSet<String> = [fork1_host.to_string()].into();
+        let gone = vanished_hosts(&old_hosts, &live_hosts);
+
+        delete_vanished_fork_caches_in(
+            &gone,
+            "acme/myrepo",
+            "boxd",
+            RemoteKind::BoxdFork,
+            cache_dir,
+        );
+
+        assert!(
+            fork1_path.exists(),
+            "fork1 must NOT be deleted — it is live"
+        );
     }
 }
