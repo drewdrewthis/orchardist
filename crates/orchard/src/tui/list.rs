@@ -256,13 +256,17 @@ pub(crate) fn status_style(status: crate::signal::PipelineStatus, theme: &Theme)
 }
 
 /// Returns the colored style used to tint the activity glyph in column A.
+///
+/// Pulse variants (Idle, Input) use the dedicated `claude_idle_pulse` and
+/// `claude_input_pulse` theme keys so themes can tune attention colors
+/// independently from the static Working/Exhausted slots. See issue #281.
 pub(crate) fn activity_style(activity: crate::signal::Activity, theme: &Theme) -> Style {
     use crate::signal::Activity as A;
     match activity {
         A::None => Style::default().fg(theme.dimmed),
-        A::Idle => Style::default().fg(theme.claude_idle),
+        A::Idle => Style::default().fg(theme.claude_idle_pulse),
         A::Working => Style::default().fg(theme.claude_active),
-        A::Input => Style::default().fg(theme.claude_needs_input),
+        A::Input => Style::default().fg(theme.claude_input_pulse),
         A::Exhausted => Style::default().fg(theme.error),
     }
 }
@@ -1022,6 +1026,10 @@ struct SubRowContext<'a> {
     /// so a pane inherits its session's activity glyph (issue #251 lossless
     /// rollup: 💀 in a session shows on each of its claude panes, not just ⚡).
     session_activity: crate::signal::Activity,
+    /// Pulse tick for this frame, sampled once at the top of `App::render`
+    /// (issue #281). Threaded here so pane/window sub-rows animate in unison
+    /// with their parent row without re-sampling wall-clock time per row.
+    pulse_tick: u8,
 }
 
 impl App {
@@ -1452,7 +1460,9 @@ impl App {
                     crate::signal::activity_from_claude(&ce)
                 })
                 .unwrap_or(crate::signal::Activity::None);
-            let activity_cell = Cell::from(activity.glyph()).style(activity_style(activity, theme));
+            let tick = self.pulse_tick.get();
+            let activity_cell =
+                Cell::from(activity.glyph_at(tick)).style(activity_style(activity, theme));
 
             // Standalone sessions have no pipeline status — STATUS is purely
             // "what's blocking this from merging?" and a shepherd/orchardist
@@ -1538,6 +1548,7 @@ impl App {
                     bar_color: Color::DarkGray,
                     prefix: "",
                     session_activity: activity,
+                    pulse_tick: self.pulse_tick.get(),
                 };
                 if ss.session.windows.len() > 1 {
                     self.push_window_sub_rows(
@@ -1678,14 +1689,30 @@ impl App {
             let hide_rollup = is_expanded && has_multi_children;
 
             // ACTIVITY cell (column A) — rollup glyph. Hidden when expanded.
-            let activity_glyph = if hide_rollup { "" } else { activity.glyph() };
+            // Issue #281: Idle and Input pulse at 1s cadence via `glyph_at(tick)`;
+            // Working/Exhausted/None remain static.
+            let tick = self.pulse_tick.get();
+            let activity_glyph = if hide_rollup {
+                ""
+            } else {
+                activity.glyph_at(tick)
+            };
             let activity_cell = Cell::from(activity_glyph).style(activity_style(activity, theme));
 
             // STATUS cell — merge-blocker glyph. Hidden when expanded, or
             // blank for `Coding` (no blocker yet — agent activity in column A
             // carries that signal). Keeps STATUS focused on "why isn't this
             // merged?" without mixing with agent activity semantics.
-            let status_glyph = if hide_rollup { "" } else { status.glyph() };
+            //
+            // Issue #281: when rollup activity is Input, the status column
+            // renders a rotating hourglass (⏳/⌛) instead of the static
+            // PipelineStatus glyph — drawing the eye to rows waiting on a
+            // human. `status_glyph_at` centralizes that routing.
+            let status_glyph = if hide_rollup {
+                ""
+            } else {
+                crate::signal::status_glyph_at(activity, status, tick)
+            };
             let status_cell = Cell::from(status_glyph).style(status_style(status, theme));
 
             // ID cell.
@@ -1838,6 +1865,7 @@ impl App {
                         bar_color,
                         prefix: "",
                         session_activity: this_session_activity,
+                        pulse_tick: self.pulse_tick.get(),
                     };
                     if session.windows.len() > 1 {
                         self.push_window_sub_rows(
@@ -1913,8 +1941,8 @@ impl App {
             } else {
                 crate::signal::Activity::None
             };
-            let activity_cell =
-                Cell::from(pane_activity.glyph()).style(activity_style(pane_activity, ctx.theme));
+            let activity_cell = Cell::from(pane_activity.glyph_at(ctx.pulse_tick))
+                .style(activity_style(pane_activity, ctx.theme));
 
             let row_style = if selected {
                 Style::default()
@@ -2038,7 +2066,7 @@ impl App {
                 })
                 .max()
                 .unwrap_or(crate::signal::Activity::None);
-            let window_activity = Cell::from(window_level_activity.glyph())
+            let window_activity = Cell::from(window_level_activity.glyph_at(ctx.pulse_tick))
                 .style(activity_style(window_level_activity, ctx.theme));
 
             let mut cells = vec![
@@ -2499,6 +2527,43 @@ mod tests {
     use crate::session::{
         ClaudeSessionInfo, EnrichedSession, Host, SessionStatus, TmuxSessionInfo,
     };
+
+    // -- activity_style (issue #281) -----------------------------------------
+
+    #[test]
+    fn activity_style_idle_uses_claude_idle_pulse() {
+        let theme = Theme::default();
+        let style = activity_style(crate::signal::Activity::Idle, &theme);
+        assert_eq!(style.fg, Some(theme.claude_idle_pulse));
+    }
+
+    #[test]
+    fn activity_style_input_uses_claude_input_pulse() {
+        let theme = Theme::default();
+        let style = activity_style(crate::signal::Activity::Input, &theme);
+        assert_eq!(style.fg, Some(theme.claude_input_pulse));
+    }
+
+    #[test]
+    fn activity_style_working_uses_claude_active() {
+        let theme = Theme::default();
+        let style = activity_style(crate::signal::Activity::Working, &theme);
+        assert_eq!(style.fg, Some(theme.claude_active));
+    }
+
+    #[test]
+    fn activity_style_exhausted_uses_error() {
+        let theme = Theme::default();
+        let style = activity_style(crate::signal::Activity::Exhausted, &theme);
+        assert_eq!(style.fg, Some(theme.error));
+    }
+
+    #[test]
+    fn activity_style_none_uses_dimmed() {
+        let theme = Theme::default();
+        let style = activity_style(crate::signal::Activity::None, &theme);
+        assert_eq!(style.fg, Some(theme.dimmed));
+    }
 
     fn make_task_row(issue_number: u32, group: DisplayGroup) -> WorktreeRow {
         WorktreeRow {

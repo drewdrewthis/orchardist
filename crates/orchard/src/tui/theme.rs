@@ -90,6 +90,15 @@ pub struct Theme {
     /// Color for a Claude session awaiting user input.
     pub claude_needs_input: Color,
 
+    /// Color for the Idle pulse in column A (issue #281). Orange by default so
+    /// an idle session stands apart from working (green) and input (red) rows.
+    pub claude_idle_pulse: Color,
+
+    /// Color for the Input pulse in column A (issue #281). Red by default —
+    /// shares intent with the hourglass in the status column to say "waiting
+    /// on you."
+    pub claude_input_pulse: Color,
+
     /// Base background color for popups and overlays.
     pub background: Color,
 
@@ -131,6 +140,8 @@ impl Default for Theme {
             claude_active: Color::Green,
             claude_idle: Color::DarkGray,
             claude_needs_input: Color::Red,
+            claude_idle_pulse: Color::Rgb(255, 165, 0),
+            claude_input_pulse: Color::Red,
             background: Color::Reset, // inherit terminal background
             text: Color::White,
             orchardist: Color::Magenta,
@@ -261,6 +272,19 @@ mod tests {
     #[test]
     fn default_search_highlight_is_yellow() {
         assert_eq!(Theme::default().search_highlight, Color::Yellow);
+    }
+
+    #[test]
+    fn default_claude_idle_pulse_is_orange() {
+        assert_eq!(
+            Theme::default().claude_idle_pulse,
+            Color::Rgb(255, 165, 0)
+        );
+    }
+
+    #[test]
+    fn default_claude_input_pulse_is_red() {
+        assert_eq!(Theme::default().claude_input_pulse, Color::Red);
     }
 
     #[test]

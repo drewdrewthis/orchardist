@@ -349,10 +349,11 @@ impl App {
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
-            legend_row(
-                PipelineStatus::NeedsInput.glyph(),
-                PipelineStatus::NeedsInput.label(),
-            ),
+            // Issue #281: NeedsInput has no status glyph — a rotating ⏳/⌛ in
+            // the status column (driven by rollup Activity::Input) carries the
+            // "waiting on you" signal. Document the hourglass here so the
+            // legend reflects what the user actually sees on screen.
+            legend_row("\u{23F3}/\u{231B}", "waiting on user input"),
             legend_row(
                 PipelineStatus::CiFailing.glyph(),
                 PipelineStatus::CiFailing.label(),
@@ -390,9 +391,12 @@ impl App {
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
-            legend_row(Activity::Working.glyph(), Activity::Working.label()),
-            legend_row(Activity::Input.glyph(), Activity::Input.label()),
-            legend_row(Activity::Idle.glyph(), Activity::Idle.label()),
+            legend_row(Activity::Working.glyph(), "working"),
+            // Issue #281: Idle and Input pulse between frames at 1s cadence.
+            // Show both frames side-by-side so the legend matches what the
+            // user sees on screen.
+            legend_row("\u{25CB}/\u{25CF}", "idle (pulsing orange)"),
+            legend_row("\u{25CB}/?", "input (pulsing red — waiting on you)"),
             legend_row(Activity::Exhausted.glyph(), Activity::Exhausted.label()),
             Line::from(""),
             Line::from(vec![Span::styled(
@@ -527,15 +531,32 @@ mod tests {
             text.contains("w") && text.contains("New worktree"),
             "help overlay must include 'w' keybinding mapped to 'New worktree', got:\n{text}"
         );
-        // Pipeline-status legend section must appear (added in issue #251).
+        // Pipeline-status legend section must appear (issue #251). Issue #281
+        // replaced the "needs input" PipelineStatus row with an hourglass row
+        // labeled "waiting on user input" — the glyph now lives in the status
+        // column as ⏳/⌛ driven by rollup Activity::Input.
         assert!(
-            text.contains("needs input") && text.contains("merged"),
-            "help overlay must include pipeline-status lexicon rows"
+            text.contains("waiting on user input") && text.contains("merged"),
+            "help overlay must include pipeline-status lexicon rows, got:\n{text}"
         );
-        // Agent-activity legend section must appear.
+        assert!(
+            !text.contains("\u{2753}"),
+            "❓ glyph must not appear in legend after issue #281, got:\n{text}"
+        );
+        // Agent-activity legend section must appear. Idle/Input are labeled
+        // with their pulse frames (○/● and ○/?) since the row shows one frame
+        // statically in the legend while the live glyph animates.
         assert!(
             text.contains("working") && text.contains("exhausted"),
-            "help overlay must include agent-activity lexicon rows"
+            "help overlay must include agent-activity lexicon rows, got:\n{text}"
+        );
+        assert!(
+            text.contains("idle (pulsing orange)"),
+            "legend must describe Idle as pulsing orange, got:\n{text}"
+        );
+        assert!(
+            text.contains("input (pulsing red"),
+            "legend must describe Input as pulsing red, got:\n{text}"
         );
     }
 
