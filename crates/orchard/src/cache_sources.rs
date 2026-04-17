@@ -471,6 +471,15 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
     worktrees
 }
 
+/// The `-F` format string passed to `tmux list-sessions` for all session
+/// enumeration — local, remote (Remmy/BoxdShared), and per-fork (BoxdFork).
+///
+/// All three callers MUST use this constant so that `parse_tmux_output` always
+/// receives identically-structured lines regardless of the code path that
+/// produced them.
+pub(crate) const TMUX_SESSION_FORMAT: &str =
+    "#{session_name}:#{session_path}|#{session_created}|#{session_activity}";
+
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
 ///
@@ -1452,15 +1461,12 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     let sessions_out = match host {
         None => run_local(
             "tmux",
-            &[
-                "list-sessions",
-                "-F",
-                "#{session_name}:#{session_path}|#{session_created}|#{session_activity}",
-            ],
+            &["list-sessions", "-F", TMUX_SESSION_FORMAT],
         ),
         Some(h) => {
             let cmd = format!(
-                "tmux list-sessions -F '#{{session_name}}:#{{session_path}}|#{{session_created}}|#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                "tmux list-sessions -F '{}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
+                TMUX_SESSION_FORMAT,
                 CLAUDE_STATE_SENTINEL
             );
             remote::ssh_exec(h, &cmd)

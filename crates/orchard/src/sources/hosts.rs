@@ -4,21 +4,13 @@
 //! reachable before attempting worktree or tmux operations on it. Probes run with a
 //! 5-second connect timeout (set in `remote::ssh_flags()`), so dead hosts fail fast.
 //!
-//! When probing multiple hosts, always use one of the concurrent variants
-//! ([`probe_reachability_all`] for plain hosts, or [`probe_reachability_all_for_remotes`]
-//! when full `RemoteConfig` entries are in hand) — each runs one thread per
-//! host so a stopped VM can't block probes for healthy hosts behind it.
+//! The concurrent entry point is [`probe_reachability_all_for_remotes`], which
+//! accepts full `RemoteConfig` entries so each host is probed with the correct
+//! command for its kind. Each probe runs on its own thread so a stopped VM
+//! can't block probes for healthy hosts behind it.
 
 use std::collections::HashMap;
 use std::thread;
-
-/// Probes whether a remote host is reachable via SSH.
-///
-/// Returns `true` if the host responds, `false` if unreachable or if the
-/// SSH connection times out.
-pub fn probe_reachability(host: &str) -> bool {
-    crate::remote::ssh_exec(host, "true").is_ok()
-}
 
 /// Probes whether a remote is reachable, using a probe command appropriate
 /// for the remote's kind.
@@ -38,25 +30,11 @@ pub fn probe_reachability_for_remote(remote: &crate::global_config::RemoteConfig
     crate::remote::ssh_exec(&remote.host, cmd).is_ok()
 }
 
-/// Probes many hosts concurrently, one thread per unique host.
-///
-/// Deduplicates the input, spawns one probe thread per host, joins them all,
-/// and returns a `host -> reachable` map. Dead hosts can't block healthy
-/// ones because each probe runs on its own thread.
-pub fn probe_reachability_all<I, S>(hosts: I) -> HashMap<String, bool>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    probe_with(hosts, probe_reachability)
-}
-
 /// Probes many (host, kind-aware) remotes concurrently.
 ///
 /// Deduplicates by host, spawns one thread per unique remote, and returns
-/// a `host -> reachable` map. Use this instead of `probe_reachability_all`
-/// when the caller has full `RemoteConfig` entries so each host can be
-/// probed with the correct command for its kind.
+/// a `host -> reachable` map. Each remote is probed with the command
+/// appropriate for its kind (see `probe_reachability_for_remote`).
 pub fn probe_reachability_all_for_remotes(
     remotes: &[crate::global_config::RemoteConfig],
 ) -> HashMap<String, bool> {
@@ -80,6 +58,7 @@ pub fn probe_reachability_all_for_remotes(
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
 
+#[cfg(test)]
 fn probe_with<I, S, F>(hosts: I, probe: F) -> HashMap<String, bool>
 where
     I: IntoIterator<Item = S>,

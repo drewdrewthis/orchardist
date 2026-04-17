@@ -16,8 +16,8 @@ use orchard::remote_adapter::{
 // RemoteWorktreeService port defines a minimal stable surface
 // ---------------------------------------------------------------------------
 
-/// The port exposes `list_worktrees`, `list_sessions`, and `probe` on all
-/// three adapter variants, each returning a typed `Result`.
+/// The port exposes `list_worktrees` and `list_sessions` on all three adapter
+/// variants, each returning a typed `Result`.
 ///
 /// These tests call each method on each variant and assert `Ok`. They fail
 /// red (panic from `unimplemented!`) until the production code fills in the
@@ -51,18 +51,6 @@ fn port_list_sessions_returns_ok_for_remmy_variant() {
         result.is_ok(),
         "list_sessions must return Ok; got: {result:?}"
     );
-}
-
-#[test]
-fn port_probe_returns_ok_for_remmy_variant() {
-    // feature.feature:22
-    let adapter = RemoteAdapter::Remmy(RemmyAdapter {
-        host: "ubuntu@10.0.3.56".to_string(),
-        path: "~/repo".to_string(),
-        ssh: Box::new(FakeSshExec::new()),
-    });
-    let result = adapter.probe();
-    assert!(result.is_ok(), "probe must return Ok; got: {result:?}");
 }
 
 #[test]
