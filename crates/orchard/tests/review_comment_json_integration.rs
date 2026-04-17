@@ -207,8 +207,5 @@ fn json_has_unaddressed_author_comment_is_always_boolean() {
         "hasUnaddressedAuthorComment must always be a boolean, got: {}",
         pr_json["hasUnaddressedAuthorComment"]
     );
-    assert_eq!(
-        pr_json["hasUnaddressedAuthorComment"].as_bool(),
-        Some(true)
-    );
+    assert_eq!(pr_json["hasUnaddressedAuthorComment"].as_bool(), Some(true));
 }

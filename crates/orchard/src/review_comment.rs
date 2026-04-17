@@ -135,7 +135,11 @@ mod tests {
     fn last_review_comment_state_agnostic() {
         let reviews = vec![
             review("reviewer1", "APPROVED", Some("2024-02-01T00:00:00Z")),
-            review("reviewer2", "CHANGES_REQUESTED", Some("2024-02-02T00:00:00Z")),
+            review(
+                "reviewer2",
+                "CHANGES_REQUESTED",
+                Some("2024-02-02T00:00:00Z"),
+            ),
             review("reviewer3", "COMMENTED", Some("2024-02-03T00:00:00Z")),
         ];
         let got = last_review_comment(&reviews).unwrap();

@@ -506,14 +506,13 @@ impl From<&PrState> for JsonPr {
         let last = crate::review_comment::last_review_comment(&pr.reviews);
         let last_review_comment_at = last.as_ref().map(|l| l.at.clone());
         let last_review_comment_author = last.as_ref().map(|l| l.author.clone());
-        let has_unaddressed_author_comment =
-            crate::review_comment::has_unaddressed_author_comment(
-                pr.state.as_deref(),
-                pr.author.as_deref(),
-                last_review_comment_at.as_deref(),
-                last_review_comment_author.as_deref(),
-                pr.last_commit_pushed_at.as_deref(),
-            );
+        let has_unaddressed_author_comment = crate::review_comment::has_unaddressed_author_comment(
+            pr.state.as_deref(),
+            pr.author.as_deref(),
+            last_review_comment_at.as_deref(),
+            last_review_comment_author.as_deref(),
+            pr.last_commit_pushed_at.as_deref(),
+        );
         Self {
             number: pr.number,
             branch: pr.branch.clone(),
@@ -2047,8 +2046,7 @@ mod tests {
         let json_pr = JsonPr::from(&pr);
         let value = serde_json::to_value(&json_pr).unwrap();
         assert_eq!(
-            value["lastReviewCommentAt"],
-            "2024-01-03T12:00:00Z",
+            value["lastReviewCommentAt"], "2024-01-03T12:00:00Z",
             "expected max submittedAt"
         );
         assert_eq!(
