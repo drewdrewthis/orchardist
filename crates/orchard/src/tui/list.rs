@@ -1819,8 +1819,7 @@ impl App {
 
             // LABELS cell — unified issue + PR labels, deduped (case-insensitive).
             let pr_labels: &[String] = vt.row.pr.as_ref().map_or(&[], |p| &p.labels);
-            let unified =
-                crate::signal::unified_labels(&vt.row.issue_labels, pr_labels);
+            let unified = crate::signal::unified_labels(&vt.row.issue_labels, pr_labels);
             let unified_refs: Vec<&str> = unified.iter().map(|s| s.as_str()).collect();
             let labels_cell = {
                 let spans = label_badges(&unified_refs, labels_width);
