@@ -496,6 +496,25 @@ impl App {
         }
     }
 
+    /// Returns `true` if `host` is not confirmed reachable and the caller
+    /// should abort. Sets `self.warning` to the appropriate message.
+    fn block_if_host_unreachable(&mut self, host: &str) -> bool {
+        match self.reachability(host) {
+            Reachability::Reachable => false,
+            Reachability::Unreachable => {
+                self.warning = Some((format!("@{} is unreachable", host), Instant::now()));
+                true
+            }
+            Reachability::Unknown => {
+                self.warning = Some((
+                    format!("@{} -- checking connectivity...", host),
+                    Instant::now(),
+                ));
+                true
+            }
+        }
+    }
+
     /// Handles the Enter key action: join or create a tmux session.
     ///
     /// Returns `true` when the TUI should exit (to switch to a session).
@@ -553,23 +572,10 @@ impl App {
                         crate::session::Host::Remote(h) => Some(h.clone()),
                     };
                     drop(tasks);
-                    // Guard: refuse to join a session on a host not confirmed reachable.
-                    if let Some(ref h) = host {
-                        match self.reachability(h) {
-                            Reachability::Reachable => {}
-                            Reachability::Unreachable => {
-                                self.warning =
-                                    Some((format!("@{} is unreachable", h), Instant::now()));
-                                return false;
-                            }
-                            Reachability::Unknown => {
-                                self.warning = Some((
-                                    format!("@{} -- checking connectivity...", h),
-                                    Instant::now(),
-                                ));
-                                return false;
-                            }
-                        }
+                    if let Some(ref h) = host
+                        && self.block_if_host_unreachable(h)
+                    {
+                        return false;
                     }
                     self.join_or_create_session(
                         &session_name,
@@ -634,22 +640,10 @@ impl App {
                 host,
                 pane_target,
             }) => {
-                // Guard: refuse to join a session on a host not confirmed reachable.
-                if let Some(ref h) = host {
-                    match self.reachability(h) {
-                        Reachability::Reachable => {}
-                        Reachability::Unreachable => {
-                            self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
-                            return false;
-                        }
-                        Reachability::Unknown => {
-                            self.warning = Some((
-                                format!("@{} -- checking connectivity...", h),
-                                Instant::now(),
-                            ));
-                            return false;
-                        }
-                    }
+                if let Some(ref h) = host
+                    && self.block_if_host_unreachable(h)
+                {
+                    return false;
                 }
                 self.join_or_create_session(
                     &session_name,
@@ -670,22 +664,10 @@ impl App {
                 branch,
                 host,
             }) => {
-                // Guard: refuse to create a session on a host not confirmed reachable.
-                if let Some(ref h) = host {
-                    match self.reachability(h) {
-                        Reachability::Reachable => {}
-                        Reachability::Unreachable => {
-                            self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
-                            return false;
-                        }
-                        Reachability::Unknown => {
-                            self.warning = Some((
-                                format!("@{} -- checking connectivity...", h),
-                                Instant::now(),
-                            ));
-                            return false;
-                        }
-                    }
+                if let Some(ref h) = host
+                    && self.block_if_host_unreachable(h)
+                {
+                    return false;
                 }
                 let repo_name = self.repo_name.clone();
                 let session_name =
