@@ -492,9 +492,77 @@ impl BoxdForkAdapter {
 
     /// Returns tmux sessions from all live fork VMs.
     ///
-    /// Slice 2 stub — full implementation in slice 3.
+    /// Steps:
+    /// 1. SSH to `golden_host` with `list --json` to enumerate live forks.
+    ///    SSH failure → `Err(FetchFailure)` so callers can preserve the prior
+    ///    cache rather than treating an empty result as authoritative.
+    /// 2. Parse the JSON array. Malformed JSON → `Err(ParseFailure)`.
+    /// 3. For each fork, SSH to `<user>@<fork.host>` and run
+    ///    `tmux list-sessions` with the standard `-F` template.  A single
+    ///    dead fork is skipped (warning logged); one bad VM should not silence
+    ///    sessions from all the others.
+    /// 4. Parse each fork's output via `cache_sources::parse_tmux_output` and
+    ///    tag every resulting `CachedTmuxSession` with `host: Some(fork_host)`
+    ///    so downstream joins can match fork worktrees.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
-        Ok(vec![])
+        // Step 1: enumerate live forks from the golden host.
+        let list_stdout = match self.ssh.exec(&self.golden_host, "list --json") {
+            Ok(output) => output.stdout,
+            Err(e) => {
+                return Err(AdapterError::FetchFailure {
+                    message: e.to_string(),
+                }
+                .into());
+            }
+        };
+
+        // Step 2: parse the fork list.
+        let entries: Vec<BoxdForkEntry> =
+            serde_json::from_str(&list_stdout).map_err(|_| AdapterError::ParseFailure {
+                raw: sanitize_raw_payload(&list_stdout),
+            })?;
+
+        let user_prefix = ssh_user_prefix(&self.golden_host);
+        const TMUX_LIST_CMD: &str = "tmux list-sessions -F '#{session_name}:#{session_path}|#{session_created}|#{session_activity}'";
+
+        let mut all_sessions: Vec<CachedTmuxSession> = Vec::new();
+
+        // Step 3-4: per-fork session collection.
+        for entry in entries {
+            if !is_safe_ssh_host(&entry.host) {
+                continue;
+            }
+            let fork_host = format!("{user_prefix}@{}", entry.host);
+
+            let stdout = match self.ssh.exec(&fork_host, TMUX_LIST_CMD) {
+                Ok(output) => output.stdout,
+                Err(e) => {
+                    crate::logger::LOG.warn(&format!(
+                        "list_sessions: skipping fork {fork_host}: {e}"
+                    ));
+                    continue;
+                }
+            };
+
+            let mut sessions = crate::cache_sources::parse_tmux_output(
+                &stdout,
+                Some(&fork_host),
+                |_| String::new(),
+                |_| vec![],
+            );
+
+            // parse_tmux_output sets host from the `host` argument, but
+            // ensure every entry carries the fork host for downstream joins.
+            for s in &mut sessions {
+                if s.host.is_none() {
+                    s.host = Some(fork_host.clone());
+                }
+            }
+
+            all_sessions.extend(sessions);
+        }
+
+        Ok(all_sessions)
     }
 
     /// Probes whether the golden Boxd host is reachable.
