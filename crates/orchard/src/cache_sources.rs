@@ -5,6 +5,7 @@
 //! cache files consumed by `sources::*` and `derive`.
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cache::{
     self, CachedIssue, CachedPr, CachedRepoMeta, CachedReview, CachedSubIssue, CachedTmuxSession,
@@ -21,6 +22,34 @@ use crate::remote;
 // ---------------------------------------------------------------------------
 // Parse helpers
 // ---------------------------------------------------------------------------
+
+/// Counts review threads that are both unresolved and still actionable.
+///
+/// A thread is counted iff `isResolved != true AND isOutdated != true`.
+/// Missing `isOutdated` is treated as "not outdated" — see below.
+///
+/// When a thread node lacks `isOutdated`, a warning is logged at most once
+/// per process to distinguish cache replay (old cache shape) from a real
+/// GraphQL schema regression without spamming the log for every PR.
+fn count_actionable_threads(nodes: &serde_json::Value) -> u32 {
+    static WARNED_MISSING_OUTDATED: AtomicBool = AtomicBool::new(false);
+
+    let Some(arr) = nodes.as_array() else {
+        return 0;
+    };
+    arr.iter()
+        .filter(|t| {
+            if t.get("isOutdated").is_none()
+                && !WARNED_MISSING_OUTDATED.swap(true, Ordering::Relaxed)
+            {
+                LOG.warn(
+                    "cache_sources: reviewThread missing isOutdated field — treating as not outdated (cache replay or schema drift)",
+                );
+            }
+            t["isResolved"].as_bool() != Some(true) && t["isOutdated"].as_bool() != Some(true)
+        })
+        .count() as u32
+}
 
 /// Parses raw JSON output from `gh issue list --json number,title,state,labels`
 /// into a `Vec<CachedIssue>`.
@@ -286,14 +315,7 @@ pub fn parse_prs_graphql(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
 
             let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
 
-            let unresolved_threads = v["reviewThreads"]["nodes"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter(|t| t["isResolved"].as_bool() != Some(true))
-                        .count() as u32
-                })
-                .unwrap_or(0);
+            let unresolved_threads = count_actionable_threads(&v["reviewThreads"]["nodes"]);
 
             // Use GitHub's closingIssuesReferences (first linked issue).
             let first_linked = v["closingIssuesReferences"]["nodes"]
@@ -814,6 +836,7 @@ pub fn pr_graphql_query(owner: &str, name: &str) -> String {
         reviewThreads(first: 100) {{
           nodes {{
             isResolved
+            isOutdated
           }}
         }}
         closingIssuesReferences(first: 5) {{
@@ -919,8 +942,8 @@ fragment PrFields on PullRequest {{
   mergeable
   labels(first: 100) {{ nodes {{ name }} }}
   reviewRequests(first: 20) {{ nodes {{ requestedReviewer {{ ... on User {{ login }} ... on Team {{ name }} }} }} }}
-  reviews(first: 20) {{ nodes {{ author {{ login }} state submittedAt }} }}
-  reviewThreads(first: 100) {{ nodes {{ isResolved }} }}
+  reviews(last: 20) {{ nodes {{ author {{ login }} state submittedAt }} }}
+  reviewThreads(first: 100) {{ nodes {{ isResolved isOutdated }} }}
   closingIssuesReferences(first: 5) {{ nodes {{ number state stateReason }} }}
   additions
   deletions
@@ -1058,14 +1081,7 @@ pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<Ca
 
         let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
 
-        let unresolved_threads = v["reviewThreads"]["nodes"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter(|t| t["isResolved"].as_bool() != Some(true))
-                    .count() as u32
-            })
-            .unwrap_or(0);
+        let unresolved_threads = count_actionable_threads(&v["reviewThreads"]["nodes"]);
 
         let first_linked = v["closingIssuesReferences"]["nodes"]
             .as_array()
@@ -3355,5 +3371,155 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         assert_eq!(session.window_layouts, vec![layout]);
         assert_eq!(session.pane_paths, vec!["/home/user/repo"]);
         assert_eq!(session.pane_active, vec!["1"]);
+    }
+
+    // -- unresolved_threads isOutdated filtering (Issue #252) -----------------
+
+    /// Builds a per-branch GraphQL response envelope with the given thread nodes.
+    fn per_branch_prs_with_threads(threads: serde_json::Value) -> String {
+        serde_json::to_string(&json!({
+            "data": {
+                "repository": {
+                    "b_feat_branch": {
+                        "nodes": [{
+                            "number": 1,
+                            "headRefName": "feat/branch",
+                            "baseRefName": "main",
+                            "title": "Test",
+                            "state": "OPEN",
+                            "isDraft": false,
+                            "author": { "login": "dev" },
+                            "reviewDecision": null,
+                            "mergeable": "MERGEABLE",
+                            "labels": { "nodes": [] },
+                            "reviewRequests": { "nodes": [] },
+                            "reviews": { "nodes": [] },
+                            "reviewThreads": { "nodes": threads },
+                            "closingIssuesReferences": { "nodes": [] },
+                            "additions": 0,
+                            "deletions": 0,
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "updatedAt": "2026-01-02T00:00:00Z",
+                            "commits": { "nodes": [{ "commit": { "pushedDate": null, "statusCheckRollup": null } }] }
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn unresolved_threads_counts_only_unresolved_and_not_outdated() {
+        let threads = json!([
+            {"isResolved": false, "isOutdated": false},
+            {"isResolved": false, "isOutdated": false},
+            {"isResolved": true,  "isOutdated": false},
+            {"isResolved": false, "isOutdated": true},
+            {"isResolved": true,  "isOutdated": true},
+        ]);
+
+        // parse_prs_graphql path
+        let json = graphql_prs(json!([{
+            "number": 1,
+            "headRefName": "feat/branch",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": { "nodes": threads.clone() },
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] }
+        }]));
+        let prs = parse_prs_graphql(&json, &empty_matcher());
+        assert_eq!(prs[0].unresolved_threads, 2);
+
+        // parse_prs_graphql_per_branch path
+        let per_branch_json = per_branch_prs_with_threads(threads);
+        let prs_pb = parse_prs_graphql_per_branch(&per_branch_json, &empty_matcher());
+        assert_eq!(prs_pb[0].unresolved_threads, 2);
+    }
+
+    #[test]
+    fn unresolved_threads_zero_when_all_resolved_or_outdated() {
+        let threads = json!([
+            {"isResolved": true,  "isOutdated": false},
+            {"isResolved": false, "isOutdated": true},
+            {"isResolved": true,  "isOutdated": true},
+        ]);
+
+        let json = graphql_prs(json!([{
+            "number": 1,
+            "headRefName": "feat/branch",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": { "nodes": threads.clone() },
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] }
+        }]));
+        let prs = parse_prs_graphql(&json, &empty_matcher());
+        assert_eq!(prs[0].unresolved_threads, 0);
+
+        let per_branch_json = per_branch_prs_with_threads(threads);
+        let prs_pb = parse_prs_graphql_per_branch(&per_branch_json, &empty_matcher());
+        assert_eq!(prs_pb[0].unresolved_threads, 0);
+    }
+
+    #[test]
+    fn parser_counts_thread_missing_is_outdated_as_unresolved() {
+        // Thread with only isResolved (no isOutdated key) — must be treated as not outdated.
+        let threads = json!([{"isResolved": false}]);
+
+        let json = graphql_prs(json!([{
+            "number": 1,
+            "headRefName": "feat/branch",
+            "state": "OPEN",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "reviewThreads": { "nodes": threads.clone() },
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] }
+        }]));
+        let prs = parse_prs_graphql(&json, &empty_matcher());
+        assert_eq!(prs[0].unresolved_threads, 1);
+
+        let per_branch_json = per_branch_prs_with_threads(threads);
+        let prs_pb = parse_prs_graphql_per_branch(&per_branch_json, &empty_matcher());
+        assert_eq!(prs_pb[0].unresolved_threads, 1);
+    }
+
+    #[test]
+    fn pr_graphql_query_includes_is_outdated_in_review_threads() {
+        let q = pr_graphql_query("owner", "repo");
+        // Strip all whitespace to be robust against formatting changes.
+        let compact: String = q.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            compact.contains("reviewThreads(first:100){nodes{isResolvedisOutdated}}"),
+            "expected reviewThreads to select isResolved and isOutdated, got: {q}"
+        );
+    }
+
+    #[test]
+    fn pr_graphql_query_per_branch_includes_is_outdated() {
+        let q = pr_graphql_query_per_branch("owner", "repo", &["branch-1".to_string()]);
+        let compact: String = q.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            compact.contains("isOutdated"),
+            "expected PrFields fragment to select isOutdated, got: {q}"
+        );
+        assert!(
+            compact.contains("isResolved"),
+            "expected PrFields fragment to select isResolved, got: {q}"
+        );
+    }
+
+    #[test]
+    fn pr_graphql_query_per_branch_uses_last_20_reviews() {
+        let q = pr_graphql_query_per_branch("owner", "repo", &["branch-1".to_string()]);
+        let compact: String = q.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            compact.contains("reviews(last:20)"),
+            "expected reviews to use last:20, got: {q}"
+        );
     }
 }

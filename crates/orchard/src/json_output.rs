@@ -209,6 +209,15 @@ pub struct JsonPr {
     pub has_conflicts: bool,
     /// Number of unresolved review threads on the PR.
     pub unresolved_threads: u32,
+    /// Number of unresolved review threads (isResolved=false AND isOutdated=false).
+    /// Forward-compatibility alias for `unresolved_threads`.
+    pub unresolved_review_threads: u32,
+    /// ISO 8601 timestamp of the most recent top-level review, or null.
+    pub last_review_comment_at: Option<String>,
+    /// GitHub login of the author of the most recent top-level review, or null.
+    pub last_review_comment_author: Option<String>,
+    /// True iff a non-author review is more recent than the last author push on an open PR.
+    pub has_unaddressed_author_comment: bool,
     /// All GitHub labels on this PR, in the order returned by the API.
     pub labels: Vec<String>,
     /// Lines added by this PR.
@@ -494,6 +503,16 @@ impl From<&PrState> for JsonPr {
     /// `ci_code_state` only — so a code-green gate-blocked PR correctly serializes
     /// as `checksState: "passing"` without any coercion here.
     fn from(pr: &PrState) -> Self {
+        let last = crate::review_comment::last_review_comment(&pr.reviews);
+        let last_review_comment_at = last.as_ref().map(|l| l.at.clone());
+        let last_review_comment_author = last.as_ref().map(|l| l.author.clone());
+        let has_unaddressed_author_comment = crate::review_comment::has_unaddressed_author_comment(
+            pr.state.as_deref(),
+            pr.author.as_deref(),
+            last_review_comment_at.as_deref(),
+            last_review_comment_author.as_deref(),
+            pr.last_commit_pushed_at.as_deref(),
+        );
         Self {
             number: pr.number,
             branch: pr.branch.clone(),
@@ -518,6 +537,14 @@ impl From<&PrState> for JsonPr {
             ci_checks: pr.ci_checks.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            // `unresolvedReviewThreads` is the forward name (matches issue #252).
+            // `unresolvedThreads` is retained as an alias until in-repo script
+            // consumers migrate. Both fields MUST stay equal — see the
+            // `json_pr_retains_legacy_unresolved_threads_alias` test.
+            unresolved_review_threads: pr.unresolved_threads,
+            last_review_comment_at,
+            last_review_comment_author,
+            has_unaddressed_author_comment,
             labels: pr.labels.clone(),
             additions: pr.additions,
             deletions: pr.deletions,
@@ -1912,5 +1939,123 @@ mod tests {
         wt.last_commit_at = Some(ts.to_string());
         let jw = JsonWorktree::from(&wt);
         assert_eq!(jw.last_activity_at.as_deref(), Some(ts));
+    }
+
+    // -----------------------------------------------------------------------
+    // review_comment field tests
+    // -----------------------------------------------------------------------
+
+    /// Builds a minimal PrState with no reviews for testing new review-comment fields.
+    #[allow(deprecated)]
+    fn make_pr_with_reviews(
+        author: Option<&str>,
+        state: Option<&str>,
+        reviews: Vec<crate::cache::CachedReview>,
+        last_commit_pushed_at: Option<&str>,
+    ) -> PrState {
+        use crate::ci_state::CiChecks;
+        PrState {
+            number: 1,
+            branch: "feat/test".to_string(),
+            state: state.map(|s| s.to_string()),
+            title: None,
+            is_draft: None,
+            author: author.map(|s| s.to_string()),
+            requested_reviewers: vec![],
+            reviews,
+            review_decision: None,
+            checks_state: None,
+            ci_code_state: None,
+            ci_gate_state: None,
+            ci_checks: CiChecks::default(),
+            has_conflicts: false,
+            unresolved_threads: 0,
+            labels: vec![],
+            additions: None,
+            deletions: None,
+            created_at: None,
+            updated_at: None,
+            last_commit_pushed_at: last_commit_pushed_at.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn json_pr_emits_all_four_new_fields_even_when_reviews_empty() {
+        let pr = make_pr_with_reviews(Some("alice"), Some("OPEN"), vec![], None);
+        let json_pr = JsonPr::from(&pr);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert!(
+            value.get("unresolvedReviewThreads").is_some(),
+            "expected 'unresolvedReviewThreads' key"
+        );
+        assert!(
+            value.get("lastReviewCommentAt").is_some(),
+            "expected 'lastReviewCommentAt' key (should be null)"
+        );
+        assert!(
+            value.get("lastReviewCommentAuthor").is_some(),
+            "expected 'lastReviewCommentAuthor' key (should be null)"
+        );
+        assert!(
+            value.get("hasUnaddressedAuthorComment").is_some(),
+            "expected 'hasUnaddressedAuthorComment' key"
+        );
+        assert_eq!(value["lastReviewCommentAt"], serde_json::Value::Null);
+        assert_eq!(value["lastReviewCommentAuthor"], serde_json::Value::Null);
+        assert_eq!(value["hasUnaddressedAuthorComment"], false);
+    }
+
+    #[test]
+    fn json_pr_retains_legacy_unresolved_threads_alias() {
+        let mut pr = make_pr_with_reviews(None, Some("OPEN"), vec![], None);
+        pr.unresolved_threads = 3;
+        let json_pr = JsonPr::from(&pr);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert!(
+            value.get("unresolvedThreads").is_some(),
+            "expected legacy 'unresolvedThreads' key"
+        );
+        assert!(
+            value.get("unresolvedReviewThreads").is_some(),
+            "expected 'unresolvedReviewThreads' key"
+        );
+        assert_eq!(value["unresolvedThreads"], 3);
+        assert_eq!(value["unresolvedReviewThreads"], 3);
+    }
+
+    #[test]
+    fn json_pr_populates_last_review_comment_fields_from_reviews() {
+        let reviews = vec![
+            crate::cache::CachedReview {
+                author: "charlie".to_string(),
+                state: "COMMENTED".to_string(),
+                submitted_at: Some("2024-01-01T08:00:00Z".to_string()),
+            },
+            crate::cache::CachedReview {
+                author: "bob".to_string(),
+                state: "CHANGES_REQUESTED".to_string(),
+                submitted_at: Some("2024-01-03T12:00:00Z".to_string()),
+            },
+        ];
+        let pr = make_pr_with_reviews(
+            Some("alice"),
+            Some("OPEN"),
+            reviews,
+            Some("2024-01-02T00:00:00Z"),
+        );
+        let json_pr = JsonPr::from(&pr);
+        let value = serde_json::to_value(&json_pr).unwrap();
+        assert_eq!(
+            value["lastReviewCommentAt"], "2024-01-03T12:00:00Z",
+            "expected max submittedAt"
+        );
+        assert_eq!(
+            value["lastReviewCommentAuthor"], "bob",
+            "expected author of max review"
+        );
+        assert_eq!(
+            value["hasUnaddressedAuthorComment"], true,
+            "bob's review is after last push"
+        );
     }
 }

@@ -34,6 +34,7 @@ pub mod priority;
 pub mod remote;
 pub mod remote_adapter;
 pub mod restore;
+pub mod review_comment;
 pub mod session;
 pub mod setup_remote;
 pub mod shell;
