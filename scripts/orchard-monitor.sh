@@ -81,14 +81,16 @@ for issue in set(list(rm_by_issue.keys()) + list(add_by_issue.keys())):
         for k in set(list(old_parts.keys()) + list(new_parts.keys())) - CONTEXT_KEYS:
             if old_parts.get(k) != new_parts.get(k):
                 diffs.append(f'{k}:{old_parts.get(k,\"?\")}→{new_parts.get(k,\"?\")}')
-        ctx = [f'{k}={new_parts.get(k,\"?\")}' for k in ('draft','phase') if k in new_parts]
-        if diffs or any(old_parts.get(k) != new_parts.get(k) for k in CONTEXT_KEYS):
+        ctx = [f'{k}={new_parts.get(k,\"?\")}' for k in sorted(CONTEXT_KEYS) if k in new_parts]
+        ctx_changed = any(old_parts.get(k) != new_parts.get(k) for k in CONTEXT_KEYS)
+        if diffs or ctx_changed:
             parts = diffs + ctx
             changes.append(f'{issue} {\" \".join(parts)}')
-            # AC3: flag PRs that are ready (ci passing, no threads) but still draft
+            # Shared predicate (also in watchlist block): ready-but-DRAFT = ci passing + 0 threads + draft
             if (new_parts.get('ci') == 'passing' and new_parts.get('threads') == '0'
                     and new_parts.get('draft') == 'true'):
-                actions.append(f'[action] {issue}: ready but still DRAFT')
+                phase = new_parts.get('phase', 'none')
+                actions.append(f'[action] {issue}: ready but still DRAFT (phase={phase})')
     elif new:
         changes.append(f'{issue} NEW')
     elif old:
@@ -107,17 +109,27 @@ if out:
         WATCHED_NUMS=$(grep -v '^#' "$WATCH_FILE" | tr '\n' '|' | sed 's/|$//')
         if [ -n "$WATCHED_NUMS" ]; then
           MSG=$(echo "$MSG" | python3 -c "
-import sys, re
-line = sys.stdin.read().strip()
+import sys
+lines = sys.stdin.read().split('\n')
 watched = set(['#$w' for w in '''$WATCHED_NUMS'''.split('|')])
-# Parse changes from the message
 prefix = '[orchard-monitor] '
-if line.startswith(prefix):
-    body = line[len(prefix):]
-    parts = [p.strip() for p in body.split(';')]
-    filtered = [p for p in parts if any(p.startswith(w) for w in watched)]
-    if filtered:
-        print(prefix + '; '.join(filtered))
+out = []
+for line in lines:
+    line = line.strip()
+    if not line:
+        continue
+    if line.startswith(prefix):
+        # Filter change segments to watched issues
+        body = line[len(prefix):]
+        parts = [p.strip() for p in body.split(';')]
+        filtered = [p for p in parts if any(p.startswith(w) for w in watched)]
+        if filtered:
+            out.append(prefix + '; '.join(filtered))
+    else:
+        # [action] lines and any other non-prefixed lines pass through unfiltered
+        out.append(line)
+if out:
+    print('\n'.join(out))
 " 2>/dev/null)
         fi
       fi
@@ -237,6 +249,7 @@ for issue_num in watched:
     ci = parts.get('ci', '')
     threads = parts.get('threads', '0')
     draft = parts.get('draft', 'false')
+    phase = parts.get('phase', 'none')
     sessions = state.split('|')[1] if '|' in state else ''
 
     # Calculate how long in current state
@@ -254,8 +267,9 @@ for issue_num in watched:
     elif 'idle' in sessions or 'input' in sessions:
         problems.append('session idle/waiting')
 
+    # Shared predicate (also in transition block): ready-but-DRAFT = ci passing + 0 threads + draft
     if ci == 'passing' and threads == '0' and draft == 'true':
-        alerts.append(f'[action] {key}: ready but still DRAFT ({dur})')
+        alerts.append(f'[action] {key}: ready but still DRAFT (phase={phase}, {dur})')
     elif not problems and ci == 'passing' and threads == '0':
         alerts.append(f'{key}: GREEN \u2713')
     elif problems:
