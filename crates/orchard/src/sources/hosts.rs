@@ -17,11 +17,13 @@ use std::time::Duration;
 
 /// Hard wall-clock deadline for a single host reachability probe.
 ///
-/// `ssh -o ConnectTimeout=5` alone is unreliable: a silently-dropping VM or a
-/// hung remote sshd can let the probe run well past the intended budget.
-/// Wrapping the probe in [`crate::remote::ssh_exec_with_timeout`] forces a
-/// kill after this deadline regardless of SSH's internal state.
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Tighter than SSH's own `ConnectTimeout=5` so that `orchard --json`
+/// can complete in under 5s even when every configured host is dead
+/// (see #246 ACs #4/#5). A silently-dropping VM or hung remote sshd
+/// can otherwise let the probe run well past the intended budget;
+/// wrapping the probe in [`crate::remote::ssh_exec_with_timeout`]
+/// forces a kill after this deadline regardless of SSH's internal state.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Returns every `RemoteConfig` configured across all repos in `config`.
 ///
