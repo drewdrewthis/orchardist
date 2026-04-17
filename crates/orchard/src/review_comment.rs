@@ -4,22 +4,41 @@
 //! These fields are computed at serialization time (not cached) from
 //! `reviews: Vec<CachedReview>`, `pr.author`, `pr.state`, and
 //! `pr.last_commit_pushed_at`.
+//!
+//! Timestamp comparisons use lexicographic ordering on the raw strings.
+//! This is correct because GitHub's GraphQL `DateTime` scalar always
+//! returns ISO 8601 UTC-`Z` form (e.g. `"2026-04-13T21:11:53Z"`), which
+//! is lexicographically sortable. If the source format ever diverges
+//! (non-UTC offsets, `+00:00`), switch to `chrono` parsing.
 
 use crate::cache::CachedReview;
 
-/// Returns `(submittedAt, author)` of the most recent review by
-/// `submittedAt`. Reviews with a null `submitted_at` are ignored.
-/// State-agnostic: APPROVED, CHANGES_REQUESTED, and COMMENTED all count.
-pub fn last_review_comment(reviews: &[CachedReview]) -> (Option<String>, Option<String>) {
-    let best = reviews
+/// Most recent top-level review on a PR.
+///
+/// `at` and `author` are always populated together: `last_review_comment`
+/// returns `Some(LastReviewComment)` only when a review with a known
+/// `submitted_at` exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastReviewComment {
+    /// ISO 8601 UTC timestamp (`submittedAt` from GitHub).
+    pub at: String,
+    /// GitHub login of the reviewer.
+    pub author: String,
+}
+
+/// Returns the most recent review by `submitted_at`, or `None` if no
+/// review has a known timestamp. Reviews with a null `submitted_at`
+/// are ignored. State-agnostic: APPROVED, CHANGES_REQUESTED, and
+/// COMMENTED all count.
+pub fn last_review_comment(reviews: &[CachedReview]) -> Option<LastReviewComment> {
+    reviews
         .iter()
         .filter(|r| r.submitted_at.is_some())
-        .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
-
-    match best {
-        Some(r) => (r.submitted_at.clone(), Some(r.author.clone())),
-        None => (None, None),
-    }
+        .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
+        .map(|r| LastReviewComment {
+            at: r.submitted_at.clone().expect("filtered Some above"),
+            author: r.author.clone(),
+        })
 }
 
 /// Returns true iff the PR has an unaddressed author comment:
@@ -91,16 +110,14 @@ mod tests {
             review("bob", "CHANGES_REQUESTED", Some("2024-01-03T12:00:00Z")),
             review("charlie", "COMMENTED", Some("2024-01-02T08:00:00Z")),
         ];
-        let (ts, author) = last_review_comment(&reviews);
-        assert_eq!(ts.as_deref(), Some("2024-01-03T12:00:00Z"));
-        assert_eq!(author.as_deref(), Some("bob"));
+        let got = last_review_comment(&reviews).unwrap();
+        assert_eq!(got.at, "2024-01-03T12:00:00Z");
+        assert_eq!(got.author, "bob");
     }
 
     #[test]
     fn last_review_comment_is_none_when_reviews_empty() {
-        let (ts, author) = last_review_comment(&[]);
-        assert_eq!(ts, None);
-        assert_eq!(author, None);
+        assert_eq!(last_review_comment(&[]), None);
     }
 
     #[test]
@@ -109,22 +126,21 @@ mod tests {
             review("alice", "APPROVED", None),
             review("bob", "COMMENTED", Some("2024-01-01T09:00:00Z")),
         ];
-        let (ts, author) = last_review_comment(&reviews);
-        assert_eq!(ts.as_deref(), Some("2024-01-01T09:00:00Z"));
-        assert_eq!(author.as_deref(), Some("bob"));
+        let got = last_review_comment(&reviews).unwrap();
+        assert_eq!(got.at, "2024-01-01T09:00:00Z");
+        assert_eq!(got.author, "bob");
     }
 
     #[test]
     fn last_review_comment_state_agnostic() {
-        // All three review states should be considered
         let reviews = vec![
             review("reviewer1", "APPROVED", Some("2024-02-01T00:00:00Z")),
             review("reviewer2", "CHANGES_REQUESTED", Some("2024-02-02T00:00:00Z")),
             review("reviewer3", "COMMENTED", Some("2024-02-03T00:00:00Z")),
         ];
-        let (ts, author) = last_review_comment(&reviews);
-        assert_eq!(ts.as_deref(), Some("2024-02-03T00:00:00Z"));
-        assert_eq!(author.as_deref(), Some("reviewer3"));
+        let got = last_review_comment(&reviews).unwrap();
+        assert_eq!(got.at, "2024-02-03T00:00:00Z");
+        assert_eq!(got.author, "reviewer3");
     }
 
     #[test]

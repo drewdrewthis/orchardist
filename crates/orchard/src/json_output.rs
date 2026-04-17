@@ -503,8 +503,9 @@ impl From<&PrState> for JsonPr {
     /// `ci_code_state` only — so a code-green gate-blocked PR correctly serializes
     /// as `checksState: "passing"` without any coercion here.
     fn from(pr: &PrState) -> Self {
-        let (last_review_comment_at, last_review_comment_author) =
-            crate::review_comment::last_review_comment(&pr.reviews);
+        let last = crate::review_comment::last_review_comment(&pr.reviews);
+        let last_review_comment_at = last.as_ref().map(|l| l.at.clone());
+        let last_review_comment_author = last.as_ref().map(|l| l.author.clone());
         let has_unaddressed_author_comment =
             crate::review_comment::has_unaddressed_author_comment(
                 pr.state.as_deref(),
@@ -537,6 +538,10 @@ impl From<&PrState> for JsonPr {
             ci_checks: pr.ci_checks.clone(),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
+            // `unresolvedReviewThreads` is the forward name (matches issue #252).
+            // `unresolvedThreads` is retained as an alias until in-repo script
+            // consumers migrate. Both fields MUST stay equal — see the
+            // `json_pr_retains_legacy_unresolved_threads_alias` test.
             unresolved_review_threads: pr.unresolved_threads,
             last_review_comment_at,
             last_review_comment_author,
