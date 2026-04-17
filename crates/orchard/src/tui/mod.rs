@@ -2735,6 +2735,56 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_remote_row_with_missing_host_entry_does_not_silently_block() {
+        // Regression for #280: when OrchardState.hosts lacks an entry for the
+        // worktree's host (not-yet-probed, skipped, or timed out), Enter must
+        // not silently block with "checking connectivity...". A missing entry
+        // is "unknown", not "blocked" — the action should be attempted and any
+        // failure surfaced, or an actionable hint shown.
+        let row = WorktreeRow {
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Remote("gpu1".to_string()),
+                    name: "sess".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+                started_at: None,
+                last_activity_at: None,
+            }],
+            ..make_task_row(1, DisplayGroup::ClaudeWorking)
+        };
+        let mut app = App::new_test(vec![row]);
+        // Intentionally do NOT insert "gpu1" into host_reachable.
+        assert!(!app.host_reachable.contains_key("gpu1"));
+
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let msg = app.handle_event(key);
+        app.update(msg.unwrap());
+
+        // Positive assertion: the action must have been attempted. In the
+        // test environment the SSH call to "gpu1" will fail, so
+        // join_or_create_session surfaces a "remote session error: …"
+        // warning. Either that error is present, or switch_target was set
+        // (action succeeded against something mocked). What must NOT happen:
+        // a silent bail-out that leaves both fields untouched.
+        let warning = app.warning.as_ref().map(|(s, _)| s.as_str());
+        let attempted =
+            app.switch_target.is_some() || warning.is_some_and(|w| w.contains("remote session"));
+        assert!(
+            attempted,
+            "Enter on not-yet-probed host must attempt the action; warning={warning:?}, switch_target={:?}",
+            app.switch_target
+        );
+        assert!(
+            warning != Some("@gpu1 -- checking connectivity..."),
+            "missing host entry must not surface the 'checking connectivity...' block; got {warning:?}"
+        );
+    }
+
+    #[test]
     fn reconnect_unreachable_hosts_all_reachable_sets_warning() {
         let mut app = App::new_test(vec![]);
         app.host_reachable.insert("gpu1".to_string(), true);
