@@ -22,7 +22,7 @@ fn pr_payload(action: &str, merged: bool, pr_number: u64, repo: &str, actor: &st
 
 fn assert_event(result: NormalizeResult) -> NormalizedEvent {
     match result {
-        NormalizeResult::Event(e) => e,
+        NormalizeResult::Event(e) => *e,
         NormalizeResult::Unsupported => panic!("expected Event, got Unsupported"),
         NormalizeResult::Unknown => panic!("expected Event, got Unknown"),
     }
