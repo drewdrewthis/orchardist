@@ -346,13 +346,9 @@ impl From<&crate::derive::PrInfo> for PrState {
     }
 }
 
-impl From<&EnrichedSession> for SessionState {
-    fn from(s: &EnrichedSession) -> Self {
-        let host = match &s.tmux.host {
-            Host::Local => None,
-            Host::Remote(h) => Some(h.clone()),
-        };
-        let claude = s.claude.as_ref().map(|c| ClaudeEnrichment {
+impl From<&crate::session::ClaudeSessionInfo> for ClaudeEnrichment {
+    fn from(c: &crate::session::ClaudeSessionInfo) -> Self {
+        Self {
             status: c.status,
             model: c.model.clone(),
             last_tool: c.last_tool.clone(),
@@ -369,7 +365,17 @@ impl From<&EnrichedSession> for SessionState {
             stop_reason: c.stop_reason.clone(),
             turn_count: c.turn_count,
             state_changed_at: c.state_changed_at,
-        });
+        }
+    }
+}
+
+impl From<&EnrichedSession> for SessionState {
+    fn from(s: &EnrichedSession) -> Self {
+        let host = match &s.tmux.host {
+            Host::Local => None,
+            Host::Remote(h) => Some(h.clone()),
+        };
+        let claude = s.claude.as_ref().map(ClaudeEnrichment::from);
         let windows = s
             .windows
             .iter()

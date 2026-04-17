@@ -1466,24 +1466,7 @@ impl App {
                 .claude
                 .as_ref()
                 .map(|c| {
-                    let ce = crate::orchard_state::ClaudeEnrichment {
-                        status: c.status,
-                        model: c.model.clone(),
-                        last_tool: c.last_tool.clone(),
-                        current_task: c.current_task.clone(),
-                        session_start_ts: c.session_start_ts,
-                        input_tokens: c.input_tokens,
-                        output_tokens: c.output_tokens,
-                        cache_creation_input_tokens: c.cache_creation_input_tokens,
-                        cache_read_input_tokens: c.cache_read_input_tokens,
-                        context_window_pct: c.context_window_pct,
-                        cost_usd: c.cost_usd,
-                        total_duration_ms: c.total_duration_ms,
-                        rate_limits: c.rate_limits.clone(),
-                        stop_reason: c.stop_reason.clone(),
-                        turn_count: c.turn_count,
-                        state_changed_at: c.state_changed_at,
-                    };
+                    let ce = crate::orchard_state::ClaudeEnrichment::from(c);
                     crate::signal::activity_from_claude(&ce)
                 })
                 .unwrap_or(crate::signal::Activity::None);
@@ -1791,25 +1774,8 @@ impl App {
             let since_cell = Cell::from(since_str).style(Style::default().fg(theme.dimmed));
 
             // LABELS cell — unified issue + PR labels, deduped (case-insensitive).
-            // Inline the merge so we don't allocate wrapper structs just to
-            // satisfy the signal::unified_labels signature.
-            let unified: Vec<String> = {
-                let mut out: Vec<String> = Vec::new();
-                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-                for l in &vt.row.issue_labels {
-                    if seen.insert(l.to_ascii_lowercase()) {
-                        out.push(l.clone());
-                    }
-                }
-                if let Some(pr) = vt.row.pr.as_ref() {
-                    for l in &pr.labels {
-                        if seen.insert(l.to_ascii_lowercase()) {
-                            out.push(l.clone());
-                        }
-                    }
-                }
-                out
-            };
+            let pr_labels: &[String] = vt.row.pr.as_ref().map_or(&[], |p| &p.labels);
+            let unified = crate::signal::unified_labels(&vt.row.issue_labels, pr_labels);
             let unified_refs: Vec<&str> = unified.iter().map(|s| s.as_str()).collect();
             let labels_cell = {
                 let spans = label_badges(&unified_refs, labels_width);
@@ -1879,24 +1845,7 @@ impl App {
                         .claude
                         .as_ref()
                         .map(|c| {
-                            let ce = crate::orchard_state::ClaudeEnrichment {
-                                status: c.status,
-                                model: c.model.clone(),
-                                last_tool: c.last_tool.clone(),
-                                current_task: c.current_task.clone(),
-                                session_start_ts: c.session_start_ts,
-                                input_tokens: c.input_tokens,
-                                output_tokens: c.output_tokens,
-                                cache_creation_input_tokens: c.cache_creation_input_tokens,
-                                cache_read_input_tokens: c.cache_read_input_tokens,
-                                context_window_pct: c.context_window_pct,
-                                cost_usd: c.cost_usd,
-                                total_duration_ms: c.total_duration_ms,
-                                rate_limits: c.rate_limits.clone(),
-                                stop_reason: c.stop_reason.clone(),
-                                turn_count: c.turn_count,
-                                state_changed_at: c.state_changed_at,
-                            };
+                            let ce = crate::orchard_state::ClaudeEnrichment::from(c);
                             crate::signal::activity_from_claude(&ce)
                         })
                         .unwrap_or(crate::signal::Activity::None);

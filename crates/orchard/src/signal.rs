@@ -463,24 +463,7 @@ pub fn rollup_activity_row(row: &WorktreeRow) -> Activity {
         .filter_map(|s| s.claude.as_ref())
         .map(|c| {
             // Bridge from session::ClaudeSessionInfo through the enrichment shape.
-            let ce = ClaudeEnrichment {
-                status: c.status,
-                model: c.model.clone(),
-                last_tool: c.last_tool.clone(),
-                current_task: c.current_task.clone(),
-                session_start_ts: c.session_start_ts,
-                input_tokens: c.input_tokens,
-                output_tokens: c.output_tokens,
-                cache_creation_input_tokens: c.cache_creation_input_tokens,
-                cache_read_input_tokens: c.cache_read_input_tokens,
-                context_window_pct: c.context_window_pct,
-                cost_usd: c.cost_usd,
-                total_duration_ms: c.total_duration_ms,
-                rate_limits: c.rate_limits.clone(),
-                stop_reason: c.stop_reason.clone(),
-                turn_count: c.turn_count,
-                state_changed_at: c.state_changed_at,
-            };
+            let ce = ClaudeEnrichment::from(c);
             activity_from_claude(&ce)
         })
         .max()
@@ -517,11 +500,14 @@ pub fn sort_key_row(row: &WorktreeRow) -> RowSortKey<'_> {
 
 /// Merges issue and PR labels into a single deduped vector, preserving first-seen order.
 ///
-/// Issue labels come first, then any PR labels not already present. Comparison is
+/// `issue_labels` come first, then any `pr_labels` not already present. Comparison is
 /// case-insensitive so `Bug` and `bug` dedupe to one. The workflow-phase labels
 /// (handled by `derive::phase_from_labels`) are intentionally *not* filtered out —
 /// they're still worth surfacing as a badge so users can see them at a glance.
-pub fn unified_labels(issue: Option<&IssueInfo>, pr: Option<&PrState>) -> Vec<String> {
+///
+/// Accepts plain slices so call sites can pass the labels they already have
+/// without constructing wrapper `IssueInfo`/`PrState` structs.
+pub fn unified_labels(issue_labels: &[String], pr_labels: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -532,15 +518,11 @@ pub fn unified_labels(issue: Option<&IssueInfo>, pr: Option<&PrState>) -> Vec<St
         }
     };
 
-    if let Some(i) = issue {
-        for l in &i.labels {
-            push(l);
-        }
+    for l in issue_labels {
+        push(l);
     }
-    if let Some(p) = pr {
-        for l in &p.labels {
-            push(l);
-        }
+    for l in pr_labels {
+        push(l);
     }
     out
 }
@@ -1007,20 +989,20 @@ mod tests {
     fn unified_labels_dedupes_case_insensitively() {
         let i = issue(|i| i.labels = vec!["Bug".into(), "priority".into()]);
         let p = pr(|p| p.labels = vec!["bug".into(), "backend".into()]);
-        let out = unified_labels(Some(&i), Some(&p));
+        let out = unified_labels(&i.labels, &p.labels);
         assert_eq!(out, vec!["Bug", "priority", "backend"]);
     }
 
     #[test]
     fn unified_labels_empty_inputs() {
-        assert!(unified_labels(None, None).is_empty());
+        assert!(unified_labels(&[], &[]).is_empty());
     }
 
     #[test]
     fn unified_labels_preserves_order_issue_first() {
         let i = issue(|i| i.labels = vec!["a".into(), "b".into()]);
         let p = pr(|p| p.labels = vec!["c".into(), "a".into()]);
-        let out = unified_labels(Some(&i), Some(&p));
+        let out = unified_labels(&i.labels, &p.labels);
         assert_eq!(out, vec!["a", "b", "c"]);
     }
 
