@@ -26,6 +26,10 @@ pub type RepoCacheEntry = (
 /// Maximum age (in seconds) before a Claude hook state file is considered stale.
 pub(crate) const HOOK_STATE_STALENESS_SECS: u64 = 300;
 
+/// Suffix Claude Code prints during a working turn to show the token counter.
+/// Used both to detect that Claude is active and that it is currently working.
+const CLAUDE_WORKING_MARKER: &str = "tokens)";
+
 /// Derives worktree rows for a single repository from its four source caches.
 ///
 /// Join chain (worktree-first):
@@ -231,12 +235,32 @@ pub(crate) fn enrich_session(
     enrich_session_from_scraping(session, tmux, windows, panes)
 }
 
+/// Detects Claude Code's TUI in captured terminal output lines.
+///
+/// Claude Code's TUI has stable visual markers — detecting them lets us recognize
+/// sessions where pane_current_command reports a subshell (e.g. claude-remote wrapping
+/// claude with a custom SHELL). See issue #238.
+///
+/// Returns true if ANY ONE of these distinctive markers appears in `lines`:
+/// - `"? for shortcuts"` — the footer hint always shown in Claude's TUI
+/// - `"↑"` AND `"tokens)"` on the same line — the working-state spinner (e.g. "↑ 1.9k tokens)")
+/// - A line whose trimmed form starts with `"│ >"` AND ends with `"│"` — Claude's input box prompt
+///   (the trailing `│` excludes REPL prompts like `│ > foo` that are not Claude's bordered box)
+fn has_claude_tui_in_output(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        let trimmed = line.trim();
+        line.contains("? for shortcuts")
+            || (line.contains("\u{2191}") && line.contains(CLAUDE_WORKING_MARKER))
+            || (trimmed.starts_with("\u{2502} >") && trimmed.ends_with('\u{2502}'))
+    })
+}
+
 /// Derives session info by scraping terminal output (fallback when no hook state).
 pub(crate) fn enrich_session_from_scraping(
     session: &CachedTmuxSession,
     tmux: TmuxSessionInfo,
-    windows: Vec<WindowInfo>,
-    panes: Vec<PaneInfo>,
+    mut windows: Vec<WindowInfo>,
+    mut panes: Vec<PaneInfo>,
 ) -> EnrichedSession {
     use crate::claude_state::ClaudeState;
 
@@ -247,7 +271,8 @@ pub(crate) fn enrich_session_from_scraping(
         || session
             .pane_titles
             .iter()
-            .any(|t| t.to_lowercase().contains("claude"));
+            .any(|t| t.to_lowercase().contains("claude"))
+        || has_claude_tui_in_output(&session.last_output_lines);
 
     let last_content: Vec<&str> = session
         .last_output_lines
@@ -260,9 +285,13 @@ pub(crate) fn enrich_session_from_scraping(
 
     // Claude Code shows a spinner + activity text while working, e.g.:
     //   "✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)"
-    // The spinner character animates, so match on the token/time suffix instead.
-    let claude_is_working =
-        has_claude_active && last_content.iter().any(|line| line.contains("tokens)"));
+    // The spinner character animates; match on the arrow+token suffix instead.
+    // Require both "↑" and CLAUDE_WORKING_MARKER on the same line to avoid
+    // false-positives from log output that happens to mention "tokens)".
+    let claude_is_working = has_claude_active
+        && last_content
+            .iter()
+            .any(|line| line.contains("\u{2191}") && line.contains(CLAUDE_WORKING_MARKER));
 
     let claude_needs_input = has_claude_active && !claude_is_working && {
         last_content.iter().any(|line| {
@@ -284,6 +313,21 @@ pub(crate) fn enrich_session_from_scraping(
     } else {
         ClaudeState::None
     };
+
+    // When Claude was detected via TUI output (not pane command/title), none of
+    // the individual panes will have `has_claude=true` yet. Propagate the
+    // session-level signal to the first pane so downstream consumers (JSON API,
+    // TUI pane glyphs) render consistently with the session's `claude` field.
+    if has_claude_active && !panes.iter().any(|p| p.has_claude) {
+        if let Some(first) = panes.first_mut() {
+            first.has_claude = true;
+        }
+        if let Some(first_window) = windows.first_mut()
+            && let Some(first_pane) = first_window.panes.first_mut()
+        {
+            first_pane.has_claude = true;
+        }
+    }
 
     let claude = if claude_state != ClaudeState::None {
         Some(ClaudeSessionInfo {
@@ -1289,6 +1333,40 @@ mod tests {
         assert!(enriched.panes[0].has_claude);
     }
 
+    /// When claude-remote wraps the Claude binary, tmux reports
+    /// `pane_current_command="zsh"` and a shell-prompt title (see issue #238).
+    /// The scraping fallback must detect Claude from `last_output_lines` alone.
+    #[test]
+    fn enrich_session_from_scraping_detects_claude_from_tui_output_when_command_is_subshell() {
+        let sess = CachedTmuxSession {
+            name: "issue238".to_string(),
+            path: "/workspace/repo".to_string(),
+            pane_targets: vec!["0.0".to_string()],
+            pane_titles: vec!["drudrukungfu".to_string()],
+            pane_commands: vec!["zsh".to_string()],
+            window_names: vec![],
+            window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            host: None,
+            created_at: None,
+            last_activity_at: None,
+            last_output_lines: vec![
+                "╭─────────────────────────────────────────────────╮".to_string(),
+                "│ >                                               │".to_string(),
+                "╰─────────────────────────────────────────────────╯".to_string(),
+                "  ? for shortcuts".to_string(),
+            ],
+            claude_state_raw: None,
+        };
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.claude.is_some(),
+            "Claude TUI visible in last_output_lines must be detected even when pane_command is 'zsh'"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // pr_info_from: split CI state propagation (task #24)
     // -----------------------------------------------------------------------
@@ -1347,6 +1425,176 @@ mod tests {
             pr_info.checks_state.as_deref(),
             Some("passing"),
             "legacy checks_state must mirror ci_code_state (not union)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // has_claude_tui_in_output unit tests (issue #238)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_claude_tui_in_output_detects_shortcuts_footer() {
+        let lines = vec![
+            "  ? for shortcuts".to_string(),
+            "some other line".to_string(),
+        ];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "'? for shortcuts' footer must be recognized as a Claude TUI marker"
+        );
+    }
+
+    #[test]
+    fn has_claude_tui_in_output_detects_tokens_indicator() {
+        let lines = vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "working-state 'tokens)' suffix must be recognized as a Claude TUI marker"
+        );
+    }
+
+    #[test]
+    fn has_claude_tui_in_output_detects_prompt_box() {
+        let lines = vec![
+            "╭─────────────────────────────────────────────────╮".to_string(),
+            "│ >                                               │".to_string(),
+            "╰─────────────────────────────────────────────────╯".to_string(),
+        ];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "input box prompt line starting with '│ >' must be recognized as a Claude TUI marker"
+        );
+    }
+
+    #[test]
+    fn has_claude_tui_in_output_returns_false_for_normal_shell() {
+        let lines = vec!["$ ls".to_string(), "foo bar".to_string(), "$ ".to_string()];
+        assert!(
+            !has_claude_tui_in_output(&lines),
+            "plain shell output must not be misidentified as Claude TUI"
+        );
+    }
+
+    #[test]
+    fn enrich_session_from_scraping_still_detects_claude_from_pane_command() {
+        let sess = session("claude-sess", "/workspace/repo", vec!["claude"]);
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.claude.is_some(),
+            "pane_command='claude' must still be detected by the existing path"
+        );
+    }
+
+    #[test]
+    fn enrich_session_from_scraping_working_state_detected_via_output() {
+        use crate::claude_state::ClaudeState;
+
+        let sess = CachedTmuxSession {
+            name: "issue238-working".to_string(),
+            path: "/workspace/repo".to_string(),
+            pane_targets: vec!["0.0".to_string()],
+            pane_titles: vec!["zsh".to_string()],
+            pane_commands: vec!["zsh".to_string()],
+            window_names: vec![],
+            window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            host: None,
+            created_at: None,
+            last_activity_at: None,
+            last_output_lines: vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()],
+            claude_state_raw: None,
+        };
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.claude.is_some(),
+            "working-state output must trigger claude detection"
+        );
+        assert_eq!(
+            enriched.claude.as_ref().unwrap().status,
+            ClaudeState::Working,
+            "session with '↑ ... tokens)' in output must be detected as Working"
+        );
+    }
+
+    /// When Claude is detected via TUI output (pane_commands is a subshell),
+    /// the session-level signal must be propagated to the first pane so the
+    /// JSON API and TUI pane glyphs render consistently.
+    #[test]
+    fn enrich_session_from_scraping_sets_pane_has_claude_when_detected_via_output() {
+        let sess = CachedTmuxSession {
+            name: "issue238-pane-propagate".to_string(),
+            path: "/workspace/repo".to_string(),
+            pane_targets: vec!["0.0".to_string()],
+            pane_titles: vec!["zsh".to_string()],
+            pane_commands: vec!["zsh".to_string()],
+            window_names: vec![],
+            window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            host: None,
+            created_at: None,
+            last_activity_at: None,
+            last_output_lines: vec!["  ? for shortcuts".to_string()],
+            claude_state_raw: None,
+        };
+        let enriched = enrich_session_from_scraping_for_test(&sess);
+        assert!(
+            enriched.panes[0].has_claude,
+            "first pane must carry has_claude=true when Claude detected via TUI output"
+        );
+        assert!(
+            enriched.windows[0].panes[0].has_claude,
+            "first window's first pane must also carry has_claude=true"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // has_claude_tui_in_output false-positive / tightening tests (issue #238)
+    // -----------------------------------------------------------------------
+
+    /// A plain `│ > search query` line (no trailing `│`) must NOT match the
+    /// Claude input-box heuristic — only Claude's bordered box ends with `│`.
+    #[test]
+    fn has_claude_tui_in_output_false_for_fzf_prompt_box() {
+        let lines = vec!["│ > search query".to_string()];
+        assert!(
+            !has_claude_tui_in_output(&lines),
+            "a line starting with '│ >' but without a trailing '│' must not be a Claude marker"
+        );
+    }
+
+    /// Claude's bordered input box ends with a closing `│` on the same line.
+    #[test]
+    fn has_claude_tui_in_output_true_for_claude_prompt_box() {
+        let lines = vec!["│ > help me debug                                │".to_string()];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "a line starting with '│ >' AND ending with '│' must be recognized as Claude's input box"
+        );
+    }
+
+    /// Shell output that mentions "tokens)" without a `↑` arrow must NOT
+    /// trigger Claude detection — the arrow is the Claude-specific signal.
+    #[test]
+    fn has_claude_tui_in_output_false_for_shell_mentioning_tokens() {
+        let lines = vec!["fetched 3 auth tokens)".to_string()];
+        assert!(
+            !has_claude_tui_in_output(&lines),
+            "'tokens)' without an accompanying '↑' arrow must not be a Claude TUI marker"
+        );
+    }
+
+    /// Claude's working spinner always shows `↑ Nk tokens)`. Both `↑` and
+    /// `tokens)` on the same line must be recognized as a Claude TUI marker.
+    #[test]
+    fn has_claude_tui_in_output_true_for_working_spinner() {
+        let lines = vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()];
+        assert!(
+            has_claude_tui_in_output(&lines),
+            "working spinner line with '↑' and 'tokens)' must be recognized as a Claude TUI marker"
         );
     }
 }
