@@ -169,6 +169,14 @@ pub struct App {
     /// `&self`) can update the state via `StatefulWidget::render`.
     preview_scroll_state: std::cell::Cell<tui_scrollview::ScrollViewState>,
 
+    /// Pulse tick sampled at the top of each [`App::render`] call (issue #281).
+    ///
+    /// All animated glyphs in a single frame read this field rather than calling
+    /// [`crate::signal::pulse_tick`] directly — that way a render that straddles
+    /// a second boundary still produces a coherent frame. The run loop writes
+    /// this just before [`App::render`]; tests override it to pin a frame.
+    pulse_tick: Cell<u8>,
+
     /// Expanded rows keyed by worktree path or standalone session name.
     ///
     /// When a key is present, the row's pane sub-rows are rendered below it.
@@ -280,6 +288,7 @@ impl App {
             preview_area: Cell::new(Rect::default()),
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
+            pulse_tick: Cell::new(crate::signal::pulse_tick()),
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
@@ -1844,6 +1853,12 @@ impl App {
     /// to the appropriate render method based on the current [`ViewState`].
     /// The preview scroll state uses `Cell` for interior mutability.
     fn render(&self, f: &mut Frame) {
+        // Pulse tick for this frame is sampled once by the run loop *before*
+        // calling `render` (see `run_loop`) and stored on `self.pulse_tick`.
+        // Every animated-row renderer reads `self.pulse_tick.get()` rather
+        // than re-sampling wall-clock time, guaranteeing frame coherence even
+        // when a render straddles a second boundary. Tests can set the field
+        // directly to force a deterministic frame (issue #281).
         match &self.view {
             ViewState::List => self.render_list(f),
             ViewState::ConfirmDelete(ds) => self.render_delete(ds, f),
@@ -1858,6 +1873,52 @@ impl App {
             }
             ViewState::Help => self.render_help(f),
         }
+    }
+
+    /// Returns `true` when any row has a rollup activity that animates
+    /// (`Activity::Idle` or `Activity::Input`) (issue #281).
+    ///
+    /// The run loop uses this to pick its event-poll cadence: fast (100ms)
+    /// while any animation is on screen, slower otherwise. Called on every
+    /// poll-timeout calculation, so the scan is kept cheap — we short-circuit
+    /// as soon as the first animated row is seen, and we delegate the full
+    /// exhaustion/rollup check to [`crate::signal::activity_from_claude`] only
+    /// when a session's raw status is already in the animated set.
+    pub(crate) fn has_animated_visible_row(&self) -> bool {
+        use crate::signal::Activity;
+
+        // Cheap pre-check for standalone sessions: if the raw ClaudeState is
+        // already not Idle/Input, no need to build the enrichment at all.
+        let standalone_animated = self.standalone_sessions.iter().any(|ss| {
+            ss.session.claude.as_ref().is_some_and(|c| {
+                if !matches!(
+                    c.status,
+                    crate::claude_state::ClaudeState::Idle
+                        | crate::claude_state::ClaudeState::Input
+                ) {
+                    return false;
+                }
+                // Context-window or rate-limit exhaustion could escalate this
+                // to Activity::Exhausted — a static glyph, not animated. Fall
+                // through to the full resolver to respect that escalation.
+                let enrichment = crate::orchard_state::ClaudeEnrichment::from(c);
+                matches!(
+                    crate::signal::activity_from_claude(&enrichment),
+                    Activity::Idle | Activity::Input
+                )
+            })
+        });
+
+        if standalone_animated {
+            return true;
+        }
+
+        self.task_rows.iter().any(|row| {
+            matches!(
+                crate::signal::rollup_activity_row(row),
+                Activity::Idle | Activity::Input
+            )
+        })
     }
 
     // -------------------------------------------------------------------
@@ -2042,6 +2103,7 @@ impl App {
             preview_area: Cell::new(Rect::default()),
             last_click: None,
             preview_scroll_state: std::cell::Cell::new(tui_scrollview::ScrollViewState::default()),
+            pulse_tick: Cell::new(crate::signal::pulse_tick()),
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
@@ -2125,6 +2187,31 @@ pub fn run(command: &str) -> anyhow::Result<Option<String>> {
     result
 }
 
+/// Idle-screen poll timeout (issue #281). Chosen to balance:
+/// - input latency: a keypress blocks for at most this long before reaching
+///   the event loop,
+/// - CPU: render cost is dominated by `has_animated_visible_row` + ratatui's
+///   diff render, so stretching past ~500ms past diminishing returns.
+///
+/// 500ms keeps keystrokes feeling snappy (users struggle to notice <500ms
+/// of delay on a single key) while cutting wasted renders ~5× vs the fast
+/// path. Exposed as `const` so it's obvious at the call site and tunable.
+pub(crate) const IDLE_POLL_TIMEOUT_MS: u64 = 500;
+
+/// Picks the event-poll cadence based on what's visible on screen (issue #281).
+///
+/// When any row animates (Idle/Input pulse) or a full-refresh spinner is
+/// running, we need the fast cadence so the animation appears at ~10Hz and
+/// the 1s pulse boundary is caught within 100ms. Otherwise, the idle cadence
+/// saves CPU on long-running screens with nothing to update.
+pub(crate) fn poll_cadence(animated_visible: bool, refreshing: bool) -> Duration {
+    if animated_visible || refreshing {
+        Duration::from_millis(POLL_TIMEOUT_MS)
+    } else {
+        Duration::from_millis(IDLE_POLL_TIMEOUT_MS)
+    }
+}
+
 fn run_loop(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::fs::File>>,
     app: &mut App,
@@ -2133,10 +2220,18 @@ fn run_loop(
         // Advance throbber animation before drawing so spinner progresses each frame.
         app.throbber_state.calc_next();
 
+        // Sample the pulse tick ONCE per frame (issue #281). All animated row
+        // renderers read `app.pulse_tick.get()` — coherent within the frame
+        // even across second boundaries.
+        app.pulse_tick.set(crate::signal::pulse_tick());
+
         terminal.draw(|f| app.render(f))?;
 
-        // Poll for events with timeout (for spinner animation).
-        if event::poll(Duration::from_millis(POLL_TIMEOUT_MS))? {
+        // Poll cadence adapts to visible animation (issue #281); see
+        // [`poll_cadence`] for the policy and its rationale.
+        let poll_timeout = poll_cadence(app.has_animated_visible_row(), app.refreshing);
+
+        if event::poll(poll_timeout)? {
             let event = event::read()?;
             let msg = match event {
                 Event::Key(key) => app.handle_event(key),
@@ -3075,20 +3170,234 @@ mod tests {
             ..make_worktree_row("feat/waiting", DisplayGroup::NeedsAttention)
         };
         let mut app = App::new_test(vec![row]);
+        // Force tick=0 so we assert deterministic frame content. Without this
+        // the test would flake across the second boundary (both frames are
+        // valid for this row).
+        app.pulse_tick.set(0);
         let output = render_to_string(&mut app, 120, 40);
 
-        // Issue #251: NeedsInput renders as a ❓ glyph in the STATUS column
-        // (parent row's single merge-blocker glyph). Activity column A shows
-        // ⚡ because the agent is "doing something" (waiting on input).
-        let needs_input_glyph = crate::signal::PipelineStatus::NeedsInput.glyph();
+        // Issue #281: the ❓ glyph is gone from the status column. The
+        // "waiting on you" signal is carried by a rotating hourglass driven
+        // off rollup Activity::Input; column A pulses ○/? in red.
         assert!(
-            output.contains(needs_input_glyph),
-            "expected ❓ needs-input glyph in STATUS column, got:\n{output}"
+            !output.contains('\u{2753}'),
+            "❓ glyph must no longer appear after issue #281; got:\n{output}"
+        );
+        // At tick=0, column A shows ○ (open circle) and the status column
+        // shows ⏳ (sand still falling).
+        assert!(
+            output.contains('\u{25CB}'),
+            "expected ○ in column A (tick=0 Input frame); got:\n{output}"
+        );
+        assert!(
+            output.contains('\u{23F3}'),
+            "expected ⏳ hourglass in status column when rollup activity is Input; got:\n{output}"
         );
         assert!(
             output.contains("needs attention"),
             "expected NeedsAttention section header"
         );
+
+        // Swap to tick=1 — column A flips to '?' and the hourglass flips to ⌛.
+        app.pulse_tick.set(1);
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(
+            output.contains('?'),
+            "expected '?' in column A (tick=1 Input frame); got:\n{output}"
+        );
+        assert!(
+            output.contains('\u{231B}'),
+            "expected ⌛ hourglass at tick=1; got:\n{output}"
+        );
+        assert!(
+            !output.contains('\u{2753}'),
+            "❓ must not appear at tick=1 either; got:\n{output}"
+        );
+    }
+
+    // -- issue #281: pulse animation / has_animated_visible_row --------------
+
+    fn make_claude_row(
+        branch: &str,
+        group: DisplayGroup,
+        state: crate::claude_state::ClaudeState,
+    ) -> WorktreeRow {
+        WorktreeRow {
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Local,
+                    name: format!("sess-{}", branch.replace('/', "-")),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: Some(ClaudeSessionInfo {
+                    status: state,
+                    model: None,
+                    last_tool: None,
+                    current_task: None,
+                    session_start_ts: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                    context_window_pct: None,
+                    cost_usd: None,
+                    total_duration_ms: None,
+                    rate_limits: None,
+                    stop_reason: None,
+                    turn_count: None,
+                    state_changed_at: None,
+                }),
+                windows: vec![],
+                panes: vec![],
+                started_at: None,
+                last_activity_at: None,
+            }],
+            ..make_worktree_row(branch, group)
+        }
+    }
+
+    #[test]
+    fn snapshot_differs_between_ticks_when_row_animates() {
+        let mut app = App::new_test(vec![make_claude_row(
+            "feat/idle",
+            DisplayGroup::ClaudeWorking,
+            crate::claude_state::ClaudeState::Idle,
+        )]);
+        app.pulse_tick.set(0);
+        let at_zero = render_to_string(&mut app, 120, 40);
+        app.pulse_tick.set(1);
+        let at_one = render_to_string(&mut app, 120, 40);
+        assert_ne!(
+            at_zero, at_one,
+            "Idle-row snapshot at tick=0 must differ from tick=1"
+        );
+        assert!(at_zero.contains('\u{25CB}'), "tick=0 should contain ○"); // ○
+        assert!(at_one.contains('\u{25CF}'), "tick=1 should contain ●"); // ●
+    }
+
+    #[test]
+    fn snapshot_identical_across_ticks_when_no_row_animates() {
+        // Only Working (static ⚡) and None — nothing should animate.
+        let mut app = App::new_test(vec![
+            make_claude_row(
+                "feat/working",
+                DisplayGroup::ClaudeWorking,
+                crate::claude_state::ClaudeState::Working,
+            ),
+            make_worktree_row("feat/none", DisplayGroup::Other), // no sessions
+        ]);
+        app.pulse_tick.set(0);
+        let at_zero = render_to_string(&mut app, 120, 40);
+        app.pulse_tick.set(1);
+        let at_one = render_to_string(&mut app, 120, 40);
+        assert_eq!(
+            at_zero, at_one,
+            "Snapshot must be identical across ticks when no row animates"
+        );
+    }
+
+    #[test]
+    fn two_renders_with_same_tick_produce_identical_buffers() {
+        // Frame-coherence guard (issue #281): rendering twice with the same
+        // tick must produce identical output — the tick sampled in `render` is
+        // the *only* source of per-frame timing.
+        let mut app = App::new_test(vec![
+            make_claude_row(
+                "feat/idle",
+                DisplayGroup::ClaudeWorking,
+                crate::claude_state::ClaudeState::Idle,
+            ),
+            make_claude_row(
+                "feat/input",
+                DisplayGroup::NeedsAttention,
+                crate::claude_state::ClaudeState::Input,
+            ),
+        ]);
+        app.pulse_tick.set(0);
+        let a = render_to_string(&mut app, 120, 40);
+        let b = render_to_string(&mut app, 120, 40);
+        assert_eq!(
+            a, b,
+            "two renders with the same tick must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn has_animated_visible_row_true_when_idle_row_visible() {
+        let app = App::new_test(vec![make_claude_row(
+            "feat/x",
+            DisplayGroup::ClaudeWorking,
+            crate::claude_state::ClaudeState::Idle,
+        )]);
+        assert!(app.has_animated_visible_row());
+    }
+
+    #[test]
+    fn has_animated_visible_row_true_when_input_row_visible() {
+        let app = App::new_test(vec![make_claude_row(
+            "feat/x",
+            DisplayGroup::NeedsAttention,
+            crate::claude_state::ClaudeState::Input,
+        )]);
+        assert!(app.has_animated_visible_row());
+    }
+
+    #[test]
+    fn has_animated_visible_row_false_when_only_working_visible() {
+        let app = App::new_test(vec![make_claude_row(
+            "feat/x",
+            DisplayGroup::ClaudeWorking,
+            crate::claude_state::ClaudeState::Working,
+        )]);
+        assert!(!app.has_animated_visible_row());
+    }
+
+    #[test]
+    fn has_animated_visible_row_false_when_no_claude_sessions() {
+        let app = App::new_test(vec![make_worktree_row("feat/none", DisplayGroup::Other)]);
+        assert!(!app.has_animated_visible_row());
+    }
+
+    // -- issue #281: adaptive poll cadence ----------------------------------
+
+    #[test]
+    fn poll_cadence_fast_when_animated_visible() {
+        assert_eq!(
+            poll_cadence(true, false),
+            Duration::from_millis(POLL_TIMEOUT_MS),
+            "animated row visible must use the fast cadence"
+        );
+    }
+
+    #[test]
+    fn poll_cadence_fast_when_refreshing() {
+        assert_eq!(
+            poll_cadence(false, true),
+            Duration::from_millis(POLL_TIMEOUT_MS),
+            "full-refresh spinner must stay on the fast cadence"
+        );
+    }
+
+    #[test]
+    fn poll_cadence_idle_when_nothing_animates() {
+        assert_eq!(
+            poll_cadence(false, false),
+            Duration::from_millis(IDLE_POLL_TIMEOUT_MS),
+            "idle screens must stretch to the idle timeout"
+        );
+    }
+
+    #[test]
+    fn idle_poll_timeout_is_user_acceptable() {
+        // Sanity guard: the idle timeout must stay below a threshold where
+        // keystroke latency becomes perceptible. 600ms is the cited threshold;
+        // we hold well below it. Tripwire for accidental bumps.
+        const {
+            assert!(
+                IDLE_POLL_TIMEOUT_MS <= 600,
+                "idle poll timeout risks perceptible input lag above 600ms"
+            );
+        }
     }
 
     #[test]
