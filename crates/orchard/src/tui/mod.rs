@@ -331,7 +331,7 @@ impl App {
 
     /// Yields the names of all hosts currently known to be unreachable.
     pub(crate) fn unreachable_hosts(&self) -> impl Iterator<Item = &str> {
-        self.host_reachable.iter().filter_map(|(host, _)| {
+        self.host_reachable.keys().filter_map(|host| {
             matches!(self.reachability(host), Reachability::Unreachable).then_some(host.as_str())
         })
     }
