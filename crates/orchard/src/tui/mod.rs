@@ -692,26 +692,20 @@ impl App {
                 let _ = cache_sources::refresh_issues(repo);
                 let _ = cache_sources::refresh_prs(repo);
                 let _ = cache_sources::refresh_worktrees(repo);
-                for remote in &repo.remotes {
-                    if reachable_hosts.contains(&remote.host) {
-                        let _ = cache_sources::refresh_remote_worktrees(repo, remote);
-                    }
-                }
             }
             // Refresh tmux sessions (local).
             let _ = cache_sources::refresh_tmux_sessions(None);
-            // Refresh remote tmux sessions for reachable hosts only.
-            let mut tmux_hosts_refreshed: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for repo in &config.repos {
-                for remote in &repo.remotes {
-                    if reachable_hosts.contains(&remote.host)
-                        && tmux_hosts_refreshed.insert(remote.host.clone())
-                    {
-                        let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote);
-                    }
-                }
-            }
+            // Refresh remote worktrees and remote tmux sessions for reachable hosts.
+            crate::sources::hosts::refresh_remotes_for_reachable_hosts(
+                &config,
+                &reachable_hosts,
+                |repo, remote| {
+                    let _ = cache_sources::refresh_remote_worktrees(repo, remote);
+                },
+                |repo, remote| {
+                    let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote);
+                },
+            );
             // Ensure a main tmux session exists for each configured repo.
             ensure_main_sessions(&config);
             // Signal that caches are updated.

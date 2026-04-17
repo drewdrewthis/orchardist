@@ -9,9 +9,10 @@
 //! command for its kind. Each probe runs on its own thread so a stopped VM
 //! can't block probes for healthy hosts behind it.
 
-use crate::global_config::{GlobalConfig, RemoteConfig};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::thread;
+
+use crate::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
 
 /// Returns every `RemoteConfig` configured across all repos in `config`.
 ///
@@ -58,7 +59,7 @@ where
     I: IntoIterator<Item = RemoteConfig>,
     F: Fn(&RemoteConfig) -> bool + Clone + Send + 'static,
 {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let unique: Vec<RemoteConfig> = remotes
         .into_iter()
         .filter(|r| seen.insert(r.host.clone()))
@@ -86,6 +87,51 @@ where
             }
         })
         .collect()
+}
+
+/// Runs per-reachable-host refresh work across all repos and their remotes.
+///
+/// For each `(repo, remote)` pair whose host appears in `reachable`, calls
+/// `refresh_worktree(repo, remote)`. The first time each unique host is
+/// encountered, also calls `refresh_tmux(repo, remote)`. Tmux is deduped per
+/// host across all repos so it runs exactly once regardless of how many repos
+/// share that host. The `(repo, remote)` pair handed to `refresh_tmux` is the
+/// first one that introduced the host, which is what adapter-routed tmux
+/// refresh needs to pick the right per-host cache file.
+///
+/// Callers supply the refresh strategy via closures, allowing both the
+/// `--json` path (direct `sources::*` calls) and the TUI SWR path
+/// (`cache_sources::*` calls) to share this loop without duplication.
+///
+/// # Arguments
+///
+/// * `config` - Global config supplying the repo × remote matrix to iterate.
+/// * `reachable` - Set of host strings confirmed reachable by a prior
+///   [`probe_reachability_all_for_remotes`] call.
+/// * `refresh_worktree` - Called once per `(repo, remote)` pair whose host is
+///   reachable.
+/// * `refresh_tmux` - Called once per unique reachable host (deduplicated),
+///   with the first `(repo, remote)` pair that introduced the host.
+pub fn refresh_remotes_for_reachable_hosts<W, T>(
+    config: &GlobalConfig,
+    reachable: &HashSet<String>,
+    mut refresh_worktree: W,
+    mut refresh_tmux: T,
+) where
+    W: FnMut(&RepoConfig, &RemoteConfig),
+    T: FnMut(&RepoConfig, &RemoteConfig),
+{
+    let mut tmux_refreshed: HashSet<String> = HashSet::new();
+    for repo in &config.repos {
+        for remote in &repo.remotes {
+            if reachable.contains(&remote.host) {
+                refresh_worktree(repo, remote);
+                if tmux_refreshed.insert(remote.host.clone()) {
+                    refresh_tmux(repo, remote);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +287,110 @@ mod tests {
             "live probe must dispatch within 100ms of the earliest probe \
              (serial would delay it ~500ms), gap was {:?}",
             dispatch_gap
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // refresh_remotes_for_reachable_hosts tests
+    // -----------------------------------------------------------------------
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn config(repos: Vec<RepoConfig>) -> GlobalConfig {
+        GlobalConfig {
+            repos,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn refresh_worktree_called_once_per_reachable_repo_remote_pair() {
+        let cfg = config(vec![
+            repo("owner/a", &["host1"]),
+            repo("owner/b", &["host1", "host2"]),
+        ]);
+        let reachable: HashSet<String> = ["host1".to_string(), "host2".to_string()]
+            .into_iter()
+            .collect();
+
+        let wt_calls: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let wt_calls_ref = wt_calls.clone();
+
+        refresh_remotes_for_reachable_hosts(
+            &cfg,
+            &reachable,
+            |repo, remote| {
+                wt_calls_ref
+                    .borrow_mut()
+                    .push((repo.slug.clone(), remote.host.clone()));
+            },
+            |_repo, _remote| {},
+        );
+
+        let calls = wt_calls.borrow();
+        // 3 (repo, remote) pairs total: (a, host1), (b, host1), (b, host2)
+        assert_eq!(calls.len(), 3);
+        assert!(calls.contains(&("owner/a".to_string(), "host1".to_string())));
+        assert!(calls.contains(&("owner/b".to_string(), "host1".to_string())));
+        assert!(calls.contains(&("owner/b".to_string(), "host2".to_string())));
+    }
+
+    #[test]
+    fn refresh_tmux_called_once_per_unique_reachable_host() {
+        // host1 appears in two repos — tmux should only refresh it once.
+        let cfg = config(vec![
+            repo("owner/a", &["host1"]),
+            repo("owner/b", &["host1", "host2"]),
+        ]);
+        let reachable: HashSet<String> = ["host1".to_string(), "host2".to_string()]
+            .into_iter()
+            .collect();
+
+        let tmux_calls: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let tmux_calls_ref = tmux_calls.clone();
+
+        refresh_remotes_for_reachable_hosts(
+            &cfg,
+            &reachable,
+            |_repo, _remote| {},
+            |_repo, remote| {
+                tmux_calls_ref.borrow_mut().push(remote.host.clone());
+            },
+        );
+
+        let mut calls = tmux_calls.borrow().clone();
+        calls.sort();
+        assert_eq!(calls, vec!["host1".to_string(), "host2".to_string()]);
+    }
+
+    #[test]
+    fn unreachable_hosts_skipped_entirely() {
+        let cfg = config(vec![repo("owner/a", &["dead-host"])]);
+        // Empty reachable set — nothing is reachable.
+        let reachable: HashSet<String> = HashSet::new();
+
+        let wt_calls: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
+        let tmux_calls: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
+        let wt_ref = wt_calls.clone();
+        let tmux_ref = tmux_calls.clone();
+
+        refresh_remotes_for_reachable_hosts(
+            &cfg,
+            &reachable,
+            |_repo, _remote| *wt_ref.borrow_mut() += 1,
+            |_repo, _remote| *tmux_ref.borrow_mut() += 1,
+        );
+
+        assert_eq!(
+            *wt_calls.borrow(),
+            0,
+            "refresh_worktree must not be called for unreachable hosts"
+        );
+        assert_eq!(
+            *tmux_calls.borrow(),
+            0,
+            "refresh_tmux must not be called for unreachable hosts"
         );
     }
 }
