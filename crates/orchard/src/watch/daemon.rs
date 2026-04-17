@@ -144,22 +144,17 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 /// Refreshes all sources: issues, PRs, worktrees, and tmux sessions for each repo.
 ///
 /// Per-repo refreshes fan out concurrently so one slow GitHub API response
-/// can't delay the next repo. Each refresh writes its own cache file, so no
-/// coordination is needed between threads.
+/// can't delay the next repo.
 fn refresh_all_sources(config: &GlobalConfig) {
-    std::thread::scope(|s| {
-        for repo in &config.repos {
-            s.spawn(move || {
-                if let Err(e) = cache_sources::refresh_issues(repo) {
-                    crate::logger::LOG.warn(&format!("watch: refresh issues failed: {e}"));
-                }
-                if let Err(e) = cache_sources::refresh_prs(repo) {
-                    crate::logger::LOG.warn(&format!("watch: refresh PRs failed: {e}"));
-                }
-                if let Err(e) = cache_sources::refresh_worktrees(repo) {
-                    crate::logger::LOG.warn(&format!("watch: refresh worktrees failed: {e}"));
-                }
-            });
+    crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
+        if let Err(e) = cache_sources::refresh_issues(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh issues failed: {e}"));
+        }
+        if let Err(e) = cache_sources::refresh_prs(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh PRs failed: {e}"));
+        }
+        if let Err(e) = cache_sources::refresh_worktrees(repo) {
+            crate::logger::LOG.warn(&format!("watch: refresh worktrees failed: {e}"));
         }
     });
     if let Err(e) = cache_sources::refresh_tmux_sessions(None) {

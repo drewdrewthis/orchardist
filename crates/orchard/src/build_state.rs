@@ -322,16 +322,11 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
     let _ = crate::restore::restore_all_local();
 
     // Refresh local sources. Per-repo refreshes fan out concurrently so
-    // GitHub API latency for one repo can't block another. Each repo writes
-    // its own cache files, so there's no shared mutable state to guard.
-    std::thread::scope(|s| {
-        for repo in &config.repos {
-            s.spawn(move || {
-                let _ = sources::worktrees::refresh_local(repo);
-                let _ = sources::github::refresh_issues(repo);
-                let _ = sources::github::refresh_prs(repo);
-            });
-        }
+    // GitHub API latency for one repo can't block another.
+    crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
+        let _ = sources::worktrees::refresh_local(repo);
+        let _ = sources::github::refresh_issues(repo);
+        let _ = sources::github::refresh_prs(repo);
     });
     let _ = sources::tmux::refresh_local();
 

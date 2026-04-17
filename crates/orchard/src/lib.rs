@@ -31,6 +31,7 @@ pub mod notify;
 pub mod orchard_state;
 pub mod paths;
 pub mod priority;
+pub mod refresh_parallel;
 pub mod remote;
 pub mod remote_adapter;
 pub mod restore;

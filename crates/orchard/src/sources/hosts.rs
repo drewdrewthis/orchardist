@@ -2,8 +2,9 @@
 //!
 //! Simple SSH connectivity checks for remote hosts. Used to determine if a host is
 //! reachable before attempting worktree or tmux operations on it. Probes enforce a
-//! hard 5-second wall-clock deadline via [`crate::remote::ssh_exec_with_timeout`],
-//! so a frozen handshake or post-auth hang can't exceed the budget.
+//! hard wall-clock deadline (see [`PROBE_TIMEOUT`]) via
+//! [`crate::remote::ssh_exec_with_timeout`], so a frozen handshake or post-auth
+//! hang can't exceed the budget.
 //!
 //! The concurrent entry point is [`probe_reachability_all_for_remotes`], which
 //! accepts full `RemoteConfig` entries so each host is probed with the correct

@@ -689,21 +689,15 @@ impl App {
             }
 
             // Fan out per-repo refreshes so GitHub API latency for one repo
-            // can't block another. Each repo writes its own cache files, so
-            // there's no shared mutable state to guard.
-            std::thread::scope(|s| {
-                for repo in &config.repos {
-                    let reachable_hosts = &reachable_hosts;
-                    s.spawn(move || {
-                        let _ = cache_sources::refresh_issues(repo);
-                        let _ = cache_sources::refresh_prs(repo);
-                        let _ = cache_sources::refresh_worktrees(repo);
-                        for remote in &repo.remotes {
-                            if reachable_hosts.contains(&remote.host) {
-                                let _ = cache_sources::refresh_remote_worktrees(repo, remote);
-                            }
-                        }
-                    });
+            // can't block another.
+            crate::refresh_parallel::for_each_repo_parallel(&config, |repo| {
+                let _ = cache_sources::refresh_issues(repo);
+                let _ = cache_sources::refresh_prs(repo);
+                let _ = cache_sources::refresh_worktrees(repo);
+                for remote in &repo.remotes {
+                    if reachable_hosts.contains(&remote.host) {
+                        let _ = cache_sources::refresh_remote_worktrees(repo, remote);
+                    }
                 }
             });
             // Refresh tmux sessions (local).
