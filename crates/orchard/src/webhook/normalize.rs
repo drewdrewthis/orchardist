@@ -41,6 +41,11 @@ pub struct NormalizedEvent {
 }
 
 /// Result of normalising a GitHub webhook payload.
+///
+/// The `Event` payload is boxed so the enum stays compact: `NormalizedEvent`
+/// is ~200 bytes while `Unsupported`/`Unknown` are unit — without the box,
+/// every variant carries the largest one's footprint (clippy's
+/// `large_enum_variant`, promoted in rust 1.94).
 pub enum NormalizeResult {
     /// The event was recognised and normalised successfully.
     Event(Box<NormalizedEvent>),
