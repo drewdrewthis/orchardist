@@ -142,8 +142,11 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Refreshes all sources: issues, PRs, worktrees, and tmux sessions for each repo.
+///
+/// Per-repo refreshes fan out concurrently so one slow GitHub API response
+/// can't delay the next repo.
 fn refresh_all_sources(config: &GlobalConfig) {
-    for repo in &config.repos {
+    crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
         if let Err(e) = cache_sources::refresh_issues(repo) {
             crate::logger::LOG.warn(&format!("watch: refresh issues failed: {e}"));
         }
@@ -153,13 +156,18 @@ fn refresh_all_sources(config: &GlobalConfig) {
         if let Err(e) = cache_sources::refresh_worktrees(repo) {
             crate::logger::LOG.warn(&format!("watch: refresh worktrees failed: {e}"));
         }
-    }
+    });
     if let Err(e) = cache_sources::refresh_tmux_sessions(None) {
         crate::logger::LOG.warn(&format!("watch: refresh tmux sessions failed: {e}"));
     }
 }
 
 /// Refreshes only local (fast) sources: worktrees and tmux sessions.
+///
+/// Intentionally serial: each `refresh_worktrees` is a local `git worktree
+/// list` — single-digit milliseconds. Thread-spawn overhead would cost more
+/// than it would save. `refresh_all_sources` is the hot path that needs
+/// parallelism.
 fn refresh_local_sources(config: &GlobalConfig) {
     for repo in &config.repos {
         if let Err(e) = cache_sources::refresh_worktrees(repo) {

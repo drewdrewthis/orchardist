@@ -688,7 +688,9 @@ impl App {
                 }
             }
 
-            for repo in &config.repos {
+            // Fan out per-repo refreshes so GitHub API latency for one repo
+            // can't block another.
+            crate::refresh_parallel::for_each_repo_parallel(&config, |repo| {
                 let _ = cache_sources::refresh_issues(repo);
                 let _ = cache_sources::refresh_prs(repo);
                 let _ = cache_sources::refresh_worktrees(repo);
@@ -697,21 +699,34 @@ impl App {
                         let _ = cache_sources::refresh_remote_worktrees(repo, remote);
                     }
                 }
-            }
+            });
             // Refresh tmux sessions (local).
             let _ = cache_sources::refresh_tmux_sessions(None);
-            // Refresh remote tmux sessions for reachable hosts only.
-            let mut tmux_hosts_refreshed: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for repo in &config.repos {
-                for remote in &repo.remotes {
-                    if reachable_hosts.contains(&remote.host)
-                        && tmux_hosts_refreshed.insert(remote.host.clone())
-                    {
+            // Refresh remote tmux sessions for reachable hosts, one unique
+            // host per thread so SSH latency is parallel across hosts. Route
+            // via the adapter so boxd-fork remotes hit the correct per-fork
+            // host rather than always the gateway.
+            let tmux_dispatch: Vec<(
+                &crate::global_config::RepoConfig,
+                &crate::global_config::RemoteConfig,
+            )> = {
+                let mut seen = std::collections::HashSet::new();
+                config
+                    .repos
+                    .iter()
+                    .flat_map(|r| r.remotes.iter().map(move |rm| (r, rm)))
+                    .filter(|(_, rm)| {
+                        reachable_hosts.contains(&rm.host) && seen.insert(rm.host.clone())
+                    })
+                    .collect()
+            };
+            std::thread::scope(|s| {
+                for (repo, remote) in &tmux_dispatch {
+                    s.spawn(move || {
                         let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote);
-                    }
+                    });
                 }
-            }
+            });
             // Ensure a main tmux session exists for each configured repo.
             ensure_main_sessions(&config);
             // Signal that caches are updated.
@@ -727,6 +742,10 @@ impl App {
         let config = self.global_config.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            // Local-only refresh runs `git worktree list` per repo — no SSH,
+            // no GitHub API. Each call is single-digit milliseconds, so
+            // parallel dispatch would add thread-spawn overhead without a
+            // measurable win. Stay serial.
             for repo in &config.repos {
                 let _ = cache_sources::refresh_worktrees(repo);
             }
