@@ -1684,50 +1684,32 @@ pub fn refresh_remote_worktrees(
     Ok(())
 }
 
-/// Fetches tmux sessions from a single remote via the appropriate `RemoteAdapter`
-/// and writes them to per-host tmux caches.
+/// Fetches tmux sessions from a single remote and writes them to per-host caches.
 ///
-/// Dispatch is driven by `remote_cfg.kind` through `RemoteAdapter::from_config`.
-/// `Remmy` and `BoxdShared` produce sessions tagged with `remote_cfg.host` and
-/// write to a single cache file. `BoxdFork` produces sessions tagged with per-
-/// fork hosts (`<user>@<fork>.boxd.sh`); this function groups sessions by
-/// `host` and writes one cache file per fork host.
+/// Dispatch is driven by `remote_cfg.kind`:
+/// - `Remmy` and `BoxdShared` delegate to the legacy `refresh_tmux_sessions`
+///   path (raw SSH `tmux list-sessions` + pane/capture batching against
+///   `remote_cfg.host`). Their adapters' `list_sessions` methods are still
+///   Slice-1/2 stubs; swapping them in would regress pane and capture enrichment.
+/// - `BoxdFork` routes through `RemoteAdapter::from_config` so enumeration
+///   fans out from the golden host to each live fork and writes one cache
+///   file per fork host.
 ///
-/// Unlike `refresh_tmux_sessions` (the legacy single-host path), this function
-/// does NOT call `tmux list-panes` / `capture-pane` per session — adapters
-/// already returned fully-parsed `CachedTmuxSession` values. Pane details and
-/// capture payloads will be empty for fork sessions until a follow-up slice
-/// wires them (see task #10 — this is acceptable per the issue's AC: forks
-/// need to be visible; pane details are not an AC).
+/// The fork path intentionally skips `tmux list-panes` / `capture-pane` per
+/// session — only the session roster is required to make forks visible in
+/// `orchard --json` and the TUI (issue #264 AC). Pane and capture enrichment
+/// for forks is a follow-up.
 ///
-/// On adapter error, the error is logged and existing caches are left intact.
-///
-/// # SWR note
-///
-/// For `Remmy` and `BoxdShared`, the `remote_cfg.host`-keyed tmux cache is
-/// checked and skipped when Fresh. For `BoxdFork`, SWR is skipped — the golden
-/// host fan-out makes a single-key SWR gate unreliable; the adapter always runs.
+/// On adapter error the error is logged and existing caches are left intact.
 pub fn refresh_remote_tmux_sessions(
     config: &RepoConfig,
     remote_cfg: &crate::global_config::RemoteConfig,
 ) -> anyhow::Result<()> {
-    // SWR fast path: skip for non-fork remotes when the host cache is Fresh.
-    // BoxdFork fans out to per-fork hosts so we cannot gate on a single key —
-    // always refresh for that kind.
+    // Remmy and BoxdShared: keep the legacy single-host path so pane details
+    // and capture-pane payloads continue to land in the cache. Their adapter
+    // `list_sessions` methods are still stubs returning `Ok(vec![])`.
     if remote_cfg.kind != crate::remote_adapter::RemoteKind::BoxdFork {
-        let cache_path = cache::tmux_cache_path(Some(&remote_cfg.host));
-        let cached_file = cache::read_cache::<CachedTmuxSession>(&cache_path);
-        let swr_config =
-            crate::swr::SwrConfig::default_for(crate::swr::SwrKind::RemoteSessions);
-        let state =
-            crate::swr::classify_cache_file(&cached_file, chrono::Utc::now(), swr_config);
-        if state == crate::swr::SwrState::Fresh {
-            LOG.info(&format!(
-                "cache_sources: refresh_remote_tmux_sessions({}, {}): swr=Fresh, skipping adapter",
-                config.slug, remote_cfg.host,
-            ));
-            return Ok(());
-        }
+        return refresh_tmux_sessions(Some(&remote_cfg.host));
     }
 
     let adapter = crate::remote_adapter::RemoteAdapter::from_config(
@@ -1735,7 +1717,7 @@ pub fn refresh_remote_tmux_sessions(
         Box::new(crate::remote_adapter::ProcessSshExec),
     );
 
-    let mut sessions = match adapter.list_sessions() {
+    let sessions = match adapter.list_sessions() {
         Ok(s) => s,
         Err(e) => {
             LOG.warn(&format!(
@@ -1746,20 +1728,16 @@ pub fn refresh_remote_tmux_sessions(
         }
     };
 
-    // Ensure every session has a host set. Non-fork adapters tag with
-    // `remote_cfg.host`; `BoxdFork` tags with per-fork hosts. Be defensive
-    // for empty-list edge cases.
-    for s in &mut sessions {
-        if s.host.is_none() {
-            s.host = Some(remote_cfg.host.clone());
-        }
-    }
-
-    // Group by host and write one cache file per distinct host.
+    // Group by host and write one cache file per distinct fork host.
+    // `BoxdFork` adapter tags every session with its fork host; unknown-host
+    // entries fall back to `remote_cfg.host` defensively.
     let mut by_host: std::collections::HashMap<String, Vec<CachedTmuxSession>> =
         std::collections::HashMap::new();
-    for s in sessions {
+    for mut s in sessions {
         let host = s.host.clone().unwrap_or_else(|| remote_cfg.host.clone());
+        if s.host.is_none() {
+            s.host = Some(host.clone());
+        }
         by_host.entry(host).or_default().push(s);
     }
 
@@ -1772,8 +1750,8 @@ pub fn refresh_remote_tmux_sessions(
     }
 
     LOG.info(&format!(
-        "cache_sources: refresh_remote_tmux_sessions({}, {}): wrote {} entries across {} hosts via {:?} adapter",
-        config.slug, remote_cfg.host, total, host_count, remote_cfg.kind,
+        "cache_sources: refresh_remote_tmux_sessions({}, {}): wrote {} entries across {} fork hosts",
+        config.slug, remote_cfg.host, total, host_count,
     ));
 
     Ok(())
