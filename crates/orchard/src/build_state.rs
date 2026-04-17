@@ -332,27 +332,23 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
     // Probe remote hosts concurrently so a dead VM can't block healthy ones.
     // Use the kind-aware variant: boxd-fork golden hosts reject `true` as a
     // subcommand, so the default probe would mark them unreachable.
-    let all_remotes: Vec<crate::global_config::RemoteConfig> = config
-        .repos
-        .iter()
-        .flat_map(|r| r.remotes.iter().cloned())
-        .collect();
+    let all_remotes = sources::hosts::remotes_from_config(config);
     let probe_results = sources::hosts::probe_reachability_all_for_remotes(&all_remotes);
 
     let hosts: HashMap<String, HostState> = probe_results
         .iter()
         .map(|(h, r)| (h.clone(), HostState { reachable: *r }))
         .collect();
+    let reachable_hosts: HashSet<String> = probe_results
+        .iter()
+        .filter_map(|(h, r)| if *r { Some(h.clone()) } else { None })
+        .collect();
 
     // Refresh remote sources for every reachable host, once per (repo, remote) pair.
     let mut tmux_refreshed: HashSet<String> = HashSet::new();
     for repo in &config.repos {
         for remote in &repo.remotes {
-            let reachable = hosts
-                .get(&remote.host)
-                .map(|s| s.reachable)
-                .unwrap_or(false);
-            if reachable {
+            if reachable_hosts.contains(&remote.host) {
                 let _ = sources::worktrees::refresh_remote(repo, remote);
                 if tmux_refreshed.insert(remote.host.clone()) {
                     let _ = sources::tmux::refresh_remote_adapter(repo, remote);
