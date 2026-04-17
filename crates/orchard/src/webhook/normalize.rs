@@ -41,17 +41,9 @@ pub struct NormalizedEvent {
 }
 
 /// Result of normalising a GitHub webhook payload.
-///
-/// `large_enum_variant` is allowed here because this result type is produced
-/// and consumed on the same call path without being stored long-term; the
-/// payload size asymmetry between variants doesn't matter in practice, and
-/// boxing the happy-path variant would add indirection everywhere for no
-/// runtime benefit. The lint began to fire with rust 1.94.
-/// See issue #268 for a follow-up if the trade-off ever warrants revisiting.
-#[allow(clippy::large_enum_variant)]
 pub enum NormalizeResult {
     /// The event was recognised and normalised successfully.
-    Event(NormalizedEvent),
+    Event(Box<NormalizedEvent>),
     /// The event type is known but the specific action is not in scope
     /// (e.g. `pull_request.assigned`). Nothing should be written to the log.
     Unsupported,
@@ -122,14 +114,14 @@ fn normalize_pull_request(
     };
 
     let pr = u64_field(payload, &["pull_request", "number"]);
-    NormalizeResult::Event(build_event(
+    NormalizeResult::Event(Box::new(build_event(
         kind.to_string(),
         repo,
         pr,
         None,
         actor,
         payload,
-    ))
+    )))
 }
 
 fn normalize_pull_request_review(
@@ -142,14 +134,14 @@ fn normalize_pull_request_review(
         return NormalizeResult::Unsupported;
     }
     let pr = u64_field(payload, &["pull_request", "number"]);
-    NormalizeResult::Event(build_event(
+    NormalizeResult::Event(Box::new(build_event(
         "pull_request.review.submitted".to_string(),
         repo,
         pr,
         None,
         actor,
         payload,
-    ))
+    )))
 }
 
 fn normalize_pull_request_review_comment(
@@ -162,14 +154,14 @@ fn normalize_pull_request_review_comment(
         return NormalizeResult::Unsupported;
     }
     let pr = u64_field(payload, &["pull_request", "number"]);
-    NormalizeResult::Event(build_event(
+    NormalizeResult::Event(Box::new(build_event(
         "pull_request.review_comment.created".to_string(),
         repo,
         pr,
         None,
         actor,
         payload,
-    ))
+    )))
 }
 
 fn normalize_issue_comment(
@@ -188,14 +180,14 @@ fn normalize_issue_comment(
         .is_some();
     let pr = if is_pr { issue_number } else { None };
 
-    NormalizeResult::Event(build_event(
+    NormalizeResult::Event(Box::new(build_event(
         "issue_comment.created".to_string(),
         repo,
         pr,
         issue_number,
         actor,
         payload,
-    ))
+    )))
 }
 
 fn normalize_issues(
@@ -209,18 +201,18 @@ fn normalize_issues(
         _ => return NormalizeResult::Unsupported,
     };
     let issue = u64_field(payload, &["issue", "number"]);
-    NormalizeResult::Event(build_event(kind, repo, None, issue, actor, payload))
+    NormalizeResult::Event(Box::new(build_event(kind, repo, None, issue, actor, payload)))
 }
 
 fn normalize_push(payload: &Value, repo: Option<String>, actor: Option<String>) -> NormalizeResult {
-    NormalizeResult::Event(build_event(
+    NormalizeResult::Event(Box::new(build_event(
         "push".to_string(),
         repo,
         None,
         None,
         actor,
         payload,
-    ))
+    )))
 }
 
 fn normalize_ci_event(
@@ -234,7 +226,7 @@ fn normalize_ci_event(
         return NormalizeResult::Unsupported;
     }
     let kind = format!("{}.completed", event_type);
-    NormalizeResult::Event(build_event(kind, repo, None, None, actor, payload))
+    NormalizeResult::Event(Box::new(build_event(kind, repo, None, None, actor, payload)))
 }
 
 // ---------------------------------------------------------------------------
