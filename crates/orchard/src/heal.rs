@@ -194,8 +194,12 @@ fn check_sessions(
     let worktree_paths: Vec<&str> = worktrees.iter().map(|w| w.path.as_str()).collect();
 
     for session in sessions {
-        let path_exists = Path::new(&session.path).exists();
-        let path_has_worktree = worktree_paths.contains(&session.path.as_str());
+        // Prefer the live active-pane cwd over the frozen session path. Users
+        // `cd` inside sessions, so the active pane reflects where they actually
+        // are — the frozen path may be stale but the session is still healthy.
+        let effective_path = session.active_pane_cwd.as_deref().unwrap_or(&session.path);
+        let path_exists = Path::new(effective_path).exists();
+        let path_has_worktree = worktree_paths.contains(&effective_path);
 
         if !path_exists {
             findings.push(HealFinding {
@@ -203,7 +207,7 @@ fn check_sessions(
                 severity: Severity::Error,
                 message: format!(
                     "Session \"{}\" points to non-existent path \"{}\"",
-                    session.name, session.path
+                    session.name, effective_path
                 ),
                 action: HealAction::KillSession(session.name.clone()),
             });
@@ -213,7 +217,7 @@ fn check_sessions(
                 severity: Severity::Warning,
                 message: format!(
                     "Session \"{}\" has no matching worktree (path: {})",
-                    session.name, session.path
+                    session.name, effective_path
                 ),
                 action: HealAction::KillSession(session.name.clone()),
             });
@@ -322,8 +326,9 @@ fn check_session_naming(
     findings: &mut Vec<HealFinding>,
 ) {
     for session in sessions {
-        // Find the worktree this session is associated with (by path).
-        let Some(wt) = worktrees.iter().find(|w| w.path == session.path) else {
+        // Match by live active-pane cwd first; fall back to frozen session path.
+        let effective_path = session.active_pane_cwd.as_deref().unwrap_or(&session.path);
+        let Some(wt) = worktrees.iter().find(|w| w.path == effective_path) else {
             continue;
         };
         let Some(expected) = &wt.expected_session_name else {
@@ -352,7 +357,14 @@ fn check_multiple_sessions_per_worktree(
     findings: &mut Vec<HealFinding>,
 ) {
     for wt in worktrees {
-        let matching: Vec<&TmuxSession> = sessions.iter().filter(|s| s.path == wt.path).collect();
+        // Match by live active-pane cwd when available; fall back to frozen path.
+        let matching: Vec<&TmuxSession> = sessions
+            .iter()
+            .filter(|s| {
+                let effective = s.active_pane_cwd.as_deref().unwrap_or(&s.path);
+                effective == wt.path
+            })
+            .collect();
 
         if matching.len() > 1 {
             let names: Vec<&str> = matching.iter().map(|s| s.name.as_str()).collect();

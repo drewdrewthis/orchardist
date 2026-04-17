@@ -161,8 +161,37 @@ fn handle_upgrade() {
 /// When `fix` is true, applies all actionable fixes. When `json` is true,
 /// outputs machine-readable JSON instead of the formatted report.
 fn handle_heal(fix: bool, json: bool) {
+    use orchard::cache::{CachedTmuxSession, read_cache, tmux_cache_path};
+    use orchard::cache_sources;
+    use orchard::session::active_pane_cwd;
+    use orchard::types::TmuxSession;
+
     let config = global_config::load_global_config();
-    let sessions = orchard::tmux::list_tmux_sessions();
+
+    // Refresh the local tmux cache so active_pane_cwd reflects current state.
+    // Best-effort: a failure here means we fall back to whatever is on disk.
+    if let Err(e) = cache_sources::refresh_tmux_sessions(None) {
+        eprintln!("heal: tmux cache refresh failed (using cached data): {e}");
+    }
+
+    // Build TmuxSession list from the cache, enriching each entry with the
+    // live active-pane cwd derived from pane_paths + pane_active.
+    let sessions: Vec<TmuxSession> = read_cache::<CachedTmuxSession>(&tmux_cache_path(None))
+        .entries
+        .into_iter()
+        .map(|s| {
+            let pane_title = s.pane_titles.first().cloned();
+            let cwd = active_pane_cwd(&s);
+            TmuxSession {
+                name: s.name,
+                path: s.path,
+                attached: false,
+                pane_title,
+                active_pane_cwd: cwd,
+            }
+        })
+        .collect();
+
     let claude_states = heal::gather_claude_states();
     let cache_files = heal::gather_cache_files();
     let known_slugs: Vec<String> = config.repos.iter().map(|r| r.slug.clone()).collect();
