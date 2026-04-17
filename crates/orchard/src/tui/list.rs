@@ -16,7 +16,7 @@ use crate::remote;
 use crate::tmux;
 use crate::tui::state::{CleanupState, InputPhase, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color, repo_color};
-use crate::tui::{ATTRIBUTION_URL, App, WARNING_DURATION_SECS, filter_stale};
+use crate::tui::{ATTRIBUTION_URL, App, Reachability, WARNING_DURATION_SECS, filter_stale};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -554,16 +554,22 @@ impl App {
                     };
                     drop(tasks);
                     // Guard: refuse to join a session on a host not confirmed reachable.
-                    if let Some(ref h) = host
-                        && self.host_reachable.get(h.as_str()) != Some(&true)
-                    {
-                        let msg = if self.host_reachable.contains_key(h.as_str()) {
-                            format!("@{} is unreachable", h)
-                        } else {
-                            format!("@{} -- checking connectivity...", h)
-                        };
-                        self.warning = Some((msg, Instant::now()));
-                        return false;
+                    if let Some(ref h) = host {
+                        match self.reachability(h) {
+                            Reachability::Reachable => {}
+                            Reachability::Unreachable => {
+                                self.warning =
+                                    Some((format!("@{} is unreachable", h), Instant::now()));
+                                return false;
+                            }
+                            Reachability::Unknown => {
+                                self.warning = Some((
+                                    format!("@{} -- checking connectivity...", h),
+                                    Instant::now(),
+                                ));
+                                return false;
+                            }
+                        }
                     }
                     self.join_or_create_session(
                         &session_name,
@@ -629,16 +635,21 @@ impl App {
                 pane_target,
             }) => {
                 // Guard: refuse to join a session on a host not confirmed reachable.
-                if let Some(ref h) = host
-                    && self.host_reachable.get(h.as_str()) != Some(&true)
-                {
-                    let msg = if self.host_reachable.contains_key(h.as_str()) {
-                        format!("@{} is unreachable", h)
-                    } else {
-                        format!("@{} -- checking connectivity...", h)
-                    };
-                    self.warning = Some((msg, Instant::now()));
-                    return false;
+                if let Some(ref h) = host {
+                    match self.reachability(h) {
+                        Reachability::Reachable => {}
+                        Reachability::Unreachable => {
+                            self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                            return false;
+                        }
+                        Reachability::Unknown => {
+                            self.warning = Some((
+                                format!("@{} -- checking connectivity...", h),
+                                Instant::now(),
+                            ));
+                            return false;
+                        }
+                    }
                 }
                 self.join_or_create_session(
                     &session_name,
@@ -660,16 +671,21 @@ impl App {
                 host,
             }) => {
                 // Guard: refuse to create a session on a host not confirmed reachable.
-                if let Some(ref h) = host
-                    && self.host_reachable.get(h.as_str()) != Some(&true)
-                {
-                    let msg = if self.host_reachable.contains_key(h.as_str()) {
-                        format!("@{} is unreachable", h)
-                    } else {
-                        format!("@{} -- checking connectivity...", h)
-                    };
-                    self.warning = Some((msg, Instant::now()));
-                    return false;
+                if let Some(ref h) = host {
+                    match self.reachability(h) {
+                        Reachability::Reachable => {}
+                        Reachability::Unreachable => {
+                            self.warning = Some((format!("@{} is unreachable", h), Instant::now()));
+                            return false;
+                        }
+                        Reachability::Unknown => {
+                            self.warning = Some((
+                                format!("@{} -- checking connectivity...", h),
+                                Instant::now(),
+                            ));
+                            return false;
+                        }
+                    }
                 }
                 let repo_name = self.repo_name.clone();
                 let session_name =
@@ -1708,8 +1724,16 @@ impl App {
                     crate::session::Host::Local => None,
                 })
                 .or(vt.row.worktree_host.as_deref());
-            let host_unreachable = task_host.is_some()
-                && task_host.and_then(|h| self.host_reachable.get(h)).copied() != Some(true);
+            // Dim rows whose host is not confirmed reachable — Unknown is
+            // treated as "not yet reachable" during startup.
+            let host_unreachable = task_host
+                .map(|h| {
+                    matches!(
+                        self.reachability(h),
+                        Reachability::Unreachable | Reachability::Unknown
+                    )
+                })
+                .unwrap_or(false);
 
             // Base row style: dim merged rows and unreachable hosts.
             let row_style = if selected {
@@ -1893,12 +1917,12 @@ impl App {
 
             if has_remote {
                 let host_cell = if let Some(h) = task_host {
-                    match self.host_reachable.get(h) {
-                        Some(&false) => Cell::from(format!("@{} \u{2717}", h))
+                    match self.reachability(h) {
+                        Reachability::Unreachable => Cell::from(format!("@{} \u{2717}", h))
                             .style(Style::default().fg(theme.error)),
-                        Some(&true) => Cell::from(format!("@{} \u{25cf}", h))
+                        Reachability::Reachable => Cell::from(format!("@{} \u{25cf}", h))
                             .style(Style::default().fg(theme.success)),
-                        None => Cell::from(format!("@{}", h))
+                        Reachability::Unknown => Cell::from(format!("@{}", h))
                             .style(Style::default().fg(theme.host_unknown)),
                     }
                 } else {

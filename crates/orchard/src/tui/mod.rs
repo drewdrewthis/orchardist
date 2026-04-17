@@ -56,6 +56,26 @@ pub(crate) enum SubCursor {
     Pane { window: usize, pane: usize },
 }
 
+// ---------------------------------------------------------------------------
+// Reachability
+// ---------------------------------------------------------------------------
+
+/// Tri-state SSH reachability for a remote host.
+///
+/// `Unknown` means no probe has completed yet (e.g. startup before the first
+/// background check). `Reachable` / `Unreachable` reflect the most recent
+/// probe result. Callers should treat `Unknown` as "don't show a connectivity
+/// warning yet" rather than "assume reachable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reachability {
+    /// No probe result available yet.
+    Unknown,
+    /// The host responded to the last SSH reachability probe.
+    Reachable,
+    /// The host did not respond to the last SSH reachability probe.
+    Unreachable,
+}
+
 use message::{Message, UpdateResult};
 use state::{AppMsg, CleanupState, InputPhase, Phase, ViewState};
 use std::path::Path;
@@ -273,6 +293,19 @@ impl App {
         }
         let idx = self.active_repo_index.saturating_sub(1);
         self.global_config.repos.get(idx).map(|r| r.slug.as_str())
+    }
+
+    /// Returns the [`Reachability`] of `host` based on the most recent probe.
+    ///
+    /// - No entry in `host_reachable` → [`Reachability::Unknown`] (probe not yet run)
+    /// - `Some(true)` → [`Reachability::Reachable`]
+    /// - `Some(false)` → [`Reachability::Unreachable`]
+    pub(crate) fn reachability(&self, host: &str) -> Reachability {
+        match self.host_reachable.get(host) {
+            None => Reachability::Unknown,
+            Some(true) => Reachability::Reachable,
+            Some(false) => Reachability::Unreachable,
+        }
     }
 
     // -------------------------------------------------------------------
@@ -2702,6 +2735,26 @@ mod tests {
             output.contains('\u{2717}'),
             "expected ✗ for unreachable host"
         );
+    }
+
+    #[test]
+    fn reachability_returns_unknown_when_no_probe_result() {
+        let app = App::new_test(vec![]);
+        assert_eq!(app.reachability("gpu1"), Reachability::Unknown);
+    }
+
+    #[test]
+    fn reachability_returns_reachable_when_probe_succeeded() {
+        let mut app = App::new_test(vec![]);
+        app.host_reachable.insert("gpu1".to_string(), true);
+        assert_eq!(app.reachability("gpu1"), Reachability::Reachable);
+    }
+
+    #[test]
+    fn reachability_returns_unreachable_when_probe_failed() {
+        let mut app = App::new_test(vec![]);
+        app.host_reachable.insert("gpu1".to_string(), false);
+        assert_eq!(app.reachability("gpu1"), Reachability::Unreachable);
     }
 
     #[test]
