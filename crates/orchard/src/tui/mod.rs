@@ -322,6 +322,44 @@ impl App {
         }
     }
 
+    /// Returns true if at least one host has been probed (i.e. the reachability
+    /// map is non-empty). Callers use this to decide whether to show probe-
+    /// dependent chrome such as the header timestamp.
+    pub(crate) fn has_probe_results(&self) -> bool {
+        !self.host_reachable.is_empty()
+    }
+
+    /// Returns true if any probed host is currently [`Reachability::Unreachable`].
+    pub(crate) fn has_unreachable_host(&self) -> bool {
+        self.host_reachable.values().any(|reachable| !*reachable)
+    }
+
+    /// Yields the names of all hosts currently known to be unreachable.
+    pub(crate) fn unreachable_hosts(&self) -> impl Iterator<Item = &str> {
+        self.host_reachable
+            .iter()
+            .filter_map(|(host, reachable)| (!*reachable).then_some(host.as_str()))
+    }
+
+    /// Returns every probed host paired with its [`Reachability`], sorted by
+    /// host name for stable rendering order.
+    pub(crate) fn probed_hosts_sorted(&self) -> Vec<(&str, Reachability)> {
+        let mut entries: Vec<(&str, Reachability)> = self
+            .host_reachable
+            .iter()
+            .map(|(host, reachable)| {
+                let rb = if *reachable {
+                    Reachability::Reachable
+                } else {
+                    Reachability::Unreachable
+                };
+                (host.as_str(), rb)
+            })
+            .collect();
+        entries.sort_by_key(|(host, _)| *host);
+        entries
+    }
+
     // -------------------------------------------------------------------
     // Expand/collapse helpers
     // -------------------------------------------------------------------
