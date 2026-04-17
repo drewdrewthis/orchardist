@@ -29,16 +29,22 @@
 //! Severity note: `Coding` (active work — watch the agent) outranks `AwaitingReview`
 //! (passive wait — nothing to do). Watching workers beats waiting on a reviewer.
 //!
-//! | Glyph | Activity | Meaning |
-//! |---|---|---|
-//! | ⚡ | Working | a Claude agent is actively working |
-//! | ○ | Idle | an agent exists but is idle |
-//! | 💀 | Exhausted | rate-limits depleted OR context_window_pct ≥ 95 |
-//! | (blank) | None | no agent / non-Claude pane |
+//! | Glyph | Activity | Meaning | Animation |
+//! |---|---|---|---|
+//! | ⚡ | Working | a Claude agent is actively working | static |
+//! | ○ ↔ ● | Idle | an agent exists but is idle | pulses 1s (orange) |
+//! | ○ ↔ ? | Input | agent waiting for a human | pulses 1s (red) |
+//! | 💀 | Exhausted | rate-limits depleted OR context_window_pct ≥ 95 | static |
+//! | (blank) | None | no agent / non-Claude pane | — |
 //!
 //! Activity rollup severity (highest wins): `Exhausted > Input > Working > Idle > None`.
 //! `Input` is an activity-level signal that also maps to the `NeedsInput` status. The
-//! rollup treats it as its own level so a single ⚡ working child cannot mask a ❓ sibling.
+//! rollup treats it as its own level so a single ⚡ working child cannot mask an Input sibling.
+//!
+//! Pulse cadence (issue #281): animated variants (Idle, Input) swap frames on a
+//! 1s cadence. Frame selection is stateless — callers pass a `tick: u8` that is
+//! even (0) or odd (1); the TUI samples [`pulse_tick`] once per render so all
+//! rows in a frame share the same phase.
 
 use crate::claude_state::ClaudeState;
 use crate::derive::WorktreeRow;
@@ -79,9 +85,18 @@ pub enum PipelineStatus {
 
 impl PipelineStatus {
     /// Single-glyph representation of this status.
+    ///
+    /// `NeedsInput` is intentionally blank (issue #281): the "waiting on a human"
+    /// signal is carried by the animated hourglass in the status column, driven
+    /// off rollup [`Activity::Input`] rather than off this variant. The variant
+    /// itself is retained because it still drives sort severity (first match in
+    /// the merge-blocker hierarchy). See [`status_glyph_at`] for the animated
+    /// status-column glyph.
     pub fn glyph(self) -> &'static str {
         match self {
-            Self::NeedsInput => "\u{2753}",            // ❓
+            // NeedsInput: blank — the ⏳/⌛ pulse in the status column (driven
+            // by Activity::Input rollup, not by this variant) carries the signal.
+            Self::NeedsInput => "",
             Self::CiFailing => "\u{1F6AB}",            // 🚫
             Self::MergeConflict => "\u{26A0}\u{FE0F}", // ⚠️
             Self::ChangesRequested => "\u{1F534}",     // 🔴
@@ -135,18 +150,52 @@ pub enum Activity {
 }
 
 impl Activity {
-    /// Single-glyph representation, or empty string for `None`.
+    /// Single-glyph representation at a specific pulse tick.
     ///
-    /// `Input` reuses the ⚡ working glyph in column A — the `NeedsInput`
-    /// *status* column is where the ❓ renders. Keeping column A to just three
-    /// activity glyphs (⚡ / ○ / 💀) matches the issue spec.
-    pub fn glyph(self) -> &'static str {
+    /// The `tick` is `0` or `1` (anything else is folded to `tick & 1`). Static
+    /// variants (`Working`, `Exhausted`, `None`) return the same glyph for both
+    /// ticks. Animated variants alternate frames per issue #281:
+    ///
+    /// | Activity | tick=0 | tick=1 |
+    /// |---|---|---|
+    /// | `Idle`     | `○` | `●` |
+    /// | `Input`    | `○` | `?` |
+    /// | `Working`  | `⚡` | `⚡` |
+    /// | `Exhausted`| `💀` | `💀` |
+    /// | `None`     | `""`| `""`|
+    ///
+    /// Tints are applied by the TUI layer via `activity_style` — `Idle` gets
+    /// `claude_idle_pulse` (orange), `Input` gets `claude_input_pulse` (red).
+    pub fn glyph_at(self, tick: u8) -> &'static str {
+        let even = tick & 1 == 0;
         match self {
             Self::None => "",
-            Self::Idle => "\u{25CB}",                  // ○
-            Self::Working | Self::Input => "\u{26A1}", // ⚡
-            Self::Exhausted => "\u{1F480}",            // 💀
+            Self::Idle => {
+                if even {
+                    "\u{25CB}" // ○
+                } else {
+                    "\u{25CF}" // ●
+                }
+            }
+            Self::Input => {
+                if even {
+                    "\u{25CB}" // ○
+                } else {
+                    "?"
+                }
+            }
+            Self::Working => "\u{26A1}",    // ⚡
+            Self::Exhausted => "\u{1F480}", // 💀
         }
+    }
+
+    /// Single-glyph representation (tick=0 frame).
+    ///
+    /// Kept as a shim for non-TUI callers (tests, JSON labels, watch events)
+    /// that don't animate. TUI callers should use [`Activity::glyph_at`] and
+    /// thread the per-render [`pulse_tick`] value.
+    pub fn glyph(self) -> &'static str {
+        self.glyph_at(0)
     }
 
     /// Short human-readable label (legend + accessibility/testing).
@@ -158,6 +207,48 @@ impl Activity {
             Self::Input => "input",
             Self::Exhausted => "exhausted",
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pulse animation (issue #281)
+// ---------------------------------------------------------------------------
+
+/// Current pulse phase, derived from wall-clock seconds.
+///
+/// Returns `0` or `1`; flips every second. Stateless by design — all callers
+/// sample the same tick within the same second, so every animated row in a
+/// frame stays in unison without any shared counter.
+///
+/// The TUI samples this **once per render** and threads the value through to
+/// row builders. Sampling it again per-row would risk producing a torn frame
+/// when a render straddles a second boundary.
+pub fn pulse_tick() -> u8 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| (d.as_secs() & 1) as u8)
+        .unwrap_or(0)
+}
+
+/// Glyph for the STATUS column at a specific pulse tick.
+///
+/// When the row's rollup activity is [`Activity::Input`], the status column
+/// renders a rotating hourglass (⏳/⌛ on a 1s cadence) to signal "waiting on
+/// you." Otherwise, falls through to the static [`PipelineStatus::glyph`].
+///
+/// This is how the "❓ needs input" signal is carried in the status column
+/// after issue #281 — the ❓ glyph itself is gone, but the Input rollup drives
+/// a more attention-grabbing animated hourglass in its place.
+pub fn status_glyph_at(activity: Activity, status: PipelineStatus, tick: u8) -> &'static str {
+    if activity == Activity::Input {
+        if tick & 1 == 0 {
+            "\u{23F3}" // ⏳
+        } else {
+            "\u{231B}" // ⌛
+        }
+    } else {
+        status.glyph()
     }
 }
 
@@ -769,11 +860,12 @@ mod tests {
 
     #[test]
     fn every_status_has_distinct_glyph() {
-        // `Coding` is intentionally blank (no blocker to show) — excluded here
-        // because an empty string can't be "distinct" from itself, and it's
-        // the only status that maps to no glyph by design.
+        // `Coding` is intentionally blank (no blocker to show). `NeedsInput` is
+        // also intentionally blank after issue #281 — the ⏳/⌛ pulse in the
+        // status column (driven by Activity::Input rollup) carries the "waiting
+        // on you" signal. Both are excluded from this distinctness check; all
+        // remaining statuses must produce unique non-empty glyphs.
         let all = [
-            PipelineStatus::NeedsInput,
             PipelineStatus::CiFailing,
             PipelineStatus::MergeConflict,
             PipelineStatus::ChangesRequested,
@@ -786,6 +878,15 @@ mod tests {
         ];
         let glyphs: std::collections::HashSet<_> = all.iter().map(|s| s.glyph()).collect();
         assert_eq!(glyphs.len(), all.len(), "glyphs must be unique");
+        assert!(
+            glyphs.iter().all(|g| !g.is_empty()),
+            "non-excluded statuses must have non-empty glyphs"
+        );
+    }
+
+    #[test]
+    fn needs_input_glyph_is_blank() {
+        assert_eq!(PipelineStatus::NeedsInput.glyph(), "");
     }
 
     #[test]
@@ -807,13 +908,138 @@ mod tests {
     }
 
     #[test]
-    fn activity_input_and_working_share_lightning_glyph() {
-        assert_eq!(Activity::Working.glyph(), Activity::Input.glyph());
+    fn activity_none_is_blank_glyph() {
+        assert_eq!(Activity::None.glyph(), "");
+    }
+
+    // -- glyph_at / pulse animation (issue #281) -----------------------------
+
+    #[test]
+    fn activity_working_is_static_across_ticks() {
+        assert_eq!(Activity::Working.glyph_at(0), "\u{26A1}");
+        assert_eq!(Activity::Working.glyph_at(1), "\u{26A1}");
     }
 
     #[test]
-    fn activity_none_is_blank_glyph() {
-        assert_eq!(Activity::None.glyph(), "");
+    fn activity_exhausted_is_static_across_ticks() {
+        assert_eq!(Activity::Exhausted.glyph_at(0), "\u{1F480}");
+        assert_eq!(Activity::Exhausted.glyph_at(1), "\u{1F480}");
+    }
+
+    #[test]
+    fn activity_none_is_static_blank_across_ticks() {
+        assert_eq!(Activity::None.glyph_at(0), "");
+        assert_eq!(Activity::None.glyph_at(1), "");
+    }
+
+    #[test]
+    fn activity_idle_pulses_between_circle_and_dot() {
+        assert_eq!(Activity::Idle.glyph_at(0), "\u{25CB}"); // ○
+        assert_eq!(Activity::Idle.glyph_at(1), "\u{25CF}"); // ●
+    }
+
+    #[test]
+    fn activity_input_pulses_between_circle_and_question_mark() {
+        assert_eq!(Activity::Input.glyph_at(0), "\u{25CB}"); // ○
+        assert_eq!(Activity::Input.glyph_at(1), "?");
+    }
+
+    #[test]
+    fn activity_animated_variants_wrap_every_two_ticks() {
+        for v in [Activity::Idle, Activity::Input] {
+            assert_eq!(v.glyph_at(0), v.glyph_at(2));
+            assert_eq!(v.glyph_at(0), v.glyph_at(4));
+            assert_eq!(v.glyph_at(1), v.glyph_at(3));
+            assert_eq!(v.glyph_at(1), v.glyph_at(5));
+        }
+    }
+
+    #[test]
+    fn activity_legacy_glyph_returns_tick_zero_frame() {
+        for v in [
+            Activity::None,
+            Activity::Idle,
+            Activity::Working,
+            Activity::Input,
+            Activity::Exhausted,
+        ] {
+            assert_eq!(v.glyph(), v.glyph_at(0));
+        }
+    }
+
+    // -- pulse_tick ----------------------------------------------------------
+
+    #[test]
+    fn pulse_tick_returns_zero_or_one() {
+        let t = pulse_tick();
+        assert!(t == 0 || t == 1, "expected 0 or 1, got {t}");
+    }
+
+    #[test]
+    fn pulse_tick_is_stable_within_same_second() {
+        // Two calls back-to-back are overwhelmingly likely to land in the same
+        // second. This test could theoretically flake if it straddles a second
+        // boundary; the flake rate is on the order of a few microseconds per
+        // second (well under 0.001%).
+        let a = pulse_tick();
+        let b = pulse_tick();
+        assert_eq!(a, b);
+    }
+
+    // -- status_glyph_at -----------------------------------------------------
+
+    #[test]
+    fn status_glyph_at_renders_hourglass_when_activity_is_input() {
+        assert_eq!(
+            status_glyph_at(Activity::Input, PipelineStatus::NeedsInput, 0),
+            "\u{23F3}" // ⏳
+        );
+        assert_eq!(
+            status_glyph_at(Activity::Input, PipelineStatus::NeedsInput, 1),
+            "\u{231B}" // ⌛
+        );
+    }
+
+    #[test]
+    fn status_glyph_at_hourglass_wraps_every_two_ticks() {
+        assert_eq!(
+            status_glyph_at(Activity::Input, PipelineStatus::NeedsInput, 0),
+            status_glyph_at(Activity::Input, PipelineStatus::NeedsInput, 2)
+        );
+        assert_eq!(
+            status_glyph_at(Activity::Input, PipelineStatus::NeedsInput, 1),
+            status_glyph_at(Activity::Input, PipelineStatus::NeedsInput, 3)
+        );
+    }
+
+    #[test]
+    fn status_glyph_at_falls_through_for_non_input_activity() {
+        assert_eq!(
+            status_glyph_at(Activity::Working, PipelineStatus::CiFailing, 0),
+            PipelineStatus::CiFailing.glyph()
+        );
+        assert_eq!(
+            status_glyph_at(Activity::Idle, PipelineStatus::MergeConflict, 1),
+            PipelineStatus::MergeConflict.glyph()
+        );
+    }
+
+    #[test]
+    fn status_glyph_at_returns_blank_for_coding_with_non_input_activity() {
+        assert_eq!(
+            status_glyph_at(Activity::Working, PipelineStatus::Coding, 0),
+            ""
+        );
+    }
+
+    #[test]
+    fn status_glyph_at_returns_blank_for_needs_input_with_non_input_activity() {
+        // Defensive: if a row somehow has status NeedsInput but activity != Input
+        // (should be unreachable via resolve_status, but keep the invariant).
+        assert_eq!(
+            status_glyph_at(Activity::Working, PipelineStatus::NeedsInput, 0),
+            ""
+        );
     }
 
     // -- resolve_status ------------------------------------------------------
@@ -1162,6 +1388,16 @@ mod tests {
         let merged = key(PipelineStatus::Merged, true, "a");
         let coding = key(PipelineStatus::Coding, false, "z");
         assert!(coding < merged);
+    }
+
+    #[test]
+    fn sort_needs_input_still_beats_ci_failing_after_glyph_blank() {
+        // Issue #281 blanks PipelineStatus::NeedsInput.glyph() but keeps the
+        // variant for sort severity. Rows resolving to NeedsInput must still
+        // outrank CiFailing rows.
+        let needs = key(PipelineStatus::NeedsInput, false, "a");
+        let ci = key(PipelineStatus::CiFailing, true, "b");
+        assert!(needs < ci);
     }
 
     #[test]
