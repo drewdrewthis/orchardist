@@ -4561,6 +4561,62 @@ mod tests {
         );
     }
 
+    // Regression tests for issue #261: user collapses must survive cache refresh
+    // (i.e., a second call to prune_expansion_state must NOT re-expand a row
+    // that the user explicitly collapsed).
+
+    #[test]
+    fn prune_expansion_state_preserves_user_collapse() {
+        // Arrange: a multi-pane row — prune auto-expands it on first call.
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "precondition: row is auto-expanded after construction"
+        );
+
+        // Act: user explicitly collapses the row, then a cache refresh fires
+        // (simulated by a second call to prune_expansion_state).
+        app.expanded.remove("/workspace/repo-1");
+        app.prune_expansion_state();
+
+        // Assert: user's collapse must be preserved — not stomped by auto-expand.
+        assert!(
+            !app.expanded.contains("/workspace/repo-1"),
+            "prune_expansion_state stomped user collapse (bug #261)"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_preserves_user_window_collapse() {
+        // Arrange: a row with 2 windows (each with 2 panes) so both pane
+        // expansion AND window expansion are exercised.
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "win-a"), (2, "win-b")],
+        )]);
+        let pane_key = "/workspace/repo-1".to_string();
+        let window_key = App::window_expansion_key("sess-1", 0);
+
+        assert!(
+            app.expanded.contains(&pane_key),
+            "precondition: pane expansion auto-seeded"
+        );
+        assert!(
+            app.window_expanded.contains(&window_key),
+            "precondition: window expansion auto-seeded"
+        );
+
+        // Act: user collapses window 0, then cache refresh fires.
+        app.window_expanded.remove(&window_key);
+        app.prune_expansion_state();
+
+        // Assert: user's window collapse must not be restored by auto-expand.
+        assert!(
+            !app.window_expanded.contains(&window_key),
+            "prune_expansion_state stomped user window collapse (bug #261)"
+        );
+    }
+
     #[test]
     fn new_test_default_expands_multi_pane_rows_per_issue_251() {
         // Issue #251 spec: "Default-expanded, user-collapsible." The expansion
