@@ -608,7 +608,7 @@ impl App {
                     if reachable_hosts.contains(&remote.host)
                         && tmux_hosts_refreshed.insert(remote.host.clone())
                     {
-                        let _ = cache_sources::refresh_tmux_sessions(Some(&remote.host));
+                        let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote);
                     }
                 }
             }

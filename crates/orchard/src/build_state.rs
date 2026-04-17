@@ -287,7 +287,7 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
             if reachable {
                 let _ = sources::worktrees::refresh_remote(repo, remote);
                 if tmux_refreshed.insert(remote.host.clone()) {
-                    let _ = sources::tmux::refresh_remote(&remote.host);
+                    let _ = sources::tmux::refresh_remote_adapter(repo, remote);
                 }
             }
         }

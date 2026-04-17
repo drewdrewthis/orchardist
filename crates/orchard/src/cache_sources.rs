@@ -1684,6 +1684,101 @@ pub fn refresh_remote_worktrees(
     Ok(())
 }
 
+/// Fetches tmux sessions from a single remote via the appropriate `RemoteAdapter`
+/// and writes them to per-host tmux caches.
+///
+/// Dispatch is driven by `remote_cfg.kind` through `RemoteAdapter::from_config`.
+/// `Remmy` and `BoxdShared` produce sessions tagged with `remote_cfg.host` and
+/// write to a single cache file. `BoxdFork` produces sessions tagged with per-
+/// fork hosts (`<user>@<fork>.boxd.sh`); this function groups sessions by
+/// `host` and writes one cache file per fork host.
+///
+/// Unlike `refresh_tmux_sessions` (the legacy single-host path), this function
+/// does NOT call `tmux list-panes` / `capture-pane` per session — adapters
+/// already returned fully-parsed `CachedTmuxSession` values. Pane details and
+/// capture payloads will be empty for fork sessions until a follow-up slice
+/// wires them (see task #10 — this is acceptable per the issue's AC: forks
+/// need to be visible; pane details are not an AC).
+///
+/// On adapter error, the error is logged and existing caches are left intact.
+///
+/// # SWR note
+///
+/// For `Remmy` and `BoxdShared`, the `remote_cfg.host`-keyed tmux cache is
+/// checked and skipped when Fresh. For `BoxdFork`, SWR is skipped — the golden
+/// host fan-out makes a single-key SWR gate unreliable; the adapter always runs.
+pub fn refresh_remote_tmux_sessions(
+    config: &RepoConfig,
+    remote_cfg: &crate::global_config::RemoteConfig,
+) -> anyhow::Result<()> {
+    // SWR fast path: skip for non-fork remotes when the host cache is Fresh.
+    // BoxdFork fans out to per-fork hosts so we cannot gate on a single key —
+    // always refresh for that kind.
+    if remote_cfg.kind != crate::remote_adapter::RemoteKind::BoxdFork {
+        let cache_path = cache::tmux_cache_path(Some(&remote_cfg.host));
+        let cached_file = cache::read_cache::<CachedTmuxSession>(&cache_path);
+        let swr_config =
+            crate::swr::SwrConfig::default_for(crate::swr::SwrKind::RemoteSessions);
+        let state =
+            crate::swr::classify_cache_file(&cached_file, chrono::Utc::now(), swr_config);
+        if state == crate::swr::SwrState::Fresh {
+            LOG.info(&format!(
+                "cache_sources: refresh_remote_tmux_sessions({}, {}): swr=Fresh, skipping adapter",
+                config.slug, remote_cfg.host,
+            ));
+            return Ok(());
+        }
+    }
+
+    let adapter = crate::remote_adapter::RemoteAdapter::from_config(
+        remote_cfg,
+        Box::new(crate::remote_adapter::ProcessSshExec),
+    );
+
+    let mut sessions = match adapter.list_sessions() {
+        Ok(s) => s,
+        Err(e) => {
+            LOG.warn(&format!(
+                "cache_sources: refresh_remote_tmux_sessions({}, {}): {e}",
+                config.slug, remote_cfg.host,
+            ));
+            return Ok(());
+        }
+    };
+
+    // Ensure every session has a host set. Non-fork adapters tag with
+    // `remote_cfg.host`; `BoxdFork` tags with per-fork hosts. Be defensive
+    // for empty-list edge cases.
+    for s in &mut sessions {
+        if s.host.is_none() {
+            s.host = Some(remote_cfg.host.clone());
+        }
+    }
+
+    // Group by host and write one cache file per distinct host.
+    let mut by_host: std::collections::HashMap<String, Vec<CachedTmuxSession>> =
+        std::collections::HashMap::new();
+    for s in sessions {
+        let host = s.host.clone().unwrap_or_else(|| remote_cfg.host.clone());
+        by_host.entry(host).or_default().push(s);
+    }
+
+    let host_count = by_host.len();
+    let total: usize = by_host.values().map(|v| v.len()).sum();
+
+    for (host, group) in &by_host {
+        let cache_path = cache::tmux_cache_path(Some(host));
+        cache::write_cache_if_nonempty(&cache_path, group)?;
+    }
+
+    LOG.info(&format!(
+        "cache_sources: refresh_remote_tmux_sessions({}, {}): wrote {} entries across {} hosts via {:?} adapter",
+        config.slug, remote_cfg.host, total, host_count, remote_cfg.kind,
+    ));
+
+    Ok(())
+}
+
 /// Maps a `RemoteKind` to its on-the-wire kebab-case string, matching the
 /// serde serialization and the `remote_type` field on
 /// `worktree.remote_lost` events.
