@@ -1446,9 +1446,7 @@ mod tests {
 
     #[test]
     fn has_claude_tui_in_output_detects_tokens_indicator() {
-        let lines = vec![
-            "✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string(),
-        ];
+        let lines = vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()];
         assert!(
             has_claude_tui_in_output(&lines),
             "working-state 'tokens)' suffix must be recognized as a Claude TUI marker"
@@ -1470,11 +1468,7 @@ mod tests {
 
     #[test]
     fn has_claude_tui_in_output_returns_false_for_normal_shell() {
-        let lines = vec![
-            "$ ls".to_string(),
-            "foo bar".to_string(),
-            "$ ".to_string(),
-        ];
+        let lines = vec!["$ ls".to_string(), "foo bar".to_string(), "$ ".to_string()];
         assert!(
             !has_claude_tui_in_output(&lines),
             "plain shell output must not be misidentified as Claude TUI"
@@ -1509,9 +1503,7 @@ mod tests {
             host: None,
             created_at: None,
             last_activity_at: None,
-            last_output_lines: vec![
-                "✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string(),
-            ],
+            last_output_lines: vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()],
             claude_state_raw: None,
         };
         let enriched = enrich_session_from_scraping_for_test(&sess);
@@ -1577,8 +1569,7 @@ mod tests {
     /// Claude's bordered input box ends with a closing `│` on the same line.
     #[test]
     fn has_claude_tui_in_output_true_for_claude_prompt_box() {
-        let lines =
-            vec!["│ > help me debug                                │".to_string()];
+        let lines = vec!["│ > help me debug                                │".to_string()];
         assert!(
             has_claude_tui_in_output(&lines),
             "a line starting with '│ >' AND ending with '│' must be recognized as Claude's input box"
@@ -1600,8 +1591,7 @@ mod tests {
     /// `tokens)` on the same line must be recognized as a Claude TUI marker.
     #[test]
     fn has_claude_tui_in_output_true_for_working_spinner() {
-        let lines =
-            vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()];
+        let lines = vec!["✢ Whirlpooling... (2m 36s · ↑ 1.9k tokens)".to_string()];
         assert!(
             has_claude_tui_in_output(&lines),
             "working spinner line with '↑' and 'tokens)' must be recognized as a Claude TUI marker"
