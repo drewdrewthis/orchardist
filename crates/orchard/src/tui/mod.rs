@@ -186,6 +186,18 @@ pub struct App {
     ///
     /// When a key is present, the window's pane sub-rows are rendered below it.
     window_expanded: HashSet<String>,
+
+    /// Keys that have been seen as expandable in a prior refresh.
+    ///
+    /// Used to distinguish "new row, auto-expand on first sight" from
+    /// "user explicitly collapsed, preserve across refreshes". A key present
+    /// here but absent from `expanded` means the user collapsed it — the next
+    /// `prune_expansion_state` call must not re-insert it.
+    seen_expandable_keys: HashSet<String>,
+
+    /// Window keys that have been seen in a prior refresh. Parallel to
+    /// `seen_expandable_keys` for `window_expanded`.
+    seen_window_keys: HashSet<String>,
 }
 
 impl App {
@@ -271,6 +283,8 @@ impl App {
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
+            seen_expandable_keys: HashSet::new(),
+            seen_window_keys: HashSet::new(),
         };
         // Default-expanded: issue #251 requires the hierarchy visible from
         // first paint without a data-refresh round-trip. `prune_expansion_state`
@@ -413,32 +427,36 @@ impl App {
 
     /// Prunes expansion state: removes entries for rows whose pane count <= 1
     /// or that no longer exist in the current data set.
+    ///
+    /// Operates on *all* task rows and standalone sessions (unfiltered) so
+    /// collapse/expand intent is preserved across filter and repo-switch
+    /// changes — a row hidden by the current filter is still a real row the
+    /// user had intent about.
     fn prune_expansion_state(&mut self) {
-        let tasks = list::visible_tasks_filtered(
-            &self.task_rows,
-            &self.filter_text,
-            self.active_repo_slug(),
-        );
-
         let mut valid_keys: HashSet<String> = HashSet::new();
         for ss in &self.standalone_sessions {
             if ss.session.panes.len() > 1 {
                 valid_keys.insert(ss.session.tmux.name.clone());
             }
         }
-        for vt in tasks.iter() {
-            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+        for row in &self.task_rows {
+            let pane_count = row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             if pane_count > 1 {
-                valid_keys.insert(vt.row.worktree_path.clone());
+                valid_keys.insert(row.worktree_path.clone());
             }
         }
 
         self.expanded.retain(|k| valid_keys.contains(k));
 
-        // Auto-expand all expandable rows so hierarchy is visible by default.
+        // Auto-expand only keys that are new (first-time sightings).
+        // Keys already in `seen_expandable_keys` were visible on a prior refresh;
+        // if they are absent from `expanded` now, the user collapsed them — preserve that.
         for key in &valid_keys {
-            self.expanded.insert(key.clone());
+            if !self.seen_expandable_keys.contains(key) {
+                self.expanded.insert(key.clone());
+            }
         }
+        self.seen_expandable_keys = valid_keys;
 
         // Also prune window_expanded: remove entries for sessions that are no longer expanded.
         let expanded_ref = &self.expanded;
@@ -450,9 +468,9 @@ impl App {
                 expanded_session_names.insert(ss.session.tmux.name.clone());
             }
         }
-        for vt in tasks.iter() {
-            if expanded_ref.contains(&vt.row.worktree_path)
-                && let Some(s) = vt.row.sessions.first()
+        for row in &self.task_rows {
+            if expanded_ref.contains(&row.worktree_path)
+                && let Some(s) = row.sessions.first()
             {
                 expanded_session_names.insert(s.tmux.name.clone());
             }
@@ -468,26 +486,34 @@ impl App {
             }
         });
 
-        // Auto-expand windows for sessions with >1 window.
+        // Compute valid window keys for sessions with >1 window.
+        let mut valid_window_keys: HashSet<String> = HashSet::new();
         for ss in &self.standalone_sessions {
             if self.expanded.contains(&ss.session.tmux.name) && ss.session.windows.len() > 1 {
                 for (i, _) in ss.session.windows.iter().enumerate() {
-                    self.window_expanded
-                        .insert(Self::window_expansion_key(&ss.session.tmux.name, i));
+                    valid_window_keys.insert(Self::window_expansion_key(&ss.session.tmux.name, i));
                 }
             }
         }
-        for vt in tasks.iter() {
-            if self.expanded.contains(&vt.row.worktree_path)
-                && let Some(s) = vt.row.sessions.first()
+        for row in &self.task_rows {
+            if self.expanded.contains(&row.worktree_path)
+                && let Some(s) = row.sessions.first()
                 && s.windows.len() > 1
             {
                 for (i, _) in s.windows.iter().enumerate() {
-                    self.window_expanded
-                        .insert(Self::window_expansion_key(&s.tmux.name, i));
+                    valid_window_keys.insert(Self::window_expansion_key(&s.tmux.name, i));
                 }
             }
         }
+
+        // Auto-expand only window keys that are new (not yet seen), preserving
+        // any user-collapsed windows from prior refreshes.
+        for key in &valid_window_keys {
+            if !self.seen_window_keys.contains(key) {
+                self.window_expanded.insert(key.clone());
+            }
+        }
+        self.seen_window_keys = valid_window_keys;
     }
 
     // -------------------------------------------------------------------
@@ -2023,6 +2049,8 @@ impl App {
             expanded: HashSet::new(),
             sub_cursor: SubCursor::None,
             window_expanded: HashSet::new(),
+            seen_expandable_keys: HashSet::new(),
+            seen_window_keys: HashSet::new(),
         };
         // Mirror production: auto-expand multi-child rows so tests see
         // hierarchy by default (issue #251).
@@ -4587,7 +4615,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_expansion_state_auto_expands_new_multi_pane_rows() {
+    fn prune_expansion_state_auto_expands_on_first_sight_only() {
         // Issue #251: rows default-expanded. `new_test` already seeds the
         // expansion set via `prune_expansion_state`, so a multi-pane row is
         // expanded immediately after construction.
@@ -4596,13 +4624,15 @@ mod tests {
             app.expanded.contains("/workspace/repo-1"),
             "multi-pane row should be auto-expanded by default"
         );
-        // Clearing + re-pruning must re-seed the same state — proves the
-        // auto-expand behavior is idempotent, not a one-time init quirk.
+        // After the first prune the key is in `seen_expandable_keys`. Subsequent
+        // prune calls must NOT re-expand a key that is absent from `expanded` —
+        // that would stomp user collapses (issue #261). Verify the key stays
+        // absent after manually clearing it and re-pruning.
         app.expanded.clear();
         app.prune_expansion_state();
         assert!(
-            app.expanded.contains("/workspace/repo-1"),
-            "multi-pane row should be re-expanded by prune"
+            !app.expanded.contains("/workspace/repo-1"),
+            "prune must not re-expand a previously-seen key (would stomp user collapse)"
         );
     }
 
@@ -4613,6 +4643,95 @@ mod tests {
         assert!(
             app.expanded.is_empty(),
             "single-pane row should not be auto-expanded"
+        );
+    }
+
+    // Regression tests for issue #261: user collapses must survive cache refresh
+    // (i.e., a second call to prune_expansion_state must NOT re-expand a row
+    // that the user explicitly collapsed).
+
+    #[test]
+    fn prune_expansion_state_preserves_user_collapse() {
+        // Arrange: a multi-pane row — prune auto-expands it on first call.
+        let mut app = App::new_test(vec![make_task_row_with_panes(1, 3)]);
+        assert!(
+            app.expanded.contains("/workspace/repo-1"),
+            "precondition: row is auto-expanded after construction"
+        );
+
+        // Act: user explicitly collapses the row, then a cache refresh fires
+        // (simulated by a second call to prune_expansion_state).
+        app.expanded.remove("/workspace/repo-1");
+        app.prune_expansion_state();
+
+        // Assert: user's collapse must be preserved — not stomped by auto-expand.
+        assert!(
+            !app.expanded.contains("/workspace/repo-1"),
+            "prune_expansion_state stomped user collapse (bug #261)"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_preserves_collapse_across_filter_changes() {
+        // Issue #261 regression: even when the user filters/repo-switches away
+        // from a row, its expansion intent must survive. Prune operates on the
+        // full task_rows set, not the visible-filtered subset.
+        let row_a = WorktreeRow {
+            repo_slug: "owner/repo-a".to_string(),
+            ..make_task_row_with_panes(1, 3)
+        };
+        let row_b = WorktreeRow {
+            repo_slug: "owner/repo-b".to_string(),
+            worktree_path: "/workspace/repo-b-2".to_string(),
+            ..make_task_row_with_panes(2, 3)
+        };
+        let mut app = App::new_test(vec![row_a, row_b]);
+
+        // User collapses repo-a's row while viewing all repos.
+        app.expanded.remove("/workspace/repo-1");
+
+        // Filter away from repo-a (e.g. repo-switch to repo-b only).
+        app.filter_text = "repo-b".to_string();
+        app.prune_expansion_state();
+
+        // Come back — filter cleared.
+        app.filter_text.clear();
+        app.prune_expansion_state();
+
+        assert!(
+            !app.expanded.contains("/workspace/repo-1"),
+            "collapse must survive filter away-and-back cycle"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_preserves_user_window_collapse() {
+        // Arrange: a row with 2 windows (each with 2 panes) so both pane
+        // expansion AND window expansion are exercised.
+        let mut app = App::new_test(vec![make_task_row_with_windows(
+            1,
+            &[(2, "win-a"), (2, "win-b")],
+        )]);
+        let pane_key = "/workspace/repo-1".to_string();
+        let window_key = App::window_expansion_key("sess-1", 0);
+
+        assert!(
+            app.expanded.contains(&pane_key),
+            "precondition: pane expansion auto-seeded"
+        );
+        assert!(
+            app.window_expanded.contains(&window_key),
+            "precondition: window expansion auto-seeded"
+        );
+
+        // Act: user collapses window 0, then cache refresh fires.
+        app.window_expanded.remove(&window_key);
+        app.prune_expansion_state();
+
+        // Assert: user's window collapse must not be restored by auto-expand.
+        assert!(
+            !app.window_expanded.contains(&window_key),
+            "prune_expansion_state stomped user window collapse (bug #261)"
         );
     }
 
