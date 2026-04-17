@@ -413,20 +413,18 @@ impl App {
         }
     }
 
-    /// Returns `true` if `host` is not confirmed reachable and the caller
-    /// should abort. Sets `self.warning` to the appropriate message.
+    /// Returns `true` if `host` is confirmed unreachable and the caller should
+    /// abort. Sets `self.warning` to the appropriate message.
+    ///
+    /// Only a confirmed [`Reachability::Unreachable`] counts as "blocked".
+    /// [`Reachability::Unknown`] (probe not yet run, or timed out) is treated
+    /// as "proceed optimistically" — issue #280: treating "not probed" as
+    /// "blocked" silently swallowed Enter on fresh launches.
     fn block_if_host_unreachable(&mut self, host: &str) -> bool {
         match self.reachability(host) {
-            Reachability::Reachable => false,
+            Reachability::Reachable | Reachability::Unknown => false,
             Reachability::Unreachable => {
                 self.warning = Some((format!("@{} is unreachable", host), Instant::now()));
-                true
-            }
-            Reachability::Unknown => {
-                self.warning = Some((
-                    format!("@{} -- checking connectivity...", host),
-                    Instant::now(),
-                ));
                 true
             }
         }
