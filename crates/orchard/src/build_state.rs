@@ -643,6 +643,103 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // issue #275: sessions outside worktrees go to standalone bucket
+    // -----------------------------------------------------------------------
+
+    /// Any live tmux session whose active-pane cwd is NOT inside any configured
+    /// worktree path must appear in `state.standalone_sessions`.
+    ///
+    /// Currently `build_standalone_sessions` only materialises sessions declared
+    /// in `config.tmux_sessions`. This test is marked ignored until the
+    /// implementer widens that function (or adds a complementary pass) to
+    /// include "discovered" sessions — i.e. any live tmux session whose path
+    /// does not match any worktree.
+    ///
+    /// Acceptance criterion: s2 (at /tmp/random-dir) must be present in
+    /// `standalone_sessions` even though it has no entry in `config.tmux_sessions`.
+    #[ignore = "AC #3 issue #275: build_standalone_sessions must include sessions outside all worktrees"]
+    #[test]
+    fn session_outside_all_worktrees_goes_to_standalone() {
+        // TODO (issue #275): remove #[ignore] once build_standalone_sessions is
+        // widened to include sessions whose active-pane cwd is outside every
+        // configured worktree path. The implementer should:
+        //   1. Accept `&[CachedTmuxSession]` and `&[CachedWorktree]` (all repos).
+        //   2. Collect sessions whose path is not a prefix of any worktree path.
+        //   3. Emit them as StandaloneSessionRow with a synthetic StandaloneConfig.
+
+        // s1 sits inside the repo worktree — expect it on a worktree row.
+        let s1 = make_cached_session_at("repo_main", "/work/repo");
+        // s2 sits in an unrelated dir — expect it in standalone bucket.
+        let s2 = make_cached_session_at("stray", "/tmp/random-dir");
+
+        // Use build_standalone_sessions directly (it is pub(crate) — accessible
+        // here because we are inside the same crate).
+        let config = GlobalConfig::default(); // no tmux_sessions configured
+        let worktrees_in_scope = vec![
+            make_cached_worktree("/work/repo"),
+            make_cached_worktree("/work/repo-feat"),
+        ];
+        let all_sessions = vec![s1.clone(), s2.clone()];
+
+        // Call the function under test.  When the implementer adds the
+        // worktrees parameter, update the call site accordingly.
+        let rows = build_standalone_sessions(&config, &all_sessions, &[]);
+
+        let stray_row = rows.iter().find(|r| r.session.tmux.name == "stray");
+        assert!(
+            stray_row.is_some(),
+            "session 'stray' at /tmp/random-dir should appear in standalone bucket \
+             because its path is not inside any worktree; worktrees in scope: {:?}",
+            worktrees_in_scope
+                .iter()
+                .map(|w| &w.path)
+                .collect::<Vec<_>>()
+        );
+
+        let repo_row = rows.iter().find(|r| r.session.tmux.name == "repo_main");
+        assert!(
+            repo_row.is_none(),
+            "session 'repo_main' at /work/repo should NOT appear in standalone bucket \
+             because it matches a worktree path"
+        );
+    }
+
+    fn make_cached_session_at(name: &str, path: &str) -> cache::CachedTmuxSession {
+        cache::CachedTmuxSession {
+            name: name.to_string(),
+            path: path.to_string(),
+            pane_targets: vec![],
+            pane_titles: vec![],
+            pane_commands: vec![],
+            window_names: vec![],
+            window_active: vec![],
+            window_layouts: vec![],
+            pane_paths: vec![],
+            pane_active: vec![],
+            host: None,
+            created_at: None,
+            last_activity_at: None,
+            last_output_lines: vec![],
+            claude_state_raw: None,
+        }
+    }
+
+    fn make_cached_worktree(path: &str) -> cache::CachedWorktree {
+        use crate::cache::WorktreeLayout;
+        cache::CachedWorktree {
+            path: path.to_string(),
+            branch: "main".to_string(),
+            is_bare: false,
+            is_locked: false,
+            host: None,
+            ahead: None,
+            behind: None,
+            last_commit_at: None,
+            layout: WorktreeLayout::Bare,
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Label threading: PR labels reach PrState; issue labels reach IssueInfo
     //
     // These tests use `derive_worktree_rows` (the pure functional core) instead

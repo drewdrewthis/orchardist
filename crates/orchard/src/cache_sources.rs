@@ -493,14 +493,96 @@ pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
     worktrees
 }
 
-/// The `-F` format string passed to `tmux list-sessions` for all session
+/// The `-F` format string passed to `tmux list-panes -a` for all session
 /// enumeration — local, remote (Remmy/BoxdShared), and per-fork (BoxdFork).
 ///
-/// All three callers MUST use this constant so that `parse_tmux_output` always
-/// receives identically-structured lines regardless of the code path that
-/// produced them.
+/// All three callers MUST use this constant so that
+/// `parse_tmux_sessions_from_panes` always receives identically-structured
+/// lines regardless of the code path that produced them.
 pub(crate) const TMUX_SESSION_FORMAT: &str =
-    "#{session_name}:#{session_path}|#{session_created}|#{session_activity}";
+    "#{session_name}\t#{pane_active}\t#{pane_current_path}\t#{session_created}\t#{session_activity}";
+
+/// Parses the output of `tmux list-panes -a -F '#{session_name}\t#{pane_active}\t#{pane_current_path}\t#{session_created}\t#{session_activity}'`
+/// into `Vec<CachedTmuxSession>`, one entry per session.
+///
+/// Each line represents a single pane. This function filters to `pane_active=1` so that
+/// `CachedTmuxSession.path` reflects the live cwd of the active pane rather than the
+/// frozen `session_path` written at session creation time.
+///
+/// `panes_fn` and `content_fn` have the same contract as in `parse_tmux_output` —
+/// they fetch per-session pane detail and terminal output respectively.
+pub fn parse_tmux_sessions_from_panes(
+    panes_output: &str,
+    host: Option<&str>,
+    panes_fn: impl Fn(&str) -> String,
+    content_fn: impl Fn(&str) -> Vec<String>,
+) -> Vec<CachedTmuxSession> {
+    // Collect the active-pane row for each session, keyed by session name.
+    // If a session appears multiple times (should not happen in practice for
+    // pane_active=1, but guard anyway) only the first matching row wins.
+    let mut seen: std::collections::HashMap<String, (String, Option<u64>, Option<u64>)> =
+        std::collections::HashMap::new();
+
+    for line in panes_output.trim().lines() {
+        if line.is_empty() {
+            continue;
+        }
+        // Format: "{session_name}\t{pane_active}\t{pane_current_path}\t{session_created}\t{session_activity}"
+        let parts: Vec<&str> = line.splitn(5, '\t').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let name = parts[0];
+        let pane_active = parts[1];
+        if pane_active != "1" {
+            continue;
+        }
+        if seen.contains_key(name) {
+            continue;
+        }
+        let path = parts[2];
+        let created_at: Option<u64> = parts.get(3).and_then(|s| s.parse().ok());
+        let last_activity_at: Option<u64> = parts.get(4).and_then(|s| s.parse().ok());
+        seen.insert(
+            name.to_string(),
+            (path.to_string(), created_at, last_activity_at),
+        );
+    }
+
+    // Build sessions in the order they were first seen (stable across runs that
+    // preserve tmux list-panes ordering, which is alphabetical by session name).
+    let mut ordered: Vec<(String, String, Option<u64>, Option<u64>)> = seen
+        .into_iter()
+        .map(|(name, (path, created, activity))| (name, path, created, activity))
+        .collect();
+    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut sessions = Vec::with_capacity(ordered.len());
+    for (name, path, created_at, last_activity_at) in ordered {
+        let pane_output = panes_fn(&name);
+        let parsed = parse_pane_lines(&pane_output);
+        let last_output_lines = content_fn(&name);
+        sessions.push(CachedTmuxSession {
+            name,
+            path,
+            pane_targets: parsed.targets,
+            pane_titles: parsed.titles,
+            pane_commands: parsed.commands,
+            window_names: parsed.window_names,
+            window_active: parsed.window_active,
+            window_layouts: parsed.window_layouts,
+            pane_paths: parsed.pane_paths,
+            pane_active: parsed.pane_active,
+            host: host.map(|h| h.to_string()),
+            created_at,
+            last_activity_at,
+            last_output_lines,
+            claude_state_raw: None,
+        });
+    }
+
+    sessions
+}
 
 /// Parses the combined output of `tmux list-sessions` and per-session pane
 /// information into `Vec<CachedTmuxSession>`.
@@ -3499,6 +3581,51 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         );
     }
 
+    // -- parse_tmux_sessions_from_panes (issue #275) --------------------------
+
+    /// Builds a panes-format line: "{name}\t{pane_active}\t{cwd}\t{created}\t{activity}".
+    fn pane_line(name: &str, pane_active: &str, cwd: &str, created: u64, activity: u64) -> String {
+        format!("{name}\t{pane_active}\t{cwd}\t{created}\t{activity}")
+    }
+
+    #[test]
+    fn parse_tmux_output_new_format_uses_active_pane_cwd() {
+        // Single session, one active pane — path must come from pane_current_path,
+        // not a frozen session_path.
+        let created = 1_700_000_000u64;
+        let activity = 1_700_001_000u64;
+        let input = pane_line("myrepo", "1", "/work/repo-feat", created, activity);
+
+        let sessions = parse_tmux_sessions_from_panes(&input, None, |_| String::new(), |_| vec![]);
+
+        assert_eq!(sessions.len(), 1);
+        let s = &sessions[0];
+        assert_eq!(s.name, "myrepo");
+        assert_eq!(s.path, "/work/repo-feat", "path must be pane_current_path");
+        assert_eq!(s.created_at, Some(created));
+        assert_eq!(s.last_activity_at, Some(activity));
+        assert!(s.host.is_none());
+    }
+
+    #[test]
+    fn parse_tmux_output_new_format_skips_inactive_panes() {
+        // Two panes for the same session: inactive (cwd=/work/repo) then active (cwd=/work/repo-feat).
+        // The session path must reflect the ACTIVE pane only.
+        let input = format!(
+            "{}\n{}",
+            pane_line("myrepo", "0", "/work/repo", 1_700_000_000, 1_700_001_000),
+            pane_line("myrepo", "1", "/work/repo-feat", 1_700_000_000, 1_700_001_000),
+        );
+
+        let sessions = parse_tmux_sessions_from_panes(&input, None, |_| String::new(), |_| vec![]);
+
+        assert_eq!(sessions.len(), 1, "should deduplicate to one session");
+        assert_eq!(
+            sessions[0].path, "/work/repo-feat",
+            "path must be the active pane cwd, not the inactive pane cwd"
+        );
+    }
+
     #[test]
     fn pr_graphql_query_per_branch_includes_is_outdated() {
         let q = pr_graphql_query_per_branch("owner", "repo", &["branch-1".to_string()]);
@@ -3521,5 +3648,46 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
             compact.contains("reviews(last:20)"),
             "expected reviews to use last:20, got: {q}"
         );
+    }
+
+    #[test]
+    fn parse_tmux_output_new_format_multiple_sessions() {
+        // Three sessions each with one active pane at a distinct cwd.
+        let input = format!(
+            "{}\n{}\n{}",
+            pane_line("alpha", "1", "/work/alpha", 1_700_000_001, 1_700_001_001),
+            pane_line("beta", "1", "/work/beta", 1_700_000_002, 1_700_001_002),
+            pane_line("gamma", "1", "/tmp/scratch", 1_700_000_003, 1_700_001_003),
+        );
+
+        let sessions = parse_tmux_sessions_from_panes(&input, None, |_| String::new(), |_| vec![]);
+
+        assert_eq!(sessions.len(), 3);
+        // Results are sorted by session name (alphabetical).
+        let by_name: std::collections::HashMap<&str, &CachedTmuxSession> =
+            sessions.iter().map(|s| (s.name.as_str(), s)).collect();
+
+        assert_eq!(by_name["alpha"].path, "/work/alpha");
+        assert_eq!(by_name["beta"].path, "/work/beta");
+        assert_eq!(by_name["gamma"].path, "/tmp/scratch");
+    }
+
+    #[test]
+    fn parse_tmux_output_new_format_handles_tabs_in_none_of_the_fields() {
+        // Sanity: tmux session names and paths never contain tabs, so tab is a
+        // reliable separator. A well-formed line with no embedded tabs parses cleanly.
+        let input = "repo_main\t1\t/workspace/git-orchard-rs\t1700000000\t1700001000";
+
+        let sessions = parse_tmux_sessions_from_panes(input, None, |_| String::new(), |_| vec![]);
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "repo_main");
+        assert_eq!(sessions[0].path, "/workspace/git-orchard-rs");
+    }
+
+    #[test]
+    fn parse_tmux_output_new_format_empty_input_returns_empty() {
+        let sessions = parse_tmux_sessions_from_panes("", None, |_| String::new(), |_| vec![]);
+        assert!(sessions.is_empty());
     }
 }
