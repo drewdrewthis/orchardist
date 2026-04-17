@@ -613,3 +613,81 @@ fn sanitize_raw_payload(raw: &str) -> String {
         .take(256)
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `BoxdForkAdapter::list_sessions` is a Slice-2 stub that unconditionally
+    /// returns `Ok(vec![])`. This test documents the expected behaviour once the
+    /// stub is replaced: the adapter should SSH to the golden host to enumerate
+    /// live forks and then SSH into each fork to collect its tmux sessions.
+    ///
+    /// The test will FAIL until the stub is implemented (issue #264).
+    #[test]
+    fn boxd_fork_adapter_list_sessions_returns_sessions_from_each_live_fork() {
+        // Arrange — wire up a FakeSshExec with two canned responses:
+        //
+        // 1. golden-host "list --json" → one fork entry
+        // 2. fork-host tmux list-sessions → one session line in the format
+        //    consumed by parse_tmux_output (see cache_sources.rs:499):
+        //    "{session_name}:{session_path}|{session_created}|{session_activity}"
+        let mut fake = FakeSshExec::new();
+
+        // Response 1: fork enumeration from the golden Boxd controller.
+        fake.insert(
+            "boxd.sh",
+            "list --json",
+            SshOutput {
+                stdout: r#"[{"name":"issue3155","host":"issue3155.boxd.sh","path":"/workspace/langwatch"}]"#
+                    .to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        // Response 2: tmux session list on the fork VM.
+        // Format: "#{session_name}:#{session_path}|#{session_created}|#{session_activity}"
+        // (matches cache_sources.rs:1458 -F template)
+        fake.insert(
+            "boxd@issue3155.boxd.sh",
+            "tmux list-sessions -F '#{session_name}:#{session_path}|#{session_created}|#{session_activity}'",
+            SshOutput {
+                stdout: "issue3155:/workspace/langwatch|1713000000|1713000060\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdForkAdapter {
+            golden_host: "boxd.sh".to_string(),
+            fork_repo_path: "/workspace/langwatch".to_string(),
+            ssh: Box::new(fake),
+        };
+
+        // Act
+        let sessions = adapter.list_sessions().expect("list_sessions must not error");
+
+        // Assert — must return at least one session whose host matches the fork
+        // VM and whose name matches what the fake returned.
+        assert!(
+            !sessions.is_empty(),
+            "list_sessions returned an empty vec; stub has not been implemented yet"
+        );
+
+        let session = &sessions[0];
+        assert_eq!(
+            session.host.as_deref(),
+            Some("boxd@issue3155.boxd.sh"),
+            "session host should identify the fork VM"
+        );
+        assert_eq!(
+            session.name, "issue3155",
+            "session name should match the tmux session returned by the fork VM"
+        );
+    }
+}
