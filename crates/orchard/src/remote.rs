@@ -202,6 +202,7 @@ fn parse_tmux_output(out: &str) -> Vec<TmuxSession> {
             path: parts[1].to_string(),
             attached: parts[2] == "1",
             pane_title: None,
+            active_pane_cwd: None,
         });
     }
     sessions

@@ -259,12 +259,18 @@ pub enum IssueState {
 pub struct TmuxSession {
     /// The tmux session name.
     pub name: String,
-    /// The working directory of the session's first window.
+    /// The working directory of the session's first window (frozen at session creation).
     pub path: String,
     /// Whether a client is currently attached to this session.
     pub attached: bool,
     /// Title of the active pane, if available.
     pub pane_title: Option<String>,
+    /// The live cwd of the active pane, if available.
+    ///
+    /// Users `cd` inside sessions, so this reflects where the user actually is
+    /// right now — which may differ from the frozen `path`. When `Some`, heal
+    /// classification should prefer this over `path`.
+    pub active_pane_cwd: Option<String>,
 }
 
 /// Connection details for a remote machine that hosts worktrees.

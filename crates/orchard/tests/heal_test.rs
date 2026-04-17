@@ -17,6 +17,7 @@ fn session(name: &str, path: &str) -> TmuxSession {
         path: path.to_string(),
         attached: false,
         pane_title: None,
+        active_pane_cwd: None,
     }
 }
 

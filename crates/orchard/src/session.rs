@@ -227,6 +227,21 @@ pub struct PaneColumns<'a> {
     pub window_layouts: &'a [String],
 }
 
+/// Returns the working directory of the active pane in a cached tmux session.
+///
+/// Scans `pane_active` for the first entry equal to `"1"` and returns the
+/// corresponding path from `pane_paths`. Empty paths are treated as absent.
+/// Returns `None` when no active pane is found or the path is empty.
+pub fn active_pane_cwd(s: &crate::cache::CachedTmuxSession) -> Option<String> {
+    s.pane_active
+        .iter()
+        .enumerate()
+        .find(|(_, flag)| flag.as_str() == "1")
+        .and_then(|(i, _)| s.pane_paths.get(i))
+        .filter(|p| !p.is_empty())
+        .cloned()
+}
+
 impl<'a> PaneColumns<'a> {
     /// Constructs a `PaneColumns` view over a `CachedTmuxSession`'s parallel
     /// vecs. The cache struct is the primary on-disk source for every field
