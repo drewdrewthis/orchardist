@@ -394,23 +394,22 @@ impl App {
 
     /// Prunes expansion state: removes entries for rows whose pane count <= 1
     /// or that no longer exist in the current data set.
+    ///
+    /// Operates on *all* task rows and standalone sessions (unfiltered) so
+    /// collapse/expand intent is preserved across filter and repo-switch
+    /// changes — a row hidden by the current filter is still a real row the
+    /// user had intent about.
     fn prune_expansion_state(&mut self) {
-        let tasks = list::visible_tasks_filtered(
-            &self.task_rows,
-            &self.filter_text,
-            self.active_repo_slug(),
-        );
-
         let mut valid_keys: HashSet<String> = HashSet::new();
         for ss in &self.standalone_sessions {
             if ss.session.panes.len() > 1 {
                 valid_keys.insert(ss.session.tmux.name.clone());
             }
         }
-        for vt in tasks.iter() {
-            let pane_count = vt.row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
+        for row in &self.task_rows {
+            let pane_count = row.sessions.first().map(|s| s.panes.len()).unwrap_or(0);
             if pane_count > 1 {
-                valid_keys.insert(vt.row.worktree_path.clone());
+                valid_keys.insert(row.worktree_path.clone());
             }
         }
 
@@ -424,8 +423,7 @@ impl App {
                 self.expanded.insert(key.clone());
             }
         }
-        // Update the seen set to match the current valid keys.
-        self.seen_expandable_keys = valid_keys.clone();
+        self.seen_expandable_keys = valid_keys;
 
         // Also prune window_expanded: remove entries for sessions that are no longer expanded.
         let expanded_ref = &self.expanded;
@@ -437,9 +435,9 @@ impl App {
                 expanded_session_names.insert(ss.session.tmux.name.clone());
             }
         }
-        for vt in tasks.iter() {
-            if expanded_ref.contains(&vt.row.worktree_path)
-                && let Some(s) = vt.row.sessions.first()
+        for row in &self.task_rows {
+            if expanded_ref.contains(&row.worktree_path)
+                && let Some(s) = row.sessions.first()
             {
                 expanded_session_names.insert(s.tmux.name.clone());
             }
@@ -464,9 +462,9 @@ impl App {
                 }
             }
         }
-        for vt in tasks.iter() {
-            if self.expanded.contains(&vt.row.worktree_path)
-                && let Some(s) = vt.row.sessions.first()
+        for row in &self.task_rows {
+            if self.expanded.contains(&row.worktree_path)
+                && let Some(s) = row.sessions.first()
                 && s.windows.len() > 1
             {
                 for (i, _) in s.windows.iter().enumerate() {
@@ -4562,7 +4560,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_expansion_state_auto_expands_new_multi_pane_rows() {
+    fn prune_expansion_state_auto_expands_on_first_sight_only() {
         // Issue #251: rows default-expanded. `new_test` already seeds the
         // expansion set via `prune_expansion_state`, so a multi-pane row is
         // expanded immediately after construction.
@@ -4615,6 +4613,39 @@ mod tests {
         assert!(
             !app.expanded.contains("/workspace/repo-1"),
             "prune_expansion_state stomped user collapse (bug #261)"
+        );
+    }
+
+    #[test]
+    fn prune_expansion_state_preserves_collapse_across_filter_changes() {
+        // Issue #261 regression: even when the user filters/repo-switches away
+        // from a row, its expansion intent must survive. Prune operates on the
+        // full task_rows set, not the visible-filtered subset.
+        let row_a = WorktreeRow {
+            repo_slug: "owner/repo-a".to_string(),
+            ..make_task_row_with_panes(1, 3)
+        };
+        let row_b = WorktreeRow {
+            repo_slug: "owner/repo-b".to_string(),
+            worktree_path: "/workspace/repo-b-2".to_string(),
+            ..make_task_row_with_panes(2, 3)
+        };
+        let mut app = App::new_test(vec![row_a, row_b]);
+
+        // User collapses repo-a's row while viewing all repos.
+        app.expanded.remove("/workspace/repo-1");
+
+        // Filter away from repo-a (e.g. repo-switch to repo-b only).
+        app.filter_text = "repo-b".to_string();
+        app.prune_expansion_state();
+
+        // Come back — filter cleared.
+        app.filter_text.clear();
+        app.prune_expansion_state();
+
+        assert!(
+            !app.expanded.contains("/workspace/repo-1"),
+            "collapse must survive filter away-and-back cycle"
         );
     }
 
