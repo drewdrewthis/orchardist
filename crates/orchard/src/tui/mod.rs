@@ -365,6 +365,27 @@ impl App {
         entries
     }
 
+    /// Seeds reachability state for a host. Test-only: lets tests express
+    /// intent in terms of the [`Reachability`] domain type instead of
+    /// reaching into the `host_reachable` storage directly.
+    ///
+    /// [`Reachability::Unknown`] removes any existing entry, matching the
+    /// "no probe has run yet" semantics of a missing map key.
+    #[cfg(test)]
+    pub(crate) fn seed_reachability(&mut self, host: &str, reachability: Reachability) {
+        match reachability {
+            Reachability::Unknown => {
+                self.host_reachable.remove(host);
+            }
+            Reachability::Reachable => {
+                self.host_reachable.insert(host.to_string(), true);
+            }
+            Reachability::Unreachable => {
+                self.host_reachable.insert(host.to_string(), false);
+            }
+        }
+    }
+
     // -------------------------------------------------------------------
     // Expand/collapse helpers
     // -------------------------------------------------------------------
@@ -2882,7 +2903,7 @@ mod tests {
             ..make_task_row(1, DisplayGroup::ClaudeWorking)
         };
         let mut app = App::new_test(vec![row]);
-        app.host_reachable.insert("gpu1".to_string(), false);
+        app.seed_reachability("gpu1", Reachability::Unreachable);
 
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let msg = app.handle_event(key);
@@ -2948,7 +2969,7 @@ mod tests {
     #[test]
     fn reconnect_unreachable_hosts_all_reachable_sets_warning() {
         let mut app = App::new_test(vec![]);
-        app.host_reachable.insert("gpu1".to_string(), true);
+        app.seed_reachability("gpu1", Reachability::Reachable);
         app.reconnect_unreachable_hosts();
         let warning = app.warning.as_ref().map(|(s, _)| s.as_str());
         assert_eq!(warning, Some("All hosts reachable"));
@@ -2957,7 +2978,7 @@ mod tests {
     #[test]
     fn reconnect_unreachable_hosts_unreachable_sets_reconnecting_warning() {
         let mut app = App::new_test(vec![]);
-        app.host_reachable.insert("gpu1".to_string(), false);
+        app.seed_reachability("gpu1", Reachability::Unreachable);
         app.reconnect_unreachable_hosts();
         let warning = app.warning.as_ref().map(|(s, _)| s.as_str());
         assert_eq!(warning, Some("Reconnecting..."));
@@ -2966,8 +2987,8 @@ mod tests {
     #[test]
     fn header_renders_host_connectivity() {
         let mut app = App::new_test(vec![]);
-        app.host_reachable.insert("gpu1".to_string(), true);
-        app.host_reachable.insert("dev2".to_string(), false);
+        app.seed_reachability("gpu1", Reachability::Reachable);
+        app.seed_reachability("dev2", Reachability::Unreachable);
         let output = render_to_string(&mut app, 120, 40);
         assert!(output.contains("@gpu1"), "expected @gpu1 in header");
         assert!(output.contains("@dev2"), "expected @dev2 in header");
@@ -2987,14 +3008,14 @@ mod tests {
     #[test]
     fn reachability_returns_reachable_when_probe_succeeded() {
         let mut app = App::new_test(vec![]);
-        app.host_reachable.insert("gpu1".to_string(), true);
+        app.seed_reachability("gpu1", Reachability::Reachable);
         assert_eq!(app.reachability("gpu1"), Reachability::Reachable);
     }
 
     #[test]
     fn reachability_returns_unreachable_when_probe_failed() {
         let mut app = App::new_test(vec![]);
-        app.host_reachable.insert("gpu1".to_string(), false);
+        app.seed_reachability("gpu1", Reachability::Unreachable);
         assert_eq!(app.reachability("gpu1"), Reachability::Unreachable);
     }
 
@@ -3559,7 +3580,7 @@ mod tests {
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row]);
-        app.host_reachable.insert("gpu1".to_string(), true);
+        app.seed_reachability("gpu1", Reachability::Reachable);
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("@gpu1"), "expected '@gpu1' in output");
@@ -3588,7 +3609,7 @@ mod tests {
             ..make_worktree_row("feat/remote", DisplayGroup::Other)
         };
         let mut app = App::new_test(vec![row]);
-        app.host_reachable.insert("gpu1".to_string(), false);
+        app.seed_reachability("gpu1", Reachability::Unreachable);
         let output = render_to_string(&mut app, 120, 40);
 
         assert!(output.contains("@gpu1"), "expected '@gpu1' in output");
