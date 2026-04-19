@@ -154,15 +154,16 @@ fn schema_flag_prints_valid_schema() {
         .stdout
         .clone();
     let stdout = String::from_utf8(output).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&stdout)
-        .expect("--schema output must be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--schema output must be valid JSON");
     // Basic shape: JSON Schema has a "$schema" or "title" at the root.
     assert!(
         parsed.get("$schema").is_some() || parsed.get("title").is_some(),
         "output should look like a JSON Schema: {stdout}"
     );
     // Wire-format invariants: top-level required fields exist in schema.
-    let props = parsed.pointer("/properties")
+    let props = parsed
+        .pointer("/properties")
         .or_else(|| parsed.pointer("/definitions/JsonOutput/properties"))
         .expect("schema should describe JsonOutput properties");
     for field in ["version", "repos", "hosts", "tmuxSessions"] {
