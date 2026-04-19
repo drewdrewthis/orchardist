@@ -66,17 +66,32 @@ orchard heal --fix         Apply repairs
 orchard setup-remote HOST  Provision a remote host for SSH worktrees
 orchard init               Setup wizard
 orchard --json             Full state as JSON (always fresh, never cached)
-orchard --toon             Same data as --json, emitted as TOON v2.0
-                           (token-efficient format for AI agent consumption)
+orchard --schema           Print the JSON Schema for --json output and exit
 ```
 
-`--toon` is mutually exclusive with `--json`. The two flags share the
-same schema — `--toon` is a thin encoding transform for agents that want
-to pay fewer tokens on uniform arrays (worktrees, sessions, PRs). Example:
+### Agent-oriented output
+
+`--json` is the single wire format. Agents that want a token-efficient
+encoding should pipe through [`@toon-format/cli`](https://www.npmjs.com/package/@toon-format/cli):
 
 ```sh
-orchard --toon | head -20
+npm i -g @toon-format/cli
+orchard --json | jq '.repos' | toon
 ```
+
+`--schema` emits the JSON Schema for `--json` output — field names
+(post-camelCase), enum string values, and nullability. Agents should read
+it before writing jq filters so they target the real wire format instead
+of guessing from Rust types:
+
+```sh
+orchard --schema | jq '.properties | keys'
+# ["hosts", "repos", "tmuxSessions", "version"]
+```
+
+The schema is generated at build time from the same types the binary
+serializes, and CI fails if the committed `crates/orchard/schema.json`
+drifts from the live types.
 
 ### Keybindings
 
