@@ -43,7 +43,6 @@ pub mod signal;
 pub mod sources;
 pub mod swr;
 pub mod tmux;
-pub mod toon_output;
 pub mod tui;
 pub mod types;
 pub mod watch;

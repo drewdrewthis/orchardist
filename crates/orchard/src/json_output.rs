@@ -3,373 +3,34 @@
 //! Decouples the public JSON API from internal `OrchardState`, allowing internal refactors
 //! without breaking scripts. All output is camelCase, version-numbered, and backed by tests.
 //! Consumed directly by external tools and scripts that call `orchard --json`.
+//!
+//! All `Json*` struct definitions live in `json_output_types.rs` — a single source of truth
+//! shared by this module (via `include!`) and `build.rs` (for schema generation). The two
+//! always describe the same wire format by construction.
 
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::claude_state::ClaudeState;
-use crate::derive::{DisplayGroup, WorkflowPhase, phase_from_labels};
+use crate::derive::{DisplayGroup, phase_from_labels};
 use crate::orchard_state::{
     IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState, WorktreeState,
 };
 use crate::session::StandaloneSessionRow;
 
 // ---------------------------------------------------------------------------
-// JSON output types (versioned, camelCase)
+// Single source of truth: Json* struct definitions (shared with build.rs)
 // ---------------------------------------------------------------------------
-
-/// Top-level versioned JSON output for `orchard --json`.
-///
-/// Contains a version number (for forward compatibility) and collections of repos and hosts.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonOutput {
-    /// Schema version number for forward compatibility.
-    pub version: u32,
-    /// Standalone tmux sessions not tied to any worktree.
-    pub tmux_sessions: Vec<JsonSession>,
-    /// All repositories in the output.
-    pub repos: Vec<JsonRepo>,
-    /// Reachability state keyed by SSH host name.
-    pub hosts: HashMap<String, JsonHostState>,
-}
-
-/// A single repository in JSON output.
-///
-/// Contains the repo slug and all worktrees within it.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonRepo {
-    /// Repository slug in `owner/repo` format.
-    pub slug: String,
-    /// Default branch name (e.g. `main`), if known.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_branch: Option<String>,
-    /// Rollup CI state of the default branch, if known.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub main_ci_state: Option<String>,
-    /// All worktrees belonging to this repository.
-    pub worktrees: Vec<JsonWorktree>,
-}
-
-/// Commit distance from the upstream branch.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonAheadBehind {
-    /// Commits ahead of upstream.
-    pub ahead: u32,
-    /// Commits behind upstream.
-    pub behind: u32,
-}
-
-/// A single worktree in JSON output.
-///
-/// Represents a git worktree with its path, branch, host, linked issue/PR, active sessions, and display group.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonWorktree {
-    /// Absolute path to the worktree on disk.
-    pub path: String,
-    /// Git branch checked out in this worktree.
-    pub branch: String,
-    /// Remote SSH host this worktree lives on, or `null` for local.
-    pub host: Option<String>,
-    /// Physical layout of the worktree: `"bare"` for Remmy/BoxdShared bare-repo model,
-    /// `"flat"` for BoxdFork single-checkout model. Added in schema v5.
-    pub layout: String,
-    /// Commit distance from upstream, if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ahead_behind: Option<JsonAheadBehind>,
-    /// ISO 8601 timestamp of the most recent commit, if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_commit_at: Option<String>,
-    /// Linked GitHub issue, if any.
-    pub issue: Option<JsonIssue>,
-    /// Linked pull request, if any.
-    pub pr: Option<JsonPr>,
-    /// Active Claude sessions associated with this worktree.
-    pub sessions: Vec<JsonSession>,
-    /// Display group as a snake_case string (e.g., "needs_attention").
-    pub display_group: String,
-    /// True when this is the repo's main worktree.
-    pub is_main_worktree: bool,
-    /// ISO 8601 timestamp of the most recent activity: `pr.last_commit_pushed_at` if set,
-    /// otherwise the worktree's own `last_commit_at`. `null` when neither exists.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_activity_at: Option<String>,
-}
-
-/// A child issue nested under a parent in JSON output.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonSubIssue {
-    /// GitHub issue number.
-    pub number: u32,
-    /// Sub-issue title.
-    pub title: String,
-    /// Sub-issue state.
-    pub state: String,
-}
-
-/// Issue information in JSON output.
-///
-/// Subset of GitHub issue data: number, title, state, and computed workflow phase.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonIssue {
-    /// GitHub issue number.
-    pub number: u32,
-    /// Issue title.
-    pub title: String,
-    /// Issue state: "open", "closed", or "completed".
-    pub state: String,
-    /// Assignees of this issue.
-    pub assignees: Vec<String>,
-    /// ISO 8601 timestamp when the issue was created.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    /// Issue numbers that block this issue.
-    pub blocked_by: Vec<u32>,
-    /// Child issues of this issue.
-    pub sub_issues: Vec<JsonSubIssue>,
-    /// Parent issue number, if this is a sub-issue.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<u32>,
-    /// All GitHub labels on this issue, in the order returned by the API.
-    pub labels: Vec<String>,
-    /// Workflow phase derived from labels (e.g. `"in-progress"`, `"blocked"`).
-    /// Always present: `null` when no phase label is set.
-    pub phase: Option<WorkflowPhase>,
-}
-
-/// A single review on a pull request in JSON output.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonReview {
-    /// GitHub login of the reviewer.
-    pub author: String,
-    /// Review state (e.g. `APPROVED`, `CHANGES_REQUESTED`).
-    pub state: String,
-    /// ISO 8601 timestamp when the review was submitted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub submitted_at: Option<String>,
-}
-
-/// Pull request information in JSON output.
-///
-/// Includes PR metadata: number, branch, state, review decision, CI checks, conflicts,
-/// unresolved review threads, and computed workflow phase.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonPr {
-    /// GitHub PR number.
-    pub number: u32,
-    /// Head branch name for this PR.
-    pub branch: String,
-    /// PR title, if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Whether the PR is a draft.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_draft: Option<bool>,
-    /// GitHub login of the PR author.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
-    /// Logins of users and teams requested as reviewers.
-    pub requested_reviewers: Vec<String>,
-    /// Reviews submitted on this PR.
-    pub reviews: Vec<JsonReview>,
-    /// PR state: "OPEN", "CLOSED", or "MERGED".
-    pub state: Option<String>,
-    /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", etc.
-    pub review_decision: Option<String>,
-    /// Deprecated: use ci_code_state; retained for one release (issue #218).
-    ///
-    /// Mirrors `ci_code_state` only — a code-green gate-blocked PR serializes as
-    /// `checksState: "passing"` so legacy consumers that filter on `checksState ==
-    /// "failing"` are not broken by the gate-blocked case.
-    pub checks_state: Option<String>,
-    /// Rollup state for code CI checks only: "passing", "failing", "pending", or null.
-    ///
-    /// Null means the PR has no code CI checks (e.g. docs-only PR).
-    pub ci_code_state: Option<String>,
-    /// Rollup state for gate/policy checks: "cleared", "blocked", "pending", or null.
-    ///
-    /// Null means no gate patterns matched any check on this PR.
-    /// "blocked" means a gate check failed — typically waiting on human approval,
-    /// not a broken-code signal.
-    pub ci_gate_state: Option<String>,
-    /// Per-check breakdown classified into code and gate buckets.
-    ///
-    /// Each entry in `code` and `gate` is an object with `"name"` and `"state"` keys.
-    /// There is no `ignored` bucket in v1 (reserved for a follow-up issue).
-    pub ci_checks: crate::ci_state::CiChecks,
-    /// True when the PR has merge conflicts.
-    pub has_conflicts: bool,
-    /// Number of unresolved review threads on the PR.
-    pub unresolved_threads: u32,
-    /// Number of unresolved review threads (isResolved=false AND isOutdated=false).
-    /// Forward-compatibility alias for `unresolved_threads`.
-    pub unresolved_review_threads: u32,
-    /// ISO 8601 timestamp of the most recent top-level review, or null.
-    pub last_review_comment_at: Option<String>,
-    /// GitHub login of the author of the most recent top-level review, or null.
-    pub last_review_comment_author: Option<String>,
-    /// True iff a non-author review is more recent than the last author push on an open PR.
-    pub has_unaddressed_author_comment: bool,
-    /// All GitHub labels on this PR, in the order returned by the API.
-    pub labels: Vec<String>,
-    /// Lines added by this PR.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub additions: Option<u32>,
-    /// Lines deleted by this PR.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deletions: Option<u32>,
-    /// ISO 8601 timestamp when the PR was created.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    /// ISO 8601 timestamp when the PR was last updated.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-    /// ISO 8601 timestamp of when the last commit was pushed to this PR.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_commit_pushed_at: Option<String>,
-    /// Workflow phase derived from labels (e.g. `"pr-ready"`, `"blocked"`).
-    /// Always present: `null` when no phase label is set.
-    pub phase: Option<WorkflowPhase>,
-}
-
-/// Session information in JSON output using the EnrichedSession shape.
-///
-/// Contains tmux session identity (name, host, status), optional Claude enrichment,
-/// and the full window → pane hierarchy.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonSession {
-    /// tmux session name.
-    pub name: String,
-    /// Host as a string: "local" or the SSH target.
-    pub host: String,
-    /// Session status: "running" or "dead".
-    pub status: String,
-    /// ISO 8601 timestamp when the session was created.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<String>,
-    /// ISO 8601 timestamp of the last activity in this session.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_activity_at: Option<String>,
-    /// Claude enrichment data, or `null` when no Claude process is active.
-    pub claude: Option<JsonClaudeInfo>,
-    /// Window hierarchy for this session (window → pane structure).
-    pub windows: Vec<JsonWindow>,
-}
-
-/// Window within a session in JSON output.
-///
-/// Contains window identity and its panes.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonWindow {
-    /// Tmux's stable window index.
-    pub index: usize,
-    /// Window name from tmux.
-    pub name: String,
-    /// Whether this is the active window in the session.
-    pub is_active: bool,
-    /// Tmux layout string, usable with `tmux select-layout` during restore.
-    pub layout: String,
-    /// Panes belonging to this window.
-    pub panes: Vec<JsonPane>,
-}
-
-/// Individual pane within a window in JSON output.
-///
-/// Contains pane identity, running command, title, and Claude detection flag.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonPane {
-    /// Zero-based sequential index in the flat pane list.
-    pub index: usize,
-    /// Tmux window.pane target address (e.g., "0.1").
-    pub tmux_target: String,
-    /// Command running in this pane.
-    pub command: String,
-    /// Tmux pane title.
-    pub title: String,
-    /// True when the pane is running a Claude process.
-    pub has_claude: bool,
-    /// Working directory at the time of snapshot (from `#{pane_current_path}`).
-    pub cwd: String,
-    /// Whether this pane is the focused/active pane in its window.
-    pub is_active: bool,
-}
-
-/// Claude enrichment data in JSON output.
-///
-/// `sessionAgeSec` is computed at serialization time from `session_start_ts`
-/// so it always reflects real elapsed time, not the time of the last hook write.
-/// All fields except `status` are optional and omitted when absent.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonClaudeInfo {
-    /// Claude state as a string: "working", "idle", "input", or "none".
-    pub status: String,
-    /// Model name (e.g., `"claude-opus-4-6"`), if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Last tool invoked, if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_tool: Option<String>,
-    /// First line of the last user prompt (≤80 chars), if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_task: Option<String>,
-    /// Elapsed seconds since the session started, computed at read time.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_age_sec: Option<u64>,
-    /// Total input tokens from the most recent assistant message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    /// Total output tokens from the most recent assistant message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    /// Cache creation input tokens from the most recent assistant message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_tokens: Option<u64>,
-    /// Cache read input tokens from the most recent assistant message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-    /// Context window usage percentage from status line telemetry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_window_pct: Option<f64>,
-    /// Total cost in USD from status line telemetry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-    /// Total session duration in milliseconds from status line telemetry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_duration_ms: Option<u64>,
-    /// Stop reason from the last Stop event.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<String>,
-    /// Number of assistant turns in the conversation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_count: Option<u32>,
-    /// Elapsed seconds since the current state was entered, computed at read time.
-    ///
-    /// Derived from `state_changed_at` in the hook state file. Absent when the
-    /// hook version does not write `state_changed_at`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state_elapsed_sec: Option<u64>,
-}
-
-/// Host reachability information in JSON output.
-///
-/// Simple boolean indicating whether an SSH host is reachable.
-#[derive(Serialize)]
-pub struct JsonHostState {
-    /// True when the SSH host responded to the last reachability check.
-    pub reachable: bool,
-}
+//
+// `json_output_types.rs` is the authoritative file.  `std::collections::HashMap`
+// is already in scope above (needed for the `JsonOutput::hosts` field).
+// `serde::Serialize` and `schemars::JsonSchema` are resolved via absolute crate
+// paths by their proc-macros and do not require a `use` import.
+// The file also defines local `CiChecks`, `CheckInfo`, and `WorkflowPhase` types —
+// the mapping code below converts from the crate-internal equivalents at the boundary.
+include!("json_output_types.rs");
 
 // ---------------------------------------------------------------------------
 // Serialization helpers
@@ -464,6 +125,43 @@ fn claude_state_str(s: ClaudeState) -> &'static str {
     }
 }
 
+/// Converts a `crate::derive::WorkflowPhase` to the local wire-format `WorkflowPhase`.
+///
+/// Both types share identical variants and kebab-case serialization; the conversion is
+/// a boundary adapter so the crate-internal type does not leak into the JSON wire type.
+fn crate_phase_to_local(p: crate::derive::WorkflowPhase) -> WorkflowPhase {
+    match p {
+        crate::derive::WorkflowPhase::Blocked => WorkflowPhase::Blocked,
+        crate::derive::WorkflowPhase::InAiReview => WorkflowPhase::InAiReview,
+        crate::derive::WorkflowPhase::PrReady => WorkflowPhase::PrReady,
+        crate::derive::WorkflowPhase::InProgress => WorkflowPhase::InProgress,
+        crate::derive::WorkflowPhase::NeedsRepro => WorkflowPhase::NeedsRepro,
+        crate::derive::WorkflowPhase::NeedsPlan => WorkflowPhase::NeedsPlan,
+        crate::derive::WorkflowPhase::Investigating => WorkflowPhase::Investigating,
+        crate::derive::WorkflowPhase::Planned => WorkflowPhase::Planned,
+    }
+}
+
+/// Converts a `crate::ci_state::CheckInfo` to the local wire-format `CheckInfo`.
+fn crate_check_info_to_local(c: &crate::ci_state::CheckInfo) -> CheckInfo {
+    CheckInfo {
+        name: c.name.clone(),
+        state: c.state.clone(),
+        details_url: c.details_url.clone(),
+    }
+}
+
+/// Converts a `crate::ci_state::CiChecks` to the local wire-format `CiChecks`.
+///
+/// Ensures the schema describes exactly what `--json` emits: same field names, same
+/// serialization attributes, same nesting.
+fn crate_ci_checks_to_local(c: &crate::ci_state::CiChecks) -> CiChecks {
+    CiChecks {
+        code: c.code.iter().map(crate_check_info_to_local).collect(),
+        gate: c.gate.iter().map(crate_check_info_to_local).collect(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // From conversions
 // ---------------------------------------------------------------------------
@@ -489,7 +187,7 @@ impl From<&IssueInfo> for JsonIssue {
                 .collect(),
             parent: i.parent,
             labels: i.labels.clone(),
-            phase: phase_from_labels(&i.labels),
+            phase: phase_from_labels(&i.labels).map(crate_phase_to_local),
         }
     }
 }
@@ -534,7 +232,7 @@ impl From<&PrState> for JsonPr {
             checks_state: pr.checks_state.clone(),
             ci_code_state: pr.ci_code_state.clone(),
             ci_gate_state: pr.ci_gate_state.clone(),
-            ci_checks: pr.ci_checks.clone(),
+            ci_checks: crate_ci_checks_to_local(&pr.ci_checks),
             has_conflicts: pr.has_conflicts,
             unresolved_threads: pr.unresolved_threads,
             // `unresolvedReviewThreads` is the forward name (matches issue #252).
@@ -551,7 +249,7 @@ impl From<&PrState> for JsonPr {
             created_at: pr.created_at.clone(),
             updated_at: pr.updated_at.clone(),
             last_commit_pushed_at: pr.last_commit_pushed_at.clone(),
-            phase: phase_from_labels(&pr.labels),
+            phase: phase_from_labels(&pr.labels).map(crate_phase_to_local),
         }
     }
 }

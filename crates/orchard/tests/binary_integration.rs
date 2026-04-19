@@ -101,95 +101,6 @@ fn json_mode_outputs_valid_json() {
 }
 
 // ---------------------------------------------------------------------------
-// TOON mode tests (issue #260)
-// ---------------------------------------------------------------------------
-
-/// `orchard --help` mentions the `--toon` flag and notes it's for AI agents.
-#[test]
-fn help_includes_toon_flag() {
-    Command::cargo_bin("orchard")
-        .unwrap()
-        .arg("--help")
-        .assert()
-        .success()
-        .stderr(contains("--toon"))
-        .stderr(contains("AI agent"));
-}
-
-/// `orchard heal --toon` must reject the invocation — `--toon` currently
-/// only applies to the top-level dashboard output, not subcommands.
-///
-/// This is a parse-time rejection, so no fixture, cwd, or HOME is needed.
-#[test]
-fn toon_with_subcommand_is_rejected() {
-    Command::cargo_bin("orchard")
-        .unwrap()
-        .args(["heal", "--toon"])
-        .assert()
-        .failure()
-        .stderr(contains("--toon is not supported"));
-}
-
-/// `orchard --json --toon` must reject the invocation (mutually exclusive).
-#[test]
-fn json_and_toon_are_mutually_exclusive() {
-    let repo = common::TestRepo::new();
-    let home = tempfile::TempDir::new().unwrap();
-
-    Command::cargo_bin("orchard")
-        .unwrap()
-        .args(["--json", "--toon"])
-        .current_dir(repo.path())
-        .env("HOME", home.path())
-        .env_remove("TMUX")
-        .assert()
-        .failure()
-        .stderr(contains("mutually exclusive"));
-}
-
-/// `orchard --toon` run from a real git repo exits 0 and outputs parseable TOON.
-///
-/// Mirrors `json_mode_outputs_valid_json`: if the binary succeeds, the output
-/// must round-trip through the TOON decoder. If it fails (e.g. `gh` not
-/// available), the error must land on stderr.
-#[test]
-fn toon_mode_outputs_valid_toon() {
-    let repo = common::TestRepo::new();
-    let home = tempfile::TempDir::new().unwrap();
-
-    let output = Command::cargo_bin("orchard")
-        .unwrap()
-        .arg("--toon")
-        .current_dir(repo.path())
-        .env("HOME", home.path())
-        .env_remove("TMUX")
-        .output()
-        .unwrap();
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(!stdout.is_empty(), "toon stdout should not be empty");
-        // Happy-path AC: stderr is empty when the command succeeds.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.is_empty(),
-            "expected empty stderr on success, got: {stderr}"
-        );
-        let decoded = json2toon_rs::decode(&stdout, &json2toon_rs::DecoderOptions::default())
-            .expect("stdout should be decodable TOON");
-        assert!(
-            decoded.get("version").is_some(),
-            "decoded toon should expose the version field"
-        );
-    } else {
-        assert!(
-            !output.stderr.is_empty(),
-            "expected an error message on stderr"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Help text includes quick-chat information
 // ---------------------------------------------------------------------------
 
@@ -224,6 +135,43 @@ fn help_includes_chat_keybinding() {
         .assert()
         .success()
         .stderr(contains("prefix + O"));
+}
+
+// ---------------------------------------------------------------------------
+// --schema flag
+// ---------------------------------------------------------------------------
+
+/// `orchard --schema` prints the committed JSON Schema. Verifies the flag
+/// is wired up and the embedded schema parses as valid JSON.
+#[test]
+fn schema_flag_prints_valid_schema() {
+    let output = Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--schema")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--schema output must be valid JSON");
+    // Basic shape: JSON Schema has a "$schema" or "title" at the root.
+    assert!(
+        parsed.get("$schema").is_some() || parsed.get("title").is_some(),
+        "output should look like a JSON Schema: {stdout}"
+    );
+    // Wire-format invariants: top-level required fields exist in schema.
+    let props = parsed
+        .pointer("/properties")
+        .or_else(|| parsed.pointer("/definitions/JsonOutput/properties"))
+        .expect("schema should describe JsonOutput properties");
+    for field in ["version", "repos", "hosts", "tmuxSessions"] {
+        assert!(
+            props.get(field).is_some(),
+            "schema missing top-level field '{field}': {stdout}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
