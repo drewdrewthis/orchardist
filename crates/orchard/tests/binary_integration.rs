@@ -138,6 +138,42 @@ fn help_includes_chat_keybinding() {
 }
 
 // ---------------------------------------------------------------------------
+// --schema flag
+// ---------------------------------------------------------------------------
+
+/// `orchard --schema` prints the committed JSON Schema. Verifies the flag
+/// is wired up and the embedded schema parses as valid JSON.
+#[test]
+fn schema_flag_prints_valid_schema() {
+    let output = Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("--schema")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("--schema output must be valid JSON");
+    // Basic shape: JSON Schema has a "$schema" or "title" at the root.
+    assert!(
+        parsed.get("$schema").is_some() || parsed.get("title").is_some(),
+        "output should look like a JSON Schema: {stdout}"
+    );
+    // Wire-format invariants: top-level required fields exist in schema.
+    let props = parsed.pointer("/properties")
+        .or_else(|| parsed.pointer("/definitions/JsonOutput/properties"))
+        .expect("schema should describe JsonOutput properties");
+    for field in ["version", "repos", "hosts", "tmuxSessions"] {
+        assert!(
+            props.get(field).is_some(),
+            "schema missing top-level field '{field}': {stdout}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // orchard chat --message required
 // ---------------------------------------------------------------------------
 

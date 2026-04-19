@@ -1,0 +1,919 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JsonOutput",
+  "description": "Top-level versioned JSON output for `orchard --json`.",
+  "type": "object",
+  "required": [
+    "hosts",
+    "repos",
+    "tmuxSessions",
+    "version"
+  ],
+  "properties": {
+    "hosts": {
+      "description": "Reachability state keyed by SSH host name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/JsonHostState"
+      }
+    },
+    "repos": {
+      "description": "All repositories in the output.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonRepo"
+      }
+    },
+    "tmuxSessions": {
+      "description": "Standalone tmux sessions not tied to any worktree.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonSession"
+      }
+    },
+    "version": {
+      "description": "Schema version number for forward compatibility.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "definitions": {
+    "CheckInfo": {
+      "description": "A single CI check with its normalized state (wire-format mirror for schema gen).",
+      "type": "object",
+      "required": [
+        "name",
+        "state"
+      ],
+      "properties": {
+        "details_url": {
+          "description": "URL to the check run details page, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the check.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Normalized state: `\"passing\"`, `\"failing\"`, or `\"pending\"`.",
+          "type": "string"
+        }
+      }
+    },
+    "CiChecks": {
+      "description": "Two-bucket classification of all CI checks on a PR (wire-format mirror for schema gen).",
+      "type": "object",
+      "required": [
+        "code",
+        "gate"
+      ],
+      "properties": {
+        "code": {
+          "description": "Checks classified as code CI.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CheckInfo"
+          }
+        },
+        "gate": {
+          "description": "Checks classified as gate/policy checks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CheckInfo"
+          }
+        }
+      }
+    },
+    "JsonAheadBehind": {
+      "description": "Commit distance from the upstream branch.",
+      "type": "object",
+      "required": [
+        "ahead",
+        "behind"
+      ],
+      "properties": {
+        "ahead": {
+          "description": "Commits ahead of upstream.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "behind": {
+          "description": "Commits behind upstream.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "JsonClaudeInfo": {
+      "description": "Claude enrichment data in JSON output.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "cacheCreationInputTokens": {
+          "description": "Cache creation input tokens from the most recent assistant message.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cacheReadInputTokens": {
+          "description": "Cache read input tokens from the most recent assistant message.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "contextWindowPct": {
+          "description": "Context window usage percentage.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "costUsd": {
+          "description": "Total cost in USD.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "currentTask": {
+          "description": "First line of the last user prompt (≤80 chars), if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputTokens": {
+          "description": "Total input tokens from the most recent assistant message.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "lastTool": {
+          "description": "Last tool invoked, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model name, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputTokens": {
+          "description": "Total output tokens from the most recent assistant message.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sessionAgeSec": {
+          "description": "Elapsed seconds since the session started.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stateElapsedSec": {
+          "description": "Elapsed seconds since the current state was entered.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "status": {
+          "description": "Claude state as a string: \"working\", \"idle\", \"input\", or \"none\".",
+          "type": "string"
+        },
+        "stopReason": {
+          "description": "Stop reason from the last Stop event.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalDurationMs": {
+          "description": "Total session duration in milliseconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "turnCount": {
+          "description": "Number of assistant turns in the conversation.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "JsonHostState": {
+      "description": "Host reachability information in JSON output.",
+      "type": "object",
+      "required": [
+        "reachable"
+      ],
+      "properties": {
+        "reachable": {
+          "description": "True when the SSH host responded to the last reachability check.",
+          "type": "boolean"
+        }
+      }
+    },
+    "JsonIssue": {
+      "description": "Issue information in JSON output.",
+      "type": "object",
+      "required": [
+        "assignees",
+        "blockedBy",
+        "labels",
+        "number",
+        "state",
+        "subIssues",
+        "title"
+      ],
+      "properties": {
+        "assignees": {
+          "description": "Assignees of this issue.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockedBy": {
+          "description": "Issue numbers that block this issue.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "createdAt": {
+          "description": "ISO 8601 timestamp when the issue was created.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "description": "All GitHub labels on this issue.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "number": {
+          "description": "GitHub issue number.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "parent": {
+          "description": "Parent issue number, if this is a sub-issue.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "phase": {
+          "description": "Workflow phase derived from labels.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowPhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "description": "Issue state: \"open\", \"closed\", or \"completed\".",
+          "type": "string"
+        },
+        "subIssues": {
+          "description": "Child issues of this issue.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonSubIssue"
+          }
+        },
+        "title": {
+          "description": "Issue title.",
+          "type": "string"
+        }
+      }
+    },
+    "JsonPane": {
+      "description": "Individual pane within a window in JSON output.",
+      "type": "object",
+      "required": [
+        "command",
+        "cwd",
+        "hasClaude",
+        "index",
+        "isActive",
+        "title",
+        "tmuxTarget"
+      ],
+      "properties": {
+        "command": {
+          "description": "Command running in this pane.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory at the time of snapshot.",
+          "type": "string"
+        },
+        "hasClaude": {
+          "description": "True when the pane is running a Claude process.",
+          "type": "boolean"
+        },
+        "index": {
+          "description": "Zero-based sequential index in the flat pane list.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "isActive": {
+          "description": "Whether this pane is the focused/active pane in its window.",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Tmux pane title.",
+          "type": "string"
+        },
+        "tmuxTarget": {
+          "description": "Tmux window.pane target address (e.g., \"0.1\").",
+          "type": "string"
+        }
+      }
+    },
+    "JsonPr": {
+      "description": "Pull request information in JSON output.",
+      "type": "object",
+      "required": [
+        "branch",
+        "ciChecks",
+        "hasConflicts",
+        "hasUnaddressedAuthorComment",
+        "labels",
+        "number",
+        "requestedReviewers",
+        "reviews",
+        "unresolvedReviewThreads",
+        "unresolvedThreads"
+      ],
+      "properties": {
+        "additions": {
+          "description": "Lines added by this PR.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "author": {
+          "description": "GitHub login of the PR author.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "Head branch name for this PR.",
+          "type": "string"
+        },
+        "checksState": {
+          "description": "Deprecated: use ci_code_state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ciChecks": {
+          "description": "Per-check breakdown classified into code and gate buckets.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CiChecks"
+            }
+          ]
+        },
+        "ciCodeState": {
+          "description": "Rollup state for code CI checks only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ciGateState": {
+          "description": "Rollup state for gate/policy checks.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "description": "ISO 8601 timestamp when the PR was created.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deletions": {
+          "description": "Lines deleted by this PR.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hasConflicts": {
+          "description": "True when the PR has merge conflicts.",
+          "type": "boolean"
+        },
+        "hasUnaddressedAuthorComment": {
+          "description": "True iff a non-author review is more recent than the last author push on an open PR.",
+          "type": "boolean"
+        },
+        "isDraft": {
+          "description": "Whether the PR is a draft.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "labels": {
+          "description": "All GitHub labels on this PR.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lastCommitPushedAt": {
+          "description": "ISO 8601 timestamp of when the last commit was pushed to this PR.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastReviewCommentAt": {
+          "description": "ISO 8601 timestamp of the most recent top-level review, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastReviewCommentAuthor": {
+          "description": "GitHub login of the author of the most recent top-level review, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "description": "GitHub PR number.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "phase": {
+          "description": "Workflow phase derived from labels.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowPhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedReviewers": {
+          "description": "Logins of users and teams requested as reviewers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reviewDecision": {
+          "description": "Review decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviews": {
+          "description": "Reviews submitted on this PR.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonReview"
+          }
+        },
+        "state": {
+          "description": "PR state: \"OPEN\", \"CLOSED\", or \"MERGED\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "PR title, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unresolvedReviewThreads": {
+          "description": "Forward-compatibility alias for `unresolved_threads`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "unresolvedThreads": {
+          "description": "Number of unresolved review threads on the PR.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "updatedAt": {
+          "description": "ISO 8601 timestamp when the PR was last updated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "JsonRepo": {
+      "description": "A single repository in JSON output.",
+      "type": "object",
+      "required": [
+        "slug",
+        "worktrees"
+      ],
+      "properties": {
+        "defaultBranch": {
+          "description": "Default branch name (e.g. `main`), if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mainCiState": {
+          "description": "Rollup CI state of the default branch, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "description": "Repository slug in `owner/repo` format.",
+          "type": "string"
+        },
+        "worktrees": {
+          "description": "All worktrees belonging to this repository.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonWorktree"
+          }
+        }
+      }
+    },
+    "JsonReview": {
+      "description": "A single review on a pull request in JSON output.",
+      "type": "object",
+      "required": [
+        "author",
+        "state"
+      ],
+      "properties": {
+        "author": {
+          "description": "GitHub login of the reviewer.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Review state (e.g. `APPROVED`, `CHANGES_REQUESTED`).",
+          "type": "string"
+        },
+        "submittedAt": {
+          "description": "ISO 8601 timestamp when the review was submitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "JsonSession": {
+      "description": "Session information in JSON output.",
+      "type": "object",
+      "required": [
+        "host",
+        "name",
+        "status",
+        "windows"
+      ],
+      "properties": {
+        "claude": {
+          "description": "Claude enrichment data, or `null` when no Claude process is active.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/JsonClaudeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "description": "Host as a string: \"local\" or the SSH target.",
+          "type": "string"
+        },
+        "lastActivityAt": {
+          "description": "ISO 8601 timestamp of the last activity in this session.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "tmux session name.",
+          "type": "string"
+        },
+        "startedAt": {
+          "description": "ISO 8601 timestamp when the session was created.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Session status: \"running\" or \"dead\".",
+          "type": "string"
+        },
+        "windows": {
+          "description": "Window hierarchy for this session.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonWindow"
+          }
+        }
+      }
+    },
+    "JsonSubIssue": {
+      "description": "A child issue nested under a parent in JSON output.",
+      "type": "object",
+      "required": [
+        "number",
+        "state",
+        "title"
+      ],
+      "properties": {
+        "number": {
+          "description": "GitHub issue number.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "state": {
+          "description": "Sub-issue state.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Sub-issue title.",
+          "type": "string"
+        }
+      }
+    },
+    "JsonWindow": {
+      "description": "Window within a session in JSON output.",
+      "type": "object",
+      "required": [
+        "index",
+        "isActive",
+        "layout",
+        "name",
+        "panes"
+      ],
+      "properties": {
+        "index": {
+          "description": "Tmux's stable window index.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "isActive": {
+          "description": "Whether this is the active window in the session.",
+          "type": "boolean"
+        },
+        "layout": {
+          "description": "Tmux layout string.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Window name from tmux.",
+          "type": "string"
+        },
+        "panes": {
+          "description": "Panes belonging to this window.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonPane"
+          }
+        }
+      }
+    },
+    "JsonWorktree": {
+      "description": "A single worktree in JSON output.",
+      "type": "object",
+      "required": [
+        "branch",
+        "displayGroup",
+        "isMainWorktree",
+        "layout",
+        "path",
+        "sessions"
+      ],
+      "properties": {
+        "aheadBehind": {
+          "description": "Commit distance from upstream, if available.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/JsonAheadBehind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch": {
+          "description": "Git branch checked out in this worktree.",
+          "type": "string"
+        },
+        "displayGroup": {
+          "description": "Display group as a snake_case string.",
+          "type": "string"
+        },
+        "host": {
+          "description": "Remote SSH host this worktree lives on, or `null` for local.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isMainWorktree": {
+          "description": "True when this is the repo's main worktree.",
+          "type": "boolean"
+        },
+        "issue": {
+          "description": "Linked GitHub issue, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/JsonIssue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastActivityAt": {
+          "description": "ISO 8601 timestamp of the most recent activity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastCommitAt": {
+          "description": "ISO 8601 timestamp of the most recent commit, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layout": {
+          "description": "Physical layout: `\"bare\"` or `\"flat\"`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the worktree on disk.",
+          "type": "string"
+        },
+        "pr": {
+          "description": "Linked pull request, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/JsonPr"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessions": {
+          "description": "Active tmux sessions associated with this worktree.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonSession"
+          }
+        }
+      }
+    },
+    "WorkflowPhase": {
+      "description": "Workflow phase derived from issue/PR labels (wire-format mirror for schema gen).",
+      "oneOf": [
+        {
+          "description": "Work halted, waiting on external resolution.",
+          "type": "string",
+          "enum": [
+            "blocked"
+          ]
+        },
+        {
+          "description": "Implementation complete, awaiting automated/AI review.",
+          "type": "string",
+          "enum": [
+            "in-ai-review"
+          ]
+        },
+        {
+          "description": "Review passed, PR ready for human merge.",
+          "type": "string",
+          "enum": [
+            "pr-ready"
+          ]
+        },
+        {
+          "description": "Actively being worked on.",
+          "type": "string",
+          "enum": [
+            "in-progress"
+          ]
+        },
+        {
+          "description": "Bug report awaiting reproduction steps.",
+          "type": "string",
+          "enum": [
+            "needs-repro"
+          ]
+        },
+        {
+          "description": "Work scoped but awaiting a concrete implementation plan.",
+          "type": "string",
+          "enum": [
+            "needs-plan"
+          ]
+        },
+        {
+          "description": "Initial triage — gathering context before planning.",
+          "type": "string",
+          "enum": [
+            "investigating"
+          ]
+        },
+        {
+          "description": "Plan exists, scheduled but not yet started.",
+          "type": "string",
+          "enum": [
+            "planned"
+          ]
+        }
+      ]
+    }
+  }
+}

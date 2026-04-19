@@ -27,6 +27,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut json_flag = false;
+    let mut schema_flag = false;
     let mut fix_flag = false;
     let mut command = String::new();
 
@@ -42,6 +43,7 @@ fn main() {
         }
         match arg.as_str() {
             "--json" => json_flag = true,
+            "--schema" => schema_flag = true,
             "--fix" => fix_flag = true,
             "--version" | "-V" => {
                 println!("orchard {}", env!("CARGO_PKG_VERSION"));
@@ -66,6 +68,11 @@ fn main() {
             _ if !arg.starts_with('-') && command.is_empty() => command = arg.clone(),
             _ => {}
         }
+    }
+
+    if schema_flag {
+        handle_schema();
+        return;
     }
 
     logger::LOG.info(&format!(
@@ -289,6 +296,16 @@ fn handle_json() {
     println!("{json}");
 }
 
+/// Prints the committed JSON Schema for the `--json` wire format and exits.
+///
+/// The schema is embedded at compile time via `include_str!`, so it is always
+/// in sync with the binary that emits it. Use `cargo build -p orchard` to
+/// regenerate `schema.json` when the wire format changes.
+fn handle_schema() {
+    const SCHEMA: &str = include_str!("../schema.json");
+    println!("{SCHEMA}");
+}
+
 /// Runs the TUI. If inside tmux and run directly (not via popup wrapper),
 /// re-launches itself as a tmux popup using the wrapper script so that
 /// session switching works correctly after the popup closes.
@@ -397,6 +414,7 @@ fn print_usage() {
 Options:
   --version, -V  Print version and exit
   --json         Output worktree data as JSON and exit
+  --schema       Print the JSON Schema for --json output and exit
 
 Navigation:
   1-9     Jump to worktree by number
