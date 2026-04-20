@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.8.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.7.0...orchard-v0.8.0) (2026-04-20)
+
+
+### Features
+
+* **cli:** add --toon output flag for token-efficient agent consumption ([#265](https://github.com/drewdrewthis/git-orchard-rs/issues/265)) ([84ff9d9](https://github.com/drewdrewthis/git-orchard-rs/commit/84ff9d901ce94d4c04b52d1f4675add4a17c50f4))
+* **json:** expose unresolved review threads and review comments ([#307](https://github.com/drewdrewthis/git-orchard-rs/issues/307)) ([eb11f6a](https://github.com/drewdrewthis/git-orchard-rs/commit/eb11f6add46a5b024c84fa0fbc21b52a6f62e7df))
+* **remote:** Boxd as first-class backend — hexagonal port + SWR ([#267](https://github.com/drewdrewthis/git-orchard-rs/issues/267)) ([#284](https://github.com/drewdrewthis/git-orchard-rs/issues/284)) ([7902754](https://github.com/drewdrewthis/git-orchard-rs/commit/790275438ac02de7b1591a0babe320711407f849))
+* **signal:** add UnresolvedThreads pipeline status ([#320](https://github.com/drewdrewthis/git-orchard-rs/issues/320)) ([#321](https://github.com/drewdrewthis/git-orchard-rs/issues/321)) ([031129a](https://github.com/drewdrewthis/git-orchard-rs/commit/031129a6605415011f221ac03b20c0384cae843d))
+* **tui:** pulse idle/input glyphs in column A; drop ❓ from status ([#304](https://github.com/drewdrewthis/git-orchard-rs/issues/304)) ([4bc0449](https://github.com/drewdrewthis/git-orchard-rs/commit/4bc0449dd59d6d0107b3d9fa8fcc531cac6f4983))
+* **tui:** session restore — reconstruct tmux sessions from persisted state ([#277](https://github.com/drewdrewthis/git-orchard-rs/issues/277)) ([9ce1f66](https://github.com/drewdrewthis/git-orchard-rs/commit/9ce1f660d8e2a40b0d8b8268a3553559ec50f480))
+
+
+### Bug Fixes
+
+* **heal:** use live active-pane cwd instead of frozen session_path ([#313](https://github.com/drewdrewthis/git-orchard-rs/issues/313)) ([852e4fa](https://github.com/drewdrewthis/git-orchard-rs/commit/852e4fae029b86da1425beed01aca1e740fead5b))
+* **join:** detect claude via TUI output when command is subshell ([#287](https://github.com/drewdrewthis/git-orchard-rs/issues/287)) ([fbf42ac](https://github.com/drewdrewthis/git-orchard-rs/commit/fbf42acb0ee6bbba40937b7dcb8f661abf6a7e35))
+* **perf:** parallelize gh api, enforce hard SSH probe deadline ([#308](https://github.com/drewdrewthis/git-orchard-rs/issues/308)) ([ef5a643](https://github.com/drewdrewthis/git-orchard-rs/commit/ef5a64308946fa416fbc70536fabfb64bf2d9f90)), closes [#246](https://github.com/drewdrewthis/git-orchard-rs/issues/246)
+* **remote:** boxd-fork session discovery via adapter-routed tmux refresh ([#288](https://github.com/drewdrewthis/git-orchard-rs/issues/288)) ([7c4cf3c](https://github.com/drewdrewthis/git-orchard-rs/commit/7c4cf3cbdd17eeb8a342ad18db5cf0467e3cfa8d))
+* **scripts:** bookend send-keys Enter to flush stuck orchardist signals ([#278](https://github.com/drewdrewthis/git-orchard-rs/issues/278)) ([7f256ce](https://github.com/drewdrewthis/git-orchard-rs/commit/7f256ce9dbefbc209ed7d5aeca8bb088a915510b))
+* **tui:** match tmux sessions by live active-pane cwd ([#292](https://github.com/drewdrewthis/git-orchard-rs/issues/292)) ([7a97ac0](https://github.com/drewdrewthis/git-orchard-rs/commit/7a97ac03b75316b3a1af37edcb8f5fc3e30f9471))
+* **tui:** parallelize host reachability probes ([#263](https://github.com/drewdrewthis/git-orchard-rs/issues/263)) ([#271](https://github.com/drewdrewthis/git-orchard-rs/issues/271)) ([ebd1660](https://github.com/drewdrewthis/git-orchard-rs/commit/ebd16602cceb25040a7212266e85f511409e79e6))
+* **tui:** parallelize reconnect_unreachable_hosts probes ([#274](https://github.com/drewdrewthis/git-orchard-rs/issues/274)) ([4aca09b](https://github.com/drewdrewthis/git-orchard-rs/commit/4aca09b8b0146982c912dcbd202f446684204cef))
+* **tui:** preserve user collapse across refresh ([#261](https://github.com/drewdrewthis/git-orchard-rs/issues/261)) ([#305](https://github.com/drewdrewthis/git-orchard-rs/issues/305)) ([055bee0](https://github.com/drewdrewthis/git-orchard-rs/commit/055bee03685ab98339ea7d898a275088634ed7f7))
+* **tui:** treat unprobed remote host as unknown, not blocked, on Enter ([#285](https://github.com/drewdrewthis/git-orchard-rs/issues/285)) ([88a0052](https://github.com/drewdrewthis/git-orchard-rs/commit/88a0052a42445d7ba749cc44d810b7e5421778b4))
+
 ## [0.7.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.6.0...orchard-v0.7.0) (2026-04-14)
 
 
