@@ -380,6 +380,10 @@ impl App {
                 PipelineStatus::Paused.glyph(),
                 PipelineStatus::Paused.label(),
             ),
+            legend_row(
+                PipelineStatus::UnresolvedThreads.glyph(),
+                PipelineStatus::UnresolvedThreads.label(),
+            ),
             legend_row(PipelineStatus::Ready.glyph(), PipelineStatus::Ready.label()),
             legend_row(
                 PipelineStatus::Merged.glyph(),
@@ -542,6 +546,12 @@ mod tests {
         assert!(
             !text.contains("\u{2753}"),
             "❓ glyph must not appear in legend after issue #281, got:\n{text}"
+        );
+        // Issue #320: UnresolvedThreads row (💬 + "unresolved threads") sits
+        // between Paused and Ready in the pipeline-status legend.
+        assert!(
+            text.contains("\u{1F4AC}") && text.contains("unresolved threads"),
+            "legend must include UnresolvedThreads row with 💬 glyph, got:\n{text}"
         );
         // Agent-activity legend section must appear. Idle/Input are labeled
         // with their pulse frames (○/● and ○/?) since the row shows one frame
