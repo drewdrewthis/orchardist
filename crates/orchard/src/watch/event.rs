@@ -138,6 +138,25 @@ pub enum EventKind {
         /// Total number of active tmux sessions.
         session_count: usize,
     },
+    /// A worktree's `PipelineStatus` transitioned from one value to another.
+    ///
+    /// This event is orthogonal to the existing [`ReviewComments`] count event:
+    /// both may fire for the same diff, and they remain distinct — count
+    /// transition vs. status transition. The `from`/`to` strings use the stable
+    /// snake_case names returned by [`crate::signal::PipelineStatus::name`] so
+    /// downstream scripts can parse them reliably without deserializing the enum.
+    StatusChanged {
+        /// Worktree path.
+        worktree: String,
+        /// GitHub PR number, if the transition involves a PR.
+        pr_number: Option<u32>,
+        /// Previous pipeline status (snake_case, from `PipelineStatus::name()`).
+        from: String,
+        /// New pipeline status (snake_case, from `PipelineStatus::name()`).
+        to: String,
+        /// Human-readable label (issue title or branch name).
+        label: String,
+    },
 }
 
 impl EventKind {
