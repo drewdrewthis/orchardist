@@ -1,8 +1,12 @@
-/// End-to-end integration test for issue #320: `UnresolvedThreads` pipeline status.
+/// Library-level integration test for issue #320: `UnresolvedThreads` pipeline status.
 ///
-/// Covers the @e2e scenario from `specs/features/unresolved-threads-pipeline-status.feature`
-/// (lines 45–53): a worktree whose PR is approved, CI passing, no merge conflicts,
-/// not paused, not blocked, but has `unresolved_threads = 2` must surface as
+/// Exercises the full in-process pipeline — `CachedPr` → `derive_worktree_rows`
+/// → `WorktreeRow` → `WorktreeState` → `JsonWorktree` — covering the behavioral
+/// contract from the @e2e scenario in `specs/features/unresolved-threads-pipeline-status.feature`
+/// (lines 45–53) without the fragility of subprocess'ing the compiled binary.
+///
+/// A worktree whose PR is approved, CI passing, no merge conflicts, not paused,
+/// not blocked, but has `unresolved_threads = 2` must surface as
 /// `status = "unresolved_threads"` with glyph `"💬"` in JSON output — not
 /// `"ready"` or `"awaiting_review"`.
 mod common;
@@ -13,7 +17,7 @@ use orchard::derive::derive_worktree_rows;
 use orchard::json_output::JsonWorktree;
 use orchard::orchard_state::WorktreeState;
 
-/// @e2e — task #8 (issue #320, AC #3 and AC #9):
+/// Integration test for issue #320 (covers AC #3 and AC #9):
 /// A PR that is approved, CI passing, no merge conflicts, not paused, not blocked,
 /// but has `unresolved_threads = 2` must produce a `JsonWorktree` with
 /// `status == "unresolved_threads"` and `status_glyph == "💬"`.
