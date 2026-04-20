@@ -725,13 +725,18 @@ pub fn since_epoch(wt: &WorktreeState, status: PipelineStatus) -> Option<u64> {
             .and_then(|i| i.updated_at.as_deref().or(i.created_at.as_deref()))
             .or_else(|| wt.pr.as_ref().and_then(|pr| pr.updated_at.as_deref()))
             .and_then(parse_iso8601),
-        // TODO(#320 task #4): use max of unresolved_thread_comment_timestamps;
-        // fall back to pr.updated_at. Full implementation in the next commit.
-        PipelineStatus::UnresolvedThreads => wt
-            .pr
-            .as_ref()
-            .and_then(|pr| pr.updated_at.as_deref())
-            .and_then(parse_iso8601),
+        PipelineStatus::UnresolvedThreads => wt.pr.as_ref().and_then(|pr| {
+            // Use the max timestamp across the pre-filtered list of unresolved-and-not-outdated
+            // thread comments. The cache layer already filters to isResolved=false AND
+            // isOutdated!=true, so this list IS the filtered set.
+            // Fall back to pr.updated_at when the list is empty (old cache or omitted field).
+            pr.unresolved_thread_comment_timestamps
+                .iter()
+                .max()
+                .copied()
+                .and_then(|ts| u64::try_from(ts).ok())
+                .or_else(|| pr.updated_at.as_deref().and_then(parse_iso8601))
+        }),
         PipelineStatus::Ready => wt
             .pr
             .as_ref()
@@ -1462,6 +1467,47 @@ mod tests {
             // Reviews vector is empty — no per-review timestamp available.
         }));
         assert!(since_epoch(&w, PipelineStatus::ChangesRequested).is_some());
+    }
+
+    // -- since_epoch: UnresolvedThreads (AC #5, issue #320) ----------------
+
+    #[test]
+    fn since_unresolved_threads_uses_max_filtered_timestamp() {
+        // Fixture: cache layer has already pre-filtered to unresolved+not-outdated.
+        // The two timestamps correspond to 2026-04-15T10:00:00Z and 2026-04-18T09:30:00Z.
+        let ts_older = parse_iso8601("2026-04-15T10:00:00Z").unwrap() as i64;
+        let ts_newer = parse_iso8601("2026-04-18T09:30:00Z").unwrap() as i64;
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.unresolved_threads = 2;
+            p.updated_at = Some("2026-04-10T00:00:00Z".into());
+            p.unresolved_thread_comment_timestamps = vec![ts_older, ts_newer];
+        }));
+        let result = since_epoch(&w, PipelineStatus::UnresolvedThreads);
+        assert_eq!(
+            result,
+            Some(ts_newer as u64),
+            "should return the max (newest) timestamp from the filtered thread list"
+        );
+    }
+
+    #[test]
+    fn since_unresolved_threads_falls_back_to_pr_updated_at_when_timestamps_empty() {
+        // Empty list: old cache without the field, or GraphQL omitted the data.
+        // Must fall back to pr.updated_at; must not return None.
+        let expected = parse_iso8601("2026-04-10T00:00:00Z").unwrap();
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.unresolved_threads = 3;
+            p.updated_at = Some("2026-04-10T00:00:00Z".into());
+            // unresolved_thread_comment_timestamps defaults to vec![] via PrInfo::default()
+        }));
+        let result = since_epoch(&w, PipelineStatus::UnresolvedThreads);
+        assert_eq!(
+            result,
+            Some(expected),
+            "empty timestamp list must fall back to pr.updated_at"
+        );
     }
 
     #[test]
