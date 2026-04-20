@@ -51,6 +51,34 @@ fn count_actionable_threads(nodes: &serde_json::Value) -> u32 {
         .count() as u32
 }
 
+/// Collects the latest-comment timestamp (epoch seconds) for each review thread
+/// that is unresolved AND not outdated (`isResolved=false AND isOutdated!=true`).
+///
+/// Each qualifying thread contributes at most one timestamp: the `createdAt` of
+/// its last comment, parsed from ISO 8601 into epoch seconds. Threads whose
+/// last comment timestamp cannot be parsed are silently skipped — the count
+/// field (`unresolved_threads`) is always authoritative for presence, this
+/// data is used only for `since_epoch`.
+fn collect_thread_comment_timestamps(nodes: &serde_json::Value) -> Vec<i64> {
+    let Some(arr) = nodes.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter(|t| {
+            t["isResolved"].as_bool() != Some(true) && t["isOutdated"].as_bool() != Some(true)
+        })
+        .filter_map(|t| {
+            let created_at = t["comments"]["nodes"]
+                .as_array()
+                .and_then(|nodes| nodes.last())
+                .and_then(|n| n["createdAt"].as_str())?;
+            // Parse ISO 8601 → epoch seconds. We only need second-level precision.
+            let ts = ::chrono::DateTime::parse_from_rfc3339(created_at).ok()?;
+            Some(ts.timestamp())
+        })
+        .collect()
+}
+
 /// Parses raw JSON output from `gh issue list --json number,title,state,labels`
 /// into a `Vec<CachedIssue>`.
 pub fn parse_issues_json(json: &str) -> Vec<CachedIssue> {
@@ -316,6 +344,8 @@ pub fn parse_prs_graphql(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
             let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
 
             let unresolved_threads = count_actionable_threads(&v["reviewThreads"]["nodes"]);
+            let unresolved_thread_comment_timestamps =
+                collect_thread_comment_timestamps(&v["reviewThreads"]["nodes"]);
 
             // Use GitHub's closingIssuesReferences (first linked issue).
             let first_linked = v["closingIssuesReferences"]["nodes"]
@@ -372,6 +402,7 @@ pub fn parse_prs_graphql(json: &str, matcher: &GateMatcher) -> Vec<CachedPr> {
                 created_at: None,
                 updated_at: None,
                 last_commit_pushed_at: None,
+                unresolved_thread_comment_timestamps,
             })
         })
         .collect()
@@ -918,6 +949,11 @@ pub fn pr_graphql_query(owner: &str, name: &str) -> String {
           nodes {{
             isResolved
             isOutdated
+            comments(last: 1) {{
+              nodes {{
+                createdAt
+              }}
+            }}
           }}
         }}
         closingIssuesReferences(first: 5) {{
@@ -1024,7 +1060,7 @@ fragment PrFields on PullRequest {{
   labels(first: 100) {{ nodes {{ name }} }}
   reviewRequests(first: 20) {{ nodes {{ requestedReviewer {{ ... on User {{ login }} ... on Team {{ name }} }} }} }}
   reviews(last: 20) {{ nodes {{ author {{ login }} state submittedAt }} }}
-  reviewThreads(first: 100) {{ nodes {{ isResolved isOutdated }} }}
+  reviewThreads(first: 100) {{ nodes {{ isResolved isOutdated comments(last:1){{nodes{{createdAt}}}} }} }}
   closingIssuesReferences(first: 5) {{ nodes {{ number state stateReason }} }}
   additions
   deletions
@@ -1163,6 +1199,8 @@ pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<Ca
         let has_conflicts = v["mergeable"].as_str().unwrap_or("") == "CONFLICTING";
 
         let unresolved_threads = count_actionable_threads(&v["reviewThreads"]["nodes"]);
+        let unresolved_thread_comment_timestamps =
+            collect_thread_comment_timestamps(&v["reviewThreads"]["nodes"]);
 
         let first_linked = v["closingIssuesReferences"]["nodes"]
             .as_array()
@@ -1216,6 +1254,7 @@ pub fn parse_prs_graphql_per_branch(json: &str, matcher: &GateMatcher) -> Vec<Ca
             created_at,
             updated_at,
             last_commit_pushed_at,
+            unresolved_thread_comment_timestamps,
         });
     }
 
@@ -3778,8 +3817,12 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         // Strip all whitespace to be robust against formatting changes.
         let compact: String = q.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            compact.contains("reviewThreads(first:100){nodes{isResolvedisOutdated}}"),
-            "expected reviewThreads to select isResolved and isOutdated, got: {q}"
+            compact.contains("isResolved"),
+            "expected reviewThreads to select isResolved, got: {q}"
+        );
+        assert!(
+            compact.contains("isOutdated"),
+            "expected reviewThreads to select isOutdated, got: {q}"
         );
     }
 
@@ -3855,6 +3898,138 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
         assert!(
             compact.contains("reviews(last:20)"),
             "expected reviews to use last:20, got: {q}"
+        );
+    }
+
+    // -- AC #5: per-thread latest-comment timestamps in both GraphQL queries ---
+
+    /// Both `pr_graphql_query` and `pr_graphql_query_per_branch` must select
+    /// `comments(last: 1) { nodes { createdAt } }` on each reviewThread node.
+    /// Only `createdAt` is selected — `body` and `author` must NOT appear inside
+    /// the comments selection (minimal cost selection per AC #5).
+    #[test]
+    fn pr_graphql_query_review_threads_select_per_thread_comment_timestamps() {
+        let q = pr_graphql_query("owner", "repo");
+        let compact: String = q.chars().filter(|c| !c.is_whitespace()).collect();
+
+        assert!(
+            compact.contains("comments(last:1){nodes{createdAt}}"),
+            "pr_graphql_query: reviewThreads must select comments(last:1){{nodes{{createdAt}}}}, got: {q}"
+        );
+        // Minimal selection — no body or author inside the comments subselection.
+        // We check that these strings don't appear as fields inside `comments{nodes{...}}`.
+        // The compact form would contain them if they were in the fragment, so this is
+        // conservative but sufficient for the constraint.
+        assert!(
+            !compact.contains("comments(last:1){nodes{createdAtbody"),
+            "pr_graphql_query: comments must not select 'body', got: {q}"
+        );
+        assert!(
+            !compact.contains("comments(last:1){nodes{createdAtauthor"),
+            "pr_graphql_query: comments must not select 'author', got: {q}"
+        );
+    }
+
+    #[test]
+    fn pr_graphql_query_per_branch_review_threads_select_per_thread_comment_timestamps() {
+        let q = pr_graphql_query_per_branch("owner", "repo", &["branch-1".to_string()]);
+        let compact: String = q.chars().filter(|c| !c.is_whitespace()).collect();
+
+        assert!(
+            compact.contains("comments(last:1){nodes{createdAt}}"),
+            "pr_graphql_query_per_branch: PrFields fragment must select comments(last:1){{nodes{{createdAt}}}}, got: {q}"
+        );
+        assert!(
+            !compact.contains("comments(last:1){nodes{createdAtbody"),
+            "pr_graphql_query_per_branch: comments must not select 'body', got: {q}"
+        );
+        assert!(
+            !compact.contains("comments(last:1){nodes{createdAtauthor"),
+            "pr_graphql_query_per_branch: comments must not select 'author', got: {q}"
+        );
+    }
+
+    // -- AC #5: parser collects only unresolved-and-not-outdated timestamps ----
+
+    /// Given a fixture with mixed resolved/outdated/unresolved threads with per-thread
+    /// `comments(last:1)` timestamps, the parser returns only timestamps for threads
+    /// where `isResolved=false AND isOutdated!=true`.
+    #[test]
+    fn parse_prs_graphql_collects_thread_timestamps_for_unresolved_not_outdated_only() {
+        // Thread fixture:
+        //   T1: unresolved, not outdated, latest comment 2026-04-15T10:00:00Z  → included
+        //   T2: unresolved, not outdated, latest comment 2026-04-18T09:30:00Z  → included (max)
+        //   T3: resolved,   not outdated, latest comment 2026-04-19T11:00:00Z  → excluded (resolved)
+        //   T4: unresolved, outdated,     latest comment 2026-04-19T12:00:00Z  → excluded (outdated)
+        let threads = json!([
+            { "isResolved": false, "isOutdated": false, "comments": { "nodes": [{ "createdAt": "2026-04-15T10:00:00Z" }] } },
+            { "isResolved": false, "isOutdated": false, "comments": { "nodes": [{ "createdAt": "2026-04-18T09:30:00Z" }] } },
+            { "isResolved": true,  "isOutdated": false, "comments": { "nodes": [{ "createdAt": "2026-04-19T11:00:00Z" }] } },
+            { "isResolved": false, "isOutdated": true,  "comments": { "nodes": [{ "createdAt": "2026-04-19T12:00:00Z" }] } },
+        ]);
+
+        let mut timestamps = collect_thread_comment_timestamps(&threads);
+        timestamps.sort_unstable();
+
+        // Epoch for 2026-04-15T10:00:00Z
+        let ts1 = ::chrono::DateTime::parse_from_rfc3339("2026-04-15T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        // Epoch for 2026-04-18T09:30:00Z
+        let ts2 = ::chrono::DateTime::parse_from_rfc3339("2026-04-18T09:30:00Z")
+            .unwrap()
+            .timestamp();
+
+        assert_eq!(
+            timestamps,
+            vec![ts1, ts2],
+            "should only include timestamps for isResolved=false AND isOutdated!=true threads"
+        );
+        // Sanity: ts2 is the max — this is the value `since_epoch` will use.
+        assert!(ts2 > ts1);
+    }
+
+    #[test]
+    fn parse_prs_graphql_thread_timestamps_skips_threads_without_comments() {
+        // Thread with no comments array should contribute no timestamp, not panic.
+        let threads = json!([
+            { "isResolved": false, "isOutdated": false, "comments": { "nodes": [] } },
+            { "isResolved": false, "isOutdated": false },
+        ]);
+        let timestamps = collect_thread_comment_timestamps(&threads);
+        assert!(
+            timestamps.is_empty(),
+            "threads with empty or missing comments should produce no timestamps"
+        );
+    }
+
+    // -- AC #5: old CachedPr JSON (missing new field) deserializes cleanly -----
+
+    /// Deserializing a `CachedPr` JSON written by a previous orchard version
+    /// (which lacks the `unresolved_thread_comment_timestamps` field) must succeed
+    /// and produce an empty vec for that field (Serde `default`).
+    #[test]
+    fn cached_pr_old_json_without_thread_timestamps_deserializes_cleanly() {
+        // Minimal old-shape CachedPr JSON — all fields that existed before this
+        // change. The new `unresolved_thread_comment_timestamps` field is absent.
+        let old_json = r#"{
+            "number": 42,
+            "branch": "fix/old-cache",
+            "linked_issue": null,
+            "state": "open",
+            "review_decision": null,
+            "has_conflicts": false,
+            "unresolved_threads": 2
+        }"#;
+
+        let pr: crate::cache::CachedPr = serde_json::from_str(old_json)
+            .expect("old CachedPr JSON must deserialize without errors");
+
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.unresolved_threads, 2);
+        assert!(
+            pr.unresolved_thread_comment_timestamps.is_empty(),
+            "missing field must default to empty vec, not error"
         );
     }
 
