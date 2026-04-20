@@ -18,6 +18,7 @@
 //! | 📝 | Draft | `pr.is_draft` |
 //! | 🔗 | Blocked | `issue.blocked_by` non-empty with open blockers |
 //! | ⏸️ | Paused | `paused` label present |
+//! | 💬 | UnresolvedThreads | `pr.unresolved_threads > 0` — reviewer left open threads |
 //! | 🟢 | Ready | all gates green |
 //! | 🚀 | Merged | `pr.state == MERGED` |
 //!
@@ -28,6 +29,9 @@
 //!
 //! Severity note: `Coding` (active work — watch the agent) outranks `AwaitingReview`
 //! (passive wait — nothing to do). Watching workers beats waiting on a reviewer.
+//! `UnresolvedThreads` sits between `Paused` and `Ready`: it beats `Ready`/`Draft`/
+//! `AwaitingReview` (threads block merge) but yields to higher-severity blockers
+//! (`Paused`, `Blocked`, `ChangesRequested`, etc.).
 //!
 //! | Glyph | Activity | Meaning | Animation |
 //! |---|---|---|---|
@@ -77,6 +81,11 @@ pub enum PipelineStatus {
     Blocked,
     /// ⏸️ Issue/PR is paused.
     Paused,
+    /// 💬 PR has unresolved review threads (`pr.unresolved_threads > 0`).
+    ///
+    /// Sits between `Paused` and `Ready`: beats `Ready`/`Draft`/`AwaitingReview`
+    /// but yields to all higher-severity blockers. See issue #320.
+    UnresolvedThreads,
     /// 🟢 All gates green — ready to merge.
     Ready,
     /// 🚀 PR is merged (terminal state; row renders dim).
@@ -107,6 +116,7 @@ impl PipelineStatus {
             Self::Draft => "\u{1F4DD}",                 // 📝
             Self::Blocked => "\u{1F517}",               // 🔗
             Self::Paused => "\u{23F8}\u{FE0F}",         // ⏸️
+            Self::UnresolvedThreads => "\u{1F4AC}",     // 💬
             Self::Ready => "\u{1F7E2}",                 // 🟢
             Self::Merged => "\u{1F680}",                // 🚀
         }
@@ -124,6 +134,7 @@ impl PipelineStatus {
             Self::Draft => "draft",
             Self::Blocked => "blocked",
             Self::Paused => "paused",
+            Self::UnresolvedThreads => "unresolved threads",
             Self::Ready => "ready",
             Self::Merged => "merged",
         }
@@ -328,17 +339,18 @@ pub fn rollup_activity(wt: &WorktreeState) -> Activity {
 /// hierarchy (first match wins).
 ///
 /// Order:
-/// 1. Merged       (terminal)
-/// 2. NeedsInput   (any agent awaiting input)
-/// 3. CiFailing    (PR ci_code_state == failing)
+/// 1. Merged              (terminal)
+/// 2. NeedsInput          (any agent awaiting input)
+/// 3. CiFailing           (PR ci_code_state == failing)
 /// 4. MergeConflict
 /// 5. ChangesRequested
-/// 6. Blocked      (issue blocked_by has open blockers)
-/// 7. Paused       (paused label on issue or PR)
-/// 8. Draft        (PR is draft)
-/// 9. Ready        (PR open, approved, CI passing)
-/// 10. AwaitingReview (PR open, no decision)
-/// 11. Coding      (no PR, or PR without review requested — default)
+/// 6. Blocked             (issue blocked_by has open blockers)
+/// 7. Paused              (paused label on issue or PR)
+/// 8. UnresolvedThreads   (pr.unresolved_threads > 0; see issue #320)
+/// 9. Draft               (PR is draft)
+/// 10. Ready              (PR open, approved, CI passing, threads == 0)
+/// 11. AwaitingReview     (PR open, no decision)
+/// 12. Coding             (no PR, or PR without review requested — default)
 ///
 /// Note: `NeedsInput` outranks CI/conflict/etc. because a human is actively
 /// required; everything else can wait. `Merged` wins overall so merged PRs
@@ -379,6 +391,12 @@ pub fn resolve_status(wt: &WorktreeState) -> PipelineStatus {
 
     if is_paused(&wt.issue, &wt.pr) {
         return PipelineStatus::Paused;
+    }
+
+    if let Some(pr) = &wt.pr
+        && pr.unresolved_threads > 0
+    {
+        return PipelineStatus::UnresolvedThreads;
     }
 
     if let Some(pr) = &wt.pr {
@@ -435,6 +453,12 @@ fn is_ready_to_merge(pr: &PrState) -> bool {
         return false;
     }
     if pr.is_draft.unwrap_or(false) || pr.has_conflicts {
+        return false;
+    }
+    // Unresolved review threads block merge — aligns with classify.rs:100.
+    // This check MUST precede the UnresolvedThreads branch in resolve_status so
+    // that an approved+passing+thread-blocked PR never short-circuits to Ready.
+    if pr.unresolved_threads > 0 {
         return false;
     }
     // Approved with no failing/pending CI — call it ready.
@@ -701,6 +725,13 @@ pub fn since_epoch(wt: &WorktreeState, status: PipelineStatus) -> Option<u64> {
             .and_then(|i| i.updated_at.as_deref().or(i.created_at.as_deref()))
             .or_else(|| wt.pr.as_ref().and_then(|pr| pr.updated_at.as_deref()))
             .and_then(parse_iso8601),
+        // TODO(#320 task #4): use max of unresolved_thread_comment_timestamps;
+        // fall back to pr.updated_at. Full implementation in the next commit.
+        PipelineStatus::UnresolvedThreads => wt
+            .pr
+            .as_ref()
+            .and_then(|pr| pr.updated_at.as_deref())
+            .and_then(parse_iso8601),
         PipelineStatus::Ready => wt
             .pr
             .as_ref()
@@ -878,6 +909,7 @@ mod tests {
             PipelineStatus::Draft,
             PipelineStatus::Blocked,
             PipelineStatus::Paused,
+            PipelineStatus::UnresolvedThreads,
             PipelineStatus::Ready,
             PipelineStatus::Merged,
         ];
@@ -901,6 +933,9 @@ mod tests {
         // Coding (active work, needs watching) outranks AwaitingReview (passive wait).
         assert!(PipelineStatus::Coding < PipelineStatus::AwaitingReview);
         assert!(PipelineStatus::AwaitingReview < PipelineStatus::Draft);
+        // UnresolvedThreads sits between Paused and Ready (issue #320).
+        assert!(PipelineStatus::Paused < PipelineStatus::UnresolvedThreads);
+        assert!(PipelineStatus::UnresolvedThreads < PipelineStatus::Ready);
         assert!(PipelineStatus::Ready < PipelineStatus::Merged);
     }
 
@@ -1165,6 +1200,86 @@ mod tests {
             i.labels = vec!["paused".into()];
         }));
         assert_eq!(resolve_status(&w), PipelineStatus::Blocked);
+    }
+
+    // -- UnresolvedThreads (issue #320) --------------------------------------
+
+    #[test]
+    fn status_unresolved_threads_when_pr_has_unresolved() {
+        // Approved + CI passing + no higher blocker + unresolved_threads = 1.
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.review_decision = Some("APPROVED".into());
+            p.ci_code_state = Some("passing".into());
+            p.unresolved_threads = 1;
+        }));
+        assert_eq!(resolve_status(&w), PipelineStatus::UnresolvedThreads);
+    }
+
+    #[test]
+    fn status_paused_beats_unresolved_threads() {
+        let mut w = wt();
+        w.issue = Some(issue(|i| i.labels = vec!["paused".into()]));
+        w.pr = Some(pr(|p| p.unresolved_threads = 2));
+        assert_eq!(resolve_status(&w), PipelineStatus::Paused);
+    }
+
+    #[test]
+    fn status_blocked_beats_unresolved_threads() {
+        let mut w = wt();
+        w.issue = Some(issue(|i| i.blocked_by = vec![99]));
+        w.pr = Some(pr(|p| p.unresolved_threads = 2));
+        assert_eq!(resolve_status(&w), PipelineStatus::Blocked);
+    }
+
+    #[test]
+    fn status_changes_requested_beats_unresolved_threads() {
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.review_decision = Some("CHANGES_REQUESTED".into());
+            p.unresolved_threads = 2;
+        }));
+        assert_eq!(resolve_status(&w), PipelineStatus::ChangesRequested);
+    }
+
+    #[test]
+    fn status_unresolved_threads_beats_ready() {
+        // End-to-end AC #4 test: approved + CI passing + unresolved=1 must NOT
+        // short-circuit to Ready through is_ready_to_merge.
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.review_decision = Some("APPROVED".into());
+            p.ci_code_state = Some("passing".into());
+            p.unresolved_threads = 1;
+        }));
+        let status = resolve_status(&w);
+        assert_eq!(status, PipelineStatus::UnresolvedThreads);
+        assert_ne!(status, PipelineStatus::Ready);
+    }
+
+    #[test]
+    fn status_ready_when_no_unresolved_threads() {
+        let mut w = wt();
+        w.pr = Some(pr(|p| {
+            p.review_decision = Some("APPROVED".into());
+            p.ci_code_state = Some("passing".into());
+            p.unresolved_threads = 0;
+        }));
+        let status = resolve_status(&w);
+        assert_eq!(status, PipelineStatus::Ready);
+        assert_ne!(status, PipelineStatus::UnresolvedThreads);
+    }
+
+    #[test]
+    fn is_ready_to_merge_returns_false_when_unresolved_threads_gt_zero() {
+        // Direct unit test for AC #4 fix: signal.rs::is_ready_to_merge must
+        // return false when pr.unresolved_threads > 0, aligning with classify.rs:100.
+        let p = pr(|p| {
+            p.review_decision = Some("APPROVED".into());
+            p.ci_code_state = Some("passing".into());
+            p.unresolved_threads = 1;
+        });
+        assert!(!is_ready_to_merge(&p));
     }
 
     // -- activity rollup -----------------------------------------------------
