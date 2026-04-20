@@ -750,6 +750,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: None,
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 
@@ -1351,6 +1352,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: None,
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 
@@ -1607,6 +1609,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: pushed_at.map(|s| s.to_string()),
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 
@@ -1674,6 +1677,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: last_commit_pushed_at.map(|s| s.to_string()),
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 

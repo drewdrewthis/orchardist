@@ -190,6 +190,7 @@ pub(crate) fn pr_info_from(pr: &CachedPr) -> PrInfo {
         created_at: pr.created_at.clone(),
         updated_at: pr.updated_at.clone(),
         last_commit_pushed_at: pr.last_commit_pushed_at.clone(),
+        unresolved_thread_comment_timestamps: pr.unresolved_thread_comment_timestamps.clone(),
     }
 }
 
@@ -1714,6 +1715,46 @@ mod tests {
         assert!(
             has_claude_tui_in_output(&lines),
             "working spinner line with '↑' and 'tokens)' must be recognized as a Claude TUI marker"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task #2: unresolved_thread_comment_timestamps plumbing
+    // -----------------------------------------------------------------------
+
+    /// `pr_info_from` must copy `unresolved_thread_comment_timestamps` from
+    /// `CachedPr` verbatim so the signal layer can read the data later.
+    #[test]
+    fn pr_info_from_copies_unresolved_thread_comment_timestamps() {
+        let cached = CachedPr {
+            unresolved_threads: 3,
+            unresolved_thread_comment_timestamps: vec![100, 200, 300],
+            ..pr_for_branch(1, "feat/timestamps")
+        };
+        let info = pr_info_from(&cached);
+        assert_eq!(
+            info.unresolved_thread_comment_timestamps,
+            vec![100_i64, 200, 300],
+            "pr_info_from must propagate unresolved_thread_comment_timestamps from CachedPr"
+        );
+    }
+
+    /// `From<&PrInfo> for PrState` must also carry the timestamps through so
+    /// callers reading `PrState` see the same data.
+    #[test]
+    fn pr_state_from_pr_info_carries_unresolved_thread_comment_timestamps() {
+        use crate::orchard_state::PrState;
+        let cached = CachedPr {
+            unresolved_threads: 2,
+            unresolved_thread_comment_timestamps: vec![100, 200, 300],
+            ..pr_for_branch(2, "feat/state-carry")
+        };
+        let info = pr_info_from(&cached);
+        let state = PrState::from(&info);
+        assert_eq!(
+            state.unresolved_thread_comment_timestamps,
+            vec![100_i64, 200, 300],
+            "PrState::from(&PrInfo) must propagate unresolved_thread_comment_timestamps"
         );
     }
 }

@@ -377,6 +377,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: None,
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 

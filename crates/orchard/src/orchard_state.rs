@@ -204,6 +204,11 @@ pub struct PrState {
     pub updated_at: Option<String>,
     /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
     pub last_commit_pushed_at: Option<String>,
+    /// Per-thread latest-comment timestamps (epoch seconds) for threads that
+    /// are unresolved AND not outdated. Sourced from `PrInfo` at conversion time.
+    /// Used by the signal layer to compute `since_epoch` for
+    /// `PipelineStatus::UnresolvedThreads`.
+    pub unresolved_thread_comment_timestamps: Vec<i64>,
 }
 
 /// Lightweight tmux session summary attached to a worktree.
@@ -342,6 +347,7 @@ impl From<&crate::derive::PrInfo> for PrState {
             created_at: pr.created_at.clone(),
             updated_at: pr.updated_at.clone(),
             last_commit_pushed_at: pr.last_commit_pushed_at.clone(),
+            unresolved_thread_comment_timestamps: pr.unresolved_thread_comment_timestamps.clone(),
         }
     }
 }

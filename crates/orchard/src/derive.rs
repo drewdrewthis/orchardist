@@ -195,6 +195,11 @@ pub struct PrInfo {
     pub updated_at: Option<String>,
     /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
     pub last_commit_pushed_at: Option<String>,
+    /// Per-thread latest-comment timestamps (epoch seconds) for threads that
+    /// are unresolved AND not outdated. Populated from `CachedPr` at join time.
+    /// Used by the signal layer to compute `since_epoch` for
+    /// `PipelineStatus::UnresolvedThreads`.
+    pub unresolved_thread_comment_timestamps: Vec<i64>,
 }
 
 /// One row in the derived worktree view. Corresponds to one non-bare worktree,
@@ -284,6 +289,7 @@ impl Default for PrInfo {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: None,
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 }
