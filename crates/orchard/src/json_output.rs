@@ -1845,6 +1845,9 @@ mod tests {
     #[test]
     fn json_output_version_reflects_status_field_addition() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 6, "version must be 6 after status/statusGlyph addition");
+        assert_eq!(
+            output.version, 6,
+            "version must be 6 after status/statusGlyph addition"
+        );
     }
 }

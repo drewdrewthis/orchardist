@@ -946,7 +946,10 @@ mod tests {
             assert!(!name.is_empty(), "name must not be empty");
         }
         // Spot-check specific values that downstream scripts rely on.
-        assert_eq!(PipelineStatus::UnresolvedThreads.name(), "unresolved_threads");
+        assert_eq!(
+            PipelineStatus::UnresolvedThreads.name(),
+            "unresolved_threads"
+        );
         assert_eq!(PipelineStatus::Ready.name(), "ready");
         assert_eq!(PipelineStatus::AwaitingReview.name(), "awaiting_review");
     }
