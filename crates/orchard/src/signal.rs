@@ -122,6 +122,27 @@ impl PipelineStatus {
         }
     }
 
+    /// Stable snake_case name for JSON output consumers.
+    ///
+    /// This is the external contract: downstream scripts parse these values.
+    /// Never change a variant's name string — add a new variant instead.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NeedsInput => "needs_input",
+            Self::CiFailing => "ci_failing",
+            Self::MergeConflict => "merge_conflict",
+            Self::ChangesRequested => "changes_requested",
+            Self::Coding => "coding",
+            Self::AwaitingReview => "awaiting_review",
+            Self::Draft => "draft",
+            Self::Blocked => "blocked",
+            Self::Paused => "paused",
+            Self::UnresolvedThreads => "unresolved_threads",
+            Self::Ready => "ready",
+            Self::Merged => "merged",
+        }
+    }
+
     /// Short human-readable label (legend + accessibility/testing).
     pub fn label(self) -> &'static str {
         match self {
@@ -895,6 +916,39 @@ mod tests {
             started_at: None,
             last_activity_at: None,
         }
+    }
+
+    // -- name() — stable JSON contract (AC #9, issue #320) ------------------
+
+    #[test]
+    fn every_status_name_is_distinct_and_snake_case() {
+        let all = [
+            PipelineStatus::NeedsInput,
+            PipelineStatus::CiFailing,
+            PipelineStatus::MergeConflict,
+            PipelineStatus::ChangesRequested,
+            PipelineStatus::Coding,
+            PipelineStatus::AwaitingReview,
+            PipelineStatus::Draft,
+            PipelineStatus::Blocked,
+            PipelineStatus::Paused,
+            PipelineStatus::UnresolvedThreads,
+            PipelineStatus::Ready,
+            PipelineStatus::Merged,
+        ];
+        let names: std::collections::HashSet<_> = all.iter().map(|s| s.name()).collect();
+        assert_eq!(names.len(), all.len(), "all names must be distinct");
+        for name in &names {
+            assert!(
+                name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "name must be snake_case (lowercase + underscores only): {name}"
+            );
+            assert!(!name.is_empty(), "name must not be empty");
+        }
+        // Spot-check specific values that downstream scripts rely on.
+        assert_eq!(PipelineStatus::UnresolvedThreads.name(), "unresolved_threads");
+        assert_eq!(PipelineStatus::Ready.name(), "ready");
+        assert_eq!(PipelineStatus::AwaitingReview.name(), "awaiting_review");
     }
 
     // -- glyph/label mapping ------------------------------------------------

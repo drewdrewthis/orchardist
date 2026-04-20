@@ -135,6 +135,13 @@ pub struct JsonWorktree {
     pub sessions: Vec<JsonSession>,
     /// Display group as a snake_case string.
     pub display_group: String,
+    /// Pipeline status as a stable snake_case string (e.g. `"unresolved_threads"`, `"ready"`).
+    ///
+    /// Stable external contract: downstream scripts parse this value. New variants
+    /// may be added but existing strings will never change.
+    pub status: String,
+    /// Single-glyph representation of the pipeline status (e.g. `"💬"`, `"🟢"`).
+    pub status_glyph: String,
     /// True when this is the repo's main worktree.
     pub is_main_worktree: bool,
     /// ISO 8601 timestamp of the most recent activity.

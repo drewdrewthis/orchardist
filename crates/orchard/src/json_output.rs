@@ -19,6 +19,7 @@ use crate::orchard_state::{
     IssueInfo, OrchardState, PrState, RepoState, SessionState, WindowState, WorktreeState,
 };
 use crate::session::StandaloneSessionRow;
+use crate::signal;
 
 // ---------------------------------------------------------------------------
 // Single source of truth: Json* struct definitions (shared with build.rs)
@@ -309,6 +310,7 @@ impl From<&WorktreeState> for JsonWorktree {
         let ahead_behind = ws
             .ahead_behind
             .map(|(ahead, behind)| JsonAheadBehind { ahead, behind });
+        let pipeline_status = signal::resolve_status(ws);
         Self {
             path: ws.path.clone(),
             branch: ws.branch.clone(),
@@ -320,6 +322,8 @@ impl From<&WorktreeState> for JsonWorktree {
             pr: ws.pr.as_ref().map(Into::into),
             sessions: ws.sessions.iter().map(Into::into).collect(),
             display_group: display_group_str(ws.display_group).to_string(),
+            status: pipeline_status.name().to_string(),
+            status_glyph: pipeline_status.glyph().to_string(),
             is_main_worktree: ws.is_main_worktree,
             last_activity_at: ws
                 .pr
@@ -390,9 +394,10 @@ impl From<&StandaloneSessionRow> for JsonSession {
 }
 
 impl From<&OrchardState> for JsonOutput {
-    /// Converts the unified `OrchardState` to JSON output, setting version to 5.
+    /// Converts the unified `OrchardState` to JSON output, setting version to 6.
     ///
-    /// Schema v5 adds the `layout` field to each worktree entry (values: `"bare"` or `"flat"`).
+    /// Schema v6 adds the `status` and `statusGlyph` fields to each worktree entry.
+    /// `status` is a stable snake_case `PipelineStatus` name (e.g. `"unresolved_threads"`).
     fn from(state: &OrchardState) -> Self {
         let hosts = state
             .hosts
@@ -408,7 +413,7 @@ impl From<&OrchardState> for JsonOutput {
             .collect();
 
         Self {
-            version: 5,
+            version: 6,
             tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
@@ -444,9 +449,9 @@ mod tests {
     }
 
     #[test]
-    fn from_orchard_state_produces_version_5() {
+    fn from_orchard_state_produces_version_6() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 5);
+        assert_eq!(output.version, 6);
     }
 
     #[test]
@@ -640,9 +645,9 @@ mod tests {
     }
 
     #[test]
-    fn json_version_is_5() {
+    fn json_version_is_6() {
         let output = JsonOutput::from(&empty_state());
-        assert_eq!(output.version, 5);
+        assert_eq!(output.version, 6);
     }
 
     #[test]
@@ -1759,5 +1764,87 @@ mod tests {
             value["hasUnaddressedAuthorComment"], true,
             "bob's review is after last push"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // status / statusGlyph fields on JsonWorktree (issue #320, AC #9)
+    // -----------------------------------------------------------------------
+
+    /// Builds a WorktreeState with a PR that has unresolved threads.
+    #[allow(deprecated)]
+    fn make_worktree_with_unresolved_threads(unresolved_threads: u32) -> WorktreeState {
+        use crate::ci_state::CiChecks;
+        WorktreeState {
+            path: "/repos/feat".to_string(),
+            branch: "issue3298/fix-bug".to_string(),
+            is_bare: false,
+            host: None,
+            issue: None,
+            pr: Some(PrState {
+                number: 3298,
+                branch: "issue3298/fix-bug".to_string(),
+                state: Some("open".to_string()),
+                title: None,
+                is_draft: None,
+                author: None,
+                requested_reviewers: vec![],
+                reviews: vec![],
+                review_decision: Some("APPROVED".to_string()),
+                checks_state: None,
+                ci_code_state: Some("passing".to_string()),
+                ci_gate_state: None,
+                ci_checks: CiChecks::default(),
+                has_conflicts: false,
+                unresolved_threads,
+                labels: vec![],
+                additions: None,
+                deletions: None,
+                created_at: None,
+                updated_at: None,
+                last_commit_pushed_at: None,
+                unresolved_thread_comment_timestamps: vec![],
+            }),
+            sessions: vec![],
+            display_group: crate::derive::DisplayGroup::NeedsAttention,
+            is_main_worktree: false,
+            ahead_behind: None,
+            last_commit_at: None,
+            layout: crate::cache::WorktreeLayout::Bare,
+        }
+    }
+
+    /// AC #9: worktree with approved + CI passing + unresolved_threads=1 serializes
+    /// `status == "unresolved_threads"` and `statusGlyph == "💬"`.
+    #[test]
+    fn json_worktree_status_is_unresolved_threads_when_pr_has_unresolved_threads() {
+        let wt = make_worktree_with_unresolved_threads(1);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.status, "unresolved_threads");
+        assert_eq!(jw.status_glyph, "\u{1F4AC}"); // 💬
+
+        // Verify via JSON serialization that field names are camelCase.
+        let value = serde_json::to_value(&jw).unwrap();
+        assert_eq!(value["status"], "unresolved_threads");
+        assert_eq!(value["statusGlyph"], "💬");
+    }
+
+    /// AC #9: smoke test — worktree with no blockers serializes `status == "ready"`.
+    #[test]
+    fn json_worktree_status_is_ready_when_no_blockers() {
+        let wt = make_worktree_with_unresolved_threads(0);
+        let jw = JsonWorktree::from(&wt);
+        assert_eq!(jw.status, "ready");
+        assert_eq!(jw.status_glyph, "\u{1F7E2}"); // 🟢
+
+        let value = serde_json::to_value(&jw).unwrap();
+        assert_eq!(value["status"], "ready");
+        assert_eq!(value["statusGlyph"], "🟢");
+    }
+
+    /// AC #9: version field has been bumped to reflect the new schema additions.
+    #[test]
+    fn json_output_version_reflects_status_field_addition() {
+        let output = JsonOutput::from(&empty_state());
+        assert_eq!(output.version, 6, "version must be 6 after status/statusGlyph addition");
     }
 }
