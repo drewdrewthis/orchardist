@@ -149,6 +149,7 @@ pub fn make_pr(number: u32, branch: &str) -> CachedPr {
         ci_checks: orchard::ci_state::CiChecks::default(),
         has_conflicts: false,
         unresolved_threads: 0,
+        unresolved_thread_comment_timestamps: vec![],
         linked_issue_state: None,
         labels: vec![],
         title: None,

@@ -249,6 +249,7 @@ pub(crate) fn status_style(status: crate::signal::PipelineStatus, theme: &Theme)
         S::Draft => theme.dimmed,
         S::Blocked => theme.warning,
         S::Paused => theme.dimmed,
+        S::UnresolvedThreads => theme.warning,
         S::Ready => theme.success,
         S::Merged => theme.pr_merged,
     };

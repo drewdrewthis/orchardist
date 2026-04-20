@@ -172,6 +172,19 @@ pub struct CachedPr {
     /// ISO 8601 timestamp of when the last commit was pushed to the PR branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_commit_pushed_at: Option<String>,
+    /// Per-thread latest-comment timestamps (epoch seconds) for threads that
+    /// are unresolved AND not outdated (`isResolved=false AND isOutdated!=true`).
+    ///
+    /// Each entry corresponds to one such thread's most recent comment
+    /// (`createdAt` of `comments(last: 1)`). Used by the signal layer to
+    /// compute `since_epoch` for `PipelineStatus::UnresolvedThreads` as the
+    /// max across these values, falling back to `pr.updated_at` when empty.
+    ///
+    /// Uses `serde(default)` so cache files written by previous orchard
+    /// versions (before this field was added) deserialize cleanly with an
+    /// empty vec.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_thread_comment_timestamps: Vec<i64>,
 }
 
 /// Repo-level metadata extracted from the per-branch PR GraphQL response.
@@ -555,6 +568,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: None,
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 

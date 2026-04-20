@@ -768,7 +768,9 @@
         "isMainWorktree",
         "layout",
         "path",
-        "sessions"
+        "sessions",
+        "status",
+        "statusGlyph"
       ],
       "properties": {
         "aheadBehind": {
@@ -851,6 +853,14 @@
           "items": {
             "$ref": "#/definitions/JsonSession"
           }
+        },
+        "status": {
+          "description": "Pipeline status as a stable snake_case string (e.g. `\"unresolved_threads\"`, `\"ready\"`).\n\nStable external contract: downstream scripts parse this value. New variants may be added but existing strings will never change.",
+          "type": "string"
+        },
+        "statusGlyph": {
+          "description": "Single-glyph representation of the pipeline status (e.g. `\"💬\"`, `\"🟢\"`).",
+          "type": "string"
         }
       }
     },

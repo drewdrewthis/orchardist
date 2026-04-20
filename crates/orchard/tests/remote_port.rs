@@ -690,16 +690,11 @@ fn worktree_layout_serializes_as_kebab_case() {
 // Scenario: feature.feature:149
 // JsonOutput version is bumped and layout field documented
 //
-// Current version is 4. Test asserts version == 5.
-// Fails red until the coder bumps the version and adds the layout field.
+// Current version is 6 (bumped from 5 to add status/statusGlyph fields, issue #320).
 // ---------------------------------------------------------------------------
 
 /// Constructing a JsonOutput from an OrchardState with a Flat-layout worktree
-/// must emit version 5 (current+1) and include "layout" on each worktree.
-///
-/// Fails red on two counts:
-/// 1. `version` is currently 4 — must become 5.
-/// 2. `WorktreeState` has no `layout` field yet — `JsonWorktree` has no layout field.
+/// must emit version 6 (current) and include "layout" on each worktree.
 #[test]
 fn json_output_version_bumped_to_next_and_includes_layout_field() {
     // feature.feature:149
@@ -742,11 +737,10 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
     let output = JsonOutput::from(&state);
     let value = serde_json::to_value(&output).unwrap();
 
-    // Fails red: currently version == 4.
     let version = value["version"].as_u64().expect("version must be a number");
     assert_eq!(
-        version, 5,
-        "JsonOutput version must be bumped to 5 (current 4 + 1); got {version}"
+        version, 6,
+        "JsonOutput version must be 6 (bumped for status/statusGlyph fields, issue #320); got {version}"
     );
 
     // Fails red: JsonWorktree has no layout field yet.

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::claude_state::ClaudeState;
 use crate::orchard_state::{OrchardState, WorktreeState};
+use crate::signal;
 use crate::watch::debounce::ClaudeDebounceState;
 use crate::watch::event::{EventKind, WatchEvent};
 
@@ -150,6 +151,27 @@ pub fn diff(
                 }));
             }
             _ => {}
+        }
+
+        // Pipeline status transition (orthogonal to per-field events above).
+        //
+        // Delegates entirely to `signal::resolve_status` so the same hierarchy
+        // that drives TUI rendering also drives the event stream.  Both this
+        // event and the existing `ReviewComments` count event may fire for the
+        // same diff; they remain distinct (status change vs. count 0→N).
+        {
+            let old_status = signal::resolve_status(old_wt);
+            let new_status = signal::resolve_status(new_wt);
+            if old_status != new_status {
+                let pr_number = new_wt.pr.as_ref().map(|pr| pr.number);
+                events.push(WatchEvent::now(EventKind::StatusChanged {
+                    worktree: path.to_string(),
+                    pr_number,
+                    from: old_status.name().to_string(),
+                    to: new_status.name().to_string(),
+                    label: label_for(new_wt),
+                }));
+            }
         }
 
         // PR-level transitions
@@ -377,6 +399,7 @@ mod tests {
             created_at: None,
             updated_at: None,
             last_commit_pushed_at: None,
+            unresolved_thread_comment_timestamps: vec![],
         }
     }
 
@@ -782,6 +805,154 @@ mod tests {
         let mut d = seeded_debounce(&state);
         let events = diff(&state, &state, &mut d);
         assert!(events.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // StatusChanged — pipeline-status transition events (AC #10 / issue #320)
+    // -----------------------------------------------------------------------
+
+    /// AC #10: when a PR transitions from AwaitingReview to UnresolvedThreads
+    /// (e.g. reviewer leaves a thread on an otherwise unblocked PR), BOTH a
+    /// `StatusChanged` event (status-pipeline transition) AND the existing
+    /// `ReviewComments` event (count 0→N) must fire independently.
+    #[test]
+    fn status_transition_awaiting_review_to_unresolved_threads_emits_status_changed() {
+        let path = "/workspace/repo/feat-1";
+        // Old snapshot: PR open, awaiting review (unresolved_threads == 0)
+        let old_pr = PrState {
+            state: Some("OPEN".to_string()),
+            ..make_pr(42)
+        };
+        // New snapshot: same PR but reviewer left 1 unresolved thread
+        let new_pr = PrState {
+            state: Some("OPEN".to_string()),
+            unresolved_threads: 1,
+            ..make_pr(42)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
+
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
+
+        // StatusChanged event must fire
+        let status_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::StatusChanged { .. }))
+            .collect();
+        assert_eq!(status_events.len(), 1, "expected one StatusChanged event");
+        assert!(
+            matches!(
+                &status_events[0].kind,
+                EventKind::StatusChanged { from, to, pr_number: Some(42), .. }
+                    if from == "awaiting_review" && to == "unresolved_threads"
+            ),
+            "expected awaiting_review → unresolved_threads, got {:?}",
+            status_events[0].kind
+        );
+
+        // ReviewComments event must also fire (count 0→1) — non-duplication proof
+        let review_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::ReviewComments { .. }))
+            .collect();
+        assert_eq!(
+            review_events.len(),
+            1,
+            "ReviewComments count-transition event must still fire alongside StatusChanged"
+        );
+    }
+
+    /// AC #10: when all threads are resolved (unresolved_threads N→0) on an
+    /// approved+passing PR, a `StatusChanged { from: "unresolved_threads",
+    /// to: "ready" }` event fires.  The `ReviewComments` count event does NOT
+    /// fire here because the transition is N→0, not 0→N.
+    #[test]
+    fn status_transition_unresolved_threads_to_ready_emits_status_changed() {
+        let path = "/workspace/repo/feat-1";
+        // Old snapshot: approved, CI passing, but 1 unresolved thread → UnresolvedThreads
+        let old_pr = PrState {
+            state: Some("OPEN".to_string()),
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            unresolved_threads: 1,
+            ..make_pr(42)
+        };
+        // New snapshot: all threads resolved → Ready
+        let new_pr = PrState {
+            state: Some("OPEN".to_string()),
+            review_decision: Some("approved".to_string()),
+            checks_state: Some("passing".to_string()),
+            ci_code_state: Some("passing".to_string()),
+            unresolved_threads: 0,
+            ..make_pr(42)
+        };
+
+        let old_wt = with_pr(make_worktree(path, "feat/issue-1"), old_pr);
+        let new_wt = with_pr(make_worktree(path, "feat/issue-1"), new_pr);
+        let old_state = make_state(vec![old_wt]);
+        let new_state = make_state(vec![new_wt]);
+
+        let mut d = seeded_debounce(&old_state);
+        let events = diff(&old_state, &new_state, &mut d);
+
+        // StatusChanged event must fire
+        let status_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::StatusChanged { .. }))
+            .collect();
+        assert_eq!(status_events.len(), 1, "expected one StatusChanged event");
+        assert!(
+            matches!(
+                &status_events[0].kind,
+                EventKind::StatusChanged { from, to, pr_number: Some(42), .. }
+                    if from == "unresolved_threads" && to == "ready"
+            ),
+            "expected unresolved_threads → ready, got {:?}",
+            status_events[0].kind
+        );
+
+        // ReviewComments must NOT fire — count went N→0, not 0→N
+        let review_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::ReviewComments { .. }))
+            .collect();
+        assert!(
+            review_events.is_empty(),
+            "ReviewComments must not fire on N→0 thread transition"
+        );
+    }
+
+    /// AC #10: when pipeline status doesn't change between snapshots, no
+    /// `StatusChanged` event is emitted.
+    #[test]
+    fn status_transition_no_event_when_status_unchanged() {
+        let path = "/workspace/repo/feat-1";
+        // Both snapshots: open PR with 1 unresolved thread (UnresolvedThreads)
+        let pr = PrState {
+            state: Some("OPEN".to_string()),
+            unresolved_threads: 1,
+            ..make_pr(42)
+        };
+
+        let wt = with_pr(make_worktree(path, "feat/issue-1"), pr);
+        let state = make_state(vec![wt]);
+
+        let mut d = seeded_debounce(&state);
+        let events = diff(&state, &state, &mut d);
+
+        let status_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::StatusChanged { .. }))
+            .collect();
+        assert!(
+            status_events.is_empty(),
+            "no StatusChanged when pipeline status is unchanged"
+        );
     }
 
     // -----------------------------------------------------------------------
