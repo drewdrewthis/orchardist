@@ -71,7 +71,42 @@ pub fn probe_command_for(kind: crate::remote_adapter::RemoteKind) -> &'static st
 /// the host is unreachable, SSH fails, or the wall-clock deadline expires.
 pub fn probe_reachability_for_remote(remote: &RemoteConfig) -> bool {
     let cmd = probe_command_for(remote.kind);
-    crate::remote::ssh_exec_with_timeout(&remote.host, cmd, PROBE_TIMEOUT).is_ok()
+    match crate::remote::ssh_exec_with_timeout(&remote.host, cmd, PROBE_TIMEOUT) {
+        Ok(_) => true,
+        Err(e) => {
+            // AC6 / AC9 intent: a failed probe for an OrchardProxy remote is a
+            // user-visible signal ("orchard missing or unreachable on this
+            // host"). Emit a `remote_adapter.proxy_failure` event so the
+            // signal appears in `events.jsonl` even though the downstream
+            // adapter call is gated off by the unreachable flag. For other
+            // kinds the probe failure is a normal, quiet event.
+            if remote.kind == crate::remote_adapter::RemoteKind::OrchardProxy {
+                let msg = e.to_string();
+                let reason = if msg.contains("timed out") {
+                    "probe timeout".to_string()
+                } else if msg.contains("exit 127") || msg.contains("command not found") {
+                    "remote orchard missing (probe: exit 127)".to_string()
+                } else if msg.contains("Connection refused") || msg.contains("connect") {
+                    "ssh unreachable".to_string()
+                } else {
+                    "probe failure".to_string()
+                };
+                crate::events::log_event(
+                    "remote_adapter.proxy_failure",
+                    &[
+                        ("host", serde_json::Value::String(remote.host.clone())),
+                        ("reason", serde_json::Value::String(reason)),
+                        (
+                            "kind",
+                            serde_json::Value::String("orchard-proxy".to_string()),
+                        ),
+                        ("phase", serde_json::Value::String("probe".to_string())),
+                    ],
+                );
+            }
+            false
+        }
+    }
 }
 
 /// Probes many (host, kind-aware) remotes concurrently.
