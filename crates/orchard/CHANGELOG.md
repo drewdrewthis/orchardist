@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.8.0...orchard-v0.9.0) (2026-04-21)
+
+
+### Features
+
+* **remote:** federated orchard — discover remotes via `ssh host orchard --json` ([#329](https://github.com/drewdrewthis/git-orchard-rs/issues/329)) ([#330](https://github.com/drewdrewthis/git-orchard-rs/issues/330)) ([d36ece7](https://github.com/drewdrewthis/git-orchard-rs/commit/d36ece77605db90a92ba19ee6a273767c74cbe88))
+
 ## [0.8.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.7.0...orchard-v0.8.0) (2026-04-20)
 
 
