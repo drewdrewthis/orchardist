@@ -15,7 +15,9 @@
 use std::collections::HashMap;
 
 use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
-use orchard::json_output::{CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonWorktree};
+use orchard::json_output::{
+    CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonWorktree,
+};
 use orchard::merge_remote::build_state_with_cached_snapshots_from;
 use orchard::orchard_snapshot::write_snapshot_to;
 use orchard::remote_adapter::RemoteKind;
@@ -87,7 +89,10 @@ fn make_json_output_with_enriched_worktree(
                     checks_state: None,
                     ci_code_state: None,
                     ci_gate_state: None,
-                    ci_checks: JsonCiChecks { code: vec![], gate: vec![] },
+                    ci_checks: JsonCiChecks {
+                        code: vec![],
+                        gate: vec![],
+                    },
                     has_conflicts: false,
                     unresolved_threads: 0,
                     unresolved_review_threads: 0,
@@ -137,11 +142,7 @@ fn federation_wire_up_delivers_pr_and_issue_from_snapshot() {
     let config = make_config_with_proxy(host);
 
     // Call the production entry point (test variant with explicit cache_dir).
-    let state = build_state_with_cached_snapshots_from(
-        &config,
-        &HashMap::new(),
-        cache_dir.path(),
-    );
+    let state = build_state_with_cached_snapshots_from(&config, &HashMap::new(), cache_dir.path());
 
     // The OrchardState must contain the repo and worktree from the snapshot.
     let repo = state
@@ -164,13 +165,26 @@ fn federation_wire_up_delivers_pr_and_issue_from_snapshot() {
     );
 
     // PR enrichment preserved from snapshot — not stripped by CachedWorktree projection.
-    let pr = wt.pr.as_ref().expect("pr must be present — sourced from snapshot, not CachedWorktree");
+    let pr = wt
+        .pr
+        .as_ref()
+        .expect("pr must be present — sourced from snapshot, not CachedWorktree");
     assert_eq!(pr.number, 42, "pr.number must equal 42 (from snapshot)");
-    assert_eq!(pr.state, Some("open".to_string()), "pr.state must be 'open'");
+    assert_eq!(
+        pr.state,
+        Some("open".to_string()),
+        "pr.state must be 'open'"
+    );
 
     // Issue enrichment preserved.
-    let issue = wt.issue.as_ref().expect("issue must be present — sourced from snapshot");
-    assert_eq!(issue.number, 329, "issue.number must equal 329 (from snapshot)");
+    let issue = wt
+        .issue
+        .as_ref()
+        .expect("issue must be present — sourced from snapshot");
+    assert_eq!(
+        issue.number, 329,
+        "issue.number must equal 329 (from snapshot)"
+    );
     assert_eq!(issue.state, "open", "issue.state must be 'open'");
 }
 

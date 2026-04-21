@@ -19,7 +19,9 @@ use crate::ci_state::{CheckInfo, CiChecks};
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
 use crate::global_config::GlobalConfig;
-use crate::json_output::{JsonClaudeInfo, JsonIssue, JsonOutput, JsonPr, JsonSession, JsonWorktree};
+use crate::json_output::{
+    JsonClaudeInfo, JsonIssue, JsonOutput, JsonPr, JsonSession, JsonWorktree,
+};
 use crate::orchard_state::{
     ClaudeEnrichment, HostState, IssueInfo, OrchardState, PaneState, PrState, RepoState,
     SessionState, WindowState, WorktreeState,
@@ -48,7 +50,8 @@ pub fn merge_remote_snapshot(state: &mut OrchardState, snapshot: JsonOutput, hos
     // --- Repos and worktrees --------------------------------------------------
     for json_repo in snapshot.repos {
         // Find or create the matching RepoState.
-        let repo_idx = if let Some(idx) = state.repos.iter().position(|r| r.slug == json_repo.slug) {
+        let repo_idx = if let Some(idx) = state.repos.iter().position(|r| r.slug == json_repo.slug)
+        {
             idx
         } else {
             state.repos.push(RepoState {
@@ -306,7 +309,10 @@ fn ci_checks_from_json(json_ci: &crate::json_output::CiChecks) -> CiChecks {
 }
 
 /// Converts a `JsonSession` to a `SessionState` suitable for attaching to a `WorktreeState`.
-fn session_state_from_json(json_session: &JsonSession, host_override: Option<String>) -> SessionState {
+fn session_state_from_json(
+    json_session: &JsonSession,
+    host_override: Option<String>,
+) -> SessionState {
     let host = host_override.or_else(|| {
         if json_session.host == "local" {
             None
@@ -416,7 +422,10 @@ fn claude_session_info_from_json(json_claude: &JsonClaudeInfo) -> Option<ClaudeS
 ///
 /// `host` is the effective host (`Some(remote_host)` for remote sessions,
 /// `None` for genuinely local ones — which should not appear in remote snapshots).
-fn standalone_row_from_json(json_session: JsonSession, host: Option<String>) -> StandaloneSessionRow {
+fn standalone_row_from_json(
+    json_session: JsonSession,
+    host: Option<String>,
+) -> StandaloneSessionRow {
     let tmux_host = match &host {
         Some(h) => Host::Remote(h.clone()),
         None => Host::Local,
@@ -428,7 +437,10 @@ fn standalone_row_from_json(json_session: JsonSession, host: Option<String>) -> 
         SessionStatus::Dead
     };
 
-    let claude = json_session.claude.as_ref().and_then(claude_session_info_from_json);
+    let claude = json_session
+        .claude
+        .as_ref()
+        .and_then(claude_session_info_from_json);
 
     let windows: Vec<WindowInfo> = json_session
         .windows
@@ -441,14 +453,16 @@ fn standalone_row_from_json(json_session: JsonSession, host: Option<String>) -> 
             panes: w
                 .panes
                 .iter()
-                .map(|p| crate::session::PaneInfo::new_with_metadata(
-                    p.index,
-                    &p.tmux_target,
-                    &p.command,
-                    &p.title,
-                    p.cwd.clone(),
-                    p.is_active,
-                ))
+                .map(|p| {
+                    crate::session::PaneInfo::new_with_metadata(
+                        p.index,
+                        &p.tmux_target,
+                        &p.command,
+                        &p.title,
+                        p.cwd.clone(),
+                        p.is_active,
+                    )
+                })
                 .collect(),
         })
         .collect();
@@ -496,8 +510,8 @@ fn parse_display_group(s: &str) -> DisplayGroup {
 mod tests {
     use super::*;
     use crate::json_output::{
-        CiChecks as JsonCiChecks, CheckInfo as JsonCheckInfo, JsonClaudeInfo, JsonIssue, JsonOutput,
-        JsonPr, JsonRepo, JsonSession, JsonWorktree,
+        CheckInfo as JsonCheckInfo, CiChecks as JsonCiChecks, JsonClaudeInfo, JsonIssue,
+        JsonOutput, JsonPr, JsonRepo, JsonSession, JsonWorktree,
     };
 
     // ---- helpers -----------------------------------------------------------
@@ -553,7 +567,10 @@ mod tests {
             checks_state: None,
             ci_code_state: None,
             ci_gate_state: None,
-            ci_checks: JsonCiChecks { code: vec![], gate: vec![] },
+            ci_checks: JsonCiChecks {
+                code: vec![],
+                gate: vec![],
+            },
             has_conflicts: false,
             unresolved_threads: 0,
             unresolved_review_threads: 0,
@@ -710,7 +727,11 @@ mod tests {
         // Claude state preserved
         let session = wt_state.sessions.first().expect("session must exist");
         let claude = session.claude.as_ref().expect("claude must exist");
-        assert_eq!(claude.status, ClaudeState::Working, "claude status must be Working");
+        assert_eq!(
+            claude.status,
+            ClaudeState::Working,
+            "claude status must be Working"
+        );
     }
 
     /// AC4 — build_state skips join/enrichment for remote-sourced worktrees.
@@ -740,10 +761,16 @@ mod tests {
             .find(|w| w.branch == "issue9999/branch")
             .unwrap();
 
-        let pr = wt_state.pr.as_ref().expect("pr must survive without local join");
+        let pr = wt_state
+            .pr
+            .as_ref()
+            .expect("pr must survive without local join");
         assert_eq!(pr.number, 9999);
 
-        let issue = wt_state.issue.as_ref().expect("issue must survive without local join");
+        let issue = wt_state
+            .issue
+            .as_ref()
+            .expect("issue must survive without local join");
         assert_eq!(issue.number, 9999);
     }
 
@@ -997,7 +1024,10 @@ mod tests {
         );
 
         let wt = &repo.worktrees[0];
-        let pr = wt.pr.as_ref().expect("remote (proxy) entry with PR must win");
+        let pr = wt
+            .pr
+            .as_ref()
+            .expect("remote (proxy) entry with PR must win");
         assert_eq!(pr.number, 42, "remote PR number must survive dedup");
     }
 
@@ -1128,16 +1158,31 @@ mod tests {
     #[test]
     fn parse_display_group_known_variants() {
         assert_eq!(parse_display_group("other"), DisplayGroup::Other);
-        assert_eq!(parse_display_group("claude_working"), DisplayGroup::ClaudeWorking);
-        assert_eq!(parse_display_group("needs_attention"), DisplayGroup::NeedsAttention);
-        assert_eq!(parse_display_group("ready_to_merge"), DisplayGroup::ReadyToMerge);
+        assert_eq!(
+            parse_display_group("claude_working"),
+            DisplayGroup::ClaudeWorking
+        );
+        assert_eq!(
+            parse_display_group("needs_attention"),
+            DisplayGroup::NeedsAttention
+        );
+        assert_eq!(
+            parse_display_group("ready_to_merge"),
+            DisplayGroup::ReadyToMerge
+        );
         assert_eq!(parse_display_group("repo_main"), DisplayGroup::RepoMain);
-        assert_eq!(parse_display_group("prioritized"), DisplayGroup::Prioritized);
+        assert_eq!(
+            parse_display_group("prioritized"),
+            DisplayGroup::Prioritized
+        );
     }
 
     #[test]
     fn parse_display_group_unknown_falls_back_to_other() {
-        assert_eq!(parse_display_group("unknown_future_variant"), DisplayGroup::Other);
+        assert_eq!(
+            parse_display_group("unknown_future_variant"),
+            DisplayGroup::Other
+        );
         assert_eq!(parse_display_group(""), DisplayGroup::Other);
     }
 
@@ -1161,7 +1206,10 @@ mod tests {
         assert_eq!(ci.code.len(), 1);
         assert_eq!(ci.code[0].name, "tests");
         assert_eq!(ci.code[0].state, "passing");
-        assert_eq!(ci.code[0].details_url, Some("https://ci.example.com/1".to_string()));
+        assert_eq!(
+            ci.code[0].details_url,
+            Some("https://ci.example.com/1".to_string())
+        );
         assert_eq!(ci.gate.len(), 1);
         assert_eq!(ci.gate[0].name, "license-check");
         assert_eq!(ci.gate[0].state, "failing");

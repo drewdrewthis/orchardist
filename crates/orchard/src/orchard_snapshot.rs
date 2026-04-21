@@ -24,7 +24,7 @@ use serde_json::Value;
 use crate::cache::cache_dir;
 use crate::events::log_event;
 use crate::global_config::GlobalConfig;
-use crate::json_output::{check_json_output_version, JsonOutput};
+use crate::json_output::{JsonOutput, check_json_output_version};
 use crate::remote_adapter::RemoteKind;
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,11 @@ pub fn write_snapshot(host: &str, snapshot: &JsonOutput) -> anyhow::Result<()> {
 }
 
 /// Like [`write_snapshot`] but writes under `cache_dir` (testing variant).
-pub fn write_snapshot_to(host: &str, snapshot: &JsonOutput, cache_dir: &Path) -> anyhow::Result<()> {
+pub fn write_snapshot_to(
+    host: &str,
+    snapshot: &JsonOutput,
+    cache_dir: &Path,
+) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
     let path = orchard_snapshot_path_in(host, cache_dir);
@@ -168,16 +172,20 @@ pub fn load_cached_snapshots(config: &GlobalConfig) -> Vec<(String, JsonOutput)>
 }
 
 /// Like [`load_cached_snapshots`] but reads under `cache_dir` (testing variant).
-pub fn load_cached_snapshots_from(config: &GlobalConfig, cache_dir: &Path) -> Vec<(String, JsonOutput)> {
+pub fn load_cached_snapshots_from(
+    config: &GlobalConfig,
+    cache_dir: &Path,
+) -> Vec<(String, JsonOutput)> {
     let mut results: Vec<(String, JsonOutput)> = Vec::new();
     let mut seen_hosts: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for repo in &config.repos {
         for remote in &repo.remotes {
-            if remote.kind == RemoteKind::OrchardProxy && seen_hosts.insert(remote.host.clone()) {
-                if let Some(snapshot) = read_snapshot_from(&remote.host, cache_dir) {
-                    results.push((remote.host.clone(), snapshot));
-                }
+            if remote.kind == RemoteKind::OrchardProxy
+                && seen_hosts.insert(remote.host.clone())
+                && let Some(snapshot) = read_snapshot_from(&remote.host, cache_dir)
+            {
+                results.push((remote.host.clone(), snapshot));
             }
         }
     }
@@ -274,7 +282,8 @@ mod tests {
 
         let path = orchard_snapshot_path_in("boxd@vm.boxd.sh", dir.path());
         assert!(
-            path.to_string_lossy().ends_with("boxd_vm_boxd_sh_orchard_snapshot.json"),
+            path.to_string_lossy()
+                .ends_with("boxd_vm_boxd_sh_orchard_snapshot.json"),
             "filename must replace @ and . with _"
         );
         assert!(path.exists());

@@ -246,9 +246,9 @@ impl RemoteAdapter {
                 ssh,
             }),
             RemoteKind::OrchardProxy => {
-                let fallback = cfg.fallback_kind.map(|kind| {
-                    FallbackAdapter::from_kind(kind, &cfg.host, &cfg.path)
-                });
+                let fallback = cfg
+                    .fallback_kind
+                    .map(|kind| FallbackAdapter::from_kind(kind, &cfg.host, &cfg.path));
                 RemoteAdapter::OrchardProxy(OrchardProxyAdapter {
                     host: cfg.host.clone(),
                     path: cfg.path.clone(),
@@ -661,12 +661,10 @@ impl OrchardProxyAdapter {
 
             // Non-zero exit code — check for the most common case (exit 127 = command not found)
             if output.exit_code != 0 {
-                let reason = if output.exit_code == 127 {
-                    format!("remote orchard missing (exit 127)")
-                } else if output.exit_code == 255 {
-                    format!("fetch failure (exit 255)")
-                } else {
-                    format!("remote orchard failed (exit {})", output.exit_code)
+                let reason = match output.exit_code {
+                    127 => "remote orchard missing (exit 127)".to_string(),
+                    255 => "fetch failure (exit 255)".to_string(),
+                    code => format!("remote orchard failed (exit {code})"),
                 };
                 return Err(AdapterError::FetchFailure { message: reason });
             }
@@ -784,15 +782,14 @@ impl OrchardProxyAdapter {
     fn log_fallback_diagnostic(&self, err: &AdapterError) {
         let (reason, snippet) = match err {
             AdapterError::FetchFailure { message } => {
-                let reason = if message.contains("exit 127")
-                    || message.contains("remote orchard missing")
-                {
-                    "remote orchard missing (exit 127)".to_string()
-                } else if message.contains("exit 255") || message.contains("fetch failure") {
-                    "fetch failure".to_string()
-                } else {
-                    format!("fetch failure: {}", bounded_chars(message, 100))
-                };
+                let reason =
+                    if message.contains("exit 127") || message.contains("remote orchard missing") {
+                        "remote orchard missing (exit 127)".to_string()
+                    } else if message.contains("exit 255") || message.contains("fetch failure") {
+                        "fetch failure".to_string()
+                    } else {
+                        format!("fetch failure: {}", bounded_chars(message, 100))
+                    };
                 (reason, None)
             }
             AdapterError::ParseFailure { raw } => {
@@ -803,12 +800,19 @@ impl OrchardProxyAdapter {
                         .nth(1)
                         .and_then(|s| s.split_whitespace().next())
                         .unwrap_or("unknown");
-                    (format!("version skew (remote version {})", version_hint), None)
+                    (
+                        format!("version skew (remote version {})", version_hint),
+                        None,
+                    )
                 } else {
                     let bounded = bounded_chars(raw, 200);
                     (
                         "parse failure".to_string(),
-                        Some(format!("payload length {}, snippet: {}", raw.len(), bounded)),
+                        Some(format!(
+                            "payload length {}, snippet: {}",
+                            raw.len(),
+                            bounded
+                        )),
                     )
                 }
             }
@@ -846,10 +850,7 @@ fn bounded_chars(s: &str, max_chars: usize) -> String {
 
 /// Projects a `JsonSession` from the remote `orchard --json` output into a
 /// `CachedTmuxSession` tagged with the given host.
-fn json_session_to_cached(
-    s: &crate::json_output::JsonSession,
-    host: &str,
-) -> CachedTmuxSession {
+fn json_session_to_cached(s: &crate::json_output::JsonSession, host: &str) -> CachedTmuxSession {
     CachedTmuxSession {
         name: s.name.clone(),
         path: String::new(), // not available in JsonSession
@@ -1150,7 +1151,10 @@ mod tests {
         let json = r#"{"type": "kubernetes"}"#;
         #[derive(Debug, serde::Deserialize)]
         struct Wrapper {
+            // Field is read by serde during deserialization; Rust's dead-code
+            // analysis ignores the serde derive, hence the allow.
             #[serde(rename = "type")]
+            #[allow(dead_code)]
             kind: RemoteKind,
         }
         let err = serde_json::from_str::<Wrapper>(json)
@@ -1360,7 +1364,11 @@ mod tests {
 
         let sessions = adapter.list_sessions().expect("must not error");
 
-        assert_eq!(sessions.len(), 3, "expected 2 worktree sessions + 1 standalone");
+        assert_eq!(
+            sessions.len(),
+            3,
+            "expected 2 worktree sessions + 1 standalone"
+        );
         for s in &sessions {
             assert_eq!(
                 s.host.as_deref(),
@@ -1415,8 +1423,12 @@ mod tests {
             snapshot: OnceLock::new(),
         };
 
-        adapter.list_worktrees().expect("list_worktrees must not error");
-        adapter.list_sessions().expect("list_sessions must not error");
+        adapter
+            .list_worktrees()
+            .expect("list_worktrees must not error");
+        adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
 
         let invocations = *count.lock().unwrap();
         assert_eq!(
@@ -1588,7 +1600,8 @@ mod tests {
             "boxd@vm.boxd.sh",
             &remmy_cmd,
             SshOutput {
-                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n"
+                    .to_string(),
                 stderr: String::new(),
                 exit_code: 0,
             },
@@ -1613,7 +1626,10 @@ mod tests {
             .expect("must not error — version skew triggers fallback");
 
         // Fallback returns the main worktree from git porcelain.
-        assert!(!worktrees.is_empty(), "fallback must activate on version skew");
+        assert!(
+            !worktrees.is_empty(),
+            "fallback must activate on version skew"
+        );
     }
 
     /// AC6 scenario 4: SSH connection failure (exit 255) triggers fallback.
@@ -1639,7 +1655,8 @@ mod tests {
             "boxd@vm.boxd.sh",
             &remmy_cmd,
             SshOutput {
-                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n"
+                    .to_string(),
                 stderr: String::new(),
                 exit_code: 0,
             },
@@ -1663,7 +1680,10 @@ mod tests {
             .list_worktrees()
             .expect("must not error — SSH failure triggers fallback");
 
-        assert!(!worktrees.is_empty(), "fallback must activate on SSH failure");
+        assert!(
+            !worktrees.is_empty(),
+            "fallback must activate on SSH failure"
+        );
     }
 
     /// AC6 scenario 5 (integration): fallback is invisible to upstream callers —
@@ -1693,7 +1713,8 @@ mod tests {
             "boxd@vm.boxd.sh",
             &remmy_cmd,
             SshOutput {
-                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n"
+                    .to_string(),
                 stderr: String::new(),
                 exit_code: 0,
             },
@@ -1710,7 +1731,8 @@ mod tests {
             "boxd@vm.boxd.sh",
             &remmy_cmd,
             SshOutput {
-                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n"
+                    .to_string(),
                 stderr: String::new(),
                 exit_code: 0,
             },
@@ -1730,7 +1752,10 @@ mod tests {
 
         // The caller of RemoteAdapter::list_worktrees must see Ok, not Err.
         let result = adapter.list_worktrees();
-        assert!(result.is_ok(), "fallback must make list_worktrees return Ok");
+        assert!(
+            result.is_ok(),
+            "fallback must make list_worktrees return Ok"
+        );
 
         let worktrees = result.unwrap();
         assert!(

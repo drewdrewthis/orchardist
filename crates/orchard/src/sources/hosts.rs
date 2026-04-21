@@ -319,7 +319,10 @@ mod tests {
         let reachable = probe_reachability_for_remote(&remote);
         let elapsed = start.elapsed();
 
-        assert!(!reachable, "unroutable OrchardProxy host must probe as unreachable");
+        assert!(
+            !reachable,
+            "unroutable OrchardProxy host must probe as unreachable"
+        );
         assert!(
             elapsed < PROBE_TIMEOUT + Duration::from_millis(1500),
             "OrchardProxy probe must respect PROBE_TIMEOUT ({:?}); got {:?} (AC7)",

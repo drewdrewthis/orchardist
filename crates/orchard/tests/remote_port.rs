@@ -156,6 +156,7 @@ fn dispatch_remmy_type_returns_remmy_adapter() {
         path: "~/repo".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::Remmy,
+        fallback_kind: None,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
     let adapter = RemoteAdapter::from_config(&cfg, ssh);
@@ -175,6 +176,7 @@ fn dispatch_boxd_shared_type_returns_boxd_shared_adapter() {
         path: "~/git-orchard-rs".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::BoxdShared,
+        fallback_kind: None,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
     let adapter = RemoteAdapter::from_config(&cfg, ssh);
@@ -194,6 +196,7 @@ fn dispatch_boxd_fork_type_returns_boxd_fork_adapter() {
         path: "~/langwatch".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::BoxdFork,
+        fallback_kind: None,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
     let adapter = RemoteAdapter::from_config(&cfg, ssh);

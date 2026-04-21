@@ -13,11 +13,11 @@ use crossterm::{
 use orchard::build_state;
 use orchard::chat;
 use orchard::global_config;
-use orchard::merge_remote;
 use orchard::heal;
 use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
+use orchard::merge_remote;
 use orchard::setup_remote;
 use orchard::shell;
 use orchard::tui;

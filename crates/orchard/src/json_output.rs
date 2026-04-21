@@ -451,14 +451,14 @@ pub const SUPPORTED_JSON_OUTPUT_VERSIONS: &[u32] = &[6];
 /// assert!(check_json_output_version(0).is_err());
 /// assert!(check_json_output_version(99).is_err());
 /// ```
-pub fn check_json_output_version(
-    version: u32,
-) -> Result<(), crate::remote_adapter::AdapterError> {
+pub fn check_json_output_version(version: u32) -> Result<(), crate::remote_adapter::AdapterError> {
     if SUPPORTED_JSON_OUTPUT_VERSIONS.contains(&version) {
         Ok(())
     } else {
         Err(crate::remote_adapter::AdapterError::ParseFailure {
-            raw: format!("version skew: remote version {version} is not in supported list {SUPPORTED_JSON_OUTPUT_VERSIONS:?}"),
+            raw: format!(
+                "version skew: remote version {version} is not in supported list {SUPPORTED_JSON_OUTPUT_VERSIONS:?}"
+            ),
         })
     }
 }
@@ -1560,8 +1560,7 @@ mod tests {
     #[test]
     fn schema_byte_identical_after_deserialize_derives() {
         let schema = schemars::schema_for!(JsonOutput);
-        let generated =
-            serde_json::to_string_pretty(&schema).expect("schema serialization failed");
+        let generated = serde_json::to_string_pretty(&schema).expect("schema serialization failed");
 
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let snapshot_path = std::path::Path::new(manifest_dir).join("schema.json");
@@ -1580,10 +1579,7 @@ mod tests {
     #[test]
     fn version_zero_is_rejected_with_parse_failure() {
         let result = check_json_output_version(0);
-        assert!(
-            result.is_err(),
-            "version 0 must be rejected but got Ok"
-        );
+        assert!(result.is_err(), "version 0 must be rejected but got Ok");
         match result.unwrap_err() {
             crate::remote_adapter::AdapterError::ParseFailure { raw } => {
                 assert!(
@@ -1603,10 +1599,7 @@ mod tests {
     #[test]
     fn version_ninety_nine_is_rejected_with_parse_failure() {
         let result = check_json_output_version(99);
-        assert!(
-            result.is_err(),
-            "version 99 must be rejected but got Ok"
-        );
+        assert!(result.is_err(), "version 99 must be rejected but got Ok");
         match result.unwrap_err() {
             crate::remote_adapter::AdapterError::ParseFailure { raw } => {
                 assert!(

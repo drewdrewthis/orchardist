@@ -42,7 +42,10 @@ pub struct RemoteConfig {
     ///
     /// Defaults to `Some(RemoteKind::Remmy)` for backwards-compatible configs.
     /// Set to `None` to disable fallback (errors propagate to callers).
-    #[serde(default = "default_fallback_kind", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_fallback_kind",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub fallback_kind: Option<RemoteKind>,
 }
 
