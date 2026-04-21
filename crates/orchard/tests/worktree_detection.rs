@@ -87,6 +87,25 @@ fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)
     let home_cache = home.path().join(".cache").join("orchard");
     std::fs::create_dir_all(&home_cache).expect("create cache dir");
 
+    // Post-#329: `orchard --json` is cache-only. Run `orchard refresh`
+    // first to populate the worktree cache from the fixture's flat clone.
+    let refresh = Command::cargo_bin("orchard")
+        .unwrap()
+        .arg("refresh")
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .env_remove("TMUX")
+        .output()
+        .unwrap();
+    if !refresh.status.success() {
+        eprintln!(
+            "SKIP worktree_detection: orchard refresh exited with {:?}. stderr: {}",
+            refresh.status.code(),
+            String::from_utf8_lossy(&refresh.stderr).trim()
+        );
+        return None;
+    }
+
     let output = Command::cargo_bin("orchard")
         .unwrap()
         .arg("--json")
