@@ -195,6 +195,29 @@ Kill-session, create-worktree, transfer would all route through
 (missing rows), mutation failures are not (orphaned resources, dual
 writes). Mutations deserve their own ADR and their own rollout.
 
+## Structural invariants
+
+The following source-level invariants enforce the "no silent fallback" decision
+and are pinned by `crates/orchard/tests/ac6_no_fallback.rs`. If a future
+refactor re-introduces either symbol, those tests fail and point the author at
+this ADR.
+
+- **No `FallbackAdapter` type** — the type was removed as part of AC6.
+  A future adapter for a different remote kind must be named explicitly;
+  `Fallback` implies an automatic downgrade that this ADR explicitly rejects.
+- **No `fallback_kind:` field on `RemoteConfig`** — the field was removed
+  alongside `FallbackAdapter`. Users who want legacy behaviour for a specific
+  host set `"type": "remmy"` explicitly; there is no per-host implicit
+  downgrade.
+- **`OrchardProxyAdapter` has no `fallback` field** — the proxy adapter either
+  succeeds or returns an `AdapterError`. It never silently delegates to another
+  adapter kind.
+
+These invariants are documented here (prose) and enforced in
+`crates/orchard/tests/ac6_no_fallback.rs` (machine-checked). The BDD feature
+file (`specs/features/federated-orchard-discovery.feature`, AC6 section)
+references this section rather than duplicating the scenario as a grep test.
+
 ## Related
 
 - ADR-001 — cache architecture (snapshot cache extends this pattern)

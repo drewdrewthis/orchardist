@@ -184,14 +184,6 @@ Feature: Federated orchard — remote discovery via `ssh host orchard --json`
     And the `remote_adapter.proxy_failure` event is still present in `events.jsonl`
     And the cache file is NOT deleted (next successful refresh will overwrite it)
 
-  @integration
-  Scenario: FallbackAdapter and fallback_kind do not exist
-    Given the codebase under crates/orchard/src/
-    Then there is no `FallbackAdapter` type anywhere in the crate
-    And there is no `fallback_kind` field on `RemoteConfig`
-    And `OrchardProxyAdapter` has no `fallback` field
-    And the proxy failure path propagates the error upward — it does not invoke any other adapter kind
-
   # =======================================================================
   # AC7 — Dashboard never blocks on network. Reads are cache-only; all I/O
   # runs in background services (`orchard watch`, `orchard refresh`).
@@ -406,7 +398,9 @@ Feature: Federated orchard — remote discovery via `ssh host orchard --json`
   #   -> "Unknown `version` surfaces as a proxy_failure event"
   #   -> "SSH connection failure surfaces as a proxy_failure event"
   #   -> "Last-known snapshot stays visible after a proxy failure"
-  #   -> "FallbackAdapter and fallback_kind do not exist"
+  #   -> Structural invariants (no FallbackAdapter, no fallback_kind) enforced by
+  #      crates/orchard/tests/ac6_no_fallback.rs; see docs/adr/008-federated-discovery.md
+  #      "Structural invariants" section for the prose description.
   # AC7 "Dashboard never blocks on network; reads are cache-only; I/O runs in background services"
   #   -> "`orchard --json` reads from cache only; never initiates SSH"
   #   -> "TUI render does not block on probe or SSH"

@@ -5,6 +5,11 @@
 //! refactor reintroduces either, these tests fail and point the author at
 //! AC6 / ADR-008 / issue #329 for context.
 //!
+//! The structural invariants tested here are documented in prose at
+//! `docs/adr/008-federated-discovery.md` under the "Structural invariants"
+//! section. The BDD feature file (`specs/features/federated-orchard-discovery.feature`)
+//! references that section rather than duplicating these as a scenario.
+//!
 //! The forbidden strings are assembled at runtime (not embedded as literals)
 //! so reading this test file does not itself trip the assertions — the same
 //! technique used in `ac11_mutation_invariance.rs`.
