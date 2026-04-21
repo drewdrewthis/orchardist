@@ -580,6 +580,16 @@ impl FallbackAdapter {
         }
     }
 
+    /// Returns the short kind identifier (kebab-case) used in fallback
+    /// diagnostics. Matches the serde representation of `RemoteKind`.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            FallbackAdapter::Remmy(_) => "remmy",
+            FallbackAdapter::BoxdShared(_) => "boxd-shared",
+            FallbackAdapter::BoxdFork(_) => "boxd-fork",
+        }
+    }
+
     /// Returns all non-bare worktrees from the fallback adapter.
     pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
         match self {
@@ -774,30 +784,28 @@ impl OrchardProxyAdapter {
     fn log_fallback_diagnostic(&self, err: &AdapterError) {
         let (reason, snippet) = match err {
             AdapterError::FetchFailure { message } => {
-                let reason = if message.contains("exit 127") || message.contains("remote orchard missing") {
+                let reason = if message.contains("exit 127")
+                    || message.contains("remote orchard missing")
+                {
                     "remote orchard missing (exit 127)".to_string()
                 } else if message.contains("exit 255") || message.contains("fetch failure") {
                     "fetch failure".to_string()
                 } else {
-                    format!("fetch failure: {}", &message[..message.len().min(100)])
+                    format!("fetch failure: {}", bounded_chars(message, 100))
                 };
                 (reason, None)
             }
             AdapterError::ParseFailure { raw } => {
                 let is_version_skew = raw.starts_with("version skew");
                 if is_version_skew {
-                    // Extract the version number from the message for the diagnostic.
                     let version_hint = raw
                         .split("remote version ")
                         .nth(1)
                         .and_then(|s| s.split_whitespace().next())
                         .unwrap_or("unknown");
-                    (
-                        format!("version skew (remote version {})", version_hint),
-                        None,
-                    )
+                    (format!("version skew (remote version {})", version_hint), None)
                 } else {
-                    let bounded = &raw[..raw.len().min(200)];
+                    let bounded = bounded_chars(raw, 200);
                     (
                         "parse failure".to_string(),
                         Some(format!("payload length {}, snippet: {}", raw.len(), bounded)),
@@ -806,13 +814,15 @@ impl OrchardProxyAdapter {
             }
         };
 
+        let kind_label = match &self.fallback {
+            Some(f) => format!("orchard-proxy → {}", f.kind_str()),
+            None => "orchard-proxy (no fallback)".to_string(),
+        };
+
         let mut fields: Vec<(&str, Value)> = vec![
             ("host", Value::String(self.host.clone())),
             ("reason", Value::String(reason)),
-            (
-                "kind",
-                Value::String("orchard-proxy → remmy".to_string()),
-            ),
+            ("kind", Value::String(kind_label)),
         ];
         let snippet_owned;
         if let Some(s) = snippet {
@@ -822,6 +832,16 @@ impl OrchardProxyAdapter {
 
         crate::events::log_event("remote_adapter.fallback", &fields);
     }
+}
+
+/// Truncates `s` to at most `max_chars` Unicode scalar values, not bytes.
+///
+/// Byte-slicing via `&s[..s.len().min(n)]` panics when the boundary lands
+/// inside a multi-byte UTF-8 sequence (emoji, accented characters); stderr
+/// text from a remote `ssh` subprocess can contain either, so we truncate on
+/// char boundaries.
+fn bounded_chars(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
 
 /// Projects a `JsonSession` from the remote `orchard --json` output into a
@@ -1717,5 +1737,57 @@ mod tests {
             !worktrees.is_empty(),
             "fallback should yield worktrees from legacy path"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Review follow-ups
+    // -----------------------------------------------------------------------
+
+    /// Regression: bounded_chars must truncate on UTF-8 scalar-value
+    /// boundaries, not byte offsets. The previous `&s[..s.len().min(N)]`
+    /// byte-slicing panicked when the boundary landed mid-codepoint (emoji,
+    /// accented characters in remote stderr). Triggering the diagnostic
+    /// path via `log_fallback_diagnostic` must NOT panic on such input.
+    #[test]
+    fn fallback_diagnostic_does_not_panic_on_multibyte_stderr() {
+        // 250 copies of a 4-byte emoji = 1000 bytes, well past the 200-char
+        // bound and guaranteed to land a naive byte slice mid-codepoint.
+        let raw = "🔥".repeat(250);
+        let truncated = super::bounded_chars(&raw, 200);
+        // Char-count must be exactly 200 (boundary-safe), byte-count must be
+        // 800 (4 bytes per char), and the result must be valid UTF-8 (the
+        // compile-time contract of &str is sufficient proof here).
+        assert_eq!(truncated.chars().count(), 200);
+        assert_eq!(truncated.len(), 800);
+    }
+
+    /// Regression: bounded_chars on purely ASCII strings returns the same
+    /// string up to the char limit — parity with the pre-fix byte-slice for
+    /// the ASCII case.
+    #[test]
+    fn bounded_chars_preserves_ascii_within_limit() {
+        let s = "x".repeat(500);
+        let t = super::bounded_chars(&s, 200);
+        assert_eq!(t.len(), 200);
+        assert!(t.chars().all(|c| c == 'x'));
+    }
+
+    /// Regression: fallback diagnostic "kind" field reflects the actual
+    /// configured `fallback_kind`, not a hardcoded "remmy". Previously the
+    /// diagnostic always said "orchard-proxy → remmy" even when the user
+    /// wired a BoxdFork fallback.
+    #[test]
+    fn fallback_adapter_kind_str_reflects_variant() {
+        let fb_remmy = FallbackAdapter::from_kind(RemoteKind::Remmy, "h", "/p");
+        let fb_shared = FallbackAdapter::from_kind(RemoteKind::BoxdShared, "h", "/p");
+        let fb_fork = FallbackAdapter::from_kind(RemoteKind::BoxdFork, "h", "/p");
+        let fb_proxy_maps_to_remmy =
+            FallbackAdapter::from_kind(RemoteKind::OrchardProxy, "h", "/p");
+
+        assert_eq!(fb_remmy.kind_str(), "remmy");
+        assert_eq!(fb_shared.kind_str(), "boxd-shared");
+        assert_eq!(fb_fork.kind_str(), "boxd-fork");
+        // OrchardProxy is remapped to Remmy by from_kind to avoid recursion.
+        assert_eq!(fb_proxy_maps_to_remmy.kind_str(), "remmy");
     }
 }
