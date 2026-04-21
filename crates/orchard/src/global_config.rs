@@ -361,6 +361,52 @@ fn ensure_cwd_repo(cfg: &mut GlobalConfig) -> bool {
     append_repo_if_new(cfg, &cwd, &slug, remotes)
 }
 
+/// Emits a `LOG.warn` for every remote that still carries the legacy
+/// `fallbackKind` JSON field, which was removed as part of ADR-008
+/// (issue #329). The field is silently dropped by serde; this helper
+/// re-parses the raw JSON as an untyped `Value` to detect its presence.
+///
+/// Called from [`load_from_path`] in non-test builds (`cfg!(test)` guard).
+/// Exposed `pub(crate)` for direct unit testing of the detection logic.
+pub(crate) fn warn_legacy_fallback_kind(data: &[u8]) {
+    let raw_value: serde_json::Value = match serde_json::from_slice(data) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let Some(repos_arr) = raw_value.get("repos").and_then(|v| v.as_array()) else {
+        return;
+    };
+
+    let warn_if_has_fallback_kind = |remote_val: &serde_json::Value| {
+        if remote_val.get("fallbackKind").is_some() {
+            let name = remote_val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+            LOG.warn(&format!(
+                "global_config: remote '{}' has legacy 'fallbackKind' setting which is no \
+                 longer honored — see docs/adr/008-federated-discovery.md. To opt into \
+                 legacy behaviour for this host, change 'type' to 'remmy'.",
+                name
+            ));
+        }
+    };
+
+    for repo_val in repos_arr {
+        // Check `remotes` array.
+        if let Some(arr) = repo_val.get("remotes").and_then(|v| v.as_array()) {
+            for remote_val in arr {
+                warn_if_has_fallback_kind(remote_val);
+            }
+        }
+        // Check singular `remote` object.
+        if let Some(remote_val) = repo_val.get("remote") {
+            warn_if_has_fallback_kind(remote_val);
+        }
+    }
+}
+
 fn load_from_path(path: &PathBuf) -> GlobalConfig {
     let data = match std::fs::read(path) {
         Ok(d) => d,
@@ -432,6 +478,14 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
             return GlobalConfig::default();
         }
     };
+
+    // Detect legacy `fallbackKind` field in remotes (silently dropped by serde
+    // since the field no longer exists on RemoteConfig). Warn once per remote
+    // so users know to reconfigure. Suppressed in test builds to keep test
+    // output clean.
+    if !cfg!(test) {
+        warn_legacy_fallback_kind(&data);
+    }
 
     let repos = raw
         .repos
@@ -1299,5 +1353,81 @@ mod tests {
             CheckBucket::Gate
         );
         assert_eq!(classify_check("test-unit", &matcher), CheckBucket::Code);
+    }
+
+    // -----------------------------------------------------------------------
+    // fallbackKind deprecation detection tests (issue #329)
+    // -----------------------------------------------------------------------
+
+    /// Config containing `fallbackKind` in a `remotes` array entry still
+    /// deserializes correctly (serde silently drops unknown fields).
+    #[test]
+    fn config_with_legacy_fallback_kind_still_loads() {
+        let dir = tempdir().unwrap();
+        let json = r#"{
+            "repos": [
+                {
+                    "slug": "owner/repo",
+                    "path": "/workspace/repo",
+                    "remotes": [
+                        {
+                            "name": "boxd",
+                            "host": "user@vm.boxd.sh",
+                            "path": "/remote/repo",
+                            "type": "orchard-proxy",
+                            "fallbackKind": "remmy"
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let path = write_config(dir.path(), json);
+        let cfg = load_from_path(&path);
+
+        // Config loads despite unknown fallbackKind — serde ignores it.
+        assert_eq!(cfg.repos.len(), 1);
+        assert_eq!(cfg.repos[0].remotes.len(), 1);
+        assert_eq!(cfg.repos[0].remotes[0].name, "boxd");
+    }
+
+    /// `warn_legacy_fallback_kind` does not panic on well-formed JSON without
+    /// the deprecated field.
+    #[test]
+    fn warn_legacy_fallback_kind_no_panic_on_clean_config() {
+        let json = r#"{
+            "repos": [
+                {
+                    "slug": "owner/repo",
+                    "path": "/workspace/repo",
+                    "remotes": [
+                        { "name": "boxd", "host": "user@vm", "path": "/repo", "type": "orchard-proxy" }
+                    ]
+                }
+            ]
+        }"#;
+        // Should not panic — no fallbackKind present.
+        warn_legacy_fallback_kind(json.as_bytes());
+    }
+
+    /// `warn_legacy_fallback_kind` does not panic on JSON with `fallbackKind`
+    /// present in a singular `remote` entry.
+    #[test]
+    fn warn_legacy_fallback_kind_no_panic_on_singular_remote_with_field() {
+        let json = r#"{
+            "repos": [
+                {
+                    "slug": "owner/repo",
+                    "path": "/workspace/repo",
+                    "remote": {
+                        "name": "boxd",
+                        "host": "user@vm",
+                        "path": "/repo",
+                        "fallbackKind": "remmy"
+                    }
+                }
+            ]
+        }"#;
+        // Should not panic.
+        warn_legacy_fallback_kind(json.as_bytes());
     }
 }
