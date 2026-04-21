@@ -222,10 +222,7 @@ impl App {
 
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
         let hosts = crate::cache::read_host_reachability();
-        let state = crate::merge_remote::build_state_with_cached_snapshots(
-            &global_cfg,
-            &hosts,
-        );
+        let state = crate::merge_remote::build_state_with_cached_snapshots(&global_cfg, &hosts);
         let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
 

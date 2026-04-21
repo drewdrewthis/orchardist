@@ -41,9 +41,7 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
     // Write a fake `ssh` script that records its invocation and exits 0.
     let fake_ssh_path = fake_ssh_dir.path().join("ssh");
     let marker_path_str = marker.display().to_string();
-    let script = format!(
-        "#!/bin/sh\ntouch \"{marker_path_str}\"\nexit 0\n"
-    );
+    let script = format!("#!/bin/sh\ntouch \"{marker_path_str}\"\nexit 0\n");
     std::fs::write(&fake_ssh_path, script).expect("write fake ssh script");
 
     // Make it executable.

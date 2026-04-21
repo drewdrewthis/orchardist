@@ -318,7 +318,9 @@ fn handle_refresh() {
     // Persist host reachability so subsequent cache-only reads
     // (--json, TUI cold start, watch daemon) can populate OrchardState.hosts.
     if let Err(e) = cache::write_host_reachability(&state.hosts) {
-        logger::LOG.warn(&format!("refresh: failed to persist host reachability: {e}"));
+        logger::LOG.warn(&format!(
+            "refresh: failed to persist host reachability: {e}"
+        ));
     }
 
     // Count refreshed repos, unique remote hosts, and worktrees.

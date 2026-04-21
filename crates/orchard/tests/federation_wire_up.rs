@@ -302,11 +302,17 @@ fn host_reachability_persists_to_cache_and_is_read_on_build() {
 
     assert_eq!(read_back.len(), 2, "both hosts must round-trip");
     assert!(
-        read_back.get("vm.boxd.sh").map(|h| h.reachable).unwrap_or(false),
+        read_back
+            .get("vm.boxd.sh")
+            .map(|h| h.reachable)
+            .unwrap_or(false),
         "vm.boxd.sh must be reachable"
     );
     assert!(
-        !read_back.get("dead.vm").map(|h| h.reachable).unwrap_or(true),
+        !read_back
+            .get("dead.vm")
+            .map(|h| h.reachable)
+            .unwrap_or(true),
         "dead.vm must be unreachable"
     );
 

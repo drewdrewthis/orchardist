@@ -478,8 +478,8 @@ pub fn write_host_reachability(
 /// Returns an empty map if the file does not exist or contains invalid JSON —
 /// the same silent-fallback behaviour as other cache reads. Callers treat
 /// an empty map as "unknown reachability" rather than an error.
-pub fn read_host_reachability(
-) -> std::collections::HashMap<String, crate::orchard_state::HostState> {
+pub fn read_host_reachability() -> std::collections::HashMap<String, crate::orchard_state::HostState>
+{
     let path = host_reachability_cache_path();
     let Ok(contents) = std::fs::read_to_string(&path) else {
         return std::collections::HashMap::new();

@@ -155,7 +155,6 @@ pub fn build_state_with_cached_snapshots_from(
     build_state_with_snapshots(config, hosts, snapshots)
 }
 
-
 // ---------------------------------------------------------------------------
 // Private converters: Json* → OrchardState types (no derive/join)
 // ---------------------------------------------------------------------------
