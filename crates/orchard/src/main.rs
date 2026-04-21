@@ -24,7 +24,15 @@ use orchard::shell;
 use orchard::tui;
 
 fn main() {
-    install_panic_hooks();
+    // color_eyre's HookBuilder probes the terminal (opens /dev/tty) during
+    // install. That fails with ENXIO in non-interactive contexts — cron,
+    // systemd, CI runners, `ssh host "orchard refresh"` without `-t`. Skip
+    // panic-hook installation when stderr isn't a TTY; the default panic
+    // handler is fine for batch invocations, and AC7 requires background
+    // services (refresh / watch / --json) to work without a controlling TTY.
+    if std::io::stderr().is_terminal() {
+        install_panic_hooks();
+    }
 
     let args: Vec<String> = env::args().collect();
 
