@@ -29,6 +29,7 @@ pub mod merge_remote;
 pub mod models;
 mod navigation;
 pub mod notify;
+pub mod orchard_snapshot;
 pub mod orchard_state;
 pub mod paths;
 pub mod priority;

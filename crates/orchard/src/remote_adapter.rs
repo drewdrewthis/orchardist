@@ -675,6 +675,18 @@ impl OrchardProxyAdapter {
             // Version check.
             crate::json_output::check_json_output_version(json_output.version)?;
 
+            // Persist the snapshot for cold-start reads. Best-effort: a write
+            // failure is logged but must not cause the list call to fail.
+            if let Err(e) = crate::orchard_snapshot::write_snapshot(&self.host, &json_output) {
+                crate::events::log_event(
+                    "remote_snapshot.write_failed",
+                    &[
+                        ("host", serde_json::Value::String(self.host.clone())),
+                        ("reason", serde_json::Value::String(e.to_string())),
+                    ],
+                );
+            }
+
             Ok(json_output)
         })
     }
