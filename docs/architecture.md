@@ -264,6 +264,88 @@ caching layer.
 - After each refresh phase completes
 - On `--json` (after fresh fetch, never from stale cache)
 
+## Federated Discovery (Read Path)
+
+Each machine that runs orchard is the **authority on its own worktrees and
+sessions**. When a remote is configured with `"type": "orchard-proxy"`, the
+local orchard proxies read-path discovery through `ssh host orchard --json`
+rather than shelling out to raw `git worktree list --porcelain` + `tmux
+list-sessions` and re-running the join pipeline locally.
+
+```
+                     Local orchard
+                          │
+             ┌────────────┼───────────────┐
+             │                            │
+     local sources                 ssh host orchard --json
+     (git, tmux, gh)                      │
+             │                            │    remote orchard
+             │                            │    already joined:
+             │                            │     ├─ PR/issue
+             │                            │     ├─ claude state
+             │                            │     └─ display_group
+             ▼                            ▼
+       local OrchardState  +   remote JsonOutput snapshot
+                     └────── merge ──────┘
+                              │
+                              ▼
+                        unified OrchardState
+                              │
+                   ┌──────────┴──────────┐
+                   ▼                     ▼
+                  TUI               --json output
+```
+
+### Wire protocol
+
+`JsonOutput` is the protocol. It's a versioned, already-joined snapshot —
+`JsonRepo` / `JsonWorktree` / `JsonSession` / `JsonStandaloneSession` carry
+`pr`, `issue`, `claude`, `check_state`, and `display_group` fields that the
+**remote** orchard computed. The local `merge_remote_snapshot()`
+(`crates/orchard/src/merge_remote.rs`) folds these into the local
+`OrchardState` **without** calling `derive_all_repos` or any PR/issue/claude
+join function over remote worktrees. That is the invariant — local code
+trusts remote enrichment.
+
+`JsonOutput.version: u32` is checked on every ingest. Unknown versions
+raise `AdapterError::ParseFailure`, which triggers the fallback path and
+emits a `remote_snapshot.invalidated` diagnostic to `events.jsonl`.
+
+### Transport: `ssh host orchard --json`
+
+No new RPC surface — just SSH + the existing `--json` mode. The
+`OrchardProxyAdapter` (`crates/orchard/src/remote_adapter.rs`) holds a
+`OnceLock<Result<JsonOutput, _>>` so one call to `list_worktrees()` plus one
+call to `list_sessions()` on the same adapter instance shares a **single**
+SSH round-trip. A reachability probe (`sources/hosts.rs`) uses `orchard
+--version` as the cheap liveness check, bounded by `PROBE_TIMEOUT = 3s`.
+
+### Graceful fallback
+
+Any failure — missing binary (exit 127), SSH failure (exit 255), malformed
+JSON, version skew — transparently delegates to the configured legacy
+kind (`RemoteConfig.fallback_kind`, default `Remmy`). The caller of
+`RemoteAdapter::list_worktrees()` sees the legacy result with no bubbled
+error. Every fallback writes a `remote_adapter.fallback` line to
+`events.jsonl` with the host and reason. This is the compat story for
+un-upgraded remotes.
+
+### Per-host cache
+
+`~/.cache/orchard/{safe_host}_orchard_snapshot.json` persists the raw
+remote `JsonOutput` on every successful fetch (atomic tmp→rename write in
+`orchard_snapshot::write_snapshot`). On TUI cold start,
+`load_cached_snapshots()` pre-populates `OrchardState` so remote rows
+appear before the first SSH completes. Files with an unrecognised `version`
+are treated as absent and overwritten by the next refresh.
+
+### What stays on the legacy path
+
+**Mutations** — create remote worktree, kill remote session, transfer
+worktree — continue to flow through the existing `RemmyAdapter` /
+`BoxdSharedAdapter` / `BoxdForkAdapter` code paths. This PR federates read
+discovery only. See ADR-008 for the decision rationale.
+
 ## Testing Strategy
 
 | Layer | How to test |
@@ -282,3 +364,4 @@ caching layer.
 - **ADR-004**: Unified data model with functional core, imperative shell
 - **ADR-006**: TEA pattern for TUI event handling
 - **ADR-007**: Session data model (TmuxSessionInfo → EnrichedSession composition)
+- **ADR-008**: Federated discovery — remote `orchard --json` is the wire protocol for read-path enrichment; legacy shell discovery is the fallback
