@@ -56,6 +56,9 @@ pub fn probe_reachability_for_remote(remote: &RemoteConfig) -> bool {
         crate::remote_adapter::RemoteKind::BoxdFork => "list --json",
         crate::remote_adapter::RemoteKind::Remmy
         | crate::remote_adapter::RemoteKind::BoxdShared => "true",
+        // OrchardProxy: use orchard --version as a lightweight probe (AC7 placeholder;
+        // full AC7 implementation is Phase 4). Falls back to "true" for now.
+        crate::remote_adapter::RemoteKind::OrchardProxy => "true",
     };
     crate::remote::ssh_exec_with_timeout(&remote.host, cmd, PROBE_TIMEOUT).is_ok()
 }
@@ -120,6 +123,7 @@ mod tests {
             path: "/tmp/repo".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::Remmy,
+            fallback_kind: None,
         }
     }
 
@@ -180,6 +184,7 @@ mod tests {
             path: "/tmp".to_string(),
             shell: "ssh".to_string(),
             kind: crate::remote_adapter::RemoteKind::Remmy,
+            fallback_kind: None,
         };
 
         let start = Instant::now();

@@ -16,10 +16,12 @@
 //! implement it.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::cache::{CachedTmuxSession, CachedWorktree, WorktreeLayout};
 
@@ -93,6 +95,10 @@ pub enum RemoteKind {
     BoxdShared,
     /// Boxd fork-per-issue adapter: one VM per open issue.
     BoxdFork,
+    /// Federated orchard-proxy: invokes `ssh host orchard --json` and projects
+    /// the remote `JsonOutput` into `CachedWorktree` / `CachedTmuxSession`.
+    /// Falls back to the configured legacy adapter on any SSH or parse failure.
+    OrchardProxy,
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +210,7 @@ impl SshExec for FakeSshExec {
 /// The hexagonal port for remote worktree/session access.
 ///
 /// Each variant wraps the configuration needed by that adapter. Methods
-/// dispatch via `match` rather than virtual dispatch because all three
+/// dispatch via `match` rather than virtual dispatch because all four
 /// adapter kinds are known at compile time.
 pub enum RemoteAdapter {
     /// Remmy-style adapter: bare repo + worktrees over SSH.
@@ -213,6 +219,8 @@ pub enum RemoteAdapter {
     BoxdShared(BoxdSharedAdapter),
     /// Boxd fork-per-issue adapter: one VM per open issue.
     BoxdFork(BoxdForkAdapter),
+    /// Federated orchard-proxy adapter: `ssh host orchard --json`.
+    OrchardProxy(OrchardProxyAdapter),
 }
 
 impl RemoteAdapter {
@@ -237,6 +245,18 @@ impl RemoteAdapter {
                 fork_repo_path: cfg.path.clone(),
                 ssh,
             }),
+            RemoteKind::OrchardProxy => {
+                let fallback = cfg.fallback_kind.map(|kind| {
+                    FallbackAdapter::from_kind(kind, &cfg.host, &cfg.path)
+                });
+                RemoteAdapter::OrchardProxy(OrchardProxyAdapter {
+                    host: cfg.host.clone(),
+                    path: cfg.path.clone(),
+                    ssh,
+                    fallback,
+                    snapshot: OnceLock::new(),
+                })
+            }
         }
     }
 
@@ -246,6 +266,7 @@ impl RemoteAdapter {
             RemoteAdapter::Remmy(a) => a.list_worktrees(),
             RemoteAdapter::BoxdShared(a) => a.list_worktrees(),
             RemoteAdapter::BoxdFork(a) => a.list_worktrees(),
+            RemoteAdapter::OrchardProxy(a) => a.list_worktrees(),
         }
     }
 
@@ -255,6 +276,7 @@ impl RemoteAdapter {
             RemoteAdapter::Remmy(a) => a.list_sessions(),
             RemoteAdapter::BoxdShared(a) => a.list_sessions(),
             RemoteAdapter::BoxdFork(a) => a.list_sessions(),
+            RemoteAdapter::OrchardProxy(a) => a.list_sessions(),
         }
     }
 }
@@ -517,6 +539,305 @@ impl BoxdForkAdapter {
 }
 
 // ---------------------------------------------------------------------------
+// FallbackAdapter — thin enum wrapping the three legacy adapter kinds
+// ---------------------------------------------------------------------------
+
+/// Thin wrapper around the three legacy adapters used as fallback targets
+/// when an `OrchardProxyAdapter` encounters any failure.
+///
+/// Constructed eagerly in `RemoteAdapter::from_config` so the fallback path
+/// is always ready without extra allocation at fail time.
+pub enum FallbackAdapter {
+    /// Remmy-style bare-repo fallback.
+    Remmy(RemmyAdapter),
+    /// Boxd shared-VM fallback.
+    BoxdShared(BoxdSharedAdapter),
+    /// Boxd fork-per-issue fallback.
+    BoxdFork(BoxdForkAdapter),
+}
+
+impl FallbackAdapter {
+    /// Constructs the appropriate fallback adapter from a `RemoteKind` and
+    /// connection parameters. `OrchardProxy` is silently mapped to `Remmy`
+    /// to avoid recursive proxy-in-fallback configurations.
+    pub fn from_kind(kind: RemoteKind, host: &str, path: &str) -> Self {
+        match kind {
+            RemoteKind::Remmy | RemoteKind::OrchardProxy => FallbackAdapter::Remmy(RemmyAdapter {
+                host: host.to_string(),
+                path: path.to_string(),
+                ssh: Box::new(ProcessSshExec),
+            }),
+            RemoteKind::BoxdShared => FallbackAdapter::BoxdShared(BoxdSharedAdapter {
+                host: host.to_string(),
+                path: path.to_string(),
+                ssh: Box::new(ProcessSshExec),
+            }),
+            RemoteKind::BoxdFork => FallbackAdapter::BoxdFork(BoxdForkAdapter {
+                golden_host: host.to_string(),
+                fork_repo_path: path.to_string(),
+                ssh: Box::new(ProcessSshExec),
+            }),
+        }
+    }
+
+    /// Returns all non-bare worktrees from the fallback adapter.
+    pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
+        match self {
+            FallbackAdapter::Remmy(a) => a.list_worktrees(),
+            FallbackAdapter::BoxdShared(a) => a.list_worktrees(),
+            FallbackAdapter::BoxdFork(a) => a.list_worktrees(),
+        }
+    }
+
+    /// Returns all tmux sessions from the fallback adapter.
+    pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
+        match self {
+            FallbackAdapter::Remmy(a) => a.list_sessions(),
+            FallbackAdapter::BoxdShared(a) => a.list_sessions(),
+            FallbackAdapter::BoxdFork(a) => a.list_sessions(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OrchardProxyAdapter
+// ---------------------------------------------------------------------------
+
+/// Adapter that invokes `ssh host orchard --json`, deserializes the response
+/// into the existing `JsonOutput` wire format, and projects it into
+/// `CachedWorktree` / `CachedTmuxSession` entries.
+///
+/// On any failure (missing binary, non-zero exit, malformed JSON, unknown
+/// version, SSH error) the adapter transparently falls back to the configured
+/// legacy adapter kind (default: `Remmy`) and emits a diagnostic line to
+/// `events.jsonl` via [`crate::events::log_event`].
+///
+/// The remote `orchard --json` output is memoized in a [`OnceLock`] so that
+/// calling both [`list_worktrees`] and [`list_sessions`] on the same adapter
+/// instance results in at most one SSH invocation.
+pub struct OrchardProxyAdapter {
+    /// SSH target host (e.g. `"boxd@vm.boxd.sh"`).
+    pub host: String,
+    /// Absolute path on the remote (passed through but not used for the proxy
+    /// call itself; available for fallback adapter construction).
+    pub path: String,
+    /// SSH executor (real process or test double).
+    pub ssh: Box<dyn SshExec>,
+    /// Pre-constructed fallback adapter, or `None` if fallback is disabled.
+    pub fallback: Option<FallbackAdapter>,
+    /// Memoized result of the single `orchard --json` SSH round-trip.
+    ///
+    /// `OnceLock` guarantees at most one call regardless of how many times
+    /// `list_worktrees` and `list_sessions` are invoked on the same instance.
+    pub snapshot: OnceLock<Result<crate::json_output::JsonOutput, AdapterError>>,
+}
+
+impl OrchardProxyAdapter {
+    /// Performs (or reuses) the `ssh host orchard --json` call.
+    ///
+    /// On first call, executes the SSH command, checks the exit code,
+    /// deserializes the JSON payload, and validates the schema version.
+    /// Subsequent calls return a reference to the cached result.
+    fn fetch_snapshot(&self) -> &Result<crate::json_output::JsonOutput, AdapterError> {
+        self.snapshot.get_or_init(|| {
+            let output = match self.ssh.exec(&self.host, "orchard --json") {
+                Ok(o) => o,
+                Err(e) => {
+                    return Err(AdapterError::FetchFailure {
+                        message: e.to_string(),
+                    });
+                }
+            };
+
+            // Non-zero exit code — check for the most common case (exit 127 = command not found)
+            if output.exit_code != 0 {
+                let reason = if output.exit_code == 127 {
+                    format!("remote orchard missing (exit 127)")
+                } else if output.exit_code == 255 {
+                    format!("fetch failure (exit 255)")
+                } else {
+                    format!("remote orchard failed (exit {})", output.exit_code)
+                };
+                return Err(AdapterError::FetchFailure { message: reason });
+            }
+
+            // Parse JSON.
+            let json_output: crate::json_output::JsonOutput =
+                match serde_json::from_str(&output.stdout) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return Err(AdapterError::ParseFailure {
+                            raw: sanitize_raw_payload(&output.stdout),
+                        });
+                    }
+                };
+
+            // Version check.
+            crate::json_output::check_json_output_version(json_output.version)?;
+
+            Ok(json_output)
+        })
+    }
+
+    /// Returns all non-bare worktrees sourced from `ssh host orchard --json`.
+    ///
+    /// On success, projects each `JsonWorktree` from every `JsonRepo` in the
+    /// remote snapshot into a `CachedWorktree` tagged with the configured
+    /// host. On any error, falls back to the configured legacy adapter and
+    /// writes a diagnostic to `events.jsonl`.
+    pub fn list_worktrees(&self) -> Result<Vec<CachedWorktree>> {
+        match self.fetch_snapshot() {
+            Ok(snapshot) => {
+                let mut worktrees = Vec::new();
+                for repo in &snapshot.repos {
+                    for wt in &repo.worktrees {
+                        if wt.is_main_worktree {
+                            continue; // skip bare/main worktrees
+                        }
+                        worktrees.push(CachedWorktree {
+                            path: wt.path.clone(),
+                            branch: wt.branch.clone(),
+                            is_bare: false,
+                            is_locked: false,
+                            host: Some(self.host.clone()),
+                            ahead: wt.ahead_behind.as_ref().map(|ab| ab.ahead),
+                            behind: wt.ahead_behind.as_ref().map(|ab| ab.behind),
+                            last_commit_at: wt.last_commit_at.clone(),
+                            layout: if wt.layout == "bare" {
+                                crate::cache::WorktreeLayout::Bare
+                            } else {
+                                crate::cache::WorktreeLayout::Flat
+                            },
+                        });
+                    }
+                }
+                Ok(worktrees)
+            }
+            Err(e) => {
+                self.log_fallback_diagnostic(e);
+                match &self.fallback {
+                    Some(f) => f.list_worktrees(),
+                    None => Ok(vec![]),
+                }
+            }
+        }
+    }
+
+    /// Returns all tmux sessions sourced from the same `orchard --json` snapshot.
+    ///
+    /// Reuses the memoized snapshot so no additional SSH call is made when
+    /// `list_worktrees` was already called on this adapter instance.
+    /// On any error, falls back to the configured legacy adapter and writes
+    /// a diagnostic to `events.jsonl`.
+    pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
+        match self.fetch_snapshot() {
+            Ok(snapshot) => {
+                let mut sessions = Vec::new();
+                // Collect sessions from worktrees.
+                for repo in &snapshot.repos {
+                    for wt in &repo.worktrees {
+                        for s in &wt.sessions {
+                            sessions.push(json_session_to_cached(s, &self.host));
+                        }
+                    }
+                }
+                // Collect standalone sessions.
+                for s in &snapshot.tmux_sessions {
+                    sessions.push(json_session_to_cached(s, &self.host));
+                }
+                Ok(sessions)
+            }
+            Err(e) => {
+                self.log_fallback_diagnostic(e);
+                match &self.fallback {
+                    Some(f) => f.list_sessions(),
+                    None => Ok(vec![]),
+                }
+            }
+        }
+    }
+
+    /// Writes a diagnostic line to `events.jsonl` describing why this
+    /// adapter fell back to the legacy path.
+    fn log_fallback_diagnostic(&self, err: &AdapterError) {
+        let (reason, snippet) = match err {
+            AdapterError::FetchFailure { message } => {
+                let reason = if message.contains("exit 127") || message.contains("remote orchard missing") {
+                    "remote orchard missing (exit 127)".to_string()
+                } else if message.contains("exit 255") || message.contains("fetch failure") {
+                    "fetch failure".to_string()
+                } else {
+                    format!("fetch failure: {}", &message[..message.len().min(100)])
+                };
+                (reason, None)
+            }
+            AdapterError::ParseFailure { raw } => {
+                let is_version_skew = raw.starts_with("version skew");
+                if is_version_skew {
+                    // Extract the version number from the message for the diagnostic.
+                    let version_hint = raw
+                        .split("remote version ")
+                        .nth(1)
+                        .and_then(|s| s.split_whitespace().next())
+                        .unwrap_or("unknown");
+                    (
+                        format!("version skew (remote version {})", version_hint),
+                        None,
+                    )
+                } else {
+                    let bounded = &raw[..raw.len().min(200)];
+                    (
+                        "parse failure".to_string(),
+                        Some(format!("payload length {}, snippet: {}", raw.len(), bounded)),
+                    )
+                }
+            }
+        };
+
+        let mut fields: Vec<(&str, Value)> = vec![
+            ("host", Value::String(self.host.clone())),
+            ("reason", Value::String(reason)),
+            (
+                "kind",
+                Value::String("orchard-proxy → remmy".to_string()),
+            ),
+        ];
+        let snippet_owned;
+        if let Some(s) = snippet {
+            snippet_owned = s;
+            fields.push(("snippet", Value::String(snippet_owned)));
+        }
+
+        crate::events::log_event("remote_adapter.fallback", &fields);
+    }
+}
+
+/// Projects a `JsonSession` from the remote `orchard --json` output into a
+/// `CachedTmuxSession` tagged with the given host.
+fn json_session_to_cached(
+    s: &crate::json_output::JsonSession,
+    host: &str,
+) -> CachedTmuxSession {
+    CachedTmuxSession {
+        name: s.name.clone(),
+        path: String::new(), // not available in JsonSession
+        pane_targets: Vec::new(),
+        pane_titles: Vec::new(),
+        pane_commands: Vec::new(),
+        window_names: Vec::new(),
+        window_active: Vec::new(),
+        window_layouts: Vec::new(),
+        pane_paths: Vec::new(),
+        pane_active: Vec::new(),
+        host: Some(host.to_string()),
+        created_at: None,
+        last_activity_at: None,
+        last_output_lines: Vec::new(),
+        claude_state_raw: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -749,5 +1070,640 @@ mod tests {
         );
         assert_eq!(worktrees[0].host.as_deref(), Some("boxd@issue3155.boxd.sh"));
         assert_eq!(worktrees[0].branch, "issue3155/some-branch");
+    }
+
+    // -----------------------------------------------------------------------
+    // AC1: RemoteKind::OrchardProxy config parsing
+    // -----------------------------------------------------------------------
+
+    /// AC1 scenario 1: `"type": "orchard-proxy"` parses to `RemoteKind::OrchardProxy`.
+    #[test]
+    fn remote_kind_orchard_proxy_parses_from_kebab_case_string() {
+        let json = r#"{"type": "orchard-proxy"}"#;
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(rename = "type")]
+            kind: RemoteKind,
+        }
+        let w: Wrapper = serde_json::from_str(json).expect("should parse");
+        assert_eq!(w.kind, RemoteKind::OrchardProxy);
+    }
+
+    /// AC1 scenario 2: `from_config` for `OrchardProxy` kind returns an
+    /// `OrchardProxy` variant carrying the configured host.
+    #[test]
+    fn from_config_orchard_proxy_returns_orchard_proxy_adapter() {
+        let cfg = crate::global_config::RemoteConfig {
+            name: "proxy".to_string(),
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/git-orchard-rs".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::OrchardProxy,
+            fallback_kind: None,
+        };
+        let adapter = RemoteAdapter::from_config(&cfg, Box::new(FakeSshExec::new()));
+        match adapter {
+            RemoteAdapter::OrchardProxy(a) => {
+                assert_eq!(a.host, "boxd@vm.boxd.sh");
+            }
+            _ => panic!("expected OrchardProxy variant"),
+        }
+    }
+
+    /// AC1 scenario 3: an invalid `"type"` string causes a serde error whose
+    /// message includes the string `"orchard-proxy"` (serde auto-generates this
+    /// from the enum's variant names).
+    #[test]
+    fn invalid_remote_kind_error_mentions_orchard_proxy() {
+        let json = r#"{"type": "kubernetes"}"#;
+        #[derive(Debug, serde::Deserialize)]
+        struct Wrapper {
+            #[serde(rename = "type")]
+            kind: RemoteKind,
+        }
+        let err = serde_json::from_str::<Wrapper>(json)
+            .expect_err("kubernetes is not a valid RemoteKind");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("orchard-proxy"),
+            "error message should list orchard-proxy as a supported type, got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC2: OrchardProxyAdapter.list_worktrees() — sources from orchard --json
+    // -----------------------------------------------------------------------
+
+    /// Returns a minimal valid `JsonOutput` JSON string with one repo containing
+    /// one non-main worktree on the given branch.
+    fn canned_json_output_one_worktree(branch: &str) -> String {
+        format!(
+            r#"{{
+                "version": 6,
+                "tmuxSessions": [],
+                "repos": [{{
+                    "slug": "owner/repo",
+                    "worktrees": [
+                        {{
+                            "path": "/remote/repo/{branch}",
+                            "branch": "{branch}",
+                            "host": null,
+                            "layout": "flat",
+                            "issue": null,
+                            "pr": null,
+                            "sessions": [],
+                            "displayGroup": "other",
+                            "status": "ready",
+                            "statusGlyph": "🟢",
+                            "isMainWorktree": false
+                        }}
+                    ]
+                }}],
+                "hosts": {{}}
+            }}"#,
+            branch = branch
+        )
+    }
+
+    /// AC2 scenario 1: `list_worktrees()` parses `orchard --json` output and
+    /// returns CachedWorktree entries tagged with the configured host.
+    #[test]
+    fn orchard_proxy_list_worktrees_parses_json_output() {
+        let mut fake = FakeSshExec::new();
+        fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: canned_json_output_one_worktree("issue329/federated-orchard"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/git-orchard-rs".to_string(),
+            ssh: Box::new(fake),
+            fallback: None,
+            snapshot: OnceLock::new(),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("list_worktrees must not error");
+
+        assert_eq!(worktrees.len(), 1, "expected exactly 1 worktree");
+        assert_eq!(
+            worktrees[0].branch, "issue329/federated-orchard",
+            "branch must match canned output"
+        );
+        assert_eq!(
+            worktrees[0].host.as_deref(),
+            Some("boxd@vm.boxd.sh"),
+            "host must be set to the configured remote host"
+        );
+    }
+
+    /// AC2 scenario 2: `list_worktrees()` on success must NOT have invoked
+    /// `git worktree list --porcelain`. Verified by checking recorded commands.
+    #[test]
+    fn orchard_proxy_list_worktrees_does_not_invoke_git_worktree_list() {
+        use std::sync::{Arc, Mutex};
+
+        /// Recording fake: records every (host, cmd) pair.
+        struct RecordingFakeSshExec {
+            inner: FakeSshExec,
+            calls: Arc<Mutex<Vec<(String, String)>>>,
+        }
+
+        impl SshExec for RecordingFakeSshExec {
+            fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((host.to_string(), cmd.to_string()));
+                self.inner.exec(host, cmd)
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let mut inner = FakeSshExec::new();
+        inner.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: canned_json_output_one_worktree("main"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let recording = RecordingFakeSshExec {
+            inner,
+            calls: calls.clone(),
+        };
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(recording),
+            fallback: None,
+            snapshot: OnceLock::new(),
+        };
+
+        adapter.list_worktrees().expect("must not error");
+
+        let recorded = calls.lock().unwrap();
+        let cmds: Vec<&str> = recorded.iter().map(|(_, c)| c.as_str()).collect();
+
+        assert!(
+            cmds.contains(&"orchard --json"),
+            "orchard --json must be invoked"
+        );
+        assert!(
+            !cmds.iter().any(|c| c.contains("git worktree list")),
+            "git worktree list --porcelain must NOT be invoked on success path; got: {cmds:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC3: list_sessions() shares the same snapshot; single SSH call
+    // -----------------------------------------------------------------------
+
+    /// AC3 scenario 1: `list_sessions()` returns sessions from the `orchard --json` snapshot.
+    #[test]
+    fn orchard_proxy_list_sessions_parses_sessions_from_snapshot() {
+        // Build a JSON output with two sessions on the worktree + one standalone.
+        let json = r#"{
+            "version": 6,
+            "tmuxSessions": [
+                {
+                    "name": "shepherd",
+                    "host": "local",
+                    "status": "running",
+                    "claude": null,
+                    "windows": []
+                }
+            ],
+            "repos": [{
+                "slug": "owner/repo",
+                "worktrees": [{
+                    "path": "/remote/repo/issue329",
+                    "branch": "issue329/federated",
+                    "host": null,
+                    "layout": "flat",
+                    "issue": null,
+                    "pr": null,
+                    "sessions": [
+                        {"name": "or_issue329_a", "host": "local", "status": "running", "claude": null, "windows": []},
+                        {"name": "or_issue329_b", "host": "local", "status": "running", "claude": null, "windows": []}
+                    ],
+                    "displayGroup": "other",
+                    "status": "ready",
+                    "statusGlyph": "🟢",
+                    "isMainWorktree": false
+                }]
+            }],
+            "hosts": {}
+        }"#;
+
+        let mut fake = FakeSshExec::new();
+        fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: json.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fake),
+            fallback: None,
+            snapshot: OnceLock::new(),
+        };
+
+        let sessions = adapter.list_sessions().expect("must not error");
+
+        assert_eq!(sessions.len(), 3, "expected 2 worktree sessions + 1 standalone");
+        for s in &sessions {
+            assert_eq!(
+                s.host.as_deref(),
+                Some("boxd@vm.boxd.sh"),
+                "every session must carry the remote host"
+            );
+        }
+    }
+
+    /// AC3 scenario 2: calling both `list_worktrees()` and `list_sessions()`
+    /// results in at most 1 `orchard --json` SSH invocation.
+    #[test]
+    fn orchard_proxy_list_worktrees_and_sessions_share_single_ssh_call() {
+        use std::sync::{Arc, Mutex};
+
+        struct CountingFakeSshExec {
+            inner: FakeSshExec,
+            count: Arc<Mutex<usize>>,
+        }
+
+        impl SshExec for CountingFakeSshExec {
+            fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
+                if cmd == "orchard --json" {
+                    *self.count.lock().unwrap() += 1;
+                }
+                self.inner.exec(host, cmd)
+            }
+        }
+
+        let count = Arc::new(Mutex::new(0usize));
+        let mut inner = FakeSshExec::new();
+        inner.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: canned_json_output_one_worktree("main"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let counting = CountingFakeSshExec {
+            inner,
+            count: count.clone(),
+        };
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(counting),
+            fallback: None,
+            snapshot: OnceLock::new(),
+        };
+
+        adapter.list_worktrees().expect("list_worktrees must not error");
+        adapter.list_sessions().expect("list_sessions must not error");
+
+        let invocations = *count.lock().unwrap();
+        assert_eq!(
+            invocations, 1,
+            "exactly 1 `orchard --json` SSH call expected; got {invocations}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC6: Graceful fallback on failure
+    // -----------------------------------------------------------------------
+
+    /// AC6 scenario 1: exit code 127 triggers fallback to Remmy and writes
+    /// a diagnostic with reason "remote orchard missing (exit 127)".
+    #[test]
+    fn orchard_proxy_exit_127_triggers_fallback() {
+        let mut fake = FakeSshExec::new();
+        // Proxy call returns exit 127 (command not found).
+        fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: String::new(),
+                stderr: "orchard: not found".to_string(),
+                exit_code: 127,
+            },
+        );
+        // Fallback Remmy call.
+        let remmy_cmd = format!(
+            "git -C {} worktree list --porcelain",
+            crate::remote::shell_escape("~/repo")
+        );
+        fake.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/issue329\nHEAD abc1234\nbranch refs/heads/issue329/federated\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        // Build a Remmy fallback with the same fake exec.
+        // We need the fallback to use the same FakeSshExec; build it manually.
+        let mut fake2 = FakeSshExec::new();
+        fake2.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 127,
+            },
+        );
+        fake2.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/issue329\nHEAD abc1234\nbranch refs/heads/issue329/federated\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let fallback = FallbackAdapter::Remmy(RemmyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fake2),
+        });
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fake),
+            fallback: Some(fallback),
+            snapshot: OnceLock::new(),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("must not error — fallback should return worktrees");
+
+        // The fallback Remmy adapter returns the worktree from porcelain output.
+        assert!(
+            !worktrees.is_empty(),
+            "fallback must return worktrees from legacy path"
+        );
+        assert_eq!(
+            worktrees[0].branch, "issue329/federated",
+            "branch must come from the fallback remmy path"
+        );
+    }
+
+    /// AC6 scenario 2: malformed JSON triggers ParseFailure and fallback.
+    #[test]
+    fn orchard_proxy_malformed_json_triggers_fallback() {
+        let mut proxy_fake = FakeSshExec::new();
+        proxy_fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: r#"{ "repos": [malformed..."#.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let mut fallback_fake = FakeSshExec::new();
+        let remmy_cmd = format!(
+            "git -C {} worktree list --porcelain",
+            crate::remote::shell_escape("~/repo")
+        );
+        fallback_fake.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/fallback\nHEAD abc1234\nbranch refs/heads/fallback/branch\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let fallback = FallbackAdapter::Remmy(RemmyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fallback_fake),
+        });
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(proxy_fake),
+            fallback: Some(fallback),
+            snapshot: OnceLock::new(),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("must not error — ParseFailure triggers fallback");
+
+        assert!(
+            !worktrees.is_empty(),
+            "fallback must return worktrees after parse failure"
+        );
+    }
+
+    /// AC6 scenario 3: unknown version triggers version-skew fallback.
+    #[test]
+    fn orchard_proxy_unknown_version_triggers_version_skew_fallback() {
+        let mut proxy_fake = FakeSshExec::new();
+        // Version 0 is not in SUPPORTED_JSON_OUTPUT_VERSIONS.
+        let json = r#"{"version": 0, "tmuxSessions": [], "repos": [], "hosts": {}}"#;
+        proxy_fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: json.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let mut fallback_fake = FakeSshExec::new();
+        let remmy_cmd = format!(
+            "git -C {} worktree list --porcelain",
+            crate::remote::shell_escape("~/repo")
+        );
+        fallback_fake.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let fallback = FallbackAdapter::Remmy(RemmyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fallback_fake),
+        });
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(proxy_fake),
+            fallback: Some(fallback),
+            snapshot: OnceLock::new(),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("must not error — version skew triggers fallback");
+
+        // Fallback returns the main worktree from git porcelain.
+        assert!(!worktrees.is_empty(), "fallback must activate on version skew");
+    }
+
+    /// AC6 scenario 4: SSH connection failure (exit 255) triggers fallback.
+    #[test]
+    fn orchard_proxy_ssh_failure_exit_255_triggers_fallback() {
+        let mut proxy_fake = FakeSshExec::new();
+        proxy_fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: String::new(),
+                stderr: "ssh: connect to host vm.boxd.sh port 22: Connection refused".to_string(),
+                exit_code: 255,
+            },
+        );
+
+        let mut fallback_fake = FakeSshExec::new();
+        let remmy_cmd = format!(
+            "git -C {} worktree list --porcelain",
+            crate::remote::shell_escape("~/repo")
+        );
+        fallback_fake.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let fallback = FallbackAdapter::Remmy(RemmyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fallback_fake),
+        });
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(proxy_fake),
+            fallback: Some(fallback),
+            snapshot: OnceLock::new(),
+        };
+
+        let worktrees = adapter
+            .list_worktrees()
+            .expect("must not error — SSH failure triggers fallback");
+
+        assert!(!worktrees.is_empty(), "fallback must activate on SSH failure");
+    }
+
+    /// AC6 scenario 5 (integration): fallback is invisible to upstream callers —
+    /// `RemoteAdapter::list_worktrees` returns `Ok` even when the proxy fails.
+    #[test]
+    fn orchard_proxy_fallback_is_invisible_to_upstream_callers() {
+        let cfg = crate::global_config::RemoteConfig {
+            name: "proxy".to_string(),
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::OrchardProxy,
+            fallback_kind: Some(RemoteKind::Remmy),
+        };
+
+        // Only provide the fallback remmy path. The proxy call will fail with
+        // "no canned response" which maps to FetchFailure.
+        // We need a combined fake that handles both.
+        let mut fake = FakeSshExec::new();
+        // No orchard --json registered → FakeSshExec returns error → FetchFailure.
+        // Remmy fallback path:
+        let remmy_cmd = format!(
+            "git -C {} worktree list --porcelain",
+            crate::remote::shell_escape("~/repo")
+        );
+        fake.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        // Build adapter manually using from_config, then replace the SSH exec.
+        // We'll build it manually since we need the FakeSshExec for proxy AND
+        // the fallback needs a separate instance pointing at the same fake responses.
+        let proxy_fake = FakeSshExec::new();
+        // No orchard --json entry → error on exec → FetchFailure.
+
+        let mut fallback_fake = FakeSshExec::new();
+        fallback_fake.insert(
+            "boxd@vm.boxd.sh",
+            &remmy_cmd,
+            SshOutput {
+                stdout: "worktree /remote/repo/main\nHEAD abc1234\nbranch refs/heads/main\n\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = RemoteAdapter::OrchardProxy(OrchardProxyAdapter {
+            host: cfg.host.clone(),
+            path: cfg.path.clone(),
+            ssh: Box::new(proxy_fake),
+            fallback: Some(FallbackAdapter::Remmy(RemmyAdapter {
+                host: cfg.host.clone(),
+                path: cfg.path.clone(),
+                ssh: Box::new(fallback_fake),
+            })),
+            snapshot: OnceLock::new(),
+        });
+
+        // The caller of RemoteAdapter::list_worktrees must see Ok, not Err.
+        let result = adapter.list_worktrees();
+        assert!(result.is_ok(), "fallback must make list_worktrees return Ok");
+
+        let worktrees = result.unwrap();
+        assert!(
+            !worktrees.is_empty(),
+            "fallback should yield worktrees from legacy path"
+        );
     }
 }
