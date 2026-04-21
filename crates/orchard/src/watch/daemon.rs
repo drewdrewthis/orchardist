@@ -51,8 +51,8 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 
     // Force a full refresh on startup.
     refresh_all_sources(config);
-    let initial =
-        merge_remote::build_state_with_cached_snapshots(config, &std::collections::HashMap::new());
+    let hosts = crate::cache::read_host_reachability();
+    let initial = merge_remote::build_state_with_cached_snapshots(config, &hosts);
     let mut previous_state: Option<OrchardState> = Some(initial);
 
     while running.load(Ordering::SeqCst) {
@@ -78,10 +78,8 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
             continue;
         }
 
-        let new_state = merge_remote::build_state_with_cached_snapshots(
-            config,
-            &std::collections::HashMap::new(),
-        );
+        let hosts = crate::cache::read_host_reachability();
+        let new_state = merge_remote::build_state_with_cached_snapshots(config, &hosts);
 
         // Diff
         let mut events: Vec<WatchEvent> = Vec::new();

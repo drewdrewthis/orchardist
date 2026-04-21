@@ -11,6 +11,7 @@ use crossterm::{
     terminal::{self, LeaveAlternateScreen},
 };
 use orchard::build_state;
+use orchard::cache;
 use orchard::chat;
 use orchard::global_config;
 use orchard::heal;
@@ -287,9 +288,9 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
 /// command instant and non-blocking. For fresh data, run `orchard refresh`
 /// first (or let `orchard watch` run in the background).
 fn build_output() -> JsonOutput {
-    use std::collections::HashMap;
     let config = global_config::load_global_config();
-    let state = merge_remote::build_state_with_cached_snapshots(&config, &HashMap::new());
+    let hosts = cache::read_host_reachability();
+    let state = merge_remote::build_state_with_cached_snapshots(&config, &hosts);
     JsonOutput::from(&state)
 }
 
@@ -310,18 +311,30 @@ fn handle_json() {
 /// the caches written here. `orchard watch` calls `refresh_and_build`
 /// internally on its own schedule.
 fn handle_refresh() {
+    use std::collections::HashSet;
     let config = global_config::load_global_config();
     let state = build_state::refresh_and_build(&config);
 
-    // Count refreshed repos, remotes with OrchardProxy remotes, and sessions.
-    let remote_count: usize = config.repos.iter().map(|r| r.remotes.len()).sum();
-    let session_count: usize = state.repos.iter().map(|r| r.worktrees.len()).sum();
+    // Persist host reachability so subsequent cache-only reads
+    // (--json, TUI cold start, watch daemon) can populate OrchardState.hosts.
+    if let Err(e) = cache::write_host_reachability(&state.hosts) {
+        logger::LOG.warn(&format!("refresh: failed to persist host reachability: {e}"));
+    }
+
+    // Count refreshed repos, unique remote hosts, and worktrees.
+    let unique_hosts: HashSet<&str> = config
+        .repos
+        .iter()
+        .flat_map(|r| r.remotes.iter().map(|rm| rm.host.as_str()))
+        .collect();
+    let remote_count = unique_hosts.len();
+    let worktree_count: usize = state.repos.iter().map(|r| r.worktrees.len()).sum();
 
     eprintln!(
         "refreshed {} repos, {} remotes, {} worktrees",
         config.repos.len(),
         remote_count,
-        session_count,
+        worktree_count,
     );
 }
 

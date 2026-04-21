@@ -221,9 +221,10 @@ impl App {
         let _ = crate::restore::restore_all_local();
 
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
+        let hosts = crate::cache::read_host_reachability();
         let state = crate::merge_remote::build_state_with_cached_snapshots(
             &global_cfg,
-            &std::collections::HashMap::new(),
+            &hosts,
         );
         let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
@@ -786,9 +787,10 @@ impl App {
             match msg {
                 AppMsg::CacheRefreshed => {
                     self.task_rows = crate::build_state::build_task_rows(&self.global_config);
+                    let hosts = crate::cache::read_host_reachability();
                     let state = crate::merge_remote::build_state_with_cached_snapshots(
                         &self.global_config,
-                        &std::collections::HashMap::new(),
+                        &hosts,
                     );
                     self.standalone_sessions = state.standalone_sessions.clone();
                     // Warn on refresh (not fatal) — a new worktree may have
@@ -873,9 +875,10 @@ impl App {
                 }
                 AppMsg::LocalCacheRefreshed => {
                     self.task_rows = crate::build_state::build_task_rows(&self.global_config);
+                    let hosts = crate::cache::read_host_reachability();
                     let state = crate::merge_remote::build_state_with_cached_snapshots(
                         &self.global_config,
-                        &std::collections::HashMap::new(),
+                        &hosts,
                     );
                     self.standalone_sessions = state.standalone_sessions.clone();
                     if let Err(e) =
