@@ -155,35 +155,6 @@ pub fn build_state_with_cached_snapshots_from(
     build_state_with_snapshots(config, hosts, snapshots)
 }
 
-/// Folds cached `OrchardProxy` snapshots into an already-built `OrchardState`.
-///
-/// Used in the **JSON / `--json` mode** path where `refresh_and_build` has
-/// already run all remote refreshes (writing fresh snapshots to disk) and
-/// returned a base `OrchardState`. This step loads those snapshots and merges
-/// them in, completing the federation wire-up for the `--json` output path.
-///
-/// Reads from `~/.cache/orchard/`. For the test variant see
-/// [`apply_cached_snapshots_from`].
-pub fn apply_cached_snapshots(state: &mut OrchardState, config: &GlobalConfig) {
-    let snapshots = crate::orchard_snapshot::load_cached_snapshots(config);
-    for (host, snapshot) in snapshots {
-        merge_remote_snapshot(state, snapshot, host);
-    }
-}
-
-/// Like [`apply_cached_snapshots`] but reads snapshots from `cache_dir`.
-///
-/// Intended for tests that redirect cache writes to a [`tempfile::TempDir`].
-pub fn apply_cached_snapshots_from(
-    state: &mut OrchardState,
-    config: &GlobalConfig,
-    cache_dir: &Path,
-) {
-    let snapshots = crate::orchard_snapshot::load_cached_snapshots_from(config, cache_dir);
-    for (host, snapshot) in snapshots {
-        merge_remote_snapshot(state, snapshot, host);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Private converters: Json* → OrchardState types (no derive/join)
