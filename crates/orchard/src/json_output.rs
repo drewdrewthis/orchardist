@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::claude_state::ClaudeState;
 use crate::derive::{DisplayGroup, phase_from_labels};
@@ -418,6 +418,48 @@ impl From<&OrchardState> for JsonOutput {
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Federation ingestion: version-check helper (AC6, Phase 1)
+// ---------------------------------------------------------------------------
+
+/// Version numbers this build can ingest from remote `orchard --json` output.
+///
+/// Only versions explicitly listed here are accepted. A remote running an older
+/// or newer schema triggers `AdapterError::ParseFailure` so the caller can fall
+/// back to the legacy shell-discovery path rather than silently misinterpreting
+/// the payload.
+///
+/// When a new version is released, add it here *and* bump the emitted version
+/// in `From<&OrchardState> for JsonOutput` to match.
+pub const SUPPORTED_JSON_OUTPUT_VERSIONS: &[u32] = &[6];
+
+/// Validates that `version` is in [`SUPPORTED_JSON_OUTPUT_VERSIONS`].
+///
+/// Returns `Ok(())` on success.  Returns
+/// `Err(AdapterError::ParseFailure { raw: … })` when the version is unknown so
+/// the caller can record a "version skew" diagnostic and fall back to the
+/// legacy adapter path (AC6).
+///
+/// # Examples
+///
+/// ```
+/// use orchard::json_output::check_json_output_version;
+/// assert!(check_json_output_version(6).is_ok());
+/// assert!(check_json_output_version(0).is_err());
+/// assert!(check_json_output_version(99).is_err());
+/// ```
+pub fn check_json_output_version(
+    version: u32,
+) -> Result<(), crate::remote_adapter::AdapterError> {
+    if SUPPORTED_JSON_OUTPUT_VERSIONS.contains(&version) {
+        Ok(())
+    } else {
+        Err(crate::remote_adapter::AdapterError::ParseFailure {
+            raw: format!("version skew: remote version {version} is not in supported list {SUPPORTED_JSON_OUTPUT_VERSIONS:?}"),
+        })
     }
 }
 
@@ -1504,6 +1546,120 @@ mod tests {
         assert!(jp.labels.is_empty());
         let v = serde_json::to_value(&jp).unwrap();
         assert_eq!(v["labels"], serde_json::json!([]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 1 — federation ingestion (AC6 + AC10, #329)
+    // -----------------------------------------------------------------------
+
+    /// AC10: schemars schema is byte-identical after adding Deserialize derives.
+    ///
+    /// Regenerates the schema at test time and compares it byte-for-byte against
+    /// the committed `schema.json`.  A divergence means the Deserialize derive
+    /// changed the schemars output, which is structurally forbidden by AC10.
+    #[test]
+    fn schema_byte_identical_after_deserialize_derives() {
+        let schema = schemars::schema_for!(JsonOutput);
+        let generated =
+            serde_json::to_string_pretty(&schema).expect("schema serialization failed");
+
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let snapshot_path = std::path::Path::new(manifest_dir).join("schema.json");
+        let committed =
+            std::fs::read_to_string(&snapshot_path).expect("schema.json must exist in crate root");
+
+        assert_eq!(
+            generated, committed,
+            "schemars schema changed after adding Deserialize derives — \
+             this violates AC10 (schema invariance). \
+             If the schema legitimately changed, regenerate schema.json with `cargo build`."
+        );
+    }
+
+    /// AC6 (parse-side): `check_json_output_version(0)` returns `AdapterError::ParseFailure`.
+    #[test]
+    fn version_zero_is_rejected_with_parse_failure() {
+        let result = check_json_output_version(0);
+        assert!(
+            result.is_err(),
+            "version 0 must be rejected but got Ok"
+        );
+        match result.unwrap_err() {
+            crate::remote_adapter::AdapterError::ParseFailure { raw } => {
+                assert!(
+                    raw.contains("version skew"),
+                    "error message must mention 'version skew', got: {raw}"
+                );
+                assert!(
+                    raw.contains('0'),
+                    "error message must include the unexpected version number, got: {raw}"
+                );
+            }
+            other => panic!("expected ParseFailure, got: {other}"),
+        }
+    }
+
+    /// AC6 (parse-side): `check_json_output_version(99)` returns `AdapterError::ParseFailure`.
+    #[test]
+    fn version_ninety_nine_is_rejected_with_parse_failure() {
+        let result = check_json_output_version(99);
+        assert!(
+            result.is_err(),
+            "version 99 must be rejected but got Ok"
+        );
+        match result.unwrap_err() {
+            crate::remote_adapter::AdapterError::ParseFailure { raw } => {
+                assert!(
+                    raw.contains("version skew"),
+                    "error message must mention 'version skew', got: {raw}"
+                );
+                assert!(
+                    raw.contains("99"),
+                    "error message must include the unexpected version number, got: {raw}"
+                );
+            }
+            other => panic!("expected ParseFailure, got: {other}"),
+        }
+    }
+
+    /// AC6 (parse-side): the current supported version (6) is accepted.
+    #[test]
+    fn version_six_is_accepted() {
+        assert!(
+            check_json_output_version(6).is_ok(),
+            "version 6 must be accepted"
+        );
+    }
+
+    /// AC6 round-trip: serialize a `JsonOutput` fixture, deserialize it back,
+    /// and verify the deserialized value is deep-equal to the original.
+    #[test]
+    fn json_output_round_trips_serialize_deserialize() {
+        // Construct a realistic JsonOutput fixture via the From<&OrchardState> mapping.
+        let state = OrchardState {
+            repos: vec![RepoState {
+                slug: "owner/repo".to_string(),
+                worktrees: vec![make_worktree(DisplayGroup::Other)],
+                default_branch: Some("main".to_string()),
+                main_ci_state: None,
+            }],
+            standalone_sessions: vec![],
+            hosts: HashMap::new(),
+        };
+        let original = JsonOutput::from(&state);
+
+        // Serialize → JSON string → deserialize back.
+        let json_str = serde_json::to_string(&original).expect("serialize must not fail");
+        let roundtripped: JsonOutput =
+            serde_json::from_str(&json_str).expect("deserialize must not fail");
+
+        // Deep-equal via re-serialization (both objects serialize identically).
+        let original_json = serde_json::to_value(&original).expect("to_value original");
+        let roundtripped_json = serde_json::to_value(&roundtripped).expect("to_value roundtripped");
+        assert_eq!(
+            original_json, roundtripped_json,
+            "round-tripped JsonOutput must be deep-equal to the original"
+        );
     }
 
     #[test]

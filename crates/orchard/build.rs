@@ -14,7 +14,7 @@ use std::{env, fs, path::PathBuf};
 #[allow(dead_code)]
 mod types {
     use schemars::JsonSchema;
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
     include!("src/json_output_types.rs");
 }

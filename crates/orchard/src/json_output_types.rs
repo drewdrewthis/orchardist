@@ -10,7 +10,7 @@
 // Constraints:
 //   - Must be self-contained: only `serde`, `schemars`, and `std::collections::HashMap`
 //     are available to `build.rs` (no other orchard modules).
-//   - `use` lines for `schemars::JsonSchema`, `serde::Serialize`, and
+//   - `use` lines for `schemars::JsonSchema`, `serde::{Serialize, Deserialize}`, and
 //     `std::collections::HashMap` are provided by the enclosing scope in each
 //     caller and must NOT be repeated here.
 //   - `CiChecks`, `CheckInfo`, and `WorkflowPhase` are defined locally here
@@ -23,7 +23,7 @@
 // ---------------------------------------------------------------------------
 
 /// A single CI check with its normalized state (wire-format mirror for schema gen).
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct CheckInfo {
     /// Name of the check.
     pub name: String,
@@ -35,7 +35,7 @@ pub struct CheckInfo {
 }
 
 /// Two-bucket classification of all CI checks on a PR (wire-format mirror for schema gen).
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct CiChecks {
     /// Checks classified as code CI.
     pub code: Vec<CheckInfo>,
@@ -44,7 +44,7 @@ pub struct CiChecks {
 }
 
 /// Workflow phase derived from issue/PR labels (wire-format mirror for schema gen).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkflowPhase {
     /// Work halted, waiting on external resolution.
@@ -70,7 +70,7 @@ pub enum WorkflowPhase {
 // ---------------------------------------------------------------------------
 
 /// Top-level versioned JSON output for `orchard --json`.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonOutput {
     /// Schema version number for forward compatibility.
@@ -84,7 +84,7 @@ pub struct JsonOutput {
 }
 
 /// A single repository in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonRepo {
     /// Repository slug in `owner/repo` format.
@@ -100,7 +100,7 @@ pub struct JsonRepo {
 }
 
 /// Commit distance from the upstream branch.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonAheadBehind {
     /// Commits ahead of upstream.
@@ -110,7 +110,7 @@ pub struct JsonAheadBehind {
 }
 
 /// A single worktree in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonWorktree {
     /// Absolute path to the worktree on disk.
@@ -150,7 +150,7 @@ pub struct JsonWorktree {
 }
 
 /// A child issue nested under a parent in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSubIssue {
     /// GitHub issue number.
@@ -162,7 +162,7 @@ pub struct JsonSubIssue {
 }
 
 /// Issue information in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonIssue {
     /// GitHub issue number.
@@ -190,7 +190,7 @@ pub struct JsonIssue {
 }
 
 /// A single review on a pull request in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonReview {
     /// GitHub login of the reviewer.
@@ -203,7 +203,7 @@ pub struct JsonReview {
 }
 
 /// Pull request information in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
     /// GitHub PR number.
@@ -269,7 +269,7 @@ pub struct JsonPr {
 }
 
 /// Session information in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSession {
     /// tmux session name.
@@ -291,7 +291,7 @@ pub struct JsonSession {
 }
 
 /// Window within a session in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonWindow {
     /// Tmux's stable window index.
@@ -307,7 +307,7 @@ pub struct JsonWindow {
 }
 
 /// Individual pane within a window in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPane {
     /// Zero-based sequential index in the flat pane list.
@@ -327,7 +327,7 @@ pub struct JsonPane {
 }
 
 /// Claude enrichment data in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonClaudeInfo {
     /// Claude state as a string: "working", "idle", "input", or "none".
@@ -377,7 +377,7 @@ pub struct JsonClaudeInfo {
 }
 
 /// Host reachability information in JSON output.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct JsonHostState {
     /// True when the SSH host responded to the last reachability check.
     pub reachable: bool,
