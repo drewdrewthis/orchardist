@@ -117,9 +117,31 @@ impl PhaseFixture {
         }
     }
 
-    /// Runs `orchard --json` with HOME pointing to the fixture and returns the
-    /// parsed JSON, or `None` if the binary fails (e.g. `gh` unavailable).
+    /// Runs `orchard refresh && orchard --json` with HOME pointing to the
+    /// fixture and returns the parsed JSON, or `None` if the binary fails
+    /// (e.g. `gh` unavailable).
+    ///
+    /// Post-#329: `orchard --json` is cache-only, so `orchard refresh` runs
+    /// first to populate the worktree cache from the fixture's temp git repo.
     fn run(&self) -> Option<Value> {
+        let refresh = Command::cargo_bin("orchard")
+            .unwrap()
+            .arg("refresh")
+            .current_dir(self.repo.path())
+            .env("HOME", self.home.path())
+            .env_remove("TMUX")
+            .output()
+            .unwrap();
+        if !refresh.status.success() {
+            let stderr = String::from_utf8_lossy(&refresh.stderr);
+            eprintln!(
+                "SKIP phase_field_integration: orchard refresh exited with {:?}. stderr: {}",
+                refresh.status.code(),
+                stderr.trim()
+            );
+            return None;
+        }
+
         let output = Command::cargo_bin("orchard")
             .unwrap()
             .arg("--json")
