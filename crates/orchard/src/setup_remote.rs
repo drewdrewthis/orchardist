@@ -360,7 +360,6 @@ mod tests {
                     path: path.to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 }],
             }],
             terminal_app: "com.apple.Terminal".to_string(),

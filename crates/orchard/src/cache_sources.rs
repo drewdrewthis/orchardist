@@ -4140,7 +4140,6 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
             path: "/workspace".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::Remmy,
-            fallback_kind: None,
         };
 
         let result = snapshot_fork_hosts_for_remote(&config, &remote);
@@ -4189,7 +4188,6 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
             path: "/workspace".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::BoxdFork,
-            fallback_kind: None,
         };
 
         // Write a remote_worktrees cache containing a mix of:

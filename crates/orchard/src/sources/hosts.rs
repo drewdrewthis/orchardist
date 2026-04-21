@@ -134,7 +134,6 @@ mod tests {
             path: "/tmp/repo".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::Remmy,
-            fallback_kind: None,
         }
     }
 
@@ -195,7 +194,6 @@ mod tests {
             path: "/tmp".to_string(),
             shell: "ssh".to_string(),
             kind: crate::remote_adapter::RemoteKind::Remmy,
-            fallback_kind: None,
         };
 
         let start = Instant::now();
@@ -312,7 +310,6 @@ mod tests {
             path: "/tmp".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::OrchardProxy,
-            fallback_kind: None,
         };
 
         let start = Instant::now();
@@ -353,7 +350,6 @@ mod tests {
                 path: "/tmp".to_string(),
                 shell: "ssh".to_string(),
                 kind: RemoteKind::OrchardProxy,
-                fallback_kind: None,
             })
             .collect();
 

@@ -72,7 +72,6 @@ mod tests {
                     path: "~/src".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 })
                 .collect(),
         }

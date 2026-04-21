@@ -136,77 +136,105 @@ Feature: Federated orchard — remote discovery via `ssh host orchard --json`
     And "shepherd" has host == Some(remote_host)
 
   # =======================================================================
-  # AC6 — Graceful fallback to legacy shell-discovery on any failure
+  # AC6 — Proxy failures surface clearly; last-known snapshot stays visible.
+  # No silent fallback to legacy shell-discovery. If users want legacy for a
+  # specific host, they reconfigure that remote as `"type": "remmy"`.
   # =======================================================================
 
   @unit
-  Scenario: Non-zero exit from remote orchard triggers legacy fallback
+  Scenario: Non-zero exit from remote orchard surfaces as a proxy_failure event
     Given an OrchardProxyAdapter with a fake SSH runner that returns exit-code 127 (command not found) for `orchard --json`
-    And the adapter is configured with fallback_kind = "remmy"
     When list_worktrees() is called
-    Then the adapter transparently delegates to the Remmy legacy code path
-    And the returned worktrees come from the fallback adapter's `git worktree list --porcelain` parsing
-    And a diagnostic line is appended to `events.jsonl` recording the fallback reason "remote orchard missing (exit 127)"
+    Then the adapter returns AdapterError::FetchFailure — it does NOT attempt any legacy git/tmux shell command
+    And the fake SSH runner records only the `orchard --json` attempt; no `git worktree list --porcelain` invocation appears
+    And a `remote_adapter.proxy_failure` event is appended to `events.jsonl` with the host and reason "remote orchard missing (exit 127)"
 
   @unit
-  Scenario: Malformed JSON from remote orchard triggers legacy fallback
+  Scenario: Malformed JSON from remote orchard surfaces as a proxy_failure event
     Given the fake SSH runner returns stdout `{ "repos": [malformed...` (truncated JSON) with exit 0
     When list_worktrees() is called
-    Then a ParseFailure is caught internally
-    And the adapter delegates to the configured fallback kind
-    And an `events.jsonl` diagnostic is written with reason "parse failure"
-    And the diagnostic includes the host and a bounded snippet of the payload (or its length) — not the full unbounded payload
+    Then the adapter returns AdapterError::ParseFailure — it does NOT attempt any legacy code path
+    And a `remote_adapter.proxy_failure` event is written with reason "parse failure"
+    And the event includes the host and a bounded snippet of the payload (or its length) — not the full unbounded payload
+    And the snippet is truncated on a UTF-8 scalar boundary (never a byte boundary — emoji-safe)
 
   @unit
-  Scenario: Unknown `version` triggers version-skew fallback
+  Scenario: Unknown `version` surfaces as a proxy_failure event
     Given the fake SSH runner returns a JsonOutput with `"version": 0`
     And the local code expects a specific supported version range
     When list_worktrees() is called
-    Then the adapter returns ParseFailure internally
-    And falls back to the legacy adapter path
-    And an `events.jsonl` diagnostic is written with reason "version skew" and the unexpected version value
+    Then the adapter returns AdapterError::ParseFailure
+    And a `remote_adapter.proxy_failure` event is written with reason "version skew" and the unexpected version value
+    And no legacy path is attempted
 
   @unit
-  Scenario: SSH connection failure triggers fallback
+  Scenario: SSH connection failure surfaces as a proxy_failure event
     Given the fake SSH runner returns a network error / non-zero exit 255 for `orchard --json`
     When list_worktrees() is called
-    Then the adapter falls back to the legacy adapter path
-    And an `events.jsonl` diagnostic is written with reason "fetch failure"
+    Then the adapter returns AdapterError::FetchFailure
+    And a `remote_adapter.proxy_failure` event is written with reason "fetch failure (exit 255)"
+    And no legacy shell-discovery is attempted
 
   @integration
-  Scenario: Fallback from OrchardProxy is invisible to upstream callers
-    Given an OrchardProxyAdapter whose remote orchard call always fails
-    And a fallback_kind of "remmy" whose fake runner returns a valid worktree list
-    When `refresh_remote_worktrees` runs for this remote
-    Then the caller receives the legacy adapter's worktrees without error
-    And no AdapterError bubbles up to the pipeline-level callers
-    And the cache-refresh orchestration code is unchanged from pre-federation behavior
+  Scenario: Last-known snapshot stays visible after a proxy failure
+    Given a prior successful `{host}_orchard_snapshot.json` exists on disk for host "vm.boxd.sh" with 2 worktrees
+    And the next OrchardProxyAdapter call for that host fails (exit 127)
+    When the pipeline builds `OrchardState` via `build_state_with_cached_snapshots`
+    Then the 2 worktrees from the stale snapshot remain visible in the merged state
+    And the `remote_adapter.proxy_failure` event is still present in `events.jsonl`
+    And the cache file is NOT deleted (next successful refresh will overwrite it)
+
+  @integration
+  Scenario: FallbackAdapter and fallback_kind do not exist
+    Given the codebase under crates/orchard/src/
+    Then there is no `FallbackAdapter` type anywhere in the crate
+    And there is no `fallback_kind` field on `RemoteConfig`
+    And `OrchardProxyAdapter` has no `fallback` field
+    And the proxy failure path propagates the error upward — it does not invoke any other adapter kind
 
   # =======================================================================
-  # AC7 — Reachability probe uses fast orchard-specific command, bounded by PROBE_TIMEOUT
+  # AC7 — Dashboard never blocks on network. Reads are cache-only; all I/O
+  # runs in background services (`orchard watch`, `orchard refresh`).
   # =======================================================================
 
   @unit
-  Scenario: Probe for OrchardProxy uses an orchard-specific command, not `true`
-    Given an OrchardProxyAdapter and a fake SSH runner recording invocations
-    When `probe_reachability_for_remote` runs for this remote
-    Then the recorded command is an orchard-specific probe (e.g. `orchard --version` or `orchard --json --probe`)
-    And the command is NOT the generic `true` used by the Remmy probe
+  Scenario: `orchard --json` reads from cache only; never initiates SSH
+    Given a configured OrchardProxy remote at "vm.boxd.sh" that is unreachable
+    And no cached snapshot exists on disk for that host
+    When the user runs `orchard --json`
+    Then the command completes in under 100ms wall-clock
+    And no SSH process is spawned during its execution
+    And no probe is issued during its execution
+    And the output includes local state without waiting on the remote
 
   @unit
-  Scenario: Probe is bounded by PROBE_TIMEOUT (3s)
-    Given an OrchardProxyAdapter probe configured with PROBE_TIMEOUT = 3s
-    And a fake SSH runner whose probe never completes
-    When the probe runs
-    Then it is killed after 3s
-    And a timeout error is returned without hanging the caller
+  Scenario: TUI render does not block on probe or SSH
+    Given a configured OrchardProxy remote that is unreachable
+    When the TUI initial frame is constructed
+    Then construction completes in under 100ms
+    And no blocking probe or SSH call runs on the render path
+    And any refresh happens in a background task that writes to the cache
+
+  @unit
+  Scenario: `orchard refresh` is the explicit fresh-data entry point
+    Given the subcommand `orchard refresh` exists
+    When the user runs `orchard refresh`
+    Then the process probes configured hosts, fetches from OrchardProxy remotes, writes snapshots + caches, and exits
+    And a subsequent `orchard --json` reads the freshly-written cache
+
+  @unit
+  Scenario: Probes run inside `orchard refresh` / `orchard watch`, bounded by PROBE_TIMEOUT
+    Given `orchard refresh` is invoked against an unreachable OrchardProxy host
+    Then the probe is bounded by `PROBE_TIMEOUT` (3s)
+    And the probe command is orchard-specific (`orchard --version`), not the generic `true`
 
   @e2e
-  Scenario: Three probes against unreachable orchard-proxy hosts complete under 5s wall-clock
+  Scenario: `orchard --json` against an unreachable host returns in under 100ms when cache is present
     Given 3 OrchardProxy remotes configured against unreachable hosts
-    When `probe_reachability_all` runs with cold caches
-    Then all 3 probes complete (returning unreachable)
-    And the total wall-clock time is under 5 seconds
+    And cached snapshots exist for all three
+    When the user runs `orchard --json`
+    Then the command completes in under 100ms wall-clock
+    And the output contains the 3 remotes' cached worktrees with their stored enrichment
 
   # =======================================================================
   # AC8 — Per-host cache snapshot with version-aware invalidation
@@ -256,18 +284,19 @@ Feature: Federated orchard — remote discovery via `ssh host orchard --json`
     And a remote worktree "issue329-smoke" on branch "issue329/smoke" exists on the VM
     And a tmux session "or_issue329_smoke" runs at that worktree path
     And the VM is configured in the local `.orchard.json` as `"type": "orchard-proxy"`
-    When the user runs `orchard --json` locally
+    When the user runs `orchard refresh` followed by `orchard --json` locally
     Then the output includes a worktree with host == VM host and branch "issue329/smoke"
     And the worktree's `issue` and/or `pr` fields are populated (enrichment computed on the VM, preserved locally)
     And a tmux session on that worktree is listed
 
   @e2e
-  Scenario: When remote orchard is removed, legacy fallback still surfaces the worktree
+  Scenario: When remote orchard is removed, last-known snapshot stays visible and proxy_failure event is written
     Given the VM from the previous scenario
     And `~/.local/bin/orchard` has been removed on the VM (remote orchard unavailable)
-    When the user runs `orchard --json` locally
-    Then the worktree for branch "issue329/smoke" is still visible in the output
-    And the local `events.jsonl` contains a fallback diagnostic line referencing this host
+    When the user runs `orchard refresh` followed by `orchard --json` locally
+    Then the worktree for branch "issue329/smoke" is STILL visible in the output — sourced from the cached `{host}_orchard_snapshot.json` written during the happy-path scenario
+    And the local `events.jsonl` contains a `remote_adapter.proxy_failure` event with reason "remote orchard missing (exit 127)"
+    And NO legacy shell-discovery (`git worktree list --porcelain`) was attempted against the VM
     And the VM is destroyed at end-of-test (`boxd destroy <vm> -y`)
 
   # =======================================================================
@@ -371,24 +400,27 @@ Feature: Federated orchard — remote discovery via `ssh host orchard --json`
   # AC5 "Standalone tmux sessions from the remote appear in OrchardState::standalone_sessions with host set"
   #   -> "Remote standalone sessions are merged into OrchardState.standalone_sessions with host set"
   #   -> "Local and remote standalone sessions coexist in a single merged state"
-  # AC6 "Failure falls back to legacy shell-discovery transparently + events.jsonl diagnostic"
-  #   -> "Non-zero exit from remote orchard triggers legacy fallback"
-  #   -> "Malformed JSON from remote orchard triggers legacy fallback"
-  #   -> "Unknown `version` triggers version-skew fallback"
-  #   -> "SSH connection failure triggers fallback"
-  #   -> "Fallback from OrchardProxy is invisible to upstream callers"
-  # AC7 "Reachability probe uses fast orchard-specific probe, bounded by PROBE_TIMEOUT; 3 unreachable probes < 5s"
-  #   -> "Probe for OrchardProxy uses an orchard-specific command, not `true`"
-  #   -> "Probe is bounded by PROBE_TIMEOUT (3s)"
-  #   -> "Three probes against unreachable orchard-proxy hosts complete under 5s wall-clock"
+  # AC6 "Proxy failures surface clearly; last-known snapshot stays visible; NO silent fallback"
+  #   -> "Non-zero exit from remote orchard surfaces as a proxy_failure event"
+  #   -> "Malformed JSON from remote orchard surfaces as a proxy_failure event"
+  #   -> "Unknown `version` surfaces as a proxy_failure event"
+  #   -> "SSH connection failure surfaces as a proxy_failure event"
+  #   -> "Last-known snapshot stays visible after a proxy failure"
+  #   -> "FallbackAdapter and fallback_kind do not exist"
+  # AC7 "Dashboard never blocks on network; reads are cache-only; I/O runs in background services"
+  #   -> "`orchard --json` reads from cache only; never initiates SSH"
+  #   -> "TUI render does not block on probe or SSH"
+  #   -> "`orchard refresh` is the explicit fresh-data entry point"
+  #   -> "Probes run inside `orchard refresh` / `orchard watch`, bounded by PROBE_TIMEOUT"
+  #   -> "`orchard --json` against an unreachable host returns in under 100ms when cache is present"
   # AC8 "Per-host `{host}_orchard_snapshot.json` cache; invalidated on version drift"
   #   -> "Successful refresh writes `{host}_orchard_snapshot.json`"
   #   -> "TUI cold start reads `{host}_orchard_snapshot.json` for instant render"
   #   -> "Snapshot with mismatched `version` is invalidated on read"
   #   -> "Snapshot refresh overwrites the prior file atomically"
-  # AC9 "End-to-end on Boxd VM: happy path preserves enrichment; fallback surfaces worktree when remote orchard removed"
+  # AC9 "End-to-end on Boxd VM: happy path preserves enrichment; after remote orchard is removed, last-known snapshot stays visible + proxy_failure event written"
   #   -> "Fresh Boxd VM with orchard installed surfaces remote enrichment locally"
-  #   -> "When remote orchard is removed, legacy fallback still surfaces the worktree"
+  #   -> "When remote orchard is removed, last-known snapshot stays visible and proxy_failure event is written"
   # AC10 "`orchard --json` unions local+remote correctly; schemars schema unchanged (new host data uses existing fields)"
   #   -> "`orchard --json` unions local and remote repos/worktrees/sessions"
   #   -> "`(host, path)` deduplication keeps remote over local on conflict"

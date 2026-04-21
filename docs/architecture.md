@@ -308,8 +308,10 @@ join function over remote worktrees. That is the invariant — local code
 trusts remote enrichment.
 
 `JsonOutput.version: u32` is checked on every ingest. Unknown versions
-raise `AdapterError::ParseFailure`, which triggers the fallback path and
-emits a `remote_snapshot.invalidated` diagnostic to `events.jsonl`.
+raise `AdapterError::ParseFailure` — the error surfaces to the caller,
+a `remote_adapter.proxy_failure` event is written to `events.jsonl`,
+and the last-known snapshot stays on disk so the dashboard continues
+to show its cached contents.
 
 ### Transport: `ssh host orchard --json`
 
@@ -317,26 +319,46 @@ No new RPC surface — just SSH + the existing `--json` mode. The
 `OrchardProxyAdapter` (`crates/orchard/src/remote_adapter.rs`) holds a
 `OnceLock<Result<JsonOutput, _>>` so one call to `list_worktrees()` plus one
 call to `list_sessions()` on the same adapter instance shares a **single**
-SSH round-trip. A reachability probe (`sources/hosts.rs`) uses `orchard
---version` as the cheap liveness check, bounded by `PROBE_TIMEOUT = 3s`.
+SSH round-trip. Reachability probes run in background services only
+(`orchard refresh`, `orchard watch`) and never block a dashboard read;
+OrchardProxy probes use `orchard --version` bounded by `PROBE_TIMEOUT = 3s`.
 
-### Graceful fallback
+### Dashboard never blocks
 
-Any failure — missing binary (exit 127), SSH failure (exit 255), malformed
-JSON, version skew — transparently delegates to the configured legacy
-kind (`RemoteConfig.fallback_kind`, default `Remmy`). The caller of
-`RemoteAdapter::list_worktrees()` sees the legacy result with no bubbled
-error. Every fallback writes a `remote_adapter.fallback` line to
-`events.jsonl` with the host and reason. This is the compat story for
-un-upgraded remotes.
+`orchard --json` and TUI render are both cache-only. They read
+`~/.cache/orchard/` and any in-memory state populated by previous
+refreshes, build the merged `OrchardState`, and return. Target latency
+< 100ms. All network I/O — SSH probes, remote `orchard --json` fetches,
+local `git`/`tmux` enumeration — is owned by background services:
+
+- `orchard refresh` — one-shot. Probes hosts, fetches from OrchardProxy
+  remotes, writes caches, exits. Run this when the user wants fresh
+  data.
+- `orchard watch` — long-running daemon. Same work on a schedule +
+  event triggers from `events.jsonl`.
+
+An unreachable host cannot delay a dashboard read, regardless of probe
+timeouts.
+
+### Failure handling (no silent fallback)
+
+On any failure — missing binary (exit 127), SSH failure (exit 255),
+malformed JSON, version skew — the adapter returns the error and writes
+a `remote_adapter.proxy_failure` event with the host and reason. There
+is no implicit fallback to legacy shell-discovery. The last-known
+`{host}_orchard_snapshot.json` remains on disk and in the merged state,
+so the dashboard shows stale data rather than nothing.
+
+If a user wants legacy shell-discovery for a specific host, they
+reconfigure that remote as `"type": "remmy"` — explicit opt-out per host.
 
 ### Per-host cache
 
 `~/.cache/orchard/{safe_host}_orchard_snapshot.json` persists the raw
 remote `JsonOutput` on every successful fetch (atomic tmp→rename write in
-`orchard_snapshot::write_snapshot`). On TUI cold start,
-`load_cached_snapshots()` pre-populates `OrchardState` so remote rows
-appear before the first SSH completes. Files with an unrecognised `version`
+`orchard_snapshot::write_snapshot`). On TUI cold start and on every
+`orchard --json` invocation, `load_cached_snapshots()` pre-populates
+`OrchardState` — no SSH required. Files with an unrecognised `version`
 are treated as absent and overwritten by the next refresh.
 
 ### What stays on the legacy path
@@ -364,4 +386,4 @@ discovery only. See ADR-008 for the decision rationale.
 - **ADR-004**: Unified data model with functional core, imperative shell
 - **ADR-006**: TEA pattern for TUI event handling
 - **ADR-007**: Session data model (TmuxSessionInfo → EnrichedSession composition)
-- **ADR-008**: Federated discovery — remote `orchard --json` is the wire protocol for read-path enrichment; legacy shell discovery is the fallback
+- **ADR-008**: Federated discovery — remote `orchard --json` is the wire protocol for read-path enrichment; failures surface explicitly (no silent legacy fallback); dashboard reads are cache-only

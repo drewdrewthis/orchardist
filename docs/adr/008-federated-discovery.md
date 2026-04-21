@@ -74,17 +74,31 @@ share one round-trip.
 `PROBE_TIMEOUT = 3s`. A host that accepts SSH but lacks orchard fails this
 probe and falls back.
 
-### Fallback (un-upgraded remotes)
+### Failure handling (no silent fallback)
 
-Every OrchardProxy call is wrapped so any `AdapterError::{FetchFailure,
+OrchardProxy failures surface explicitly. On any `AdapterError::{FetchFailure,
 ParseFailure}` — missing binary (exit 127), SSH failure (exit 255),
-malformed JSON, version skew — transparently dispatches to the configured
-legacy kind (`RemoteConfig.fallback_kind`, default `Remmy`). Every fallback
-writes a `remote_adapter.fallback` event with host + reason. Callers see
-the legacy result with no bubbled error.
+malformed JSON, version skew — the adapter:
 
-The fallback is **required** for the compat story: an orchard upgrade
-must not break remotes that haven't been upgraded yet.
+1. Returns the error up the refresh pipeline (does **not** invoke any
+   other adapter kind).
+2. Writes a `remote_adapter.proxy_failure` event to `events.jsonl` with
+   the host, reason, and (for parse failures) a bounded UTF-8-safe
+   snippet of the payload.
+3. Leaves the last-known `{host}_orchard_snapshot.json` on disk so
+   `build_state_with_cached_snapshots` still surfaces its contents to
+   the caller. The dashboard shows stale data rather than nothing.
+
+There is no silent downgrade to legacy shell-discovery. If a user wants
+legacy behaviour for a specific host, they reconfigure that remote as
+`"type": "remmy"` — an explicit opt-out, not a hidden default. This:
+
+- Keeps the upgrade path honest: un-upgraded remotes surface as errors,
+  not as "looks fine but subtly different enrichment."
+- Eliminates `FallbackAdapter` / `RemoteConfig.fallback_kind` as
+  permanent code debt carried for a transitional concern.
+- Prevents papering over real remote failures (crashed orchard, broken
+  SSH) with silently different data.
 
 ### Caching
 
@@ -115,25 +129,34 @@ webhook event streams between machines is a different problem.
 - Remote enrichment is computed once, by the authority. Local orchard
   never makes `gh api` calls about remote repos.
 - SSH round-trips per remote collapse from N (one per source) to 1.
-- Per-host snapshot cache means TUI cold start is instant even with slow
-  SSH; remote rows render from cache, then refresh in background.
+- Per-host snapshot cache means TUI cold start is instant; remote rows
+  render from cache, then refresh in background via `orchard watch` or
+  `orchard refresh`.
+- Dashboard reads (`orchard --json`, TUI render) never block on network.
+  Unreachable hosts cannot delay a read, regardless of probe timeouts.
 - Adding a new source type on the remote (e.g. future claude enrichment
   fields) requires no local change — it rides the existing `JsonOutput`.
+- No `FallbackAdapter` / `fallback_kind` code debt. Failures surface
+  explicitly; users opt into legacy behaviour per-host with
+  `"type": "remmy"` if they want it.
 
 ### Negative
 
 - Version skew must be handled. A remote on an older schema emits an
-  unknown `version`; local falls back. A remote on a newer schema that
-  adds a field local doesn't understand — serde's `#[serde(default)]` on
-  new fields is the mitigation, but schema additions require care.
-- Remote orchard must be available and working for the fast path.
-  Upgrading orchard now involves keeping the `--json` schema
-  backward-compatible across rollout windows. The fallback path absorbs
-  the window, but it is slower and less rich.
+  unknown `version`; local emits a `remote_adapter.proxy_failure` event
+  and keeps the last-known snapshot visible. A remote on a newer schema
+  that adds a field local doesn't understand — serde's `#[serde(default)]`
+  on new fields is the mitigation, but schema additions require care.
+- Remote orchard must be available and working for fresh data. If it's
+  down, users see the last-known snapshot plus an error event — never
+  silently stale-but-plausible data from a different code path.
+- Users running `orchard --json` get cache-only output. For fresh data
+  they must run `orchard refresh` first (or have `orchard watch`
+  running). This is a deliberate trade — reads are instant, freshness
+  is explicit.
 - `OrchardProxyAdapter` holds a `OnceLock` snapshot per instance; callers
   that want a fresh snapshot must construct a new adapter. The existing
-  cache-refresh pipeline does this implicitly, but new call sites need to
-  know.
+  refresh pipeline does this implicitly; new call sites need to know.
 
 ### Neutral
 

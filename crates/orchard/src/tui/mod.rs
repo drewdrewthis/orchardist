@@ -5694,7 +5694,6 @@ mod tests {
             path: "/workspace".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::BoxdFork,
-            fallback_kind: None,
         };
         assert_eq!(dedup_key(&boxd_fork), "boxd-fork:boxd.sh");
 
@@ -5704,7 +5703,6 @@ mod tests {
             path: "/workspace".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::Remmy,
-            fallback_kind: None,
         };
         assert_eq!(dedup_key(&remmy), "remmy:ubuntu@myhost");
 
@@ -5714,7 +5712,6 @@ mod tests {
             path: "/workspace".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::BoxdShared,
-            fallback_kind: None,
         };
         assert_eq!(dedup_key(&boxd_shared), "boxd-shared:shared.boxd.sh");
     }

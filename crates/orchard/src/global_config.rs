@@ -37,24 +37,10 @@ pub struct RemoteConfig {
     /// field are rejected at parse time, preventing silent misclassification.
     #[serde(rename = "type")]
     pub kind: RemoteKind,
-    /// The fallback adapter kind to use when `kind == OrchardProxy` and the
-    /// remote `orchard --json` call fails for any reason.
-    ///
-    /// Defaults to `Some(RemoteKind::Remmy)` for backwards-compatible configs.
-    /// Set to `None` to disable fallback (errors propagate to callers).
-    #[serde(
-        default = "default_fallback_kind",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub fallback_kind: Option<RemoteKind>,
 }
 
 fn default_remote_name() -> String {
     "default".to_string()
-}
-
-fn default_fallback_kind() -> Option<RemoteKind> {
-    Some(RemoteKind::Remmy)
 }
 
 fn default_shell() -> String {
@@ -405,8 +391,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         shell: String,
         #[serde(rename = "type", default)]
         kind: Option<RemoteKind>,
-        #[serde(default = "default_fallback_kind")]
-        fallback_kind: Option<RemoteKind>,
+        // Note: existing configs may carry a `fallback_kind` field; serde
+        // silently ignores unknown fields, so no explicit field is needed.
     }
 
     #[derive(Deserialize)]
@@ -462,7 +448,6 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
                     // Legacy configs predate the `type` field; default to Remmy
                     // for backward compatibility when loading from disk.
                     kind: r.kind.unwrap_or(RemoteKind::Remmy),
-                    fallback_kind: r.fallback_kind,
                 })
                 .collect();
 
@@ -477,7 +462,6 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
                     path: r.path.or(r.repo_path).unwrap_or_default(),
                     shell: r.shell,
                     kind: r.kind.unwrap_or(RemoteKind::Remmy),
-                    fallback_kind: r.fallback_kind,
                 });
             }
 
@@ -627,7 +611,6 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
                     path,
                     shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
                     kind: r.kind.unwrap_or(RemoteKind::Remmy),
-                    fallback_kind: default_fallback_kind(),
                 });
             }
         }
@@ -645,7 +628,6 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
             path,
             shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
             kind: r.kind.unwrap_or(RemoteKind::Remmy),
-            fallback_kind: default_fallback_kind(),
         });
     }
 
@@ -809,7 +791,6 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "mosh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 },
                 RemoteConfig {
                     name: "cpu".to_string(),
@@ -817,7 +798,6 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 },
             ],
         };
@@ -849,7 +829,6 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "mosh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 },
                 RemoteConfig {
                     name: "cpu".to_string(),
@@ -857,7 +836,6 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 },
             ],
         };

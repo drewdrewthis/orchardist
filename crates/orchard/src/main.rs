@@ -92,6 +92,7 @@ fn main() {
         "heal" => handle_heal(fix_flag, json_flag),
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         "watch" => handle_watch(&args),
+        "refresh" => handle_refresh(),
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         _ => {
@@ -279,16 +280,16 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
     }
 }
 
-/// Builds the versioned JSON output from fresh state.
+/// Builds the versioned JSON output from **cached** state only.
 ///
-/// `JsonOutput` is the single source of truth for the machine-readable schema.
-/// After `refresh_and_build` runs all remote refreshes (which write fresh
-/// snapshots to disk via `OrchardProxyAdapter`), we apply those snapshots so
-/// federated remote enrichment is included in the output.
+/// `orchard --json` reads the last-written cache files and snapshots; it does
+/// NOT probe hosts, make SSH calls, or fetch from GitHub. This keeps the
+/// command instant and non-blocking. For fresh data, run `orchard refresh`
+/// first (or let `orchard watch` run in the background).
 fn build_output() -> JsonOutput {
+    use std::collections::HashMap;
     let config = global_config::load_global_config();
-    let mut state = build_state::refresh_and_build(&config);
-    merge_remote::apply_cached_snapshots(&mut state, &config);
+    let state = merge_remote::build_state_with_cached_snapshots(&config, &HashMap::new());
     JsonOutput::from(&state)
 }
 
@@ -299,6 +300,29 @@ fn handle_json() {
         std::process::exit(1);
     });
     println!("{json}");
+}
+
+/// Handles `orchard refresh` — probes hosts, fetches remote data, writes
+/// caches and snapshots, then exits.
+///
+/// This is the **only** entry point that makes SSH connections and writes
+/// fresh data to disk. `orchard --json` and the TUI cold-start both read
+/// the caches written here. `orchard watch` calls `refresh_and_build`
+/// internally on its own schedule.
+fn handle_refresh() {
+    let config = global_config::load_global_config();
+    let state = build_state::refresh_and_build(&config);
+
+    // Count refreshed repos, remotes with OrchardProxy remotes, and sessions.
+    let remote_count: usize = config.repos.iter().map(|r| r.remotes.len()).sum();
+    let session_count: usize = state.repos.iter().map(|r| r.worktrees.len()).sum();
+
+    eprintln!(
+        "refreshed {} repos, {} remotes, {} worktrees",
+        config.repos.len(),
+        remote_count,
+        session_count,
+    );
 }
 
 /// Prints the committed JSON Schema for the `--json` wire format and exits.
@@ -407,6 +431,9 @@ fn print_usage() {
   orchard heal                   Audit and repair drifted state (dry run)
   orchard heal --fix             Apply all safe automatic repairs
   orchard heal --json            Output health check results as JSON
+  orchard refresh                Probe hosts, fetch from remotes, update caches, exit.
+                                   Run before `orchard --json` for fresh data, or let
+                                   `orchard watch` run in the background.
   orchard watch                  Run event-driven watch daemon (Ctrl-C to stop)
   orchard watch --subscribe --id <id> --session <session> [--pane <pane>]
                                    Register a tmux subscriber for watch events
@@ -418,7 +445,8 @@ fn print_usage() {
 
 Options:
   --version, -V  Print version and exit
-  --json         Output worktree data as JSON and exit
+  --json         Output cached worktree data as JSON and exit (reads last-written
+                 cache; run `orchard refresh` first for fresh data)
   --schema       Print the JSON Schema for --json output and exit
 
 Navigation:

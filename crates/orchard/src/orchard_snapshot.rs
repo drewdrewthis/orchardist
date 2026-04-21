@@ -462,7 +462,6 @@ mod tests {
                     path: "/remote/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::OrchardProxy,
-                    fallback_kind: None,
                 }],
             }],
             ..GlobalConfig::default()
@@ -496,7 +495,6 @@ mod tests {
                     path: "/remote/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
-                    fallback_kind: None,
                 }],
             }],
             ..GlobalConfig::default()
@@ -531,7 +529,6 @@ mod tests {
                         path: "/remote/repo1".to_string(),
                         shell: "ssh".to_string(),
                         kind: RemoteKind::OrchardProxy,
-                        fallback_kind: None,
                     }],
                 },
                 RepoConfig {
@@ -543,7 +540,6 @@ mod tests {
                         path: "/remote/repo2".to_string(),
                         shell: "ssh".to_string(),
                         kind: RemoteKind::OrchardProxy,
-                        fallback_kind: None,
                     }],
                 },
             ],
