@@ -2,7 +2,7 @@
 //! fresh-data entry point.
 //!
 //! Scenarios covered:
-//! - `orchard --json` with no cache returns quickly (≤ 500ms) and spawns no SSH.
+//! - `orchard --json` spawns no SSH even with a configured OrchardProxy remote.
 //! - `orchard --json` with a cached snapshot returns the cached worktree quickly.
 //! - `orchard refresh --help` (or `orchard refresh`) exits cleanly (subcommand exists).
 
@@ -18,17 +18,44 @@ use orchard::remote_adapter::RemoteKind;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
-// AC7 scenario 1: `orchard --json` with no cache and unreachable remote
+// AC7 scenario 1: `orchard --json` spawns no SSH
+//
+// We prove this deterministically by placing a fake `ssh` wrapper script at
+// the front of PATH. The wrapper writes a marker file when invoked. After the
+// `orchard --json` run we assert the marker file does NOT exist.
 // ---------------------------------------------------------------------------
 
-/// `orchard --json` against a configured OrchardProxy remote with no cache
-/// must complete in under 500ms — it reads only from disk, makes no SSH calls.
+/// `orchard --json` must never invoke `ssh`, even when an OrchardProxy remote
+/// is configured. Reads are cache-only; SSH only happens inside `orchard refresh`
+/// or `orchard watch`.
 ///
-/// We verify this by setting HOME to a clean tempdir (so no global config
-/// or caches exist) and timing the binary invocation.
+/// We verify this by placing a fake `ssh` wrapper in a tempdir and prepending
+/// it to PATH. If `orchard --json` calls `ssh`, the wrapper writes
+/// `ssh-called.marker`. After the run we assert the marker is absent.
 #[test]
 fn orchard_json_reads_cache_only_no_ssh_spawned() {
     let home_dir = TempDir::new().expect("create temp home");
+    let fake_ssh_dir = TempDir::new().expect("create fake ssh dir");
+    let marker = fake_ssh_dir.path().join("ssh-called.marker");
+
+    // Write a fake `ssh` script that records its invocation and exits 0.
+    let fake_ssh_path = fake_ssh_dir.path().join("ssh");
+    let marker_path_str = marker.display().to_string();
+    let script = format!(
+        "#!/bin/sh\ntouch \"{marker_path_str}\"\nexit 0\n"
+    );
+    std::fs::write(&fake_ssh_path, script).expect("write fake ssh script");
+
+    // Make it executable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_ssh_path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake ssh");
+    }
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", fake_ssh_dir.path().display(), original_path);
 
     let start = Instant::now();
 
@@ -39,17 +66,22 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
         // XDG_CONFIG_HOME must also be redirected so load_global_config()
         // doesn't read the real ~/.config/orchard/config.json.
         .env("XDG_CONFIG_HOME", home_dir.path().join(".config"))
+        .env("PATH", &new_path)
         .assert()
         .success();
 
-    // Bound is loose enough to survive a cold CI runner (disk read + binary
-    // cold-start), tight enough to catch real blocking. A synchronous SSH
-    // probe + fetch against an unreachable host would take 3-5s per host at
-    // `PROBE_TIMEOUT` + `DEFAULT_ADAPTER_TIMEOUT` — well above this bound.
+    // Marker file must NOT exist — no SSH was spawned.
+    assert!(
+        !marker.exists(),
+        "orchard --json must not invoke ssh; marker file was created at {}",
+        marker.display()
+    );
+
+    // Generous hang-guard: if we somehow block (regression), we still catch it.
     let elapsed = start.elapsed();
     assert!(
-        elapsed.as_millis() < 3000,
-        "orchard --json must complete quickly (cache-only); took {:?}",
+        elapsed.as_millis() < 10_000,
+        "orchard --json must not hang; took {:?}",
         elapsed
     );
 }
@@ -61,7 +93,7 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
 /// Pre-write a snapshot to a tempdir and verify `build_state_with_cached_snapshots_from`
 /// returns the cached worktree in under 500ms (no SSH, pure disk read).
 #[test]
-fn orchard_json_with_cached_snapshot_returns_in_under_500ms() {
+fn orchard_json_with_cached_snapshot_returns_quickly() {
     let cache_dir = TempDir::new().expect("create temp cache dir");
     let host = "vm.boxd.sh";
 
