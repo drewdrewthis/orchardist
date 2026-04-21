@@ -712,49 +712,30 @@ impl OrchardProxyAdapter {
     }
 
     /// Writes a `remote_adapter.proxy_failure` event to `events.jsonl`
-    /// describing why this adapter's proxy call failed.
+    /// describing why this adapter's proxy call failed. Delegates the
+    /// reason classification to [`classify_proxy_failure_reason`] so the
+    /// vocabulary stays consistent with the probe-path diagnostic in
+    /// `crate::sources::hosts`.
     fn log_proxy_failure_diagnostic(&self, err: &AdapterError) {
-        let (reason, snippet) = match err {
-            AdapterError::FetchFailure { message } => {
-                let reason =
-                    if message.contains("exit 127") || message.contains("remote orchard missing") {
-                        "remote orchard missing (exit 127)".to_string()
-                    } else if message.contains("exit 255") || message.contains("fetch failure") {
-                        "fetch failure (exit 255)".to_string()
-                    } else {
-                        format!("fetch failure: {}", bounded_chars(message, 100))
-                    };
-                (reason, None)
+        let msg = err.to_string();
+        let reason = classify_proxy_failure_reason(&msg);
+
+        let snippet = match err {
+            AdapterError::ParseFailure { raw } if !raw.starts_with("version skew") => {
+                let bounded = bounded_chars(raw, 200);
+                Some(format!(
+                    "payload length {}, snippet: {}",
+                    raw.len(),
+                    bounded
+                ))
             }
-            AdapterError::ParseFailure { raw } => {
-                let is_version_skew = raw.starts_with("version skew");
-                if is_version_skew {
-                    let version_hint = raw
-                        .split("remote version ")
-                        .nth(1)
-                        .and_then(|s| s.split_whitespace().next())
-                        .unwrap_or("unknown");
-                    (
-                        format!("version skew (remote version {})", version_hint),
-                        None,
-                    )
-                } else {
-                    let bounded = bounded_chars(raw, 200);
-                    (
-                        "parse failure".to_string(),
-                        Some(format!(
-                            "payload length {}, snippet: {}",
-                            raw.len(),
-                            bounded
-                        )),
-                    )
-                }
-            }
+            _ => None,
         };
 
         let mut fields: Vec<(&str, Value)> = vec![
             ("host", Value::String(self.host.clone())),
             ("reason", Value::String(reason)),
+            ("phase", Value::String("fetch".to_string())),
         ];
         let snippet_owned;
         if let Some(s) = snippet {
@@ -763,6 +744,47 @@ impl OrchardProxyAdapter {
         }
 
         crate::events::log_event("remote_adapter.proxy_failure", &fields);
+    }
+}
+
+/// Classifies a stringified SSH / adapter error into a short, stable
+/// `reason` label for `remote_adapter.proxy_failure` diagnostics.
+///
+/// Both the probe path (`sources::hosts::probe_reachability_for_remote`)
+/// and the fetch path (`OrchardProxyAdapter::log_proxy_failure_diagnostic`)
+/// go through this helper so consumers of `events.jsonl` group failures
+/// by a consistent vocabulary regardless of where in the pipeline the
+/// failure originated. The `phase` field on the event distinguishes
+/// probe vs fetch.
+///
+/// Recognised categories:
+/// - `"remote orchard missing (exit 127)"` — command not found
+/// - `"fetch failure (exit 255)"` — SSH connection failure
+/// - `"probe timeout"` — `ssh_exec_with_timeout` hit `PROBE_TIMEOUT`
+/// - `"version skew (remote version N)"` — schema mismatch
+/// - `"parse failure"` — malformed JSON payload
+/// - `"fetch failure: <bounded snippet>"` — everything else
+pub fn classify_proxy_failure_reason(msg: &str) -> String {
+    if msg.starts_with("version skew") {
+        let version_hint = msg
+            .split("remote version ")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .unwrap_or("unknown");
+        format!("version skew (remote version {})", version_hint)
+    } else if msg.contains("parse failure") || msg.contains("parse") && msg.contains("payload") {
+        "parse failure".to_string()
+    } else if msg.contains("timed out") {
+        "probe timeout".to_string()
+    } else if msg.contains("exit 127") || msg.contains("command not found") {
+        "remote orchard missing (exit 127)".to_string()
+    } else if msg.contains("exit 255")
+        || msg.contains("Connection refused")
+        || msg.contains("fetch failure")
+    {
+        "fetch failure (exit 255)".to_string()
+    } else {
+        format!("fetch failure: {}", bounded_chars(msg, 100))
     }
 }
 
@@ -1677,5 +1699,66 @@ mod tests {
         let t = super::bounded_chars(&s, 200);
         assert_eq!(t.len(), 200);
         assert!(t.chars().all(|c| c == 'x'));
+    }
+
+    // -----------------------------------------------------------------------
+    // classify_proxy_failure_reason — shared vocabulary for probe + fetch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_exit_127_is_remote_orchard_missing() {
+        assert_eq!(
+            super::classify_proxy_failure_reason("ssh command failed: exit 127"),
+            "remote orchard missing (exit 127)"
+        );
+    }
+
+    #[test]
+    fn classify_command_not_found_is_remote_orchard_missing() {
+        assert_eq!(
+            super::classify_proxy_failure_reason("bash: orchard: command not found"),
+            "remote orchard missing (exit 127)"
+        );
+    }
+
+    #[test]
+    fn classify_exit_255_is_fetch_failure() {
+        assert_eq!(
+            super::classify_proxy_failure_reason("ssh command failed: exit 255"),
+            "fetch failure (exit 255)"
+        );
+    }
+
+    #[test]
+    fn classify_connection_refused_is_fetch_failure() {
+        assert_eq!(
+            super::classify_proxy_failure_reason("ssh: Connection refused"),
+            "fetch failure (exit 255)"
+        );
+    }
+
+    #[test]
+    fn classify_timeout_is_probe_timeout() {
+        assert_eq!(
+            super::classify_proxy_failure_reason("ssh command timed out after 3s"),
+            "probe timeout"
+        );
+    }
+
+    #[test]
+    fn classify_version_skew_extracts_version_number() {
+        assert_eq!(
+            super::classify_proxy_failure_reason(
+                "version skew: remote version 99 not in supported list [6]"
+            ),
+            "version skew (remote version 99)"
+        );
+    }
+
+    #[test]
+    fn classify_unknown_falls_back_to_bounded_snippet() {
+        let reason = super::classify_proxy_failure_reason("some other error");
+        assert!(reason.starts_with("fetch failure: "));
+        assert!(reason.contains("some other error"));
     }
 }

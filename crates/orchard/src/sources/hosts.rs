@@ -69,37 +69,26 @@ pub fn probe_command_for(kind: crate::remote_adapter::RemoteKind) -> &'static st
 ///
 /// Returns `true` if the host responds within [`PROBE_TIMEOUT`], `false` if
 /// the host is unreachable, SSH fails, or the wall-clock deadline expires.
+///
+/// **Side effect (AC6 / AC9):** when probing an `OrchardProxy` remote and
+/// the probe fails, emits a `remote_adapter.proxy_failure` event to
+/// `events.jsonl` with `phase: "probe"` and a classified `reason`. The
+/// classification vocabulary is shared with the fetch-path diagnostic in
+/// [`crate::remote_adapter::classify_proxy_failure_reason`] so consumers
+/// can group failures by `reason` regardless of pipeline stage. Other
+/// remote kinds fail silently at probe time — their legacy behaviour.
 pub fn probe_reachability_for_remote(remote: &RemoteConfig) -> bool {
     let cmd = probe_command_for(remote.kind);
     match crate::remote::ssh_exec_with_timeout(&remote.host, cmd, PROBE_TIMEOUT) {
         Ok(_) => true,
         Err(e) => {
-            // AC6 / AC9 intent: a failed probe for an OrchardProxy remote is a
-            // user-visible signal ("orchard missing or unreachable on this
-            // host"). Emit a `remote_adapter.proxy_failure` event so the
-            // signal appears in `events.jsonl` even though the downstream
-            // adapter call is gated off by the unreachable flag. For other
-            // kinds the probe failure is a normal, quiet event.
-            if remote.kind == crate::remote_adapter::RemoteKind::OrchardProxy {
-                let msg = e.to_string();
-                let reason = if msg.contains("timed out") {
-                    "probe timeout".to_string()
-                } else if msg.contains("exit 127") || msg.contains("command not found") {
-                    "remote orchard missing (probe: exit 127)".to_string()
-                } else if msg.contains("Connection refused") || msg.contains("connect") {
-                    "ssh unreachable".to_string()
-                } else {
-                    "probe failure".to_string()
-                };
+            if matches!(remote.kind, crate::remote_adapter::RemoteKind::OrchardProxy) {
+                let reason = crate::remote_adapter::classify_proxy_failure_reason(&e.to_string());
                 crate::events::log_event(
                     "remote_adapter.proxy_failure",
                     &[
                         ("host", serde_json::Value::String(remote.host.clone())),
                         ("reason", serde_json::Value::String(reason)),
-                        (
-                            "kind",
-                            serde_json::Value::String("orchard-proxy".to_string()),
-                        ),
                         ("phase", serde_json::Value::String("probe".to_string())),
                     ],
                 );
@@ -452,5 +441,124 @@ mod tests {
              (serial would delay it ~500ms), gap was {:?}",
             dispatch_gap
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC6 / AC9 — OrchardProxy probe-failure emits a proxy_failure event.
+    // -----------------------------------------------------------------------
+
+    /// When probing an OrchardProxy remote fails, the probe path must write
+    /// a `remote_adapter.proxy_failure` line to `events.jsonl` (under
+    /// `$HOME/.local/state/git-orchard/`) with `phase: "probe"` and a
+    /// classified `reason`. This is the signal AC9's fallback scenario
+    /// asserts on.
+    ///
+    /// Uses TEST-NET-1 (192.0.2.x) for a guaranteed unroutable probe; the
+    /// `ssh_exec_with_timeout` error surfaces as "timed out after …s" which
+    /// `classify_proxy_failure_reason` maps to `"probe timeout"`.
+    #[test]
+    fn orchard_proxy_probe_failure_writes_event() {
+        if !ssh_binary_present() {
+            eprintln!("SKIP: ssh binary not available");
+            return;
+        }
+
+        // Isolate HOME so events.jsonl writes to a tempdir, not the
+        // developer's real state dir.
+        let home = tempfile::TempDir::new().expect("create temp home");
+        // SAFETY: test is serial within this module; no other thread
+        // reads HOME during this call.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+
+        let remote = RemoteConfig {
+            name: "proxy-test".to_string(),
+            host: "192.0.2.77".to_string(),
+            path: "/tmp/repo".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::OrchardProxy,
+        };
+
+        let reachable = probe_reachability_for_remote(&remote);
+        assert!(!reachable, "TEST-NET-1 address must be unreachable");
+
+        let events_path = home
+            .path()
+            .join(".local")
+            .join("state")
+            .join("git-orchard")
+            .join("events.jsonl");
+        let contents =
+            std::fs::read_to_string(&events_path).expect("events.jsonl must exist after probe");
+
+        // One JSONL line per event; find the proxy_failure for our host.
+        let mut found = false;
+        for line in contents.lines() {
+            let v: serde_json::Value = serde_json::from_str(line).expect("valid JSONL line");
+            if v["event"] == "remote_adapter.proxy_failure"
+                && v["host"] == "192.0.2.77"
+                && v["phase"] == "probe"
+            {
+                // reason must be a non-empty string; specific text depends on
+                // the classifier (timeout / exit 127 / etc.) but probe-failure
+                // on TEST-NET-1 should land on "probe timeout".
+                let reason = v["reason"].as_str().expect("reason must be a string");
+                assert!(!reason.is_empty(), "reason must not be empty");
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "expected a remote_adapter.proxy_failure event with phase=probe for host \
+             192.0.2.77 in:\n{contents}"
+        );
+    }
+
+    /// Regression: probe failure for a non-OrchardProxy remote must NOT
+    /// emit a diagnostic event. Other kinds (Remmy / BoxdShared / BoxdFork)
+    /// treat unreachable hosts as a normal, quiet state.
+    #[test]
+    fn non_orchard_proxy_probe_failure_is_silent() {
+        if !ssh_binary_present() {
+            eprintln!("SKIP: ssh binary not available");
+            return;
+        }
+
+        let home = tempfile::TempDir::new().expect("create temp home");
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+
+        let remote = RemoteConfig {
+            name: "remmy-test".to_string(),
+            host: "192.0.2.78".to_string(),
+            path: "/tmp/repo".to_string(),
+            shell: "ssh".to_string(),
+            kind: RemoteKind::Remmy,
+        };
+
+        let reachable = probe_reachability_for_remote(&remote);
+        assert!(!reachable);
+
+        let events_path = home
+            .path()
+            .join(".local")
+            .join("state")
+            .join("git-orchard")
+            .join("events.jsonl");
+        // The file may or may not exist (nothing else writes in this test);
+        // if it does, it must contain no proxy_failure line for this host.
+        if let Ok(contents) = std::fs::read_to_string(&events_path) {
+            for line in contents.lines() {
+                let v: serde_json::Value = serde_json::from_str(line).expect("valid JSONL");
+                assert_ne!(
+                    v["event"].as_str(),
+                    Some("remote_adapter.proxy_failure"),
+                    "Remmy probe failures must not emit proxy_failure events"
+                );
+            }
+        }
     }
 }

@@ -30,7 +30,7 @@ fn main() {
     // panic-hook installation when stderr isn't a TTY; the default panic
     // handler is fine for batch invocations, and AC7 requires background
     // services (refresh / watch / --json) to work without a controlling TTY.
-    if std::io::stderr().is_terminal() {
+    if should_install_panic_hooks() {
         install_panic_hooks();
     }
 
@@ -428,6 +428,21 @@ fn install_panic_hooks() {
         let _ = crossterm::execute!(std::io::stderr(), cursor::Show);
         eprintln!("{}", panic_hook.panic_report(info));
     }));
+}
+
+/// Returns true iff the pretty panic hook should be installed.
+///
+/// `color_eyre::HookBuilder::default()` probes the terminal during install,
+/// which opens `/dev/tty` and fails with ENXIO in any non-interactive
+/// context (cron, systemd, CI runner, `ssh` with no `-t`). Batch commands
+/// like `orchard refresh`, `orchard --json`, and `orchard hook-enrich`
+/// must not require a controlling TTY (AC7: background services never
+/// block or fail on terminal absence), so we gate the install on
+/// `stderr` being a TTY. The default Rust panic handler works fine for
+/// batch invocations — it just produces less pretty output, which no one
+/// reads from cron anyway.
+fn should_install_panic_hooks() -> bool {
+    std::io::stderr().is_terminal()
 }
 
 /// Handles `orchard hook-enrich --transcript <path>`.
