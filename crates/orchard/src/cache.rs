@@ -439,6 +439,54 @@ fn restrict_cache_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_cache_permissions(_path: &Path) {}
 
+/// Returns the cache file path for host reachability state.
+///
+/// Written by `orchard refresh`, read by `orchard --json`, TUI cold start,
+/// and the watch daemon to populate `OrchardState.hosts`.
+pub fn host_reachability_cache_path() -> PathBuf {
+    cache_dir().join("hosts.json")
+}
+
+/// Persists host reachability state to `~/.cache/orchard/hosts.json`.
+///
+/// Called by `orchard refresh` after probing hosts so that subsequent
+/// cache-only reads (`orchard --json`, TUI cold start, watch daemon) can
+/// populate `OrchardState.hosts` without re-probing.
+///
+/// Uses atomic tmp→rename write to prevent partial reads. Errors are
+/// logged but never propagated — a missing cache is silently treated as
+/// "unknown reachability" by [`read_host_reachability`].
+pub fn write_host_reachability(
+    map: &std::collections::HashMap<String, crate::orchard_state::HostState>,
+) -> anyhow::Result<()> {
+    let path = host_reachability_cache_path();
+    let dir = path
+        .parent()
+        .context("host reachability cache path has no parent")?;
+    std::fs::create_dir_all(dir).context("create cache directory")?;
+
+    let json = serde_json::to_string_pretty(map).context("serialize host reachability")?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json).context("write host reachability .tmp file")?;
+    restrict_cache_permissions(&tmp);
+    std::fs::rename(&tmp, &path).context("rename .tmp to final host reachability file")?;
+    Ok(())
+}
+
+/// Reads persisted host reachability state from `~/.cache/orchard/hosts.json`.
+///
+/// Returns an empty map if the file does not exist or contains invalid JSON —
+/// the same silent-fallback behaviour as other cache reads. Callers treat
+/// an empty map as "unknown reachability" rather than an error.
+pub fn read_host_reachability() -> std::collections::HashMap<String, crate::orchard_state::HostState>
+{
+    let path = host_reachability_cache_path();
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return std::collections::HashMap::new();
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
 /// Like `write_cache`, but skips the write when `entries` is empty **and** the
 /// cache file already exists on disk. This prevents a failed API call (which
 /// returns no entries) from overwriting good cached data with an empty list.

@@ -114,9 +114,34 @@ impl LabelsFixture {
         }
     }
 
-    /// Runs `orchard --json` with HOME pointing to the fixture and returns the
-    /// parsed JSON, or `None` if the binary fails (e.g. `gh` unavailable).
+    /// Runs `orchard refresh && orchard --json` with HOME pointing to the
+    /// fixture and returns the parsed JSON, or `None` if the binary fails
+    /// (e.g. `gh` unavailable).
+    ///
+    /// Post-#329: `orchard --json` is cache-only. `orchard refresh` is the
+    /// explicit entry point that refreshes worktrees via `git worktree list`
+    /// (so the local git repo's current branch surfaces in the cache) and
+    /// leaves any pre-written issues/PRs caches untouched when `gh` is
+    /// unavailable. The test then reads the cache via `--json`.
     fn run(&self) -> Option<Value> {
+        let refresh = Command::cargo_bin("orchard")
+            .unwrap()
+            .arg("refresh")
+            .current_dir(self.repo.path())
+            .env("HOME", self.home.path())
+            .env_remove("TMUX")
+            .output()
+            .unwrap();
+        if !refresh.status.success() {
+            let stderr = String::from_utf8_lossy(&refresh.stderr);
+            eprintln!(
+                "SKIP labels_integration: orchard refresh exited with {:?}. stderr: {}",
+                refresh.status.code(),
+                stderr.trim()
+            );
+            return None;
+        }
+
         let output = Command::cargo_bin("orchard")
             .unwrap()
             .arg("--json")

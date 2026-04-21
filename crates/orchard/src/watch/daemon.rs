@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::build_state;
 use crate::cache_sources;
 use crate::events::events_path;
 use crate::global_config::GlobalConfig;
+use crate::merge_remote;
 use crate::orchard_state::OrchardState;
 use crate::watch::diff;
 use crate::watch::event::{EventKind, WatchEvent};
@@ -51,7 +51,8 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 
     // Force a full refresh on startup.
     refresh_all_sources(config);
-    let initial = build_state::build_state(config);
+    let hosts = crate::cache::read_host_reachability();
+    let initial = merge_remote::build_state_with_cached_snapshots(config, &hosts);
     let mut previous_state: Option<OrchardState> = Some(initial);
 
     while running.load(Ordering::SeqCst) {
@@ -77,7 +78,8 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
             continue;
         }
 
-        let new_state = build_state::build_state(config);
+        let hosts = crate::cache::read_host_reachability();
+        let new_state = merge_remote::build_state_with_cached_snapshots(config, &hosts);
 
         // Diff
         let mut events: Vec<WatchEvent> = Vec::new();

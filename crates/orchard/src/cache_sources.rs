@@ -1830,6 +1830,7 @@ pub(crate) fn kind_str(kind: crate::remote_adapter::RemoteKind) -> &'static str 
         crate::remote_adapter::RemoteKind::Remmy => "remmy",
         crate::remote_adapter::RemoteKind::BoxdShared => "boxd-shared",
         crate::remote_adapter::RemoteKind::BoxdFork => "boxd-fork",
+        crate::remote_adapter::RemoteKind::OrchardProxy => "orchard-proxy",
     }
 }
 
@@ -2032,6 +2033,9 @@ pub fn refresh_remote_tmux_sessions(
     match remote_cfg.kind {
         RemoteKind::Remmy | RemoteKind::BoxdShared => refresh_tmux_sessions(Some(&remote_cfg.host)),
         RemoteKind::BoxdFork => refresh_boxd_fork_tmux_sessions(config, remote_cfg, old_hosts),
+        // OrchardProxy sessions are sourced from `orchard --json`; tmux discovery
+        // uses the fallback adapter path which is handled by RemoteAdapter dispatch.
+        RemoteKind::OrchardProxy => Ok(()),
     }
 }
 

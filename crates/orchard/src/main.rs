@@ -11,18 +11,28 @@ use crossterm::{
     terminal::{self, LeaveAlternateScreen},
 };
 use orchard::build_state;
+use orchard::cache;
 use orchard::chat;
 use orchard::global_config;
 use orchard::heal;
 use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
+use orchard::merge_remote;
 use orchard::setup_remote;
 use orchard::shell;
 use orchard::tui;
 
 fn main() {
-    install_panic_hooks();
+    // color_eyre's HookBuilder probes the terminal (opens /dev/tty) during
+    // install. That fails with ENXIO in non-interactive contexts — cron,
+    // systemd, CI runners, `ssh host "orchard refresh"` without `-t`. Skip
+    // panic-hook installation when stderr isn't a TTY; the default panic
+    // handler is fine for batch invocations, and AC7 requires background
+    // services (refresh / watch / --json) to work without a controlling TTY.
+    if should_install_panic_hooks() {
+        install_panic_hooks();
+    }
 
     let args: Vec<String> = env::args().collect();
 
@@ -91,6 +101,7 @@ fn main() {
         "heal" => handle_heal(fix_flag, json_flag),
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         "watch" => handle_watch(&args),
+        "refresh" => handle_refresh(),
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         _ => {
@@ -278,12 +289,16 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
     }
 }
 
-/// Builds the versioned JSON output from fresh state.
+/// Builds the versioned JSON output from **cached** state only.
 ///
-/// `JsonOutput` is the single source of truth for the machine-readable schema.
+/// `orchard --json` reads the last-written cache files and snapshots; it does
+/// NOT probe hosts, make SSH calls, or fetch from GitHub. This keeps the
+/// command instant and non-blocking. For fresh data, run `orchard refresh`
+/// first (or let `orchard watch` run in the background).
 fn build_output() -> JsonOutput {
     let config = global_config::load_global_config();
-    let state = build_state::refresh_and_build(&config);
+    let hosts = cache::read_host_reachability();
+    let state = merge_remote::build_state_with_cached_snapshots(&config, &hosts);
     JsonOutput::from(&state)
 }
 
@@ -294,6 +309,43 @@ fn handle_json() {
         std::process::exit(1);
     });
     println!("{json}");
+}
+
+/// Handles `orchard refresh` — probes hosts, fetches remote data, writes
+/// caches and snapshots, then exits.
+///
+/// This is the **only** entry point that makes SSH connections and writes
+/// fresh data to disk. `orchard --json` and the TUI cold-start both read
+/// the caches written here. `orchard watch` calls `refresh_and_build`
+/// internally on its own schedule.
+fn handle_refresh() {
+    use std::collections::HashSet;
+    let config = global_config::load_global_config();
+    let state = build_state::refresh_and_build(&config);
+
+    // Persist host reachability so subsequent cache-only reads
+    // (--json, TUI cold start, watch daemon) can populate OrchardState.hosts.
+    if let Err(e) = cache::write_host_reachability(&state.hosts) {
+        logger::LOG.warn(&format!(
+            "refresh: failed to persist host reachability: {e}"
+        ));
+    }
+
+    // Count refreshed repos, unique remote hosts, and worktrees.
+    let unique_hosts: HashSet<&str> = config
+        .repos
+        .iter()
+        .flat_map(|r| r.remotes.iter().map(|rm| rm.host.as_str()))
+        .collect();
+    let remote_count = unique_hosts.len();
+    let worktree_count: usize = state.repos.iter().map(|r| r.worktrees.len()).sum();
+
+    eprintln!(
+        "refreshed {} repos, {} remotes, {} worktrees",
+        config.repos.len(),
+        remote_count,
+        worktree_count,
+    );
 }
 
 /// Prints the committed JSON Schema for the `--json` wire format and exits.
@@ -378,6 +430,21 @@ fn install_panic_hooks() {
     }));
 }
 
+/// Returns true iff the pretty panic hook should be installed.
+///
+/// `color_eyre::HookBuilder::default()` probes the terminal during install,
+/// which opens `/dev/tty` and fails with ENXIO in any non-interactive
+/// context (cron, systemd, CI runner, `ssh` with no `-t`). Batch commands
+/// like `orchard refresh`, `orchard --json`, and `orchard hook-enrich`
+/// must not require a controlling TTY (AC7: background services never
+/// block or fail on terminal absence), so we gate the install on
+/// `stderr` being a TTY. The default Rust panic handler works fine for
+/// batch invocations — it just produces less pretty output, which no one
+/// reads from cron anyway.
+fn should_install_panic_hooks() -> bool {
+    std::io::stderr().is_terminal()
+}
+
 /// Handles `orchard hook-enrich --transcript <path>`.
 ///
 /// Reads the JSONL transcript and prints a JSON enrichment object to stdout.
@@ -402,6 +469,9 @@ fn print_usage() {
   orchard heal                   Audit and repair drifted state (dry run)
   orchard heal --fix             Apply all safe automatic repairs
   orchard heal --json            Output health check results as JSON
+  orchard refresh                Probe hosts, fetch from remotes, update caches, exit.
+                                   Run before `orchard --json` for fresh data, or let
+                                   `orchard watch` run in the background.
   orchard watch                  Run event-driven watch daemon (Ctrl-C to stop)
   orchard watch --subscribe --id <id> --session <session> [--pane <pane>]
                                    Register a tmux subscriber for watch events
@@ -413,7 +483,8 @@ fn print_usage() {
 
 Options:
   --version, -V  Print version and exit
-  --json         Output worktree data as JSON and exit
+  --json         Output cached worktree data as JSON and exit (reads last-written
+                 cache; run `orchard refresh` first for fresh data)
   --schema       Print the JSON Schema for --json output and exit
 
 Navigation:

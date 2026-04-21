@@ -312,7 +312,7 @@ pub struct ClaudeEnrichment {
 }
 
 /// Reachability state for a remote host.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HostState {
     /// True when the SSH host responded to the last reachability check.
     pub reachable: bool,

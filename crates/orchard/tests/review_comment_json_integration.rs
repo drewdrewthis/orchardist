@@ -81,6 +81,26 @@ impl ReviewFixture {
     }
 
     fn run(&self) -> Option<Value> {
+        // Post-#329: `orchard --json` is cache-only. Run `orchard refresh`
+        // first to populate the worktree cache from the fixture's temp repo.
+        let refresh = Command::cargo_bin("orchard")
+            .unwrap()
+            .arg("refresh")
+            .current_dir(self.repo.path())
+            .env("HOME", self.home.path())
+            .env_remove("TMUX")
+            .output()
+            .unwrap();
+        if !refresh.status.success() {
+            let stderr = String::from_utf8_lossy(&refresh.stderr);
+            eprintln!(
+                "SKIP review_comment_json_integration: orchard refresh exited with {:?}. stderr: {}",
+                refresh.status.code(),
+                stderr.trim()
+            );
+            return None;
+        }
+
         let output = Command::cargo_bin("orchard")
             .unwrap()
             .arg("--json")
