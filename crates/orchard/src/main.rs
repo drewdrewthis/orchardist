@@ -13,6 +13,7 @@ use crossterm::{
 use orchard::build_state;
 use orchard::chat;
 use orchard::global_config;
+use orchard::merge_remote;
 use orchard::heal;
 use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
@@ -281,9 +282,13 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
 /// Builds the versioned JSON output from fresh state.
 ///
 /// `JsonOutput` is the single source of truth for the machine-readable schema.
+/// After `refresh_and_build` runs all remote refreshes (which write fresh
+/// snapshots to disk via `OrchardProxyAdapter`), we apply those snapshots so
+/// federated remote enrichment is included in the output.
 fn build_output() -> JsonOutput {
     let config = global_config::load_global_config();
-    let state = build_state::refresh_and_build(&config);
+    let mut state = build_state::refresh_and_build(&config);
+    merge_remote::apply_cached_snapshots(&mut state, &config);
     JsonOutput::from(&state)
 }
 

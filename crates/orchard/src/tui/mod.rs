@@ -221,7 +221,10 @@ impl App {
         let _ = crate::restore::restore_all_local();
 
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
-        let state = crate::build_state::build_state(&global_cfg);
+        let state = crate::merge_remote::build_state_with_cached_snapshots(
+            &global_cfg,
+            &std::collections::HashMap::new(),
+        );
         let standalone_sessions = state.standalone_sessions;
         let (tx, rx) = mpsc::channel();
 
@@ -783,7 +786,10 @@ impl App {
             match msg {
                 AppMsg::CacheRefreshed => {
                     self.task_rows = crate::build_state::build_task_rows(&self.global_config);
-                    let state = crate::build_state::build_state(&self.global_config);
+                    let state = crate::merge_remote::build_state_with_cached_snapshots(
+                        &self.global_config,
+                        &std::collections::HashMap::new(),
+                    );
                     self.standalone_sessions = state.standalone_sessions.clone();
                     // Warn on refresh (not fatal) — a new worktree may have
                     // introduced a collision after boot. Don't crash the TUI.
@@ -867,7 +873,10 @@ impl App {
                 }
                 AppMsg::LocalCacheRefreshed => {
                     self.task_rows = crate::build_state::build_task_rows(&self.global_config);
-                    let state = crate::build_state::build_state(&self.global_config);
+                    let state = crate::merge_remote::build_state_with_cached_snapshots(
+                        &self.global_config,
+                        &std::collections::HashMap::new(),
+                    );
                     self.standalone_sessions = state.standalone_sessions.clone();
                     if let Err(e) =
                         check_standalone_collisions(&self.standalone_sessions, &self.task_rows)

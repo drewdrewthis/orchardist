@@ -13,6 +13,7 @@
 //! missing data (e.g. a PR that exists on the remote but has not been fetched locally).
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::ci_state::{CheckInfo, CiChecks};
 use crate::claude_state::ClaudeState;
@@ -119,6 +120,66 @@ pub fn build_state_with_snapshots(
         merge_remote_snapshot(&mut state, snapshot, host);
     }
     state
+}
+
+/// Loads cached snapshots from disk and folds them into a freshly-built `OrchardState`.
+///
+/// This is the **production entry point** for TUI cold start and watch-daemon refresh.
+/// It reads every `OrchardProxy` remote's snapshot from `~/.cache/orchard/` and merges
+/// the results into the state produced by [`crate::build_state::build_state_with_hosts`],
+/// ensuring federated remote enrichment (PR, issue, claude, CI) reaches callers without
+/// re-running the local derive/join pipeline over remote data.
+///
+/// Use [`build_state_with_cached_snapshots_from`] in tests where you need to redirect
+/// the cache directory.
+pub fn build_state_with_cached_snapshots(
+    config: &GlobalConfig,
+    hosts: &HashMap<String, HostState>,
+) -> OrchardState {
+    let snapshots = crate::orchard_snapshot::load_cached_snapshots(config);
+    build_state_with_snapshots(config, hosts, snapshots)
+}
+
+/// Like [`build_state_with_cached_snapshots`] but reads snapshots from `cache_dir`.
+///
+/// Intended for tests that redirect cache writes to a [`tempfile::TempDir`].
+pub fn build_state_with_cached_snapshots_from(
+    config: &GlobalConfig,
+    hosts: &HashMap<String, HostState>,
+    cache_dir: &Path,
+) -> OrchardState {
+    let snapshots = crate::orchard_snapshot::load_cached_snapshots_from(config, cache_dir);
+    build_state_with_snapshots(config, hosts, snapshots)
+}
+
+/// Folds cached `OrchardProxy` snapshots into an already-built `OrchardState`.
+///
+/// Used in the **JSON / `--json` mode** path where `refresh_and_build` has
+/// already run all remote refreshes (writing fresh snapshots to disk) and
+/// returned a base `OrchardState`. This step loads those snapshots and merges
+/// them in, completing the federation wire-up for the `--json` output path.
+///
+/// Reads from `~/.cache/orchard/`. For the test variant see
+/// [`apply_cached_snapshots_from`].
+pub fn apply_cached_snapshots(state: &mut OrchardState, config: &GlobalConfig) {
+    let snapshots = crate::orchard_snapshot::load_cached_snapshots(config);
+    for (host, snapshot) in snapshots {
+        merge_remote_snapshot(state, snapshot, host);
+    }
+}
+
+/// Like [`apply_cached_snapshots`] but reads snapshots from `cache_dir`.
+///
+/// Intended for tests that redirect cache writes to a [`tempfile::TempDir`].
+pub fn apply_cached_snapshots_from(
+    state: &mut OrchardState,
+    config: &GlobalConfig,
+    cache_dir: &Path,
+) {
+    let snapshots = crate::orchard_snapshot::load_cached_snapshots_from(config, cache_dir);
+    for (host, snapshot) in snapshots {
+        merge_remote_snapshot(state, snapshot, host);
+    }
 }
 
 // ---------------------------------------------------------------------------
