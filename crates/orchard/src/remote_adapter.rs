@@ -359,9 +359,34 @@ impl BoxdSharedAdapter {
 
     /// Returns all tmux sessions from the Boxd shared VM.
     ///
-    /// Slice 2 stub — full implementation in slice 3.
+    /// Runs `tmux list-panes -a -F '...'` on the shared VM via SSH and parses
+    /// the output with `cache_sources::parse_tmux_sessions_from_panes`. Every
+    /// returned session is tagged with the shared-VM host. SSH failure returns
+    /// `Err` so the caller can preserve prior cache rather than treating an
+    /// empty result as authoritative.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
-        Ok(vec![])
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        let stdout = match self.ssh.exec(&self.host, &tmux_cmd) {
+            Ok(output) => output.stdout,
+            Err(e) => {
+                return Err(AdapterError::FetchFailure {
+                    message: e.to_string(),
+                }
+                .into());
+            }
+        };
+
+        let sessions = crate::cache_sources::parse_tmux_sessions_from_panes(
+            &stdout,
+            Some(&self.host),
+            |_| String::new(),
+            |_| vec![],
+        );
+
+        Ok(sessions)
     }
 }
 
@@ -1458,83 +1483,12 @@ mod tests {
         );
     }
 
-    /// #337 AC5: exit 127 writes a `remote_adapter.proxy_failure` event to events.jsonl
-    /// with the host and a reason mentioning "exit 127".
-    ///
-    /// Uses `ORCHARD_EVENTS_PATH` to redirect writes to a temp directory so the
-    /// test is hermetic and does not touch `~/.local/state/git-orchard/events.jsonl`.
-    #[test]
-    fn orchard_proxy_exit_127_writes_proxy_failure_event_to_events_jsonl() {
-        use std::io::Read;
-        use tempfile::tempdir;
-
-        let dir = tempdir().expect("create temp dir");
-        let events_file = dir.path().join("events.jsonl");
-
-        // Redirect events writes to our temp file.
-        // SAFETY: setting env vars is process-global; this test uses a unique
-        // tempdir path and removes the var before parallel reads, so it cannot
-        // collide with other tests that touch `ORCHARD_EVENTS_PATH`.
-        unsafe { std::env::set_var("ORCHARD_EVENTS_PATH", events_file.as_os_str()) };
-
-        let mut fake = FakeSshExec::new();
-        fake.insert(
-            "boxd@vm.boxd.sh",
-            "orchard --json",
-            SshOutput {
-                stdout: String::new(),
-                stderr: "orchard: not found".to_string(),
-                exit_code: 127,
-            },
-        );
-
-        let adapter = OrchardProxyAdapter {
-            host: "boxd@vm.boxd.sh".to_string(),
-            path: "~/repo".to_string(),
-            ssh: Box::new(fake),
-            snapshot: OnceLock::new(),
-        };
-
-        let _result = adapter.list_worktrees();
-
-        // SAFETY: same as above — process-global mutation, but this test owns
-        // the variable lifecycle within its own scope.
-        unsafe { std::env::remove_var("ORCHARD_EVENTS_PATH") };
-
-        // Read events file.
-        let mut contents = String::new();
-        std::fs::File::open(&events_file)
-            .expect("events.jsonl must have been created")
-            .read_to_string(&mut contents)
-            .unwrap();
-
-        // Find the proxy_failure event.
-        let failure_line = contents
-            .lines()
-            .filter(|l| !l.is_empty())
-            .find(|l| l.contains("remote_adapter.proxy_failure"))
-            .expect("events.jsonl must contain a remote_adapter.proxy_failure event");
-
-        let parsed: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(failure_line).expect("proxy_failure line must be valid JSON");
-
-        // host field must match the adapter's host.
-        assert_eq!(
-            parsed.get("host").and_then(|v| v.as_str()),
-            Some("boxd@vm.boxd.sh"),
-            "proxy_failure event must carry the host; got: {parsed:?}"
-        );
-
-        // reason field must mention exit 127.
-        let reason = parsed
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        assert!(
-            reason.contains("127"),
-            "proxy_failure reason must mention exit 127; got: '{reason}'"
-        );
-    }
+    // The "exit 127 → proxy_failure event written to events.jsonl with host
+    // and exit-127 reason" assertion is locked by the integration test
+    // `cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged`
+    // in `crates/orchard/tests/federation_wire_up.rs`. That test runs in a
+    // separate binary, sidestepping the parallel env-var race on
+    // `ORCHARD_EVENTS_PATH` that sinks unit-level attempts.
 
     /// AC6 scenario 2: malformed JSON returns ParseFailure.
     #[test]
@@ -1858,5 +1812,145 @@ mod tests {
         let reason = super::classify_proxy_failure_reason("some other error");
         assert!(reason.starts_with("fetch failure: "));
         assert!(reason.contains("some other error"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AC1: BoxdForkAdapter::list_sessions — session name, host, and path
+    // -----------------------------------------------------------------------
+
+    /// AC1 scenario: `BoxdForkAdapter::list_sessions()` returns exactly one
+    /// `CachedTmuxSession` with the correct name, host, and working-directory
+    /// path for the launched issue session.
+    ///
+    /// Satisfies feature.feature:41-48.
+    #[test]
+    fn boxd_fork_adapter_list_sessions_returns_session_with_correct_name_host_and_path() {
+        let fork_host = "boxd@or-issue999.boxd.sh";
+        let fork_url = "or-issue999.boxd.sh";
+        let worktree_path = "/workspace/repo";
+        let session_name = "or_issue999";
+
+        let mut fake = FakeSshExec::new();
+
+        // Prime: golden host enumerates exactly one running fork.
+        fake.insert(
+            "boxd.sh",
+            "list --json",
+            SshOutput {
+                stdout: format!(
+                    r#"[{{"name":"{session_name}","url":"{fork_url}","status":"running","path":"{worktree_path}"}}]"#
+                ),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        // Prime: fork VM returns one active-pane tmux row.
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        // Format: session_name\tpane_active\tpane_current_path\tsession_created\tsession_activity
+        fake.insert(
+            fork_host,
+            &tmux_cmd,
+            SshOutput {
+                stdout: format!("{session_name}\t1\t{worktree_path}\t1713000000\t1713000060\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdForkAdapter {
+            golden_host: "boxd.sh".to_string(),
+            fork_repo_path: worktree_path.to_string(),
+            ssh: Box::new(fake),
+        };
+
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        assert_eq!(
+            sessions.len(),
+            1,
+            "expected exactly 1 CachedTmuxSession; got: {sessions:?}"
+        );
+
+        let session = &sessions[0];
+        assert_eq!(
+            session.name, session_name,
+            "session name must be '{session_name}'"
+        );
+        assert_eq!(
+            session.host.as_deref(),
+            Some(fork_host),
+            "session host must be '{fork_host}'"
+        );
+        assert_eq!(
+            session.path, worktree_path,
+            "session working directory must be '{worktree_path}'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC2: BoxdSharedAdapter::list_sessions — session name and host
+    // -----------------------------------------------------------------------
+
+    /// AC2 scenario: `BoxdSharedAdapter::list_sessions()` returns exactly one
+    /// `CachedTmuxSession` with the correct name and host for an issue session
+    /// on the shared VM.
+    ///
+    /// Satisfies feature.feature:69-75.
+    #[test]
+    fn boxd_shared_adapter_list_sessions_returns_session_with_correct_name_and_host() {
+        let host = "boxd@orchard-rs.boxd.sh";
+        let worktree_path = "/home/boxd/orchard/worktrees/issue999";
+        let session_name = "or_issue999";
+
+        let mut fake = FakeSshExec::new();
+
+        // Prime: shared VM returns one active-pane tmux row.
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        // Format: session_name\tpane_active\tpane_current_path\tsession_created\tsession_activity
+        fake.insert(
+            host,
+            &tmux_cmd,
+            SshOutput {
+                stdout: format!("{session_name}\t1\t{worktree_path}\t1713000000\t1713000060\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdSharedAdapter {
+            host: host.to_string(),
+            path: "/home/boxd/orchard".to_string(),
+            ssh: Box::new(fake),
+        };
+
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        assert_eq!(
+            sessions.len(),
+            1,
+            "expected exactly 1 CachedTmuxSession; got: {sessions:?}"
+        );
+
+        let session = &sessions[0];
+        assert_eq!(
+            session.name, session_name,
+            "session name must be '{session_name}'"
+        );
+        assert_eq!(
+            session.host.as_deref(),
+            Some(host),
+            "session host must be '{host}'"
+        );
     }
 }
