@@ -701,7 +701,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
     use std::collections::HashMap;
 
     use orchard::derive::DisplayGroup;
-    use orchard::json_output::JsonOutput;
+    use orchard::json_output::{JsonOutput, JsonSource};
     use orchard::orchard_state::{OrchardState, RepoState, WorktreeState};
 
     // Build a minimal OrchardState with two worktrees — one bare-layout (default),
@@ -720,6 +720,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         ahead_behind: None,
         last_commit_at: None,
         layout: orchard::cache::WorktreeLayout::Bare,
+        source: JsonSource::Local,
     };
 
     // Until `WorktreeState.layout` exists, we can still test the version bump.

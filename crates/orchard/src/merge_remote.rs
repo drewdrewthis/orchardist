@@ -20,7 +20,7 @@ use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
 use crate::global_config::GlobalConfig;
 use crate::json_output::{
-    JsonClaudeInfo, JsonIssue, JsonOutput, JsonPr, JsonSession, JsonWorktree,
+    JsonClaudeInfo, JsonIssue, JsonOutput, JsonPr, JsonSession, JsonSource, JsonWorktree,
 };
 use crate::orchard_state::{
     ClaudeEnrichment, HostState, IssueInfo, OrchardState, PaneState, PrState, RepoState,
@@ -189,6 +189,7 @@ fn worktree_state_from_json(json_wt: JsonWorktree, host: String) -> WorktreeStat
         ahead_behind,
         last_commit_at: json_wt.last_commit_at,
         layout,
+        source: JsonSource::OrchardProxy,
     }
 }
 
@@ -327,6 +328,7 @@ fn session_state_from_json(
         windows,
         started_at: None,
         last_activity_at: None,
+        source: JsonSource::OrchardProxy,
     }
 }
 
@@ -516,6 +518,7 @@ mod tests {
             status_glyph: "\u{1f7e2}".to_string(),
             is_main_worktree: false,
             last_activity_at: None,
+            source: JsonSource::Local,
         }
     }
 
@@ -657,6 +660,7 @@ mod tests {
                 state_elapsed_sec: None,
             }),
             windows: vec![],
+            source: JsonSource::Local,
         }];
         let mut pr = make_empty_pr(335, "issue329/federated", "open");
         pr.ci_code_state = Some("passing".to_string());
@@ -762,6 +766,7 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                source: JsonSource::Local,
             }],
             repos: vec![],
             hosts: HashMap::new(),
@@ -819,6 +824,7 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                source: JsonSource::Local,
             }],
             repos: vec![],
             hosts: HashMap::new(),
@@ -876,6 +882,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            source: JsonSource::Local,
         };
         let local_wt2 = WorktreeState {
             path: "/local/repo-feat".to_string(),
@@ -890,6 +897,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            source: JsonSource::Local,
         };
 
         let mut state = OrchardState {
@@ -950,6 +958,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            source: JsonSource::Local,
         };
 
         let mut state = OrchardState {
@@ -1042,6 +1051,7 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                source: JsonSource::Local,
             }],
             repos: vec![],
             hosts: HashMap::new(),
@@ -1183,5 +1193,67 @@ mod tests {
         assert_eq!(ci.gate.len(), 1);
         assert_eq!(ci.gate[0].name, "license-check");
         assert_eq!(ci.gate[0].state, "failing");
+    }
+
+    // ---- Scenario 20: merge_remote_snapshot stamps source="orchard-proxy" ---
+
+    /// Scenario 20 — every worktree and session folded from an OrchardProxy
+    /// snapshot carries `source == JsonSource::OrchardProxy`.
+    ///
+    /// The local machine trusts the remote's enrichment wholesale; the
+    /// `source` stamp is the downstream signal that these rows came from
+    /// an `OrchardProxyAdapter` fetch rather than local shell-discovery.
+    #[test]
+    fn merge_remote_snapshot_stamps_orchard_proxy_source() {
+        fn make_session_local(name: &str) -> JsonSession {
+            JsonSession {
+                name: name.to_string(),
+                host: "local".to_string(),
+                status: "running".to_string(),
+                started_at: None,
+                last_activity_at: None,
+                claude: None,
+                windows: vec![],
+                source: JsonSource::Local, // input has Local; merge must override to OrchardProxy
+            }
+        }
+
+        let mut wt = make_minimal_worktree("/remote/issue336", "issue336/branch");
+        wt.sessions = vec![make_session_local("or_issue336")];
+
+        let snapshot = JsonOutput {
+            version: 6,
+            tmux_sessions: vec![make_session_local("shepherd")],
+            repos: vec![JsonRepo {
+                slug: "owner/repo".to_string(),
+                default_branch: None,
+                main_ci_state: None,
+                worktrees: vec![wt],
+            }],
+            hosts: HashMap::new(),
+        };
+
+        let mut state = make_empty_state();
+        merge_remote_snapshot(&mut state, snapshot, "proxy-host".to_string());
+
+        // Every worktree from the snapshot must carry OrchardProxy source.
+        let repo = state.repos.iter().find(|r| r.slug == "owner/repo").unwrap();
+        for wt_state in &repo.worktrees {
+            assert_eq!(
+                wt_state.source,
+                JsonSource::OrchardProxy,
+                "worktree '{}' must have source=OrchardProxy after merge",
+                wt_state.branch
+            );
+            // Sessions nested inside worktrees must also be stamped.
+            for sess in &wt_state.sessions {
+                assert_eq!(
+                    sess.source,
+                    JsonSource::OrchardProxy,
+                    "worktree session '{}' must have source=OrchardProxy",
+                    sess.name
+                );
+            }
+        }
     }
 }

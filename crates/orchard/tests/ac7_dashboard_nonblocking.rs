@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use assert_cmd::Command;
 use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
-use orchard::json_output::{JsonOutput, JsonRepo, JsonWorktree};
+use orchard::json_output::{JsonOutput, JsonRepo, JsonSource, JsonWorktree};
 use orchard::merge_remote::build_state_with_cached_snapshots_from;
 use orchard::orchard_snapshot::write_snapshot_to;
 use orchard::remote_adapter::RemoteKind;
@@ -118,6 +118,7 @@ fn orchard_json_with_cached_snapshot_returns_quickly() {
                 ahead_behind: None,
                 last_commit_at: None,
                 last_activity_at: None,
+                source: JsonSource::Local,
             }],
         }],
         hosts: HashMap::new(),

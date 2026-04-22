@@ -237,6 +237,7 @@ mod tests {
                     status_glyph: "\u{1f7e2}".to_string(),
                     is_main_worktree: false,
                     last_activity_at: None,
+                    source: crate::json_output::JsonSource::Local,
                 }],
             }],
             hosts: HashMap::new(),
@@ -409,6 +410,7 @@ mod tests {
                         status_glyph: "\u{1f7e2}".to_string(),
                         is_main_worktree: false,
                         last_activity_at: None,
+                        source: crate::json_output::JsonSource::Local,
                     },
                     JsonWorktree {
                         path: "/remote/wt2".to_string(),
@@ -425,6 +427,7 @@ mod tests {
                         status_glyph: "\u{1f7e2}".to_string(),
                         is_main_worktree: false,
                         last_activity_at: None,
+                        source: crate::json_output::JsonSource::Local,
                     },
                 ],
             }],

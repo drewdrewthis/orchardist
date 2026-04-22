@@ -676,6 +676,15 @@
           "description": "tmux session name.",
           "type": "string"
         },
+        "source": {
+          "description": "Which adapter sourced this row. Defaults to `\"local\"` for backwards compatibility.",
+          "default": "local",
+          "allOf": [
+            {
+              "$ref": "#/definitions/JsonSource"
+            }
+          ]
+        },
         "startedAt": {
           "description": "ISO 8601 timestamp when the session was created.",
           "type": [
@@ -695,6 +704,46 @@
           }
         }
       }
+    },
+    "JsonSource": {
+      "description": "Which adapter sourced this worktree or session row in the wire protocol.\n\nEnables downstream consumers to assert that rows fetched via `OrchardProxyAdapter` are tagged distinctly from locally-sourced rows, without inspecting the `host` field.",
+      "oneOf": [
+        {
+          "description": "Sourced from the local machine.",
+          "type": "string",
+          "enum": [
+            "local"
+          ]
+        },
+        {
+          "description": "Fetched via `ssh host orchard --json` (OrchardProxyAdapter).",
+          "type": "string",
+          "enum": [
+            "orchard-proxy"
+          ]
+        },
+        {
+          "description": "Fetched via Remmy shell-discovery.",
+          "type": "string",
+          "enum": [
+            "remmy"
+          ]
+        },
+        {
+          "description": "Fetched via BoxdFork shell-discovery.",
+          "type": "string",
+          "enum": [
+            "boxd-fork"
+          ]
+        },
+        {
+          "description": "Fetched via BoxdShared shell-discovery.",
+          "type": "string",
+          "enum": [
+            "boxd-shared"
+          ]
+        }
+      ]
     },
     "JsonSubIssue": {
       "description": "A child issue nested under a parent in JSON output.",
@@ -853,6 +902,15 @@
           "items": {
             "$ref": "#/definitions/JsonSession"
           }
+        },
+        "source": {
+          "description": "Which adapter sourced this row. Defaults to `\"local\"` for backwards compatibility.",
+          "default": "local",
+          "allOf": [
+            {
+              "$ref": "#/definitions/JsonSource"
+            }
+          ]
         },
         "status": {
           "description": "Pipeline status as a stable snake_case string (e.g. `\"unresolved_threads\"`, `\"ready\"`).\n\nStable external contract: downstream scripts parse this value. New variants may be added but existing strings will never change.",

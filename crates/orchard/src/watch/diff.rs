@@ -326,6 +326,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            source: crate::json_output::JsonSource::Local,
         }
     }
 
@@ -354,6 +355,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            source: crate::json_output::JsonSource::Local,
         }];
         wt
     }

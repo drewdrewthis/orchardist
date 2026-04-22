@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::ci_state::CiChecks;
 use crate::claude_state::ClaudeState;
 use crate::derive::DisplayGroup;
+use crate::json_output::JsonSource;
 use crate::session::{EnrichedSession, Host, StandaloneSessionRow};
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,8 @@ pub struct WorktreeState {
     /// Physical layout of this worktree — `Bare` (bare repo + linked
     /// worktrees) or `Flat` (single non-bare clone per BoxdFork VM).
     pub layout: crate::cache::WorktreeLayout,
+    /// Which adapter produced this worktree row (wire-protocol discriminator).
+    pub source: JsonSource,
 }
 
 impl WorktreeState {
@@ -230,6 +233,8 @@ pub struct SessionState {
     pub started_at: Option<u64>,
     /// Unix timestamp of the last activity in this session.
     pub last_activity_at: Option<u64>,
+    /// Which adapter produced this session row (wire-protocol discriminator).
+    pub source: JsonSource,
 }
 
 /// Window within a session, with nested panes.
@@ -412,6 +417,7 @@ impl From<&EnrichedSession> for SessionState {
             windows,
             started_at: s.started_at,
             last_activity_at: s.last_activity_at,
+            source: JsonSource::Local,
         }
     }
 }
@@ -454,6 +460,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             ahead_behind,
             last_commit_at: row.worktree_last_commit_at.clone(),
             layout: row.layout,
+            source: JsonSource::Local,
         }
     }
 }

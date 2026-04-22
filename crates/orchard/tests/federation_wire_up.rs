@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
 use orchard::json_output::{
-    CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonWorktree,
+    CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonSource, JsonWorktree,
 };
 use orchard::merge_remote::build_state_with_cached_snapshots_from;
 use orchard::orchard_snapshot::write_snapshot_to;
@@ -112,6 +112,7 @@ fn make_json_output_with_enriched_worktree(
                 status_glyph: "\u{1f7e2}".to_string(),
                 is_main_worktree: false,
                 last_activity_at: None,
+                source: JsonSource::Local,
             }],
         }],
         hosts: HashMap::new(),

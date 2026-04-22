@@ -915,6 +915,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            source: crate::json_output::JsonSource::Local,
         }
     }
 

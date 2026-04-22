@@ -296,6 +296,7 @@ impl From<&SessionState> for JsonSession {
             last_activity_at: unix_to_iso8601(s.last_activity_at),
             claude,
             windows: s.windows.iter().map(Into::into).collect(),
+            source: s.source,
         }
     }
 }
@@ -330,6 +331,7 @@ impl From<&WorktreeState> for JsonWorktree {
                 .as_ref()
                 .and_then(|pr| pr.last_commit_pushed_at.clone())
                 .or_else(|| ws.last_commit_at.clone()),
+            source: ws.source,
         }
     }
 }
@@ -389,6 +391,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
             last_activity_at: unix_to_iso8601(row.session.last_activity_at),
             claude,
             windows,
+            source: JsonSource::Local,
         }
     }
 }
@@ -487,6 +490,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            source: JsonSource::Local,
         }
     }
 
@@ -618,6 +622,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            source: JsonSource::Local,
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.host, "local");
@@ -635,6 +640,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            source: JsonSource::Local,
         };
         let js = JsonSession::from(&session);
         assert!(js.claude.is_none());
@@ -683,6 +689,7 @@ mod tests {
                     }],
                 },
             ],
+            source: JsonSource::Local,
         }
     }
 
@@ -750,6 +757,7 @@ mod tests {
                 layout: String::new(),
                 panes: vec![],
             }],
+            source: JsonSource::Local,
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.windows.len(), 1);
@@ -907,6 +915,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            source: JsonSource::Local,
         }
     }
 
@@ -1126,6 +1135,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            source: JsonSource::Local,
         };
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
         assert!(
@@ -1698,6 +1708,7 @@ mod tests {
                 layout: "abc1,80x24,0,0".to_string(),
                 panes: vec![pane],
             }],
+            source: JsonSource::Local,
         }
     }
 
@@ -1959,6 +1970,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            source: JsonSource::Local,
         }
     }
 
@@ -1997,6 +2009,74 @@ mod tests {
         assert_eq!(
             output.version, 6,
             "version must be 6 after status/statusGlyph addition"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Scenario 19: JsonSource discriminator round-trips and defaults
+    // -----------------------------------------------------------------------
+
+    /// Scenario 19 — each of the 5 `JsonSource` variants serializes and
+    /// deserializes back to the same value with kebab-case wire names.
+    #[test]
+    fn json_source_round_trips() {
+        let variants = [
+            (JsonSource::Local, "\"local\""),
+            (JsonSource::OrchardProxy, "\"orchard-proxy\""),
+            (JsonSource::Remmy, "\"remmy\""),
+            (JsonSource::BoxdFork, "\"boxd-fork\""),
+            (JsonSource::BoxdShared, "\"boxd-shared\""),
+        ];
+        for (variant, expected_wire) in variants {
+            let serialized = serde_json::to_string(&variant).expect("serialize");
+            assert_eq!(serialized, expected_wire, "wire name mismatch for {variant:?}");
+            let deserialized: JsonSource =
+                serde_json::from_str(&serialized).expect("deserialize");
+            assert_eq!(deserialized, variant, "round-trip failed for {variant:?}");
+        }
+    }
+
+    /// Scenario 19 — deserializing a `JsonWorktree` JSON blob that omits the
+    /// `source` field must produce `JsonSource::Local` (serde default).
+    #[test]
+    fn json_worktree_source_defaults_to_local_when_absent() {
+        let json = r#"{
+            "path": "/repos/foo",
+            "branch": "main",
+            "host": null,
+            "layout": "bare",
+            "issue": null,
+            "pr": null,
+            "sessions": [],
+            "displayGroup": "other",
+            "status": "ready",
+            "statusGlyph": "🟢",
+            "isMainWorktree": false
+        }"#;
+        let wt: JsonWorktree = serde_json::from_str(json).expect("deserialize JsonWorktree");
+        assert_eq!(
+            wt.source,
+            JsonSource::Local,
+            "missing source field must default to Local"
+        );
+    }
+
+    /// Scenario 19 — deserializing a `JsonSession` JSON blob that omits the
+    /// `source` field must produce `JsonSource::Local` (serde default).
+    #[test]
+    fn json_session_source_defaults_to_local_when_absent() {
+        let json = r#"{
+            "name": "my-session",
+            "host": "local",
+            "status": "running",
+            "claude": null,
+            "windows": []
+        }"#;
+        let session: JsonSession = serde_json::from_str(json).expect("deserialize JsonSession");
+        assert_eq!(
+            session.source,
+            JsonSource::Local,
+            "missing source field must default to Local"
         );
     }
 }

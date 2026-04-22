@@ -1585,6 +1585,7 @@ mod tests {
                         ahead_behind: None,
                         last_commit_at: None,
                         last_activity_at: None,
+                        source: crate::json_output::JsonSource::Local,
                     },
                     JsonWorktree {
                         path: "/remote/wt2".to_string(),
@@ -1601,6 +1602,7 @@ mod tests {
                         ahead_behind: None,
                         last_commit_at: None,
                         last_activity_at: None,
+                        source: crate::json_output::JsonSource::Local,
                     },
                 ],
             }],

@@ -66,6 +66,41 @@ pub enum WorkflowPhase {
 }
 
 // ---------------------------------------------------------------------------
+// Source discriminator — which adapter produced this row
+// ---------------------------------------------------------------------------
+
+/// Which adapter sourced this worktree or session row in the wire protocol.
+///
+/// Enables downstream consumers to assert that rows fetched via
+/// `OrchardProxyAdapter` are tagged distinctly from locally-sourced rows,
+/// without inspecting the `host` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum JsonSource {
+    /// Sourced from the local machine.
+    Local,
+    /// Fetched via `ssh host orchard --json` (OrchardProxyAdapter).
+    OrchardProxy,
+    /// Fetched via Remmy shell-discovery.
+    Remmy,
+    /// Fetched via BoxdFork shell-discovery.
+    BoxdFork,
+    /// Fetched via BoxdShared shell-discovery.
+    BoxdShared,
+}
+
+impl Default for JsonSource {
+    /// Default to `Local` so older snapshots without the field parse cleanly.
+    fn default() -> Self {
+        JsonSource::Local
+    }
+}
+
+fn default_source() -> JsonSource {
+    JsonSource::default()
+}
+
+// ---------------------------------------------------------------------------
 // JSON output types (versioned, camelCase) — mirrors of json_output.rs
 // ---------------------------------------------------------------------------
 
@@ -147,6 +182,9 @@ pub struct JsonWorktree {
     /// ISO 8601 timestamp of the most recent activity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<String>,
+    /// Which adapter sourced this row. Defaults to `"local"` for backwards compatibility.
+    #[serde(default = "default_source")]
+    pub source: JsonSource,
 }
 
 /// A child issue nested under a parent in JSON output.
@@ -288,6 +326,9 @@ pub struct JsonSession {
     pub claude: Option<JsonClaudeInfo>,
     /// Window hierarchy for this session.
     pub windows: Vec<JsonWindow>,
+    /// Which adapter sourced this row. Defaults to `"local"` for backwards compatibility.
+    #[serde(default = "default_source")]
+    pub source: JsonSource,
 }
 
 /// Window within a session in JSON output.
