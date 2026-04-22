@@ -16,8 +16,12 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      # release-please-action v4 prefixes outputs by the manifest package path.
+      # Our component is at "crates/orchard", so the flat root-level
+      # `release_created` / `tag_name` are never set. Use the path-prefixed
+      # names instead: https://github.com/googleapis/release-please-action#path-outputs
+      release_created: ${{ steps.release.outputs['crates/orchard--release_created'] }}
+      tag_name: ${{ steps.release.outputs['crates/orchard--tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
         id: release
@@ -27,6 +31,9 @@ jobs:
 
   build:
     needs: release-please
+    # Gated on `release_created` which is mapped from the path-prefixed output
+    # above. Without this, builds skip on every release-please PR merge (v4 bug
+    # for non-root components — see crates/orchard manifest path).
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
