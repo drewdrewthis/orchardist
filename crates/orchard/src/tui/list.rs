@@ -4498,4 +4498,74 @@ mod tests {
             "proxy_name in recorder must equal proxy_session_name(session_name)"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // AC4 regression lock — CreateSession dispatch
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 124-130
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for AC4 (CreateSession path):
+    /// When `join_or_create_session` is called with `remote_host=Some(...)` —
+    /// as it is from the `TaskEnterAction::CreateSession` arm in
+    /// `handle_enter_action` — it must call
+    /// `remote::create_remote_proxy_session` exactly once with the correct host.
+    ///
+    /// Note: the "create_remote_session is called first" sub-claim in the
+    /// scenario refers to an implementation detail *inside*
+    /// `create_remote_proxy_session`'s production block (`#[cfg(not(test))]`
+    /// at remote.rs:336-337). That internal two-step is not observable through
+    /// this seam in test builds; it is covered by the `#[ignore]`-gated live
+    /// e2e harness (Task #22). What we lock here is that the CreateSession
+    /// arm dispatches through the same `create_remote_proxy_session` gateway
+    /// as the JoinSession arm — same contract, different caller.
+    #[test]
+    fn join_or_create_session_for_create_session_dispatches_create_remote_proxy_session() {
+        use crate::remote;
+
+        let host = "boxd@vm.boxd.sh";
+        let session_name = "issue999_workflow";
+        let worktree_path = "/path/to/worktree";
+
+        // Drain any stale recorder state from a prior test in this thread.
+        let _ = remote::take_proxy_session_calls();
+
+        let mut app = App::new_test(vec![]);
+        // This is the same call shape the CreateSession arm of handle_enter_action
+        // produces after deriving session_name via tmux::derive_session_name.
+        app.join_or_create_session(
+            session_name,
+            worktree_path,
+            Some("issue999/branch"),
+            Some(host),
+            None,
+        );
+
+        let calls = remote::take_proxy_session_calls();
+
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected exactly one create_remote_proxy_session call from CreateSession path, got {}: {calls:?}",
+            calls.len()
+        );
+
+        let call = &calls[0];
+
+        assert_eq!(
+            call.host, host,
+            "recorded host must be {host:?}, got {:?}",
+            call.host
+        );
+        assert_eq!(
+            call.session_name, session_name,
+            "recorded source session must be {session_name:?}, got {:?}",
+            call.session_name
+        );
+        assert_eq!(
+            call.proxy_name,
+            remote::proxy_session_name(session_name),
+            "proxy_name must equal proxy_session_name(session_name), got {:?}",
+            call.proxy_name
+        );
+    }
 }
