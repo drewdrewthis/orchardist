@@ -4344,4 +4344,75 @@ mod tests {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // AC3 regression lock — join_or_create_session dispatch
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 92-99
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for AC3:
+    /// When `join_or_create_session` receives a `JoinSession` action for a
+    /// remote host, it must call `remote::create_remote_proxy_session` exactly
+    /// once with the correct host and source session name, and the derived
+    /// proxy session name must equal `"remote_{source}"`.
+    ///
+    /// Validated manually 2026-04-22 06:14 (createRemoteProxySession:
+    /// claude -> remote_claude; hostname=issue3201). This test locks the
+    /// call-site dispatch contract.
+    #[test]
+    fn join_or_create_session_calls_create_remote_proxy_session_for_remote_join() {
+        use crate::remote;
+
+        let host = "boxd@issue3201.boxd.sh";
+        let session_name = "claude";
+        let worktree_path = "/workspace/issue3201";
+
+        // Drain any stale recorder state from a prior test in this thread.
+        let _ = remote::take_proxy_session_calls();
+
+        let mut app = App::new_test(vec![]);
+        app.join_or_create_session(
+            session_name,
+            worktree_path,
+            Some("issue3201/fix"),
+            Some(host),
+            None,
+        );
+
+        let calls = remote::take_proxy_session_calls();
+
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected exactly one create_remote_proxy_session call, got {}: {calls:?}",
+            calls.len()
+        );
+
+        let call = &calls[0];
+
+        assert_eq!(
+            call.host, host,
+            "recorded host must be {host:?}, got {:?}",
+            call.host
+        );
+        assert_eq!(
+            call.session_name, session_name,
+            "recorded source session must be {session_name:?}, got {:?}",
+            call.session_name
+        );
+
+        // The proxy session name is the central naming-convention contract.
+        assert_eq!(
+            call.proxy_name, "remote_claude",
+            "proxy session name must be \"remote_claude\", got {:?}",
+            call.proxy_name
+        );
+
+        // Cross-check via the pure helper — both paths derive the same name.
+        assert_eq!(
+            call.proxy_name,
+            remote::proxy_session_name(session_name),
+            "proxy_name in recorder must equal proxy_session_name(session_name)"
+        );
+    }
 }

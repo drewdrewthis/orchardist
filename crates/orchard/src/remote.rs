@@ -246,6 +246,11 @@ pub fn create_remote_session(
 /// Determines whether the local proxy session needs to be (re)created.
 /// `remote_was_fresh` indicates the remote session was just created, meaning
 /// any existing proxy is connected to a stale session.
+///
+/// In `cfg(test)` builds, [`create_remote_proxy_session`] short-circuits
+/// before calling this helper, so it appears dead. Gated to suppress the
+/// warning rather than cfg-out the helper itself.
+#[cfg_attr(test, allow(dead_code))]
 fn should_recreate_proxy(local_name: &str, remote_was_fresh: bool) -> bool {
     let proxy_exists = Command::new("tmux")
         .args(["has-session", "-t", local_name])
@@ -306,6 +311,45 @@ fn should_recreate_proxy(local_name: &str, remote_was_fresh: bool) -> bool {
     false
 }
 
+/// Returns the local proxy session name for a given remote session name.
+///
+/// The naming convention `remote_{name}` is used consistently: this function
+/// is the single source of truth for that derivation so callers and tests can
+/// verify the contract without duplicating the format string.
+pub(crate) fn proxy_session_name(name: &str) -> String {
+    format!("remote_{name}")
+}
+
+/// A single recorded invocation of [`create_remote_proxy_session`] captured
+/// during tests via the thread-local recorder.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ProxySessionCall {
+    /// The remote host passed to `create_remote_proxy_session`.
+    pub host: String,
+    /// The source session name (the remote tmux session).
+    pub session_name: String,
+    /// The derived local proxy session name (`remote_{session_name}`).
+    pub proxy_name: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Records every call to [`create_remote_proxy_session`] made in the current
+    /// thread during a test run. Drain with [`take_proxy_session_calls`].
+    static PROXY_SESSION_CALLS: std::cell::RefCell<Vec<ProxySessionCall>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drains and returns all [`ProxySessionCall`] entries recorded in this thread.
+///
+/// Call this from a test after invoking code that may call
+/// [`create_remote_proxy_session`] to assert on the recorded invocations.
+#[cfg(test)]
+pub(crate) fn take_proxy_session_calls() -> Vec<ProxySessionCall> {
+    PROXY_SESSION_CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
+}
+
 /// Creates a local proxy tmux session that connects to the remote session via ssh or
 /// mosh. Does NOT switch the local tmux client to it. Returns the local session name.
 ///
@@ -324,6 +368,30 @@ pub fn create_remote_proxy_session(
     shell: &str,
     discovery_path: Option<&[String]>,
 ) -> anyhow::Result<String> {
+    let local_name = proxy_session_name(name);
+
+    // Under test, record the call and return immediately — no SSH or tmux.
+    #[cfg(test)]
+    {
+        // Suppress unused-parameter warnings: path and shell are only used
+        // in the production path below.
+        let _ = (path, shell);
+        PROXY_SESSION_CALLS.with(|calls| {
+            calls.borrow_mut().push(ProxySessionCall {
+                host: host.to_string(),
+                session_name: name.to_string(),
+                proxy_name: local_name.clone(),
+            });
+        });
+        return Ok(local_name);
+    }
+
+    // Production path: real SSH/tmux work. Gated `#[cfg(not(test))]` so the
+    // unreachable-in-test block doesn't trip the lint, and the helper
+    // `should_recreate_proxy` (only called here) is annotated with
+    // `#[cfg_attr(test, allow(dead_code))]` to stay live in production.
+    #[cfg(not(test))]
+    {
     let shell = if shell.is_empty() { "ssh" } else { shell };
 
     // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
@@ -344,7 +412,6 @@ pub fn create_remote_proxy_session(
         create_remote_session(host, name, path, discovery_path)?;
     }
 
-    let local_name = format!("remote_{}", name);
     let connect_cmd = if shell == "mosh" {
         // Depth-0 or depth-1 mosh: direct connection is fine.
         format!(
@@ -423,6 +490,12 @@ pub fn create_remote_proxy_session(
         name, local_name
     ));
     Ok(local_name)
+    }
+    // Test builds short-circuit above; the production block compiles but is
+    // unreachable. Function must end with an expression of `Result<String>`.
+    #[cfg(test)]
+    #[allow(unreachable_code)]
+    Ok(String::new())
 }
 
 /// Captures the pane content of a remote tmux session via SSH.
