@@ -19,8 +19,9 @@ use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
 use orchard::json_output::{
     CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonWorktree,
 };
-use orchard::merge_remote::build_state_with_cached_snapshots_from;
+use orchard::merge_remote::{build_state_with_cached_snapshots_from, merge_remote_snapshot};
 use orchard::orchard_snapshot::{orchard_snapshot_path_in, write_snapshot_to};
+use orchard::orchard_state::{OrchardState, RepoState, WorktreeState};
 use orchard::remote_adapter::{FakeSshExec, OrchardProxyAdapter, RemoteKind, SshOutput};
 use tempfile::TempDir;
 
@@ -502,5 +503,318 @@ fn cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged() {
         parsed.get("host").and_then(|v| v.as_str()),
         Some(host),
         "proxy_failure event must carry the correct host; got: {parsed:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: multi-snapshot merge dedupes by (host, path)
+// ---------------------------------------------------------------------------
+
+/// #337 Scenario A — `(host, path)` deduplication collapses duplicate entries
+/// within a single snapshot.
+///
+/// A `JsonOutput` that contains two `JsonWorktree` entries with the same path
+/// (and therefore the same `(host, path)` tuple after tagging with the snapshot
+/// host) must produce exactly **one** `WorktreeState` in the merged
+/// `OrchardState`. The second entry overwrites the first — snapshot-wins
+/// semantics per `merge_remote.rs`.
+///
+/// Cross-host case: two different hosts each contributing a worktree at the
+/// same *path string* produce **two** `WorktreeState` entries — they are
+/// distinct `(host, path)` tuples.
+#[test]
+fn multi_snapshot_merge_dedupes_by_host_path_tuple() {
+    // ---- Part 1: same host, same path → one WorktreeState ------------------
+    let host = "boxd@vm.boxd.sh";
+
+    // Two entries with identical path under the same snapshot host.
+    let snapshot_with_dupes = JsonOutput {
+        version: 6,
+        tmux_sessions: vec![],
+        repos: vec![JsonRepo {
+            slug: "owner/repo".to_string(),
+            default_branch: None,
+            main_ci_state: None,
+            worktrees: vec![
+                // First entry at /remote/repo — will be overwritten by second.
+                JsonWorktree {
+                    path: "/remote/repo".to_string(),
+                    branch: "issue1/first".to_string(),
+                    host: None,
+                    layout: "bare".to_string(),
+                    ahead_behind: None,
+                    last_commit_at: None,
+                    issue: None,
+                    pr: None,
+                    sessions: vec![],
+                    display_group: "other".to_string(),
+                    status: "ready".to_string(),
+                    status_glyph: "\u{1f7e2}".to_string(),
+                    is_main_worktree: false,
+                    last_activity_at: None,
+                },
+                // Second entry at same /remote/repo — snapshot-wins dedup.
+                JsonWorktree {
+                    path: "/remote/repo".to_string(),
+                    branch: "issue2/second".to_string(),
+                    host: None,
+                    layout: "bare".to_string(),
+                    ahead_behind: None,
+                    last_commit_at: None,
+                    issue: None,
+                    pr: None,
+                    sessions: vec![],
+                    display_group: "other".to_string(),
+                    status: "ready".to_string(),
+                    status_glyph: "\u{1f7e2}".to_string(),
+                    is_main_worktree: false,
+                    last_activity_at: None,
+                },
+            ],
+        }],
+        hosts: HashMap::new(),
+    };
+
+    let mut state = OrchardState::new();
+    merge_remote_snapshot(&mut state, snapshot_with_dupes, host.to_string());
+
+    let repo = state
+        .repos
+        .iter()
+        .find(|r| r.slug == "owner/repo")
+        .expect("owner/repo must be present after merge");
+
+    // The dedup key is (host, path). Both entries share the same effective host
+    // (snapshot host "boxd@vm.boxd.sh") and path "/remote/repo", so they must
+    // collapse to a single WorktreeState. The second entry wins.
+    let same_path_entries: Vec<_> = repo
+        .worktrees
+        .iter()
+        .filter(|w| w.path == "/remote/repo" && w.host.as_deref() == Some(host))
+        .collect();
+
+    assert_eq!(
+        same_path_entries.len(),
+        1,
+        "two entries with the same (host, path) must collapse to one; got: {same_path_entries:?}"
+    );
+
+    // The surviving entry is the last-written one (second entry wins).
+    assert_eq!(
+        same_path_entries[0].branch,
+        "issue2/second",
+        "the second (later) entry must win the dedup; got branch: {}",
+        same_path_entries[0].branch
+    );
+
+    // ---- Part 2: different hosts, same path string → two WorktreeStates ----
+    // (host, path) tuples are distinct because the hosts differ.
+    let host_a = "boxd@vm1.boxd.sh";
+    let host_b = "boxd@vm2.boxd.sh";
+
+    let snapshot_a = JsonOutput {
+        version: 6,
+        tmux_sessions: vec![],
+        repos: vec![JsonRepo {
+            slug: "owner/repo".to_string(),
+            default_branch: None,
+            main_ci_state: None,
+            worktrees: vec![JsonWorktree {
+                path: "/remote/repo".to_string(),
+                branch: "main".to_string(),
+                host: None,
+                layout: "bare".to_string(),
+                ahead_behind: None,
+                last_commit_at: None,
+                issue: None,
+                pr: None,
+                sessions: vec![],
+                display_group: "other".to_string(),
+                status: "ready".to_string(),
+                status_glyph: "\u{1f7e2}".to_string(),
+                is_main_worktree: false,
+                last_activity_at: None,
+            }],
+        }],
+        hosts: HashMap::new(),
+    };
+
+    let snapshot_b = JsonOutput {
+        version: 6,
+        tmux_sessions: vec![],
+        repos: vec![JsonRepo {
+            slug: "owner/repo".to_string(),
+            default_branch: None,
+            main_ci_state: None,
+            worktrees: vec![JsonWorktree {
+                path: "/remote/repo".to_string(),
+                branch: "main".to_string(),
+                host: None,
+                layout: "bare".to_string(),
+                ahead_behind: None,
+                last_commit_at: None,
+                issue: None,
+                pr: None,
+                sessions: vec![],
+                display_group: "other".to_string(),
+                status: "ready".to_string(),
+                status_glyph: "\u{1f7e2}".to_string(),
+                is_main_worktree: false,
+                last_activity_at: None,
+            }],
+        }],
+        hosts: HashMap::new(),
+    };
+
+    let mut cross_state = OrchardState::new();
+    merge_remote_snapshot(&mut cross_state, snapshot_a, host_a.to_string());
+    merge_remote_snapshot(&mut cross_state, snapshot_b, host_b.to_string());
+
+    let cross_repo = cross_state
+        .repos
+        .iter()
+        .find(|r| r.slug == "owner/repo")
+        .expect("owner/repo must be present");
+
+    // Different hosts → different (host, path) tuples → must NOT collapse.
+    assert_eq!(
+        cross_repo.worktrees.len(),
+        2,
+        "same path on different hosts must yield 2 WorktreeStates (distinct (host, path) tuples); \
+         got: {cross_repo:?}"
+    );
+
+    let has_vm1 = cross_repo
+        .worktrees
+        .iter()
+        .any(|w| w.host.as_deref() == Some(host_a));
+    let has_vm2 = cross_repo
+        .worktrees
+        .iter()
+        .any(|w| w.host.as_deref() == Some(host_b));
+    assert!(has_vm1, "worktree for {host_a} must be present");
+    assert!(has_vm2, "worktree for {host_b} must be present");
+}
+
+// ---------------------------------------------------------------------------
+// Test: local and remote worktrees for the same slug stay separate by host
+// ---------------------------------------------------------------------------
+
+/// #337 Scenario B — Local (`host=None`) and remote (`host=Some(...)`) worktrees
+/// for the same repo slug do NOT collapse, because they are distinct `(host, path)`.
+///
+/// Manually construct an `OrchardState` with a local `WorktreeState` (host=None,
+/// path="/local/repo"), then merge a remote snapshot carrying a worktree at a
+/// different path on the remote. Assert both rows survive and host attribution
+/// is preserved exactly.
+#[test]
+fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
+    let remote_host = "boxd@orchard-rs.boxd.sh";
+
+    // Seed the OrchardState with a local worktree (host = None).
+    let local_wt = WorktreeState {
+        path: "/local/git-orchard-rs".to_string(),
+        branch: "main".to_string(),
+        is_bare: false,
+        host: None,
+        issue: None,
+        pr: None,
+        sessions: vec![],
+        display_group: orchard::derive::DisplayGroup::RepoMain,
+        is_main_worktree: true,
+        ahead_behind: None,
+        last_commit_at: None,
+        layout: orchard::cache::WorktreeLayout::Bare,
+    };
+
+    let mut state = OrchardState {
+        repos: vec![RepoState {
+            slug: "drewdrewthis/git-orchard-rs".to_string(),
+            worktrees: vec![local_wt],
+            default_branch: Some("main".to_string()),
+            main_ci_state: None,
+        }],
+        standalone_sessions: vec![],
+        hosts: HashMap::new(),
+    };
+
+    // Remote snapshot: same slug, different path, remote machine's worktree.
+    let remote_snapshot = JsonOutput {
+        version: 6,
+        tmux_sessions: vec![],
+        repos: vec![JsonRepo {
+            slug: "drewdrewthis/git-orchard-rs".to_string(),
+            default_branch: Some("main".to_string()),
+            main_ci_state: None,
+            worktrees: vec![JsonWorktree {
+                path: "/remote/git-orchard-rs".to_string(),
+                branch: "issue337/validate-launch-remote-and-federation".to_string(),
+                host: None,
+                layout: "bare".to_string(),
+                ahead_behind: None,
+                last_commit_at: None,
+                issue: None,
+                pr: None,
+                sessions: vec![],
+                display_group: "other".to_string(),
+                status: "ready".to_string(),
+                status_glyph: "\u{1f7e2}".to_string(),
+                is_main_worktree: false,
+                last_activity_at: None,
+            }],
+        }],
+        hosts: HashMap::new(),
+    };
+
+    merge_remote_snapshot(&mut state, remote_snapshot, remote_host.to_string());
+
+    let repo = state
+        .repos
+        .iter()
+        .find(|r| r.slug == "drewdrewthis/git-orchard-rs")
+        .expect("drewdrewthis/git-orchard-rs must be present after merge");
+
+    // Both the local and remote worktrees must coexist.
+    assert_eq!(
+        repo.worktrees.len(),
+        2,
+        "local (host=None) and remote (host=Some) worktrees must both survive; \
+         got: {repo:?}"
+    );
+
+    // The local row must keep host = None.
+    let local_row = repo
+        .worktrees
+        .iter()
+        .find(|w| w.path == "/local/git-orchard-rs")
+        .expect("local worktree at /local/git-orchard-rs must still be present");
+
+    assert!(
+        local_row.host.is_none(),
+        "local worktree host must stay None; got: {:?}",
+        local_row.host
+    );
+
+    // The remote row must have host = Some(remote_host).
+    let remote_row = repo
+        .worktrees
+        .iter()
+        .find(|w| w.path == "/remote/git-orchard-rs")
+        .expect("remote worktree at /remote/git-orchard-rs must be present after merge");
+
+    assert_eq!(
+        remote_row.host.as_deref(),
+        Some(remote_host),
+        "remote worktree host must equal {remote_host}; got: {:?}",
+        remote_row.host
+    );
+
+    // Confirm the two rows are on separate (host, path) tuples — they must not
+    // have collapsed into a single entry.
+    let local_tuple = (local_row.host.as_deref(), local_row.path.as_str());
+    let remote_tuple = (remote_row.host.as_deref(), remote_row.path.as_str());
+    assert_ne!(
+        local_tuple, remote_tuple,
+        "local and remote rows must have distinct (host, path) tuples"
     );
 }
