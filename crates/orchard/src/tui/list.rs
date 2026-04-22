@@ -4389,6 +4389,46 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // AC4 regression lock — Unknown host does not block Enter (#285)
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 116-122
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for #285:
+    /// When a host has no entry in `host_reachable` (probe never ran, timed out,
+    /// or returned Unknown), `block_if_host_unreachable` must return `false` so
+    /// that Enter is NOT short-circuited.  A missing entry means Unknown, and
+    /// Unknown is treated as "proceed optimistically" — only a confirmed
+    /// `Reachability::Unreachable` blocks.
+    ///
+    /// This test also asserts that no spurious warning is written for the Unknown
+    /// state, since a warning would confuse the user into thinking the host was
+    /// checked and found unreachable.
+    #[test]
+    fn block_if_host_unreachable_returns_false_for_unknown_host() {
+        let host = "boxd@unknown-host.boxd.sh";
+
+        let mut app = App::new_test(vec![]);
+
+        // Intentionally do NOT insert the host — this is the Unknown state.
+        assert!(
+            !app.host_reachable.contains_key(host),
+            "pre-condition: host must be absent from host_reachable (Unknown state)"
+        );
+
+        let blocked = app.block_if_host_unreachable(host);
+
+        assert!(
+            !blocked,
+            "block_if_host_unreachable must return false for Unknown (missing) host, got true"
+        );
+        assert!(
+            app.warning.is_none(),
+            "no warning must be written for Unknown host; got {:?}",
+            app.warning.as_ref().map(|(s, _)| s.as_str())
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // AC3 regression lock — join_or_create_session dispatch
     // Feature: launch-remote-tui-enter-federation-validation.feature lines 92-99
     // -----------------------------------------------------------------------
