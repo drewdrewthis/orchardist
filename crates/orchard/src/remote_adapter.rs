@@ -1953,4 +1953,96 @@ mod tests {
             "session host must be '{host}'"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // AC6: Without orchard-proxy, adapter list_sessions is the source of truth
+    // -----------------------------------------------------------------------
+
+    /// AC6 scenario B: For a non-proxy remote (here `BoxdSharedAdapter`),
+    /// `list_sessions()` is sourced from a direct `tmux list-panes` SSH call —
+    /// never from `orchard --json`.
+    ///
+    /// Satisfies the contract: "no `ssh host orchard --json` call is made for
+    /// hosts that are not orchard-proxy". Verified by recording every SSH
+    /// command the adapter issues and asserting the negative.
+    #[test]
+    fn non_proxy_adapter_list_sessions_does_not_invoke_orchard_json() {
+        use std::sync::{Arc, Mutex};
+
+        /// Recording seam: forwards every call to an inner `FakeSshExec` and
+        /// appends the command string to a shared log.
+        struct RecordingFakeSshExec {
+            inner: FakeSshExec,
+            calls: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl SshExec for RecordingFakeSshExec {
+            fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
+                self.calls.lock().unwrap().push(cmd.to_string());
+                self.inner.exec(host, cmd)
+            }
+        }
+
+        let host = "boxd@orchard-rs.boxd.sh";
+        let session_name = "or_issue999";
+        let worktree_path = "/home/boxd/orchard/worktrees/issue999";
+
+        // Prime: shared VM returns one active-pane tmux row for or_issue999.
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        let mut inner = FakeSshExec::new();
+        inner.insert(
+            host,
+            &tmux_cmd,
+            SshOutput {
+                stdout: format!("{session_name}\t1\t{worktree_path}\t1713000000\t1713000060\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recording = RecordingFakeSshExec {
+            inner,
+            calls: calls.clone(),
+        };
+
+        let adapter = BoxdSharedAdapter {
+            host: host.to_string(),
+            path: "/home/boxd/orchard".to_string(),
+            ssh: Box::new(recording),
+        };
+
+        // The adapter IS the source of truth for non-proxy remotes.
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        let recorded = calls.lock().unwrap();
+
+        // Positive assertion: the adapter used the direct tmux probe.
+        assert!(
+            recorded.iter().any(|c| c.contains("tmux list-panes")),
+            "list_sessions for a non-proxy remote must use tmux list-panes; got: {recorded:?}"
+        );
+
+        // Negative assertion: `orchard --json` must NEVER be invoked on a non-proxy adapter.
+        assert!(
+            !recorded.iter().any(|c| c.contains("orchard --json")),
+            "list_sessions for a non-proxy remote must NOT invoke orchard --json; got: {recorded:?}"
+        );
+
+        // The adapter is the authoritative source — returned sessions are non-empty.
+        assert!(
+            !sessions.is_empty(),
+            "list_sessions must return the session from the direct tmux probe; got: {sessions:?}"
+        );
+        assert_eq!(
+            sessions[0].name, session_name,
+            "session name must be '{session_name}'; got: {}",
+            sessions[0].name
+        );
+    }
 }

@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 
 use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
 use orchard::json_output::{
-    CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonWorktree,
+    CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonSession, JsonWorktree,
 };
 use orchard::merge_remote::{build_state_with_cached_snapshots_from, merge_remote_snapshot};
 use orchard::orchard_snapshot::{orchard_snapshot_path_in, write_snapshot_to};
@@ -817,4 +817,112 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
         local_tuple, remote_tuple,
         "local and remote rows must have distinct (host, path) tuples"
     );
+}
+
+// ---------------------------------------------------------------------------
+// AC6 unit: Scenario A — cached snapshot exposes sessions for orchard-proxy host
+// ---------------------------------------------------------------------------
+
+/// AC6 scenario A: With orchard-proxy enabled, `load_cached_snapshots_from`
+/// returns the cached snapshot including its worktree sessions.
+///
+/// A precheck-style consumer can read `load_cached_snapshots_from` and inspect
+/// the returned sessions to determine whether a tmux session already exists for
+/// a given issue — without any new SSH call.
+///
+/// No real SSH is involved — we write the snapshot directly to a TempDir and
+/// pass that directory to `load_cached_snapshots_from`.
+#[test]
+fn load_cached_snapshots_exposes_session_for_orchard_proxy_host() {
+    let cache_dir = TempDir::new().expect("create temp cache dir");
+    let host = "boxd@orchard-rs.boxd.sh";
+
+    // Build a snapshot containing a worktree with an active tmux session.
+    let snapshot = JsonOutput {
+        version: 6,
+        tmux_sessions: vec![],
+        repos: vec![JsonRepo {
+            slug: "owner/repo".to_string(),
+            default_branch: None,
+            main_ci_state: None,
+            worktrees: vec![JsonWorktree {
+                path: "/remote/worktree".to_string(),
+                branch: "issue999/foo".to_string(),
+                // host is None on the wire — the merge step tags it with the
+                // snapshot host at merge time (not at snapshot-read time).
+                host: None,
+                layout: "bare".to_string(),
+                ahead_behind: None,
+                last_commit_at: None,
+                issue: None,
+                pr: None,
+                sessions: vec![JsonSession {
+                    name: "or_issue999".to_string(),
+                    host: "local".to_string(),
+                    status: "running".to_string(),
+                    started_at: None,
+                    last_activity_at: None,
+                    claude: None,
+                    windows: vec![],
+                }],
+                display_group: "other".to_string(),
+                status: "ready".to_string(),
+                status_glyph: "\u{1f7e2}".to_string(),
+                is_main_worktree: false,
+                last_activity_at: None,
+            }],
+        }],
+        hosts: HashMap::new(),
+    };
+
+    // Write the snapshot as if OrchardProxyAdapter had just fetched and persisted it.
+    write_snapshot_to(host, &snapshot, cache_dir.path()).expect("write snapshot");
+
+    // Build config with OrchardProxy remote pointing at the same host.
+    let config = make_config_with_proxy(host);
+
+    // Call the production cache-reader — this is the data layer a precheck
+    // would call to determine whether a session already exists.
+    // No SSH is involved here: load_cached_snapshots_from reads from disk only.
+    let snapshots =
+        orchard::orchard_snapshot::load_cached_snapshots_from(&config, cache_dir.path());
+
+    // Must return exactly one entry for our host.
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "expected one snapshot for {host}; got: {:?}",
+        snapshots.iter().map(|(h, _)| h).collect::<Vec<_>>()
+    );
+
+    let (returned_host, loaded_snapshot) = &snapshots[0];
+    assert_eq!(
+        returned_host, host,
+        "snapshot must be keyed by the remote host string"
+    );
+
+    // Locate the worktree in the loaded snapshot.
+    let repo = loaded_snapshot
+        .repos
+        .iter()
+        .find(|r| r.slug == "owner/repo")
+        .expect("owner/repo must be present in loaded snapshot");
+
+    let wt = repo
+        .worktrees
+        .iter()
+        .find(|w| w.branch == "issue999/foo")
+        .expect("worktree branch issue999/foo must be present in loaded snapshot");
+
+    // The session data is intact — a precheck can read session names from here
+    // without making any new SSH call.
+    let session_names: Vec<&str> = wt.sessions.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        session_names.contains(&"or_issue999"),
+        "session 'or_issue999' must be present in the loaded snapshot's worktree sessions; \
+         got: {session_names:?}"
+    );
+    // SSH-free assertion is structural: load_cached_snapshots_from reads the
+    // {safe_host}_orchard_snapshot.json file from disk — no SshExec is
+    // involved and no network call is made.
 }
