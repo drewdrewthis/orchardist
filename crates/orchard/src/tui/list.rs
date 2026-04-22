@@ -51,7 +51,7 @@ pub(crate) const ID_W: usize = 17;
 
 /// Describes what action the Enter key should take in the task view.
 /// Used to avoid holding a borrow on `task_rows` while calling `&mut self` methods.
-enum TaskEnterAction {
+pub(crate) enum TaskEnterAction {
     JoinSession {
         session_name: String,
         worktree_path: String,
@@ -79,6 +79,36 @@ enum TaskEnterAction {
         /// When `Some`, select this pane after switching (tmux target "window.pane").
         pane_target: Option<String>,
     },
+}
+
+/// Builds the [`TaskEnterAction`] for a worktree row.
+///
+/// Returns `JoinSession` when the row has at least one existing session, or
+/// `CreateSession` when there are no sessions. The `pane_target` field is
+/// always `None`; callers that need pane routing (e.g. `handle_enter_action`)
+/// patch it in after calling this function.
+pub(crate) fn build_worktree_enter_action(row: &WorktreeRow) -> TaskEnterAction {
+    if let Some(session) = row.sessions.first() {
+        let host = match &session.tmux.host {
+            crate::session::Host::Local => None,
+            crate::session::Host::Remote(h) => Some(h.clone()),
+        };
+        TaskEnterAction::JoinSession {
+            session_name: session.tmux.name.clone(),
+            worktree_path: row.worktree_path.clone(),
+            branch: Some(row.branch.clone()),
+            host,
+            pane_target: None,
+            discovery_path: row.discovery_path.clone(),
+        }
+    } else {
+        TaskEnterAction::CreateSession {
+            worktree_path: row.worktree_path.clone(),
+            branch: Some(row.branch.clone()),
+            host: row.worktree_host.clone(),
+            discovery_path: row.discovery_path.clone(),
+        }
+    }
 }
 
 /// Returns whether the cursor is currently on a standalone session row.
@@ -535,28 +565,17 @@ impl App {
             let tasks =
                 visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
             let action = tasks.get(worktree_cursor).map(|vt| {
-                if let Some(session) = vt.row.sessions.first() {
-                    let host = match &session.tmux.host {
-                        crate::session::Host::Local => None,
-                        crate::session::Host::Remote(h) => Some(h.clone()),
-                    };
-                    let pane_target = resolve_pane_target_from_sub_cursor(&sub_cursor, session);
-                    TaskEnterAction::JoinSession {
-                        session_name: session.tmux.name.clone(),
-                        worktree_path: vt.row.worktree_path.clone(),
-                        branch: Some(vt.row.branch.clone()),
-                        host,
-                        pane_target,
-                        discovery_path: vt.row.discovery_path.clone(),
-                    }
-                } else {
-                    TaskEnterAction::CreateSession {
-                        worktree_path: vt.row.worktree_path.clone(),
-                        branch: Some(vt.row.branch.clone()),
-                        host: vt.row.worktree_host.clone(),
-                        discovery_path: vt.row.discovery_path.clone(),
-                    }
+                // Build the base action (no pane_target) then patch in pane routing.
+                let mut action = build_worktree_enter_action(vt.row);
+                if let TaskEnterAction::JoinSession {
+                    ref mut pane_target,
+                    ..
+                } = action
+                    && let Some(session) = vt.row.sessions.first()
+                {
+                    *pane_target = resolve_pane_target_from_sub_cursor(&sub_cursor, session);
                 }
+                action
             });
             drop(tasks);
             action
@@ -4264,5 +4283,65 @@ mod tests {
             "unexpected '[b]' in badge text: {:?}",
             text
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC3 regression lock — TaskEnterAction builder: JoinSession vs CreateSession
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 84-90
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for AC3:
+    /// When a worktree row has a remote host and an existing session, the Enter
+    /// action builder must choose `JoinSession`, not `CreateSession`.
+    ///
+    /// Validated manually 2026-04-22 06:14 (createRemoteProxySession:
+    /// claude -> remote_claude; hostname=issue3201). This test locks that behaviour.
+    #[test]
+    fn enter_action_builder_selects_join_session_for_remote_worktree_with_existing_session() {
+        let host = "boxd@issue3201.boxd.sh";
+
+        // A worktree row on a remote host with exactly one existing session named "claude".
+        let row = WorktreeRow {
+            worktree_host: Some(host.to_string()),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Remote(host.to_string()),
+                    name: "claude".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+                started_at: None,
+                last_activity_at: None,
+            }],
+            ..make_task_row(3201, DisplayGroup::ClaudeWorking)
+        };
+
+        let action = build_worktree_enter_action(&row);
+
+        match action {
+            TaskEnterAction::JoinSession {
+                ref session_name,
+                ref host,
+                ..
+            } => {
+                assert_eq!(
+                    session_name, "claude",
+                    "session_name must be 'claude', got '{session_name}'"
+                );
+                assert_eq!(
+                    host.as_deref(),
+                    Some("boxd@issue3201.boxd.sh"),
+                    "host must be Some(\"boxd@issue3201.boxd.sh\"), got {host:?}"
+                );
+            }
+            TaskEnterAction::CreateSession { .. } => {
+                panic!("expected JoinSession but got CreateSession — builder chose wrong variant");
+            }
+            TaskEnterAction::JoinStandalone { .. } => {
+                panic!("expected JoinSession but got JoinStandalone");
+            }
+        }
     }
 }
