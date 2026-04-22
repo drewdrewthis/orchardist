@@ -1387,8 +1387,10 @@ mod tests {
     // AC6: Proxy failures surface as events; no silent fallback
     // -----------------------------------------------------------------------
 
-    /// AC6 scenario 1: exit code 127 returns FetchFailure and does NOT attempt
-    /// any legacy `git worktree list --porcelain` invocation.
+    /// AC6 scenario 1 / #337 AC5: exit code 127 returns FetchFailure and does NOT attempt
+    /// any legacy `git worktree list --porcelain` or `tmux list-sessions` invocations.
+    ///
+    /// Scenario contract: "Proxy failure does NOT trigger any legacy shell-discovery on that host"
     #[test]
     fn orchard_proxy_exit_127_surfaces_proxy_failure_event() {
         use std::sync::{Arc, Mutex};
@@ -1435,11 +1437,102 @@ mod tests {
             "exit 127 must surface as Err (FetchFailure), not Ok; got: {result:?}"
         );
 
-        // The recorded command list must only contain `orchard --json` — no git worktree list.
         let recorded = calls.lock().unwrap();
+
+        // AC5: the positive assertion — `orchard --json` must have been attempted.
+        assert!(
+            recorded.iter().any(|c| c.contains("orchard --json")),
+            "orchard --json must be in the recorded commands; got: {recorded:?}"
+        );
+
+        // AC5: legacy git discovery must NOT be triggered on failure.
         assert!(
             !recorded.iter().any(|c| c.contains("git worktree list")),
             "git worktree list --porcelain must NOT be invoked on failure path; got: {recorded:?}"
+        );
+
+        // AC5: legacy tmux discovery must NOT be triggered on failure.
+        assert!(
+            !recorded.iter().any(|c| c.contains("tmux list-sessions")),
+            "tmux list-sessions must NOT be invoked on failure path; got: {recorded:?}"
+        );
+    }
+
+    /// #337 AC5: exit 127 writes a `remote_adapter.proxy_failure` event to events.jsonl
+    /// with the host and a reason mentioning "exit 127".
+    ///
+    /// Uses `ORCHARD_EVENTS_PATH` to redirect writes to a temp directory so the
+    /// test is hermetic and does not touch `~/.local/state/git-orchard/events.jsonl`.
+    #[test]
+    fn orchard_proxy_exit_127_writes_proxy_failure_event_to_events_jsonl() {
+        use std::io::Read;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("create temp dir");
+        let events_file = dir.path().join("events.jsonl");
+
+        // Redirect events writes to our temp file.
+        // SAFETY: setting env vars is process-global; this test uses a unique
+        // tempdir path and removes the var before parallel reads, so it cannot
+        // collide with other tests that touch `ORCHARD_EVENTS_PATH`.
+        unsafe { std::env::set_var("ORCHARD_EVENTS_PATH", events_file.as_os_str()) };
+
+        let mut fake = FakeSshExec::new();
+        fake.insert(
+            "boxd@vm.boxd.sh",
+            "orchard --json",
+            SshOutput {
+                stdout: String::new(),
+                stderr: "orchard: not found".to_string(),
+                exit_code: 127,
+            },
+        );
+
+        let adapter = OrchardProxyAdapter {
+            host: "boxd@vm.boxd.sh".to_string(),
+            path: "~/repo".to_string(),
+            ssh: Box::new(fake),
+            snapshot: OnceLock::new(),
+        };
+
+        let _result = adapter.list_worktrees();
+
+        // SAFETY: same as above — process-global mutation, but this test owns
+        // the variable lifecycle within its own scope.
+        unsafe { std::env::remove_var("ORCHARD_EVENTS_PATH") };
+
+        // Read events file.
+        let mut contents = String::new();
+        std::fs::File::open(&events_file)
+            .expect("events.jsonl must have been created")
+            .read_to_string(&mut contents)
+            .unwrap();
+
+        // Find the proxy_failure event.
+        let failure_line = contents
+            .lines()
+            .filter(|l| !l.is_empty())
+            .find(|l| l.contains("remote_adapter.proxy_failure"))
+            .expect("events.jsonl must contain a remote_adapter.proxy_failure event");
+
+        let parsed: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(failure_line).expect("proxy_failure line must be valid JSON");
+
+        // host field must match the adapter's host.
+        assert_eq!(
+            parsed.get("host").and_then(|v| v.as_str()),
+            Some("boxd@vm.boxd.sh"),
+            "proxy_failure event must carry the host; got: {parsed:?}"
+        );
+
+        // reason field must mention exit 127.
+        let reason = parsed
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            reason.contains("127"),
+            "proxy_failure reason must mention exit 127; got: '{reason}'"
         );
     }
 
