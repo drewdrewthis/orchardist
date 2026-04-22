@@ -13,14 +13,15 @@
 //! pr/issue fields).
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
 use orchard::json_output::{
     CiChecks as JsonCiChecks, JsonIssue, JsonOutput, JsonPr, JsonRepo, JsonWorktree,
 };
 use orchard::merge_remote::build_state_with_cached_snapshots_from;
-use orchard::orchard_snapshot::write_snapshot_to;
-use orchard::remote_adapter::RemoteKind;
+use orchard::orchard_snapshot::{orchard_snapshot_path_in, write_snapshot_to};
+use orchard::remote_adapter::{FakeSshExec, OrchardProxyAdapter, RemoteKind, SshOutput};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -338,4 +339,168 @@ fn host_reachability_persists_to_cache_and_is_read_on_build() {
     // write_host_reachability is production-only (writes to real cache dir);
     // smoke-test it without asserting on the real filesystem path.
     let _ = write_host_reachability(&hosts);
+}
+
+// ---------------------------------------------------------------------------
+// Test: cached snapshot survives proxy failure — no phantom data, no data loss
+// ---------------------------------------------------------------------------
+
+/// Builds a `JsonOutput` containing 2 worktrees for "owner/repo" under the
+/// given `host`, for use in the proxy-failure survival test.
+fn make_json_output_with_two_worktrees() -> JsonOutput {
+    fn bare_worktree(path: &str, branch: &str) -> JsonWorktree {
+        JsonWorktree {
+            path: path.to_string(),
+            branch: branch.to_string(),
+            host: None,
+            layout: "bare".to_string(),
+            ahead_behind: None,
+            last_commit_at: None,
+            issue: None,
+            pr: None,
+            sessions: vec![],
+            display_group: "other".to_string(),
+            status: "ready".to_string(),
+            status_glyph: "\u{1f7e2}".to_string(),
+            is_main_worktree: false,
+            last_activity_at: None,
+        }
+    }
+
+    JsonOutput {
+        version: 6,
+        tmux_sessions: vec![],
+        repos: vec![JsonRepo {
+            slug: "owner/repo".to_string(),
+            default_branch: None,
+            main_ci_state: None,
+            worktrees: vec![
+                bare_worktree("/remote/wt1", "issue1/foo"),
+                bare_worktree("/remote/wt2", "issue2/bar"),
+            ],
+        }],
+        hosts: HashMap::new(),
+    }
+}
+
+/// #337 Scenario: "Last-known snapshot stays visible after a proxy failure
+/// (no phantom data, but no data loss)"
+///
+/// Proves that when `OrchardProxyAdapter::fetch_snapshot` fails with exit 127:
+/// 1. The cached snapshot file is NOT deleted.
+/// 2. `build_state_with_cached_snapshots_from` still surfaces the 2 worktrees
+///    from the prior snapshot in the merged `OrchardState`.
+/// 3. A `remote_adapter.proxy_failure` event is written to `events.jsonl`.
+#[test]
+fn cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged() {
+    use std::io::Read as _;
+
+    let cache_dir = TempDir::new().expect("create temp cache dir");
+    let events_dir = TempDir::new().expect("create temp events dir");
+    let events_file = events_dir.path().join("events.jsonl");
+
+    let host = "boxd@orchard-rs.boxd.sh";
+
+    // Step 1–3: write a prior snapshot with 2 worktrees.
+    let snapshot = make_json_output_with_two_worktrees();
+    write_snapshot_to(host, &snapshot, cache_dir.path()).expect("write snapshot");
+
+    // Step 4: derive the expected snapshot path (@ and . → _).
+    let snapshot_path = orchard_snapshot_path_in(host, cache_dir.path());
+    assert!(snapshot_path.exists(), "snapshot must exist before the adapter call");
+
+    // Step 5: redirect events.jsonl to tempdir.
+    // SAFETY: process-global mutation; isolated per-test via unique tempdir path.
+    unsafe { std::env::set_var("ORCHARD_EVENTS_PATH", events_file.as_os_str()) };
+
+    // Step 6: build an OrchardProxyAdapter primed to fail with exit 127.
+    let mut fake = FakeSshExec::new();
+    fake.insert(
+        host,
+        "orchard --json",
+        SshOutput {
+            stdout: String::new(),
+            stderr: "orchard: not found".to_string(),
+            exit_code: 127,
+        },
+    );
+
+    let adapter = OrchardProxyAdapter {
+        host: host.to_string(),
+        path: "~/repo".to_string(),
+        ssh: Box::new(fake),
+        snapshot: OnceLock::new(),
+    };
+
+    // Step 7: the call must return Err — no silent fallback.
+    let result = adapter.list_worktrees();
+    assert!(
+        result.is_err(),
+        "exit 127 must surface as Err, not Ok; got: {result:?}"
+    );
+
+    // Step 8: remove env var before touching the filesystem.
+    unsafe { std::env::remove_var("ORCHARD_EVENTS_PATH") };
+
+    // Step 9: snapshot file must still exist — the adapter must not delete it on failure.
+    assert!(
+        snapshot_path.exists(),
+        "snapshot file must NOT be deleted on proxy failure; path: {snapshot_path:?}"
+    );
+
+    // Step 10–11: build OrchardState from the cached snapshot (cold-start path).
+    let config = make_config_with_proxy(host);
+    let state = build_state_with_cached_snapshots_from(&config, &HashMap::new(), cache_dir.path());
+
+    // Step 12–13: the 2 worktrees must still appear in the merged state.
+    let repo = state
+        .repos
+        .iter()
+        .find(|r| r.slug == "owner/repo")
+        .expect("owner/repo must be present after snapshot merge");
+
+    let remote_worktrees: Vec<_> = repo
+        .worktrees
+        .iter()
+        .filter(|w| w.host.as_deref() == Some(host))
+        .collect();
+
+    assert_eq!(
+        remote_worktrees.len(),
+        2,
+        "exactly 2 worktrees from the cached snapshot must survive the proxy failure; \
+         got: {remote_worktrees:?}"
+    );
+
+    let branches: Vec<&str> = remote_worktrees.iter().map(|w| w.branch.as_str()).collect();
+    assert!(
+        branches.contains(&"issue1/foo"),
+        "branch 'issue1/foo' must appear in merged state; got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&"issue2/bar"),
+        "branch 'issue2/bar' must appear in merged state; got: {branches:?}"
+    );
+
+    // Step 14: events.jsonl must contain a remote_adapter.proxy_failure event.
+    let mut contents = String::new();
+    std::fs::File::open(&events_file)
+        .expect("events.jsonl must have been created by the adapter call")
+        .read_to_string(&mut contents)
+        .unwrap();
+
+    let failure_line = contents
+        .lines()
+        .filter(|l| !l.is_empty())
+        .find(|l| l.contains("remote_adapter.proxy_failure"))
+        .expect("events.jsonl must contain a remote_adapter.proxy_failure event");
+
+    let parsed: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(failure_line).expect("proxy_failure line must be valid JSON");
+
+    assert_eq!(
+        parsed.get("host").and_then(|v| v.as_str()),
+        Some(host),
+        "proxy_failure event must carry the correct host; got: {parsed:?}"
+    );
 }
