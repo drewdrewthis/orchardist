@@ -4346,6 +4346,49 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // AC4 unit lock — TaskEnterAction builder for remote worktree with no sessions
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 107-114
+    // -----------------------------------------------------------------------
+
+    /// When a worktree row has a remote host and **no** existing sessions, the Enter
+    /// action builder must choose `CreateSession`, not `JoinSession`.
+    ///
+    /// The boxd-fork routing is preserved: the host on the action equals the
+    /// worktree's host field (`boxd@vm.boxd.sh`).
+    ///
+    /// Note: `host_reachable` is checked by `block_if_host_unreachable` at the App
+    /// level, not inside the builder — so it is irrelevant to this unit test.
+    #[test]
+    fn enter_action_builder_selects_create_session_for_remote_worktree_with_no_sessions() {
+        let host = "boxd@vm.boxd.sh";
+
+        // A worktree row on a remote host with no sessions.
+        let row = WorktreeRow {
+            worktree_host: Some(host.to_string()),
+            sessions: vec![],
+            ..make_task_row(337, DisplayGroup::ClaudeWorking)
+        };
+
+        let action = build_worktree_enter_action(&row);
+
+        match action {
+            TaskEnterAction::CreateSession { ref host, .. } => {
+                assert_eq!(
+                    host.as_deref(),
+                    Some("boxd@vm.boxd.sh"),
+                    "host must be Some(\"boxd@vm.boxd.sh\"), got {host:?}"
+                );
+            }
+            TaskEnterAction::JoinSession { .. } => {
+                panic!("expected CreateSession but got JoinSession — builder chose wrong variant for no-session remote row");
+            }
+            TaskEnterAction::JoinStandalone { .. } => {
+                panic!("expected CreateSession but got JoinStandalone");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // AC3 regression lock — join_or_create_session dispatch
     // Feature: launch-remote-tui-enter-federation-validation.feature lines 92-99
     // -----------------------------------------------------------------------
