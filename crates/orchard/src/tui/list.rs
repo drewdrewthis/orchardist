@@ -4568,4 +4568,65 @@ mod tests {
             call.proxy_name
         );
     }
+
+    // -----------------------------------------------------------------------
+    // AC4 regression lock — CreateSession failure surfaces warning
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 132-138
+    // -----------------------------------------------------------------------
+
+    /// When `create_remote_proxy_session` fails, `join_or_create_session` must:
+    ///   - return `false` (failure path),
+    ///   - leave `switch_target` as `None` (no premature switch),
+    ///   - set `app.warning` with a message containing the error description.
+    ///
+    /// This locks the "failure surfaces warning, not silent swallow" contract
+    /// from the scenario at feature file lines 132-138.
+    #[test]
+    fn join_or_create_session_failure_surfaces_warning_in_app() {
+        use crate::remote;
+
+        let host = "boxd@vm.boxd.sh";
+        let session_name = "issue999";
+        let worktree_path = "/path";
+
+        // Drain any stale recorder state from a prior test in this thread.
+        let _ = remote::take_proxy_session_calls();
+
+        // Arm the failure — next call returns Err("simulated SSH failure").
+        remote::set_next_proxy_session_error("simulated SSH failure");
+
+        let mut app = App::new_test(vec![]);
+        let result = app.join_or_create_session(
+            session_name,
+            worktree_path,
+            Some("issue999/x"),
+            Some(host),
+            None,
+        );
+
+        // Returns false on the failure path.
+        assert!(!result, "join_or_create_session must return false on proxy error");
+
+        // No premature tmux switch.
+        assert!(
+            app.switch_target.is_none(),
+            "switch_target must be None when proxy call fails, got {:?}",
+            app.switch_target
+        );
+
+        // Warning must be set and contain the error context.
+        let (msg, _) = app
+            .warning
+            .as_ref()
+            .expect("app.warning must be Some after a remote proxy session failure");
+
+        assert!(
+            msg.contains("remote session error"),
+            "warning must contain \"remote session error\", got {msg:?}"
+        );
+        assert!(
+            msg.contains("simulated SSH failure"),
+            "warning must contain the original error message \"simulated SSH failure\", got {msg:?}"
+        );
+    }
 }

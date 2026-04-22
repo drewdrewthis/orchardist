@@ -339,6 +339,12 @@ thread_local! {
     /// thread during a test run. Drain with [`take_proxy_session_calls`].
     static PROXY_SESSION_CALLS: std::cell::RefCell<Vec<ProxySessionCall>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// When `Some`, the next call to [`create_remote_proxy_session`] will
+    /// drain this value and return `Err(anyhow!(msg))` instead of `Ok(local_name)`.
+    /// Consumed on first use so subsequent calls revert to the default `Ok` path.
+    static NEXT_PROXY_SESSION_RESULT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Drains and returns all [`ProxySessionCall`] entries recorded in this thread.
@@ -348,6 +354,16 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn take_proxy_session_calls() -> Vec<ProxySessionCall> {
     PROXY_SESSION_CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
+}
+
+/// Arms the test seam so the **next** call to [`create_remote_proxy_session`]
+/// returns `Err(anyhow!(msg))`. Consumed on first use — subsequent calls revert
+/// to the default `Ok` path.
+#[cfg(test)]
+pub(crate) fn set_next_proxy_session_error(msg: impl Into<String>) {
+    NEXT_PROXY_SESSION_RESULT.with(|slot| {
+        *slot.borrow_mut() = Some(msg.into());
+    });
 }
 
 /// Creates a local proxy tmux session that connects to the remote session via ssh or
@@ -383,6 +399,11 @@ pub fn create_remote_proxy_session(
                 proxy_name: local_name.clone(),
             });
         });
+        // If a test has armed a failure for this call, drain and return it.
+        let maybe_err = NEXT_PROXY_SESSION_RESULT.with(|slot| slot.borrow_mut().take());
+        if let Some(msg) = maybe_err {
+            return Err(anyhow::anyhow!("{}", msg));
+        }
         return Ok(local_name);
     }
 
