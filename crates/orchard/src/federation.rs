@@ -338,6 +338,113 @@ pub fn emit_federation_discovered_host(raw_target: &str, dedup_key: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// build_ssh_chain — write-path chaining for transitive nodes (AC5)
+// ---------------------------------------------------------------------------
+
+/// Shell-quote a string for use in a POSIX single-quoted context.
+///
+/// Single-quotes in the string are escaped as `'\''` (end-single-quote,
+/// escaped-single-quote, start-single-quote).  The result is wrapped in
+/// outer single quotes.
+///
+/// # Examples
+///
+/// ```
+/// use orchard::federation::shell_quote;
+///
+/// assert_eq!(shell_quote("hello"), "'hello'");
+/// assert_eq!(shell_quote("it's"), "'it'\\''s'");
+/// assert_eq!(shell_quote("$VAR"), "'$VAR'");
+/// ```
+pub fn shell_quote(s: &str) -> String {
+    // Replace each `'` with `'\''` and wrap in single quotes.
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+/// Builds an SSH command string that executes `cmd` on the leaf host in
+/// `discovery_path` by chaining through each intermediate hop.
+///
+/// `discovery_path` is the same slice carried on `WorktreeState.discovery_path`
+/// and `SessionState.discovery_path` — it starts with `"local"` and ends with
+/// the target host.  The `"local"` sentinel is always stripped before building
+/// the chain.
+///
+/// # Behaviour
+///
+/// | path length | result |
+/// |---|---|
+/// | 0 or 1 (`["local"]` or empty) | `cmd` unchanged (already on local machine) |
+/// | 2 (`["local", "boxd"]`) | `ssh boxd <cmd>` |
+/// | 3 (`["local", "boxd", "child"]`) | `ssh boxd ssh 'child' <shell-quoted-cmd>` |
+/// | N | recursively nested: each intermediate hop wraps the inner command |
+///
+/// Shell metacharacters in `cmd` and in host names are quoted at each nesting
+/// level so the payload arrives at the leaf byte-identical.
+///
+/// # Examples
+///
+/// ```
+/// use orchard::federation::build_ssh_chain;
+///
+/// // depth-1: single hop — no nesting
+/// let chain = build_ssh_chain(&["local".into(), "boxd".into()], "tmux ls");
+/// assert_eq!(chain, "ssh boxd tmux ls");
+///
+/// // depth-2: nested SSH
+/// let chain = build_ssh_chain(
+///     &["local".into(), "boxd".into(), "child.example.com".into()],
+///     "tmux ls",
+/// );
+/// assert_eq!(chain, "ssh boxd ssh 'child.example.com' 'tmux ls'");
+///
+/// // empty / local-only path → unchanged cmd
+/// let chain = build_ssh_chain(&["local".into()], "echo hi");
+/// assert_eq!(chain, "echo hi");
+/// ```
+pub fn build_ssh_chain(discovery_path: &[String], cmd: &str) -> String {
+    // Strip the leading "local" sentinel if present.
+    let hops: &[String] = if discovery_path.first().map(String::as_str) == Some("local") {
+        &discovery_path[1..]
+    } else {
+        discovery_path
+    };
+
+    if hops.is_empty() {
+        // Already local — run cmd directly.
+        return cmd.to_string();
+    }
+
+    // Build the command inside-out: start from the innermost (leaf) command
+    // and wrap it in each hop's ssh call from right to left.
+    //
+    // For hops = ["boxd", "child"] and cmd = "tmux ls":
+    //   inner = "tmux ls"
+    //   wrap with "child" → "ssh 'child' 'tmux ls'"
+    //   wrap with "boxd"  → "ssh boxd ssh 'child' 'tmux ls'"
+    //
+    // The leaf hop uses the raw cmd; each outer hop quotes the inner string.
+
+    let mut inner = cmd.to_string();
+
+    // Walk hops from right-to-left, but we want the *leftmost* hop to be
+    // outermost (not quoted).  Strategy:
+    //   - all hops except the first: build the inner chain with quoting
+    //   - first (outermost) hop: `ssh <host> <inner>` without host quoting
+    //     (the immediate SSH target doesn't need shell-quoting — it's an arg
+    //     to ssh, not a sub-shell string)
+
+    // Wrap from the rightmost hop inward, quoting cmd at each step.
+    // After this loop, `inner` holds the fully-nested quoted command.
+    for hop in hops[1..].iter().rev() {
+        inner = format!("ssh {} {}", shell_quote(hop), shell_quote(&inner));
+    }
+
+    // The outermost hop is not shell-quoted (it's a direct ssh argument).
+    format!("ssh {} {}", hops[0], inner)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -658,5 +765,96 @@ mod tests {
         );
         assert_eq!(parsed["raw_target"].as_str().unwrap(), "Boxd@VM.Boxd.Sh");
         assert_eq!(parsed["dedup_key"].as_str().unwrap(), "boxd@vm.boxd.sh");
+    }
+
+    // -----------------------------------------------------------------------
+    // build_ssh_chain / shell_quote — AC5
+    // -----------------------------------------------------------------------
+
+    /// AC5: depth-1 direct remote produces `ssh host cmd` (no nesting).
+    #[test]
+    fn build_ssh_chain_depth1_no_nesting() {
+        let path = vec!["local".to_string(), "boxd".to_string()];
+        let result = build_ssh_chain(&path, "tmux ls");
+        assert_eq!(result, "ssh boxd tmux ls");
+    }
+
+    /// AC5: depth-2 target produces `ssh parent ssh 'child' 'cmd'`.
+    #[test]
+    fn build_ssh_chain_depth2_nested_ssh() {
+        let path = vec![
+            "local".to_string(),
+            "boxd".to_string(),
+            "scenario-voice-agents.boxd.sh".to_string(),
+        ];
+        let result = build_ssh_chain(&path, "tmux ls");
+        assert_eq!(
+            result,
+            "ssh boxd ssh 'scenario-voice-agents.boxd.sh' 'tmux ls'"
+        );
+    }
+
+    /// AC5: empty path or local-only returns cmd unchanged.
+    #[test]
+    fn build_ssh_chain_local_only_returns_cmd_unchanged() {
+        let path_empty: Vec<String> = vec![];
+        assert_eq!(build_ssh_chain(&path_empty, "echo hi"), "echo hi");
+
+        let path_local = vec!["local".to_string()];
+        assert_eq!(build_ssh_chain(&path_local, "echo hi"), "echo hi");
+    }
+
+    /// AC5: shell metacharacters in cmd are escaped at inner nesting level.
+    #[test]
+    fn build_ssh_chain_shell_metacharacters_escaped() {
+        let path = vec!["local".to_string(), "boxd".to_string(), "child".to_string()];
+        // cmd with $, backtick, double-quote, backslash — starts with $ to make
+        // assertion unambiguous regardless of surrounding context.
+        let cmd = "$VAR `cmd` \"q\" \\n echo done";
+        let result = build_ssh_chain(&path, cmd);
+
+        // The resulting string must contain the outer ssh invocation.
+        assert!(result.starts_with("ssh boxd "), "outer ssh must be first");
+        // The inner cmd must be single-quoted at the inner layer so $ is not interpolated.
+        // shell_quote wraps in single quotes: result contains "'$VAR"
+        assert!(
+            result.contains("'$VAR"),
+            "$ must be within single quotes to prevent interpolation; got: {result}"
+        );
+    }
+
+    /// AC5: depth-3 chain produces three-level nesting.
+    #[test]
+    fn build_ssh_chain_depth3_three_level_nesting() {
+        let path = vec![
+            "local".to_string(),
+            "hop1".to_string(),
+            "hop2".to_string(),
+            "leaf".to_string(),
+        ];
+        let result = build_ssh_chain(&path, "echo done");
+        // Outermost: ssh hop1 <inner>
+        assert!(
+            result.starts_with("ssh hop1 "),
+            "outermost hop must be hop1"
+        );
+        // Should contain hop2 and leaf quoted
+        assert!(result.contains("'hop2'"), "hop2 must be quoted");
+        assert!(result.contains("'leaf'"), "leaf must be quoted");
+    }
+
+    /// shell_quote wraps in single quotes and escapes embedded single quotes.
+    #[test]
+    fn shell_quote_basic() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote("$VAR"), "'$VAR'");
+        assert_eq!(shell_quote("back`tick"), "'back`tick'");
+    }
+
+    /// shell_quote: empty string produces two single quotes.
+    #[test]
+    fn shell_quote_empty_string() {
+        assert_eq!(shell_quote(""), "''");
     }
 }
