@@ -190,6 +190,21 @@ pub fn load_cached_snapshots_from(
         }
     }
 
+    // Also load snapshots for transitively-discovered hosts from topology.
+    // These hosts are not in config.repos.remotes but were discovered on a
+    // prior successful walk and persisted in federation_topology.json.
+    if let Some(topology) = crate::federation_topology::read_topology_from(cache_dir) {
+        let transitive_hosts =
+            crate::federation_topology::transitive_hosts_from_topology(&topology);
+        for host in transitive_hosts {
+            if seen_hosts.insert(host.clone()) {
+                if let Some(snapshot) = read_snapshot_from(&host, cache_dir) {
+                    results.push((host, snapshot));
+                }
+            }
+        }
+    }
+
     results
 }
 
@@ -573,5 +588,86 @@ mod tests {
     fn orchard_snapshot_path_in_no_special_chars() {
         let p = orchard_snapshot_path_in("myhost", Path::new("/tmp/cache"));
         assert_eq!(p, Path::new("/tmp/cache/myhost_orchard_snapshot.json"));
+    }
+
+    // ---- load_cached_snapshots: topology extension (Phase 3 / feature:351) ---
+
+    /// feature:351 — load_cached_snapshots consults federation_topology.json
+    ///
+    /// When the topology lists a transitive host that is not in config.repos.remotes
+    /// but has a snapshot file on disk, that snapshot must be loaded.
+    #[test]
+    fn load_cached_snapshots_includes_transitive_hosts_from_topology() {
+        use crate::federation_topology::{
+            FederationTopology, TOPOLOGY_CURRENT_VERSION, TopologyEntry, write_topology_to,
+        };
+        use crate::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
+
+        let dir = TempDir::new().unwrap();
+
+        // Write a snapshot for a directly-configured host.
+        let direct_snap = json_output_with_worktree(6, "/remote/direct", "direct-branch");
+        write_snapshot_to("direct-host", &direct_snap, dir.path()).unwrap();
+
+        // Write a snapshot for a transitively-discovered host.
+        let transitive_snap =
+            json_output_with_worktree(6, "/remote/transitive", "transitive-branch");
+        write_snapshot_to("transitive-child", &transitive_snap, dir.path()).unwrap();
+
+        // Config only knows about direct-host.
+        let config = GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: "owner/repo".to_string(),
+                path: "/local".to_string(),
+                remotes: vec![RemoteConfig {
+                    name: "direct".to_string(),
+                    host: "direct-host".to_string(),
+                    path: "/remote".to_string(),
+                    shell: "ssh".to_string(),
+                    kind: RemoteKind::OrchardProxy,
+                    allow_transitive: false,
+                }],
+            }],
+            ..GlobalConfig::default()
+        };
+
+        // Write a topology that lists transitive-child.
+        let topo = FederationTopology {
+            version: TOPOLOGY_CURRENT_VERSION,
+            written_at: "2026-01-01T00:00:00+00:00".to_string(),
+            entries: vec![TopologyEntry {
+                dedup_key: "transitive-child".to_string(),
+                discovery_path: vec![
+                    "local".to_string(),
+                    "direct-host".to_string(),
+                    "transitive-child".to_string(),
+                ],
+                root: "direct-host".to_string(),
+                last_seen_at: "2026-01-01T00:00:00+00:00".to_string(),
+            }],
+        };
+        write_topology_to(&topo, dir.path()).unwrap();
+
+        let snapshots = load_cached_snapshots_from(&config, dir.path());
+
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "both direct and transitive must be loaded"
+        );
+        assert!(
+            snapshots.iter().any(|(h, _)| h == "direct-host"),
+            "direct host must be present"
+        );
+        assert!(
+            snapshots.iter().any(|(h, _)| h == "transitive-child"),
+            "transitive host must be present"
+        );
+        // Verify the transitive snapshot's content is intact.
+        let trans = snapshots
+            .iter()
+            .find(|(h, _)| h == "transitive-child")
+            .unwrap();
+        assert_eq!(trans.1.repos[0].worktrees[0].branch, "transitive-branch");
     }
 }
