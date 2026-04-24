@@ -127,7 +127,7 @@ branch does not abort the rest of the walk.
   allow onward SSH (not always guaranteed in locked-down environments).
 
 **Neutral**:
-- Depth limit defaults to 4 hops; overridable with `--max-depth` on
+- Depth limit defaults to 8 hops; overridable with `--max-depth` on
   `orchard refresh`. Deep topologies are an operational choice.
 - `host_dedup_key` normalization is best-effort. Two aliases for the same
   physical host that resolve differently will still be fetched twice;
