@@ -138,25 +138,71 @@ pub fn ssh_exec_with_timeout(
     }
 }
 
+/// Returns the first hop SSH target and the fully-chained command string for a
+/// remote write operation.
+///
+/// When `discovery_path` is `Some` and has length ≥ 3 (i.e., at least one
+/// intermediate hop between local and the leaf), the leaf command is wrapped in
+/// nested SSH calls via [`crate::federation::build_ssh_chain`] and the first
+/// hop host is returned as the SSH target.
+///
+/// For depth-1 direct remotes (`discovery_path` is `None`, empty, or
+/// `["local", host]`) the command and host are returned unchanged — behaviour
+/// is bit-identical to before federation was introduced.
+///
+/// Exposed for testing so callers can verify the SSH chain without performing a
+/// real SSH round-trip.
+pub fn chain_cmd(host: &str, discovery_path: Option<&[String]>, cmd: &str) -> (String, String) {
+    match discovery_path {
+        Some(path) if path.len() > 2 => {
+            // Transitive: build nested SSH chain and target the first hop.
+            let chained = crate::federation::build_ssh_chain(path, cmd);
+            // The first element is "local"; the second is the jump host.
+            let jump_host = path[1].clone();
+            (jump_host, chained)
+        }
+        // Depth-1 or no path — pass through unchanged.
+        _ => (host.to_string(), cmd.to_string()),
+    }
+}
+
 /// Kills the named tmux session on the remote host.
-pub fn kill_remote_tmux_session(host: &str, name: &str) -> anyhow::Result<()> {
-    ssh_exec(
-        host,
-        &format!("tmux kill-session -t {}", shell_escape(name)),
-    )?;
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`
+/// (e.g. `["local", "boxd", "child.example.com"]`).  Pass `None` for
+/// direct (depth-1) remotes; the behaviour is unchanged from before
+/// transitive federation was introduced.
+pub fn kill_remote_tmux_session(
+    host: &str,
+    name: &str,
+    discovery_path: Option<&[String]>,
+) -> anyhow::Result<()> {
+    let inner_cmd = format!("tmux kill-session -t {}", shell_escape(name));
+    let (ssh_target, cmd) = chain_cmd(host, discovery_path, &inner_cmd);
+    ssh_exec(&ssh_target, &cmd)?;
     LOG.info(&format!("remote: killed tmux session {}", name));
     Ok(())
 }
 
 /// Removes a worktree on the remote host.
+///
 /// First tries `git worktree remove --force`; falls back to `git worktree prune && rm -rf`.
-pub fn remove_remote_worktree(host: &str, repo_path: &str, wt_path: &str) -> anyhow::Result<()> {
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`.  Pass
+/// `None` for direct (depth-1) remotes; the behaviour is unchanged.
+pub fn remove_remote_worktree(
+    host: &str,
+    repo_path: &str,
+    wt_path: &str,
+    discovery_path: Option<&[String]>,
+) -> anyhow::Result<()> {
     let cmd = format!(
         "cd {} && git worktree remove --force {}",
         shell_escape(repo_path),
         shell_escape(wt_path)
     );
-    if ssh_exec(host, &cmd).is_ok() {
+    let (ssh_target, chained_cmd) = chain_cmd(host, discovery_path, &cmd);
+    if ssh_exec(&ssh_target, &chained_cmd).is_ok() {
         return Ok(());
     }
 
@@ -165,19 +211,30 @@ pub fn remove_remote_worktree(host: &str, repo_path: &str, wt_path: &str) -> any
         shell_escape(repo_path),
         shell_escape(wt_path)
     );
-    ssh_exec(host, &fallback)?;
+    let (ssh_target2, chained_fallback) = chain_cmd(host, discovery_path, &fallback);
+    ssh_exec(&ssh_target2, &chained_fallback)?;
     Ok(())
 }
 
 /// Creates a new detached tmux session on the remote host.
+///
 /// If the session already exists the error is silently ignored.
-pub fn create_remote_session(host: &str, name: &str, path: &str) -> anyhow::Result<()> {
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`.  Pass
+/// `None` for direct (depth-1) remotes; the behaviour is unchanged.
+pub fn create_remote_session(
+    host: &str,
+    name: &str,
+    path: &str,
+    discovery_path: Option<&[String]>,
+) -> anyhow::Result<()> {
     let cmd = format!(
         "tmux new-session -d -s {} -c {}",
         shell_escape(name),
         shell_escape(path)
     );
-    match ssh_exec(host, &cmd) {
+    let (ssh_target, chained_cmd) = chain_cmd(host, discovery_path, &cmd);
+    match ssh_exec(&ssh_target, &chained_cmd) {
         Ok(_) => Ok(()),
         Err(e) if e.to_string().contains("duplicate session") => Ok(()),
         Err(e) => Err(e),
@@ -254,34 +311,79 @@ fn should_recreate_proxy(local_name: &str, remote_was_fresh: bool) -> bool {
 ///
 /// This is the popup-mode entry point: the caller gets the local session name back
 /// and prints it to stdout for the wrapper script to call `tmux switch-client`.
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`.  Pass
+/// `None` for direct (depth-1) remotes; the behaviour is unchanged.  For
+/// transitive (depth-2+) remotes the `has-session` probe, `create_remote_session`
+/// call, and the local proxy's inner `ssh ... tmux attach-session` command all
+/// route through the nested SSH chain.
 pub fn create_remote_proxy_session(
     host: &str,
     name: &str,
     path: &str,
     shell: &str,
+    discovery_path: Option<&[String]>,
 ) -> anyhow::Result<String> {
     let shell = if shell.is_empty() { "ssh" } else { shell };
 
+    // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
+    // BEFORE any SSH is attempted to avoid a cryptic network-layer failure later.
+    if shell == "mosh" && discovery_path.is_some_and(|dp| dp.len() > 2) {
+        anyhow::bail!(
+            "mosh is not supported for transitive hosts ({}); \
+             change this remote's shell to ssh",
+            discovery_path.unwrap().join(" -> ")
+        );
+    }
+
     // Create the remote session if it doesn't exist yet.
-    let remote_was_fresh =
-        ssh_exec(host, &format!("tmux has-session -t {}", shell_escape(name))).is_err();
+    let has_session_cmd = format!("tmux has-session -t {}", shell_escape(name));
+    let (has_target, has_cmd) = chain_cmd(host, discovery_path, &has_session_cmd);
+    let remote_was_fresh = ssh_exec(&has_target, &has_cmd).is_err();
     if remote_was_fresh {
-        create_remote_session(host, name, path)?;
+        create_remote_session(host, name, path, discovery_path)?;
     }
 
     let local_name = format!("remote_{}", name);
     let connect_cmd = if shell == "mosh" {
+        // Depth-0 or depth-1 mosh: direct connection is fine.
         format!(
             "env LC_ALL=en_US.UTF-8 mosh --predict=always {} -- tmux attach-session -t {}",
             shell_escape(host),
             shell_escape(name)
         )
     } else {
-        format!(
-            "ssh -tt {} tmux attach-session -t {}",
-            shell_escape(host),
-            shell_escape(name)
-        )
+        // Build the connect command for the local proxy pane.
+        // For depth-1: `ssh -tt host tmux attach-session -t name`
+        // For depth-2+: `ssh -tt jump_host ssh 'leaf' 'tmux attach-session -t name'`
+        let leaf_attach = format!("tmux attach-session -t {}", shell_escape(name));
+        match discovery_path {
+            Some(dp) if dp.len() > 2 => {
+                // Build inner hops using build_ssh_chain on the leaf-only portion,
+                // then add -tt on the outermost hop.
+                // hops = dp[1..] (strip "local"), jump = dp[1], rest = dp[2..]
+                let jump_host = &dp[1];
+                // Build the chain from the jump host onward (inner only).
+                // We use build_ssh_chain with a sub-path starting from the jump host.
+                let sub_path: Vec<String> = dp[1..].to_vec();
+                let inner = crate::federation::build_ssh_chain(&sub_path, &leaf_attach);
+                // inner = "ssh jump_host ssh 'leaf' 'tmux attach-session -t name'"
+                // but the outermost `ssh jump_host` needs `-tt`.
+                // Replace leading `ssh jump_host ` with `ssh -tt jump_host `.
+                let prefix = format!("ssh {} ", jump_host);
+                if inner.starts_with(&prefix) {
+                    format!("ssh -tt {} {}", jump_host, &inner[prefix.len()..])
+                } else {
+                    format!("ssh -tt {} {}", shell_escape(jump_host), inner)
+                }
+            }
+            // depth-0 or depth-1: unchanged
+            _ => format!(
+                "ssh -tt {} tmux attach-session -t {}",
+                shell_escape(host),
+                shell_escape(name)
+            ),
+        }
     };
 
     let need_create = should_recreate_proxy(&local_name, remote_was_fresh);
@@ -324,27 +426,40 @@ pub fn create_remote_proxy_session(
 }
 
 /// Captures the pane content of a remote tmux session via SSH.
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`.  Pass
+/// `None` for direct (depth-1) remotes; the behaviour is unchanged.  For
+/// transitive (depth-2+) remotes the call is routed through the jump host
+/// via `chain_cmd`, matching the pattern used by the other write-path helpers.
 pub fn capture_remote_pane_content(
     host: &str,
     session: &str,
     lines: u32,
+    discovery_path: Option<&[String]>,
 ) -> anyhow::Result<String> {
     let cmd = format!(
         "tmux capture-pane -t {} -p -J -S -{}",
         shell_escape(session),
         lines
     );
-    let out = ssh_exec(host, &cmd)?;
+    let (ssh_target, chained_cmd) = chain_cmd(host, discovery_path, &cmd);
+    let out = ssh_exec(&ssh_target, &chained_cmd)?;
     Ok(out.trim_end_matches('\n').to_string())
 }
 
 /// Removes the remmy session registry file for the given session name on the
 /// remote host.
-pub fn remove_remote_registry_entry(host: &str, name: &str) -> anyhow::Result<()> {
-    ssh_exec(
-        host,
-        &format!("rm -f ~/.remmy/sessions/{}.json", shell_escape(name)),
-    )?;
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`.  Pass
+/// `None` for direct (depth-1) remotes; the behaviour is unchanged.
+pub fn remove_remote_registry_entry(
+    host: &str,
+    name: &str,
+    discovery_path: Option<&[String]>,
+) -> anyhow::Result<()> {
+    let cmd = format!("rm -f ~/.remmy/sessions/{}.json", shell_escape(name));
+    let (ssh_target, chained_cmd) = chain_cmd(host, discovery_path, &cmd);
+    ssh_exec(&ssh_target, &chained_cmd)?;
     Ok(())
 }
 
@@ -496,5 +611,49 @@ mod tests {
     fn sanitize_remote_payload_caps_at_256_chars() {
         let long = "x".repeat(1000);
         assert_eq!(sanitize_remote_payload(&long).len(), 256);
+    }
+
+    // Fix 8 — mosh+transitive guard
+    //
+    // `create_remote_proxy_session` must reject mosh when the discovery path
+    // has more than 2 segments (i.e. the host is not directly reachable from
+    // localhost).  The check must fire *before* any SSH call so it is
+    // synchronous and returns a plain `Err`.
+
+    /// Calling `create_remote_proxy_session` with `shell="mosh"` and a
+    /// 3-segment discovery path (local → jump → leaf) returns an error
+    /// whose message calls out "mosh is not supported for transitive hosts".
+    #[test]
+    fn mosh_transitive_host_returns_error() {
+        let dp: Vec<String> = vec!["local".to_string(), "jump".to_string(), "leaf".to_string()];
+        let result = create_remote_proxy_session("leaf", "my-session", "/work", "mosh", Some(&dp));
+        assert!(result.is_err(), "mosh + transitive must return Err");
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("mosh is not supported for transitive hosts"),
+            "error message must mention mosh unsupported for transitive; got: {msg}"
+        );
+    }
+
+    /// Depth-1 mosh (discovery_path has exactly 2 segments) must NOT be
+    /// rejected by the guard — the guard must remain a no-op in that case.
+    /// (The function may still fail for other reasons in a test environment;
+    /// that is acceptable — we assert only that the *mosh guard* did not
+    /// fire.)
+    #[test]
+    fn mosh_depth1_host_does_not_hit_transitive_guard() {
+        let dp: Vec<String> = vec!["local".to_string(), "jump".to_string()];
+        let result = create_remote_proxy_session("jump", "my-session", "/work", "mosh", Some(&dp));
+        // In a unit-test environment there is no real SSH or tmux, so the
+        // function will fail — but NOT with the mosh-transitive message.
+        if let Err(e) = result {
+            let msg = format!("{e:#}");
+            assert!(
+                !msg.contains("mosh is not supported for transitive hosts"),
+                "depth-1 mosh must not hit the transitive guard; got: {msg}"
+            );
+        }
+        // If it somehow succeeds (e.g. a tmux session named "my-session" already
+        // exists on the CI host), that's also fine.
     }
 }

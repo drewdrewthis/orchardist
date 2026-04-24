@@ -254,6 +254,16 @@ pub struct WorktreeRow {
     /// Physical layout of this worktree (`Bare` bare-repo+worktrees, or
     /// `Flat` single-clone-per-VM). Propagated from `CachedWorktree.layout`.
     pub layout: crate::cache::WorktreeLayout,
+    /// Full discovery path from `"local"` to the host that owns this worktree.
+    ///
+    /// `None` for local worktrees and depth-1 Remmy-type remotes. Set for
+    /// transitively-federated (OrchardProxy) worktrees when the row is
+    /// populated from an `OrchardState` that has been through the transitive
+    /// walker merge. The write-path uses this to build a nested SSH chain via
+    /// [`crate::federation::build_ssh_chain`].
+    ///
+    /// Example: `Some(["local", "boxd", "scenario-voice-agents.boxd.sh"])`
+    pub discovery_path: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------

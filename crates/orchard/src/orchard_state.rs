@@ -24,6 +24,12 @@ pub struct OrchardState {
     pub standalone_sessions: Vec<StandaloneSessionRow>,
     /// Reachability state keyed by SSH host name.
     pub hosts: HashMap<String, HostState>,
+    /// Transitive-federation walk errors from the most recent refresh.
+    ///
+    /// One entry per node that failed during the walk. The walk continues
+    /// after each failure (non-fatal). Empty when no transitive federation
+    /// is configured or all hops succeeded.
+    pub transitive_errors: Vec<crate::transitive_walker::TransitiveError>,
 }
 
 impl OrchardState {
@@ -33,6 +39,7 @@ impl OrchardState {
             repos: Vec::new(),
             standalone_sessions: Vec::new(),
             hosts: HashMap::new(),
+            transitive_errors: Vec::new(),
         }
     }
 
@@ -100,6 +107,13 @@ pub struct WorktreeState {
     /// Physical layout of this worktree — `Bare` (bare repo + linked
     /// worktrees) or `Flat` (single non-bare clone per BoxdFork VM).
     pub layout: crate::cache::WorktreeLayout,
+    /// Full discovery path from `"local"` to the host that owns this worktree.
+    ///
+    /// `None` for local worktrees and direct (depth-1) remotes when not set
+    /// by the merge path. Set during transitive federation merge.
+    ///
+    /// Example: `Some(["local", "boxd", "scenario-voice-agents.boxd.sh"])`
+    pub discovery_path: Option<Vec<String>>,
 }
 
 impl WorktreeState {
@@ -230,6 +244,11 @@ pub struct SessionState {
     pub started_at: Option<u64>,
     /// Unix timestamp of the last activity in this session.
     pub last_activity_at: Option<u64>,
+    /// Full discovery path from `"local"` to the host that owns this session.
+    ///
+    /// Set during transitive federation merge; `None` for local sessions and
+    /// direct (depth-1) remotes when the path is not propagated.
+    pub discovery_path: Option<Vec<String>>,
 }
 
 /// Window within a session, with nested panes.
@@ -412,6 +431,7 @@ impl From<&EnrichedSession> for SessionState {
             windows,
             started_at: s.started_at,
             last_activity_at: s.last_activity_at,
+            discovery_path: None,
         }
     }
 }
@@ -454,6 +474,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             ahead_behind,
             last_commit_at: row.worktree_last_commit_at.clone(),
             layout: row.layout,
+            discovery_path: row.discovery_path.clone(),
         }
     }
 }
@@ -494,6 +515,7 @@ mod tests {
             worktree_behind: None,
             worktree_last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 
@@ -519,6 +541,7 @@ mod tests {
             repos,
             standalone_sessions: Vec::new(),
             hosts: std::collections::HashMap::new(),
+            transitive_errors: Vec::new(),
         }
     }
 

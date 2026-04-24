@@ -23,7 +23,7 @@
 // ---------------------------------------------------------------------------
 
 /// A single CI check with its normalized state (wire-format mirror for schema gen).
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CheckInfo {
     /// Name of the check.
     pub name: String,
@@ -35,7 +35,7 @@ pub struct CheckInfo {
 }
 
 /// Two-bucket classification of all CI checks on a PR (wire-format mirror for schema gen).
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CiChecks {
     /// Checks classified as code CI.
     pub code: Vec<CheckInfo>,
@@ -69,8 +69,28 @@ pub enum WorkflowPhase {
 // JSON output types (versioned, camelCase) — mirrors of json_output.rs
 // ---------------------------------------------------------------------------
 
+/// A transitive-federation walk error surfaced in JSON output.
+///
+/// One entry per node that failed during the transitive walk. The walk
+/// continues after each failure (non-fatal). Empty when no transitive
+/// federation is configured or all hops succeeded.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonTransitiveError {
+    /// `host_dedup_key()` of the failing host.
+    pub dedup_key: String,
+    /// Full discovery path from `"local"` to the failing node.
+    pub discovery_path: Vec<String>,
+    /// The first element after `"local"` — the directly-configured root.
+    pub root: String,
+    /// Short, stable reason label (e.g. `"timeout (10s)"`, `"exit 255"`).
+    pub reason: String,
+    /// Which call failed: `"list-remotes"` or `"fetch"`.
+    pub phase: String,
+}
+
 /// Top-level versioned JSON output for `orchard --json`.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonOutput {
     /// Schema version number for forward compatibility.
@@ -81,10 +101,15 @@ pub struct JsonOutput {
     pub repos: Vec<JsonRepo>,
     /// Reachability state keyed by SSH host name.
     pub hosts: HashMap<String, JsonHostState>,
+    /// Transitive-federation walk errors from the most recent refresh.
+    ///
+    /// Empty when no transitive federation is configured or all hops succeeded.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub errors: Vec<JsonTransitiveError>,
 }
 
 /// A single repository in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonRepo {
     /// Repository slug in `owner/repo` format.
@@ -100,7 +125,7 @@ pub struct JsonRepo {
 }
 
 /// Commit distance from the upstream branch.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonAheadBehind {
     /// Commits ahead of upstream.
@@ -110,7 +135,7 @@ pub struct JsonAheadBehind {
 }
 
 /// A single worktree in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonWorktree {
     /// Absolute path to the worktree on disk.
@@ -147,10 +172,16 @@ pub struct JsonWorktree {
     /// ISO 8601 timestamp of the most recent activity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<String>,
+    /// Full discovery path from `"local"` to the host that owns this worktree.
+    ///
+    /// Absent for local worktrees and direct (depth-1) remotes when not set.
+    /// Example: `["local", "boxd", "scenario-voice-agents.boxd.sh"]`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_path: Option<Vec<String>>,
 }
 
 /// A child issue nested under a parent in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSubIssue {
     /// GitHub issue number.
@@ -162,7 +193,7 @@ pub struct JsonSubIssue {
 }
 
 /// Issue information in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonIssue {
     /// GitHub issue number.
@@ -190,7 +221,7 @@ pub struct JsonIssue {
 }
 
 /// A single review on a pull request in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonReview {
     /// GitHub login of the reviewer.
@@ -203,7 +234,7 @@ pub struct JsonReview {
 }
 
 /// Pull request information in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPr {
     /// GitHub PR number.
@@ -269,7 +300,7 @@ pub struct JsonPr {
 }
 
 /// Session information in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonSession {
     /// tmux session name.
@@ -288,10 +319,15 @@ pub struct JsonSession {
     pub claude: Option<JsonClaudeInfo>,
     /// Window hierarchy for this session.
     pub windows: Vec<JsonWindow>,
+    /// Full discovery path from `"local"` to the host that owns this session.
+    ///
+    /// Absent for local sessions and direct (depth-1) remotes when not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_path: Option<Vec<String>>,
 }
 
 /// Window within a session in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonWindow {
     /// Tmux's stable window index.
@@ -307,7 +343,7 @@ pub struct JsonWindow {
 }
 
 /// Individual pane within a window in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonPane {
     /// Zero-based sequential index in the flat pane list.
@@ -327,7 +363,7 @@ pub struct JsonPane {
 }
 
 /// Claude enrichment data in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonClaudeInfo {
     /// Claude state as a string: "working", "idle", "input", or "none".
@@ -377,7 +413,7 @@ pub struct JsonClaudeInfo {
 }
 
 /// Host reachability information in JSON output.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct JsonHostState {
     /// True when the SSH host responded to the last reachability check.
     pub reachable: bool,

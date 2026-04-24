@@ -38,25 +38,30 @@ pub(super) fn filter_stale(rows: &[derive::WorktreeRow]) -> Vec<derive::Worktree
 ///
 /// Handles both remote (SSH) and local worktrees. Kills any associated tmux
 /// session before removing the worktree from git.
+///
+/// For transitively-federated worktrees, `row.discovery_path` carries the
+/// hop chain and is forwarded to every remote write call so the SSH commands
+/// are routed through the correct intermediate hosts via nested SSH.
 pub(super) fn delete_task_row(
     row: &derive::WorktreeRow,
     global_config: &global_config::GlobalConfig,
 ) -> anyhow::Result<()> {
     let session_name = row.sessions.first().map(|s| s.tmux.name.as_str());
+    let dp = row.discovery_path.as_deref();
     if let Some(ref host) = row.worktree_host {
-        // Remote deletion
+        // Remote deletion — forward discovery_path for transitive hop chaining.
         if let Some(sess) = session_name {
-            let _ = remote::kill_remote_tmux_session(host, sess);
+            let _ = remote::kill_remote_tmux_session(host, sess, dp);
         }
         let slug = crate::paths::sanitize_branch_slug(&row.branch);
-        let _ = remote::remove_remote_registry_entry(host, &slug);
+        let _ = remote::remove_remote_registry_entry(host, &slug, dp);
         // Find the remote config matching this host to get the repo_path.
         let remote_cfg = global_config
             .repos
             .iter()
             .find_map(|repo| repo.remote_for_host(host));
         if let Some(remote_cfg) = remote_cfg {
-            remote::remove_remote_worktree(host, &remote_cfg.path, &row.worktree_path)?;
+            remote::remove_remote_worktree(host, &remote_cfg.path, &row.worktree_path, dp)?;
         }
         return Ok(());
     }

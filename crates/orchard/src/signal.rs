@@ -854,6 +854,7 @@ mod tests {
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         })
     }
 
@@ -915,6 +916,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
         }
     }
 

@@ -296,6 +296,7 @@ impl From<&SessionState> for JsonSession {
             last_activity_at: unix_to_iso8601(s.last_activity_at),
             claude,
             windows: s.windows.iter().map(Into::into).collect(),
+            discovery_path: s.discovery_path.clone(),
         }
     }
 }
@@ -330,6 +331,7 @@ impl From<&WorktreeState> for JsonWorktree {
                 .as_ref()
                 .and_then(|pr| pr.last_commit_pushed_at.clone())
                 .or_else(|| ws.last_commit_at.clone()),
+            discovery_path: ws.discovery_path.clone(),
         }
     }
 }
@@ -389,6 +391,7 @@ impl From<&StandaloneSessionRow> for JsonSession {
             last_activity_at: unix_to_iso8601(row.session.last_activity_at),
             claude,
             windows,
+            discovery_path: None, // standalone sessions don't carry discovery_path
         }
     }
 }
@@ -412,11 +415,25 @@ impl From<&OrchardState> for JsonOutput {
             })
             .collect();
 
+        let errors: Vec<JsonTransitiveError> = state
+            .transitive_errors
+            .iter()
+            .map(|e| JsonTransitiveError {
+                dedup_key: e.dedup_key.clone(),
+                discovery_path: e.discovery_path.clone(),
+                // root is derived from discovery_path[1] rather than a stored field.
+                root: e.root().unwrap_or_default().to_string(),
+                reason: e.reason.clone(),
+                phase: e.phase.clone(),
+            })
+            .collect();
+
         Self {
             version: 6,
             tmux_sessions: state.standalone_sessions.iter().map(Into::into).collect(),
             repos: state.repos.iter().map(Into::into).collect(),
             hosts,
+            errors,
         }
     }
 }
@@ -487,6 +504,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 
@@ -556,6 +574,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
         let output = JsonOutput::from(&state);
         let value = serde_json::to_value(&output).unwrap();
@@ -578,6 +597,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
         let output = JsonOutput::from(&state);
         let value = serde_json::to_value(&output).unwrap();
@@ -618,6 +638,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
         };
         let js = JsonSession::from(&session);
         assert_eq!(js.host, "local");
@@ -635,6 +656,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
         };
         let js = JsonSession::from(&session);
         assert!(js.claude.is_none());
@@ -651,6 +673,7 @@ mod tests {
             claude: None,
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
             windows: vec![
                 WindowState {
                     index: 0,
@@ -743,6 +766,7 @@ mod tests {
             claude: None,
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
             windows: vec![WindowState {
                 index: 0,
                 name: "main".to_string(),
@@ -907,6 +931,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
         }
     }
 
@@ -1126,6 +1151,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
         };
         let value = serde_json::to_value(JsonSession::from(&session)).unwrap();
         assert!(
@@ -1638,6 +1664,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
         let original = JsonOutput::from(&state);
 
@@ -1691,6 +1718,7 @@ mod tests {
             claude: None,
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
             windows: vec![WindowState {
                 index: 0,
                 name: "main".to_string(),
@@ -1959,6 +1987,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 

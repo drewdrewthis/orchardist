@@ -37,6 +37,13 @@ pub struct RemoteConfig {
     /// field are rejected at parse time, preventing silent misclassification.
     #[serde(rename = "type")]
     pub kind: RemoteKind,
+    /// When `true`, the transitive-federation walker will follow this remote's
+    /// own `orchard list-remotes` output to discover grandchild nodes.
+    ///
+    /// Defaults to `false` — opt-in per root so existing single-hop configs
+    /// are unaffected by deserialization of configs that predate this field.
+    #[serde(default)]
+    pub allow_transitive: bool,
 }
 
 fn default_remote_name() -> String {
@@ -437,6 +444,8 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
         shell: String,
         #[serde(rename = "type", default)]
         kind: Option<RemoteKind>,
+        #[serde(default)]
+        allow_transitive: bool,
         // Note: existing configs may carry a `fallback_kind` field; serde
         // silently ignores unknown fields, so no explicit field is needed.
     }
@@ -502,6 +511,7 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
                     // Legacy configs predate the `type` field; default to Remmy
                     // for backward compatibility when loading from disk.
                     kind: r.kind.unwrap_or(RemoteKind::Remmy),
+                    allow_transitive: r.allow_transitive,
                 })
                 .collect();
 
@@ -516,6 +526,7 @@ fn load_from_path(path: &PathBuf) -> GlobalConfig {
                     path: r.path.or(r.repo_path).unwrap_or_default(),
                     shell: r.shell,
                     kind: r.kind.unwrap_or(RemoteKind::Remmy),
+                    allow_transitive: r.allow_transitive,
                 });
             }
 
@@ -637,6 +648,8 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
         shell: Option<String>,
         #[serde(rename = "type", default)]
         kind: Option<RemoteKind>,
+        #[serde(default)]
+        allow_transitive: bool,
     }
 
     #[derive(Deserialize)]
@@ -665,6 +678,7 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
                     path,
                     shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
                     kind: r.kind.unwrap_or(RemoteKind::Remmy),
+                    allow_transitive: r.allow_transitive,
                 });
             }
         }
@@ -682,6 +696,7 @@ fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
             path,
             shell: r.shell.unwrap_or_else(|| "ssh".to_string()),
             kind: r.kind.unwrap_or(RemoteKind::Remmy),
+            allow_transitive: r.allow_transitive,
         });
     }
 
@@ -845,6 +860,7 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "mosh".to_string(),
                     kind: RemoteKind::Remmy,
+                    allow_transitive: false,
                 },
                 RemoteConfig {
                     name: "cpu".to_string(),
@@ -852,6 +868,7 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
+                    allow_transitive: false,
                 },
             ],
         };
@@ -883,6 +900,7 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "mosh".to_string(),
                     kind: RemoteKind::Remmy,
+                    allow_transitive: false,
                 },
                 RemoteConfig {
                     name: "cpu".to_string(),
@@ -890,6 +908,7 @@ mod tests {
                     path: "/home/ubuntu/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::Remmy,
+                    allow_transitive: false,
                 },
             ],
         };

@@ -156,6 +156,7 @@ fn dispatch_remmy_type_returns_remmy_adapter() {
         path: "~/repo".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::Remmy,
+        allow_transitive: false,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
     let adapter = RemoteAdapter::from_config(&cfg, ssh);
@@ -175,6 +176,7 @@ fn dispatch_boxd_shared_type_returns_boxd_shared_adapter() {
         path: "~/git-orchard-rs".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::BoxdShared,
+        allow_transitive: false,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
     let adapter = RemoteAdapter::from_config(&cfg, ssh);
@@ -194,6 +196,7 @@ fn dispatch_boxd_fork_type_returns_boxd_fork_adapter() {
         path: "~/langwatch".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::BoxdFork,
+        allow_transitive: false,
     };
     let ssh: Box<dyn SshExec> = Box::new(FakeSshExec::new());
     let adapter = RemoteAdapter::from_config(&cfg, ssh);
@@ -720,6 +723,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         ahead_behind: None,
         last_commit_at: None,
         layout: orchard::cache::WorktreeLayout::Bare,
+        discovery_path: None,
     };
 
     // Until `WorktreeState.layout` exists, we can still test the version bump.
@@ -732,6 +736,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         }],
         standalone_sessions: vec![],
         hosts: HashMap::new(),
+        transitive_errors: vec![],
     };
 
     let output = JsonOutput::from(&state);

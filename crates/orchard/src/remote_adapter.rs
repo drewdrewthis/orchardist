@@ -1082,6 +1082,7 @@ mod tests {
             path: "~/git-orchard-rs".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::OrchardProxy,
+            allow_transitive: false,
         };
         let adapter = RemoteAdapter::from_config(&cfg, Box::new(FakeSshExec::new()));
         match adapter {
@@ -1585,6 +1586,7 @@ mod tests {
                         ahead_behind: None,
                         last_commit_at: None,
                         last_activity_at: None,
+                        discovery_path: None,
                     },
                     JsonWorktree {
                         path: "/remote/wt2".to_string(),
@@ -1601,10 +1603,12 @@ mod tests {
                         ahead_behind: None,
                         last_commit_at: None,
                         last_activity_at: None,
+                        discovery_path: None,
                     },
                 ],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         write_snapshot_to(host, &snapshot, cache_dir.path()).expect("write snapshot");
@@ -1646,6 +1650,7 @@ mod tests {
                     path: "/remote/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::OrchardProxy,
+                    allow_transitive: false,
                 }],
             }],
             ..GlobalConfig::default()

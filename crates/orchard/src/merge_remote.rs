@@ -46,7 +46,25 @@ use crate::session::{
 /// Standalone sessions (top-level `tmux_sessions` in `JsonOutput`) are merged
 /// into `state.standalone_sessions`. Same `(name, host)` pair → one row. Same
 /// name on different hosts → both rows are kept.
+///
+/// `discovery_path` is the full path from `"local"` to `host`. When `Some`,
+/// it is stamped onto every `WorktreeState` and `SessionState` sourced from
+/// this snapshot. Pass `None` for direct (depth-1) remotes when the caller
+/// does not track federation topology.
 pub fn merge_remote_snapshot(state: &mut OrchardState, snapshot: JsonOutput, host: String) {
+    merge_remote_snapshot_with_path(state, snapshot, host, None);
+}
+
+/// Like [`merge_remote_snapshot`] but also stamps `discovery_path` onto every
+/// `WorktreeState` and `SessionState` sourced from the snapshot.
+///
+/// Called by the transitive-federation merge path.
+pub fn merge_remote_snapshot_with_path(
+    state: &mut OrchardState,
+    snapshot: JsonOutput,
+    host: String,
+    discovery_path: Option<Vec<String>>,
+) {
     // --- Repos and worktrees --------------------------------------------------
     for json_repo in snapshot.repos {
         // Find or create the matching RepoState.
@@ -76,7 +94,17 @@ pub fn merge_remote_snapshot(state: &mut OrchardState, snapshot: JsonOutput, hos
                 !(w_host == wt_host && w.path == path)
             });
 
-            let wt_state = worktree_state_from_json(json_wt, wt_host);
+            let mut wt_state = worktree_state_from_json(json_wt, wt_host);
+            // Stamp discovery_path if provided by the transitive walk.
+            if wt_state.discovery_path.is_none() {
+                wt_state.discovery_path = discovery_path.clone();
+            }
+            // Also stamp discovery_path onto all sessions in this worktree.
+            for sess in &mut wt_state.sessions {
+                if sess.discovery_path.is_none() {
+                    sess.discovery_path = discovery_path.clone();
+                }
+            }
             state.repos[repo_idx].worktrees.push(wt_state);
         }
     }
@@ -189,6 +217,11 @@ fn worktree_state_from_json(json_wt: JsonWorktree, host: String) -> WorktreeStat
         ahead_behind,
         last_commit_at: json_wt.last_commit_at,
         layout,
+        // Preserve the discovery_path serialised into the on-disk snapshot so
+        // that a TUI restart or cache-only `orchard --json` round-trip does not
+        // lose the transitive hop chain.  `merge_remote_snapshot_with_path` will
+        // overwrite with `None`-check semantics, so this is safe to populate here.
+        discovery_path: json_wt.discovery_path,
     }
 }
 
@@ -327,6 +360,10 @@ fn session_state_from_json(
         windows,
         started_at: None,
         last_activity_at: None,
+        // Preserve the discovery_path from the on-disk snapshot so that
+        // cache-reload restores the full hop chain.  The caller may overwrite
+        // this with a caller-supplied path (None-check semantics above).
+        discovery_path: json_session.discovery_path.clone(),
     }
 }
 
@@ -497,6 +534,7 @@ mod tests {
                 worktrees: vec![wt],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         }
     }
 
@@ -516,6 +554,7 @@ mod tests {
             status_glyph: "\u{1f7e2}".to_string(),
             is_main_worktree: false,
             last_activity_at: None,
+            discovery_path: None,
         }
     }
 
@@ -657,6 +696,7 @@ mod tests {
                 state_elapsed_sec: None,
             }),
             windows: vec![],
+            discovery_path: None,
         }];
         let mut pr = make_empty_pr(335, "issue329/federated", "open");
         pr.ci_code_state = Some("passing".to_string());
@@ -762,9 +802,11 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                discovery_path: None,
             }],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         let mut state = make_empty_state();
@@ -819,9 +861,11 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                discovery_path: None,
             }],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         let mut state = make_empty_state();
@@ -876,6 +920,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         };
         let local_wt2 = WorktreeState {
             path: "/local/repo-feat".to_string(),
@@ -890,6 +935,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         };
 
         let mut state = OrchardState {
@@ -901,6 +947,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
 
         let snapshot = JsonOutput {
@@ -917,6 +964,7 @@ mod tests {
                 ],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         merge_remote_snapshot(&mut state, snapshot, "vm.boxd.sh".to_string());
@@ -950,6 +998,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         };
 
         let mut state = OrchardState {
@@ -961,6 +1010,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
 
         // Snapshot entry for the same (host, path) but with enriched PR data.
@@ -982,6 +1032,7 @@ mod tests {
                 worktrees: vec![remote_wt],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         merge_remote_snapshot(&mut state, snapshot, "vm.boxd.sh".to_string());
@@ -1042,9 +1093,11 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                discovery_path: None,
             }],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         merge_remote_snapshot(&mut state, snapshot, "remote-host".to_string());
@@ -1106,6 +1159,7 @@ mod tests {
                 worktrees: vec![make_minimal_worktree("/remote/main", "main")],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         let state = build_state_with_snapshots(
@@ -1183,5 +1237,114 @@ mod tests {
         assert_eq!(ci.gate.len(), 1);
         assert_eq!(ci.gate[0].name, "license-check");
         assert_eq!(ci.gate[0].state, "failing");
+    }
+
+    // ---- Fix 1: cache-reload preserves discovery_path -----------------------
+
+    /// Regression test: worktree `discovery_path` survives a cache round-trip.
+    ///
+    /// When a depth-2 snapshot is written to disk with `discovery_path` set and
+    /// then loaded via `build_state_with_cached_snapshots_from`, the resulting
+    /// `WorktreeState` must have the correct `discovery_path`.
+    ///
+    /// Without the fix, `worktree_state_from_json` hardcoded `None` and the hop
+    /// chain was silently dropped, causing write-path operations (delete/launch/
+    /// kill) to SSH directly to the leaf host instead of routing through the jump.
+    #[test]
+    fn fix1_cache_reload_preserves_discovery_path() {
+        use crate::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
+        use crate::orchard_snapshot::write_snapshot_to;
+        use crate::remote_adapter::RemoteKind;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Build a snapshot whose worktree already has discovery_path set
+        // (as written by orchard refresh after a transitive walk).
+        let dp = vec!["local".to_string(), "B".to_string(), "C".to_string()];
+        let snapshot = JsonOutput {
+            version: 6,
+            tmux_sessions: vec![],
+            repos: vec![JsonRepo {
+                slug: "owner/repo".to_string(),
+                default_branch: None,
+                main_ci_state: None,
+                worktrees: vec![JsonWorktree {
+                    path: "/remote/wt".to_string(),
+                    branch: "issue99/branch".to_string(),
+                    host: None,
+                    layout: "bare".to_string(),
+                    ahead_behind: None,
+                    last_commit_at: None,
+                    issue: None,
+                    pr: None,
+                    sessions: vec![JsonSession {
+                        name: "sess1".to_string(),
+                        host: "local".to_string(),
+                        status: "running".to_string(),
+                        started_at: None,
+                        last_activity_at: None,
+                        claude: None,
+                        windows: vec![],
+                        discovery_path: Some(dp.clone()),
+                    }],
+                    display_group: "other".to_string(),
+                    status: "ready".to_string(),
+                    status_glyph: "\u{1f7e2}".to_string(),
+                    is_main_worktree: false,
+                    last_activity_at: None,
+                    discovery_path: Some(dp.clone()),
+                }],
+            }],
+            hosts: HashMap::new(),
+            errors: vec![],
+        };
+
+        // Write to cache as the "C" host (the transitive leaf).
+        write_snapshot_to("C", &snapshot, dir.path()).unwrap();
+
+        // Config: "B" is a directly-configured OrchardProxy.  "C" is not in
+        // config — it is discovered transitively and loaded via topology.
+        // For this test, we bypass topology and just manually add "C" to config
+        // so load_cached_snapshots_from finds it.  The important thing is that
+        // the discovery_path field on the JsonWorktree is preserved.
+        let config = GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: "owner/repo".to_string(),
+                path: "/local".to_string(),
+                remotes: vec![RemoteConfig {
+                    name: "C".to_string(),
+                    host: "C".to_string(),
+                    path: "/remote".to_string(),
+                    shell: "ssh".to_string(),
+                    kind: RemoteKind::OrchardProxy,
+                    allow_transitive: false,
+                }],
+            }],
+            ..GlobalConfig::default()
+        };
+
+        let state = build_state_with_cached_snapshots_from(&config, &HashMap::new(), dir.path());
+
+        let wt = state
+            .repos
+            .iter()
+            .flat_map(|r| r.worktrees.iter())
+            .find(|w| w.branch == "issue99/branch")
+            .expect("worktree must be present after cache-reload");
+
+        assert_eq!(
+            wt.discovery_path.as_deref(),
+            Some(dp.as_slice()),
+            "discovery_path must survive cache round-trip (fix1 regression)"
+        );
+
+        // Session discovery_path must also be preserved.
+        let sess = wt.sessions.first().expect("session must be present");
+        assert_eq!(
+            sess.discovery_path.as_deref(),
+            Some(dp.as_slice()),
+            "session discovery_path must survive cache round-trip (fix1 regression)"
+        );
     }
 }

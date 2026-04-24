@@ -143,7 +143,9 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Refreshes all sources: issues, PRs, worktrees, and tmux sessions for each repo.
+/// Refreshes all sources: issues, PRs, worktrees, tmux sessions, and runs
+/// the transitive federation walker so transitively-discovered host snapshots
+/// are written to cache before the next `build_state_with_cached_snapshots` call.
 ///
 /// Per-repo refreshes fan out concurrently so one slow GitHub API response
 /// can't delay the next repo.
@@ -161,6 +163,81 @@ fn refresh_all_sources(config: &GlobalConfig) {
     });
     if let Err(e) = cache_sources::refresh_tmux_sessions(None) {
         crate::logger::LOG.warn(&format!("watch: refresh tmux sessions failed: {e}"));
+    }
+
+    // Run the transitive federation walker so depth-2+ remotes are written to
+    // cache and picked up by the subsequent `build_state_with_cached_snapshots`.
+    refresh_transitive_federation(config);
+}
+
+/// Runs the transitive federation walker for all `allow_transitive=true`
+/// OrchardProxy roots in the config, writing per-host snapshot files and
+/// updating `federation_topology.json`.
+///
+/// Called exclusively from `refresh_all_sources` (full-refresh cycle). The
+/// written snapshots are then read back by `build_state_with_cached_snapshots`
+/// on the next state build.
+fn refresh_transitive_federation(config: &GlobalConfig) {
+    use crate::remote_adapter::{ProcessSshExec, RemoteKind};
+    use crate::transitive_walker::{WalkerConfig, walk};
+    use std::collections::HashSet;
+
+    let transitive_roots: Vec<(String, bool)> = {
+        let mut seen = HashSet::new();
+        config
+            .repos
+            .iter()
+            .flat_map(|r| r.remotes.iter())
+            .filter(|rm| rm.kind == RemoteKind::OrchardProxy && seen.insert(rm.host.clone()))
+            .map(|rm| (rm.host.clone(), rm.allow_transitive))
+            .collect()
+    };
+
+    if transitive_roots.is_empty() {
+        return;
+    }
+
+    let roots_ref: Vec<(&str, bool)> = transitive_roots
+        .iter()
+        .map(|(h, a)| (h.as_str(), *a))
+        .collect();
+
+    let ssh = Arc::new(ProcessSshExec) as Arc<dyn crate::remote_adapter::SshExec>;
+    let walker_cfg = WalkerConfig::new(ssh);
+    let walker_result = walk(&roots_ref, &walker_cfg);
+
+    // Log walker errors but don't abort — partial results are still useful.
+    for err in &walker_result.errors {
+        crate::logger::LOG.warn(&format!(
+            "watch: transitive federation error for {} ({}:{}): {}",
+            err.dedup_key,
+            err.phase,
+            err.reason,
+            err.discovery_path.join(" → ")
+        ));
+    }
+
+    // Write per-host snapshots and collect topology entries.
+    let mut topology_entries: Vec<(Vec<String>, String)> = Vec::new();
+    for (discovery_path, snapshot) in &walker_result.snapshots {
+        if discovery_path.len() > 2 {
+            // depth-2+: write snapshot to cache.
+            let host = discovery_path.last().cloned().unwrap_or_default();
+            let dedup_key =
+                crate::federation::host_dedup_key(&host).unwrap_or_else(|_| host.clone());
+            let _ = crate::orchard_snapshot::write_snapshot(&host, snapshot);
+            topology_entries.push((discovery_path.clone(), dedup_key));
+        }
+    }
+
+    // Persist topology so the next cold-start reads the transitive hosts.
+    if !topology_entries.is_empty() {
+        let topology = crate::federation_topology::build_topology(&topology_entries);
+        let _ = crate::federation_topology::write_topology(&topology);
+
+        // GC snapshots that are no longer in the topology.
+        let topology_read = crate::federation_topology::read_topology();
+        crate::federation_topology::gc_orphan_snapshots(topology_read.as_ref(), config);
     }
 }
 

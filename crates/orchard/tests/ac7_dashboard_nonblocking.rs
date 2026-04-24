@@ -118,9 +118,11 @@ fn orchard_json_with_cached_snapshot_returns_quickly() {
                 ahead_behind: None,
                 last_commit_at: None,
                 last_activity_at: None,
+                discovery_path: None,
             }],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     };
 
     write_snapshot_to(host, &snapshot, cache_dir.path()).expect("write snapshot");
@@ -135,6 +137,7 @@ fn orchard_json_with_cached_snapshot_returns_quickly() {
                 path: "/remote/repo".to_string(),
                 shell: "ssh".to_string(),
                 kind: RemoteKind::OrchardProxy,
+                allow_transitive: false,
             }],
         }],
         ..GlobalConfig::default()

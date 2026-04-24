@@ -309,6 +309,7 @@ mod tests {
             repos: vec![],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         }
     }
 
@@ -326,6 +327,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 
@@ -354,6 +356,7 @@ mod tests {
             windows: vec![],
             started_at: None,
             last_activity_at: None,
+            discovery_path: None,
         }];
         wt
     }
@@ -373,6 +376,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         }
     }
 
@@ -740,6 +744,7 @@ mod tests {
                 },
             }],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
 
         let mut d = seeded_debounce(&old);
@@ -781,6 +786,7 @@ mod tests {
                 },
             }],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
         let new = empty_state();
 

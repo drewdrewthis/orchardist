@@ -10,6 +10,13 @@
     "version"
   ],
   "properties": {
+    "errors": {
+      "description": "Transitive-federation walk errors from the most recent refresh.\n\nEmpty when no transitive federation is configured or all hops succeeded.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonTransitiveError"
+      }
+    },
     "hosts": {
       "description": "Reachability state keyed by SSH host name.",
       "type": "object",
@@ -661,6 +668,16 @@
             }
           ]
         },
+        "discoveryPath": {
+          "description": "Full discovery path from `\"local\"` to the host that owns this session.\n\nAbsent for local sessions and direct (depth-1) remotes when not set.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "host": {
           "description": "Host as a string: \"local\" or the SSH target.",
           "type": "string"
@@ -717,6 +734,42 @@
         },
         "title": {
           "description": "Sub-issue title.",
+          "type": "string"
+        }
+      }
+    },
+    "JsonTransitiveError": {
+      "description": "A transitive-federation walk error surfaced in JSON output.\n\nOne entry per node that failed during the transitive walk. The walk continues after each failure (non-fatal). Empty when no transitive federation is configured or all hops succeeded.",
+      "type": "object",
+      "required": [
+        "dedupKey",
+        "discoveryPath",
+        "phase",
+        "reason",
+        "root"
+      ],
+      "properties": {
+        "dedupKey": {
+          "description": "`host_dedup_key()` of the failing host.",
+          "type": "string"
+        },
+        "discoveryPath": {
+          "description": "Full discovery path from `\"local\"` to the failing node.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "phase": {
+          "description": "Which call failed: `\"list-remotes\"` or `\"fetch\"`.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Short, stable reason label (e.g. `\"timeout (10s)\"`, `\"exit 255\"`).",
+          "type": "string"
+        },
+        "root": {
+          "description": "The first element after `\"local\"` — the directly-configured root.",
           "type": "string"
         }
       }
@@ -787,6 +840,16 @@
         "branch": {
           "description": "Git branch checked out in this worktree.",
           "type": "string"
+        },
+        "discoveryPath": {
+          "description": "Full discovery path from `\"local\"` to the host that owns this worktree.\n\nAbsent for local worktrees and direct (depth-1) remotes when not set. Example: `[\"local\", \"boxd\", \"scenario-voice-agents.boxd.sh\"]`",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "displayGroup": {
           "description": "Display group as a snake_case string.",

@@ -309,6 +309,7 @@ pub fn build_state_with_hosts(
         repos,
         standalone_sessions,
         hosts: hosts.clone(),
+        transitive_errors: Vec::new(),
     }
 }
 
@@ -316,7 +317,28 @@ pub fn build_state_with_hosts(
 ///
 /// Intended for `--json` mode where the caller wants fresh data before output.
 /// Probes host reachability before attempting remote refreshes.
+///
+/// Uses default walker settings ([`crate::transitive_walker::DEFAULT_MAX_DEPTH`] and
+/// [`crate::transitive_walker::DEFAULT_PER_HOP_TIMEOUT`]).
 pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
+    refresh_and_build_with_walker_config(config, None, None)
+}
+
+/// Like [`refresh_and_build`] but allows overriding transitive-federation walker settings.
+///
+/// - `max_depth`: override [`crate::transitive_walker::DEFAULT_MAX_DEPTH`]
+///   (e.g. from `--max-depth` CLI flag).
+/// - `per_hop_timeout_secs`: override [`crate::transitive_walker::DEFAULT_PER_HOP_TIMEOUT`]
+///   (e.g. from `--per-hop-timeout` CLI flag).
+pub fn refresh_and_build_with_walker_config(
+    config: &GlobalConfig,
+    max_depth: Option<u32>,
+    per_hop_timeout_secs: Option<u64>,
+) -> OrchardState {
+    use crate::remote_adapter::ProcessSshExec;
+    use crate::transitive_walker::{WalkerConfig, walk};
+    use std::sync::Arc;
+
     // Best-effort restore of dead tmux sessions from cache before the first
     // refresh, so the subsequent tmux listing already reflects them.
     let _ = crate::restore::restore_all_local();
@@ -381,7 +403,96 @@ pub fn refresh_and_build(config: &GlobalConfig) -> OrchardState {
         }
     });
 
-    build_state_with_hosts(config, &hosts)
+    // Build base state from local caches and one-hop remotes.
+    let mut state = build_state_with_hosts(config, &hosts);
+
+    // --- Transitive federation walk ------------------------------------------
+    // Collect only OrchardProxy roots with allow_transitive=true.  Roots with
+    // allow_transitive=false need no child discovery; their snapshots are
+    // already fetched by the OrchardProxyAdapter phase above.
+    let transitive_roots: Vec<(&str, bool)> = {
+        let mut seen = HashSet::new();
+        config
+            .repos
+            .iter()
+            .flat_map(|r| r.remotes.iter())
+            .filter(|rm| {
+                rm.kind == crate::remote_adapter::RemoteKind::OrchardProxy
+                    && rm.allow_transitive
+                    && seen.insert(rm.host.clone())
+            })
+            .map(|rm| (rm.host.as_str(), rm.allow_transitive))
+            .collect()
+    };
+
+    if !transitive_roots.is_empty() {
+        let ssh = Arc::new(ProcessSshExec) as Arc<dyn crate::remote_adapter::SshExec>;
+        let mut walker_cfg = WalkerConfig::new(ssh)
+            // Depth-1 snapshots were already fetched by OrchardProxyAdapter above;
+            // the walker only needs list-remotes for depth-1 roots to find children.
+            .with_skip_depth1_snapshot();
+        if let Some(d) = max_depth {
+            walker_cfg = walker_cfg.with_max_depth(d);
+        }
+        if let Some(t) = per_hop_timeout_secs {
+            walker_cfg = walker_cfg.with_per_hop_timeout(std::time::Duration::from_secs(t));
+        }
+
+        let walker_result = walk(&transitive_roots, &walker_cfg);
+
+        // Write per-host snapshots and build topology entries.
+        let mut topology_entries: Vec<(Vec<String>, String)> = Vec::new();
+        for (discovery_path, snapshot) in &walker_result.snapshots {
+            let host = discovery_path.last().cloned().unwrap_or_default();
+            let dedup_key =
+                crate::federation::host_dedup_key(&host).unwrap_or_else(|_| host.clone());
+
+            // Only write and merge if depth > 1 (depth-1 already handled above).
+            if discovery_path.len() > 2 {
+                // Write snapshot cache file for this transitive host.
+                let _ = crate::orchard_snapshot::write_snapshot(&host, snapshot);
+
+                // Merge into state with discovery_path.
+                crate::merge_remote::merge_remote_snapshot_with_path(
+                    &mut state,
+                    (**snapshot).clone(),
+                    host.clone(),
+                    Some(discovery_path.clone()),
+                );
+
+                topology_entries.push((discovery_path.clone(), dedup_key));
+            } else {
+                // Depth-1: update discovery_path on already-merged worktrees.
+                // The one-hop merge above didn't set discovery_path — set it now.
+                let dedup = dedup_key.clone();
+                for repo in &mut state.repos {
+                    for wt in &mut repo.worktrees {
+                        if wt.host.as_deref() == Some(&dedup) || wt.host.as_deref() == Some(&host) {
+                            wt.discovery_path = Some(discovery_path.clone());
+                            for sess in &mut wt.sessions {
+                                sess.discovery_path = Some(discovery_path.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Persist topology.
+        if !topology_entries.is_empty() {
+            let topology = crate::federation_topology::build_topology(&topology_entries);
+            let _ = crate::federation_topology::write_topology(&topology);
+
+            // GC orphan snapshots.
+            let topology_read = crate::federation_topology::read_topology();
+            crate::federation_topology::gc_orphan_snapshots(topology_read.as_ref(), config);
+        }
+
+        // Surface transitive errors onto the state.
+        state.transitive_errors = walker_result.errors;
+    }
+
+    state
 }
 
 #[cfg(test)]
