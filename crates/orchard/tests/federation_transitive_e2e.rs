@@ -136,7 +136,11 @@ fn ac9_two_hop_graph_c_worktree_has_discovery_path() {
         ok(&list_remotes_json(&[("C", true)])),
     );
     fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
-    fake.insert("C", "orchard list-remotes --json", ok(&list_remotes_empty()));
+    fake.insert(
+        "C",
+        "orchard list-remotes --json",
+        ok(&list_remotes_empty()),
+    );
 
     let cfg = WalkerConfig::new(Arc::new(fake) as Arc<dyn orchard::remote_adapter::SshExec>);
     let result = walk(&[("B", true)], &cfg);
@@ -227,7 +231,11 @@ fn ac9_three_hop_graph_d_worktree_has_discovery_path() {
         ok(&list_remotes_json(&[("D", true)])),
     );
     fake.insert("D", "orchard --json", ok(&ser(&snap_d)));
-    fake.insert("D", "orchard list-remotes --json", ok(&list_remotes_empty()));
+    fake.insert(
+        "D",
+        "orchard list-remotes --json",
+        ok(&list_remotes_empty()),
+    );
 
     let cfg = WalkerConfig::new(Arc::new(fake) as Arc<dyn orchard::remote_adapter::SshExec>);
     let result = walk(&[("B", true)], &cfg);
@@ -310,8 +318,8 @@ fn ac9_cycle_graph_terminates_no_duplicates() {
         ok(&list_remotes_json(&[("A", true)])),
     );
 
-    let cfg =
-        WalkerConfig::new(Arc::new(fake) as Arc<dyn orchard::remote_adapter::SshExec>).with_max_depth(100);
+    let cfg = WalkerConfig::new(Arc::new(fake) as Arc<dyn orchard::remote_adapter::SshExec>)
+        .with_max_depth(100);
     let result = walk(&[("A", true)], &cfg);
 
     // Walk must terminate without error.
@@ -332,7 +340,10 @@ fn ac9_cycle_graph_terminates_no_duplicates() {
         .iter()
         .filter(|(p, _)| p.last().map(String::as_str) == Some("B"))
         .count();
-    assert_eq!(a_count, 1, "A must appear exactly once; seen-set prevents re-fetch");
+    assert_eq!(
+        a_count, 1,
+        "A must appear exactly once; seen-set prevents re-fetch"
+    );
     assert_eq!(b_count, 1, "B must appear exactly once");
 
     // Merge into state — both worktrees present, neither duplicated.

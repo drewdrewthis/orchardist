@@ -197,11 +197,10 @@ pub fn load_cached_snapshots_from(
         let transitive_hosts =
             crate::federation_topology::transitive_hosts_from_topology(&topology);
         for host in transitive_hosts {
-            if seen_hosts.insert(host.clone()) {
-                if let Some(snapshot) = read_snapshot_from(&host, cache_dir) {
+            if seen_hosts.insert(host.clone())
+                && let Some(snapshot) = read_snapshot_from(&host, cache_dir) {
                     results.push((host, snapshot));
                 }
-            }
         }
     }
 

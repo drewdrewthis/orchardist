@@ -244,8 +244,8 @@ pub fn gc_orphan_snapshots_in(
             known_keys.insert(entry.dedup_key.clone());
 
             // Soft TTL: log stale entries but keep them.
-            if let Ok(age_days) = age_days_from_iso8601(&entry.last_seen_at, now) {
-                if age_days > TOPOLOGY_SOFT_TTL_DAYS {
+            if let Ok(age_days) = age_days_from_iso8601(&entry.last_seen_at, now)
+                && age_days > TOPOLOGY_SOFT_TTL_DAYS {
                     log_event(
                         "remote_snapshot.stale",
                         &[
@@ -261,7 +261,6 @@ pub fn gc_orphan_snapshots_in(
                         ],
                     );
                 }
-            }
         }
     }
 
@@ -305,8 +304,8 @@ pub fn gc_orphan_snapshots_in(
                 .is_some_and(|n| n == entry.file_name())
         });
 
-        if !is_known {
-            if std::fs::remove_file(&path).is_ok() {
+        if !is_known
+            && std::fs::remove_file(&path).is_ok() {
                 log_event(
                     "remote_snapshot.gc_deleted",
                     &[(
@@ -316,7 +315,6 @@ pub fn gc_orphan_snapshots_in(
                 );
                 deleted.push(path);
             }
-        }
     }
 
     deleted

@@ -188,9 +188,7 @@ fn refresh_transitive_federation(config: &GlobalConfig) {
             .repos
             .iter()
             .flat_map(|r| r.remotes.iter())
-            .filter(|rm| {
-                rm.kind == RemoteKind::OrchardProxy && seen.insert(rm.host.clone())
-            })
+            .filter(|rm| rm.kind == RemoteKind::OrchardProxy && seen.insert(rm.host.clone()))
             .map(|rm| (rm.host.clone(), rm.allow_transitive))
             .collect()
     };
@@ -212,7 +210,9 @@ fn refresh_transitive_federation(config: &GlobalConfig) {
     for err in &walker_result.errors {
         crate::logger::LOG.warn(&format!(
             "watch: transitive federation error for {} ({}:{}): {}",
-            err.dedup_key, err.phase, err.reason,
+            err.dedup_key,
+            err.phase,
+            err.reason,
             err.discovery_path.join(" → ")
         ));
     }
@@ -223,8 +223,8 @@ fn refresh_transitive_federation(config: &GlobalConfig) {
         if discovery_path.len() > 2 {
             // depth-2+: write snapshot to cache.
             let host = discovery_path.last().cloned().unwrap_or_default();
-            let dedup_key = crate::federation::host_dedup_key(&host)
-                .unwrap_or_else(|_| host.clone());
+            let dedup_key =
+                crate::federation::host_dedup_key(&host).unwrap_or_else(|_| host.clone());
             let _ = crate::orchard_snapshot::write_snapshot(&host, snapshot);
             topology_entries.push((discovery_path.clone(), dedup_key));
         }
