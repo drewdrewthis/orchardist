@@ -245,22 +245,23 @@ pub fn gc_orphan_snapshots_in(
 
             // Soft TTL: log stale entries but keep them.
             if let Ok(age_days) = age_days_from_iso8601(&entry.last_seen_at, now)
-                && age_days > TOPOLOGY_SOFT_TTL_DAYS {
-                    log_event(
-                        "remote_snapshot.stale",
-                        &[
-                            (
-                                "dedup_key",
-                                serde_json::Value::String(entry.dedup_key.clone()),
-                            ),
-                            (
-                                "last_seen_at",
-                                serde_json::Value::String(entry.last_seen_at.clone()),
-                            ),
-                            ("age_days", serde_json::Value::Number(age_days.into())),
-                        ],
-                    );
-                }
+                && age_days > TOPOLOGY_SOFT_TTL_DAYS
+            {
+                log_event(
+                    "remote_snapshot.stale",
+                    &[
+                        (
+                            "dedup_key",
+                            serde_json::Value::String(entry.dedup_key.clone()),
+                        ),
+                        (
+                            "last_seen_at",
+                            serde_json::Value::String(entry.last_seen_at.clone()),
+                        ),
+                        ("age_days", serde_json::Value::Number(age_days.into())),
+                    ],
+                );
+            }
         }
     }
 
@@ -304,17 +305,16 @@ pub fn gc_orphan_snapshots_in(
                 .is_some_and(|n| n == entry.file_name())
         });
 
-        if !is_known
-            && std::fs::remove_file(&path).is_ok() {
-                log_event(
-                    "remote_snapshot.gc_deleted",
-                    &[(
-                        "path",
-                        serde_json::Value::String(path.display().to_string()),
-                    )],
-                );
-                deleted.push(path);
-            }
+        if !is_known && std::fs::remove_file(&path).is_ok() {
+            log_event(
+                "remote_snapshot.gc_deleted",
+                &[(
+                    "path",
+                    serde_json::Value::String(path.display().to_string()),
+                )],
+            );
+            deleted.push(path);
+        }
     }
 
     deleted

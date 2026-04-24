@@ -124,6 +124,9 @@ pub fn derive_worktree_rows(
             display_group,
             is_main_worktree,
             layout: wt.layout,
+            // CachedWorktree has no discovery_path; set for transitive rows via
+            // OrchardState enrichment after the derive pass.
+            discovery_path: None,
         });
 
         is_first_non_bare = false;

@@ -54,6 +54,36 @@ impl OrchardState {
 
         all
     }
+
+    /// Returns the `discovery_path` for any worktree on the given `host`.
+    ///
+    /// Scans all repos' worktrees and returns the first non-`None`
+    /// `discovery_path` whose final element matches `host`. All worktrees on
+    /// the same host share the same discovery path by construction (the
+    /// transitive walker records a single path per host), so returning the
+    /// first match is correct.
+    ///
+    /// Returns `None` when:
+    /// - the host has no worktrees in state, or
+    /// - all worktrees for that host have `discovery_path = None` (local /
+    ///   direct depth-1 remotes that pre-date federation or don't need chaining).
+    ///
+    /// Used by write-path callers to look up the SSH hop chain before
+    /// dispatching a remote command.
+    pub fn discovery_path_for_host<'a>(&'a self, host: &str) -> Option<&'a [String]> {
+        self.repos
+            .iter()
+            .flat_map(|r| r.worktrees.iter())
+            .find_map(|wt| {
+                let dp = wt.discovery_path.as_deref()?;
+                // The last element of discovery_path is the leaf host.
+                if dp.last().map(String::as_str) == Some(host) {
+                    Some(dp)
+                } else {
+                    None
+                }
+            })
+    }
 }
 
 impl Default for OrchardState {
@@ -474,7 +504,7 @@ impl From<&crate::derive::WorktreeRow> for WorktreeState {
             ahead_behind,
             last_commit_at: row.worktree_last_commit_at.clone(),
             layout: row.layout,
-            discovery_path: None,
+            discovery_path: row.discovery_path.clone(),
         }
     }
 }
@@ -515,6 +545,7 @@ mod tests {
             worktree_behind: None,
             worktree_last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 

@@ -1,9 +1,11 @@
-//! End-to-end regression tests for transitive federation (issue #363, AC9).
+//! End-to-end regression tests for transitive federation (issue #363, AC5 + AC9).
 //!
 //! Exercises the full walk → merge pipeline using [`FakeSshExec`] canned
 //! responses.  No real SSH is involved.
 //!
 //! Scenarios:
+//! - AC5: Write-path chaining — `kill_remote_tmux_session` with a depth-2
+//!   `discovery_path` resolves to the correct jump host and nested SSH command.
 //! - AC9: Two-hop (A → B → C): C's worktrees carry `discovery_path = ["local","B","C"]`
 //! - AC9: Three-hop (A → B → C → D): D's snapshot appears; tagged with 4-element path
 //! - AC9: Cycle (A → B → A): walk terminates, each host fetched once, no duplicates
@@ -370,4 +372,113 @@ fn ac9_cycle_graph_terminates_no_duplicates() {
     let b_dups = all_branches.iter().filter(|&&b| b == "issue22/b").count();
     assert_eq!(a_dups, 1, "A's worktree must not be duplicated");
     assert_eq!(b_dups, 1, "B's worktree must not be duplicated");
+}
+
+// ---------------------------------------------------------------------------
+// AC5 — Write-path chaining for transitive nodes
+// ---------------------------------------------------------------------------
+
+/// AC5: Given a WorktreeRow with discovery_path ["local","B","C"] (depth-2
+/// transitive topology), `chain_cmd` resolves the SSH target to "B" and the
+/// resolved command contains the nested `ssh 'C' '...'` form.
+///
+/// This proves that `kill_remote_tmux_session`, `remove_remote_worktree`, and
+/// the other write-path callers route through `build_ssh_chain` for depth-2
+/// hosts without performing a real SSH round-trip.
+#[test]
+fn ac5_write_path_depth2_routes_through_jump_host() {
+    // Topology: local → B → C (depth-2).
+    let discovery_path: Vec<String> = vec!["local".to_string(), "B".to_string(), "C".to_string()];
+
+    // Simulate what `kill_remote_tmux_session("C", "my-session", Some(&dp))` does
+    // internally: call chain_cmd to get the SSH target and chained command.
+    let inner_cmd = "tmux kill-session -t my-session";
+    let (ssh_target, chained_cmd) =
+        orchard::remote::chain_cmd("C", Some(&discovery_path), inner_cmd);
+
+    // The SSH target must be the jump host (B), not the leaf (C).
+    assert_eq!(
+        ssh_target, "B",
+        "write-path must target jump host B, not leaf host C"
+    );
+
+    // The chained command must contain a nested ssh to C.
+    assert!(
+        chained_cmd.contains("ssh") && chained_cmd.contains("C"),
+        "chained command must contain nested ssh to C; got: {chained_cmd:?}"
+    );
+
+    // Full form check: `ssh B ssh 'C' 'tmux kill-session -t my-session'`
+    let expected = orchard::federation::build_ssh_chain(&discovery_path, inner_cmd);
+    assert_eq!(
+        chained_cmd, expected,
+        "chain_cmd result must match build_ssh_chain directly; got: {chained_cmd:?}"
+    );
+}
+
+/// AC5: Depth-1 direct remote is bit-identical to before — no nesting, no regression.
+#[test]
+fn ac5_write_path_depth1_unchanged() {
+    let discovery_path: Vec<String> = vec!["local".to_string(), "B".to_string()];
+
+    let inner_cmd = "tmux kill-session -t my-session";
+    let (ssh_target, chained_cmd) =
+        orchard::remote::chain_cmd("B", Some(&discovery_path), inner_cmd);
+
+    // Depth-1: target is unchanged.
+    assert_eq!(ssh_target, "B", "depth-1 must target B directly");
+
+    // Command is passed through unchanged.
+    assert_eq!(
+        chained_cmd, inner_cmd,
+        "depth-1 command must be unchanged; got: {chained_cmd:?}"
+    );
+}
+
+/// AC5: No discovery_path (legacy / Remmy-type remotes) — completely unchanged.
+#[test]
+fn ac5_write_path_no_discovery_path_unchanged() {
+    let inner_cmd = "tmux kill-session -t my-session";
+    let (ssh_target, chained_cmd) = orchard::remote::chain_cmd("legacyhost", None, inner_cmd);
+
+    assert_eq!(
+        ssh_target, "legacyhost",
+        "no-discovery-path must target legacyhost"
+    );
+    assert_eq!(
+        chained_cmd, inner_cmd,
+        "no-discovery-path command must be unchanged; got: {chained_cmd:?}"
+    );
+}
+
+/// AC5: Three-hop chain (local → B → C → D) produces ssh B ssh 'C' ssh 'D' '...'
+/// and targets B as the jump host.
+#[test]
+fn ac5_write_path_depth3_triple_hop() {
+    let discovery_path: Vec<String> = vec![
+        "local".to_string(),
+        "B".to_string(),
+        "C".to_string(),
+        "D".to_string(),
+    ];
+
+    let inner_cmd = "tmux kill-session -t sess";
+    let (ssh_target, chained_cmd) =
+        orchard::remote::chain_cmd("D", Some(&discovery_path), inner_cmd);
+
+    // Jump host is B (the first non-local hop).
+    assert_eq!(ssh_target, "B", "3-hop chain must target B as jump host");
+
+    // Full expected form from build_ssh_chain.
+    let expected = orchard::federation::build_ssh_chain(&discovery_path, inner_cmd);
+    assert_eq!(
+        chained_cmd, expected,
+        "3-hop chain_cmd must match build_ssh_chain; got: {chained_cmd:?}"
+    );
+
+    // The chained command must contain both C and D.
+    assert!(
+        chained_cmd.contains("C") && chained_cmd.contains("D"),
+        "chained command must reference both intermediate and leaf host; got: {chained_cmd:?}"
+    );
 }

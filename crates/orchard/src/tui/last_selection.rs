@@ -301,6 +301,7 @@ mod tests {
             worktree_behind: None,
             worktree_last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 

@@ -59,11 +59,17 @@ enum TaskEnterAction {
         host: Option<String>,
         /// When `Some`, select this pane after switching (tmux target "window.pane").
         pane_target: Option<String>,
+        /// Full discovery path for transitive SSH chaining.  `None` for local
+        /// and direct depth-1 remotes.
+        discovery_path: Option<Vec<String>>,
     },
     CreateSession {
         worktree_path: String,
         branch: Option<String>,
         host: Option<String>,
+        /// Full discovery path for transitive SSH chaining.  `None` for local
+        /// and direct depth-1 remotes.
+        discovery_path: Option<Vec<String>>,
     },
     /// Attach to or restart a standalone session.
     JoinStandalone {
@@ -491,6 +497,7 @@ impl App {
                         crate::session::Host::Local => None,
                         crate::session::Host::Remote(h) => Some(h.clone()),
                     };
+                    let discovery_path = vt.row.discovery_path.clone();
                     drop(tasks);
                     if let Some(ref h) = host
                         && self.block_if_host_unreachable(h)
@@ -503,6 +510,7 @@ impl App {
                         branch.as_deref(),
                         host.as_deref(),
                         None,
+                        discovery_path.as_deref(),
                     );
                     let _ = tmux::select_window(&session_name, window_idx);
                     return self.switch_target.is_some();
@@ -539,12 +547,14 @@ impl App {
                         branch: Some(vt.row.branch.clone()),
                         host,
                         pane_target,
+                        discovery_path: vt.row.discovery_path.clone(),
                     }
                 } else {
                     TaskEnterAction::CreateSession {
                         worktree_path: vt.row.worktree_path.clone(),
                         branch: Some(vt.row.branch.clone()),
                         host: vt.row.worktree_host.clone(),
+                        discovery_path: vt.row.discovery_path.clone(),
                     }
                 }
             });
@@ -559,6 +569,7 @@ impl App {
                 branch,
                 host,
                 pane_target,
+                discovery_path,
             }) => {
                 if let Some(ref h) = host
                     && self.block_if_host_unreachable(h)
@@ -571,6 +582,7 @@ impl App {
                     branch.as_deref(),
                     host.as_deref(),
                     None,
+                    discovery_path.as_deref(),
                 );
                 // Select specific pane after switching if a sub-row was active.
                 if let Some(ref target) = pane_target {
@@ -583,6 +595,7 @@ impl App {
                 worktree_path,
                 branch,
                 host,
+                discovery_path,
             }) => {
                 if let Some(ref h) = host
                     && self.block_if_host_unreachable(h)
@@ -598,6 +611,7 @@ impl App {
                     branch.as_deref(),
                     host.as_deref(),
                     None,
+                    discovery_path.as_deref(),
                 )
             }
             Some(TaskEnterAction::JoinStandalone {
@@ -959,6 +973,7 @@ impl App {
         branch: Option<&str>,
         remote_host: Option<&str>,
         pr: Option<&crate::types::PrInfo>,
+        discovery_path: Option<&[String]>,
     ) -> bool {
         if let Some(host) = remote_host {
             // Look up the shell preference from the matching remote config.
@@ -969,7 +984,13 @@ impl App {
                 .find_map(|repo| repo.remote_for_host(host))
                 .map(|r| r.shell.clone())
                 .unwrap_or_else(|| "ssh".to_string());
-            match remote::create_remote_proxy_session(host, session_name, worktree_path, &shell) {
+            match remote::create_remote_proxy_session(
+                host,
+                session_name,
+                worktree_path,
+                &shell,
+                discovery_path,
+            ) {
                 Ok(local_name) => {
                     self.switch_target = Some(local_name);
                     true
@@ -2589,6 +2610,7 @@ mod tests {
             display_group: group,
             is_main_worktree: false,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 

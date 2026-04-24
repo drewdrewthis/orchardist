@@ -2443,6 +2443,7 @@ mod tests {
             display_group: group,
             is_main_worktree: false,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 
@@ -3132,6 +3133,7 @@ mod tests {
             display_group: group,
             is_main_worktree: false,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 
@@ -4697,6 +4699,7 @@ mod tests {
             display_group: DisplayGroup::Other,
             is_main_worktree: false,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         }
     }
 
