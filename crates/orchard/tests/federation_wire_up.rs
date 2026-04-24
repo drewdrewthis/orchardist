@@ -113,9 +113,11 @@ fn make_json_output_with_enriched_worktree(
                 status_glyph: "\u{1f7e2}".to_string(),
                 is_main_worktree: false,
                 last_activity_at: None,
+                discovery_path: None,
             }],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     }
 }
 
