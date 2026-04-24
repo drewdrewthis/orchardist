@@ -1082,6 +1082,7 @@ mod tests {
             path: "~/git-orchard-rs".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::OrchardProxy,
+            allow_transitive: false,
         };
         let adapter = RemoteAdapter::from_config(&cfg, Box::new(FakeSshExec::new()));
         match adapter {
@@ -1646,6 +1647,7 @@ mod tests {
                     path: "/remote/repo".to_string(),
                     shell: "ssh".to_string(),
                     kind: RemoteKind::OrchardProxy,
+                    allow_transitive: false,
                 }],
             }],
             ..GlobalConfig::default()
