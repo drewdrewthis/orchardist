@@ -46,6 +46,7 @@ pub mod signal;
 pub mod sources;
 pub mod swr;
 pub mod tmux;
+pub mod transitive_walker;
 pub mod tui;
 pub mod types;
 pub mod watch;
