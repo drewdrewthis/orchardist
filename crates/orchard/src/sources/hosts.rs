@@ -158,6 +158,7 @@ mod tests {
             path: "/tmp/repo".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::Remmy,
+            allow_transitive: false,
         }
     }
 
@@ -218,6 +219,7 @@ mod tests {
             path: "/tmp".to_string(),
             shell: "ssh".to_string(),
             kind: crate::remote_adapter::RemoteKind::Remmy,
+            allow_transitive: false,
         };
 
         let start = Instant::now();
@@ -334,6 +336,7 @@ mod tests {
             path: "/tmp".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::OrchardProxy,
+            allow_transitive: false,
         };
 
         let start = Instant::now();
@@ -374,6 +377,7 @@ mod tests {
                 path: "/tmp".to_string(),
                 shell: "ssh".to_string(),
                 kind: RemoteKind::OrchardProxy,
+                allow_transitive: false,
             })
             .collect();
 
@@ -478,6 +482,7 @@ mod tests {
             path: "/tmp/repo".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::OrchardProxy,
+            allow_transitive: false,
         };
 
         let reachable = probe_reachability_for_remote(&remote);
@@ -537,6 +542,7 @@ mod tests {
             path: "/tmp/repo".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::Remmy,
+            allow_transitive: false,
         };
 
         let reachable = probe_reachability_for_remote(&remote);

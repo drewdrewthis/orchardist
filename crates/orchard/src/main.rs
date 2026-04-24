@@ -13,6 +13,7 @@ use crossterm::{
 use orchard::build_state;
 use orchard::cache;
 use orchard::chat;
+use orchard::federation;
 use orchard::global_config;
 use orchard::heal;
 use orchard::hook_enrich;
@@ -104,6 +105,7 @@ fn main() {
         "refresh" => handle_refresh(),
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
+        "list-remotes" => handle_list_remotes(json_flag),
         _ => {
             if json_flag {
                 handle_json();
@@ -148,6 +150,48 @@ fn handle_upgrade() {
     eprintln!(
         "Download the latest from: https://github.com/drewdrewthis/git-orchard-rs/releases/latest"
     );
+}
+
+/// Outputs the list of configured remotes in JSON format.
+///
+/// When `--json` is present, serialises a [`federation::ListRemotesOutput`]
+/// to stdout.  Without `--json`, prints a human-readable summary.
+///
+/// The JSON wire format is versioned with its OWN independent version constant
+/// ([`federation::LIST_REMOTES_MIN_VERSION`]) — callers check `version >=
+/// LIST_REMOTES_MIN_VERSION` (lower bound, NOT an exact whitelist).  This
+/// avoids the version-skew trap in `JsonOutput`'s exact-whitelist design.
+fn handle_list_remotes(json: bool) {
+    let config = global_config::load_global_config();
+
+    if json {
+        let output = federation::build_list_remotes_output(&config);
+        match serde_json::to_string_pretty(&output) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("list-remotes: failed to serialize output: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let all_remotes: Vec<_> = config.repos.iter().flat_map(|r| r.remotes.iter()).collect();
+        if all_remotes.is_empty() {
+            println!("No remotes configured.");
+        } else {
+            for r in &all_remotes {
+                println!(
+                    "{} ({}) — {}",
+                    r.name,
+                    r.host,
+                    if r.allow_transitive {
+                        "transitive"
+                    } else {
+                        "direct"
+                    }
+                );
+            }
+        }
+    }
 }
 
 /// Runs the heal command in CLI mode (non-TUI).

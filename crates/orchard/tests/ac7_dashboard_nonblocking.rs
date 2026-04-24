@@ -135,6 +135,7 @@ fn orchard_json_with_cached_snapshot_returns_quickly() {
                 path: "/remote/repo".to_string(),
                 shell: "ssh".to_string(),
                 kind: RemoteKind::OrchardProxy,
+                allow_transitive: false,
             }],
         }],
         ..GlobalConfig::default()

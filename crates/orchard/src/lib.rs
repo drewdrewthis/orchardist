@@ -16,6 +16,7 @@ pub mod claude_state;
 pub mod config;
 pub mod derive;
 pub mod events;
+pub mod federation;
 pub mod git;
 pub mod git_parse;
 pub mod github;
