@@ -326,22 +326,22 @@ pub fn create_remote_proxy_session(
 ) -> anyhow::Result<String> {
     let shell = if shell.is_empty() { "ssh" } else { shell };
 
+    // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
+    // BEFORE any SSH is attempted to avoid a cryptic network-layer failure later.
+    if shell == "mosh" && discovery_path.is_some_and(|dp| dp.len() > 2) {
+        anyhow::bail!(
+            "mosh is not supported for transitive hosts ({}); \
+             change this remote's shell to ssh",
+            discovery_path.unwrap().join(" -> ")
+        );
+    }
+
     // Create the remote session if it doesn't exist yet.
     let has_session_cmd = format!("tmux has-session -t {}", shell_escape(name));
     let (has_target, has_cmd) = chain_cmd(host, discovery_path, &has_session_cmd);
     let remote_was_fresh = ssh_exec(&has_target, &has_cmd).is_err();
     if remote_was_fresh {
         create_remote_session(host, name, path, discovery_path)?;
-    }
-
-    // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
-    // early to avoid a cryptic network-layer failure later.
-    if shell == "mosh" && discovery_path.map_or(false, |dp| dp.len() > 2) {
-        anyhow::bail!(
-            "mosh is not supported for transitive hosts ({}); \
-             change this remote's shell to ssh",
-            discovery_path.unwrap().join(" -> ")
-        );
     }
 
     let local_name = format!("remote_{}", name);
@@ -625,11 +625,7 @@ mod tests {
     /// whose message calls out "mosh is not supported for transitive hosts".
     #[test]
     fn mosh_transitive_host_returns_error() {
-        let dp: Vec<String> = vec![
-            "local".to_string(),
-            "jump".to_string(),
-            "leaf".to_string(),
-        ];
+        let dp: Vec<String> = vec!["local".to_string(), "jump".to_string(), "leaf".to_string()];
         let result = create_remote_proxy_session("leaf", "my-session", "/work", "mosh", Some(&dp));
         assert!(result.is_err(), "mosh + transitive must return Err");
         let msg = format!("{:#}", result.unwrap_err());
@@ -647,8 +643,7 @@ mod tests {
     #[test]
     fn mosh_depth1_host_does_not_hit_transitive_guard() {
         let dp: Vec<String> = vec!["local".to_string(), "jump".to_string()];
-        let result =
-            create_remote_proxy_session("jump", "my-session", "/work", "mosh", Some(&dp));
+        let result = create_remote_proxy_session("jump", "my-session", "/work", "mosh", Some(&dp));
         // In a unit-test environment there is no real SSH or tmux, so the
         // function will fail — but NOT with the mosh-transitive message.
         if let Err(e) = result {

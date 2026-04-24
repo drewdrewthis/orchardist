@@ -54,7 +54,6 @@ impl OrchardState {
 
         all
     }
-
 }
 
 impl Default for OrchardState {
