@@ -416,17 +416,24 @@ pub fn create_remote_proxy_session(
 }
 
 /// Captures the pane content of a remote tmux session via SSH.
+///
+/// `discovery_path` is the full hop chain from `"local"` to `host`.  Pass
+/// `None` for direct (depth-1) remotes; the behaviour is unchanged.  For
+/// transitive (depth-2+) remotes the call is routed through the jump host
+/// via `chain_cmd`, matching the pattern used by the other write-path helpers.
 pub fn capture_remote_pane_content(
     host: &str,
     session: &str,
     lines: u32,
+    discovery_path: Option<&[String]>,
 ) -> anyhow::Result<String> {
     let cmd = format!(
         "tmux capture-pane -t {} -p -J -S -{}",
         shell_escape(session),
         lines
     );
-    let out = ssh_exec(host, &cmd)?;
+    let (ssh_target, chained_cmd) = chain_cmd(host, discovery_path, &cmd);
+    let out = ssh_exec(&ssh_target, &chained_cmd)?;
     Ok(out.trim_end_matches('\n').to_string())
 }
 

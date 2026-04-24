@@ -719,6 +719,7 @@ impl App {
                     crate::session::Host::Remote(h) => Some(h.clone()),
                 };
                 let pane_target = self.resolve_pane_target(session);
+                let discovery_path = vt.row.discovery_path.clone();
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let content = if let Some(host) = remote_host {
@@ -726,6 +727,7 @@ impl App {
                             &host,
                             &session_name,
                             PANE_CAPTURE_LINES,
+                            discovery_path.as_deref(),
                         )
                         .unwrap_or_default()
                     } else {
