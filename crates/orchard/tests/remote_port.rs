@@ -723,6 +723,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         ahead_behind: None,
         last_commit_at: None,
         layout: orchard::cache::WorktreeLayout::Bare,
+        discovery_path: None,
     };
 
     // Until `WorktreeState.layout` exists, we can still test the version bump.
@@ -735,6 +736,7 @@ fn json_output_version_bumped_to_next_and_includes_layout_field() {
         }],
         standalone_sessions: vec![],
         hosts: HashMap::new(),
+        transitive_errors: vec![],
     };
 
     let output = JsonOutput::from(&state);
