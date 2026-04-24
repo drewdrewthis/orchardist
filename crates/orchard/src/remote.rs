@@ -334,9 +334,19 @@ pub fn create_remote_proxy_session(
         create_remote_session(host, name, path, discovery_path)?;
     }
 
+    // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
+    // early to avoid a cryptic network-layer failure later.
+    if shell == "mosh" && discovery_path.map_or(false, |dp| dp.len() > 2) {
+        anyhow::bail!(
+            "mosh is not supported for transitive hosts ({}); \
+             change this remote's shell to ssh",
+            discovery_path.unwrap().join(" -> ")
+        );
+    }
+
     let local_name = format!("remote_{}", name);
     let connect_cmd = if shell == "mosh" {
-        // mosh doesn't support transitive hops — use direct host.
+        // Depth-0 or depth-1 mosh: direct connection is fine.
         format!(
             "env LC_ALL=en_US.UTF-8 mosh --predict=always {} -- tmux attach-session -t {}",
             shell_escape(host),
@@ -601,5 +611,54 @@ mod tests {
     fn sanitize_remote_payload_caps_at_256_chars() {
         let long = "x".repeat(1000);
         assert_eq!(sanitize_remote_payload(&long).len(), 256);
+    }
+
+    // Fix 8 — mosh+transitive guard
+    //
+    // `create_remote_proxy_session` must reject mosh when the discovery path
+    // has more than 2 segments (i.e. the host is not directly reachable from
+    // localhost).  The check must fire *before* any SSH call so it is
+    // synchronous and returns a plain `Err`.
+
+    /// Calling `create_remote_proxy_session` with `shell="mosh"` and a
+    /// 3-segment discovery path (local → jump → leaf) returns an error
+    /// whose message calls out "mosh is not supported for transitive hosts".
+    #[test]
+    fn mosh_transitive_host_returns_error() {
+        let dp: Vec<String> = vec![
+            "local".to_string(),
+            "jump".to_string(),
+            "leaf".to_string(),
+        ];
+        let result = create_remote_proxy_session("leaf", "my-session", "/work", "mosh", Some(&dp));
+        assert!(result.is_err(), "mosh + transitive must return Err");
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("mosh is not supported for transitive hosts"),
+            "error message must mention mosh unsupported for transitive; got: {msg}"
+        );
+    }
+
+    /// Depth-1 mosh (discovery_path has exactly 2 segments) must NOT be
+    /// rejected by the guard — the guard must remain a no-op in that case.
+    /// (The function may still fail for other reasons in a test environment;
+    /// that is acceptable — we assert only that the *mosh guard* did not
+    /// fire.)
+    #[test]
+    fn mosh_depth1_host_does_not_hit_transitive_guard() {
+        let dp: Vec<String> = vec!["local".to_string(), "jump".to_string()];
+        let result =
+            create_remote_proxy_session("jump", "my-session", "/work", "mosh", Some(&dp));
+        // In a unit-test environment there is no real SSH or tmux, so the
+        // function will fail — but NOT with the mosh-transitive message.
+        if let Err(e) = result {
+            let msg = format!("{e:#}");
+            assert!(
+                !msg.contains("mosh is not supported for transitive hosts"),
+                "depth-1 mosh must not hit the transitive guard; got: {msg}"
+            );
+        }
+        // If it somehow succeeds (e.g. a tmux session named "my-session" already
+        // exists on the CI host), that's also fine.
     }
 }
