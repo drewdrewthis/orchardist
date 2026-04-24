@@ -648,7 +648,6 @@ mod tests {
                     "direct-host".to_string(),
                     "transitive-child".to_string(),
                 ],
-                root: "direct-host".to_string(),
                 last_seen_at: "2026-01-01T00:00:00+00:00".to_string(),
             }],
         };

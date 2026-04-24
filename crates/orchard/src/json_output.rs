@@ -421,7 +421,8 @@ impl From<&OrchardState> for JsonOutput {
             .map(|e| JsonTransitiveError {
                 dedup_key: e.dedup_key.clone(),
                 discovery_path: e.discovery_path.clone(),
-                root: e.root.clone(),
+                // root is derived from discovery_path[1] rather than a stored field.
+                root: e.root().unwrap_or_default().to_string(),
                 reason: e.reason.clone(),
                 phase: e.phase.clone(),
             })

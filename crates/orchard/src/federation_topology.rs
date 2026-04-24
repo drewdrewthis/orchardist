@@ -66,6 +66,11 @@ pub const TOPOLOGY_SOFT_TTL_DAYS: u64 = 7;
 // ---------------------------------------------------------------------------
 
 /// A single entry in the topology file — one per transitively-discovered host.
+///
+/// Serde silently ignores unknown fields (no `deny_unknown_fields`), so
+/// existing `federation_topology.json` files that contain a `"root"` field
+/// will still deserialize correctly after the field was removed from this
+/// struct.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TopologyEntry {
@@ -75,12 +80,19 @@ pub struct TopologyEntry {
     ///
     /// Example: `["local", "boxd", "scenario-voice-agents.boxd.sh"]`
     pub discovery_path: Vec<String>,
-    /// The first element after `"local"` — the directly-configured root from
-    /// which this host was reached.
-    pub root: String,
     /// ISO 8601 UTC timestamp of the last time this host was seen during a
     /// successful walk.
     pub last_seen_at: String,
+}
+
+impl TopologyEntry {
+    /// Returns the directly-configured root host from which this node was
+    /// reached: `discovery_path[1]` (the first element after `"local"`).
+    ///
+    /// Returns `None` when `discovery_path` has fewer than 2 elements.
+    pub fn root(&self) -> Option<&str> {
+        self.discovery_path.get(1).map(String::as_str)
+    }
 }
 
 /// Top-level structure of `federation_topology.json`.
@@ -184,14 +196,10 @@ pub fn build_topology(entries: &[(Vec<String>, String)]) -> FederationTopology {
 
     let topology_entries: Vec<TopologyEntry> = entries
         .iter()
-        .map(|(path, key)| {
-            let root = path.get(1).cloned().unwrap_or_default();
-            TopologyEntry {
-                dedup_key: key.clone(),
-                discovery_path: path.clone(),
-                root,
-                last_seen_at: now.clone(),
-            }
+        .map(|(path, key)| TopologyEntry {
+            dedup_key: key.clone(),
+            discovery_path: path.clone(),
+            last_seen_at: now.clone(),
         })
         .collect();
 
@@ -388,11 +396,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn make_entry(key: &str, path: &[&str], root: &str) -> TopologyEntry {
+    fn make_entry(key: &str, path: &[&str], _root: &str) -> TopologyEntry {
+        // `root` is no longer stored as a field; it is derived from discovery_path[1].
         TopologyEntry {
             dedup_key: key.to_string(),
             discovery_path: path.iter().map(|s| s.to_string()).collect(),
-            root: root.to_string(),
             last_seen_at: "2026-01-01T00:00:00+00:00".to_string(),
         }
     }
@@ -432,7 +440,7 @@ mod tests {
         assert_eq!(loaded.version, TOPOLOGY_CURRENT_VERSION);
         assert_eq!(loaded.entries.len(), 2);
         assert_eq!(loaded.entries[0].dedup_key, "boxd@vm.boxd.sh");
-        assert_eq!(loaded.entries[0].root, "boxd");
+        assert_eq!(loaded.entries[0].root(), Some("boxd"));
     }
 
     #[test]
@@ -640,7 +648,6 @@ mod tests {
                 "root".to_string(),
                 "old-host".to_string(),
             ],
-            root: "root".to_string(),
             last_seen_at: "2020-01-01T00:00:00+00:00".to_string(), // way old
         };
         let topo = make_topology(vec![old_entry]);
@@ -668,7 +675,7 @@ mod tests {
         assert_eq!(topo.version, TOPOLOGY_CURRENT_VERSION);
         assert_eq!(topo.entries.len(), 1);
         assert_eq!(topo.entries[0].dedup_key, "child-key");
-        assert_eq!(topo.entries[0].root, "boxd");
+        assert_eq!(topo.entries[0].root(), Some("boxd"));
         assert_eq!(
             topo.entries[0].discovery_path,
             vec!["local", "boxd", "child"]

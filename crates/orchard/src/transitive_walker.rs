@@ -126,14 +126,23 @@ pub struct TransitiveError {
     ///
     /// Example: `["local", "boxd", "evals-v3-debug"]`
     pub discovery_path: Vec<String>,
-    /// The first element after `"local"` — the directly-configured root from
-    /// which this node was reached.
-    pub root: String,
     /// Short, stable reason label matching the vocabulary from
     /// [`crate::remote_adapter::classify_proxy_failure_reason`].
     pub reason: String,
-    /// Which call failed: `"list-remotes"` or `"fetch"`.
+    /// Which call failed: `"list-remotes"`, `"fetch"`, or
+    /// `"list_remotes_after_snapshot"`.
     pub phase: String,
+}
+
+impl TransitiveError {
+    /// Returns the directly-configured root host from which this node was
+    /// reached: `discovery_path[1]` (the first element after `"local"`).
+    ///
+    /// Returns `None` when `discovery_path` has fewer than 2 elements, which
+    /// should not occur in practice but is handled defensively.
+    pub fn root(&self) -> Option<&str> {
+        self.discovery_path.get(1).map(String::as_str)
+    }
 }
 
 /// Result of a single walker run.
@@ -158,7 +167,6 @@ struct FrontierNode {
     host: String,
     dedup_key: String,
     discovery_path: Vec<String>,
-    root: String,
     /// When `true`, skip the `orchard --json` call for this node.
     ///
     /// Set for depth-1 roots whose snapshot was already fetched by
@@ -262,7 +270,6 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
             host: host.to_string(),
             dedup_key: key,
             discovery_path: vec!["local".to_string(), host.to_string()],
-            root: host.to_string(),
             // Skip orchard --json for depth-1 roots when the pre-walker phase
             // already fetched them via OrchardProxyAdapter.
             skip_snapshot: config.skip_depth1_snapshot,
@@ -326,7 +333,6 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
                                     host: child_host,
                                     dedup_key: child_key,
                                     discovery_path: child_path,
-                                    root: node.root.clone(),
                                     // Depth 2+: always fetch orchard --json.
                                     skip_snapshot: false,
                                 });
@@ -405,7 +411,6 @@ fn visit_with_timeout(
             let err = TransitiveError {
                 dedup_key: node_for_result.dedup_key.clone(),
                 discovery_path: node_for_result.discovery_path.clone(),
-                root: node_for_result.root.clone(),
                 reason,
                 phase: "fetch".to_string(),
             };
@@ -436,7 +441,6 @@ fn visit_inner(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache) ->
             return HopOutcome::Error(TransitiveError {
                 dedup_key: node.dedup_key.clone(),
                 discovery_path: node.discovery_path.clone(),
-                root: node.root.clone(),
                 reason: format!("fetch failure for {}", node.host),
                 phase: "fetch".to_string(),
             });
@@ -533,7 +537,6 @@ fn call_list_remotes(node: &FrontierNode, ssh: &dyn SshExec) -> ListRemotesResul
             return ListRemotesResult::Err(TransitiveError {
                 dedup_key: node.dedup_key.clone(),
                 discovery_path: node.discovery_path.clone(),
-                root: node.root.clone(),
                 reason,
                 phase: "list-remotes".to_string(),
             });
@@ -552,7 +555,6 @@ fn call_list_remotes(node: &FrontierNode, ssh: &dyn SshExec) -> ListRemotesResul
         return ListRemotesResult::Err(TransitiveError {
             dedup_key: node.dedup_key.clone(),
             discovery_path: node.discovery_path.clone(),
-            root: node.root.clone(),
             reason,
             phase: "list-remotes".to_string(),
         });
@@ -564,7 +566,6 @@ fn call_list_remotes(node: &FrontierNode, ssh: &dyn SshExec) -> ListRemotesResul
             return ListRemotesResult::Err(TransitiveError {
                 dedup_key: node.dedup_key.clone(),
                 discovery_path: node.discovery_path.clone(),
-                root: node.root.clone(),
                 reason: "parse failure".to_string(),
                 phase: "list-remotes".to_string(),
             });
@@ -575,7 +576,6 @@ fn call_list_remotes(node: &FrontierNode, ssh: &dyn SshExec) -> ListRemotesResul
         return ListRemotesResult::Err(TransitiveError {
             dedup_key: node.dedup_key.clone(),
             discovery_path: node.discovery_path.clone(),
-            root: node.root.clone(),
             reason: e,
             phase: "list-remotes".to_string(),
         });
@@ -988,7 +988,11 @@ mod tests {
         assert_eq!(result.errors.len(), 1, "exactly one error for C");
         let c_key = host_dedup_key("C").unwrap();
         assert_eq!(result.errors[0].dedup_key, c_key);
-        assert!(!result.errors[0].root.is_empty(), "root must be set");
+        // root() is now computed from discovery_path[1] instead of a stored field.
+        assert!(
+            result.errors[0].root().is_some(),
+            "root() must return Some for a well-formed discovery_path"
+        );
         assert!(
             !result.errors[0].discovery_path.is_empty(),
             "discovery_path must be set"
