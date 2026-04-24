@@ -46,7 +46,25 @@ use crate::session::{
 /// Standalone sessions (top-level `tmux_sessions` in `JsonOutput`) are merged
 /// into `state.standalone_sessions`. Same `(name, host)` pair → one row. Same
 /// name on different hosts → both rows are kept.
+///
+/// `discovery_path` is the full path from `"local"` to `host`. When `Some`,
+/// it is stamped onto every `WorktreeState` and `SessionState` sourced from
+/// this snapshot. Pass `None` for direct (depth-1) remotes when the caller
+/// does not track federation topology.
 pub fn merge_remote_snapshot(state: &mut OrchardState, snapshot: JsonOutput, host: String) {
+    merge_remote_snapshot_with_path(state, snapshot, host, None);
+}
+
+/// Like [`merge_remote_snapshot`] but also stamps `discovery_path` onto every
+/// `WorktreeState` and `SessionState` sourced from the snapshot.
+///
+/// Called by the transitive-federation merge path.
+pub fn merge_remote_snapshot_with_path(
+    state: &mut OrchardState,
+    snapshot: JsonOutput,
+    host: String,
+    discovery_path: Option<Vec<String>>,
+) {
     // --- Repos and worktrees --------------------------------------------------
     for json_repo in snapshot.repos {
         // Find or create the matching RepoState.
@@ -76,7 +94,17 @@ pub fn merge_remote_snapshot(state: &mut OrchardState, snapshot: JsonOutput, hos
                 !(w_host == wt_host && w.path == path)
             });
 
-            let wt_state = worktree_state_from_json(json_wt, wt_host);
+            let mut wt_state = worktree_state_from_json(json_wt, wt_host);
+            // Stamp discovery_path if provided by the transitive walk.
+            if wt_state.discovery_path.is_none() {
+                wt_state.discovery_path = discovery_path.clone();
+            }
+            // Also stamp discovery_path onto all sessions in this worktree.
+            for sess in &mut wt_state.sessions {
+                if sess.discovery_path.is_none() {
+                    sess.discovery_path = discovery_path.clone();
+                }
+            }
             state.repos[repo_idx].worktrees.push(wt_state);
         }
     }
@@ -189,6 +217,7 @@ fn worktree_state_from_json(json_wt: JsonWorktree, host: String) -> WorktreeStat
         ahead_behind,
         last_commit_at: json_wt.last_commit_at,
         layout,
+        discovery_path: None,
     }
 }
 
@@ -327,6 +356,7 @@ fn session_state_from_json(
         windows,
         started_at: None,
         last_activity_at: None,
+        discovery_path: None,
     }
 }
 
@@ -497,6 +527,7 @@ mod tests {
                 worktrees: vec![wt],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         }
     }
 
@@ -516,6 +547,7 @@ mod tests {
             status_glyph: "\u{1f7e2}".to_string(),
             is_main_worktree: false,
             last_activity_at: None,
+            discovery_path: None,
         }
     }
 
@@ -657,6 +689,7 @@ mod tests {
                 state_elapsed_sec: None,
             }),
             windows: vec![],
+            discovery_path: None,
         }];
         let mut pr = make_empty_pr(335, "issue329/federated", "open");
         pr.ci_code_state = Some("passing".to_string());
@@ -762,9 +795,11 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                discovery_path: None,
             }],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         let mut state = make_empty_state();
@@ -819,9 +854,11 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                discovery_path: None,
             }],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         let mut state = make_empty_state();
@@ -876,6 +913,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         };
         let local_wt2 = WorktreeState {
             path: "/local/repo-feat".to_string(),
@@ -890,6 +928,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         };
 
         let mut state = OrchardState {
@@ -901,6 +940,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
 
         let snapshot = JsonOutput {
@@ -917,6 +957,7 @@ mod tests {
                 ],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         merge_remote_snapshot(&mut state, snapshot, "vm.boxd.sh".to_string());
@@ -950,6 +991,7 @@ mod tests {
             ahead_behind: None,
             last_commit_at: None,
             layout: crate::cache::WorktreeLayout::Bare,
+            discovery_path: None,
         };
 
         let mut state = OrchardState {
@@ -961,6 +1003,7 @@ mod tests {
             }],
             standalone_sessions: vec![],
             hosts: HashMap::new(),
+            transitive_errors: vec![],
         };
 
         // Snapshot entry for the same (host, path) but with enriched PR data.
@@ -982,6 +1025,7 @@ mod tests {
                 worktrees: vec![remote_wt],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         merge_remote_snapshot(&mut state, snapshot, "vm.boxd.sh".to_string());
@@ -1042,9 +1086,11 @@ mod tests {
                 last_activity_at: None,
                 claude: None,
                 windows: vec![],
+                discovery_path: None,
             }],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         merge_remote_snapshot(&mut state, snapshot, "remote-host".to_string());
@@ -1106,6 +1152,7 @@ mod tests {
                 worktrees: vec![make_minimal_worktree("/remote/main", "main")],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         let state = build_state_with_snapshots(

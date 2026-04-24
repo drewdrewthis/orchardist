@@ -102,7 +102,7 @@ fn main() {
         "heal" => handle_heal(fix_flag, json_flag),
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         "watch" => handle_watch(&args),
-        "refresh" => handle_refresh(),
+        "refresh" => handle_refresh(&args),
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         "list-remotes" => handle_list_remotes(json_flag),
@@ -362,10 +362,37 @@ fn handle_json() {
 /// fresh data to disk. `orchard --json` and the TUI cold-start both read
 /// the caches written here. `orchard watch` calls `refresh_and_build`
 /// internally on its own schedule.
-fn handle_refresh() {
+///
+/// Flags:
+/// - `--max-depth <n>`: override the maximum transitive federation depth
+/// - `--per-hop-timeout <secs>`: override the per-hop SSH timeout in seconds
+fn handle_refresh(args: &[String]) {
     use std::collections::HashSet;
+
+    let mut max_depth: Option<u32> = None;
+    let mut per_hop_timeout: Option<u64> = None;
+    let mut skip_next = false;
+    for (i, arg) in args.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--max-depth" => {
+                max_depth = args.get(i + 1).and_then(|v| v.parse().ok());
+                skip_next = true;
+            }
+            "--per-hop-timeout" => {
+                per_hop_timeout = args.get(i + 1).and_then(|v| v.parse().ok());
+                skip_next = true;
+            }
+            _ => {}
+        }
+    }
+
     let config = global_config::load_global_config();
-    let state = build_state::refresh_and_build(&config);
+    let state =
+        build_state::refresh_and_build_with_walker_config(&config, max_depth, per_hop_timeout);
 
     // Persist host reachability so subsequent cache-only reads
     // (--json, TUI cold start, watch daemon) can populate OrchardState.hosts.

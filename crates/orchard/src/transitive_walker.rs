@@ -380,6 +380,7 @@ fn visit_inner(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache) ->
                     tmux_sessions: vec![],
                     repos: vec![],
                     hosts: std::collections::HashMap::new(),
+                    errors: vec![],
                 })
             });
             HopOutcome::Success { snapshot, children }
@@ -401,6 +402,7 @@ fn visit_inner(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache) ->
                     tmux_sessions: vec![],
                     repos: vec![],
                     hosts: std::collections::HashMap::new(),
+                    errors: vec![],
                 })
             });
             HopOutcome::Success {
@@ -578,6 +580,7 @@ mod tests {
             tmux_sessions: vec![],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         }
     }
 
@@ -604,9 +607,11 @@ mod tests {
                     status_glyph: "\u{1f7e2}".to_string(),
                     is_main_worktree: false,
                     last_activity_at: None,
+                    discovery_path: None,
                 }],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         }
     }
 

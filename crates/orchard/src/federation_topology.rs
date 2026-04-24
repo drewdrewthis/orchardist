@@ -527,6 +527,7 @@ mod tests {
             tmux_sessions: vec![],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         // Write a known snapshot (in config).
@@ -581,6 +582,7 @@ mod tests {
             tmux_sessions: vec![],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         // A transitive host — not in config but in topology.
@@ -624,6 +626,7 @@ mod tests {
             tmux_sessions: vec![],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         };
 
         // A very old topology entry.

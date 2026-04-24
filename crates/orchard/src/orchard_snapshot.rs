@@ -226,6 +226,7 @@ mod tests {
             tmux_sessions: vec![],
             repos: vec![],
             hosts: HashMap::new(),
+            errors: vec![],
         }
     }
 
@@ -245,6 +246,7 @@ mod tests {
                     ahead_behind: None,
                     last_commit_at: None,
                     issue: None,
+                    discovery_path: None,
                     pr: None,
                     sessions: vec![],
                     display_group: "other".to_string(),
@@ -255,6 +257,7 @@ mod tests {
                 }],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         }
     }
 
@@ -424,6 +427,7 @@ mod tests {
                         status_glyph: "\u{1f7e2}".to_string(),
                         is_main_worktree: false,
                         last_activity_at: None,
+                        discovery_path: None,
                     },
                     JsonWorktree {
                         path: "/remote/wt2".to_string(),
@@ -440,10 +444,12 @@ mod tests {
                         status_glyph: "\u{1f7e2}".to_string(),
                         is_main_worktree: false,
                         last_activity_at: None,
+                        discovery_path: None,
                     },
                 ],
             }],
             hosts: HashMap::new(),
+            errors: vec![],
         };
         write_snapshot_to("vm.boxd.sh", &second, dir.path()).unwrap();
 
