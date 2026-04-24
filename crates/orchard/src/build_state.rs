@@ -407,7 +407,9 @@ pub fn refresh_and_build_with_walker_config(
     let mut state = build_state_with_hosts(config, &hosts);
 
     // --- Transitive federation walk ------------------------------------------
-    // Collect OrchardProxy roots that have allow_transitive=true.
+    // Collect only OrchardProxy roots with allow_transitive=true.  Roots with
+    // allow_transitive=false need no child discovery; their snapshots are
+    // already fetched by the OrchardProxyAdapter phase above.
     let transitive_roots: Vec<(&str, bool)> = {
         let mut seen = HashSet::new();
         config
@@ -416,6 +418,7 @@ pub fn refresh_and_build_with_walker_config(
             .flat_map(|r| r.remotes.iter())
             .filter(|rm| {
                 rm.kind == crate::remote_adapter::RemoteKind::OrchardProxy
+                    && rm.allow_transitive
                     && seen.insert(rm.host.clone())
             })
             .map(|rm| (rm.host.as_str(), rm.allow_transitive))
@@ -424,7 +427,10 @@ pub fn refresh_and_build_with_walker_config(
 
     if !transitive_roots.is_empty() {
         let ssh = Arc::new(ProcessSshExec) as Arc<dyn crate::remote_adapter::SshExec>;
-        let mut walker_cfg = WalkerConfig::new(ssh);
+        let mut walker_cfg = WalkerConfig::new(ssh)
+            // Depth-1 snapshots were already fetched by OrchardProxyAdapter above;
+            // the walker only needs list-remotes for depth-1 roots to find children.
+            .with_skip_depth1_snapshot();
         if let Some(d) = max_depth {
             walker_cfg = walker_cfg.with_max_depth(d);
         }

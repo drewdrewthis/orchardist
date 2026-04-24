@@ -72,6 +72,13 @@ pub struct WalkerConfig {
     pub per_hop_timeout: Duration,
     /// SSH executor shared across all threads in this walk.
     pub ssh: Arc<dyn SshExec>,
+    /// When `true`, skip `orchard --json` for depth-1 roots.
+    ///
+    /// Set by `refresh_and_build_with_walker_config` because those roots were
+    /// already fetched by `OrchardProxyAdapter` in the pre-walker phase.
+    /// Leave `false` (the default) when calling the walker directly in tests
+    /// or from contexts that have not pre-fetched depth-1 snapshots.
+    pub skip_depth1_snapshot: bool,
 }
 
 impl WalkerConfig {
@@ -82,6 +89,7 @@ impl WalkerConfig {
             max_depth: DEFAULT_MAX_DEPTH,
             per_hop_timeout: DEFAULT_PER_HOP_TIMEOUT,
             ssh,
+            skip_depth1_snapshot: false,
         }
     }
 
@@ -94,6 +102,15 @@ impl WalkerConfig {
     /// Overrides `per_hop_timeout`.
     pub fn with_per_hop_timeout(mut self, timeout: Duration) -> Self {
         self.per_hop_timeout = timeout;
+        self
+    }
+
+    /// Enables skipping `orchard --json` for depth-1 roots.
+    ///
+    /// Only set this when the caller has already fetched depth-1 snapshots
+    /// via `OrchardProxyAdapter` (i.e., from `refresh_and_build_with_walker_config`).
+    pub fn with_skip_depth1_snapshot(mut self) -> Self {
+        self.skip_depth1_snapshot = true;
         self
     }
 }
@@ -142,20 +159,34 @@ struct FrontierNode {
     dedup_key: String,
     discovery_path: Vec<String>,
     root: String,
+    /// When `true`, skip the `orchard --json` call for this node.
+    ///
+    /// Set for depth-1 roots whose snapshot was already fetched by
+    /// `OrchardProxyAdapter` during the pre-walker refresh phase.
+    /// The walker only needs `list-remotes` for these nodes to discover children.
+    skip_snapshot: bool,
 }
 
 /// The outcome of visiting a single node.
 enum HopOutcome {
-    /// Both calls succeeded.
+    /// The snapshot fetch succeeded and `list-remotes` returned children (possibly empty).
     Success {
         snapshot: Arc<JsonOutput>,
         /// Child hosts from `list-remotes` (`allow_transitive == true` + `orchard-proxy` only).
         children: Vec<String>,
     },
+    /// `list-remotes` failed after a successful snapshot fetch (or skip).
+    ///
+    /// The snapshot is still recorded; the error is surfaced so operators can
+    /// observe the partial failure.  No children are discovered for this node.
+    ListRemotesFailed {
+        snapshot: Arc<JsonOutput>,
+        err: TransitiveError,
+    },
     /// `orchard list-remotes --json` returned exit 127. The node is a leaf;
     /// its snapshot was fetched and is in the cache.
     Leaf,
-    /// A hard error occurred.
+    /// A hard error occurred (snapshot fetch failed, or timeout).
     Error(TransitiveError),
 }
 
@@ -177,8 +208,13 @@ type SnapshotCache = Arc<Mutex<HashMap<String, Arc<OnceLock<Option<Arc<JsonOutpu
 ///
 /// `roots` is a slice of `(host, allow_transitive)` pairs representing
 /// directly-configured `OrchardProxy` remotes.  Roots with
-/// `allow_transitive == false` have their snapshots fetched but their
-/// children are not discovered.
+/// `allow_transitive == false` are not seeded into the walker at all —
+/// their snapshots are already fetched by `OrchardProxyAdapter` in the
+/// pre-walker refresh phase, and they have no children to discover.
+///
+/// For `allow_transitive == true` roots (depth-1), the walker skips the
+/// `orchard --json` call (already done by `OrchardProxyAdapter`) and only
+/// calls `list-remotes --json` to discover transitive children.
 ///
 /// All SSH calls go through `config.ssh`, making the walker fully testable
 /// with [`crate::remote_adapter::FakeSshExec`].
@@ -196,12 +232,24 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
         .collect();
 
     // Seed the frontier.
+    // - Roots with allow_transitive=false are excluded: they have no children
+    //   to discover and (when skip_depth1_snapshot is set) their snapshots are
+    //   already fetched by OrchardProxyAdapter.  Mark them seen so a transitive
+    //   child cannot re-introduce them.
+    // - Roots with allow_transitive=true are seeded.  When skip_depth1_snapshot
+    //   is set, their orchard --json call is also skipped (pre-fetched by
+    //   OrchardProxyAdapter); only list-remotes is called to find children.
     let mut frontier: Vec<FrontierNode> = Vec::new();
-    for &(host, _allow) in roots {
+    for &(host, allow) in roots {
         let key = match host_dedup_key(host) {
             Ok(k) => k,
             Err(_) => continue,
         };
+        if !allow {
+            // Mark as seen so a transitive child cannot re-introduce this host.
+            seen.lock().unwrap().insert(key);
+            continue;
+        }
         let is_new = {
             let mut s = seen.lock().unwrap();
             s.insert(key.clone())
@@ -215,6 +263,9 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
             dedup_key: key,
             discovery_path: vec!["local".to_string(), host.to_string()],
             root: host.to_string(),
+            // Skip orchard --json for depth-1 roots when the pre-walker phase
+            // already fetched them via OrchardProxyAdapter.
+            skip_snapshot: config.skip_depth1_snapshot,
         });
     }
 
@@ -276,10 +327,23 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
                                     dedup_key: child_key,
                                     discovery_path: child_path,
                                     root: node.root.clone(),
+                                    // Depth 2+: always fetch orchard --json.
+                                    skip_snapshot: false,
                                 });
                             }
                         }
                     }
+                }
+                HopOutcome::ListRemotesFailed { snapshot, err } => {
+                    // Snapshot was fetched (or skipped for depth-1 roots) but
+                    // list-remotes failed.  Record the snapshot so the node's
+                    // own state is visible in the dashboard, and surface the
+                    // list-remotes failure so operators can observe the partial
+                    // failure (topology silently shrinking is worse than a
+                    // visible error).
+                    all_snapshots.push((node.discovery_path.clone(), snapshot));
+                    emit_proxy_failure_event(&err);
+                    all_errors.push(err);
                 }
                 HopOutcome::Leaf => {
                     // Snapshot was fetched before list-remotes was called; pull from cache.
@@ -357,58 +421,58 @@ fn visit_with_timeout(
 // Internal: actual hop logic
 // ---------------------------------------------------------------------------
 
-/// Executes both SSH calls for a node. No timeout enforcement here.
+/// Executes SSH calls for a node. No timeout enforcement here.
+///
+/// When `node.skip_snapshot` is `true` (depth-1 roots), the `orchard --json`
+/// call is skipped because the snapshot was already fetched by
+/// `OrchardProxyAdapter` in the pre-walker phase.  Only `list-remotes --json`
+/// is called to discover transitive children.
 fn visit_inner(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache) -> HopOutcome {
-    // Step 1: fetch orchard --json (with dedup via OnceLock).
-    let fetch_ok = fetch_snapshot(node, ssh, cache);
-    if !fetch_ok {
-        return HopOutcome::Error(TransitiveError {
-            dedup_key: node.dedup_key.clone(),
-            discovery_path: node.discovery_path.clone(),
-            root: node.root.clone(),
-            reason: format!("fetch failure for {}", node.host),
-            phase: "fetch".to_string(),
-        });
+    // Step 1: fetch orchard --json (unless this node's snapshot is already
+    // available from the pre-walker OrchardProxyAdapter phase).
+    if !node.skip_snapshot {
+        let fetch_ok = fetch_snapshot(node, ssh, cache);
+        if !fetch_ok {
+            return HopOutcome::Error(TransitiveError {
+                dedup_key: node.dedup_key.clone(),
+                discovery_path: node.discovery_path.clone(),
+                root: node.root.clone(),
+                reason: format!("fetch failure for {}", node.host),
+                phase: "fetch".to_string(),
+            });
+        }
     }
 
     // Step 2: call list-remotes to discover children.
+    let empty_snapshot = || {
+        Arc::new(JsonOutput {
+            version: 6,
+            tmux_sessions: vec![],
+            repos: vec![],
+            hosts: std::collections::HashMap::new(),
+            errors: vec![],
+        })
+    };
+
     match call_list_remotes(node, ssh) {
         ListRemotesResult::Ok(children) => {
-            let snapshot = take_cached_snapshot(cache, &node.dedup_key).unwrap_or_else(|| {
-                Arc::new(JsonOutput {
-                    version: 6,
-                    tmux_sessions: vec![],
-                    repos: vec![],
-                    hosts: std::collections::HashMap::new(),
-                    errors: vec![],
-                })
-            });
+            // For skip_snapshot nodes, take_cached_snapshot returns None (nothing
+            // was stored).  Use an empty stub — the real snapshot for this host
+            // was already merged by the pre-walker OrchardProxyAdapter phase.
+            let snapshot =
+                take_cached_snapshot(cache, &node.dedup_key).unwrap_or_else(empty_snapshot);
             HopOutcome::Success { snapshot, children }
         }
         ListRemotesResult::Leaf => HopOutcome::Leaf,
-        ListRemotesResult::Err(_err) => {
-            // list-remotes failed but snapshot was successfully fetched.
-            // Return the snapshot with empty children so the node's state is
-            // recorded. Per AC7 / "middle-hop failure does not abort the tree"
-            // — the list-remotes error is surfaced as an empty child list here;
-            // the fetch error is already excluded (fetch was ok above).
-            // NOTE: We intentionally drop the list-remotes error here rather
-            // than recording a TransitiveError because the node's own state IS
-            // available. If callers want to surface list-remotes failures they
-            // can extend this to emit an error in addition to the snapshot.
-            let snapshot = take_cached_snapshot(cache, &node.dedup_key).unwrap_or_else(|| {
-                Arc::new(JsonOutput {
-                    version: 6,
-                    tmux_sessions: vec![],
-                    repos: vec![],
-                    hosts: std::collections::HashMap::new(),
-                    errors: vec![],
-                })
-            });
-            HopOutcome::Success {
-                snapshot,
-                children: vec![],
-            }
+        ListRemotesResult::Err(mut err) => {
+            // list-remotes failed but snapshot was successfully fetched (or
+            // skip_snapshot was set, meaning the pre-walker phase handled it).
+            // Use a distinct phase label so the error is distinguishable from
+            // a full-hop failure where the snapshot was never fetched.
+            err.phase = "list_remotes_after_snapshot".to_string();
+            let snapshot =
+                take_cached_snapshot(cache, &node.dedup_key).unwrap_or_else(empty_snapshot);
+            HopOutcome::ListRemotesFailed { snapshot, err }
         }
     }
 }
@@ -1061,6 +1125,91 @@ mod tests {
             result.errors[0].reason.contains("timeout"),
             "reason must contain 'timeout', got: {}",
             result.errors[0].reason
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fix 4: allow_transitive=false root produces zero SSH calls from the walker
+    // -----------------------------------------------------------------------
+
+    /// Fix 4 — `allow_transitive=false` roots are not seeded into the walker.
+    ///
+    /// When a root is configured with `allow_transitive=false`, the walker must
+    /// make zero SSH calls for it (no `orchard --json`, no `list-remotes`).
+    /// The snapshot for such a root is handled by OrchardProxyAdapter, not
+    /// the walker.
+    #[test]
+    fn fix4_allow_transitive_false_root_produces_zero_ssh_calls() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingSshExec {
+            count: Arc<AtomicUsize>,
+        }
+        impl SshExec for CountingSshExec {
+            fn exec(&self, _host: &str, _cmd: &str) -> anyhow::Result<SshOutput> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                // Returning error is fine — the test asserts zero calls.
+                Err(anyhow::anyhow!("should not be called"))
+            }
+        }
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let ssh = Arc::new(CountingSshExec {
+            count: Arc::clone(&call_count),
+        }) as Arc<dyn SshExec>;
+
+        let config = WalkerConfig::new(ssh);
+        // Pass a root with allow_transitive=false.
+        let result = walk(&[("direct-host", false)], &config);
+
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "allow_transitive=false root must produce zero SSH calls from the walker"
+        );
+        assert!(
+            result.snapshots.is_empty(),
+            "allow_transitive=false root must produce no walker snapshots (snapshot handled by OrchardProxyAdapter)"
+        );
+        assert!(
+            result.errors.is_empty(),
+            "allow_transitive=false root must produce no errors"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fix 6: list-remotes failure after successful snapshot is surfaced
+    // -----------------------------------------------------------------------
+
+    /// Fix 6 — `list-remotes` failure after a successful `orchard --json` fetch
+    /// surfaces a `TransitiveError` with `phase: "list_remotes_after_snapshot"`.
+    ///
+    /// Without the fix, the walker silently returned `Success{children: vec![]}`,
+    /// causing the topology to shrink a level with no operator signal.
+    #[test]
+    fn fix6_list_remotes_failure_after_snapshot_surfaces_error() {
+        let snap_b = make_output_with_branch("issue99/b");
+
+        let mut fake = FakeSshExec::new();
+        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        // list-remotes fails with a non-127 exit code (network blip).
+        fake.insert("B", "orchard list-remotes --json", exit_code(1));
+
+        let result = walk(&[("B", true)], &walker(fake));
+
+        // The snapshot for B must still be recorded.
+        assert_eq!(result.snapshots.len(), 1, "B's snapshot must be present");
+        assert_eq!(result.snapshots[0].0.as_slice(), ["local", "B"]);
+
+        // A TransitiveError must be emitted for the list-remotes failure.
+        assert_eq!(
+            result.errors.len(),
+            1,
+            "list-remotes failure must surface a TransitiveError"
+        );
+        assert_eq!(
+            result.errors[0].phase, "list_remotes_after_snapshot",
+            "phase must be 'list_remotes_after_snapshot' to distinguish from full-hop failures"
         );
     }
 }
