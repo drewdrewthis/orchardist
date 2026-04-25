@@ -359,9 +359,34 @@ impl BoxdSharedAdapter {
 
     /// Returns all tmux sessions from the Boxd shared VM.
     ///
-    /// Slice 2 stub — full implementation in slice 3.
+    /// Runs `tmux list-panes -a -F '...'` on the shared VM via SSH and parses
+    /// the output with `cache_sources::parse_tmux_sessions_from_panes`. Every
+    /// returned session is tagged with the shared-VM host. SSH failure returns
+    /// `Err` so the caller can preserve prior cache rather than treating an
+    /// empty result as authoritative.
     pub fn list_sessions(&self) -> Result<Vec<CachedTmuxSession>> {
-        Ok(vec![])
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        let stdout = match self.ssh.exec(&self.host, &tmux_cmd) {
+            Ok(output) => output.stdout,
+            Err(e) => {
+                return Err(AdapterError::FetchFailure {
+                    message: e.to_string(),
+                }
+                .into());
+            }
+        };
+
+        let sessions = crate::cache_sources::parse_tmux_sessions_from_panes(
+            &stdout,
+            Some(&self.host),
+            |_| String::new(),
+            |_| vec![],
+        );
+
+        Ok(sessions)
     }
 }
 
@@ -1387,8 +1412,10 @@ mod tests {
     // AC6: Proxy failures surface as events; no silent fallback
     // -----------------------------------------------------------------------
 
-    /// AC6 scenario 1: exit code 127 returns FetchFailure and does NOT attempt
-    /// any legacy `git worktree list --porcelain` invocation.
+    /// AC6 scenario 1 / #337 AC5: exit code 127 returns FetchFailure and does NOT attempt
+    /// any legacy `git worktree list --porcelain` or `tmux list-sessions` invocations.
+    ///
+    /// Scenario contract: "Proxy failure does NOT trigger any legacy shell-discovery on that host"
     #[test]
     fn orchard_proxy_exit_127_surfaces_proxy_failure_event() {
         use std::sync::{Arc, Mutex};
@@ -1435,13 +1462,33 @@ mod tests {
             "exit 127 must surface as Err (FetchFailure), not Ok; got: {result:?}"
         );
 
-        // The recorded command list must only contain `orchard --json` — no git worktree list.
         let recorded = calls.lock().unwrap();
+
+        // AC5: the positive assertion — `orchard --json` must have been attempted.
+        assert!(
+            recorded.iter().any(|c| c.contains("orchard --json")),
+            "orchard --json must be in the recorded commands; got: {recorded:?}"
+        );
+
+        // AC5: legacy git discovery must NOT be triggered on failure.
         assert!(
             !recorded.iter().any(|c| c.contains("git worktree list")),
             "git worktree list --porcelain must NOT be invoked on failure path; got: {recorded:?}"
         );
+
+        // AC5: legacy tmux discovery must NOT be triggered on failure.
+        assert!(
+            !recorded.iter().any(|c| c.contains("tmux list-sessions")),
+            "tmux list-sessions must NOT be invoked on failure path; got: {recorded:?}"
+        );
     }
+
+    // The "exit 127 → proxy_failure event written to events.jsonl with host
+    // and exit-127 reason" assertion is locked by the integration test
+    // `cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged`
+    // in `crates/orchard/tests/federation_wire_up.rs`. That test runs in a
+    // separate binary, sidestepping the parallel env-var race on
+    // `ORCHARD_EVENTS_PATH` that sinks unit-level attempts.
 
     /// AC6 scenario 2: malformed JSON returns ParseFailure.
     #[test]
@@ -1765,5 +1812,393 @@ mod tests {
         let reason = super::classify_proxy_failure_reason("some other error");
         assert!(reason.starts_with("fetch failure: "));
         assert!(reason.contains("some other error"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AC1: BoxdForkAdapter::list_sessions — session name, host, and path
+    // -----------------------------------------------------------------------
+
+    /// AC1 scenario: `BoxdForkAdapter::list_sessions()` returns exactly one
+    /// `CachedTmuxSession` with the correct name, host, and working-directory
+    /// path for the launched issue session.
+    ///
+    /// Satisfies feature.feature:41-48.
+    #[test]
+    fn boxd_fork_adapter_list_sessions_returns_session_with_correct_name_host_and_path() {
+        let fork_host = "boxd@or-issue999.boxd.sh";
+        let fork_url = "or-issue999.boxd.sh";
+        let worktree_path = "/workspace/repo";
+        let session_name = "or_issue999";
+
+        let mut fake = FakeSshExec::new();
+
+        // Prime: golden host enumerates exactly one running fork.
+        fake.insert(
+            "boxd.sh",
+            "list --json",
+            SshOutput {
+                stdout: format!(
+                    r#"[{{"name":"{session_name}","url":"{fork_url}","status":"running","path":"{worktree_path}"}}]"#
+                ),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        // Prime: fork VM returns one active-pane tmux row.
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        // Format: session_name\tpane_active\tpane_current_path\tsession_created\tsession_activity
+        fake.insert(
+            fork_host,
+            &tmux_cmd,
+            SshOutput {
+                stdout: format!("{session_name}\t1\t{worktree_path}\t1713000000\t1713000060\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdForkAdapter {
+            golden_host: "boxd.sh".to_string(),
+            fork_repo_path: worktree_path.to_string(),
+            ssh: Box::new(fake),
+        };
+
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        assert_eq!(
+            sessions.len(),
+            1,
+            "expected exactly 1 CachedTmuxSession; got: {sessions:?}"
+        );
+
+        let session = &sessions[0];
+        assert_eq!(
+            session.name, session_name,
+            "session name must be '{session_name}'"
+        );
+        assert_eq!(
+            session.host.as_deref(),
+            Some(fork_host),
+            "session host must be '{fork_host}'"
+        );
+        assert_eq!(
+            session.path, worktree_path,
+            "session working directory must be '{worktree_path}'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC2: BoxdSharedAdapter::list_sessions — session name and host
+    // -----------------------------------------------------------------------
+
+    /// AC2 scenario: `BoxdSharedAdapter::list_sessions()` returns exactly one
+    /// `CachedTmuxSession` with the correct name and host for an issue session
+    /// on the shared VM.
+    ///
+    /// Satisfies feature.feature:69-75.
+    #[test]
+    fn boxd_shared_adapter_list_sessions_returns_session_with_correct_name_and_host() {
+        let host = "boxd@orchard-rs.boxd.sh";
+        let worktree_path = "/home/boxd/orchard/worktrees/issue999";
+        let session_name = "or_issue999";
+
+        let mut fake = FakeSshExec::new();
+
+        // Prime: shared VM returns one active-pane tmux row.
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        // Format: session_name\tpane_active\tpane_current_path\tsession_created\tsession_activity
+        fake.insert(
+            host,
+            &tmux_cmd,
+            SshOutput {
+                stdout: format!("{session_name}\t1\t{worktree_path}\t1713000000\t1713000060\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let adapter = BoxdSharedAdapter {
+            host: host.to_string(),
+            path: "/home/boxd/orchard".to_string(),
+            ssh: Box::new(fake),
+        };
+
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        assert_eq!(
+            sessions.len(),
+            1,
+            "expected exactly 1 CachedTmuxSession; got: {sessions:?}"
+        );
+
+        let session = &sessions[0];
+        assert_eq!(
+            session.name, session_name,
+            "session name must be '{session_name}'"
+        );
+        assert_eq!(
+            session.host.as_deref(),
+            Some(host),
+            "session host must be '{host}'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC6: Without orchard-proxy, adapter list_sessions is the source of truth
+    // -----------------------------------------------------------------------
+
+    /// AC6 scenario B: For a non-proxy remote (here `BoxdSharedAdapter`),
+    /// `list_sessions()` is sourced from a direct `tmux list-panes` SSH call —
+    /// never from `orchard --json`.
+    ///
+    /// Satisfies the contract: "no `ssh host orchard --json` call is made for
+    /// hosts that are not orchard-proxy". Verified by recording every SSH
+    /// command the adapter issues and asserting the negative.
+    #[test]
+    fn non_proxy_adapter_list_sessions_does_not_invoke_orchard_json() {
+        use std::sync::{Arc, Mutex};
+
+        /// Recording seam: forwards every call to an inner `FakeSshExec` and
+        /// appends the command string to a shared log.
+        struct RecordingFakeSshExec {
+            inner: FakeSshExec,
+            calls: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl SshExec for RecordingFakeSshExec {
+            fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
+                self.calls.lock().unwrap().push(cmd.to_string());
+                self.inner.exec(host, cmd)
+            }
+        }
+
+        let host = "boxd@orchard-rs.boxd.sh";
+        let session_name = "or_issue999";
+        let worktree_path = "/home/boxd/orchard/worktrees/issue999";
+
+        // Prime: shared VM returns one active-pane tmux row for or_issue999.
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        let mut inner = FakeSshExec::new();
+        inner.insert(
+            host,
+            &tmux_cmd,
+            SshOutput {
+                stdout: format!("{session_name}\t1\t{worktree_path}\t1713000000\t1713000060\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recording = RecordingFakeSshExec {
+            inner,
+            calls: calls.clone(),
+        };
+
+        let adapter = BoxdSharedAdapter {
+            host: host.to_string(),
+            path: "/home/boxd/orchard".to_string(),
+            ssh: Box::new(recording),
+        };
+
+        // The adapter IS the source of truth for non-proxy remotes.
+        let sessions = adapter
+            .list_sessions()
+            .expect("list_sessions must not error");
+
+        let recorded = calls.lock().unwrap();
+
+        // Positive assertion: the adapter used the direct tmux probe.
+        assert!(
+            recorded.iter().any(|c| c.contains("tmux list-panes")),
+            "list_sessions for a non-proxy remote must use tmux list-panes; got: {recorded:?}"
+        );
+
+        // Negative assertion: `orchard --json` must NEVER be invoked on a non-proxy adapter.
+        assert!(
+            !recorded.iter().any(|c| c.contains("orchard --json")),
+            "list_sessions for a non-proxy remote must NOT invoke orchard --json; got: {recorded:?}"
+        );
+
+        // The adapter is the authoritative source — returned sessions are non-empty.
+        assert!(
+            !sessions.is_empty(),
+            "list_sessions must return the session from the direct tmux probe; got: {sessions:?}"
+        );
+        assert_eq!(
+            sessions[0].name, session_name,
+            "session name must be '{session_name}'; got: {}",
+            sessions[0].name
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC7: Mixed-config refresh — per-host command-set isolation
+    // -----------------------------------------------------------------------
+
+    /// Feature file lines 232-240: "Mixed-config refresh — proxy host uses
+    /// snapshot, non-proxy host uses legacy probe".
+    ///
+    /// Two adapters, each with its own recording SSH executor:
+    ///  - Host A (`OrchardProxy`): must issue `orchard --json` and must NOT
+    ///    issue any `tmux list-panes` or `git worktree list` commands.
+    ///  - Host B (`BoxdShared`): must issue `tmux list-panes` and must NOT
+    ///    issue `orchard --json`.
+    ///
+    /// This locks the dispatch invariant in `RemoteAdapter::from_config` and
+    /// each adapter's command vocabulary without spawning a binary or requiring
+    /// a live SSH connection.
+    #[test]
+    fn mixed_config_refresh_routes_per_remote_kind_with_no_cross_chatter() {
+        use std::sync::{Arc, Mutex};
+
+        /// Recording seam: forwards every call to an inner `FakeSshExec` and
+        /// appends the raw command string to a shared log (host-bound, so the
+        /// host argument is not needed in the log).
+        struct RecordingFakeSshExec {
+            inner: FakeSshExec,
+            calls: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl SshExec for RecordingFakeSshExec {
+            fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
+                self.calls.lock().unwrap().push(cmd.to_string());
+                self.inner.exec(host, cmd)
+            }
+        }
+
+        // --- Host A: OrchardProxy ---
+        let host_a = "boxd@vm-a.boxd.sh";
+        let calls_a = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let mut inner_a = FakeSshExec::new();
+        // Prime: minimal valid JsonOutput (version 6, empty repos) so
+        // list_sessions() succeeds without needing a worktree entry.
+        inner_a.insert(
+            host_a,
+            "orchard --json",
+            SshOutput {
+                stdout: r#"{"version":6,"tmuxSessions":[],"repos":[],"hosts":{}}"#.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+        let recording_a = RecordingFakeSshExec {
+            inner: inner_a,
+            calls: calls_a.clone(),
+        };
+
+        let adapter_a = OrchardProxyAdapter {
+            host: host_a.to_string(),
+            path: "~/git-orchard-rs".to_string(),
+            ssh: Box::new(recording_a),
+            snapshot: OnceLock::new(),
+        };
+
+        // --- Host B: BoxdShared (non-proxy legacy path) ---
+        let host_b = "ubuntu@vm-b";
+        let calls_b = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let tmux_cmd = format!(
+            "tmux list-panes -a -F '{}'",
+            crate::cache_sources::TMUX_SESSION_FORMAT
+        );
+        let mut inner_b = FakeSshExec::new();
+        // Prime: one tmux pane row so list_sessions() returns a non-empty result.
+        inner_b.insert(
+            host_b,
+            &tmux_cmd,
+            SshOutput {
+                stdout: "vm-b-session\t1\t/home/ubuntu/repo\t1713000000\t1713000060\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+        let recording_b = RecordingFakeSshExec {
+            inner: inner_b,
+            calls: calls_b.clone(),
+        };
+
+        let adapter_b = BoxdSharedAdapter {
+            host: host_b.to_string(),
+            path: "/home/ubuntu/repo".to_string(),
+            ssh: Box::new(recording_b),
+        };
+
+        // --- Act ---
+        let sessions_a = adapter_a
+            .list_sessions()
+            .expect("host A list_sessions must not error");
+        let sessions_b = adapter_b
+            .list_sessions()
+            .expect("host B list_sessions must not error");
+
+        // --- Assert Host A (OrchardProxy) ---
+        let recorded_a = calls_a.lock().unwrap();
+
+        // Positive: orchard --json was issued to host A.
+        assert!(
+            recorded_a.iter().any(|c| c.contains("orchard --json")),
+            "host A (OrchardProxy) must invoke `orchard --json`; recorded: {recorded_a:?}"
+        );
+
+        // Negative: no tmux list-panes on the proxy host.
+        assert!(
+            !recorded_a.iter().any(|c| c.contains("tmux list-panes")),
+            "host A (OrchardProxy) must NOT invoke `tmux list-panes`; recorded: {recorded_a:?}"
+        );
+
+        // Negative: no git worktree list on the proxy host.
+        assert!(
+            !recorded_a.iter().any(|c| c.contains("git worktree list")),
+            "host A (OrchardProxy) must NOT invoke `git worktree list`; recorded: {recorded_a:?}"
+        );
+
+        drop(recorded_a);
+
+        // --- Assert Host B (BoxdShared, legacy path) ---
+        let recorded_b = calls_b.lock().unwrap();
+
+        // Positive: tmux list-panes was issued to host B.
+        assert!(
+            recorded_b.iter().any(|c| c.contains("tmux list-panes")),
+            "host B (BoxdShared) must invoke `tmux list-panes`; recorded: {recorded_b:?}"
+        );
+
+        // Negative: no orchard --json on the legacy host.
+        assert!(
+            !recorded_b.iter().any(|c| c.contains("orchard --json")),
+            "host B (BoxdShared) must NOT invoke `orchard --json`; recorded: {recorded_b:?}"
+        );
+
+        drop(recorded_b);
+
+        // Sanity: host A snapshot was empty (no sessions), host B returned one.
+        assert!(
+            sessions_a.is_empty(),
+            "host A returned empty repos/sessions so sessions_a should be empty; got: {sessions_a:?}"
+        );
+        assert!(
+            !sessions_b.is_empty(),
+            "host B should return the one session from the canned tmux pane row; got: {sessions_b:?}"
+        );
+        assert_eq!(
+            sessions_b[0].name, "vm-b-session",
+            "host B session name must match the canned tmux pane row"
+        );
     }
 }

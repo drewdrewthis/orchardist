@@ -51,7 +51,7 @@ pub(crate) const ID_W: usize = 17;
 
 /// Describes what action the Enter key should take in the task view.
 /// Used to avoid holding a borrow on `task_rows` while calling `&mut self` methods.
-enum TaskEnterAction {
+pub(crate) enum TaskEnterAction {
     JoinSession {
         session_name: String,
         worktree_path: String,
@@ -79,6 +79,36 @@ enum TaskEnterAction {
         /// When `Some`, select this pane after switching (tmux target "window.pane").
         pane_target: Option<String>,
     },
+}
+
+/// Builds the [`TaskEnterAction`] for a worktree row.
+///
+/// Returns `JoinSession` when the row has at least one existing session, or
+/// `CreateSession` when there are no sessions. The `pane_target` field is
+/// always `None`; callers that need pane routing (e.g. `handle_enter_action`)
+/// patch it in after calling this function.
+pub(crate) fn build_worktree_enter_action(row: &WorktreeRow) -> TaskEnterAction {
+    if let Some(session) = row.sessions.first() {
+        let host = match &session.tmux.host {
+            crate::session::Host::Local => None,
+            crate::session::Host::Remote(h) => Some(h.clone()),
+        };
+        TaskEnterAction::JoinSession {
+            session_name: session.tmux.name.clone(),
+            worktree_path: row.worktree_path.clone(),
+            branch: Some(row.branch.clone()),
+            host,
+            pane_target: None,
+            discovery_path: row.discovery_path.clone(),
+        }
+    } else {
+        TaskEnterAction::CreateSession {
+            worktree_path: row.worktree_path.clone(),
+            branch: Some(row.branch.clone()),
+            host: row.worktree_host.clone(),
+            discovery_path: row.discovery_path.clone(),
+        }
+    }
 }
 
 /// Returns whether the cursor is currently on a standalone session row.
@@ -535,28 +565,17 @@ impl App {
             let tasks =
                 visible_tasks_filtered(&self.task_rows, &self.filter_text, self.active_repo_slug());
             let action = tasks.get(worktree_cursor).map(|vt| {
-                if let Some(session) = vt.row.sessions.first() {
-                    let host = match &session.tmux.host {
-                        crate::session::Host::Local => None,
-                        crate::session::Host::Remote(h) => Some(h.clone()),
-                    };
-                    let pane_target = resolve_pane_target_from_sub_cursor(&sub_cursor, session);
-                    TaskEnterAction::JoinSession {
-                        session_name: session.tmux.name.clone(),
-                        worktree_path: vt.row.worktree_path.clone(),
-                        branch: Some(vt.row.branch.clone()),
-                        host,
-                        pane_target,
-                        discovery_path: vt.row.discovery_path.clone(),
-                    }
-                } else {
-                    TaskEnterAction::CreateSession {
-                        worktree_path: vt.row.worktree_path.clone(),
-                        branch: Some(vt.row.branch.clone()),
-                        host: vt.row.worktree_host.clone(),
-                        discovery_path: vt.row.discovery_path.clone(),
-                    }
+                // Build the base action (no pane_target) then patch in pane routing.
+                let mut action = build_worktree_enter_action(vt.row);
+                if let TaskEnterAction::JoinSession {
+                    ref mut pane_target,
+                    ..
+                } = action
+                    && let Some(session) = vt.row.sessions.first()
+                {
+                    *pane_target = resolve_pane_target_from_sub_cursor(&sub_cursor, session);
                 }
+                action
             });
             drop(tasks);
             action
@@ -4263,6 +4282,359 @@ mod tests {
             !text.contains("[b]"),
             "unexpected '[b]' in badge text: {:?}",
             text
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC3 regression lock — TaskEnterAction builder: JoinSession vs CreateSession
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 84-90
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for AC3:
+    /// When a worktree row has a remote host and an existing session, the Enter
+    /// action builder must choose `JoinSession`, not `CreateSession`.
+    ///
+    /// Validated manually 2026-04-22 06:14 (createRemoteProxySession:
+    /// claude -> remote_claude; hostname=issue3201). This test locks that behaviour.
+    #[test]
+    fn enter_action_builder_selects_join_session_for_remote_worktree_with_existing_session() {
+        let host = "boxd@issue3201.boxd.sh";
+
+        // A worktree row on a remote host with exactly one existing session named "claude".
+        let row = WorktreeRow {
+            worktree_host: Some(host.to_string()),
+            sessions: vec![EnrichedSession {
+                tmux: TmuxSessionInfo {
+                    host: Host::Remote(host.to_string()),
+                    name: "claude".to_string(),
+                    status: SessionStatus::Running { attached: false },
+                },
+                claude: None,
+                windows: vec![],
+                panes: vec![],
+                started_at: None,
+                last_activity_at: None,
+            }],
+            ..make_task_row(3201, DisplayGroup::ClaudeWorking)
+        };
+
+        let action = build_worktree_enter_action(&row);
+
+        match action {
+            TaskEnterAction::JoinSession {
+                ref session_name,
+                ref host,
+                ..
+            } => {
+                assert_eq!(
+                    session_name, "claude",
+                    "session_name must be 'claude', got '{session_name}'"
+                );
+                assert_eq!(
+                    host.as_deref(),
+                    Some("boxd@issue3201.boxd.sh"),
+                    "host must be Some(\"boxd@issue3201.boxd.sh\"), got {host:?}"
+                );
+            }
+            TaskEnterAction::CreateSession { .. } => {
+                panic!("expected JoinSession but got CreateSession — builder chose wrong variant");
+            }
+            TaskEnterAction::JoinStandalone { .. } => {
+                panic!("expected JoinSession but got JoinStandalone");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // AC4 unit lock — TaskEnterAction builder for remote worktree with no sessions
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 107-114
+    // -----------------------------------------------------------------------
+
+    /// When a worktree row has a remote host and **no** existing sessions, the Enter
+    /// action builder must choose `CreateSession`, not `JoinSession`.
+    ///
+    /// The boxd-fork routing is preserved: the host on the action equals the
+    /// worktree's host field (`boxd@vm.boxd.sh`).
+    ///
+    /// Note: `host_reachable` is checked by `block_if_host_unreachable` at the App
+    /// level, not inside the builder — so it is irrelevant to this unit test.
+    #[test]
+    fn enter_action_builder_selects_create_session_for_remote_worktree_with_no_sessions() {
+        let host = "boxd@vm.boxd.sh";
+
+        // A worktree row on a remote host with no sessions.
+        let row = WorktreeRow {
+            worktree_host: Some(host.to_string()),
+            sessions: vec![],
+            ..make_task_row(337, DisplayGroup::ClaudeWorking)
+        };
+
+        let action = build_worktree_enter_action(&row);
+
+        match action {
+            TaskEnterAction::CreateSession { ref host, .. } => {
+                assert_eq!(
+                    host.as_deref(),
+                    Some("boxd@vm.boxd.sh"),
+                    "host must be Some(\"boxd@vm.boxd.sh\"), got {host:?}"
+                );
+            }
+            TaskEnterAction::JoinSession { .. } => {
+                panic!(
+                    "expected CreateSession but got JoinSession — builder chose wrong variant for no-session remote row"
+                );
+            }
+            TaskEnterAction::JoinStandalone { .. } => {
+                panic!("expected CreateSession but got JoinStandalone");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // AC4 regression lock — Unknown host does not block Enter (#285)
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 116-122
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for #285:
+    /// When a host has no entry in `host_reachable` (probe never ran, timed out,
+    /// or returned Unknown), `block_if_host_unreachable` must return `false` so
+    /// that Enter is NOT short-circuited.  A missing entry means Unknown, and
+    /// Unknown is treated as "proceed optimistically" — only a confirmed
+    /// `Reachability::Unreachable` blocks.
+    ///
+    /// This test also asserts that no spurious warning is written for the Unknown
+    /// state, since a warning would confuse the user into thinking the host was
+    /// checked and found unreachable.
+    #[test]
+    fn block_if_host_unreachable_returns_false_for_unknown_host() {
+        let host = "boxd@unknown-host.boxd.sh";
+
+        let mut app = App::new_test(vec![]);
+
+        // Intentionally do NOT insert the host — this is the Unknown state.
+        assert!(
+            !app.host_reachable.contains_key(host),
+            "pre-condition: host must be absent from host_reachable (Unknown state)"
+        );
+
+        let blocked = app.block_if_host_unreachable(host);
+
+        assert!(
+            !blocked,
+            "block_if_host_unreachable must return false for Unknown (missing) host, got true"
+        );
+        assert!(
+            app.warning.is_none(),
+            "no warning must be written for Unknown host; got {:?}",
+            app.warning.as_ref().map(|(s, _)| s.as_str())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC3 regression lock — join_or_create_session dispatch
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 92-99
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for AC3:
+    /// When `join_or_create_session` receives a `JoinSession` action for a
+    /// remote host, it must call `remote::create_remote_proxy_session` exactly
+    /// once with the correct host and source session name, and the derived
+    /// proxy session name must equal `"remote_{source}"`.
+    ///
+    /// Validated manually 2026-04-22 06:14 (createRemoteProxySession:
+    /// claude -> remote_claude; hostname=issue3201). This test locks the
+    /// call-site dispatch contract.
+    #[test]
+    fn join_or_create_session_calls_create_remote_proxy_session_for_remote_join() {
+        use crate::remote;
+
+        let host = "boxd@issue3201.boxd.sh";
+        let session_name = "claude";
+        let worktree_path = "/workspace/issue3201";
+
+        // Drain any stale recorder state from a prior test in this thread.
+        let _ = remote::take_proxy_session_calls();
+
+        let mut app = App::new_test(vec![]);
+        app.join_or_create_session(
+            session_name,
+            worktree_path,
+            Some("issue3201/fix"),
+            Some(host),
+            None,
+            None,
+        );
+
+        let calls = remote::take_proxy_session_calls();
+
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected exactly one create_remote_proxy_session call, got {}: {calls:?}",
+            calls.len()
+        );
+
+        let call = &calls[0];
+
+        assert_eq!(
+            call.host, host,
+            "recorded host must be {host:?}, got {:?}",
+            call.host
+        );
+        assert_eq!(
+            call.session_name, session_name,
+            "recorded source session must be {session_name:?}, got {:?}",
+            call.session_name
+        );
+
+        // The proxy session name is the central naming-convention contract.
+        assert_eq!(
+            call.proxy_name, "remote_claude",
+            "proxy session name must be \"remote_claude\", got {:?}",
+            call.proxy_name
+        );
+
+        // Cross-check via the pure helper — both paths derive the same name.
+        assert_eq!(
+            call.proxy_name,
+            remote::proxy_session_name(session_name),
+            "proxy_name in recorder must equal proxy_session_name(session_name)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC4 regression lock — CreateSession dispatch
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 124-130
+    // -----------------------------------------------------------------------
+
+    /// Regression lock for AC4 (CreateSession path):
+    /// When `join_or_create_session` is called with `remote_host=Some(...)` —
+    /// as it is from the `TaskEnterAction::CreateSession` arm in
+    /// `handle_enter_action` — it must call
+    /// `remote::create_remote_proxy_session` exactly once with the correct host.
+    ///
+    /// Note: the "create_remote_session is called first" sub-claim in the
+    /// scenario refers to an implementation detail *inside*
+    /// `create_remote_proxy_session`'s production block (`#[cfg(not(test))]`
+    /// at remote.rs:336-337). That internal two-step is not observable through
+    /// this seam in test builds; it is covered by the `#[ignore]`-gated live
+    /// e2e harness (Task #22). What we lock here is that the CreateSession
+    /// arm dispatches through the same `create_remote_proxy_session` gateway
+    /// as the JoinSession arm — same contract, different caller.
+    #[test]
+    fn join_or_create_session_for_create_session_dispatches_create_remote_proxy_session() {
+        use crate::remote;
+
+        let host = "boxd@vm.boxd.sh";
+        let session_name = "issue999_workflow";
+        let worktree_path = "/path/to/worktree";
+
+        // Drain any stale recorder state from a prior test in this thread.
+        let _ = remote::take_proxy_session_calls();
+
+        let mut app = App::new_test(vec![]);
+        // This is the same call shape the CreateSession arm of handle_enter_action
+        // produces after deriving session_name via tmux::derive_session_name.
+        app.join_or_create_session(
+            session_name,
+            worktree_path,
+            Some("issue999/branch"),
+            Some(host),
+            None,
+            None,
+        );
+
+        let calls = remote::take_proxy_session_calls();
+
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected exactly one create_remote_proxy_session call from CreateSession path, got {}: {calls:?}",
+            calls.len()
+        );
+
+        let call = &calls[0];
+
+        assert_eq!(
+            call.host, host,
+            "recorded host must be {host:?}, got {:?}",
+            call.host
+        );
+        assert_eq!(
+            call.session_name, session_name,
+            "recorded source session must be {session_name:?}, got {:?}",
+            call.session_name
+        );
+        assert_eq!(
+            call.proxy_name,
+            remote::proxy_session_name(session_name),
+            "proxy_name must equal proxy_session_name(session_name), got {:?}",
+            call.proxy_name
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC4 regression lock — CreateSession failure surfaces warning
+    // Feature: launch-remote-tui-enter-federation-validation.feature lines 132-138
+    // -----------------------------------------------------------------------
+
+    /// When `create_remote_proxy_session` fails, `join_or_create_session` must:
+    ///   - return `false` (failure path),
+    ///   - leave `switch_target` as `None` (no premature switch),
+    ///   - set `app.warning` with a message containing the error description.
+    ///
+    /// This locks the "failure surfaces warning, not silent swallow" contract
+    /// from the scenario at feature file lines 132-138.
+    #[test]
+    fn join_or_create_session_failure_surfaces_warning_in_app() {
+        use crate::remote;
+
+        let host = "boxd@vm.boxd.sh";
+        let session_name = "issue999";
+        let worktree_path = "/path";
+
+        // Drain any stale recorder state from a prior test in this thread.
+        let _ = remote::take_proxy_session_calls();
+
+        // Arm the failure — next call returns Err("simulated SSH failure").
+        remote::set_next_proxy_session_error("simulated SSH failure");
+
+        let mut app = App::new_test(vec![]);
+        let result = app.join_or_create_session(
+            session_name,
+            worktree_path,
+            Some("issue999/x"),
+            Some(host),
+            None,
+            None,
+        );
+
+        // Returns false on the failure path.
+        assert!(
+            !result,
+            "join_or_create_session must return false on proxy error"
+        );
+
+        // No premature tmux switch.
+        assert!(
+            app.switch_target.is_none(),
+            "switch_target must be None when proxy call fails, got {:?}",
+            app.switch_target
+        );
+
+        // Warning must be set and contain the error context.
+        let (msg, _) = app
+            .warning
+            .as_ref()
+            .expect("app.warning must be Some after a remote proxy session failure");
+
+        assert!(
+            msg.contains("remote session error"),
+            "warning must contain \"remote session error\", got {msg:?}"
+        );
+        assert!(
+            msg.contains("simulated SSH failure"),
+            "warning must contain the original error message \"simulated SSH failure\", got {msg:?}"
         );
     }
 }

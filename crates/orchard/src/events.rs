@@ -30,7 +30,14 @@ pub struct Event {
 ///
 /// Used by the watch daemon tailer to know which file to tail, and by
 /// the events module internally for all writes.
+///
+/// If `ORCHARD_EVENTS_PATH` is set in the environment the value is used
+/// verbatim.  This lets unit tests redirect writes to a temp directory
+/// without touching `~/.local/state/git-orchard/events.jsonl`.
 pub fn events_path() -> PathBuf {
+    if let Ok(p) = std::env::var("ORCHARD_EVENTS_PATH") {
+        return PathBuf::from(p);
+    }
     dirs::home_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(".local")
