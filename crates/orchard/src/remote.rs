@@ -386,12 +386,23 @@ pub fn create_remote_proxy_session(
 ) -> anyhow::Result<String> {
     let local_name = proxy_session_name(name);
 
+    // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
+    // BEFORE any SSH or test short-circuit fires, so the synchronous Err is
+    // returned regardless of build mode.
+    if shell == "mosh" && discovery_path.is_some_and(|dp| dp.len() > 2) {
+        anyhow::bail!(
+            "mosh is not supported for transitive hosts ({}); \
+             change this remote's shell to ssh",
+            discovery_path.unwrap().join(" -> ")
+        );
+    }
+
     // Under test, record the call and return immediately — no SSH or tmux.
     #[cfg(test)]
     {
-        // Suppress unused-parameter warnings: path and shell are only used
-        // in the production path below.
-        let _ = (path, shell);
+        // Suppress unused-parameter warnings: path is only used in the
+        // production path below.
+        let _ = path;
         PROXY_SESSION_CALLS.with(|calls| {
             calls.borrow_mut().push(ProxySessionCall {
                 host: host.to_string(),
@@ -413,104 +424,94 @@ pub fn create_remote_proxy_session(
     // `#[cfg_attr(test, allow(dead_code))]` to stay live in production.
     #[cfg(not(test))]
     {
-    let shell = if shell.is_empty() { "ssh" } else { shell };
+        let shell = if shell.is_empty() { "ssh" } else { shell };
 
-    // mosh does not support multi-hop chains. Reject transitive (depth-2+) hosts
-    // BEFORE any SSH is attempted to avoid a cryptic network-layer failure later.
-    if shell == "mosh" && discovery_path.is_some_and(|dp| dp.len() > 2) {
-        anyhow::bail!(
-            "mosh is not supported for transitive hosts ({}); \
-             change this remote's shell to ssh",
-            discovery_path.unwrap().join(" -> ")
-        );
-    }
+        // Create the remote session if it doesn't exist yet.
+        let has_session_cmd = format!("tmux has-session -t {}", shell_escape(name));
+        let (has_target, has_cmd) = chain_cmd(host, discovery_path, &has_session_cmd);
+        let remote_was_fresh = ssh_exec(&has_target, &has_cmd).is_err();
+        if remote_was_fresh {
+            create_remote_session(host, name, path, discovery_path)?;
+        }
 
-    // Create the remote session if it doesn't exist yet.
-    let has_session_cmd = format!("tmux has-session -t {}", shell_escape(name));
-    let (has_target, has_cmd) = chain_cmd(host, discovery_path, &has_session_cmd);
-    let remote_was_fresh = ssh_exec(&has_target, &has_cmd).is_err();
-    if remote_was_fresh {
-        create_remote_session(host, name, path, discovery_path)?;
-    }
-
-    let connect_cmd = if shell == "mosh" {
-        // Depth-0 or depth-1 mosh: direct connection is fine.
-        format!(
-            "env LC_ALL=en_US.UTF-8 mosh --predict=always {} -- tmux attach-session -t {}",
-            shell_escape(host),
-            shell_escape(name)
-        )
-    } else {
-        // Build the connect command for the local proxy pane.
-        // For depth-1: `ssh -tt host tmux attach-session -t name`
-        // For depth-2+: `ssh -tt jump_host ssh 'leaf' 'tmux attach-session -t name'`
-        let leaf_attach = format!("tmux attach-session -t {}", shell_escape(name));
-        match discovery_path {
-            Some(dp) if dp.len() > 2 => {
-                // Build inner hops using build_ssh_chain on the leaf-only portion,
-                // then add -tt on the outermost hop.
-                // hops = dp[1..] (strip "local"), jump = dp[1], rest = dp[2..]
-                let jump_host = &dp[1];
-                // Build the chain from the jump host onward (inner only).
-                // We use build_ssh_chain with a sub-path starting from the jump host.
-                let sub_path: Vec<String> = dp[1..].to_vec();
-                let inner = crate::federation::build_ssh_chain(&sub_path, &leaf_attach);
-                // inner = "ssh jump_host ssh 'leaf' 'tmux attach-session -t name'"
-                // but the outermost `ssh jump_host` needs `-tt`.
-                // Replace leading `ssh jump_host ` with `ssh -tt jump_host `.
-                let prefix = format!("ssh {} ", jump_host);
-                if inner.starts_with(&prefix) {
-                    format!("ssh -tt {} {}", jump_host, &inner[prefix.len()..])
-                } else {
-                    format!("ssh -tt {} {}", shell_escape(jump_host), inner)
-                }
-            }
-            // depth-0 or depth-1: unchanged
-            _ => format!(
-                "ssh -tt {} tmux attach-session -t {}",
+        let connect_cmd = if shell == "mosh" {
+            // Depth-0 or depth-1 mosh: direct connection is fine.
+            format!(
+                "env LC_ALL=en_US.UTF-8 mosh --predict=always {} -- tmux attach-session -t {}",
                 shell_escape(host),
                 shell_escape(name)
-            ),
-        }
-    };
+            )
+        } else {
+            // Build the connect command for the local proxy pane.
+            // For depth-1: `ssh -tt host tmux attach-session -t name`
+            // For depth-2+: `ssh -tt jump_host ssh 'leaf' 'tmux attach-session -t name'`
+            let leaf_attach = format!("tmux attach-session -t {}", shell_escape(name));
+            match discovery_path {
+                Some(dp) if dp.len() > 2 => {
+                    // Build inner hops using build_ssh_chain on the leaf-only portion,
+                    // then add -tt on the outermost hop.
+                    // hops = dp[1..] (strip "local"), jump = dp[1], rest = dp[2..]
+                    let jump_host = &dp[1];
+                    // Build the chain from the jump host onward (inner only).
+                    // We use build_ssh_chain with a sub-path starting from the jump host.
+                    let sub_path: Vec<String> = dp[1..].to_vec();
+                    let inner = crate::federation::build_ssh_chain(&sub_path, &leaf_attach);
+                    // inner = "ssh jump_host ssh 'leaf' 'tmux attach-session -t name'"
+                    // but the outermost `ssh jump_host` needs `-tt`.
+                    // Replace leading `ssh jump_host ` with `ssh -tt jump_host `.
+                    let prefix = format!("ssh {} ", jump_host);
+                    if inner.starts_with(&prefix) {
+                        format!("ssh -tt {} {}", jump_host, &inner[prefix.len()..])
+                    } else {
+                        format!("ssh -tt {} {}", shell_escape(jump_host), inner)
+                    }
+                }
+                // depth-0 or depth-1: unchanged
+                _ => format!(
+                    "ssh -tt {} tmux attach-session -t {}",
+                    shell_escape(host),
+                    shell_escape(name)
+                ),
+            }
+        };
 
-    let need_create = should_recreate_proxy(&local_name, remote_was_fresh);
-    if need_create {
-        let create_out = Command::new("tmux")
-            .args([
-                "new-session",
-                "-d",
-                "-s",
-                &local_name,
-                "--",
-                "sh",
-                "-c",
-                &connect_cmd,
-            ])
-            .output()?;
+        let need_create = should_recreate_proxy(&local_name, remote_was_fresh);
+        if need_create {
+            let create_out = Command::new("tmux")
+                .args([
+                    "new-session",
+                    "-d",
+                    "-s",
+                    &local_name,
+                    "--",
+                    "sh",
+                    "-c",
+                    &connect_cmd,
+                ])
+                .output()?;
 
-        if !create_out.status.success() {
-            let stderr = String::from_utf8_lossy(&create_out.stderr);
-            if !stderr.contains("duplicate session") {
-                return Err(anyhow!(
-                    "creating local proxy session {:?}: {}",
-                    local_name,
-                    stderr
-                ));
+            if !create_out.status.success() {
+                let stderr = String::from_utf8_lossy(&create_out.stderr);
+                if !stderr.contains("duplicate session") {
+                    return Err(anyhow!(
+                        "creating local proxy session {:?}: {}",
+                        local_name,
+                        stderr
+                    ));
+                }
             }
         }
-    }
 
-    // Keep the pane alive after the SSH/mosh process exits.
-    let _ = Command::new("tmux")
-        .args(["set-option", "-t", &local_name, "remain-on-exit", "on"])
-        .status();
+        // Keep the pane alive after the SSH/mosh process exits.
+        let _ = Command::new("tmux")
+            .args(["set-option", "-t", &local_name, "remain-on-exit", "on"])
+            .status();
 
-    LOG.info(&format!(
-        "createRemoteProxySession: {} -> {}",
-        name, local_name
-    ));
-    Ok(local_name)
+        LOG.info(&format!(
+            "createRemoteProxySession: {} -> {}",
+            name, local_name
+        ));
+        Ok(local_name)
     }
     // Test builds short-circuit above; the production block compiles but is
     // unreachable. Function must end with an expression of `Result<String>`.

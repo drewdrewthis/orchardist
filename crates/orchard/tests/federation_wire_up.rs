@@ -410,7 +410,10 @@ fn cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged() {
 
     // Step 4: derive the expected snapshot path (@ and . → _).
     let snapshot_path = orchard_snapshot_path_in(host, cache_dir.path());
-    assert!(snapshot_path.exists(), "snapshot must exist before the adapter call");
+    assert!(
+        snapshot_path.exists(),
+        "snapshot must exist before the adapter call"
+    );
 
     // Step 5: redirect events.jsonl to tempdir.
     // SAFETY: process-global mutation; isolated per-test via unique tempdir path.
@@ -554,6 +557,7 @@ fn multi_snapshot_merge_dedupes_by_host_path_tuple() {
                     status_glyph: "\u{1f7e2}".to_string(),
                     is_main_worktree: false,
                     last_activity_at: None,
+                    discovery_path: None,
                 },
                 // Second entry at same /remote/repo — snapshot-wins dedup.
                 JsonWorktree {
@@ -571,10 +575,12 @@ fn multi_snapshot_merge_dedupes_by_host_path_tuple() {
                     status_glyph: "\u{1f7e2}".to_string(),
                     is_main_worktree: false,
                     last_activity_at: None,
+                    discovery_path: None,
                 },
             ],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     };
 
     let mut state = OrchardState::new();
@@ -603,8 +609,7 @@ fn multi_snapshot_merge_dedupes_by_host_path_tuple() {
 
     // The surviving entry is the last-written one (second entry wins).
     assert_eq!(
-        same_path_entries[0].branch,
-        "issue2/second",
+        same_path_entries[0].branch, "issue2/second",
         "the second (later) entry must win the dedup; got branch: {}",
         same_path_entries[0].branch
     );
@@ -636,9 +641,11 @@ fn multi_snapshot_merge_dedupes_by_host_path_tuple() {
                 status_glyph: "\u{1f7e2}".to_string(),
                 is_main_worktree: false,
                 last_activity_at: None,
+                discovery_path: None,
             }],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     };
 
     let snapshot_b = JsonOutput {
@@ -663,9 +670,11 @@ fn multi_snapshot_merge_dedupes_by_host_path_tuple() {
                 status_glyph: "\u{1f7e2}".to_string(),
                 is_main_worktree: false,
                 last_activity_at: None,
+                discovery_path: None,
             }],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     };
 
     let mut cross_state = OrchardState::new();
@@ -727,6 +736,7 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
         ahead_behind: None,
         last_commit_at: None,
         layout: orchard::cache::WorktreeLayout::Bare,
+        discovery_path: None,
     };
 
     let mut state = OrchardState {
@@ -738,6 +748,7 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
         }],
         standalone_sessions: vec![],
         hosts: HashMap::new(),
+        transitive_errors: vec![],
     };
 
     // Remote snapshot: same slug, different path, remote machine's worktree.
@@ -763,9 +774,11 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
                 status_glyph: "\u{1f7e2}".to_string(),
                 is_main_worktree: false,
                 last_activity_at: None,
+                discovery_path: None,
             }],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     };
 
     merge_remote_snapshot(&mut state, remote_snapshot, remote_host.to_string());
@@ -866,15 +879,18 @@ fn load_cached_snapshots_exposes_session_for_orchard_proxy_host() {
                     last_activity_at: None,
                     claude: None,
                     windows: vec![],
+                    discovery_path: None,
                 }],
                 display_group: "other".to_string(),
                 status: "ready".to_string(),
                 status_glyph: "\u{1f7e2}".to_string(),
                 is_main_worktree: false,
                 last_activity_at: None,
+                discovery_path: None,
             }],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     };
 
     // Write the snapshot as if OrchardProxyAdapter had just fetched and persisted it.

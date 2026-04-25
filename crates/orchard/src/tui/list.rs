@@ -4380,7 +4380,9 @@ mod tests {
                 );
             }
             TaskEnterAction::JoinSession { .. } => {
-                panic!("expected CreateSession but got JoinSession — builder chose wrong variant for no-session remote row");
+                panic!(
+                    "expected CreateSession but got JoinSession — builder chose wrong variant for no-session remote row"
+                );
             }
             TaskEnterAction::JoinStandalone { .. } => {
                 panic!("expected CreateSession but got JoinStandalone");
@@ -4460,6 +4462,7 @@ mod tests {
             Some("issue3201/fix"),
             Some(host),
             None,
+            None,
         );
 
         let calls = remote::take_proxy_session_calls();
@@ -4538,6 +4541,7 @@ mod tests {
             Some("issue999/branch"),
             Some(host),
             None,
+            None,
         );
 
         let calls = remote::take_proxy_session_calls();
@@ -4602,10 +4606,14 @@ mod tests {
             Some("issue999/x"),
             Some(host),
             None,
+            None,
         );
 
         // Returns false on the failure path.
-        assert!(!result, "join_or_create_session must return false on proxy error");
+        assert!(
+            !result,
+            "join_or_create_session must return false on proxy error"
+        );
 
         // No premature tmux switch.
         assert!(

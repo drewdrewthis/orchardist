@@ -165,9 +165,9 @@ fn session_row_visible(json_stdout: &str, repo_slug: &str, needle: &str) -> bool
     // fails, fall back to the substring gate (which is already permissive).
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_stdout)
         && let Some(repos) = json.get("repos").and_then(|v| v.as_array())
-        && let Some(repo) = repos.iter().find(|r| {
-            r.get("slug").and_then(|s| s.as_str()) == Some(repo_slug)
-        })
+        && let Some(repo) = repos
+            .iter()
+            .find(|r| r.get("slug").and_then(|s| s.as_str()) == Some(repo_slug))
         && let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array())
     {
         for wt in worktrees {
