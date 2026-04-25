@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.9.0...orchard-v0.10.0) (2026-04-24)
+
+
+### Features
+
+* **federation:** transitive remote discovery ([#363](https://github.com/drewdrewthis/git-orchard-rs/issues/363)) ([#364](https://github.com/drewdrewthis/git-orchard-rs/issues/364)) ([403ea27](https://github.com/drewdrewthis/git-orchard-rs/commit/403ea27c77314e0d844de06e293e1685883c32c0))
+
 ## [0.9.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.8.0...orchard-v0.9.0) (2026-04-21)
 
 
