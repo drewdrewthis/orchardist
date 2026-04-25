@@ -365,6 +365,7 @@ fn make_json_output_with_two_worktrees() -> JsonOutput {
             status_glyph: "\u{1f7e2}".to_string(),
             is_main_worktree: false,
             last_activity_at: None,
+            discovery_path: None,
         }
     }
 
@@ -381,6 +382,7 @@ fn make_json_output_with_two_worktrees() -> JsonOutput {
             ],
         }],
         hosts: HashMap::new(),
+        errors: vec![],
     }
 }
 
