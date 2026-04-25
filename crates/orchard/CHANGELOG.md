@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.10.0...orchard-v0.11.0) (2026-04-25)
+
+
+### Features
+
+* **#337:** validate launch-remote + TUI Enter + federation on v0.9.0 ([#338](https://github.com/drewdrewthis/git-orchard-rs/issues/338)) ([18f4c4d](https://github.com/drewdrewthis/git-orchard-rs/commit/18f4c4df1e423a86cb66767599ed756dcb27673c))
+
 ## [0.10.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.9.0...orchard-v0.10.0) (2026-04-24)
 
 
