@@ -561,7 +561,11 @@ pub fn format_report(report: &HealReport, fix_results: Option<&[FixResult]>) -> 
         )
     }) {
         let icon = severity_icon(&finding.severity);
-        let suffix = if finding.is_self { " \u{2014} skipped (self)" } else { "" };
+        let suffix = if finding.is_self {
+            " \u{2014} skipped (self)"
+        } else {
+            ""
+        };
         lines.push(format!("{} {}{}", icon, finding.message, suffix));
     }
 
@@ -573,7 +577,11 @@ pub fn format_report(report: &HealReport, fix_results: Option<&[FixResult]>) -> 
         )
     }) {
         let icon = severity_icon(&finding.severity);
-        let suffix = if finding.is_self { " \u{2014} skipped (self)" } else { "" };
+        let suffix = if finding.is_self {
+            " \u{2014} skipped (self)"
+        } else {
+            ""
+        };
         lines.push(format!("{} {}{}", icon, finding.message, suffix));
     }
 
@@ -1223,7 +1231,10 @@ mod tests {
             .iter()
             .find(|f| matches!(&f.action, HealAction::KillSession(n) if n == "another"));
 
-        assert!(orchardist_finding.is_some(), "should have finding for orchardist");
+        assert!(
+            orchardist_finding.is_some(),
+            "should have finding for orchardist"
+        );
         assert!(another_finding.is_some(), "should have finding for another");
 
         assert!(
@@ -1295,10 +1306,7 @@ mod tests {
             "message must start with 'Skipped session', got: {}",
             results[0].message
         );
-        assert!(
-            results[0].error.is_none(),
-            "skip result must have no error"
-        );
+        assert!(results[0].error.is_none(), "skip result must have no error");
     }
 
     #[test]
@@ -1311,9 +1319,7 @@ mod tests {
             category: HealCategory::OrphanedSession,
             severity: Severity::Warning,
             message: "Session has no matching worktree".to_string(),
-            action: HealAction::KillSession(
-                "orchardist-test-no-such-session-issue361-xxx".into(),
-            ),
+            action: HealAction::KillSession("orchardist-test-no-such-session-issue361-xxx".into()),
             is_self: false,
         };
 
@@ -1382,7 +1388,10 @@ mod tests {
         };
 
         let result = detect_self_error(&report);
-        assert!(result.is_some(), "should return Some for self + Error finding");
+        assert!(
+            result.is_some(),
+            "should return Some for self + Error finding"
+        );
         // Confirm it is the same finding (by matching the message).
         assert_eq!(result.unwrap().message, finding.message);
     }

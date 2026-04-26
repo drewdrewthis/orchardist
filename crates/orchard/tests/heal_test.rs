@@ -3,8 +3,8 @@
 /// These tests exercise the `heal::diagnose` pure function with realistic inputs,
 /// corresponding to acceptance criteria from `specs/features/orchard-heal.feature`.
 use orchard::heal::{
-    HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, diagnose, format_report,
-    apply_fixes, detect_self_error,
+    HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, apply_fixes,
+    detect_self_error, diagnose, format_report,
 };
 use orchard::types::TmuxSession;
 
@@ -578,10 +578,7 @@ fn regression_full_pipeline_from_inside_named_tmux_session_never_kills_self() {
     // Both sessions point to /tmp (exists but not a worktree) → two OrphanedSession findings.
     // Use a name that certainly does not exist on the test runner for the orphan.
     let orphan_name = "myrepo_old-feature-test-issue361";
-    let sessions = vec![
-        session("orchardist", "/tmp"),
-        session(orphan_name, "/tmp"),
-    ];
+    let sessions = vec![session("orchardist", "/tmp"), session(orphan_name, "/tmp")];
     let worktrees: Vec<HealWorktree> = vec![];
 
     let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
@@ -598,9 +595,10 @@ fn regression_full_pipeline_from_inside_named_tmux_session_never_kills_self() {
     );
 
     // Non-self orphan must still go through the kill path.
-    let killed = fix_results
-        .iter()
-        .any(|r| r.message.starts_with(&format!("Killed session \"{}\"", orphan_name)));
+    let killed = fix_results.iter().any(|r| {
+        r.message
+            .starts_with(&format!("Killed session \"{}\"", orphan_name))
+    });
     assert!(
         killed,
         "must attempt kill for non-self orphan \"{}\"; got: {:?}",
