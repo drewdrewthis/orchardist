@@ -4,7 +4,7 @@
 /// corresponding to acceptance criteria from `specs/features/orchard-heal.feature`.
 use orchard::heal::{
     HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, diagnose, format_report,
-    apply_fixes,
+    apply_fixes, detect_self_error,
 };
 use orchard::types::TmuxSession;
 
@@ -563,5 +563,157 @@ fn json_output_exposes_is_self_field() {
         orchardist_finding.unwrap().get("is_self"),
         Some(&serde_json::Value::Bool(true)),
         "is_self must be true for the invoking session finding: {json_str}"
+    );
+}
+
+// Regression: must never kill self (#361) — full coverage
+
+/// Full pipeline test: the invoking session is skipped while unrelated orphans are
+/// still killed.
+///
+/// Proves that self-protection isolates only the invoking session; other orphaned
+/// sessions that don't match the current session name still go through the kill path.
+#[test]
+fn regression_full_pipeline_from_inside_named_tmux_session_never_kills_self() {
+    // Both sessions point to /tmp (exists but not a worktree) → two OrphanedSession findings.
+    // Use a name that certainly does not exist on the test runner for the orphan.
+    let orphan_name = "myrepo_old-feature-test-issue361";
+    let sessions = vec![
+        session("orchardist", "/tmp"),
+        session(orphan_name, "/tmp"),
+    ];
+    let worktrees: Vec<HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let fix_results = apply_fixes(&report.findings);
+
+    // Self must be skipped, not killed.
+    let skipped = fix_results
+        .iter()
+        .any(|r| r.message.starts_with("Skipped session \"orchardist\""));
+    assert!(
+        skipped,
+        "must emit a skip result for the invoking session \"orchardist\"; got: {:?}",
+        fix_results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+
+    // Non-self orphan must still go through the kill path.
+    let killed = fix_results
+        .iter()
+        .any(|r| r.message.starts_with(&format!("Killed session \"{}\"", orphan_name)));
+    assert!(
+        killed,
+        "must attempt kill for non-self orphan \"{}\"; got: {:?}",
+        orphan_name,
+        fix_results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+/// Sister windows inside the same tmux session share the `#S` session name.
+/// `current_session_name()` returns the session name regardless of which window
+/// invoked the command, so name-based self-detection covers sister windows automatically.
+///
+/// This test pins down that `is_self` is computed from the session name match
+/// alone — not from pane state or active_pane_cwd. Two scenarios are checked:
+/// 1. Plain session (no active_pane_cwd).
+/// 2. Session with active_pane_cwd set (simulating a sister window that has cd'd elsewhere).
+/// Both must produce `is_self == true`.
+#[test]
+fn regression_sister_window_of_invoking_session_is_still_treated_as_self() {
+    use orchard::types::TmuxSession;
+
+    // Scenario 1: plain session — no active_pane_cwd.
+    {
+        let sessions = vec![TmuxSession {
+            name: "orchardist".to_string(),
+            path: "/tmp".to_string(),
+            attached: false,
+            pane_title: None,
+            active_pane_cwd: None,
+        }];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.category == HealCategory::OrphanedSession);
+        assert!(
+            finding.is_some(),
+            "scenario 1: should produce an OrphanedSession finding"
+        );
+        assert!(
+            finding.unwrap().is_self,
+            "scenario 1 (no active_pane_cwd): is_self must be true when session name matches current_session"
+        );
+    }
+
+    // Scenario 2: session with active_pane_cwd set to an existing path — simulates a
+    // sister window that has cd'd to a different (but real) directory. The session name
+    // still matches current_session, so is_self must still be true regardless of the
+    // active pane path. We use /tmp so the path-exists check passes and we stay in the
+    // OrphanedSession branch (no matching worktree).
+    {
+        let sessions = vec![TmuxSession {
+            name: "orchardist".to_string(),
+            path: "/tmp".to_string(),
+            attached: false,
+            pane_title: None,
+            active_pane_cwd: Some("/tmp".to_string()),
+        }];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.category == HealCategory::OrphanedSession);
+        assert!(
+            finding.is_some(),
+            "scenario 2: should produce an OrphanedSession finding"
+        );
+        assert!(
+            finding.unwrap().is_self,
+            "scenario 2 (with active_pane_cwd): is_self must be true — sister windows share \
+             the session name, so name-based self-detection covers them automatically"
+        );
+    }
+}
+
+/// Negative case for AC #2: only Error-severity self findings trigger the abort path.
+/// A Warning-severity OrphanedSession with is_self=true must NOT cause detect_self_error
+/// to return Some — that would abort heal for a normally "unregistered standalone session"
+/// classification, which is overly aggressive.
+#[test]
+fn regression_warning_severity_self_does_not_trigger_abort_path() {
+    // Session "orchardist" at /tmp — real path → OrphanedSession (Warning severity).
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+    // Confirm we actually got a self finding at Warning severity.
+    let self_finding = report
+        .findings
+        .iter()
+        .find(|f| f.is_self && f.category == HealCategory::OrphanedSession);
+    assert!(
+        self_finding.is_some(),
+        "test precondition: should have an OrphanedSession finding with is_self=true"
+    );
+    assert_eq!(
+        self_finding.unwrap().severity,
+        Severity::Warning,
+        "test precondition: the self finding must be Warning severity (not Error)"
+    );
+
+    // The abort gate must NOT fire for Warning-severity self findings.
+    let abort = detect_self_error(&report);
+    assert!(
+        abort.is_none(),
+        "detect_self_error must return None for Warning-severity self finding; \
+         only Error-severity self findings should abort the heal run"
     );
 }
