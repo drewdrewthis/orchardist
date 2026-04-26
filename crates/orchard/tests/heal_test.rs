@@ -414,3 +414,44 @@ fn json_output_contains_findings_array() {
         assert!(first.get("action").is_some(), "finding should have action");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Regression: must never kill self (#361)
+// ---------------------------------------------------------------------------
+
+/// Regression for issue #361: heal --fix from inside a tmux session must not kill the invoking session.
+#[test]
+fn regression_heal_must_never_kill_invoking_session() {
+    // Build a TmuxSession named "orchardist" pointing to /tmp.
+    // /tmp exists on disk so we don't trip the dead-path (DeadSessionDirectory) branch,
+    // but there is no matching worktree → this produces an OrphanedSession finding
+    // with action KillSession("orchardist").
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
+
+    // Pass `Some("orchardist")` as the `current_session` argument.
+    // TODAY diagnose() only accepts 5 positional args — this 6th arg is the one
+    // the fix will add. Passing it here causes a compile error, which is the
+    // expected failing-first signal for Phase 1 of TDD.
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+    let fix_results = orchard::heal::apply_fixes(&report.findings);
+
+    // The invoking session must NOT be killed.
+    let killed = fix_results
+        .iter()
+        .any(|r| r.message.starts_with("Killed session \"orchardist\""));
+    assert!(
+        !killed,
+        "heal --fix must not kill the invoking session \"orchardist\""
+    );
+
+    // There must be at least one skip result for the invoking session.
+    let skipped = fix_results
+        .iter()
+        .any(|r| r.message.starts_with("Skipped session \"orchardist\""));
+    assert!(
+        skipped,
+        "heal --fix must emit a skip result for the invoking session \"orchardist\""
+    );
+}
