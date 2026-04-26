@@ -504,3 +504,64 @@ fn regression_heal_must_never_kill_invoking_session() {
         "heal --fix must emit a skip result for the invoking session \"orchardist\""
     );
 }
+
+// ---------------------------------------------------------------------------
+// Self-protection: format_report annotates is_self findings (#361)
+// ---------------------------------------------------------------------------
+
+/// AC #3 (dry-run): format_report marks the invoking session as "skipped (self)".
+#[test]
+fn format_report_marks_invoking_session_as_skipped() {
+    // Session "orchardist" at /tmp — path exists but no matching worktree
+    // → OrphanedSession with KillSession("orchardist") and is_self=true.
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let text = format_report(&report, None);
+
+    assert!(
+        text.contains("skipped (self)"),
+        "format_report must annotate the invoking session as 'skipped (self)': {text}"
+    );
+    assert!(
+        text.contains("orchardist"),
+        "format_report output must mention the session name 'orchardist': {text}"
+    );
+}
+
+/// AC #3 (JSON): the is_self field is serialized and exposed for the invoking session finding.
+#[test]
+fn json_output_exposes_is_self_field() {
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let json_str = serde_json::to_string(&report).expect("serialize report");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
+
+    let findings = json
+        .get("findings")
+        .expect("should have findings field")
+        .as_array()
+        .expect("findings should be an array");
+
+    // Find the finding whose action targets "orchardist".
+    let orchardist_finding = findings.iter().find(|f| {
+        f.get("action")
+            .and_then(|a| a.get("value"))
+            .and_then(|v| v.as_str())
+            .map(|s| s == "orchardist")
+            .unwrap_or(false)
+    });
+
+    assert!(
+        orchardist_finding.is_some(),
+        "should find a finding targeting orchardist in JSON: {json_str}"
+    );
+    assert_eq!(
+        orchardist_finding.unwrap().get("is_self"),
+        Some(&serde_json::Value::Bool(true)),
+        "is_self must be true for the invoking session finding: {json_str}"
+    );
+}

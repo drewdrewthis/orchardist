@@ -549,7 +549,8 @@ pub fn format_report(report: &HealReport, fix_results: Option<&[FixResult]>) -> 
         )
     }) {
         let icon = severity_icon(&finding.severity);
-        lines.push(format!("{} {}", icon, finding.message));
+        let suffix = if finding.is_self { " \u{2014} skipped (self)" } else { "" };
+        lines.push(format!("{} {}{}", icon, finding.message, suffix));
     }
 
     // Print all non-session findings.
@@ -560,7 +561,8 @@ pub fn format_report(report: &HealReport, fix_results: Option<&[FixResult]>) -> 
         )
     }) {
         let icon = severity_icon(&finding.severity);
-        lines.push(format!("{} {}", icon, finding.message));
+        let suffix = if finding.is_self { " \u{2014} skipped (self)" } else { "" };
+        lines.push(format!("{} {}{}", icon, finding.message, suffix));
     }
 
     // Fix results section.
@@ -1310,6 +1312,42 @@ mod tests {
             results[0].message.starts_with("Killed session"),
             "non-self finding must go through kill path, got: {}",
             results[0].message
+        );
+    }
+
+    #[test]
+    fn format_report_annotates_is_self_findings_with_skipped_self() {
+        let report = HealReport {
+            findings: vec![HealFinding {
+                category: HealCategory::OrphanedSession,
+                severity: Severity::Warning,
+                message: "Session \"orchardist\" has no matching worktree (path: /tmp)".to_string(),
+                action: HealAction::KillSession("orchardist".to_string()),
+                is_self: true,
+            }],
+        };
+        let text = format_report(&report, None);
+        assert!(
+            text.contains("skipped (self)"),
+            "format_report must annotate is_self findings with 'skipped (self)': {text}"
+        );
+    }
+
+    #[test]
+    fn format_report_leaves_non_is_self_kill_session_findings_unchanged() {
+        let report = HealReport {
+            findings: vec![HealFinding {
+                category: HealCategory::OrphanedSession,
+                severity: Severity::Warning,
+                message: "Session \"orchardist\" has no matching worktree (path: /tmp)".to_string(),
+                action: HealAction::KillSession("orchardist".to_string()),
+                is_self: false,
+            }],
+        };
+        let text = format_report(&report, None);
+        assert!(
+            !text.contains("skipped (self)"),
+            "format_report must not annotate non-is_self findings: {text}"
         );
     }
 
