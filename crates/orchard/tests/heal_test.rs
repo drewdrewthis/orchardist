@@ -3,7 +3,8 @@
 /// These tests exercise the `heal::diagnose` pure function with realistic inputs,
 /// corresponding to acceptance criteria from `specs/features/orchard-heal.feature`.
 use orchard::heal::{
-    HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, diagnose, format_report,
+    HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, apply_fixes,
+    detect_self_error, diagnose, format_report,
 };
 use orchard::types::TmuxSession;
 
@@ -47,7 +48,7 @@ fn dry_run_reports_findings_without_applying_fixes() {
         tmux_session: "myrepo_dead".to_string(),
     }];
 
-    let report = diagnose(&sessions, &worktrees, &claude_states, &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &claude_states, &[], &[], None);
 
     // Orphaned session finding.
     let orphan = report
@@ -85,7 +86,7 @@ fn all_healthy_when_sessions_match_worktrees() {
     let sessions = vec![session("myrepo_main", &tmp)];
     let worktrees = vec![worktree(&tmp, "main")];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
     assert_eq!(report.findings.len(), 0, "should have no findings");
     assert!(report.is_all_ok());
@@ -108,7 +109,7 @@ fn orphaned_session_detected_when_path_exists_but_no_worktree_matches() {
     let sessions = vec![session("myrepo_old-feature", "/tmp")];
     let worktrees = vec![worktree("/workspace/other", "main")];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -138,7 +139,7 @@ fn dead_session_directory_detected_for_nonexistent_path() {
     )];
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -162,7 +163,7 @@ fn stale_claude_state_detected_for_dead_session() {
         tmux_session: "myrepo_dead".to_string(),
     }];
 
-    let report = diagnose(&sessions, &[], &claude_states, &[], &[]);
+    let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
 
     let finding = report
         .findings
@@ -186,7 +187,7 @@ fn no_stale_claude_state_when_session_is_alive() {
         tmux_session: "myrepo_live".to_string(),
     }];
 
-    let report = diagnose(&sessions, &[], &claude_states, &[], &[]);
+    let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
 
     let stale = report
         .findings
@@ -208,7 +209,7 @@ fn stale_cache_file_flagged_for_unknown_repo() {
     let cache_files = vec!["ghost_repo_issues.json".to_string()];
     let known_slugs = vec!["owner/known-project".to_string()];
 
-    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
     let finding = report
         .findings
@@ -225,7 +226,7 @@ fn no_stale_cache_for_known_repo() {
     let cache_files = vec!["owner_myrepo_issues.json".to_string()];
     let known_slugs = vec!["owner/myrepo".to_string()];
 
-    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
     let stale = report
         .findings
@@ -245,7 +246,7 @@ fn merged_pr_worktree_flagged_for_manual_cleanup() {
     wt.pr_state = Some("merged".to_string());
     wt.pr_number = Some(12);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -266,7 +267,7 @@ fn closed_pr_worktree_flagged() {
     wt.pr_state = Some("closed".to_string());
     wt.pr_number = Some(15);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -282,7 +283,7 @@ fn fix_does_not_auto_delete_merged_pr_worktrees() {
     wt.pr_state = Some("merged".to_string());
     wt.pr_number = Some(12);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
     let fix_results = orchard::heal::apply_fixes(&report.findings);
 
     // All results should be FlagForCleanup (not KillSession or DeleteFile).
@@ -305,7 +306,7 @@ fn closed_issue_worktree_flagged_when_no_pr() {
     let mut wt = worktree(".worktrees/issue8-refactor", "issue8/refactor");
     wt.issue_state = Some("closed".to_string());
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -329,7 +330,7 @@ fn session_naming_mismatch_detected() {
     let mut wt = worktree("/workspace/feature-login", "feature/login");
     wt.expected_session_name = Some("myrepo_feature-login".to_string());
 
-    let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+    let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -353,7 +354,7 @@ fn multiple_sessions_per_worktree_detected() {
     ];
     let wt = worktree("/workspace/issue10-api", "issue10/api");
 
-    let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+    let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -374,7 +375,7 @@ fn report_format_includes_icons() {
     let sessions = vec![session("orphan", "/tmp")]; // /tmp is a real path but not a worktree
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
     let text = format_report(&report, None);
 
     // Should contain at least one icon character.
@@ -389,7 +390,7 @@ fn json_output_contains_findings_array() {
     let sessions = vec![session("orphan", "/tmp")];
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
     let json_str = serde_json::to_string(&report).expect("serialize report");
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
 
@@ -413,4 +414,306 @@ fn json_output_contains_findings_array() {
         );
         assert!(first.get("action").is_some(), "finding should have action");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Regression: must never kill self (#361)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Self-protection: outside tmux (#361)
+// ---------------------------------------------------------------------------
+
+/// When current_session is None (running outside tmux), no self-protection is
+/// applied: the OrphanedSession finding has is_self == false, and apply_fixes
+/// goes through the kill path (not the skip path) for an otherwise-applicable
+/// KillSession action.
+///
+/// Using a session name that cannot exist on the host so the kill is harmless.
+#[test]
+fn outside_tmux_no_self_protection_applied() {
+    // Use a unique session name that will not exist on any test runner.
+    let session_name = "orchardist-test-issue361-no-such-session";
+
+    // Session at /tmp — path exists but no matching worktree → OrphanedSession.
+    let sessions = vec![session(session_name, "/tmp")];
+    let worktrees: Vec<HealWorktree> = vec![];
+
+    // current_session = None simulates running outside tmux.
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.category == HealCategory::OrphanedSession);
+    assert!(
+        finding.is_some(),
+        "should produce an OrphanedSession finding: {:?}",
+        report.findings
+    );
+    assert!(
+        !finding.unwrap().is_self,
+        "is_self must be false when current_session is None"
+    );
+
+    // apply_fixes must go through the kill path, not skip.
+    let fix_results = apply_fixes(&report.findings);
+    let kill_result = fix_results
+        .iter()
+        .find(|r| r.message.starts_with("Killed session"));
+    assert!(
+        kill_result.is_some(),
+        "apply_fixes must attempt kill (not skip) when is_self=false; got: {:?}",
+        fix_results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+/// Regression for issue #361: heal --fix from inside a tmux session must not kill the invoking session.
+#[test]
+fn regression_heal_must_never_kill_invoking_session() {
+    // Build a TmuxSession named "orchardist" pointing to /tmp.
+    // /tmp exists on disk so we don't trip the dead-path (DeadSessionDirectory) branch,
+    // but there is no matching worktree → this produces an OrphanedSession finding
+    // with action KillSession("orchardist").
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
+
+    // Pass `Some("orchardist")` as the `current_session` argument.
+    // TODAY diagnose() only accepts 5 positional args — this 6th arg is the one
+    // the fix will add. Passing it here causes a compile error, which is the
+    // expected failing-first signal for Phase 1 of TDD.
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+    let fix_results = orchard::heal::apply_fixes(&report.findings);
+
+    // The invoking session must NOT be killed.
+    let killed = fix_results
+        .iter()
+        .any(|r| r.message.starts_with("Killed session \"orchardist\""));
+    assert!(
+        !killed,
+        "heal --fix must not kill the invoking session \"orchardist\""
+    );
+
+    // There must be at least one skip result for the invoking session.
+    let skipped = fix_results
+        .iter()
+        .any(|r| r.message.starts_with("Skipped session \"orchardist\""));
+    assert!(
+        skipped,
+        "heal --fix must emit a skip result for the invoking session \"orchardist\""
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Self-protection: format_report annotates is_self findings (#361)
+// ---------------------------------------------------------------------------
+
+/// AC #3 (dry-run): format_report marks the invoking session as "skipped (self)".
+#[test]
+fn format_report_marks_invoking_session_as_skipped() {
+    // Session "orchardist" at /tmp — path exists but no matching worktree
+    // → OrphanedSession with KillSession("orchardist") and is_self=true.
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let text = format_report(&report, None);
+
+    assert!(
+        text.contains("skipped (self)"),
+        "format_report must annotate the invoking session as 'skipped (self)': {text}"
+    );
+    assert!(
+        text.contains("orchardist"),
+        "format_report output must mention the session name 'orchardist': {text}"
+    );
+}
+
+/// AC #3 (JSON): the is_self field is serialized and exposed for the invoking session finding.
+#[test]
+fn json_output_exposes_is_self_field() {
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let json_str = serde_json::to_string(&report).expect("serialize report");
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
+
+    let findings = json
+        .get("findings")
+        .expect("should have findings field")
+        .as_array()
+        .expect("findings should be an array");
+
+    // Find the finding whose action targets "orchardist".
+    let orchardist_finding = findings.iter().find(|f| {
+        f.get("action")
+            .and_then(|a| a.get("value"))
+            .and_then(|v| v.as_str())
+            .map(|s| s == "orchardist")
+            .unwrap_or(false)
+    });
+
+    assert!(
+        orchardist_finding.is_some(),
+        "should find a finding targeting orchardist in JSON: {json_str}"
+    );
+    assert_eq!(
+        orchardist_finding.unwrap().get("is_self"),
+        Some(&serde_json::Value::Bool(true)),
+        "is_self must be true for the invoking session finding: {json_str}"
+    );
+}
+
+// Regression: must never kill self (#361) — full coverage
+
+/// Full pipeline test: the invoking session is skipped while unrelated orphans are
+/// still killed.
+///
+/// Proves that self-protection isolates only the invoking session; other orphaned
+/// sessions that don't match the current session name still go through the kill path.
+#[test]
+fn regression_full_pipeline_from_inside_named_tmux_session_never_kills_self() {
+    // Both sessions point to /tmp (exists but not a worktree) → two OrphanedSession findings.
+    // Use a name that certainly does not exist on the test runner for the orphan.
+    let orphan_name = "myrepo_old-feature-test-issue361";
+    let sessions = vec![session("orchardist", "/tmp"), session(orphan_name, "/tmp")];
+    let worktrees: Vec<HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let fix_results = apply_fixes(&report.findings);
+
+    // Self must be skipped, not killed.
+    let skipped = fix_results
+        .iter()
+        .any(|r| r.message.starts_with("Skipped session \"orchardist\""));
+    assert!(
+        skipped,
+        "must emit a skip result for the invoking session \"orchardist\"; got: {:?}",
+        fix_results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+
+    // Non-self orphan must still go through the kill path.
+    let killed = fix_results.iter().any(|r| {
+        r.message
+            .starts_with(&format!("Killed session \"{}\"", orphan_name))
+    });
+    assert!(
+        killed,
+        "must attempt kill for non-self orphan \"{}\"; got: {:?}",
+        orphan_name,
+        fix_results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
+
+/// Sister windows inside the same tmux session share the `#S` session name.
+/// `current_session_name()` returns the session name regardless of which window
+/// invoked the command, so name-based self-detection covers sister windows automatically.
+///
+/// This test pins down that `is_self` is computed from the session name match
+/// alone — not from pane state or active_pane_cwd. Two scenarios are checked:
+///
+/// 1. Plain session (no active_pane_cwd).
+/// 2. Session with active_pane_cwd set (simulating a sister window that has cd'd elsewhere).
+///
+/// Both must produce `is_self == true`.
+#[test]
+fn regression_sister_window_of_invoking_session_is_still_treated_as_self() {
+    use orchard::types::TmuxSession;
+
+    // Scenario 1: plain session — no active_pane_cwd.
+    {
+        let sessions = vec![TmuxSession {
+            name: "orchardist".to_string(),
+            path: "/tmp".to_string(),
+            attached: false,
+            pane_title: None,
+            active_pane_cwd: None,
+        }];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.category == HealCategory::OrphanedSession);
+        assert!(
+            finding.is_some(),
+            "scenario 1: should produce an OrphanedSession finding"
+        );
+        assert!(
+            finding.unwrap().is_self,
+            "scenario 1 (no active_pane_cwd): is_self must be true when session name matches current_session"
+        );
+    }
+
+    // Scenario 2: session with active_pane_cwd set to an existing path — simulates a
+    // sister window that has cd'd to a different (but real) directory. The session name
+    // still matches current_session, so is_self must still be true regardless of the
+    // active pane path. We use /tmp so the path-exists check passes and we stay in the
+    // OrphanedSession branch (no matching worktree).
+    {
+        let sessions = vec![TmuxSession {
+            name: "orchardist".to_string(),
+            path: "/tmp".to_string(),
+            attached: false,
+            pane_title: None,
+            active_pane_cwd: Some("/tmp".to_string()),
+        }];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.category == HealCategory::OrphanedSession);
+        assert!(
+            finding.is_some(),
+            "scenario 2: should produce an OrphanedSession finding"
+        );
+        assert!(
+            finding.unwrap().is_self,
+            "scenario 2 (with active_pane_cwd): is_self must be true — sister windows share \
+             the session name, so name-based self-detection covers them automatically"
+        );
+    }
+}
+
+/// Negative case for AC #2: only Error-severity self findings trigger the abort path.
+/// A Warning-severity OrphanedSession with is_self=true must NOT cause detect_self_error
+/// to return Some — that would abort heal for a normally "unregistered standalone session"
+/// classification, which is overly aggressive.
+#[test]
+fn regression_warning_severity_self_does_not_trigger_abort_path() {
+    // Session "orchardist" at /tmp — real path → OrphanedSession (Warning severity).
+    let sessions = vec![session("orchardist", "/tmp")];
+    let worktrees: Vec<HealWorktree> = vec![];
+
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+    // Confirm we actually got a self finding at Warning severity.
+    let self_finding = report
+        .findings
+        .iter()
+        .find(|f| f.is_self && f.category == HealCategory::OrphanedSession);
+    assert!(
+        self_finding.is_some(),
+        "test precondition: should have an OrphanedSession finding with is_self=true"
+    );
+    assert_eq!(
+        self_finding.unwrap().severity,
+        Severity::Warning,
+        "test precondition: the self finding must be Warning severity (not Error)"
+    );
+
+    // The abort gate must NOT fire for Warning-severity self findings.
+    let abort = detect_self_error(&report);
+    assert!(
+        abort.is_none(),
+        "detect_self_error must return None for Warning-severity self finding; \
+         only Error-severity self findings should abort the heal run"
+    );
 }

@@ -3,7 +3,7 @@
 //! Lists active sessions, resolves pane titles, creates new sessions for
 //! worktrees, switches the current client to a session, and orchestrates the
 //! full "switch to worktree" flow including PR-aware notification banners.
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result};
 
@@ -390,6 +390,50 @@ pub fn create_session(opts: &SwitchToSessionOptions) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Current-session detection
+// ---------------------------------------------------------------------------
+
+/// Inner implementation, accepting the `$TMUX` env value and an executor
+/// closure. Extracted for hermetic unit testing without env-var manipulation.
+///
+/// `tmux_var` is the value of `$TMUX` (pass `None` to simulate "not inside tmux").
+/// `exec` is called to run `tmux display-message -p '#S'`; it must return an
+/// `std::io::Result<Output>`.
+pub(crate) fn current_session_name_inner(
+    tmux_var: Option<&str>,
+    exec: impl Fn() -> std::io::Result<Output>,
+) -> Option<String> {
+    // Not inside tmux — $TMUX is unset.
+    tmux_var?;
+
+    let output = exec().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout);
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Returns the name of the tmux session this process is running inside, if any.
+///
+/// Returns `None` when not inside tmux (`$TMUX` env var unset) or when
+/// `tmux display-message -p '#S'` fails (e.g. the tmux server is gone).
+/// The returned string is trimmed of trailing whitespace/newlines.
+pub fn current_session_name() -> Option<String> {
+    let tmux_var = std::env::var("TMUX").ok();
+    current_session_name_inner(tmux_var.as_deref(), || {
+        Command::new("tmux")
+            .args(["display-message", "-p", "#S"])
+            .output()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +617,35 @@ mod tests {
         // not exist tmux exits non-zero, so the function must return Err.
         let result = zoom_pane("nonexistent-session-xyz", "0.0");
         assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // current_session_name
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn current_session_name_returns_none_when_tmux_env_unset() {
+        // Pass None for tmux_var to simulate $TMUX being unset.
+        // The exec closure must never be called in this case.
+        let result = current_session_name_inner(None, || {
+            panic!("exec should not be called when TMUX is unset");
+        });
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn current_session_name_returns_some_when_inside_tmux() {
+        // This test is only meaningful when actually running inside tmux.
+        if std::env::var("TMUX").is_err() {
+            return;
+        }
+        let name = current_session_name();
+        assert!(name.is_some(), "expected Some(_) when inside tmux");
+        let name = name.unwrap();
+        assert!(!name.is_empty(), "session name must not be empty");
+        assert!(
+            !name.contains('\n'),
+            "session name must not contain newlines"
+        );
     }
 }
