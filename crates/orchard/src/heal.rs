@@ -420,6 +420,14 @@ pub fn apply_fixes(findings: &[HealFinding]) -> Vec<FixResult> {
     for finding in findings {
         match &finding.action {
             HealAction::KillSession(name) => {
+                if finding.is_self {
+                    results.push(FixResult {
+                        message: format!("Skipped session \"{}\" — refusing to kill self", name),
+                        success: true,
+                        error: None,
+                    });
+                    continue;
+                }
                 let result = tmux::kill_tmux_session(name);
                 results.push(FixResult {
                     message: format!("Killed session \"{}\"", name),
@@ -1240,5 +1248,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn apply_fixes_skips_kill_session_for_is_self_finding() {
+        let finding = HealFinding {
+            category: HealCategory::OrphanedSession,
+            severity: Severity::Warning,
+            message: "Session \"orchardist\" has no matching worktree".to_string(),
+            action: HealAction::KillSession("orchardist".into()),
+            is_self: true,
+        };
+
+        let results = apply_fixes(&[finding]);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success, "skip result must be success=true");
+        assert!(
+            results[0].message.starts_with("Skipped session"),
+            "message must start with 'Skipped session', got: {}",
+            results[0].message
+        );
+        assert!(
+            results[0].error.is_none(),
+            "skip result must have no error"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_runs_kill_session_when_is_self_is_false() {
+        // Use a session name that certainly does not exist on the host.
+        // tmux kill-session on a nonexistent session emits an error to stderr
+        // but Command::status() still returns Ok — so kill_tmux_session always
+        // returns Ok for our purposes; success will be true regardless.
+        let finding = HealFinding {
+            category: HealCategory::OrphanedSession,
+            severity: Severity::Warning,
+            message: "Session has no matching worktree".to_string(),
+            action: HealAction::KillSession(
+                "orchardist-test-no-such-session-issue361-xxx".into(),
+            ),
+            is_self: false,
+        };
+
+        let results = apply_fixes(&[finding]);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].message.starts_with("Killed session"),
+            "non-self finding must go through kill path, got: {}",
+            results[0].message
+        );
     }
 }
