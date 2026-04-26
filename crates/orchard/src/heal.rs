@@ -83,6 +83,11 @@ pub struct HealFinding {
     pub message: String,
     /// The action to take, if any.
     pub action: HealAction,
+    /// True when this finding targets the tmux session that invoked `orchard heal`.
+    ///
+    /// When `is_self` is true, `apply_fixes` must skip the action rather than
+    /// killing the session — a self-kill would terminate the running process.
+    pub is_self: bool,
 }
 
 /// The complete output of a heal diagnosis run.
@@ -162,16 +167,20 @@ pub struct HealClaudeState {
 /// - `claude_states`: stale-check candidates from `/tmp/orchard-claude-*.json`
 /// - `cache_files`: cache file names from `~/.cache/orchard/`
 /// - `known_repo_slugs`: repo slugs from global config (e.g. `["owner/repo"]`)
+/// - `current_session`: name of the tmux session invoking heal, if any.
+///   `KillSession` findings whose target matches this name will have `is_self`
+///   set to `true`, allowing callers to skip self-destructive kills.
 pub fn diagnose(
     sessions: &[TmuxSession],
     worktrees: &[HealWorktree],
     claude_states: &[HealClaudeState],
     cache_files: &[String],
     known_repo_slugs: &[String],
+    current_session: Option<&str>,
 ) -> HealReport {
     let mut findings = Vec::new();
 
-    check_sessions(sessions, worktrees, &mut findings);
+    check_sessions(sessions, worktrees, &mut findings, current_session);
     check_claude_states(claude_states, sessions, &mut findings);
     check_cache_files(cache_files, known_repo_slugs, &mut findings);
     check_worktree_pr_states(worktrees, &mut findings);
@@ -190,6 +199,7 @@ fn check_sessions(
     sessions: &[TmuxSession],
     worktrees: &[HealWorktree],
     findings: &mut Vec<HealFinding>,
+    current_session: Option<&str>,
 ) {
     let worktree_paths: Vec<&str> = worktrees.iter().map(|w| w.path.as_str()).collect();
 
@@ -200,6 +210,7 @@ fn check_sessions(
         let effective_path = session.active_pane_cwd.as_deref().unwrap_or(&session.path);
         let path_exists = Path::new(effective_path).exists();
         let path_has_worktree = worktree_paths.contains(&effective_path);
+        let is_self = current_session.map(|s| s == session.name).unwrap_or(false);
 
         if !path_exists {
             findings.push(HealFinding {
@@ -210,6 +221,7 @@ fn check_sessions(
                     session.name, effective_path
                 ),
                 action: HealAction::KillSession(session.name.clone()),
+                is_self,
             });
         } else if !path_has_worktree {
             findings.push(HealFinding {
@@ -220,6 +232,7 @@ fn check_sessions(
                     session.name, effective_path
                 ),
                 action: HealAction::KillSession(session.name.clone()),
+                is_self,
             });
         }
     }
@@ -242,6 +255,7 @@ fn check_claude_states(
                     cs.tmux_session, cs.path
                 ),
                 action: HealAction::DeleteFile(cs.path.clone()),
+                is_self: false,
             });
         }
     }
@@ -267,6 +281,7 @@ fn check_cache_files(
                     filename, repo_slug
                 ),
                 action: HealAction::DeleteFile(cache_path.to_string_lossy().to_string()),
+                is_self: false,
             });
         }
     }
@@ -288,6 +303,7 @@ fn check_worktree_pr_states(worktrees: &[HealWorktree], findings: &mut Vec<HealF
                 severity: Severity::Warning,
                 message: format!("Worktree \"{}\" is stale: {} merged", wt.path, pr_label),
                 action: HealAction::FlagForCleanup(wt.path.clone()),
+                is_self: false,
             });
         } else if pr_state.eq_ignore_ascii_case("closed") {
             findings.push(HealFinding {
@@ -298,6 +314,7 @@ fn check_worktree_pr_states(worktrees: &[HealWorktree], findings: &mut Vec<HealF
                     wt.path, pr_label
                 ),
                 action: HealAction::FlagForCleanup(wt.path.clone()),
+                is_self: false,
             });
         }
     }
@@ -315,6 +332,7 @@ fn check_worktree_issue_states(worktrees: &[HealWorktree], findings: &mut Vec<He
                 severity: Severity::Warning,
                 message: format!("Worktree \"{}\" is stale: linked issue is closed", wt.path),
                 action: HealAction::FlagForCleanup(wt.path.clone()),
+                is_self: false,
             });
         }
     }
@@ -346,6 +364,7 @@ fn check_session_naming(
                     "Rename session \"{}\" to \"{}\"",
                     session.name, expected
                 )),
+                is_self: false,
             });
         }
     }
@@ -381,6 +400,7 @@ fn check_multiple_sessions_per_worktree(
                     wt.path,
                     matching.len()
                 )),
+                is_self: false,
             });
         }
     }
@@ -683,7 +703,7 @@ mod tests {
             "/tmp/nonexistent-worktree",
         )];
         let worktrees = vec![make_worktree("/workspace/main", "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
         // Path doesn't exist → DeadSessionDirectory, not orphaned
         let finding = &report.findings[0];
@@ -696,7 +716,7 @@ mod tests {
         // Use a real path that exists but is not a worktree.
         let sessions = vec![make_session("myrepo_old-feature", "/tmp")];
         let worktrees = vec![make_worktree("/workspace/main", "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -717,7 +737,7 @@ mod tests {
     fn detect_dead_session_directory() {
         let sessions = vec![make_session("myrepo_gone", "/tmp/nonexistent-path-xyz")];
         let worktrees = vec![];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -740,7 +760,7 @@ mod tests {
             path: "/tmp/orchard-claude-abc123.json".to_string(),
             tmux_session: "myrepo_dead".to_string(),
         }];
-        let report = diagnose(&sessions, &[], &claude_states, &[], &[]);
+        let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
 
         let finding = report
             .findings
@@ -759,7 +779,7 @@ mod tests {
             path: "/tmp/orchard-claude-abc123.json".to_string(),
             tmux_session: "myrepo_live".to_string(),
         }];
-        let report = diagnose(&sessions, &[], &claude_states, &[], &[]);
+        let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
 
         let stale = report
             .findings
@@ -779,7 +799,7 @@ mod tests {
     fn detect_stale_cache_file_for_unknown_repo() {
         let cache_files = vec!["ghost_repo_issues.json".to_string()];
         let known_slugs = vec!["owner/my-project".to_string()];
-        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
         let finding = report
             .findings
@@ -793,7 +813,7 @@ mod tests {
     fn no_stale_cache_finding_for_known_repo() {
         let cache_files = vec!["owner_myproject_issues.json".to_string()];
         let known_slugs = vec!["owner/myproject".to_string()];
-        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
         let stale = report
             .findings
@@ -806,7 +826,7 @@ mod tests {
     fn tmux_sessions_cache_file_ignored() {
         let cache_files = vec!["tmux_sessions.json".to_string()];
         let known_slugs: Vec<String> = vec![];
-        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
         let stale = report
             .findings
@@ -824,7 +844,7 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue3-tests", "issue3/tests");
         wt.pr_state = Some("merged".to_string());
         wt.pr_number = Some(12);
-        let report = diagnose(&[], &[wt], &[], &[], &[]);
+        let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -844,7 +864,7 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue5-fix", "issue5/fix");
         wt.pr_state = Some("closed".to_string());
         wt.pr_number = Some(15);
-        let report = diagnose(&[], &[wt], &[], &[], &[]);
+        let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -858,7 +878,7 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue3-tests", "issue3/tests");
         wt.pr_state = Some("merged".to_string());
         wt.pr_number = Some(12);
-        let report = diagnose(&[], &[wt], &[], &[], &[]);
+        let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
         let results = apply_fixes(&report.findings);
         // FlagForCleanup produces a result but does not kill/delete anything.
@@ -875,7 +895,7 @@ mod tests {
     fn flag_worktree_with_closed_issue_no_pr() {
         let mut wt = make_worktree(".worktrees/issue8-refactor", "issue8/refactor");
         wt.issue_state = Some("closed".to_string());
-        let report = diagnose(&[], &[wt], &[], &[], &[]);
+        let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -890,7 +910,7 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue8-refactor", "issue8/refactor");
         wt.issue_state = Some("closed".to_string());
         wt.pr_state = Some("open".to_string());
-        let report = diagnose(&[], &[wt], &[], &[], &[]);
+        let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
         let issue_finding = report
             .findings
@@ -911,7 +931,7 @@ mod tests {
         let sessions = vec![make_session("wrong-name", "/workspace/feature-login")];
         let mut wt = make_worktree("/workspace/feature-login", "feature/login");
         wt.expected_session_name = Some("myrepo_feature-login".to_string());
-        let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+        let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -930,7 +950,7 @@ mod tests {
         )];
         let mut wt = make_worktree("/workspace/feature-login", "feature/login");
         wt.expected_session_name = Some("myrepo_feature-login".to_string());
-        let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+        let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
         let mismatch = report
             .findings
@@ -950,7 +970,7 @@ mod tests {
             make_session("extra-session", "/workspace/issue10-api"),
         ];
         let wt = make_worktree("/workspace/issue10-api", "issue10/api");
-        let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+        let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
         let finding = report
             .findings
@@ -972,7 +992,7 @@ mod tests {
         let path = tmp.to_string_lossy().to_string();
         let sessions = vec![make_session("myrepo_main", &path)];
         let worktrees = vec![make_worktree(&path, "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
         assert!(report.is_all_ok(), "should report all-ok");
         assert_eq!(report.findings.len(), 0);
@@ -986,7 +1006,7 @@ mod tests {
     fn format_report_suggests_fix_when_actionable() {
         let sessions = vec![make_session("orphan", "/tmp")];
         let worktrees = vec![];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
         let text = format_report(&report, None);
 
         assert!(
@@ -1002,7 +1022,7 @@ mod tests {
         let path = tmp.to_string_lossy().to_string();
         let sessions = vec![make_session("myrepo_main", &path)];
         let worktrees = vec![make_worktree(&path, "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
         let text = format_report(&report, None);
 
         assert!(
@@ -1082,7 +1102,7 @@ mod tests {
         };
 
         let worktrees = vec![make_worktree(&worktree_path, "issue297/fix")];
-        let report = diagnose(&[session], &worktrees, &[], &[], &[]);
+        let report = diagnose(&[session], &worktrees, &[], &[], &[], None);
 
         let bad = report.findings.iter().find(|f| {
             matches!(
@@ -1116,8 +1136,109 @@ mod tests {
                 severity: Severity::Warning,
                 message: "orphaned".to_string(),
                 action: HealAction::KillSession("orphan".to_string()),
+                is_self: false,
             }],
         };
         assert!(!report.is_all_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Self-protection: is_self flag (#361)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diagnose_marks_kill_session_finding_as_is_self_when_name_matches_current_session() {
+        // Session "orchardist" at /tmp — path exists but no matching worktree
+        // → OrphanedSession with KillSession("orchardist").
+        let sessions = vec![make_session("orchardist", "/tmp")];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| matches!(&f.action, HealAction::KillSession(n) if n == "orchardist"));
+        assert!(
+            finding.is_some(),
+            "should produce a KillSession(\"orchardist\") finding"
+        );
+        assert!(
+            finding.unwrap().is_self,
+            "KillSession finding for current session must have is_self == true"
+        );
+    }
+
+    #[test]
+    fn diagnose_does_not_mark_non_matching_kill_session_findings_as_is_self() {
+        // Two sessions at /tmp, no worktrees → two OrphanedSession findings.
+        let sessions = vec![
+            make_session("orchardist", "/tmp"),
+            make_session("another", "/tmp"),
+        ];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+
+        let orchardist_finding = report
+            .findings
+            .iter()
+            .find(|f| matches!(&f.action, HealAction::KillSession(n) if n == "orchardist"));
+        let another_finding = report
+            .findings
+            .iter()
+            .find(|f| matches!(&f.action, HealAction::KillSession(n) if n == "another"));
+
+        assert!(orchardist_finding.is_some(), "should have finding for orchardist");
+        assert!(another_finding.is_some(), "should have finding for another");
+
+        assert!(
+            orchardist_finding.unwrap().is_self,
+            "orchardist finding must have is_self == true"
+        );
+        assert!(
+            !another_finding.unwrap().is_self,
+            "another finding must have is_self == false"
+        );
+    }
+
+    #[test]
+    fn diagnose_with_current_session_none_never_sets_is_self_true() {
+        // Session "orchardist" at /tmp, no worktrees → KillSession, current_session = None.
+        let sessions = vec![make_session("orchardist", "/tmp")];
+        let worktrees: Vec<HealWorktree> = vec![];
+
+        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+
+        for finding in &report.findings {
+            assert!(
+                !finding.is_self,
+                "is_self must be false when current_session is None, but found is_self=true on: {:?}",
+                finding
+            );
+        }
+    }
+
+    #[test]
+    fn is_self_is_false_on_findings_whose_action_is_not_kill_session() {
+        // A stale Claude state file produces DeleteFile — not KillSession.
+        // is_self must remain false regardless of current_session.
+        let sessions: Vec<TmuxSession> = vec![];
+        let claude_states = vec![HealClaudeState {
+            path: "/tmp/orchard-claude-abc123.json".to_string(),
+            tmux_session: "anything".to_string(),
+        }];
+
+        let report = diagnose(&sessions, &[], &claude_states, &[], &[], Some("anything"));
+
+        for finding in &report.findings {
+            if !matches!(finding.action, HealAction::KillSession(_)) {
+                assert!(
+                    !finding.is_self,
+                    "is_self must be false on non-KillSession finding: {:?}",
+                    finding
+                );
+            }
+        }
     }
 }

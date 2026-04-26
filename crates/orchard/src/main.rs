@@ -244,6 +244,7 @@ fn handle_heal(fix: bool, json: bool) {
         &claude_states,
         &cache_files,
         &known_slugs,
+        None, // Phase 4 will wire in the current tmux session name
     );
 
     if json {

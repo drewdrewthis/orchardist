@@ -47,7 +47,7 @@ fn dry_run_reports_findings_without_applying_fixes() {
         tmux_session: "myrepo_dead".to_string(),
     }];
 
-    let report = diagnose(&sessions, &worktrees, &claude_states, &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &claude_states, &[], &[], None);
 
     // Orphaned session finding.
     let orphan = report
@@ -85,7 +85,7 @@ fn all_healthy_when_sessions_match_worktrees() {
     let sessions = vec![session("myrepo_main", &tmp)];
     let worktrees = vec![worktree(&tmp, "main")];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
     assert_eq!(report.findings.len(), 0, "should have no findings");
     assert!(report.is_all_ok());
@@ -108,7 +108,7 @@ fn orphaned_session_detected_when_path_exists_but_no_worktree_matches() {
     let sessions = vec![session("myrepo_old-feature", "/tmp")];
     let worktrees = vec![worktree("/workspace/other", "main")];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -138,7 +138,7 @@ fn dead_session_directory_detected_for_nonexistent_path() {
     )];
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -162,7 +162,7 @@ fn stale_claude_state_detected_for_dead_session() {
         tmux_session: "myrepo_dead".to_string(),
     }];
 
-    let report = diagnose(&sessions, &[], &claude_states, &[], &[]);
+    let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
 
     let finding = report
         .findings
@@ -186,7 +186,7 @@ fn no_stale_claude_state_when_session_is_alive() {
         tmux_session: "myrepo_live".to_string(),
     }];
 
-    let report = diagnose(&sessions, &[], &claude_states, &[], &[]);
+    let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
 
     let stale = report
         .findings
@@ -208,7 +208,7 @@ fn stale_cache_file_flagged_for_unknown_repo() {
     let cache_files = vec!["ghost_repo_issues.json".to_string()];
     let known_slugs = vec!["owner/known-project".to_string()];
 
-    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
     let finding = report
         .findings
@@ -225,7 +225,7 @@ fn no_stale_cache_for_known_repo() {
     let cache_files = vec!["owner_myrepo_issues.json".to_string()];
     let known_slugs = vec!["owner/myrepo".to_string()];
 
-    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs);
+    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
 
     let stale = report
         .findings
@@ -245,7 +245,7 @@ fn merged_pr_worktree_flagged_for_manual_cleanup() {
     wt.pr_state = Some("merged".to_string());
     wt.pr_number = Some(12);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -266,7 +266,7 @@ fn closed_pr_worktree_flagged() {
     wt.pr_state = Some("closed".to_string());
     wt.pr_number = Some(15);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -282,7 +282,7 @@ fn fix_does_not_auto_delete_merged_pr_worktrees() {
     wt.pr_state = Some("merged".to_string());
     wt.pr_number = Some(12);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
     let fix_results = orchard::heal::apply_fixes(&report.findings);
 
     // All results should be FlagForCleanup (not KillSession or DeleteFile).
@@ -305,7 +305,7 @@ fn closed_issue_worktree_flagged_when_no_pr() {
     let mut wt = worktree(".worktrees/issue8-refactor", "issue8/refactor");
     wt.issue_state = Some("closed".to_string());
 
-    let report = diagnose(&[], &[wt], &[], &[], &[]);
+    let report = diagnose(&[], &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -329,7 +329,7 @@ fn session_naming_mismatch_detected() {
     let mut wt = worktree("/workspace/feature-login", "feature/login");
     wt.expected_session_name = Some("myrepo_feature-login".to_string());
 
-    let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+    let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -353,7 +353,7 @@ fn multiple_sessions_per_worktree_detected() {
     ];
     let wt = worktree("/workspace/issue10-api", "issue10/api");
 
-    let report = diagnose(&sessions, &[wt], &[], &[], &[]);
+    let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
 
     let finding = report
         .findings
@@ -374,7 +374,7 @@ fn report_format_includes_icons() {
     let sessions = vec![session("orphan", "/tmp")]; // /tmp is a real path but not a worktree
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
     let text = format_report(&report, None);
 
     // Should contain at least one icon character.
@@ -389,7 +389,7 @@ fn json_output_contains_findings_array() {
     let sessions = vec![session("orphan", "/tmp")];
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[]);
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
     let json_str = serde_json::to_string(&report).expect("serialize report");
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
 
