@@ -87,6 +87,18 @@ pub struct HealFinding {
     ///
     /// When `is_self` is true, `apply_fixes` must skip the action rather than
     /// killing the session — a self-kill would terminate the running process.
+    ///
+    /// **Invariant**: `is_self` is set by matching the finding's session name
+    /// against `current_session` passed to [`diagnose`]. This assumes both
+    /// names come from the same tmux server (tmux session names are unique
+    /// within a server but NOT across servers). Callers diagnosing remote or
+    /// cross-socket sessions MUST NOT pass a `current_session` value sourced
+    /// from a different server, or the self-protection invariant breaks.
+    ///
+    /// **JSON consumers**: a finding with `is_self: true` and `severity:
+    /// error` is the "do-not-act" marker — `apply_fixes` will skip it and
+    /// `orchard heal --fix` aborts with exit 1 before reaching any action.
+    /// External tooling reading `--json` output must honour this signal.
     pub is_self: bool,
 }
 
