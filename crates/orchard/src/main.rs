@@ -255,14 +255,14 @@ fn handle_heal(fix: bool, json: bool) {
     // has an Error-severity self-classification. A session in an unknown-bad
     // state cannot safely kill itself. Dry-run and JSON modes always continue
     // so consumers see the is_self danger flag without triggering the abort.
-    if fix {
-        if let Some(self_err) = heal::detect_self_error(&report) {
-            eprintln!(
-                "orchard heal: refusing to kill the session I'm running in; run from outside tmux"
-            );
-            eprintln!("  finding: {}", self_err.message);
-            std::process::exit(1);
-        }
+    if fix
+        && let Some(self_err) = heal::detect_self_error(&report)
+    {
+        eprintln!(
+            "orchard heal: refusing to kill the session I'm running in; run from outside tmux"
+        );
+        eprintln!("  finding: {}", self_err.message);
+        std::process::exit(1);
     }
 
     if json {

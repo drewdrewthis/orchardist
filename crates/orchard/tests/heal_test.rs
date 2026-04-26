@@ -615,8 +615,10 @@ fn regression_full_pipeline_from_inside_named_tmux_session_never_kills_self() {
 ///
 /// This test pins down that `is_self` is computed from the session name match
 /// alone — not from pane state or active_pane_cwd. Two scenarios are checked:
+///
 /// 1. Plain session (no active_pane_cwd).
 /// 2. Session with active_pane_cwd set (simulating a sister window that has cd'd elsewhere).
+///
 /// Both must produce `is_self == true`.
 #[test]
 fn regression_sister_window_of_invoking_session_is_still_treated_as_self() {
