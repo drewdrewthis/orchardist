@@ -4,6 +4,7 @@
 /// corresponding to acceptance criteria from `specs/features/orchard-heal.feature`.
 use orchard::heal::{
     HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, diagnose, format_report,
+    apply_fixes,
 };
 use orchard::types::TmuxSession;
 
@@ -418,6 +419,54 @@ fn json_output_contains_findings_array() {
 // ---------------------------------------------------------------------------
 // Regression: must never kill self (#361)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Self-protection: outside tmux (#361)
+// ---------------------------------------------------------------------------
+
+/// When current_session is None (running outside tmux), no self-protection is
+/// applied: the OrphanedSession finding has is_self == false, and apply_fixes
+/// goes through the kill path (not the skip path) for an otherwise-applicable
+/// KillSession action.
+///
+/// Using a session name that cannot exist on the host so the kill is harmless.
+#[test]
+fn outside_tmux_no_self_protection_applied() {
+    // Use a unique session name that will not exist on any test runner.
+    let session_name = "orchardist-test-issue361-no-such-session";
+
+    // Session at /tmp — path exists but no matching worktree → OrphanedSession.
+    let sessions = vec![session(session_name, "/tmp")];
+    let worktrees: Vec<HealWorktree> = vec![];
+
+    // current_session = None simulates running outside tmux.
+    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.category == HealCategory::OrphanedSession);
+    assert!(
+        finding.is_some(),
+        "should produce an OrphanedSession finding: {:?}",
+        report.findings
+    );
+    assert!(
+        !finding.unwrap().is_self,
+        "is_self must be false when current_session is None"
+    );
+
+    // apply_fixes must go through the kill path, not skip.
+    let fix_results = apply_fixes(&report.findings);
+    let kill_result = fix_results
+        .iter()
+        .find(|r| r.message.starts_with("Killed session"));
+    assert!(
+        kill_result.is_some(),
+        "apply_fixes must attempt kill (not skip) when is_self=false; got: {:?}",
+        fix_results.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+}
 
 /// Regression for issue #361: heal --fix from inside a tmux session must not kill the invoking session.
 #[test]

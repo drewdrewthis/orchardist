@@ -213,6 +213,10 @@ fn handle_heal(fix: bool, json: bool) {
         eprintln!("heal: tmux cache refresh failed (using cached data): {e}");
     }
 
+    // Capture the invoking session name before building the sessions list so
+    // diagnose() can mark self-targeting KillSession findings with is_self=true.
+    let current_session = orchard::tmux::current_session_name();
+
     // Build TmuxSession list from the cache, enriching each entry with the
     // live active-pane cwd derived from pane_paths + pane_active.
     let sessions: Vec<TmuxSession> = read_cache::<CachedTmuxSession>(&tmux_cache_path(None))
@@ -244,8 +248,22 @@ fn handle_heal(fix: bool, json: bool) {
         &claude_states,
         &cache_files,
         &known_slugs,
-        None, // Phase 4 will wire in the current tmux session name
+        current_session.as_deref(),
     );
+
+    // Abort before applying any destructive fixes when the invoking session
+    // has an Error-severity self-classification. A session in an unknown-bad
+    // state cannot safely kill itself. Dry-run and JSON modes always continue
+    // so consumers see the is_self danger flag without triggering the abort.
+    if fix {
+        if let Some(self_err) = heal::detect_self_error(&report) {
+            eprintln!(
+                "orchard heal: refusing to kill the session I'm running in; run from outside tmux"
+            );
+            eprintln!("  finding: {}", self_err.message);
+            std::process::exit(1);
+        }
+    }
 
     if json {
         let output = serde_json::to_string_pretty(&report).unwrap_or_else(|e| {

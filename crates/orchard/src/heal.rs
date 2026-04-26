@@ -111,6 +111,18 @@ impl HealReport {
     }
 }
 
+/// Returns the first finding (if any) that is both is_self and Severity::Error.
+///
+/// When such a finding exists, the heal CLI must abort before applying any
+/// fixes — the invoking session is in an unknown-bad state, and silent
+/// repairs are unsafe. See AC #2 of issue #361.
+pub fn detect_self_error(report: &HealReport) -> Option<&HealFinding> {
+    report
+        .findings
+        .iter()
+        .find(|f| f.is_self && f.severity == Severity::Error)
+}
+
 /// Result of applying a single heal action.
 #[derive(Debug, Serialize)]
 pub struct FixResult {
@@ -1298,6 +1310,93 @@ mod tests {
             results[0].message.starts_with("Killed session"),
             "non-self finding must go through kill path, got: {}",
             results[0].message
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // detect_self_error (#361)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detect_self_error_returns_finding_for_dead_session_directory_self() {
+        // One DeadSessionDirectory finding with is_self=true, severity Error.
+        let finding = HealFinding {
+            category: HealCategory::DeadSessionDirectory,
+            severity: Severity::Error,
+            message: "Session \"orchardist\" points to non-existent path".to_string(),
+            action: HealAction::KillSession("orchardist".to_string()),
+            is_self: true,
+        };
+        let report = HealReport {
+            findings: vec![finding.clone()],
+        };
+
+        let result = detect_self_error(&report);
+        assert!(result.is_some(), "should return Some for self + Error finding");
+        // Confirm it is the same finding (by matching the message).
+        assert_eq!(result.unwrap().message, finding.message);
+    }
+
+    #[test]
+    fn detect_self_error_returns_none_when_self_finding_is_warning_severity() {
+        // is_self=true but severity is Warning — must return None.
+        let finding = HealFinding {
+            category: HealCategory::OrphanedSession,
+            severity: Severity::Warning,
+            message: "Session has no matching worktree".to_string(),
+            action: HealAction::KillSession("orchardist".to_string()),
+            is_self: true,
+        };
+        let report = HealReport {
+            findings: vec![finding],
+        };
+
+        let result = detect_self_error(&report);
+        assert!(
+            result.is_none(),
+            "Warning-severity self finding must not trigger detect_self_error"
+        );
+    }
+
+    #[test]
+    fn detect_self_error_returns_none_when_no_self_findings() {
+        // Findings exist but none has is_self=true.
+        let finding = HealFinding {
+            category: HealCategory::DeadSessionDirectory,
+            severity: Severity::Error,
+            message: "Session points to non-existent path".to_string(),
+            action: HealAction::KillSession("other-session".to_string()),
+            is_self: false,
+        };
+        let report = HealReport {
+            findings: vec![finding],
+        };
+
+        let result = detect_self_error(&report);
+        assert!(
+            result.is_none(),
+            "no is_self findings → detect_self_error must return None"
+        );
+    }
+
+    #[test]
+    fn detect_self_error_skips_non_self_error_findings() {
+        // Severity::Error but is_self=false — must return None.
+        let finding = HealFinding {
+            category: HealCategory::DeadSessionDirectory,
+            severity: Severity::Error,
+            message: "Other session dead".to_string(),
+            action: HealAction::KillSession("other".to_string()),
+            is_self: false,
+        };
+        let report = HealReport {
+            findings: vec![finding],
+        };
+
+        let result = detect_self_error(&report);
+        assert!(
+            result.is_none(),
+            "Error severity without is_self must not trigger detect_self_error"
         );
     }
 }
