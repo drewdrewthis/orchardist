@@ -71,8 +71,16 @@ ssh probe         ──→  (in-memory only)                     ┘         �
   Two-phase refresh: fast locals first (git, tmux, claude files), then slow
   remotes (GitHub API, SSH). Re-renders after each phase.
 
-- **JSON mode**: fetches fresh data from all sources. Never returns cached
-  results. Produces a versioned `JsonOutput` for scripting.
+- **JSON mode** (`orchard --json`, `orchard sessions --json`): always live —
+  performs the same synchronous refresh as `orchard refresh` (SSH probes,
+  remote worktree + tmux fetches, local git/tmux re-stat, GitHub issue/PR
+  refresh) before serialising. Never returns cached results. Produces a
+  versioned `JsonOutput` for scripting. The latency is bounded by the slowest
+  reachable host's SSH round-trip plus the GitHub API; unreachable hosts are
+  bounded by reachability-probe timeouts. The freshness contract belongs to
+  `--json`: `git worktree remove` and `tmux kill-session` are observable in
+  the next `orchard --json` invocation, not pending a background refresh.
+  See ADR-010 for the design rationale.
 
 Both modes produce an `OrchardState` — the single unified data model.
 
