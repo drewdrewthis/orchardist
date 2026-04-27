@@ -408,9 +408,15 @@ fn sessions_json_classifies_session_inside_worktree_as_worktree_attached() {
 }
 
 /// A session with `^issue\d+` name + `claude` command + cwd outside any
-/// known worktree classifies as `DetachedClaude`. Approximates the `claude`
-/// command via a no-op shell script named `claude` so the foreground command
-/// reads as `claude`.
+/// known worktree classifies as `DetachedClaude`.
+///
+/// We don't have a real `claude` binary in CI, so we approximate by hard-
+/// linking `sleep` to a binary named `claude` and running that. tmux reads
+/// `pane_current_command` from `/proc/PID/comm` (kernel field, set from
+/// argv[0] basename), so the comm reads as `claude` even though the
+/// underlying executable is `sleep`. Hard-link rather than shell shim
+/// avoids the layered-process problem (a shell + exec sleep would expose
+/// `sleep` on CI runners where the shell exits first).
 #[cfg(unix)]
 #[test]
 fn sessions_json_classifies_orphaned_claude_with_issue_name_as_detached_claude() {
@@ -421,16 +427,22 @@ fn sessions_json_classifies_orphaned_claude_with_issue_name_as_detached_claude()
     let home = TempDir::new().expect("create home");
     write_minimal_config(home.path());
 
-    // We need tmux's `pane_current_command` to read as "claude". Put a
-    // shim called `claude` on PATH that just sleeps — tmux reports the
-    // foreground process name from /proc, so the comm name will be "claude".
-    let bin_dir = home.path().join("bin");
-    std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
-    let claude_shim = bin_dir.join("claude");
-    std::fs::write(&claude_shim, "#!/bin/sh\nexec sleep 30\n").expect("write claude shim");
-    set_executable(&claude_shim);
+    let claude_bin = match make_fake_claude_binary(home.path()) {
+        Some(p) => p,
+        None => {
+            eprintln!("could not create fake claude binary — skipping");
+            return;
+        }
+    };
 
-    harness.create_session_with_path("issue999_main", "/tmp", "claude", bin_dir.to_str().unwrap());
+    // Run the fake-claude binary with an absolute path so we don't depend
+    // on tmux session PATH propagation. tmux's `pane_current_command`
+    // reports the basename of argv[0], which is `claude` here.
+    harness.create_session(
+        "issue999_main",
+        "/tmp",
+        &format!("{} 30", claude_bin.display()),
+    );
 
     let out = run_orchard_sessions_json_with_tmux(home.path(), &harness);
     let rec = out
@@ -587,27 +599,6 @@ impl TmuxHarness {
             .expect("tmux new-session");
         assert!(status.success(), "tmux new-session failed for {name}");
     }
-
-    /// Variant of [`Self::create_session`] that prepends `extra_path` to the
-    /// tmux session's `PATH`. Used to put a shim binary in front of system
-    /// binaries (e.g. a no-op `claude` script).
-    fn create_session_with_path(&self, name: &str, cwd: &str, command: &str, extra_path: &str) {
-        let new_path = format!(
-            "{}:{}",
-            extra_path,
-            std::env::var("PATH").unwrap_or_default()
-        );
-        let status = std::process::Command::new("tmux")
-            .arg("-S")
-            .arg(&self.socket)
-            .args(["new-session", "-d", "-s", name, "-c", cwd])
-            .arg("-e")
-            .arg(format!("PATH={new_path}"))
-            .arg(command)
-            .status()
-            .expect("tmux new-session");
-        assert!(status.success(), "tmux new-session failed for {name}");
-    }
 }
 
 #[cfg(unix)]
@@ -683,4 +674,43 @@ fn which_tmux() -> String {
 fn set_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+}
+
+/// Creates a binary at `home/bin/claude` that, when run, behaves like
+/// `sleep` but is reported by tmux's `pane_current_command` as `claude`.
+///
+/// Returns the absolute path to the new binary, or `None` if we couldn't
+/// locate `sleep` to copy/link from. The returned path is suitable for
+/// passing to a tmux `new-session` command line.
+///
+/// Strategy: copy `sleep` into a file named `claude`. tmux reads
+/// `pane_current_command` from `/proc/PID/comm`, which the kernel sets
+/// from the basename of argv[0]. Both copy-then-rename and hard-link
+/// achieve this; we use copy because hard-link fails across filesystems
+/// (e.g. /tmp on tmpfs vs /usr on ext4).
+#[cfg(unix)]
+fn make_fake_claude_binary(home: &Path) -> Option<std::path::PathBuf> {
+    let bin_dir = home.join("bin");
+    std::fs::create_dir_all(&bin_dir).ok()?;
+    let dest = bin_dir.join("claude");
+
+    // Locate the real `sleep` binary.
+    let sleep_path = std::process::Command::new("which")
+        .arg("sleep")
+        .output()
+        .ok()?;
+    if !sleep_path.status.success() {
+        return None;
+    }
+    let real_sleep = String::from_utf8_lossy(&sleep_path.stdout)
+        .trim()
+        .to_string();
+    if real_sleep.is_empty() {
+        return None;
+    }
+
+    // Copy `sleep` to `claude` (NOT a hard link — fails across mounts).
+    std::fs::copy(&real_sleep, &dest).ok()?;
+    set_executable(&dest);
+    Some(dest)
 }
