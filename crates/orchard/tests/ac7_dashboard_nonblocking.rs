@@ -1,10 +1,16 @@
-//! AC7 — `orchard --json` is cache-only; `orchard refresh` is the explicit
-//! fresh-data entry point.
+//! AC7 (post-#374): `orchard --json` is a live read but is bounded — it
+//! never blocks on hosts that aren't configured and the cached-snapshot
+//! merge path stays fast.
 //!
-//! Scenarios covered:
-//! - `orchard --json` spawns no SSH even with a configured OrchardProxy remote.
-//! - `orchard --json` with a cached snapshot returns the cached worktree quickly.
-//! - `orchard refresh --help` (or `orchard refresh`) exits cleanly (subcommand exists).
+//! Issues #374 / #375 reversed the original AC7 "cache-only" contract:
+//! `orchard --json` now refreshes every reachable source before serialising.
+//! The non-blocking guarantees we still hold are:
+//! - Empty config → zero SSH calls and zero hang risk (proven by the
+//!   no-ssh-spawned test below — a fake ssh in PATH is never invoked).
+//! - The cached-snapshot merge function used by the TUI cold-start
+//!   (`build_state_with_cached_snapshots_from`) still returns under 500ms,
+//!   independent of `--json`'s live behaviour.
+//! - `orchard refresh` continues to work as a standalone entry point.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -18,20 +24,23 @@ use orchard::remote_adapter::RemoteKind;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
-// AC7 scenario 1: `orchard --json` spawns no SSH
+// AC7 scenario 1: `orchard --json` with no configured remotes spawns no SSH
 //
-// We prove this deterministically by placing a fake `ssh` wrapper script at
-// the front of PATH. The wrapper writes a marker file when invoked. After the
-// `orchard --json` run we assert the marker file does NOT exist.
+// Even though `--json` is now a live read (issue #374), an empty config still
+// means zero SSH activity. We prove this deterministically with a fake `ssh`
+// wrapper that writes a marker on invocation.
 // ---------------------------------------------------------------------------
 
-/// `orchard --json` must never invoke `ssh`, even when an OrchardProxy remote
-/// is configured. Reads are cache-only; SSH only happens inside `orchard refresh`
-/// or `orchard watch`.
+/// `orchard --json` must not invoke `ssh` when no remotes are configured.
 ///
-/// We verify this by placing a fake `ssh` wrapper in a tempdir and prepending
-/// it to PATH. If `orchard --json` calls `ssh`, the wrapper writes
-/// `ssh-called.marker`. After the run we assert the marker is absent.
+/// Post-#374 `--json` is a live read that DOES probe SSH for any configured
+/// remote — but with an empty global config there are no remotes to probe,
+/// so no `ssh` invocation is expected. The fake `ssh` wrapper never fires.
+///
+/// (Tests that exercise SSH probing on configured remotes belong in the
+/// federation / remote-adapter test suites; this test guards the empty-config
+/// boundary so a regression in `refresh_and_build` cannot accidentally call
+/// SSH on a non-remote.)
 #[test]
 fn orchard_json_reads_cache_only_no_ssh_spawned() {
     let home_dir = TempDir::new().expect("create temp home");

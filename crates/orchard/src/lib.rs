@@ -41,6 +41,7 @@ pub mod remote_adapter;
 pub mod restore;
 pub mod review_comment;
 pub mod session;
+pub mod sessions_index;
 pub mod setup_remote;
 pub mod shell;
 pub mod signal;
