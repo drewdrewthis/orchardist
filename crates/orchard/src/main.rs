@@ -19,7 +19,6 @@ use orchard::heal;
 use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
-use orchard::merge_remote;
 use orchard::setup_remote;
 use orchard::shell;
 use orchard::tui;
@@ -106,6 +105,7 @@ fn main() {
         "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         "list-remotes" => handle_list_remotes(json_flag),
+        "sessions" => handle_sessions(json_flag),
         _ => {
             if json_flag {
                 handle_json();
@@ -350,16 +350,31 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
     }
 }
 
-/// Builds the versioned JSON output from **cached** state only.
+/// Builds the versioned JSON output from a **live** refresh — never cache.
 ///
-/// `orchard --json` reads the last-written cache files and snapshots; it does
-/// NOT probe hosts, make SSH calls, or fetch from GitHub. This keeps the
-/// command instant and non-blocking. For fresh data, run `orchard refresh`
-/// first (or let `orchard watch` run in the background).
+/// Freshness contract (issue #374): `orchard --json` is the source of truth,
+/// not a cache view. It runs the same refresh path as `orchard refresh`
+/// (probes hosts, fetches remote worktrees and tmux sessions over SSH,
+/// re-runs `git worktree list` and `tmux list-panes` locally, refreshes
+/// GitHub issues/PRs) before serialising. The TUI keeps its cache-fast
+/// path; `--json` does not.
+///
+/// Practical implications for callers:
+/// - Latency tracks the slowest reachable host's SSH round-trip plus the
+///   GitHub API. Unreachable hosts are bounded by reachability-probe
+///   timeouts. Use `orchard watch` if you need a low-latency feed.
+/// - Side effect: caches written by `orchard refresh` (`~/.cache/orchard/*`)
+///   are also written here. Subsequent TUI cold-starts benefit from this.
 fn build_output() -> JsonOutput {
     let config = global_config::load_global_config();
-    let hosts = cache::read_host_reachability();
-    let state = merge_remote::build_state_with_cached_snapshots(&config, &hosts);
+    let state = build_state::refresh_and_build(&config);
+
+    // Persist host reachability so subsequent cache-only reads
+    // (TUI cold start, watch daemon) can populate OrchardState.hosts.
+    if let Err(e) = cache::write_host_reachability(&state.hosts) {
+        logger::LOG.warn(&format!("--json: failed to persist host reachability: {e}"));
+    }
+
     JsonOutput::from(&state)
 }
 
@@ -370,6 +385,47 @@ fn handle_json() {
         std::process::exit(1);
     });
     println!("{json}");
+}
+
+/// Handles `orchard sessions --json` — comprehensive sessions index keyed by host.
+///
+/// Returns every tmux session known to orchard across all managed hosts (not
+/// just orchard-managed ones), classified by relationship to worktrees and
+/// the protected-session list. Each entry carries `host` inline so consumers
+/// like the orchardist's `/prune` skill can route per-host actions without
+/// inferring from output order.
+///
+/// Freshness contract (issue #375) matches `--json`: this is a live read,
+/// not a cache view. We refresh every reachable remote tmux source over
+/// SSH plus the local `tmux list-panes` before classifying. `orchard
+/// refresh` and the on-disk caches are reused as a side effect.
+///
+/// Wire format is versioned independently from `--json` (its own
+/// `SESSIONS_INDEX_VERSION`), so additions here cannot break consumers of the
+/// worktree-centric `--json` output.
+fn handle_sessions(json: bool) {
+    if !json {
+        eprintln!(
+            "orchard sessions: only `--json` output is currently supported.\n\
+             Usage: orchard sessions --json"
+        );
+        std::process::exit(2);
+    }
+
+    let config = global_config::load_global_config();
+
+    // Live refresh: drive the same refresh path that `--json` uses so the
+    // output reflects the actual state of every reachable host. The
+    // sessions index re-reads from the freshly-written caches afterwards.
+    // See `build_state::refresh_and_build` for the full source list.
+    let _state = build_state::refresh_and_build(&config);
+
+    let output = orchard::sessions_index::build_sessions_index(&config);
+    let serialized = serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
+        eprintln!("Error serializing JSON: {e}");
+        std::process::exit(1);
+    });
+    println!("{serialized}");
 }
 
 /// Handles `orchard refresh` — probes hosts, fetches remote data, writes
@@ -557,9 +613,19 @@ fn print_usage() {
   orchard heal                   Audit and repair drifted state (dry run)
   orchard heal --fix             Apply all safe automatic repairs
   orchard heal --json            Output health check results as JSON
+  orchard sessions --json        Print every tmux session across all managed hosts
+                                   (worktree-attached, orphan, detached-claude, or
+                                   protected) — host-tagged at the data plane.
+                                   Live read: refreshes every reachable remote
+                                   tmux source over SSH plus the local tmux state
+                                   before classifying.
   orchard refresh                Probe hosts, fetch from remotes, update caches, exit.
-                                   Run before `orchard --json` for fresh data, or let
-                                   `orchard watch` run in the background.
+                                   Hot-loads the same caches that `orchard --json`
+                                   and `orchard sessions --json` already refresh;
+                                   useful when you want the side effects (warmed
+                                   caches for the TUI cold start) without the JSON
+                                   output. Use `orchard watch` for a continuous
+                                   background refresh.
   orchard watch                  Run event-driven watch daemon (Ctrl-C to stop)
   orchard watch --subscribe --id <id> --session <session> [--pane <pane>]
                                    Register a tmux subscriber for watch events
@@ -571,8 +637,11 @@ fn print_usage() {
 
 Options:
   --version, -V  Print version and exit
-  --json         Output cached worktree data as JSON and exit (reads last-written
-                 cache; run `orchard refresh` first for fresh data)
+  --json         Output worktree data as JSON and exit. Live read — performs
+                 the same refresh as `orchard refresh` (SSH probes, remote
+                 worktree + tmux fetches, local git/tmux re-stat, GitHub
+                 issue/PR refresh) before serialising. The TUI uses a cache
+                 path; --json does not.
   --schema       Print the JSON Schema for --json output and exit
 
 Navigation:
