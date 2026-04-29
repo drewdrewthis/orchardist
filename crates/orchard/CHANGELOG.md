@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.11.0...orchard-v0.12.0) (2026-04-27)
+
+
+### Features
+
+* **#374,#375:** orchard --json is a live read; add sessions --json ([#376](https://github.com/drewdrewthis/git-orchard-rs/issues/376)) ([f890035](https://github.com/drewdrewthis/git-orchard-rs/commit/f89003552977a8f1d81eab7ea57f226c341fc2b7))
+
+
+### Bug Fixes
+
+* **#361:** heal must never kill the invoking tmux session ([#368](https://github.com/drewdrewthis/git-orchard-rs/issues/368)) ([bce70d1](https://github.com/drewdrewthis/git-orchard-rs/commit/bce70d1e0089c96cbd851c431ab41c6751801377))
+
 ## [0.11.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.10.0...orchard-v0.11.0) (2026-04-25)
 
 
