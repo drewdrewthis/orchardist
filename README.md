@@ -4,6 +4,29 @@ A command center for managing git worktrees, tmux sessions, GitHub PRs, and Clau
 
 Built with [Rust](https://www.rust-lang.org/) + [Ratatui](https://ratatui.rs/).
 
+## Polyglot history
+
+This repo is polyglot as of **2026-05-04**:
+
+- **Rust CLI** (`crates/orchard`, `crates/orchard-gui`) — the original
+  TUI / GUI / `--json` worktree manager. Build with `cargo build` or
+  `make rust`. Still the production binary today.
+- **Go daemon** (`cmd/orchard`, `internal/`) — the new GraphQL daemon
+  introduced in [ADR-011](https://github.com/drewdrewthis/orchard-codex/blob/main/adrs/011-orchard-node-model-and-providers.md):
+  a read-only join layer over git, tmux, claude, and processes,
+  exposed over `localhost:7777`. Build with `make daemon` →
+  `bin/orchard`. Run `bin/orchard daemon start` to bring it up,
+  `curl localhost:7777/health` to probe.
+
+The repo name still ends in `-rs` because URL stability is worth more
+than the suffix. The Rust CLI and the Go daemon coexist; the Go binary
+is the long-term direction and will absorb feature parity workstream by
+workstream. See `scripts/init/` for launchd / systemd units.
+
+The schema lives in `schema.graphql` at the repo root — schema-first.
+Run `make generate` to regenerate Go types from it. The Rust TUI client
+will codegen from the same file.
+
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 📰 **Blog:** [Grow the Orchard](https://growtheorchard.substack.com/)
