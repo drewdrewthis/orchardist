@@ -1,0 +1,21 @@
+# Canonical GraphQL schema for the orchard daemon.
+#
+# Source of truth — gqlgen reads this and codegens types + resolver stubs
+# under internal/server/graphql/. The Rust TUI codegens its client from
+# the same file. Schema-first is intentional; see ADR-011.
+#
+# Workstream A scope: only the `health` field. Real node types come in
+# later workstreams.
+
+type Query {
+  "Liveness probe — returns daemon health and uptime."
+  health: Health!
+}
+
+type Health {
+  "Daemon health status — 'ok' when serving."
+  status: String!
+
+  "Uptime in seconds since daemon started."
+  uptimeS: Int!
+}
