@@ -4,6 +4,10 @@
 node_modules/
 .gitnexus
 
+# Go daemon build artefacts (cmd/orchard → bin/orchard).
+/bin/
+
 # Claude Code session-local state
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
+.claude-context/
