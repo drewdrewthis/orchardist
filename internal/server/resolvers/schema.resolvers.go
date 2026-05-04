@@ -13,6 +13,11 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
+// Worktrees is the resolver for the worktrees field.
+func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) ([]*graphql1.Worktree, error) {
+	panic(fmt.Errorf("not implemented: Worktrees - worktrees"))
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	uptime := int64(time.Since(r.StartedAt).Round(time.Second).Seconds())
@@ -66,7 +71,20 @@ func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, erro
 	return out, nil
 }
 
+// Processes is the resolver for the processes field.
+func (r *worktreeResolver) Processes(ctx context.Context, obj *graphql1.Worktree) ([]*graphql1.Process, error) {
+	panic(fmt.Errorf("not implemented: Processes - processes"))
+}
+
+// Project returns graphql1.ProjectResolver implementation.
+func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
+
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 
+// Worktree returns graphql1.WorktreeResolver implementation.
+func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
+
+type projectResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type worktreeResolver struct{ *Resolver }

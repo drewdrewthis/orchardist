@@ -26,7 +26,20 @@ resolver:
 # Optimised types for our schema. Health.uptimeS is non-negative and fits
 # easily into int64; map GraphQL Int to Go int64 to keep parity with the
 # stdlib JSON encoder.
+#
+# Per-field overrides force gqlgen to emit a resolver method for fields
+# whose value comes from a provider rather than a struct field. The git
+# provider drives Project.worktrees; the (future) ps provider drives
+# Worktree.processes. Until ps lands, the latter resolver returns [].
 models:
   Int:
     model:
       - github.com/99designs/gqlgen/graphql.Int64
+  Project:
+    fields:
+      worktrees:
+        resolver: true
+  Worktree:
+    fields:
+      processes:
+        resolver: true
