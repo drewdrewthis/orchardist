@@ -42,6 +42,11 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 	return []*graphql1.Host{h}, nil
 }
 
+// Projects is the resolver for the projects field.
+func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, error) {
+	panic(fmt.Errorf("not implemented: Projects - projects"))
+}
+
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 
