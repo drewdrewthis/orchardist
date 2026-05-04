@@ -4,12 +4,39 @@
 # under internal/server/graphql/. The Rust TUI codegens its client from
 # the same file. Schema-first is intentional; see ADR-011.
 #
-# Workstream A scope: only the `health` field. Real node types come in
-# later workstreams.
+# Workstream A:    `health` field.
+# Workstream B-git (this commit): Node interface, Project + Worktree
+#                                 nodes, `Query.projects`, the git
+#                                 provider's read surface.
+#
+# Project is owned by ws-b-config; we declare the minimal shape we need
+# (`id` for the worktree FK, `directory` to point the git provider at,
+# `name` for ergonomics) so the schema compiles standalone.
+# `Project.worktrees` is owned by THIS workstream and must survive any
+# rebase from ws-b-config.
+
+# Node is the universal interface every queryable entity implements.
+# Per ADR-011, every node has a stable, host-qualified ID. Reach a node
+# directly via `query.node(id:)` once additional providers are wired.
+interface Node {
+  "Globally unique identifier — opaque to clients; used as the lookup key for `node(id:)` and provider caches."
+  id: ID!
+}
+
+# Process is forward-declared here so Worktree.processes can reference
+# it; the ps provider in ws-b-ps fills in the rest of the type.
+# Until that lands, Worktree.processes resolves to `[]`.
+type Process implements Node {
+  "Stable id formatted as `<host>:<pid>`."
+  id: ID!
+}
 
 type Query {
   "Liveness probe — returns daemon health and uptime."
   health: Health!
+
+  "All projects declared in ~/.config/orchard/config.json. Read-only — projects are added with `orchard config add-repo`."
+  projects: [Project!]!
 }
 
 type Health {
@@ -18,4 +45,40 @@ type Health {
 
   "Uptime in seconds since daemon started."
   uptimeS: Int!
+}
+
+"A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Project implements Node {
+  "Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration."
+  id: ID!
+
+  "Absolute filesystem path to the project's working tree."
+  directory: String!
+
+  "Human-readable label. Defaults to the basename of `directory` when not specified in the config."
+  name: String!
+
+  "Worktrees discovered for this project — the project's main checkout plus everything under `.git/worktrees/`."
+  worktrees: [Worktree!]!
+}
+
+"A git worktree — either the project's main checkout or one created with `git worktree add`. See ADR-011 §5.1."
+type Worktree implements Node {
+  "Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`."
+  id: ID!
+
+  "Absolute filesystem path to the worktree."
+  path: String!
+
+  "Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees."
+  branch: String!
+
+  "Resolved 40-character SHA the worktree's HEAD points at. Empty string when HEAD cannot be resolved (e.g. an unborn branch)."
+  head: String!
+
+  "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
+  bare: Boolean!
+
+  "Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands."
+  processes: [Process!]!
 }

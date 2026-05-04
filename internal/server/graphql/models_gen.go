@@ -2,6 +2,12 @@
 
 package graphql
 
+type Node interface {
+	IsNode()
+	// Globally unique identifier — opaque to clients; used as the lookup key for `node(id:)` and provider caches.
+	GetID() string
+}
+
 type Health struct {
 	// Daemon health status — 'ok' when serving.
 	Status string `json:"status"`
@@ -9,5 +15,53 @@ type Health struct {
 	UptimeS int64 `json:"uptimeS"`
 }
 
+type Process struct {
+	// Stable id formatted as `<host>:<pid>`.
+	ID string `json:"id"`
+}
+
+func (Process) IsNode() {}
+
+// Globally unique identifier — opaque to clients; used as the lookup key for `node(id:)` and provider caches.
+func (this Process) GetID() string { return this.ID }
+
+// A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
+type Project struct {
+	// Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration.
+	ID string `json:"id"`
+	// Absolute filesystem path to the project's working tree.
+	Directory string `json:"directory"`
+	// Human-readable label. Defaults to the basename of `directory` when not specified in the config.
+	Name string `json:"name"`
+	// Worktrees discovered for this project — the project's main checkout plus everything under `.git/worktrees/`.
+	Worktrees []*Worktree `json:"worktrees"`
+}
+
+func (Project) IsNode() {}
+
+// Globally unique identifier — opaque to clients; used as the lookup key for `node(id:)` and provider caches.
+func (this Project) GetID() string { return this.ID }
+
 type Query struct {
 }
+
+// A git worktree — either the project's main checkout or one created with `git worktree add`. See ADR-011 §5.1.
+type Worktree struct {
+	// Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`.
+	ID string `json:"id"`
+	// Absolute filesystem path to the worktree.
+	Path string `json:"path"`
+	// Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees.
+	Branch string `json:"branch"`
+	// Resolved 40-character SHA the worktree's HEAD points at. Empty string when HEAD cannot be resolved (e.g. an unborn branch).
+	Head string `json:"head"`
+	// True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch.
+	Bare bool `json:"bare"`
+	// Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands.
+	Processes []*Process `json:"processes"`
+}
+
+func (Worktree) IsNode() {}
+
+// Globally unique identifier — opaque to clients; used as the lookup key for `node(id:)` and provider caches.
+func (this Worktree) GetID() string { return this.ID }
