@@ -28,9 +28,7 @@ resolver:
 # stdlib JSON encoder.
 #
 # Per-field overrides force gqlgen to emit a resolver method for fields
-# whose value comes from a provider rather than a struct field. The git
-# provider drives Project.worktrees; the (future) ps provider drives
-# Worktree.processes. Until ps lands, the latter resolver returns [].
+# whose value comes from a provider rather than a struct field.
 models:
   Int:
     model:

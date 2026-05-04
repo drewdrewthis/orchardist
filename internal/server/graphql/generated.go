@@ -54,6 +54,17 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	ClaudeAccount struct {
+		Email          func(childComplexity int) int
+		Host           func(childComplexity int) int
+		ID             func(childComplexity int) int
+		Instances      func(childComplexity int) int
+		QuotaCap       func(childComplexity int) int
+		QuotaEstimated func(childComplexity int) int
+		QuotaResetsAt  func(childComplexity int) int
+		QuotaUsed      func(childComplexity int) int
+	}
+
 	ClaudeInstance struct {
 		ID func(childComplexity int) int
 	}
@@ -112,15 +123,16 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Conversation  func(childComplexity int, id string) int
-		Conversations func(childComplexity int) int
-		Health        func(childComplexity int) int
-		Host          func(childComplexity int) int
-		Hosts         func(childComplexity int) int
-		Projects      func(childComplexity int) int
-		TmuxPanes     func(childComplexity int, filter *TmuxPaneFilter) int
-		TmuxServer    func(childComplexity int) int
-		TmuxSessions  func(childComplexity int, filter *TmuxSessionFilter) int
+		ClaudeAccounts func(childComplexity int) int
+		Conversation   func(childComplexity int, id string) int
+		Conversations  func(childComplexity int) int
+		Health         func(childComplexity int) int
+		Host           func(childComplexity int) int
+		Hosts          func(childComplexity int) int
+		Projects       func(childComplexity int) int
+		TmuxPanes      func(childComplexity int, filter *TmuxPaneFilter) int
+		TmuxServer     func(childComplexity int) int
+		TmuxSessions   func(childComplexity int, filter *TmuxSessionFilter) int
 	}
 
 	ResourceLoad struct {
@@ -231,6 +243,7 @@ type QueryResolver interface {
 	TmuxPanes(ctx context.Context, filter *TmuxPaneFilter) ([]*TmuxPane, error)
 	Conversations(ctx context.Context) ([]*Conversation, error)
 	Conversation(ctx context.Context, id string) (*Conversation, error)
+	ClaudeAccounts(ctx context.Context) ([]*ClaudeAccount, error)
 }
 type TmuxClientResolver interface {
 	Server(ctx context.Context, obj *TmuxClient) (*TmuxServer, error)
@@ -307,6 +320,62 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 	ec := executionContext{nil, e, 0, 0, nil}
 	_ = ec
 	switch typeName + "." + field {
+
+	case "ClaudeAccount.email":
+		if e.complexity.ClaudeAccount.Email == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.Email(childComplexity), true
+
+	case "ClaudeAccount.host":
+		if e.complexity.ClaudeAccount.Host == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.Host(childComplexity), true
+
+	case "ClaudeAccount.id":
+		if e.complexity.ClaudeAccount.ID == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.ID(childComplexity), true
+
+	case "ClaudeAccount.instances":
+		if e.complexity.ClaudeAccount.Instances == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.Instances(childComplexity), true
+
+	case "ClaudeAccount.quotaCap":
+		if e.complexity.ClaudeAccount.QuotaCap == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.QuotaCap(childComplexity), true
+
+	case "ClaudeAccount.quotaEstimated":
+		if e.complexity.ClaudeAccount.QuotaEstimated == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.QuotaEstimated(childComplexity), true
+
+	case "ClaudeAccount.quotaResetsAt":
+		if e.complexity.ClaudeAccount.QuotaResetsAt == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.QuotaResetsAt(childComplexity), true
+
+	case "ClaudeAccount.quotaUsed":
+		if e.complexity.ClaudeAccount.QuotaUsed == nil {
+			break
+		}
+
+		return e.complexity.ClaudeAccount.QuotaUsed(childComplexity), true
 
 	case "ClaudeInstance.id":
 		if e.complexity.ClaudeInstance.ID == nil {
@@ -585,6 +654,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Project.Worktrees(childComplexity), true
+
+	case "Query.claudeAccounts":
+		if e.complexity.Query.ClaudeAccounts == nil {
+			break
+		}
+
+		return e.complexity.Query.ClaudeAccounts(childComplexity), true
 
 	case "Query.conversation":
 		if e.complexity.Query.Conversation == nil {
@@ -1316,6 +1392,9 @@ type Query {
 
   "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
   conversation(id: ID!): Conversation
+
+  "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account ` + "`" + `claude auth status` + "`" + ` reports for; later workstreams may surface additional accounts."
+  claudeAccounts: [ClaudeAccount!]!
 }
 
 type Health {
@@ -1692,6 +1771,47 @@ type Conversation implements Node {
   "Plugin-populated short summary. Always null in v1."
   recap: String
 }
+
+"""
+A Claude CLI account. v1 surfaces the single account ` + "`" + `claude auth
+status` + "`" + ` reports for the local user — and the resolver returns it as
+the only element of ` + "`" + `claudeAccounts` + "`" + `.
+
+` + "`" + `quotaUsed` + "`" + `, ` + "`" + `quotaCap` + "`" + `, and ` + "`" + `quotaResetsAt` + "`" + ` are scraped from
+` + "`" + `ccusage` + "`" + `. They are nullable because:
+  - ` + "`" + `claude` + "`" + ` may be installed without ` + "`" + `ccusage` + "`" + `, in which case the
+    fields are unknown rather than zero.
+  - ` + "`" + `ccusage` + "`" + ` itself may not yet have observed any traffic for the
+    current quota window, in which case the cap is unknown.
+
+When the numbers come from ` + "`" + `ccusage` + "`" + ` (the only source v1 supports),
+` + "`" + `quotaEstimated` + "`" + ` is true.
+"""
+type ClaudeAccount implements Node {
+  "Stable orchard id — \"ClaudeAccount:<host>:<email>\"."
+  id: ID!
+
+  "Email address ` + "`" + `claude auth status` + "`" + ` reports for the active session."
+  email: String!
+
+  "Quota consumed in the current window. Null when ccusage has not been able to report a number."
+  quotaUsed: Float
+
+  "Quota cap for the current window. Null when ccusage cannot determine the cap (e.g. fresh install with no traffic)."
+  quotaCap: Float
+
+  "True when the quota numbers are estimated by ` + "`" + `ccusage` + "`" + ` rather than reported by a first-party Anthropic API. Always true in v1."
+  quotaEstimated: Boolean!
+
+  "When the current quota window resets. Null when ccusage cannot determine the next reset."
+  quotaResetsAt: Time
+
+  "The host this account is scoped to."
+  host: Host!
+
+  "Claude processes currently running under this account. v1 returns []; populated by Workstream B-claudeinstance."
+  instances: [ClaudeInstance!]!
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -1884,6 +2004,377 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ************************** directives.gotpl **************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _ClaudeAccount_id(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_email(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_email(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Email, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_email(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_quotaUsed(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_quotaUsed(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QuotaUsed, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_quotaUsed(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_quotaCap(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_quotaCap(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QuotaCap, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_quotaCap(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_quotaEstimated(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_quotaEstimated(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QuotaEstimated, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_quotaEstimated(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_quotaResetsAt(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_quotaResetsAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QuotaResetsAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_quotaResetsAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_host(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_host(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Host, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_host(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeAccount_instances(ctx context.Context, field graphql.CollectedField, obj *ClaudeAccount) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeAccount_instances(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Instances, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*ClaudeInstance)
+	fc.Result = res
+	return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeAccount_instances(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeAccount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_ClaudeInstance_id(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
+		},
+	}
+	return fc, nil
+}
 
 func (ec *executionContext) _ClaudeInstance_id(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ClaudeInstance_id(ctx, field)
@@ -4285,6 +4776,68 @@ func (ec *executionContext) fieldContext_Query_conversation(ctx context.Context,
 	if fc.Args, err = ec.field_Query_conversation_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_claudeAccounts(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_claudeAccounts(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().ClaudeAccounts(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*ClaudeAccount)
+	fc.Result = res
+	return ec.marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_claudeAccounts(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_ClaudeAccount_id(ctx, field)
+			case "email":
+				return ec.fieldContext_ClaudeAccount_email(ctx, field)
+			case "quotaUsed":
+				return ec.fieldContext_ClaudeAccount_quotaUsed(ctx, field)
+			case "quotaCap":
+				return ec.fieldContext_ClaudeAccount_quotaCap(ctx, field)
+			case "quotaEstimated":
+				return ec.fieldContext_ClaudeAccount_quotaEstimated(ctx, field)
+			case "quotaResetsAt":
+				return ec.fieldContext_ClaudeAccount_quotaResetsAt(ctx, field)
+			case "host":
+				return ec.fieldContext_ClaudeAccount_host(ctx, field)
+			case "instances":
+				return ec.fieldContext_ClaudeAccount_instances(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClaudeAccount", field.Name)
+		},
 	}
 	return fc, nil
 }
@@ -9479,6 +10032,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Conversation(ctx, sel, obj)
+	case ClaudeAccount:
+		return ec._ClaudeAccount(ctx, sel, &obj)
+	case *ClaudeAccount:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ClaudeAccount(ctx, sel, obj)
 	default:
 		panic(fmt.Errorf("unexpected type %T", obj))
 	}
@@ -9487,6 +10047,71 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
+
+var claudeAccountImplementors = []string{"ClaudeAccount", "Node"}
+
+func (ec *executionContext) _ClaudeAccount(ctx context.Context, sel ast.SelectionSet, obj *ClaudeAccount) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, claudeAccountImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClaudeAccount")
+		case "id":
+			out.Values[i] = ec._ClaudeAccount_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "email":
+			out.Values[i] = ec._ClaudeAccount_email(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "quotaUsed":
+			out.Values[i] = ec._ClaudeAccount_quotaUsed(ctx, field, obj)
+		case "quotaCap":
+			out.Values[i] = ec._ClaudeAccount_quotaCap(ctx, field, obj)
+		case "quotaEstimated":
+			out.Values[i] = ec._ClaudeAccount_quotaEstimated(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "quotaResetsAt":
+			out.Values[i] = ec._ClaudeAccount_quotaResetsAt(ctx, field, obj)
+		case "host":
+			out.Values[i] = ec._ClaudeAccount_host(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "instances":
+			out.Values[i] = ec._ClaudeAccount_instances(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
 
 var claudeInstanceImplementors = []string{"ClaudeInstance"}
 
@@ -10270,6 +10895,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_conversation(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "claudeAccounts":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_claudeAccounts(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
 				return res
 			}
 
@@ -12435,6 +13082,114 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeAccount) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx context.Context, sel ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ClaudeAccount(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ClaudeInstance(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx context.Context, sel ast.SelectionSet, v []*Conversation) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
@@ -13312,6 +14067,22 @@ func (ec *executionContext) marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthis�
 		return graphql.Null
 	}
 	return ec._Conversation(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOFloat2ᚖfloat64(ctx context.Context, v interface{}) (*float64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalFloatContext(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel ast.SelectionSet, v *float64) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	res := graphql.MarshalFloatContext(*v)
+	return graphql.WrapContextMarshaler(ctx, res)
 }
 
 func (ec *executionContext) unmarshalOInt2ᚕint64ᚄ(ctx context.Context, v interface{}) ([]int64, error) {

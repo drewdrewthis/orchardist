@@ -115,6 +115,9 @@ type Query {
 
   "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
   conversation(id: ID!): Conversation
+
+  "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account `claude auth status` reports for; later workstreams may surface additional accounts."
+  claudeAccounts: [ClaudeAccount!]!
 }
 
 type Health {
@@ -490,4 +493,45 @@ type Conversation implements Node {
 
   "Plugin-populated short summary. Always null in v1."
   recap: String
+}
+
+"""
+A Claude CLI account. v1 surfaces the single account `claude auth
+status` reports for the local user — and the resolver returns it as
+the only element of `claudeAccounts`.
+
+`quotaUsed`, `quotaCap`, and `quotaResetsAt` are scraped from
+`ccusage`. They are nullable because:
+  - `claude` may be installed without `ccusage`, in which case the
+    fields are unknown rather than zero.
+  - `ccusage` itself may not yet have observed any traffic for the
+    current quota window, in which case the cap is unknown.
+
+When the numbers come from `ccusage` (the only source v1 supports),
+`quotaEstimated` is true.
+"""
+type ClaudeAccount implements Node {
+  "Stable orchard id — \"ClaudeAccount:<host>:<email>\"."
+  id: ID!
+
+  "Email address `claude auth status` reports for the active session."
+  email: String!
+
+  "Quota consumed in the current window. Null when ccusage has not been able to report a number."
+  quotaUsed: Float
+
+  "Quota cap for the current window. Null when ccusage cannot determine the cap (e.g. fresh install with no traffic)."
+  quotaCap: Float
+
+  "True when the quota numbers are estimated by `ccusage` rather than reported by a first-party Anthropic API. Always true in v1."
+  quotaEstimated: Boolean!
+
+  "When the current quota window resets. Null when ccusage cannot determine the next reset."
+  quotaResetsAt: Time
+
+  "The host this account is scoped to."
+  host: Host!
+
+  "Claude processes currently running under this account. v1 returns []; populated by Workstream B-claudeinstance."
+  instances: [ClaudeInstance!]!
 }

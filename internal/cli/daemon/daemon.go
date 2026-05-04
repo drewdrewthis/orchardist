@@ -32,6 +32,7 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
@@ -131,6 +132,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
+		server.WithClaudeAccount(claudeaccount.New("local", logger)),
 	)
 	return srv.Run(ctx)
 }

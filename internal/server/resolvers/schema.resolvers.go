@@ -6,6 +6,7 @@ package resolvers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
@@ -93,22 +95,14 @@ func (r *processResolver) ClaudeInstance(_ context.Context, _ *graphql1.Process)
 	return nil, nil
 }
 
-// Processes is the resolver for the worktree.processes field.
-func (r *worktreeResolver) Processes(_ context.Context, _ *graphql1.Worktree) ([]*graphql1.Process, error) {
-	return []*graphql1.Process{}, nil
+// Health is the resolver for the health field.
+func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
+	uptime := int64(time.Since(r.StartedAt).Round(time.Second).Seconds())
+	return &graphql1.Health{
+		Status:  "ok",
+		UptimeS: uptime,
+	}, nil
 }
-
-// Host returns graphql1.HostResolver implementation.
-func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
-
-// Process returns graphql1.ProcessResolver implementation.
-func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
-
-// Project returns graphql1.ProjectResolver implementation.
-func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
-
-// Worktree returns graphql1.WorktreeResolver implementation.
-func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
 
 // Host is the resolver for the host field.
 func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
@@ -155,15 +149,6 @@ func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, erro
 	return out, nil
 }
 
-// Health is the resolver for the health field.
-func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
-	uptime := int64(time.Since(r.StartedAt).Round(time.Second).Seconds())
-	return &graphql1.Health{
-		Status:  "ok",
-		UptimeS: uptime,
-	}, nil
-}
-
 // TmuxServer is the resolver for the tmuxServer field.
 func (r *queryResolver) TmuxServer(ctx context.Context) (*graphql1.TmuxServer, error) {
 	if r.Tmux == nil {
@@ -208,504 +193,7 @@ func (r *queryResolver) TmuxPanes(ctx context.Context, filter *graphql1.TmuxPane
 	return out, nil
 }
 
-// Server is the resolver for the server field.
-func (r *tmuxClientResolver) Server(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	return projectServer(r.Tmux.Host(), r.Tmux.Server()), nil
-}
-
-// Session is the resolver for the session field.
-func (r *tmuxClientResolver) Session(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxSession, error) {
-	if r.Tmux == nil {
-		return &graphql1.TmuxSession{ID: "TmuxSession:"}, nil
-	}
-	c, ok := r.lookupClient(obj.ID)
-	if !ok {
-		return nil, nil
-	}
-	host := r.Tmux.Host()
-	s, ok := r.Tmux.Snapshot().Sessions[tmux.SessionKey{Host: host, Name: c.Session}]
-	if !ok {
-		return nil, nil
-	}
-	return projectSession(s), nil
-}
-
-// Tty is the resolver for the tty field.
-func (r *tmuxClientResolver) Tty(ctx context.Context, obj *graphql1.TmuxClient) (string, error) {
-	c, ok := r.lookupClient(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	return c.TTY, nil
-}
-
-// Hostname is the resolver for the hostname field.
-func (r *tmuxClientResolver) Hostname(ctx context.Context, obj *graphql1.TmuxClient) (string, error) {
-	c, ok := r.lookupClient(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	return c.Hostname, nil
-}
-
-// TermName is the resolver for the termName field.
-func (r *tmuxClientResolver) TermName(ctx context.Context, obj *graphql1.TmuxClient) (string, error) {
-	c, ok := r.lookupClient(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	return c.TermName, nil
-}
-
-// AttachedAt is the resolver for the attachedAt field.
-func (r *tmuxClientResolver) AttachedAt(ctx context.Context, obj *graphql1.TmuxClient) (string, error) {
-	c, ok := r.lookupClient(obj.ID)
-	if !ok || c.AttachedAt.IsZero() {
-		return "", nil
-	}
-	return c.AttachedAt.Format(time.RFC3339), nil
-}
-
-// LastActivityAt is the resolver for the lastActivityAt field.
-func (r *tmuxClientResolver) LastActivityAt(ctx context.Context, obj *graphql1.TmuxClient) (*string, error) {
-	c, ok := r.lookupClient(obj.ID)
-	if !ok || c.LastActivityAt.IsZero() {
-		return nil, nil
-	}
-	s := c.LastActivityAt.Format(time.RFC3339)
-	return &s, nil
-}
-
-// Readonly is the resolver for the readonly field.
-func (r *tmuxClientResolver) Readonly(ctx context.Context, obj *graphql1.TmuxClient) (bool, error) {
-	c, ok := r.lookupClient(obj.ID)
-	if !ok {
-		return false, nil
-	}
-	return c.Readonly, nil
-}
-
-// CurrentWindow is the resolver for the currentWindow field.
-func (r *tmuxClientResolver) CurrentWindow(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxWindow, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	c, ok := r.lookupClient(obj.ID)
-	if !ok || c.CurrentWindow < 0 {
-		return nil, nil
-	}
-	host := r.Tmux.Host()
-	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: c.Session, Index: c.CurrentWindow}]
-	if !ok {
-		return nil, nil
-	}
-	return projectWindow(w), nil
-}
-
-// CurrentPane is the resolver for the currentPane field.
-func (r *tmuxClientResolver) CurrentPane(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxPane, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	c, ok := r.lookupClient(obj.ID)
-	if !ok || c.CurrentPane == "" {
-		return nil, nil
-	}
-	host := r.Tmux.Host()
-	p, ok := r.Tmux.Snapshot().Panes[tmux.PaneKey{Host: host, PaneID: c.CurrentPane}]
-	if !ok {
-		return nil, nil
-	}
-	return projectPane(p), nil
-}
-
-// Window is the resolver for the window field.
-func (r *tmuxPaneResolver) Window(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.TmuxWindow, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return nil, nil
-	}
-	w, ok := r.Tmux.Snapshot().Windows[p.WindowKey]
-	if !ok {
-		return nil, nil
-	}
-	return projectWindow(w), nil
-}
-
-// Title is the resolver for the title field.
-func (r *tmuxPaneResolver) Title(ctx context.Context, obj *graphql1.TmuxPane) (string, error) {
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	return p.Title, nil
-}
-
-// CurrentCommand is the resolver for the currentCommand field.
-func (r *tmuxPaneResolver) CurrentCommand(ctx context.Context, obj *graphql1.TmuxPane) (string, error) {
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	return p.CurrentCommand, nil
-}
-
-// CurrentPid is the resolver for the currentPid field.
-func (r *tmuxPaneResolver) CurrentPid(ctx context.Context, obj *graphql1.TmuxPane) (*int64, error) {
-	p, ok := r.lookupPane(obj.ID)
-	if !ok || p.CurrentPid == 0 {
-		return nil, nil
-	}
-	pid := int64(p.CurrentPid)
-	return &pid, nil
-}
-
-// Width is the resolver for the width field.
-func (r *tmuxPaneResolver) Width(ctx context.Context, obj *graphql1.TmuxPane) (int64, error) {
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return 0, nil
-	}
-	return int64(p.Width), nil
-}
-
-// Height is the resolver for the height field.
-func (r *tmuxPaneResolver) Height(ctx context.Context, obj *graphql1.TmuxPane) (int64, error) {
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return 0, nil
-	}
-	return int64(p.Height), nil
-}
-
-// Dead is the resolver for the dead field.
-func (r *tmuxPaneResolver) Dead(ctx context.Context, obj *graphql1.TmuxPane) (bool, error) {
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return false, nil
-	}
-	return p.Dead, nil
-}
-
-// WatchingClients is the resolver for the watchingClients field.
-func (r *tmuxPaneResolver) WatchingClients(ctx context.Context, obj *graphql1.TmuxPane) ([]*graphql1.TmuxClient, error) {
-	if r.Tmux == nil {
-		return []*graphql1.TmuxClient{}, nil
-	}
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return []*graphql1.TmuxClient{}, nil
-	}
-	out := make([]*graphql1.TmuxClient, 0)
-	for _, c := range r.Tmux.Snapshot().Clients {
-		if c.CurrentPane == p.Key.PaneID {
-			out = append(out, projectClient(c))
-		}
-	}
-	return out, nil
-}
-
-// Process is the resolver for the process field. Stub — ws-b-ps wires it.
-func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.Process, error) {
-	return nil, nil
-}
-
-// ClaudeInstance is the resolver for the claudeInstance field. Stub — ws-b-claudeinstance wires it.
-func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
-	return nil, nil
-}
-
-// Content is the resolver for the content field.
-func (r *tmuxPaneResolver) Content(ctx context.Context, obj *graphql1.TmuxPane, lines *int64, stripAnsi *bool) (string, error) {
-	if r.Tmux == nil {
-		return "", nil
-	}
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	n := 50
-	if lines != nil && *lines > 0 {
-		n = int(*lines)
-	}
-	strip := true
-	if stripAnsi != nil {
-		strip = *stripAnsi
-	}
-	return r.Tmux.CapturePaneTail(ctx, p.Key, n, strip)
-}
-
-// ContentRange is the resolver for the contentRange field.
-func (r *tmuxPaneResolver) ContentRange(ctx context.Context, obj *graphql1.TmuxPane, startLine int64, endLine int64, stripAnsi *bool) (string, error) {
-	if r.Tmux == nil {
-		return "", nil
-	}
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	strip := true
-	if stripAnsi != nil {
-		strip = *stripAnsi
-	}
-	return r.Tmux.CapturePane(ctx, p.Key, int(startLine), int(endLine), false, strip)
-}
-
-// ContentFull is the resolver for the contentFull field.
-func (r *tmuxPaneResolver) ContentFull(ctx context.Context, obj *graphql1.TmuxPane, stripAnsi *bool) (string, error) {
-	if r.Tmux == nil {
-		return "", nil
-	}
-	p, ok := r.lookupPane(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	strip := true
-	if stripAnsi != nil {
-		strip = *stripAnsi
-	}
-	return r.Tmux.CapturePane(ctx, p.Key, 0, 0, true, strip)
-}
-
-// Pid is the resolver for the pid field.
-func (r *tmuxServerResolver) Pid(ctx context.Context, obj *graphql1.TmuxServer) (*int64, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	pid := r.Tmux.Server().Pid
-	if pid == 0 {
-		return nil, nil
-	}
-	v := int64(pid)
-	return &v, nil
-}
-
-// Alive is the resolver for the alive field.
-func (r *tmuxServerResolver) Alive(ctx context.Context, obj *graphql1.TmuxServer) (bool, error) {
-	if r.Tmux == nil {
-		return false, nil
-	}
-	return r.Tmux.Server().Alive, nil
-}
-
-// Sessions is the resolver for the sessions field.
-func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer) ([]*graphql1.TmuxSession, error) {
-	if r.Tmux == nil {
-		return []*graphql1.TmuxSession{}, nil
-	}
-	snap := r.Tmux.Snapshot()
-	out := make([]*graphql1.TmuxSession, 0, len(snap.Sessions))
-	for _, s := range snap.Sessions {
-		out = append(out, projectSession(s))
-	}
-	return out, nil
-}
-
-// Clients is the resolver for the clients field.
-func (r *tmuxServerResolver) Clients(ctx context.Context, obj *graphql1.TmuxServer) ([]*graphql1.TmuxClient, error) {
-	if r.Tmux == nil {
-		return []*graphql1.TmuxClient{}, nil
-	}
-	snap := r.Tmux.Snapshot()
-	out := make([]*graphql1.TmuxClient, 0, len(snap.Clients))
-	for _, c := range snap.Clients {
-		out = append(out, projectClient(c))
-	}
-	return out, nil
-}
-
-// Server is the resolver for the server field.
-func (r *tmuxSessionResolver) Server(ctx context.Context, obj *graphql1.TmuxSession) (*graphql1.TmuxServer, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	return projectServer(r.Tmux.Host(), r.Tmux.Server()), nil
-}
-
-// CreatedAt is the resolver for the createdAt field.
-func (r *tmuxSessionResolver) CreatedAt(ctx context.Context, obj *graphql1.TmuxSession) (string, error) {
-	s, ok := r.lookupSession(obj.ID)
-	if !ok || s.CreatedAt.IsZero() {
-		return "", nil
-	}
-	return s.CreatedAt.Format(time.RFC3339), nil
-}
-
-// Attached is the resolver for the attached field.
-func (r *tmuxSessionResolver) Attached(ctx context.Context, obj *graphql1.TmuxSession) (bool, error) {
-	s, ok := r.lookupSession(obj.ID)
-	if !ok {
-		return false, nil
-	}
-	return s.Attached, nil
-}
-
-// ActiveAttached is the resolver for the activeAttached field.
-func (r *tmuxSessionResolver) ActiveAttached(ctx context.Context, obj *graphql1.TmuxSession) (bool, error) {
-	if r.Tmux == nil {
-		return false, nil
-	}
-	s, ok := r.lookupSession(obj.ID)
-	if !ok || !s.Attached {
-		return false, nil
-	}
-	host := r.Tmux.Host()
-	cutoff := time.Now().Add(-tmux.ActiveAttachedWindow)
-	for _, c := range r.Tmux.Snapshot().Clients {
-		if c.Key.Host != host {
-			continue
-		}
-		if c.Session != s.Key.Name {
-			continue
-		}
-		if !c.LastActivityAt.IsZero() && c.LastActivityAt.After(cutoff) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// AttachedClients is the resolver for the attachedClients field.
-func (r *tmuxSessionResolver) AttachedClients(ctx context.Context, obj *graphql1.TmuxSession) ([]*graphql1.TmuxClient, error) {
-	if r.Tmux == nil {
-		return []*graphql1.TmuxClient{}, nil
-	}
-	s, ok := r.lookupSession(obj.ID)
-	if !ok {
-		return []*graphql1.TmuxClient{}, nil
-	}
-	out := make([]*graphql1.TmuxClient, 0)
-	for _, c := range r.Tmux.Snapshot().Clients {
-		if c.Session == s.Key.Name {
-			out = append(out, projectClient(c))
-		}
-	}
-	return out, nil
-}
-
-// LastActivityAt is the resolver for the lastActivityAt field.
-func (r *tmuxSessionResolver) LastActivityAt(ctx context.Context, obj *graphql1.TmuxSession) (*string, error) {
-	s, ok := r.lookupSession(obj.ID)
-	if !ok || s.LastActivityAt.IsZero() {
-		return nil, nil
-	}
-	v := s.LastActivityAt.Format(time.RFC3339)
-	return &v, nil
-}
-
-// Windows is the resolver for the windows field.
-func (r *tmuxSessionResolver) Windows(ctx context.Context, obj *graphql1.TmuxSession) ([]*graphql1.TmuxWindow, error) {
-	if r.Tmux == nil {
-		return []*graphql1.TmuxWindow{}, nil
-	}
-	s, ok := r.lookupSession(obj.ID)
-	if !ok {
-		return []*graphql1.TmuxWindow{}, nil
-	}
-	out := make([]*graphql1.TmuxWindow, 0)
-	for _, w := range r.Tmux.Snapshot().Windows {
-		if w.Key.Session == s.Key.Name {
-			out = append(out, projectWindow(w))
-		}
-	}
-	return out, nil
-}
-
-// CurrentWindow is the resolver for the currentWindow field.
-func (r *tmuxSessionResolver) CurrentWindow(ctx context.Context, obj *graphql1.TmuxSession) (*graphql1.TmuxWindow, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	s, ok := r.lookupSession(obj.ID)
-	if !ok {
-		return nil, nil
-	}
-	host := r.Tmux.Host()
-	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: s.Key.Name, Index: s.CurrentWindow}]
-	if !ok {
-		return nil, nil
-	}
-	return projectWindow(w), nil
-}
-
-// Session is the resolver for the session field.
-func (r *tmuxWindowResolver) Session(ctx context.Context, obj *graphql1.TmuxWindow) (*graphql1.TmuxSession, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	w, ok := r.lookupWindow(obj.ID)
-	if !ok {
-		return nil, nil
-	}
-	s, ok := r.Tmux.Snapshot().Sessions[tmux.SessionKey{Host: w.Key.Host, Name: w.Key.Session}]
-	if !ok {
-		return nil, nil
-	}
-	return projectSession(s), nil
-}
-
-// Name is the resolver for the name field.
-func (r *tmuxWindowResolver) Name(ctx context.Context, obj *graphql1.TmuxWindow) (string, error) {
-	w, ok := r.lookupWindow(obj.ID)
-	if !ok {
-		return "", nil
-	}
-	return w.Name, nil
-}
-
-// Active is the resolver for the active field.
-func (r *tmuxWindowResolver) Active(ctx context.Context, obj *graphql1.TmuxWindow) (bool, error) {
-	w, ok := r.lookupWindow(obj.ID)
-	if !ok {
-		return false, nil
-	}
-	return w.Active, nil
-}
-
-// Panes is the resolver for the panes field.
-func (r *tmuxWindowResolver) Panes(ctx context.Context, obj *graphql1.TmuxWindow) ([]*graphql1.TmuxPane, error) {
-	if r.Tmux == nil {
-		return []*graphql1.TmuxPane{}, nil
-	}
-	w, ok := r.lookupWindow(obj.ID)
-	if !ok {
-		return []*graphql1.TmuxPane{}, nil
-	}
-	out := make([]*graphql1.TmuxPane, 0)
-	for _, p := range r.Tmux.Snapshot().Panes {
-		if p.WindowKey == w.Key {
-			out = append(out, projectPane(p))
-		}
-	}
-	return out, nil
-}
-
-// CurrentPane is the resolver for the currentPane field.
-func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.TmuxWindow) (*graphql1.TmuxPane, error) {
-	if r.Tmux == nil {
-		return nil, nil
-	}
-	w, ok := r.lookupWindow(obj.ID)
-	if !ok || w.CurrentPane == "" {
-		return nil, nil
-	}
-	host := r.Tmux.Host()
-	p, ok := r.Tmux.Snapshot().Panes[tmux.PaneKey{Host: host, PaneID: w.CurrentPane}]
-	if !ok {
-		return nil, nil
-	}
-	return projectPane(p), nil
-}
-
-//
-// Returns every Conversation the provider currently has cached,
-// sorted descending by lastSeenAt (most-recently active first).
+// Conversations is the resolver for the conversations field.
 func (r *queryResolver) Conversations(ctx context.Context) ([]*graphql1.Conversation, error) {
 	if r.ClaudeProjects == nil {
 		return nil, fmt.Errorf("claudeprojects provider not initialised")
@@ -722,9 +210,6 @@ func (r *queryResolver) Conversations(ctx context.Context) ([]*graphql1.Conversa
 }
 
 // Conversation is the resolver for the conversation field.
-//
-// id is the orchard-canonical "Conversation:<sessionUuid>" string.
-// Unknown ids return (nil, nil).
 func (r *queryResolver) Conversation(ctx context.Context, id string) (*graphql1.Conversation, error) {
 	if r.ClaudeProjects == nil {
 		return nil, fmt.Errorf("claudeprojects provider not initialised")
@@ -750,8 +235,518 @@ func (r *queryResolver) Conversation(ctx context.Context, id string) (*graphql1.
 	return nil, nil
 }
 
+// ClaudeAccounts is the resolver for the claudeAccounts field.
+func (r *queryResolver) ClaudeAccounts(ctx context.Context) ([]*graphql1.ClaudeAccount, error) {
+	if r.ClaudeAccount == nil {
+		return nil, fmt.Errorf("claudeaccount provider not initialised")
+	}
+	rows, err := r.ClaudeAccount.List(ctx)
+	if err != nil {
+		var notInstalled *claudeaccount.ToolNotInstalledError
+		if errors.As(err, &notInstalled) {
+			return nil, notInstalled
+		}
+		return nil, fmt.Errorf("list claude accounts: %w", err)
+	}
+	out := make([]*graphql1.ClaudeAccount, 0, len(rows))
+	for _, a := range rows {
+		out = append(out, r.ClaudeAccount.ToGraphQL(a))
+	}
+	return out, nil
+}
+
+// Processes is the resolver for the worktree.processes field.
+func (r *worktreeResolver) Processes(_ context.Context, _ *graphql1.Worktree) ([]*graphql1.Process, error) {
+	return []*graphql1.Process{}, nil
+}
+
+// All Tmux* field resolvers come from the tmux provider — see tmux_resolvers below.
+
+// Server is the resolver for tmuxClient.server.
+func (r *tmuxClientResolver) Server(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	return projectServer(r.Tmux.Host(), r.Tmux.Server()), nil
+}
+
+// Session is the resolver for tmuxClient.session.
+func (r *tmuxClientResolver) Session(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxSession, error) {
+	if r.Tmux == nil {
+		return &graphql1.TmuxSession{ID: "TmuxSession:"}, nil
+	}
+	c, ok := r.lookupClient(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	s, ok := r.Tmux.Snapshot().Sessions[tmux.SessionKey{Host: host, Name: c.Session}]
+	if !ok {
+		return nil, nil
+	}
+	return projectSession(s), nil
+}
+
+// Tty is the resolver for tmuxClient.tty.
+func (r *tmuxClientResolver) Tty(_ context.Context, obj *graphql1.TmuxClient) (string, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok {
+		return "", nil
+	}
+	return c.TTY, nil
+}
+
+// Hostname is the resolver for tmuxClient.hostname.
+func (r *tmuxClientResolver) Hostname(_ context.Context, obj *graphql1.TmuxClient) (string, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok {
+		return "", nil
+	}
+	return c.Hostname, nil
+}
+
+// TermName is the resolver for tmuxClient.termName.
+func (r *tmuxClientResolver) TermName(_ context.Context, obj *graphql1.TmuxClient) (string, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok {
+		return "", nil
+	}
+	return c.TermName, nil
+}
+
+// AttachedAt is the resolver for tmuxClient.attachedAt.
+func (r *tmuxClientResolver) AttachedAt(_ context.Context, obj *graphql1.TmuxClient) (string, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok || c.AttachedAt.IsZero() {
+		return "", nil
+	}
+	return c.AttachedAt.Format(time.RFC3339), nil
+}
+
+// LastActivityAt is the resolver for tmuxClient.lastActivityAt.
+func (r *tmuxClientResolver) LastActivityAt(_ context.Context, obj *graphql1.TmuxClient) (*string, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok || c.LastActivityAt.IsZero() {
+		return nil, nil
+	}
+	v := c.LastActivityAt.Format(time.RFC3339)
+	return &v, nil
+}
+
+// Readonly is the resolver for tmuxClient.readonly.
+func (r *tmuxClientResolver) Readonly(_ context.Context, obj *graphql1.TmuxClient) (bool, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok {
+		return false, nil
+	}
+	return c.Readonly, nil
+}
+
+// CurrentWindow is the resolver for tmuxClient.currentWindow.
+func (r *tmuxClientResolver) CurrentWindow(_ context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxWindow, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok || r.Tmux == nil {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: c.Session, Index: c.CurrentWindow}]
+	if !ok {
+		return nil, nil
+	}
+	return projectWindow(w), nil
+}
+
+// CurrentPane is the resolver for tmuxClient.currentPane.
+func (r *tmuxClientResolver) CurrentPane(_ context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxPane, error) {
+	c, ok := r.lookupClient(obj.ID)
+	if !ok || r.Tmux == nil || c.CurrentPane == "" {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	p, ok := r.Tmux.Snapshot().Panes[tmux.PaneKey{Host: host, PaneID: c.CurrentPane}]
+	if !ok {
+		return nil, nil
+	}
+	return projectPane(p), nil
+}
+
+// Window is the resolver for tmuxPane.window.
+func (r *tmuxPaneResolver) Window(_ context.Context, obj *graphql1.TmuxPane) (*graphql1.TmuxWindow, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok || r.Tmux == nil {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: p.WindowKey.Session, Index: p.WindowKey.Index}]
+	if !ok {
+		return nil, nil
+	}
+	return projectWindow(w), nil
+}
+
+// Title is the resolver for tmuxPane.title.
+func (r *tmuxPaneResolver) Title(_ context.Context, obj *graphql1.TmuxPane) (string, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return "", nil
+	}
+	return p.Title, nil
+}
+
+// CurrentCommand is the resolver for tmuxPane.currentCommand.
+func (r *tmuxPaneResolver) CurrentCommand(_ context.Context, obj *graphql1.TmuxPane) (string, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return "", nil
+	}
+	return p.CurrentCommand, nil
+}
+
+// CurrentPid is the resolver for tmuxPane.currentPid.
+func (r *tmuxPaneResolver) CurrentPid(_ context.Context, obj *graphql1.TmuxPane) (*int64, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok || p.CurrentPid == 0 {
+		return nil, nil
+	}
+	v := int64(p.CurrentPid)
+	return &v, nil
+}
+
+// Width is the resolver for tmuxPane.width.
+func (r *tmuxPaneResolver) Width(_ context.Context, obj *graphql1.TmuxPane) (int64, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return 0, nil
+	}
+	return int64(p.Width), nil
+}
+
+// Height is the resolver for tmuxPane.height.
+func (r *tmuxPaneResolver) Height(_ context.Context, obj *graphql1.TmuxPane) (int64, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return 0, nil
+	}
+	return int64(p.Height), nil
+}
+
+// Dead is the resolver for tmuxPane.dead.
+func (r *tmuxPaneResolver) Dead(_ context.Context, obj *graphql1.TmuxPane) (bool, error) {
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return false, nil
+	}
+	return p.Dead, nil
+}
+
+// WatchingClients is the resolver for tmuxPane.watchingClients.
+func (r *tmuxPaneResolver) WatchingClients(_ context.Context, obj *graphql1.TmuxPane) ([]*graphql1.TmuxClient, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	out := []*graphql1.TmuxClient{}
+	for _, c := range r.Tmux.Snapshot().Clients {
+		if c.CurrentPane == p.Key.PaneID {
+			out = append(out, projectClient(c))
+		}
+	}
+	return out, nil
+}
+
+// Process is the resolver for tmuxPane.process.
+func (r *tmuxPaneResolver) Process(_ context.Context, _ *graphql1.TmuxPane) (*graphql1.Process, error) {
+	return nil, nil
+}
+
+// ClaudeInstance is the resolver for tmuxPane.claudeInstance.
+func (r *tmuxPaneResolver) ClaudeInstance(_ context.Context, _ *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
+	return nil, nil
+}
+
+// Content is the resolver for tmuxPane.content.
+func (r *tmuxPaneResolver) Content(ctx context.Context, obj *graphql1.TmuxPane, lines *int64, stripAnsi *bool) (string, error) {
+	if r.Tmux == nil {
+		return "", fmt.Errorf("tmux provider not wired")
+	}
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return "", fmt.Errorf("pane %q not found", obj.ID)
+	}
+	n := 50
+	if lines != nil {
+		n = int(*lines)
+	}
+	strip := true
+	if stripAnsi != nil {
+		strip = *stripAnsi
+	}
+	return r.Tmux.CapturePaneTail(ctx, p.Key, n, strip)
+}
+
+// ContentRange is the resolver for tmuxPane.contentRange.
+func (r *tmuxPaneResolver) ContentRange(ctx context.Context, obj *graphql1.TmuxPane, startLine int64, endLine int64, stripAnsi *bool) (string, error) {
+	if r.Tmux == nil {
+		return "", fmt.Errorf("tmux provider not wired")
+	}
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return "", fmt.Errorf("pane %q not found", obj.ID)
+	}
+	strip := true
+	if stripAnsi != nil {
+		strip = *stripAnsi
+	}
+	return r.Tmux.CapturePane(ctx, p.Key, int(startLine), int(endLine), false, strip)
+}
+
+// ContentFull is the resolver for tmuxPane.contentFull.
+func (r *tmuxPaneResolver) ContentFull(ctx context.Context, obj *graphql1.TmuxPane, stripAnsi *bool) (string, error) {
+	if r.Tmux == nil {
+		return "", fmt.Errorf("tmux provider not wired")
+	}
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
+		return "", fmt.Errorf("pane %q not found", obj.ID)
+	}
+	strip := true
+	if stripAnsi != nil {
+		strip = *stripAnsi
+	}
+	return r.Tmux.CapturePane(ctx, p.Key, 0, 0, true, strip)
+}
+
+// Pid is the resolver for tmuxServer.pid.
+func (r *tmuxServerResolver) Pid(_ context.Context, _ *graphql1.TmuxServer) (*int64, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	if pid := r.Tmux.Server().Pid; pid != 0 {
+		v := int64(pid)
+		return &v, nil
+	}
+	return nil, nil
+}
+
+// Alive is the resolver for tmuxServer.alive.
+func (r *tmuxServerResolver) Alive(_ context.Context, _ *graphql1.TmuxServer) (bool, error) {
+	if r.Tmux == nil {
+		return false, nil
+	}
+	return r.Tmux.Server().Alive, nil
+}
+
+// Sessions is the resolver for tmuxServer.sessions.
+func (r *tmuxServerResolver) Sessions(_ context.Context, _ *graphql1.TmuxServer) ([]*graphql1.TmuxSession, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	snap := r.Tmux.Snapshot()
+	out := make([]*graphql1.TmuxSession, 0, len(snap.Sessions))
+	for _, s := range snap.Sessions {
+		out = append(out, projectSession(s))
+	}
+	return out, nil
+}
+
+// Clients is the resolver for tmuxServer.clients.
+func (r *tmuxServerResolver) Clients(_ context.Context, _ *graphql1.TmuxServer) ([]*graphql1.TmuxClient, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	snap := r.Tmux.Snapshot()
+	out := make([]*graphql1.TmuxClient, 0, len(snap.Clients))
+	for _, c := range snap.Clients {
+		out = append(out, projectClient(c))
+	}
+	return out, nil
+}
+
+// Server is the resolver for tmuxSession.server.
+func (r *tmuxSessionResolver) Server(_ context.Context, _ *graphql1.TmuxSession) (*graphql1.TmuxServer, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	return projectServer(r.Tmux.Host(), r.Tmux.Server()), nil
+}
+
+// CreatedAt is the resolver for tmuxSession.createdAt.
+func (r *tmuxSessionResolver) CreatedAt(_ context.Context, obj *graphql1.TmuxSession) (string, error) {
+	s, ok := r.lookupSession(obj.ID)
+	if !ok || s.CreatedAt.IsZero() {
+		return "", nil
+	}
+	return s.CreatedAt.Format(time.RFC3339), nil
+}
+
+// Attached is the resolver for tmuxSession.attached.
+func (r *tmuxSessionResolver) Attached(_ context.Context, obj *graphql1.TmuxSession) (bool, error) {
+	s, ok := r.lookupSession(obj.ID)
+	if !ok {
+		return false, nil
+	}
+	return s.Attached, nil
+}
+
+// ActiveAttached is the resolver for tmuxSession.activeAttached.
+func (r *tmuxSessionResolver) ActiveAttached(_ context.Context, obj *graphql1.TmuxSession) (bool, error) {
+	s, ok := r.lookupSession(obj.ID)
+	if !ok || !s.Attached {
+		return false, nil
+	}
+	return true, nil
+}
+
+// AttachedClients is the resolver for tmuxSession.attachedClients.
+func (r *tmuxSessionResolver) AttachedClients(_ context.Context, obj *graphql1.TmuxSession) ([]*graphql1.TmuxClient, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	s, ok := r.lookupSession(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	out := []*graphql1.TmuxClient{}
+	for _, c := range r.Tmux.Snapshot().Clients {
+		if c.Session == s.Key.Name {
+			out = append(out, projectClient(c))
+		}
+	}
+	return out, nil
+}
+
+// LastActivityAt is the resolver for tmuxSession.lastActivityAt.
+func (r *tmuxSessionResolver) LastActivityAt(_ context.Context, obj *graphql1.TmuxSession) (*string, error) {
+	s, ok := r.lookupSession(obj.ID)
+	if !ok || s.LastActivityAt.IsZero() {
+		return nil, nil
+	}
+	v := s.LastActivityAt.Format(time.RFC3339)
+	return &v, nil
+}
+
+// Windows is the resolver for tmuxSession.windows.
+func (r *tmuxSessionResolver) Windows(_ context.Context, obj *graphql1.TmuxSession) ([]*graphql1.TmuxWindow, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	s, ok := r.lookupSession(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	out := []*graphql1.TmuxWindow{}
+	for _, w := range r.Tmux.Snapshot().Windows {
+		if w.Key.Session == s.Key.Name {
+			out = append(out, projectWindow(w))
+		}
+	}
+	return out, nil
+}
+
+// CurrentWindow is the resolver for tmuxSession.currentWindow.
+func (r *tmuxSessionResolver) CurrentWindow(_ context.Context, obj *graphql1.TmuxSession) (*graphql1.TmuxWindow, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	s, ok := r.lookupSession(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: s.Key.Name, Index: s.CurrentWindow}]
+	if !ok {
+		return nil, nil
+	}
+	return projectWindow(w), nil
+}
+
+// Session is the resolver for tmuxWindow.session.
+func (r *tmuxWindowResolver) Session(_ context.Context, obj *graphql1.TmuxWindow) (*graphql1.TmuxSession, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	w, ok := r.lookupWindow(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	s, ok := r.Tmux.Snapshot().Sessions[tmux.SessionKey{Host: host, Name: w.Key.Session}]
+	if !ok {
+		return nil, nil
+	}
+	return projectSession(s), nil
+}
+
+// Name is the resolver for tmuxWindow.name.
+func (r *tmuxWindowResolver) Name(_ context.Context, obj *graphql1.TmuxWindow) (string, error) {
+	w, ok := r.lookupWindow(obj.ID)
+	if !ok {
+		return "", nil
+	}
+	return w.Name, nil
+}
+
+// Active is the resolver for tmuxWindow.active.
+func (r *tmuxWindowResolver) Active(_ context.Context, obj *graphql1.TmuxWindow) (bool, error) {
+	w, ok := r.lookupWindow(obj.ID)
+	if !ok {
+		return false, nil
+	}
+	return w.Active, nil
+}
+
+// Panes is the resolver for tmuxWindow.panes.
+func (r *tmuxWindowResolver) Panes(_ context.Context, obj *graphql1.TmuxWindow) ([]*graphql1.TmuxPane, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	w, ok := r.lookupWindow(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	out := []*graphql1.TmuxPane{}
+	for _, p := range r.Tmux.Snapshot().Panes {
+		if p.WindowKey.Session == w.Key.Session && p.WindowKey.Index == w.Key.Index {
+			out = append(out, projectPane(p))
+		}
+	}
+	return out, nil
+}
+
+// CurrentPane is the resolver for tmuxWindow.currentPane.
+func (r *tmuxWindowResolver) CurrentPane(_ context.Context, obj *graphql1.TmuxWindow) (*graphql1.TmuxPane, error) {
+	if r.Tmux == nil {
+		return nil, nil
+	}
+	w, ok := r.lookupWindow(obj.ID)
+	if !ok || w.CurrentPane == "" {
+		return nil, nil
+	}
+	host := r.Tmux.Host()
+	p, ok := r.Tmux.Snapshot().Panes[tmux.PaneKey{Host: host, PaneID: w.CurrentPane}]
+	if !ok {
+		return nil, nil
+	}
+	return projectPane(p), nil
+}
+
+// Host returns graphql1.HostResolver implementation.
+func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
+
+// Process returns graphql1.ProcessResolver implementation.
+func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
+
+// Project returns graphql1.ProjectResolver implementation.
+func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
+
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
+
+// Worktree returns graphql1.WorktreeResolver implementation.
+func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
 
 // TmuxClient returns graphql1.TmuxClientResolver implementation.
 func (r *Resolver) TmuxClient() graphql1.TmuxClientResolver { return &tmuxClientResolver{r} }
@@ -779,7 +774,6 @@ type tmuxServerResolver struct{ *Resolver }
 type tmuxSessionResolver struct{ *Resolver }
 type tmuxWindowResolver struct{ *Resolver }
 
-// toGraphQLWorktree projects a git provider Worktree into the GraphQL model.
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 	return &graphql1.Worktree{
 		ID:     string(w.ID),
@@ -790,7 +784,6 @@ func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 	}
 }
 
-// projectProcess maps the provider's domain Process onto the gqlgen wire type.
 func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
 	tty := p.TTY
 	startedAt := p.StartedRaw
@@ -813,7 +806,6 @@ func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
 	return out
 }
 
-// applyProcessFilter applies the resolver-layer ProcessFilter.
 func applyProcessFilter(ctx context.Context, p *ps.Provider, in []ps.Process, filter *graphql1.ProcessFilter) []ps.Process {
 	if filter == nil {
 		return in
@@ -871,7 +863,6 @@ func applyProcessFilter(ctx context.Context, p *ps.Provider, in []ps.Process, fi
 	return out
 }
 
-// splitProcessNodeID extracts (host, pid) from a Process node id.
 func splitProcessNodeID(s string) (string, string) {
 	idx := strings.LastIndexByte(s, ':')
 	if idx <= 0 {
@@ -880,47 +871,47 @@ func splitProcessNodeID(s string) (string, string) {
 	return s[:idx], s[idx+1:]
 }
 
-// !!! WARNING !!!
-// The code below was going to be deleted when updating resolvers. It has been copied here so you have
-// one last chance to move it out of harms way if you want. There are two reasons this happens:
-//   - When renaming or deleting a resolver the old code will be put in here. You can safely delete
-//     it when you're done.
-//   - You have helper methods in this file. Move them out to keep these resolver files clean.
 func projectServer(host tmux.HostID, info tmux.ServerInfo) *graphql1.TmuxServer {
 	return &graphql1.TmuxServer{
 		ID:         "TmuxServer:" + string(host) + ":" + info.SocketPath,
 		SocketPath: info.SocketPath,
 	}
 }
+
 func projectSession(s tmux.Session) *graphql1.TmuxSession {
 	return &graphql1.TmuxSession{
 		ID:   "TmuxSession:" + string(s.Key.Host) + ":" + s.Key.Name,
 		Name: s.Key.Name,
 	}
 }
+
 func projectWindow(w tmux.Window) *graphql1.TmuxWindow {
 	return &graphql1.TmuxWindow{
 		ID:    "TmuxWindow:" + string(w.Key.Host) + ":" + w.Key.Session + ":" + strconv.Itoa(w.Key.Index),
 		Index: int64(w.Key.Index),
 	}
 }
+
 func projectPane(p tmux.Pane) *graphql1.TmuxPane {
 	return &graphql1.TmuxPane{
 		ID:     "TmuxPane:" + string(p.Key.Host) + ":" + p.Key.PaneID,
 		PaneID: p.Key.PaneID,
 	}
 }
+
 func projectClient(c tmux.Client) *graphql1.TmuxClient {
 	return &graphql1.TmuxClient{
 		ID: "TmuxClient:" + string(c.Key.Host) + ":" + c.Key.ClientName,
 	}
 }
+
 func stripPrefix(s, prefix string) string {
 	if strings.HasPrefix(s, prefix) {
 		return s[len(prefix):]
 	}
 	return s
 }
+
 func sessionMatchesFilter(s tmux.Session, f *graphql1.TmuxSessionFilter) bool {
 	if f == nil {
 		return true
@@ -936,6 +927,7 @@ func sessionMatchesFilter(s tmux.Session, f *graphql1.TmuxSessionFilter) bool {
 	}
 	return true
 }
+
 func paneMatchesFilter(p tmux.Pane, f *graphql1.TmuxPaneFilter) bool {
 	if f == nil {
 		return true
@@ -957,6 +949,7 @@ func paneMatchesFilter(p tmux.Pane, f *graphql1.TmuxPaneFilter) bool {
 	}
 	return true
 }
+
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {
@@ -965,6 +958,7 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
 func (r *tmuxClientResolver) lookupClient(id string) (tmux.Client, bool) {
 	if r.Tmux == nil {
 		return tmux.Client{}, false
@@ -974,6 +968,7 @@ func (r *tmuxClientResolver) lookupClient(id string) (tmux.Client, bool) {
 	c, ok := r.Tmux.Snapshot().Clients[tmux.ClientKey{Host: host, ClientName: name}]
 	return c, ok
 }
+
 func (r *tmuxPaneResolver) lookupPane(id string) (tmux.Pane, bool) {
 	if r.Tmux == nil {
 		return tmux.Pane{}, false
@@ -983,6 +978,7 @@ func (r *tmuxPaneResolver) lookupPane(id string) (tmux.Pane, bool) {
 	p, ok := r.Tmux.Snapshot().Panes[tmux.PaneKey{Host: host, PaneID: paneID}]
 	return p, ok
 }
+
 func (r *tmuxSessionResolver) lookupSession(id string) (tmux.Session, bool) {
 	if r.Tmux == nil {
 		return tmux.Session{}, false
@@ -992,6 +988,7 @@ func (r *tmuxSessionResolver) lookupSession(id string) (tmux.Session, bool) {
 	s, ok := r.Tmux.Snapshot().Sessions[tmux.SessionKey{Host: host, Name: name}]
 	return s, ok
 }
+
 func (r *tmuxWindowResolver) lookupWindow(id string) (tmux.Window, bool) {
 	if r.Tmux == nil {
 		return tmux.Window{}, false

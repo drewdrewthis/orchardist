@@ -1,13 +1,12 @@
 // Package resolvers wires the gqlgen-generated GraphQL surface to the
-// providers under internal/server/providers. One file per node type
-// hangs off this Resolver root; the root holds dependencies the field
-// resolvers need.
+// providers under internal/server/providers.
 package resolvers
 
 import (
 	"context"
 	"time"
 
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
@@ -16,8 +15,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
-// ProjectsLister is the narrow read-side contract the project resolver
-// depends on.
+// ProjectsLister is the narrow read-side contract the project resolver depends on.
 type ProjectsLister interface {
 	List(ctx context.Context) ([]configprovider.Project, error)
 }
@@ -31,6 +29,7 @@ type Resolver struct {
 	PS               *ps.Provider
 	Tmux             *tmux.Provider
 	ClaudeProjects   *claudeprojects.Provider
+	ClaudeAccount    *claudeaccount.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -71,5 +70,11 @@ func (r *Resolver) WithTmux(p *tmux.Provider) *Resolver {
 // WithClaudeProjects wires the claudeprojects provider.
 func (r *Resolver) WithClaudeProjects(p *claudeprojects.Provider) *Resolver {
 	r.ClaudeProjects = p
+	return r
+}
+
+// WithClaudeAccount wires the claudeaccount provider.
+func (r *Resolver) WithClaudeAccount(p *claudeaccount.Provider) *Resolver {
+	r.ClaudeAccount = p
 	return r
 }
