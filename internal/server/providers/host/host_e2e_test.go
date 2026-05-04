@@ -116,9 +116,8 @@ func TestHosts_E2E_RealMachine(t *testing.T) {
 	if got := len(resp.Data.Hosts); got != 1 {
 		t.Fatalf("hosts has %d entries, want 1 (v1: local only)", got)
 	}
-	if resp.Data.Hosts[0].MachineID != resp.Data.Host.MachineID && resp.Data.Host.MachineID != "" {
-		// host wasn't requested in this query, leave the cross-check loose.
-	}
+	// host wasn't requested in this query, so cross-check is intentionally loose.
+	_ = resp.Data.Hosts[0].MachineID
 }
 
 // TestHost_E2E_FreshSample asserts repeated GraphQL queries see
@@ -232,7 +231,7 @@ func postQuery(t *testing.T, url, query string) graphqlResponse {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
