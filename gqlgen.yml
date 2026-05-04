@@ -1,0 +1,32 @@
+# gqlgen configuration — schema-first.
+# See https://gqlgen.com/config/
+#
+# schema.graphql at repo root is the source of truth. Generated types and
+# the executable schema land in internal/server/graphql/. Resolvers are
+# stubbed out into internal/server/resolvers/ on first generation; we then
+# fill them in by hand and gqlgen leaves them alone on subsequent runs.
+
+schema:
+  - schema.graphql
+
+exec:
+  filename: internal/server/graphql/generated.go
+  package: graphql
+
+model:
+  filename: internal/server/graphql/models_gen.go
+  package: graphql
+
+resolver:
+  layout: follow-schema
+  dir: internal/server/resolvers
+  package: resolvers
+  filename_template: "{name}.resolvers.go"
+
+# Optimised types for our schema. Health.uptimeS is non-negative and fits
+# easily into int64; map GraphQL Int to Go int64 to keep parity with the
+# stdlib JSON encoder.
+models:
+  Int:
+    model:
+      - github.com/99designs/gqlgen/graphql.Int64

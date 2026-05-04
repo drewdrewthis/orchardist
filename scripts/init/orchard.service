@@ -1,0 +1,38 @@
+# systemd user unit for the orchard daemon (Linux).
+#
+# Install (per-user, no root required):
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/init/orchard.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now orchard.service
+#
+# Logs go to the journal: `journalctl --user -u orchard.service -f`.
+#
+# The daemon traps SIGTERM via signal.NotifyContext so `systemctl --user
+# stop orchard.service` shuts the GraphQL server down cleanly with the
+# default 5s grace.
+
+[Unit]
+Description=orchard daemon — read-only join layer over local developer state
+Documentation=https://github.com/drewdrewthis/git-orchard-rs
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/orchard daemon start
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+
+# Security hygiene — orchard reads developer state, doesn't need much.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+# Allow writing to the orchard state directory.
+ReadWritePaths=%h/.local/state/orchard %h/.config/orchard
+
+[Install]
+WantedBy=default.target
