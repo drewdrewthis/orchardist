@@ -4,8 +4,8 @@
   launchd unit for the orchard daemon (macOS).
 
   Install:
-    cp scripts/init/com.drewdrewthis.orchard.plist ~/Library/LaunchAgents/
-    launchctl load -w ~/Library/LaunchAgents/com.drewdrewthis.orchard.plist
+    cp scripts/init/com.gitorchard.orchard.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.gitorchard.orchard.plist
 
   Logs land in ~/.local/state/orchard/orchard.{out,err}.log so they
   coexist with the pidfile and any other daemon-owned state.
@@ -17,7 +17,7 @@
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.drewdrewthis.orchard</string>
+    <string>com.gitorchard.orchard</string>
 
     <key>ProgramArguments</key>
     <array>
