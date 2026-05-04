@@ -1,3 +1,7 @@
+// Package resolvers wires the gqlgen-generated GraphQL surface to the
+// providers under internal/server/providers. One file per node type
+// hangs off this Resolver root; the root holds dependencies the field
+// resolvers need.
 package resolvers
 
 import (
@@ -7,6 +11,7 @@ import (
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 )
 
 // ProjectsLister is the narrow read-side contract the project resolver
@@ -30,6 +35,7 @@ type Resolver struct {
 	HostProvider     *host.Provider
 	ProjectsProvider ProjectsLister
 	Git              *gitprovider.Provider
+	PS               *ps.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured. The
@@ -56,5 +62,12 @@ func (r *Resolver) WithProjects(p ProjectsLister) *Resolver {
 // Worktree.* resolvers.
 func (r *Resolver) WithGit(g *gitprovider.Provider) *Resolver {
 	r.Git = g
+	return r
+}
+
+// WithPS wires the ps provider that backs Host.processes and Process
+// node resolution.
+func (r *Resolver) WithPS(p *ps.Provider) *Resolver {
+	r.PS = p
 	return r
 }

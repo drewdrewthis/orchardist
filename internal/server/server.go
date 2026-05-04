@@ -18,6 +18,12 @@
 //
 // Workstream B-git: WithGit wires the git provider that backs
 // Project.worktrees and Worktree.* resolvers.
+//
+// Workstream B-ps: WithPS attaches a ps provider so resolvers can serve
+// `host.processes` and the Process node fields. The server takes
+// responsibility for the provider's lifecycle: Run() calls Start()
+// before opening the listener and (implicitly) tears it down by
+// cancelling its context on shutdown.
 package server
 
 import (
@@ -35,6 +41,7 @@ import (
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
 
@@ -51,6 +58,7 @@ type Server struct {
 	httpSrv   *http.Server
 	host      *host.Provider
 	resolver  *resolvers.Resolver
+	psProv    *ps.Provider
 }
 
 // Option mutates a Server during construction. Used for wiring optional
@@ -65,6 +73,16 @@ func WithProjects(p resolvers.ProjectsLister) Option {
 // WithGit wires a git provider into the resolver.
 func WithGit(g *gitprovider.Provider) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithGit(g) }
+}
+
+// WithPS attaches a ps provider to the server's resolver root. The
+// server takes responsibility for the provider's lifecycle: Run()
+// calls Start() before opening the listener.
+func WithPS(p *ps.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.psProv = p
+		r.WithPS(p)
+	}
 }
 
 // New constructs a Server bound to addr. The host provider is constructed
@@ -135,6 +153,11 @@ func (s *Server) Run(ctx context.Context) error {
 		// Identity is load-bearing — fail fast so the operator sees it
 		// rather than getting half-populated GraphQL responses.
 		return fmt.Errorf("start host provider: %w", err)
+	}
+	if s.psProv != nil {
+		if err := s.psProv.Start(ctx); err != nil {
+			return fmt.Errorf("ps provider start: %w", err)
+		}
 	}
 
 	errCh := make(chan error, 1)

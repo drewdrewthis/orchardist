@@ -11,6 +11,11 @@ type Node interface {
 	GetID() string
 }
 
+type ClaudeInstance struct {
+	// Stable id; ws-b-claudeinstance formalises (host_id, claudePid).
+	ID string `json:"id"`
+}
+
 type Health struct {
 	// Daemon health status — 'ok' when serving.
 	Status string `json:"status"`
@@ -42,6 +47,8 @@ type Host struct {
 	LastSeenAt string `json:"lastSeenAt"`
 	// Peer hosts this daemon federates with. v1: always empty; Workstream F populates.
 	Peers []*Host `json:"peers"`
+	// Processes visible to this host's `ps` adapter, optionally filtered.
+	Processes []*Process `json:"processes"`
 }
 
 func (Host) IsNode() {}
@@ -52,12 +59,45 @@ func (this Host) GetID() string { return this.ID }
 type Process struct {
 	// Stable id formatted as `<host>:<pid>`.
 	ID string `json:"id"`
+	// Host this process is running on.
+	Host *Host `json:"host"`
+	// Process id.
+	Pid int64 `json:"pid"`
+	// Parent process id (0 for kernel/launchd-rooted processes).
+	Ppid int64 `json:"ppid"`
+	// Command basename (e.g. 'sleep', 'claude'). Cheap, always populated.
+	Command string `json:"command"`
+	// Full argv. Slow path — opt-in (separate `ps -wwax -o pid,args` lookup).
+	Args []string `json:"args,omitempty"`
+	// Current working directory. Slow path — opt-in (lsof on macOS, /proc on Linux).
+	Cwd *string `json:"cwd,omitempty"`
+	// Process start time (RFC3339 if parseable, otherwise the raw `lstart` field).
+	StartedAt string `json:"startedAt"`
+	// CPU percent as reported by ps.
+	CPUPercent float64 `json:"cpuPercent"`
+	// Resident memory in bytes (RSS * 1024 from ps).
+	MemBytes int64 `json:"memBytes"`
+	// Controlling terminal, or null if none.
+	Tty *string `json:"tty,omitempty"`
+	// Worktree this process is running inside, derived from cwd. Null until ws-b-git wires the lookup.
+	Worktree *Worktree `json:"worktree,omitempty"`
+	// Claude instance back-edge — populated when this pid is the foreground claude pid. Null until ws-b-claudeinstance lands.
+	ClaudeInstance *ClaudeInstance `json:"claudeInstance,omitempty"`
 }
 
 func (Process) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Process) GetID() string { return this.ID }
+
+type ProcessFilter struct {
+	// Match processes whose command basename is in this list.
+	CommandIn []string `json:"commandIn,omitempty"`
+	// Match processes whose cwd starts with this prefix. Forces cwd resolution.
+	CwdPrefix *string `json:"cwdPrefix,omitempty"`
+	// Match processes by pid.
+	PidIn []int64 `json:"pidIn,omitempty"`
+}
 
 // A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
 type Project struct {
