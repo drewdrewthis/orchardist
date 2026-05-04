@@ -3,6 +3,9 @@
 package graphql
 
 import (
+	"fmt"
+	"io"
+	"strconv"
 	"time"
 )
 
@@ -127,12 +130,43 @@ type Host struct {
 	Peers []*Host `json:"peers"`
 	// Processes visible to this host's `ps` adapter, optionally filtered.
 	Processes []*Process `json:"processes"`
+	// Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.config/orchard/config.json.
+	HostServices []*HostService `json:"hostServices"`
 }
 
 func (Host) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Host) GetID() string { return this.ID }
+
+// A curated launchd (macOS) or systemd-user (Linux) unit on a host.
+//
+// Per ADR-011 §5.1 the watchlist is config-driven — `services` in
+// `~/.config/orchard/config.json`. Defaults to
+// `["claude-remote", "orchard", "chezmoi"]` if the key is absent.
+// Watched services that don't exist on the host surface as
+// `state: unknown` rather than failing the resolver.
+type HostService struct {
+	// Stable orchard id — "HostService:<host_machineId>:<name>".
+	ID string `json:"id"`
+	// The host this service belongs to.
+	Host *Host `json:"host"`
+	// Service name as written in config (e.g. "claude-remote").
+	Name string `json:"name"`
+	// Lifecycle state of the service on the host.
+	State HostServiceState `json:"state"`
+	// RFC 3339 timestamp the service entered its current state.
+	Since *string `json:"since,omitempty"`
+	// Most recent exit code of the service's last completed run.
+	ExitCode *int64 `json:"exitCode,omitempty"`
+	// Last 20 log lines from the service.
+	LogTail *string `json:"logTail,omitempty"`
+}
+
+func (HostService) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this HostService) GetID() string { return this.ID }
 
 type Process struct {
 	// Stable id formatted as `<host>:<pid>`.
@@ -410,3 +444,54 @@ func (Worktree) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Worktree) GetID() string { return this.ID }
+
+// Lifecycle state of a HostService.
+//
+//   - `active`   — running and healthy.
+//   - `inactive` — stopped cleanly; not currently running.
+//   - `failed`   — exited with non-zero status or crashed.
+//   - `unknown`  — watched in config but not present on this host.
+type HostServiceState string
+
+const (
+	HostServiceStateActive   HostServiceState = "active"
+	HostServiceStateInactive HostServiceState = "inactive"
+	HostServiceStateFailed   HostServiceState = "failed"
+	HostServiceStateUnknown  HostServiceState = "unknown"
+)
+
+var AllHostServiceState = []HostServiceState{
+	HostServiceStateActive,
+	HostServiceStateInactive,
+	HostServiceStateFailed,
+	HostServiceStateUnknown,
+}
+
+func (e HostServiceState) IsValid() bool {
+	switch e {
+	case HostServiceStateActive, HostServiceStateInactive, HostServiceStateFailed, HostServiceStateUnknown:
+		return true
+	}
+	return false
+}
+
+func (e HostServiceState) String() string {
+	return string(e)
+}
+
+func (e *HostServiceState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = HostServiceState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid HostServiceState", str)
+	}
+	return nil
+}
+
+func (e HostServiceState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}

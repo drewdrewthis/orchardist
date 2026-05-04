@@ -11,6 +11,7 @@ import (
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
@@ -22,14 +23,15 @@ type ProjectsLister interface {
 
 // Resolver is the dependency-injection root for GraphQL resolvers.
 type Resolver struct {
-	StartedAt        time.Time
-	HostProvider     *host.Provider
-	ProjectsProvider ProjectsLister
-	Git              *gitprovider.Provider
-	PS               *ps.Provider
-	Tmux             *tmux.Provider
-	ClaudeProjects   *claudeprojects.Provider
-	ClaudeAccount    *claudeaccount.Provider
+	StartedAt           time.Time
+	HostProvider        *host.Provider
+	ProjectsProvider    ProjectsLister
+	Git                 *gitprovider.Provider
+	PS                  *ps.Provider
+	Tmux                *tmux.Provider
+	ClaudeProjects      *claudeprojects.Provider
+	ClaudeAccount       *claudeaccount.Provider
+	HostServiceProvider *hostservice.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -76,5 +78,11 @@ func (r *Resolver) WithClaudeProjects(p *claudeprojects.Provider) *Resolver {
 // WithClaudeAccount wires the claudeaccount provider.
 func (r *Resolver) WithClaudeAccount(p *claudeaccount.Provider) *Resolver {
 	r.ClaudeAccount = p
+	return r
+}
+
+// WithHostService wires the hostservice provider.
+func (r *Resolver) WithHostService(p *hostservice.Provider) *Resolver {
+	r.HostServiceProvider = p
 	return r
 }

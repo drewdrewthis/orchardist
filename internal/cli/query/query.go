@@ -2,7 +2,7 @@
 // dispatches GraphQL queries against the running daemon.
 //
 // Named verbs land per workstream — host, projects, processes, panes,
-// conversations, claude-account. The `--raw <gql>` escape hatch always works.
+// conversations, claude-account, host-services. The `--raw <gql>` escape hatch always works.
 //
 // The cobra alias `q` mirrors the impl guide's "permitted alias for
 // query" so typing ergonomics match the documented CLI shape.
@@ -51,7 +51,7 @@ func Command() *cobra.Command {
 		Aliases: []string{"q"},
 		Short:   "Query the running orchard daemon via GraphQL",
 		Long: "Dispatch GraphQL queries against the running daemon at " + server.DefaultAddr + ".\n\n" +
-			"Use a named verb (e.g. `host`, `projects`, `processes`, `panes`, `conversations`, `claude-account`) for high-level reads,\n" +
+			"Use a named verb (e.g. `host`, `projects`, `processes`, `panes`, `conversations`, `claude-account`, `host-services`) for high-level reads,\n" +
 			"or `--raw '<gql>'` as the escape hatch when you need a custom GraphQL query.",
 		Example: "  orchard query host\n" +
 			"  orchard query projects\n" +
@@ -59,13 +59,14 @@ func Command() *cobra.Command {
 			"  orchard query panes\n" +
 			"  orchard query conversations\n" +
 			"  orchard query claude-account\n" +
+			"  orchard query host-services\n" +
 			"  orchard query --raw 'query { health { status } }'",
 	}
 	var raw string
 	cmd.Flags().StringVar(&raw, "raw", "", "raw GraphQL query string")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		if raw == "" {
-			return fmt.Errorf("provide a verb (e.g. `host`, `projects`, `processes`, `panes`, `conversations`, `claude-account`) or --raw '<graphql>'")
+			return fmt.Errorf("provide a verb (e.g. `host`, `projects`, `processes`, `panes`, `conversations`, `claude-account`, `host-services`) or --raw '<graphql>'")
 		}
 		return runRaw(cmd.Context(), cmd.OutOrStdout(), raw)
 	}
@@ -75,6 +76,7 @@ func Command() *cobra.Command {
 	cmd.AddCommand(panesCmd())
 	cmd.AddCommand(conversationsCmd())
 	cmd.AddCommand(claudeAccountCmd())
+	cmd.AddCommand(hostServicesCmd())
 	return cmd
 }
 

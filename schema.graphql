@@ -166,6 +166,9 @@ type Host implements Node {
 
   "Processes visible to this host's `ps` adapter, optionally filtered."
   processes(filter: ProcessFilter): [Process!]!
+
+  "Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.config/orchard/config.json."
+  hostServices: [HostService!]!
 }
 
 """
@@ -534,4 +537,51 @@ type ClaudeAccount implements Node {
 
   "Claude processes currently running under this account. v1 returns []; populated by Workstream B-claudeinstance."
   instances: [ClaudeInstance!]!
+}
+
+"""
+A curated launchd (macOS) or systemd-user (Linux) unit on a host.
+
+Per ADR-011 §5.1 the watchlist is config-driven — `services` in
+`~/.config/orchard/config.json`. Defaults to
+`["claude-remote", "orchard", "chezmoi"]` if the key is absent.
+Watched services that don't exist on the host surface as
+`state: unknown` rather than failing the resolver.
+"""
+type HostService implements Node {
+  "Stable orchard id — \"HostService:<host_machineId>:<name>\"."
+  id: ID!
+
+  "The host this service belongs to."
+  host: Host!
+
+  "Service name as written in config (e.g. \"claude-remote\")."
+  name: String!
+
+  "Lifecycle state of the service on the host."
+  state: HostServiceState!
+
+  "RFC 3339 timestamp the service entered its current state."
+  since: String
+
+  "Most recent exit code of the service's last completed run."
+  exitCode: Int
+
+  "Last 20 log lines from the service."
+  logTail: String
+}
+
+"""
+Lifecycle state of a HostService.
+
+  - `active`   — running and healthy.
+  - `inactive` — stopped cleanly; not currently running.
+  - `failed`   — exited with non-zero status or crashed.
+  - `unknown`  — watched in config but not present on this host.
+"""
+enum HostServiceState {
+  active
+  inactive
+  failed
+  unknown
 }

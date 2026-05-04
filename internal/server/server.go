@@ -1,5 +1,4 @@
-// Package server hosts the orchard daemon's HTTP surface: the GraphQL
-// endpoint and the /health probe.
+// Package server hosts the orchard daemon's HTTP surface.
 //
 // Workstream A: stub Health resolver, /health, graceful shutdown.
 // Workstream B-host: host Provider constructed and started in Run.
@@ -9,6 +8,7 @@
 // Workstream B-tmux: WithTmux + tmux watcher.
 // Workstream B-claudeprojects: WithClaudeProjects starts on Run().
 // Workstream B-claudeaccount: WithClaudeAccount starts on Run().
+// Workstream B-hostservice: WithHostService starts on Run().
 package server
 
 import (
@@ -30,6 +30,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
@@ -53,6 +54,7 @@ type Server struct {
 	tmuxProv       *tmux.Provider
 	claudeProjects *claudeprojects.Provider
 	claudeAccount  *claudeaccount.Provider
+	hostService    *hostservice.Provider
 }
 
 // Option mutates a Server during construction.
@@ -68,7 +70,7 @@ func WithGit(g *gitprovider.Provider) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithGit(g) }
 }
 
-// WithPS attaches a ps provider; Run() calls Start().
+// WithPS attaches a ps provider.
 func WithPS(p *ps.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.psProv = p
@@ -76,7 +78,7 @@ func WithPS(p *ps.Provider) Option {
 	}
 }
 
-// WithTmux attaches a tmux provider; Run() calls Start()+StartWatcher.
+// WithTmux attaches a tmux provider.
 func WithTmux(p *tmux.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.tmuxProv = p
@@ -84,7 +86,7 @@ func WithTmux(p *tmux.Provider) Option {
 	}
 }
 
-// WithClaudeProjects attaches a claudeprojects provider; Run() calls Start().
+// WithClaudeProjects attaches a claudeprojects provider.
 func WithClaudeProjects(p *claudeprojects.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.claudeProjects = p
@@ -92,11 +94,19 @@ func WithClaudeProjects(p *claudeprojects.Provider) Option {
 	}
 }
 
-// WithClaudeAccount attaches a claudeaccount provider; Run() calls Start().
+// WithClaudeAccount attaches a claudeaccount provider.
 func WithClaudeAccount(p *claudeaccount.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.claudeAccount = p
 		r.WithClaudeAccount(p)
+	}
+}
+
+// WithHostService attaches a hostservice provider.
+func WithHostService(p *hostservice.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.hostService = p
+		r.WithHostService(p)
 	}
 }
 
@@ -177,6 +187,11 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.claudeAccount != nil {
 		if err := s.claudeAccount.Start(ctx); err != nil {
 			return fmt.Errorf("start claudeaccount provider: %w", err)
+		}
+	}
+	if s.hostService != nil {
+		if err := s.hostService.Start(ctx); err != nil {
+			return fmt.Errorf("start hostservice provider: %w", err)
 		}
 	}
 
