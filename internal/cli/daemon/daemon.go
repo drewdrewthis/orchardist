@@ -34,6 +34,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
 // Command returns the `daemon` subcommand group rooted with three leaves.
@@ -120,12 +121,22 @@ func runStart(parentCtx context.Context, addr string) error {
 	// for v1 — the host provider (Workstream G) replaces this with a
 	// real machine id once it lands.
 	psProvider := ps.New(ps.NewAdapter("local"), logger)
+	tmuxProvider := tmux.New(tmux.NewAdapter(localHostID()), logger)
 
 	srv := server.New(addr, logger,
 		server.WithProjects(configProvider),
 		server.WithPS(psProvider),
+		server.WithTmux(tmuxProvider),
 	)
 	return srv.Run(ctx)
+}
+
+// localHostID returns the host id every tmux node carries. v1 stays
+// neutral (`local`); ws-b-host promotes this to the OS-issued machine
+// id, but until that adapter lands on this branch a fixed string is
+// fine — node ids are still per-host stable within one orchard process.
+func localHostID() tmux.HostID {
+	return tmux.HostID("local")
 }
 
 // runStop reads the pidfile and signals the running daemon.

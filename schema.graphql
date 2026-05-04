@@ -4,24 +4,12 @@
 # under internal/server/graphql/. The Rust TUI codegens its client from
 # the same file. Schema-first is intentional; see ADR-011.
 #
-# Workstream A scope: only the `health` field. Real node types come in
-# later workstreams.
-#
-# Workstream B-host: Host node + ResourceLoad. Identity surfaces machine
-# id, hostname, OS, kernel; resourceLoad surfaces live CPU/mem/disk/load
-# averages. peers ships empty until Workstream F federates orchard
-# instances together. Other providers add their own back-edges.
-#
-# Workstream B-config: Project node — projects declared in the orchard
-# config. Read-only; mutations go through `orchard config add-repo`.
-#
-# Workstream B-git: Worktree node + Project.worktrees back-edge. Process
-# is forward-declared so Worktree.processes can reference it; ws-b-ps
-# fills in the rest.
-#
-# Workstream B-ps: full Process node + Host.processes(filter). Edges
-# to Worktree (via cwd) and ClaudeInstance (via foreground claude pid)
-# stay placeholder until their owning workstreams land.
+# Workstream A: only the `health` field.
+# Workstream B-host: Host node + ResourceLoad.
+# Workstream B-config: Project node — projects declared in orchard config.
+# Workstream B-git: Worktree node + Project.worktrees back-edge.
+# Workstream B-ps: full Process node + Host.processes(filter).
+# Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -34,9 +22,6 @@ interface Node {
 }
 
 # Process is an OS-level process surfaced via the `ps` adapter.
-# Identity: (host_id, pid). Lifetime: alive AND visible to ps.
-# Not enumerable from root — reach via `host.processes` etc.
-# See ADR-011 §5.1.
 type Process implements Node {
   "Stable id formatted as `<host>:<pid>`."
   id: ID!
@@ -70,11 +55,6 @@ type Process implements Node {
 
   "Controlling terminal, or null if none."
   tty: String
-
-  # Cross-provider edges — placeholders until their owning workstreams land.
-  # ws-b-git wires `worktree` via cwd → git worktree lookup;
-  # ws-b-claudeinstance (Wave 3) wires `claudeInstance` as the back-edge
-  # from a Claude pid.
 
   "Worktree this process is running inside, derived from cwd. Null until ws-b-git wires the lookup."
   worktree: Worktree
@@ -115,6 +95,15 @@ type Query {
 
   "All projects declared in ~/.config/orchard/config.json. Read-only — projects are added with `orchard config add-repo`."
   projects: [Project!]!
+
+  "The tmux server running on the local host. Null when no tmux daemon is reachable."
+  tmuxServer: TmuxServer
+
+  "Tmux sessions on the local host, optionally filtered. Empty when no tmux daemon is reachable."
+  tmuxSessions(filter: TmuxSessionFilter): [TmuxSession!]!
+
+  "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
+  tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
 }
 
 type Health {
@@ -223,4 +212,230 @@ type Worktree implements Node {
 
   "Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands."
   processes: [Process!]!
+}
+
+# ---------------------------------------------------------------------
+# Tmux node hierarchy — see ADR-011 §5.1.
+#
+# Identity scheme:
+#   TmuxServer:   `TmuxServer:<host>:<socketPath>`
+#   TmuxSession:  `TmuxSession:<host>:<sessionName>`
+#   TmuxWindow:   `TmuxWindow:<host>:<sessionName>:<windowIndex>`
+#   TmuxPane:     `TmuxPane:<host>:<paneId>`            (e.g. `%26`)
+#   TmuxClient:   `TmuxClient:<host>:<clientName>`
+# ---------------------------------------------------------------------
+
+"""
+The tmux daemon process on a host. v1 surfaces the local tmux only;
+multi-server setups (custom -L socket names) are reachable via socketPath.
+"""
+type TmuxServer implements Node {
+  "Stable id `TmuxServer:<host>:<socketPath>`."
+  id: ID!
+
+  "Filesystem path of the tmux socket the daemon is listening on."
+  socketPath: String!
+
+  "Pid of the tmux daemon process. Null if not currently determinable."
+  pid: Int
+
+  "True while the tmux daemon answers a heartbeat command."
+  alive: Boolean!
+
+  "Sessions hosted on this server."
+  sessions: [TmuxSession!]!
+
+  "Clients currently connected to this server."
+  clients: [TmuxClient!]!
+}
+
+"""
+A named tmux session. Stable across detach/reattach. Identity is the
+session name within its server.
+"""
+type TmuxSession implements Node {
+  "Stable id `TmuxSession:<host>:<sessionName>`."
+  id: ID!
+
+  "Server hosting this session."
+  server: TmuxServer!
+
+  "Session name."
+  name: String!
+
+  "RFC3339 timestamp of when the session was created."
+  createdAt: String!
+
+  "True when at least one client is attached to this session."
+  attached: Boolean!
+
+  "True when at least one attached client has had activity within the freshness window (default 5m)."
+  activeAttached: Boolean!
+
+  "Clients currently attached to this session."
+  attachedClients: [TmuxClient!]!
+
+  "Most recent activity timestamp across all panes/windows. RFC3339; null if never observed."
+  lastActivityAt: String
+
+  "Windows in this session."
+  windows: [TmuxWindow!]!
+
+  "The currently-focused window in this session."
+  currentWindow: TmuxWindow
+}
+
+"""
+A window inside a tmux session. Identity is the window index within its
+session.
+"""
+type TmuxWindow implements Node {
+  "Stable id `TmuxWindow:<host>:<sessionName>:<windowIndex>`."
+  id: ID!
+
+  "Session this window belongs to."
+  session: TmuxSession!
+
+  "Window index, zero-based as tmux numbers them when -base-index is 0."
+  index: Int!
+
+  "Window name (tmux's `window_name`)."
+  name: String!
+
+  "True when this window is the currently-focused window in its session."
+  active: Boolean!
+
+  "Panes in this window."
+  panes: [TmuxPane!]!
+
+  "The currently-focused pane in this window."
+  currentPane: TmuxPane
+}
+
+"""
+A pane inside a window — the leaf where commands actually run. Identity
+is the global tmux pane id (e.g. `%26`) within a host.
+
+Content fields (`content`, `contentRange`, `contentFull`) shell out to
+`tmux capture-pane`. They are not poll-cached; queries that ask for them
+pay the per-call cost.
+"""
+type TmuxPane implements Node {
+  "Stable id `TmuxPane:<host>:<paneId>`."
+  id: ID!
+
+  "Window this pane belongs to."
+  window: TmuxWindow!
+
+  "tmux pane id, including the leading `%` (e.g. `%26`)."
+  paneId: String!
+
+  "Pane title (tmux `pane_title`)."
+  title: String!
+
+  "Foreground command basename (tmux `pane_current_command`, e.g. 'claude', 'zsh')."
+  currentCommand: String!
+
+  "Pid of the foreground process. Null when tmux reports no current pid."
+  currentPid: Int
+
+  "Pane width in cells."
+  width: Int!
+
+  "Pane height in cells."
+  height: Int!
+
+  "True when tmux marks the pane as dead (process exited, awaiting reuse/close)."
+  dead: Boolean!
+
+  "Clients with their cursor on this pane."
+  watchingClients: [TmuxClient!]!
+
+  "OS-level Process for the foreground pid. Null until ws-b-ps wires it."
+  process: Process
+
+  "Claude instance running in this pane, if the foreground command is claude. Null until ws-b-claudeinstance wires it."
+  claudeInstance: ClaudeInstance
+
+  "Last N lines of pane output, default 50. Strips ANSI escapes by default."
+  content(lines: Int = 50, stripAnsi: Boolean = true): String!
+
+  "Output between two history line numbers (tmux's -S/-E semantics)."
+  contentRange(startLine: Int!, endLine: Int!, stripAnsi: Boolean = true): String!
+
+  "Full visible-history pane buffer."
+  contentFull(stripAnsi: Boolean = true): String!
+}
+
+"""
+A client (terminal) attached to a tmux server. Multiple clients may share
+the same session/window/pane.
+"""
+type TmuxClient implements Node {
+  "Stable id `TmuxClient:<host>:<clientName>`."
+  id: ID!
+
+  "Server this client connects to."
+  server: TmuxServer!
+
+  "Session this client is attached to."
+  session: TmuxSession!
+
+  "Client tty path (e.g. `/dev/ttys003`)."
+  tty: String!
+
+  "Hostname the client originated from. Empty for local clients."
+  hostname: String!
+
+  "TERM value the client advertises (e.g. `xterm-256color`)."
+  termName: String!
+
+  "RFC3339 attach time."
+  attachedAt: String!
+
+  "RFC3339 last activity time. Null if tmux returned no value."
+  lastActivityAt: String
+
+  "True when the client is in read-only mode."
+  readonly: Boolean!
+
+  "Window the client is currently looking at."
+  currentWindow: TmuxWindow
+
+  "Pane the client is currently looking at."
+  currentPane: TmuxPane
+}
+
+# ---------------------------------------------------------------------
+# Filter inputs — applied at the resolver layer per ADR-011 §6.
+# ---------------------------------------------------------------------
+
+"Filter for `Query.tmuxSessions`. AND-combined when multiple are set."
+input TmuxSessionFilter {
+  "Session names to include."
+  nameIn: [String!]
+
+  "Only include sessions with at least one attached client."
+  attachedOnly: Boolean
+
+  "Only include sessions with active-attached clients within the freshness window."
+  activeAttachedOnly: Boolean
+}
+
+"Filter for `Query.tmuxPanes`. AND-combined when multiple are set."
+input TmuxPaneFilter {
+  "Pane ids (e.g. `%26`) to include."
+  paneIdIn: [String!]
+
+  "Only include panes whose `currentCommand` is in this list."
+  currentCommandIn: [String!]
+
+  "Only include panes in these session names."
+  sessionIn: [String!]
+
+  "Only include panes whose `pane_title` matches the substring (case-sensitive)."
+  titleContains: String
+
+  "Only include dead (or non-dead) panes."
+  dead: Boolean
 }

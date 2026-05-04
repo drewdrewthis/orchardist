@@ -12,6 +12,7 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
 // ProjectsLister is the narrow read-side contract the project resolver
@@ -36,12 +37,10 @@ type Resolver struct {
 	ProjectsProvider ProjectsLister
 	Git              *gitprovider.Provider
 	PS               *ps.Provider
+	Tmux             *tmux.Provider
 }
 
-// New constructs a Resolver with the daemon's start time captured. The
-// caller (the daemon entry point) calls this once at boot. Optional
-// dependencies (the providers) are wired with the With* setters below
-// so callers can swap implementations in tests.
+// New constructs a Resolver with the daemon's start time captured.
 func New(startedAt time.Time) *Resolver {
 	return &Resolver{StartedAt: startedAt}
 }
@@ -58,16 +57,20 @@ func (r *Resolver) WithProjects(p ProjectsLister) *Resolver {
 	return r
 }
 
-// WithGit wires the git provider that backs Project.worktrees and
-// Worktree.* resolvers.
+// WithGit wires the git provider that backs Project.worktrees and Worktree.*.
 func (r *Resolver) WithGit(g *gitprovider.Provider) *Resolver {
 	r.Git = g
 	return r
 }
 
-// WithPS wires the ps provider that backs Host.processes and Process
-// node resolution.
+// WithPS wires the ps provider that backs Host.processes and Process resolution.
 func (r *Resolver) WithPS(p *ps.Provider) *Resolver {
 	r.PS = p
+	return r
+}
+
+// WithTmux wires the tmux provider that backs TmuxServer/Session/Window/Pane/Client.
+func (r *Resolver) WithTmux(p *tmux.Provider) *Resolver {
+	r.Tmux = p
 	return r
 }

@@ -2,28 +2,13 @@
 // endpoint and the /health probe. It is the deployment shell that runs
 // the gqlgen-generated executable schema.
 //
-// Workstream A scope: GraphQL with the stub Health resolver, a /health
-// JSON endpoint for cheap liveness checks, graceful shutdown on context
-// cancellation. Subscriptions are not wired yet — Workstream C lights
-// them up alongside the rest of the schema.
-//
-// Workstream B-host: the host Provider is constructed here and started
-// in Run, so the resolver root has it ready before any GraphQL request
-// arrives. Subsequent provider workstreams hang their constructors off
-// New the same way.
-//
-// Workstream B-config: providers introduced by later workstreams are
-// wired through the Option pattern (WithFoo(p)), so New keeps a tight
-// signature as the provider set grows.
-//
-// Workstream B-git: WithGit wires the git provider that backs
-// Project.worktrees and Worktree.* resolvers.
-//
-// Workstream B-ps: WithPS attaches a ps provider so resolvers can serve
-// `host.processes` and the Process node fields. The server takes
-// responsibility for the provider's lifecycle: Run() calls Start()
-// before opening the listener and (implicitly) tears it down by
-// cancelling its context on shutdown.
+// Workstream A: GraphQL with the stub Health resolver, /health, graceful shutdown.
+// Workstream B-host: host Provider constructed and started in Run.
+// Workstream B-config: Option pattern (WithFoo) wires optional providers.
+// Workstream B-git: WithGit wires the git provider.
+// Workstream B-ps: WithPS attaches a ps provider; Run() starts it.
+// Workstream B-tmux: WithTmux attaches a tmux provider; Run() starts it
+// + the fsnotify-backed watcher.
 package server
 
 import (
@@ -42,15 +27,14 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
 
-// DefaultAddr is where the daemon listens. Hard-coded for v1; promote to
-// config if multi-binding becomes a real need.
+// DefaultAddr is where the daemon listens.
 const DefaultAddr = "localhost:7777"
 
 // Server wraps the http.Server plus the resolver root and provider set.
-// One instance per daemon process.
 type Server struct {
 	addr      string
 	startedAt time.Time
@@ -59,10 +43,10 @@ type Server struct {
 	host      *host.Provider
 	resolver  *resolvers.Resolver
 	psProv    *ps.Provider
+	tmuxProv  *tmux.Provider
 }
 
-// Option mutates a Server during construction. Used for wiring optional
-// providers without bloating the New signature.
+// Option mutates a Server during construction.
 type Option func(*Server, *resolvers.Resolver)
 
 // WithProjects wires a projects provider into the resolver.
@@ -75,9 +59,7 @@ func WithGit(g *gitprovider.Provider) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithGit(g) }
 }
 
-// WithPS attaches a ps provider to the server's resolver root. The
-// server takes responsibility for the provider's lifecycle: Run()
-// calls Start() before opening the listener.
+// WithPS attaches a ps provider; Run() calls Start() before the listener opens.
 func WithPS(p *ps.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.psProv = p
@@ -85,10 +67,15 @@ func WithPS(p *ps.Provider) Option {
 	}
 }
 
-// New constructs a Server bound to addr. The host provider is constructed
-// here but not started — Run owns lifecycle so the poll loops are tied
-// to the same ctx as the HTTP listener. Optional providers are wired
-// via the With* options.
+// WithTmux attaches a tmux provider; Run() calls Start()+StartWatcher.
+func WithTmux(p *tmux.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.tmuxProv = p
+		r.WithTmux(p)
+	}
+}
+
+// New constructs a Server bound to addr.
 func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	if addr == "" {
 		addr = DefaultAddr
@@ -125,38 +112,37 @@ func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	return srv
 }
 
-// Addr returns the configured listen address. Useful for tests using
-// httptest or for callers that need to print the URL.
+// Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.addr }
 
-// HTTPHandler returns the underlying HTTP mux for tests that wrap the
-// daemon in httptest.Server without binding a real port.
+// HTTPHandler returns the underlying HTTP mux for tests.
 func (s *Server) HTTPHandler() http.Handler { return s.httpSrv.Handler }
 
-// Resolver returns the resolver root the server was built with. Tests
-// that need to inject providers post-construction can use this.
+// Resolver returns the resolver root the server was built with.
 func (s *Server) Resolver() *resolvers.Resolver { return s.resolver }
 
-// GraphQLHandler returns a fresh handler bound to the server's
-// resolver. Useful for in-process tests that drive the schema through
-// httptest.Server without standing up the full HTTP listener.
+// GraphQLHandler returns a fresh handler bound to the server's resolver.
 func (s *Server) GraphQLHandler() http.Handler {
 	return graphqlHandlerFor(s.resolver)
 }
 
 // Run starts providers, the HTTP server, and blocks until ctx is
 // cancelled, then drains in-flight requests with a 5-second deadline.
-// Returns the underlying ListenAndServe error unless it is the expected
-// http.ErrServerClosed.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.host.Start(ctx); err != nil {
-		// Identity is load-bearing — fail fast so the operator sees it
-		// rather than getting half-populated GraphQL responses.
 		return fmt.Errorf("start host provider: %w", err)
 	}
 	if s.psProv != nil {
 		if err := s.psProv.Start(ctx); err != nil {
 			return fmt.Errorf("ps provider start: %w", err)
+		}
+	}
+	if s.tmuxProv != nil {
+		if err := s.tmuxProv.Start(ctx); err != nil {
+			return fmt.Errorf("tmux provider start: %w", err)
+		}
+		if err := tmux.StartWatcher(ctx, s.tmuxProv, s.logger); err != nil {
+			s.logger.Warn("tmux watcher start failed; continuing poll-only", "err", err)
 		}
 	}
 
@@ -183,9 +169,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// healthHandler reflects the server's uptime as JSON. Mirrors the
-// GraphQL `health` field so callers can pick the cheaper transport for
-// liveness probes.
+// healthHandler reflects the server's uptime as JSON.
 func healthHandler(startedAt time.Time) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uptime := int64(time.Since(startedAt).Round(time.Second).Seconds())
@@ -197,11 +181,7 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 	}
 }
 
-// graphqlHandlerFor wires the gqlgen executable schema with an
-// already-constructed Resolver root, so callers can inject providers
-// before serving any requests. POST + GET (for query strings) are both
-// accepted; multipart and websocket transports stay deferred to
-// Workstream C.
+// graphqlHandlerFor wires the gqlgen executable schema with an already-constructed Resolver root.
 func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	cfg := gql.Config{Resolvers: res}
 	srv := handler.New(gql.NewExecutableSchema(cfg))

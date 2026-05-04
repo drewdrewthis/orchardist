@@ -136,6 +136,182 @@ type ResourceLoad struct {
 	LoadAvg15m float64 `json:"loadAvg15m"`
 }
 
+// A client (terminal) attached to a tmux server. Multiple clients may share
+// the same session/window/pane.
+type TmuxClient struct {
+	// Stable id `TmuxClient:<host>:<clientName>`.
+	ID string `json:"id"`
+	// Server this client connects to.
+	Server *TmuxServer `json:"server"`
+	// Session this client is attached to.
+	Session *TmuxSession `json:"session"`
+	// Client tty path (e.g. `/dev/ttys003`).
+	Tty string `json:"tty"`
+	// Hostname the client originated from. Empty for local clients.
+	Hostname string `json:"hostname"`
+	// TERM value the client advertises (e.g. `xterm-256color`).
+	TermName string `json:"termName"`
+	// RFC3339 attach time.
+	AttachedAt string `json:"attachedAt"`
+	// RFC3339 last activity time. Null if tmux returned no value.
+	LastActivityAt *string `json:"lastActivityAt,omitempty"`
+	// True when the client is in read-only mode.
+	Readonly bool `json:"readonly"`
+	// Window the client is currently looking at.
+	CurrentWindow *TmuxWindow `json:"currentWindow,omitempty"`
+	// Pane the client is currently looking at.
+	CurrentPane *TmuxPane `json:"currentPane,omitempty"`
+}
+
+func (TmuxClient) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this TmuxClient) GetID() string { return this.ID }
+
+// A pane inside a window — the leaf where commands actually run. Identity
+// is the global tmux pane id (e.g. `%26`) within a host.
+//
+// Content fields (`content`, `contentRange`, `contentFull`) shell out to
+// `tmux capture-pane`. They are not poll-cached; queries that ask for them
+// pay the per-call cost.
+type TmuxPane struct {
+	// Stable id `TmuxPane:<host>:<paneId>`.
+	ID string `json:"id"`
+	// Window this pane belongs to.
+	Window *TmuxWindow `json:"window"`
+	// tmux pane id, including the leading `%` (e.g. `%26`).
+	PaneID string `json:"paneId"`
+	// Pane title (tmux `pane_title`).
+	Title string `json:"title"`
+	// Foreground command basename (tmux `pane_current_command`, e.g. 'claude', 'zsh').
+	CurrentCommand string `json:"currentCommand"`
+	// Pid of the foreground process. Null when tmux reports no current pid.
+	CurrentPid *int64 `json:"currentPid,omitempty"`
+	// Pane width in cells.
+	Width int64 `json:"width"`
+	// Pane height in cells.
+	Height int64 `json:"height"`
+	// True when tmux marks the pane as dead (process exited, awaiting reuse/close).
+	Dead bool `json:"dead"`
+	// Clients with their cursor on this pane.
+	WatchingClients []*TmuxClient `json:"watchingClients"`
+	// OS-level Process for the foreground pid. Null until ws-b-ps wires it.
+	Process *Process `json:"process,omitempty"`
+	// Claude instance running in this pane, if the foreground command is claude. Null until ws-b-claudeinstance wires it.
+	ClaudeInstance *ClaudeInstance `json:"claudeInstance,omitempty"`
+	// Last N lines of pane output, default 50. Strips ANSI escapes by default.
+	Content string `json:"content"`
+	// Output between two history line numbers (tmux's -S/-E semantics).
+	ContentRange string `json:"contentRange"`
+	// Full visible-history pane buffer.
+	ContentFull string `json:"contentFull"`
+}
+
+func (TmuxPane) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this TmuxPane) GetID() string { return this.ID }
+
+// Filter for `Query.tmuxPanes`. AND-combined when multiple are set.
+type TmuxPaneFilter struct {
+	// Pane ids (e.g. `%26`) to include.
+	PaneIDIn []string `json:"paneIdIn,omitempty"`
+	// Only include panes whose `currentCommand` is in this list.
+	CurrentCommandIn []string `json:"currentCommandIn,omitempty"`
+	// Only include panes in these session names.
+	SessionIn []string `json:"sessionIn,omitempty"`
+	// Only include panes whose `pane_title` matches the substring (case-sensitive).
+	TitleContains *string `json:"titleContains,omitempty"`
+	// Only include dead (or non-dead) panes.
+	Dead *bool `json:"dead,omitempty"`
+}
+
+// The tmux daemon process on a host. v1 surfaces the local tmux only;
+// multi-server setups (custom -L socket names) are reachable via socketPath.
+type TmuxServer struct {
+	// Stable id `TmuxServer:<host>:<socketPath>`.
+	ID string `json:"id"`
+	// Filesystem path of the tmux socket the daemon is listening on.
+	SocketPath string `json:"socketPath"`
+	// Pid of the tmux daemon process. Null if not currently determinable.
+	Pid *int64 `json:"pid,omitempty"`
+	// True while the tmux daemon answers a heartbeat command.
+	Alive bool `json:"alive"`
+	// Sessions hosted on this server.
+	Sessions []*TmuxSession `json:"sessions"`
+	// Clients currently connected to this server.
+	Clients []*TmuxClient `json:"clients"`
+}
+
+func (TmuxServer) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this TmuxServer) GetID() string { return this.ID }
+
+// A named tmux session. Stable across detach/reattach. Identity is the
+// session name within its server.
+type TmuxSession struct {
+	// Stable id `TmuxSession:<host>:<sessionName>`.
+	ID string `json:"id"`
+	// Server hosting this session.
+	Server *TmuxServer `json:"server"`
+	// Session name.
+	Name string `json:"name"`
+	// RFC3339 timestamp of when the session was created.
+	CreatedAt string `json:"createdAt"`
+	// True when at least one client is attached to this session.
+	Attached bool `json:"attached"`
+	// True when at least one attached client has had activity within the freshness window (default 5m).
+	ActiveAttached bool `json:"activeAttached"`
+	// Clients currently attached to this session.
+	AttachedClients []*TmuxClient `json:"attachedClients"`
+	// Most recent activity timestamp across all panes/windows. RFC3339; null if never observed.
+	LastActivityAt *string `json:"lastActivityAt,omitempty"`
+	// Windows in this session.
+	Windows []*TmuxWindow `json:"windows"`
+	// The currently-focused window in this session.
+	CurrentWindow *TmuxWindow `json:"currentWindow,omitempty"`
+}
+
+func (TmuxSession) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this TmuxSession) GetID() string { return this.ID }
+
+// Filter for `Query.tmuxSessions`. AND-combined when multiple are set.
+type TmuxSessionFilter struct {
+	// Session names to include.
+	NameIn []string `json:"nameIn,omitempty"`
+	// Only include sessions with at least one attached client.
+	AttachedOnly *bool `json:"attachedOnly,omitempty"`
+	// Only include sessions with active-attached clients within the freshness window.
+	ActiveAttachedOnly *bool `json:"activeAttachedOnly,omitempty"`
+}
+
+// A window inside a tmux session. Identity is the window index within its
+// session.
+type TmuxWindow struct {
+	// Stable id `TmuxWindow:<host>:<sessionName>:<windowIndex>`.
+	ID string `json:"id"`
+	// Session this window belongs to.
+	Session *TmuxSession `json:"session"`
+	// Window index, zero-based as tmux numbers them when -base-index is 0.
+	Index int64 `json:"index"`
+	// Window name (tmux's `window_name`).
+	Name string `json:"name"`
+	// True when this window is the currently-focused window in its session.
+	Active bool `json:"active"`
+	// Panes in this window.
+	Panes []*TmuxPane `json:"panes"`
+	// The currently-focused pane in this window.
+	CurrentPane *TmuxPane `json:"currentPane,omitempty"`
+}
+
+func (TmuxWindow) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this TmuxWindow) GetID() string { return this.ID }
+
 // A git worktree — either the project's main checkout or one created with `git worktree add`. See ADR-011 §5.1.
 type Worktree struct {
 	// Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`.
