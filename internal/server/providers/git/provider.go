@@ -166,7 +166,7 @@ func (p *Provider) refreshKey(ctx context.Context, id WorktreeID) {
 		value: v,
 		freshness: adapter.Freshness{
 			LastFetchedAt: time.Now(),
-			Source:        adapter.FreshnessWatcherPush,
+			Source:        adapter.SourceWatcherPush,
 		},
 	}
 	p.mu.Unlock()
@@ -195,7 +195,7 @@ func (p *Provider) refreshProject(ctx context.Context, proj Project) error {
 		}
 		p.store[id] = storeEntry{
 			value:     v,
-			freshness: adapter.Freshness{LastFetchedAt: now, Source: adapter.FreshnessPoll},
+			freshness: adapter.Freshness{LastFetchedAt: now, Source: adapter.SourcePoll},
 		}
 	}
 	return nil
@@ -214,7 +214,7 @@ func (p *Provider) Get(ctx context.Context, key WorktreeID) (Worktree, adapter.F
 	if err != nil {
 		return Worktree{}, adapter.Freshness{}, err
 	}
-	fr := adapter.Freshness{LastFetchedAt: time.Now(), Source: adapter.FreshnessPoll}
+	fr := adapter.Freshness{LastFetchedAt: time.Now(), Source: adapter.SourcePoll}
 	p.mu.Lock()
 	p.store[key] = storeEntry{value: v, freshness: fr}
 	p.mu.Unlock()

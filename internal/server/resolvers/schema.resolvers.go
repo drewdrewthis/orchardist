@@ -11,11 +11,26 @@ import (
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 )
 
-// Worktrees is the resolver for the worktrees field.
+// Worktrees is the resolver for the worktrees field. Lists the git
+// worktrees backing this project — the main checkout plus everything
+// under `.git/worktrees/`. Returns an empty list when the git provider
+// has no records yet for this project (e.g. fresh boot before scan).
 func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) ([]*graphql1.Worktree, error) {
-	panic(fmt.Errorf("not implemented: Worktrees - worktrees"))
+	if r.Git == nil {
+		return nil, fmt.Errorf("git provider not configured")
+	}
+	worktrees, err := r.Git.ListByProject(ctx, obj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list worktrees for project %q: %w", obj.ID, err)
+	}
+	out := make([]*graphql1.Worktree, 0, len(worktrees))
+	for _, w := range worktrees {
+		out = append(out, toGraphQLWorktree(w))
+	}
+	return out, nil
 }
 
 // Health is the resolver for the health field.
@@ -72,8 +87,12 @@ func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, erro
 }
 
 // Processes is the resolver for the processes field.
-func (r *worktreeResolver) Processes(ctx context.Context, obj *graphql1.Worktree) ([]*graphql1.Process, error) {
-	panic(fmt.Errorf("not implemented: Processes - processes"))
+//
+// Placeholder until Workstream B-ps lands the ps provider. Returning
+// an empty slice satisfies the non-null `[Process!]!` schema contract
+// and keeps the rest of the graph queryable.
+func (r *worktreeResolver) Processes(_ context.Context, _ *graphql1.Worktree) ([]*graphql1.Process, error) {
+	return []*graphql1.Process{}, nil
 }
 
 // Project returns graphql1.ProjectResolver implementation.
@@ -88,3 +107,16 @@ func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolv
 type projectResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type worktreeResolver struct{ *Resolver }
+
+// toGraphQLWorktree projects a git provider Worktree into the GraphQL
+// model. Kept as a free function so the projection logic is testable
+// without a full resolver harness.
+func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
+	return &graphql1.Worktree{
+		ID:     string(w.ID),
+		Path:   w.Path,
+		Branch: w.Branch,
+		Head:   w.Head,
+		Bare:   w.Bare,
+	}
+}
