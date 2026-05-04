@@ -87,6 +87,7 @@ type ComplexityRoot struct {
 
 	Host struct {
 		Address      func(childComplexity int) int
+		HostServices func(childComplexity int) int
 		Hostname     func(childComplexity int) int
 		ID           func(childComplexity int) int
 		Kernel       func(childComplexity int) int
@@ -97,6 +98,16 @@ type ComplexityRoot struct {
 		Processes    func(childComplexity int, filter *ProcessFilter) int
 		Reachable    func(childComplexity int) int
 		ResourceLoad func(childComplexity int) int
+	}
+
+	HostService struct {
+		ExitCode func(childComplexity int) int
+		Host     func(childComplexity int) int
+		ID       func(childComplexity int) int
+		LogTail  func(childComplexity int) int
+		Name     func(childComplexity int) int
+		Since    func(childComplexity int) int
+		State    func(childComplexity int) int
 	}
 
 	Process struct {
@@ -461,6 +472,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Host.Address(childComplexity), true
 
+	case "Host.hostServices":
+		if e.complexity.Host.HostServices == nil {
+			break
+		}
+
+		return e.complexity.Host.HostServices(childComplexity), true
+
 	case "Host.hostname":
 		if e.complexity.Host.Hostname == nil {
 			break
@@ -535,6 +553,55 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Host.ResourceLoad(childComplexity), true
+
+	case "HostService.exitCode":
+		if e.complexity.HostService.ExitCode == nil {
+			break
+		}
+
+		return e.complexity.HostService.ExitCode(childComplexity), true
+
+	case "HostService.host":
+		if e.complexity.HostService.Host == nil {
+			break
+		}
+
+		return e.complexity.HostService.Host(childComplexity), true
+
+	case "HostService.id":
+		if e.complexity.HostService.ID == nil {
+			break
+		}
+
+		return e.complexity.HostService.ID(childComplexity), true
+
+	case "HostService.logTail":
+		if e.complexity.HostService.LogTail == nil {
+			break
+		}
+
+		return e.complexity.HostService.LogTail(childComplexity), true
+
+	case "HostService.name":
+		if e.complexity.HostService.Name == nil {
+			break
+		}
+
+		return e.complexity.HostService.Name(childComplexity), true
+
+	case "HostService.since":
+		if e.complexity.HostService.Since == nil {
+			break
+		}
+
+		return e.complexity.HostService.Since(childComplexity), true
+
+	case "HostService.state":
+		if e.complexity.HostService.State == nil {
+			break
+		}
+
+		return e.complexity.HostService.State(childComplexity), true
 
 	case "Process.args":
 		if e.complexity.Process.Args == nil {
@@ -1443,6 +1510,9 @@ type Host implements Node {
 
   "Processes visible to this host's ` + "`" + `ps` + "`" + ` adapter, optionally filtered."
   processes(filter: ProcessFilter): [Process!]!
+
+  "Curated launchd / systemd watchlist for this host, drawn from ` + "`" + `services` + "`" + ` in ~/.config/orchard/config.json."
+  hostServices: [HostService!]!
 }
 
 """
@@ -1811,6 +1881,53 @@ type ClaudeAccount implements Node {
 
   "Claude processes currently running under this account. v1 returns []; populated by Workstream B-claudeinstance."
   instances: [ClaudeInstance!]!
+}
+
+"""
+A curated launchd (macOS) or systemd-user (Linux) unit on a host.
+
+Per ADR-011 §5.1 the watchlist is config-driven — ` + "`" + `services` + "`" + ` in
+` + "`" + `~/.config/orchard/config.json` + "`" + `. Defaults to
+` + "`" + `["claude-remote", "orchard", "chezmoi"]` + "`" + ` if the key is absent.
+Watched services that don't exist on the host surface as
+` + "`" + `state: unknown` + "`" + ` rather than failing the resolver.
+"""
+type HostService implements Node {
+  "Stable orchard id — \"HostService:<host_machineId>:<name>\"."
+  id: ID!
+
+  "The host this service belongs to."
+  host: Host!
+
+  "Service name as written in config (e.g. \"claude-remote\")."
+  name: String!
+
+  "Lifecycle state of the service on the host."
+  state: HostServiceState!
+
+  "RFC 3339 timestamp the service entered its current state."
+  since: String
+
+  "Most recent exit code of the service's last completed run."
+  exitCode: Int
+
+  "Last 20 log lines from the service."
+  logTail: String
+}
+
+"""
+Lifecycle state of a HostService.
+
+  - ` + "`" + `active` + "`" + `   — running and healthy.
+  - ` + "`" + `inactive` + "`" + ` — stopped cleanly; not currently running.
+  - ` + "`" + `failed` + "`" + `   — exited with non-zero status or crashed.
+  - ` + "`" + `unknown` + "`" + `  — watched in config but not present on this host.
+"""
+enum HostServiceState {
+  active
+  inactive
+  failed
+  unknown
 }
 `, BuiltIn: false},
 }
@@ -2321,6 +2438,8 @@ func (ec *executionContext) fieldContext_ClaudeAccount_host(ctx context.Context,
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -3310,6 +3429,8 @@ func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field g
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -3396,6 +3517,391 @@ func (ec *executionContext) fieldContext_Host_processes(ctx context.Context, fie
 	if fc.Args, err = ec.field_Host_processes_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_hostServices(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_hostServices(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HostServices, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*HostService)
+	fc.Result = res
+	return ec.marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_hostServices(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_HostService_id(ctx, field)
+			case "host":
+				return ec.fieldContext_HostService_host(ctx, field)
+			case "name":
+				return ec.fieldContext_HostService_name(ctx, field)
+			case "state":
+				return ec.fieldContext_HostService_state(ctx, field)
+			case "since":
+				return ec.fieldContext_HostService_since(ctx, field)
+			case "exitCode":
+				return ec.fieldContext_HostService_exitCode(ctx, field)
+			case "logTail":
+				return ec.fieldContext_HostService_logTail(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HostService", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_id(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_host(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_host(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Host, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_host(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_name(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_name(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Name, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_name(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_state(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_state(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.State, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(HostServiceState)
+	fc.Result = res
+	return ec.marshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_state(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type HostServiceState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_since(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_since(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Since, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_since(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_exitCode(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_exitCode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ExitCode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int64)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_exitCode(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HostService_logTail(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HostService_logTail(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LogTail, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HostService_logTail(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HostService",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
 	}
 	return fc, nil
 }
@@ -3505,6 +4011,8 @@ func (ec *executionContext) fieldContext_Process_host(ctx context.Context, field
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -4300,6 +4808,8 @@ func (ec *executionContext) fieldContext_Query_host(ctx context.Context, field g
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -4368,6 +4878,8 @@ func (ec *executionContext) fieldContext_Query_hosts(ctx context.Context, field 
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -10039,6 +10551,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._ClaudeAccount(ctx, sel, obj)
+	case HostService:
+		return ec._HostService(ctx, sel, &obj)
+	case *HostService:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._HostService(ctx, sel, obj)
 	default:
 		panic(fmt.Errorf("unexpected type %T", obj))
 	}
@@ -10346,6 +10865,71 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "hostServices":
+			out.Values[i] = ec._Host_hostServices(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var hostServiceImplementors = []string{"HostService", "Node"}
+
+func (ec *executionContext) _HostService(ctx context.Context, sel ast.SelectionSet, obj *HostService) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, hostServiceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("HostService")
+		case "id":
+			out.Values[i] = ec._HostService_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "host":
+			out.Values[i] = ec._HostService_host(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._HostService_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "state":
+			out.Values[i] = ec._HostService_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "since":
+			out.Values[i] = ec._HostService_since(ctx, field, obj)
+		case "exitCode":
+			out.Values[i] = ec._HostService_exitCode(ctx, field, obj)
+		case "logTail":
+			out.Values[i] = ec._HostService_logTail(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -13329,6 +13913,70 @@ func (ec *executionContext) marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑ
 		return graphql.Null
 	}
 	return ec._Host(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx context.Context, sel ast.SelectionSet, v []*HostService) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostService(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostService(ctx context.Context, sel ast.SelectionSet, v *HostService) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._HostService(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, v interface{}) (HostServiceState, error) {
+	var res HostServiceState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, sel ast.SelectionSet, v HostServiceState) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v interface{}) (string, error) {
