@@ -49,13 +49,39 @@ type ComplexityRoot struct {
 		UptimeS func(childComplexity int) int
 	}
 
+	Host struct {
+		Address      func(childComplexity int) int
+		Hostname     func(childComplexity int) int
+		ID           func(childComplexity int) int
+		Kernel       func(childComplexity int) int
+		LastSeenAt   func(childComplexity int) int
+		MachineID    func(childComplexity int) int
+		Os           func(childComplexity int) int
+		Peers        func(childComplexity int) int
+		Reachable    func(childComplexity int) int
+		ResourceLoad func(childComplexity int) int
+	}
+
 	Query struct {
 		Health func(childComplexity int) int
+		Host   func(childComplexity int) int
+		Hosts  func(childComplexity int) int
+	}
+
+	ResourceLoad struct {
+		CPUPercent  func(childComplexity int) int
+		DiskPercent func(childComplexity int) int
+		LoadAvg15m  func(childComplexity int) int
+		LoadAvg1m   func(childComplexity int) int
+		LoadAvg5m   func(childComplexity int) int
+		MemPercent  func(childComplexity int) int
 	}
 }
 
 type QueryResolver interface {
 	Health(ctx context.Context) (*Health, error)
+	Host(ctx context.Context) (*Host, error)
+	Hosts(ctx context.Context) ([]*Host, error)
 }
 
 type executableSchema struct {
@@ -91,12 +117,138 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Health.UptimeS(childComplexity), true
 
+	case "Host.address":
+		if e.complexity.Host.Address == nil {
+			break
+		}
+
+		return e.complexity.Host.Address(childComplexity), true
+
+	case "Host.hostname":
+		if e.complexity.Host.Hostname == nil {
+			break
+		}
+
+		return e.complexity.Host.Hostname(childComplexity), true
+
+	case "Host.id":
+		if e.complexity.Host.ID == nil {
+			break
+		}
+
+		return e.complexity.Host.ID(childComplexity), true
+
+	case "Host.kernel":
+		if e.complexity.Host.Kernel == nil {
+			break
+		}
+
+		return e.complexity.Host.Kernel(childComplexity), true
+
+	case "Host.lastSeenAt":
+		if e.complexity.Host.LastSeenAt == nil {
+			break
+		}
+
+		return e.complexity.Host.LastSeenAt(childComplexity), true
+
+	case "Host.machineId":
+		if e.complexity.Host.MachineID == nil {
+			break
+		}
+
+		return e.complexity.Host.MachineID(childComplexity), true
+
+	case "Host.os":
+		if e.complexity.Host.Os == nil {
+			break
+		}
+
+		return e.complexity.Host.Os(childComplexity), true
+
+	case "Host.peers":
+		if e.complexity.Host.Peers == nil {
+			break
+		}
+
+		return e.complexity.Host.Peers(childComplexity), true
+
+	case "Host.reachable":
+		if e.complexity.Host.Reachable == nil {
+			break
+		}
+
+		return e.complexity.Host.Reachable(childComplexity), true
+
+	case "Host.resourceLoad":
+		if e.complexity.Host.ResourceLoad == nil {
+			break
+		}
+
+		return e.complexity.Host.ResourceLoad(childComplexity), true
+
 	case "Query.health":
 		if e.complexity.Query.Health == nil {
 			break
 		}
 
 		return e.complexity.Query.Health(childComplexity), true
+
+	case "Query.host":
+		if e.complexity.Query.Host == nil {
+			break
+		}
+
+		return e.complexity.Query.Host(childComplexity), true
+
+	case "Query.hosts":
+		if e.complexity.Query.Hosts == nil {
+			break
+		}
+
+		return e.complexity.Query.Hosts(childComplexity), true
+
+	case "ResourceLoad.cpuPercent":
+		if e.complexity.ResourceLoad.CPUPercent == nil {
+			break
+		}
+
+		return e.complexity.ResourceLoad.CPUPercent(childComplexity), true
+
+	case "ResourceLoad.diskPercent":
+		if e.complexity.ResourceLoad.DiskPercent == nil {
+			break
+		}
+
+		return e.complexity.ResourceLoad.DiskPercent(childComplexity), true
+
+	case "ResourceLoad.loadAvg15m":
+		if e.complexity.ResourceLoad.LoadAvg15m == nil {
+			break
+		}
+
+		return e.complexity.ResourceLoad.LoadAvg15m(childComplexity), true
+
+	case "ResourceLoad.loadAvg1m":
+		if e.complexity.ResourceLoad.LoadAvg1m == nil {
+			break
+		}
+
+		return e.complexity.ResourceLoad.LoadAvg1m(childComplexity), true
+
+	case "ResourceLoad.loadAvg5m":
+		if e.complexity.ResourceLoad.LoadAvg5m == nil {
+			break
+		}
+
+		return e.complexity.ResourceLoad.LoadAvg5m(childComplexity), true
+
+	case "ResourceLoad.memPercent":
+		if e.complexity.ResourceLoad.MemPercent == nil {
+			break
+		}
+
+		return e.complexity.ResourceLoad.MemPercent(childComplexity), true
 
 	}
 	return 0, false
@@ -195,10 +347,31 @@ var sources = []*ast.Source{
 #
 # Workstream A scope: only the ` + "`" + `health` + "`" + ` field. Real node types come in
 # later workstreams.
+#
+# Workstream B-host: Host node + ResourceLoad. Identity surfaces machine
+# id, hostname, OS, kernel; resourceLoad surfaces live CPU/mem/disk/load
+# averages. peers ships empty until Workstream F federates orchard
+# instances together. Other providers add their own back-edges.
+
+"""
+A node in the orchard graph. Every node has a globally-unique id so
+clients can fetch it via Query.node(id) regardless of which concrete
+type it is.
+"""
+interface Node {
+  "Globally-unique id (e.g. \"Host:<machineId>\")."
+  id: ID!
+}
 
 type Query {
   "Liveness probe — returns daemon health and uptime."
   health: Health!
+
+  "The local machine running this daemon. Identity is one-shot at boot; resource load refreshes every 5s."
+  host: Host!
+
+  "All hosts known to this daemon. v1: only the local host. Workstream F adds federated peers."
+  hosts: [Host!]!
 }
 
 type Health {
@@ -207,6 +380,67 @@ type Health {
 
   "Uptime in seconds since daemon started."
   uptimeS: Int!
+}
+
+"""
+A machine that orchard reflects. Identity is the OS-issued machine id
+(/etc/machine-id on Linux, IOPlatformUUID on macOS). Resource load
+samples on a 5s TTL.
+"""
+type Host implements Node {
+  "Stable orchard id — \"Host:<machineId>\"."
+  id: ID!
+
+  "OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID."
+  machineId: String!
+
+  "Hostname as reported by the OS at boot."
+  hostname: String!
+
+  "Operating system family — 'darwin', 'linux', etc."
+  os: String!
+
+  "Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable."
+  kernel: String
+
+  "Reachable network address. v1: null for the local host; Workstream F populates for peers."
+  address: String
+
+  "True when the daemon last heard from this host. v1: always true for local host."
+  reachable: Boolean!
+
+  "Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands."
+  resourceLoad: ResourceLoad
+
+  "RFC 3339 timestamp of the last successful read. v1: time of the last load sample for the local host."
+  lastSeenAt: String!
+
+  "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
+  peers: [Host!]!
+}
+
+"""
+A snapshot of a host's resource utilisation. Percentages are 0..100.
+Load averages are the kernel-reported 1/5/15-minute moving averages.
+"""
+type ResourceLoad {
+  "Aggregate CPU usage 0..100."
+  cpuPercent: Float!
+
+  "Used memory as a percentage of total physical memory, 0..100."
+  memPercent: Float!
+
+  "Used disk on the root filesystem as a percentage, 0..100."
+  diskPercent: Float!
+
+  "1-minute load average."
+  loadAvg1m: Float!
+
+  "5-minute load average."
+  loadAvg5m: Float!
+
+  "15-minute load average."
+  loadAvg15m: Float!
 }
 `, BuiltIn: false},
 }
@@ -357,6 +591,473 @@ func (ec *executionContext) fieldContext_Health_uptimeS(ctx context.Context, fie
 	return fc, nil
 }
 
+func (ec *executionContext) _Host_id(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_machineId(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_machineId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.MachineID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_machineId(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_hostname(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_hostname(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Hostname, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_hostname(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_os(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_os(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Os, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_os(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_kernel(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_kernel(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Kernel, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_kernel(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_address(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_address(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Address, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_address(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_reachable(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_reachable(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Reachable, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_reachable(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_resourceLoad(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_resourceLoad(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ResourceLoad, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*ResourceLoad)
+	fc.Result = res
+	return ec.marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_resourceLoad(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "cpuPercent":
+				return ec.fieldContext_ResourceLoad_cpuPercent(ctx, field)
+			case "memPercent":
+				return ec.fieldContext_ResourceLoad_memPercent(ctx, field)
+			case "diskPercent":
+				return ec.fieldContext_ResourceLoad_diskPercent(ctx, field)
+			case "loadAvg1m":
+				return ec.fieldContext_ResourceLoad_loadAvg1m(ctx, field)
+			case "loadAvg5m":
+				return ec.fieldContext_ResourceLoad_loadAvg5m(ctx, field)
+			case "loadAvg15m":
+				return ec.fieldContext_ResourceLoad_loadAvg15m(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ResourceLoad", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_lastSeenAt(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_lastSeenAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastSeenAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_lastSeenAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_peers(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_peers(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Peers, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_health(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_health(ctx, field)
 	if err != nil {
@@ -402,6 +1103,138 @@ func (ec *executionContext) fieldContext_Query_health(ctx context.Context, field
 				return ec.fieldContext_Health_uptimeS(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Health", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_host(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_host(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Host(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_host(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_hosts(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_hosts(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Hosts(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_hosts(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
 	}
 	return fc, nil
@@ -531,6 +1364,270 @@ func (ec *executionContext) fieldContext_Query___schema(ctx context.Context, fie
 				return ec.fieldContext___Schema_directives(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type __Schema", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ResourceLoad_cpuPercent(ctx context.Context, field graphql.CollectedField, obj *ResourceLoad) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ResourceLoad_cpuPercent(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CPUPercent, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ResourceLoad_cpuPercent(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResourceLoad",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ResourceLoad_memPercent(ctx context.Context, field graphql.CollectedField, obj *ResourceLoad) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ResourceLoad_memPercent(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.MemPercent, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ResourceLoad_memPercent(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResourceLoad",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ResourceLoad_diskPercent(ctx context.Context, field graphql.CollectedField, obj *ResourceLoad) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ResourceLoad_diskPercent(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DiskPercent, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ResourceLoad_diskPercent(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResourceLoad",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ResourceLoad_loadAvg1m(ctx context.Context, field graphql.CollectedField, obj *ResourceLoad) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ResourceLoad_loadAvg1m(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LoadAvg1m, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ResourceLoad_loadAvg1m(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResourceLoad",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ResourceLoad_loadAvg5m(ctx context.Context, field graphql.CollectedField, obj *ResourceLoad) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ResourceLoad_loadAvg5m(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LoadAvg5m, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ResourceLoad_loadAvg5m(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResourceLoad",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ResourceLoad_loadAvg15m(ctx context.Context, field graphql.CollectedField, obj *ResourceLoad) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ResourceLoad_loadAvg15m(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LoadAvg15m, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ResourceLoad_loadAvg15m(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResourceLoad",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -2313,6 +3410,22 @@ func (ec *executionContext) fieldContext___Type_specifiedByURL(ctx context.Conte
 
 // region    ************************** interface.gotpl ***************************
 
+func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj Node) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case Host:
+		return ec._Host(ctx, sel, &obj)
+	case *Host:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Host(ctx, sel, obj)
+	default:
+		panic(fmt.Errorf("unexpected type %T", obj))
+	}
+}
+
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
@@ -2335,6 +3448,81 @@ func (ec *executionContext) _Health(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "uptimeS":
 			out.Values[i] = ec._Health_uptimeS(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var hostImplementors = []string{"Host", "Node"}
+
+func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj *Host) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, hostImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Host")
+		case "id":
+			out.Values[i] = ec._Host_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "machineId":
+			out.Values[i] = ec._Host_machineId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hostname":
+			out.Values[i] = ec._Host_hostname(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "os":
+			out.Values[i] = ec._Host_os(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kernel":
+			out.Values[i] = ec._Host_kernel(ctx, field, obj)
+		case "address":
+			out.Values[i] = ec._Host_address(ctx, field, obj)
+		case "reachable":
+			out.Values[i] = ec._Host_reachable(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resourceLoad":
+			out.Values[i] = ec._Host_resourceLoad(ctx, field, obj)
+		case "lastSeenAt":
+			out.Values[i] = ec._Host_lastSeenAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "peers":
+			out.Values[i] = ec._Host_peers(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2402,6 +3590,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "host":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_host(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "hosts":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_hosts(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -2410,6 +3642,70 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___schema(ctx, field)
 			})
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var resourceLoadImplementors = []string{"ResourceLoad"}
+
+func (ec *executionContext) _ResourceLoad(ctx context.Context, sel ast.SelectionSet, obj *ResourceLoad) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, resourceLoadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ResourceLoad")
+		case "cpuPercent":
+			out.Values[i] = ec._ResourceLoad_cpuPercent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "memPercent":
+			out.Values[i] = ec._ResourceLoad_memPercent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "diskPercent":
+			out.Values[i] = ec._ResourceLoad_diskPercent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "loadAvg1m":
+			out.Values[i] = ec._ResourceLoad_loadAvg1m(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "loadAvg5m":
+			out.Values[i] = ec._ResourceLoad_loadAvg5m(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "loadAvg15m":
+			out.Values[i] = ec._ResourceLoad_loadAvg15m(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2774,6 +4070,21 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v interface{}) (float64, error) {
+	res, err := graphql.UnmarshalFloatContext(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.SelectionSet, v float64) graphql.Marshaler {
+	res := graphql.MarshalFloatContext(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return graphql.WrapContextMarshaler(ctx, res)
+}
+
 func (ec *executionContext) marshalNHealth2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHealth(ctx context.Context, sel ast.SelectionSet, v Health) graphql.Marshaler {
 	return ec._Health(ctx, sel, &v)
 }
@@ -2786,6 +4097,79 @@ func (ec *executionContext) marshalNHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋgit�
 		return graphql.Null
 	}
 	return ec._Health(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNHost2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx context.Context, sel ast.SelectionSet, v Host) graphql.Marshaler {
+	return ec._Host(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx context.Context, sel ast.SelectionSet, v []*Host) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx context.Context, sel ast.SelectionSet, v *Host) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Host(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNID2string(ctx context.Context, v interface{}) (string, error) {
+	res, err := graphql.UnmarshalID(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNID2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
+	res := graphql.MarshalID(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
 }
 
 func (ec *executionContext) unmarshalNInt2int64(ctx context.Context, v interface{}) (int64, error) {
@@ -3095,6 +4479,13 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	}
 	res := graphql.MarshalBoolean(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx context.Context, sel ast.SelectionSet, v *ResourceLoad) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ResourceLoad(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v interface{}) (*string, error) {

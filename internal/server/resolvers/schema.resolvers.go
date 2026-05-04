@@ -6,6 +6,7 @@ package resolvers
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
@@ -18,6 +19,16 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 		Status:  "ok",
 		UptimeS: uptime,
 	}, nil
+}
+
+// Host is the resolver for the host field.
+func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
+	panic(fmt.Errorf("not implemented: Host - host"))
+}
+
+// Hosts is the resolver for the hosts field.
+func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
+	panic(fmt.Errorf("not implemented: Hosts - hosts"))
 }
 
 // Query returns graphql1.QueryResolver implementation.
