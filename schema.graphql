@@ -118,6 +118,12 @@ type Query {
 
   "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account `claude auth status` reports for; later workstreams may surface additional accounts."
   claudeAccounts: [ClaudeAccount!]!
+
+  "A single Contract by id. Returns null if the id is unknown."
+  contract(id: ID!): Contract
+
+  "Every Contract the daemon currently knows about, optionally filtered."
+  contracts(filter: ContractFilter): [Contract!]!
 }
 
 type Health {
@@ -584,4 +590,96 @@ enum HostServiceState {
   inactive
   failed
   unknown
+}
+
+"""
+A commitment an agent has made to deliver something. Contracts are
+authored exclusively by the claude-contracts plugin; orchard reads
+them via the contracts provider and never writes.
+"""
+type Contract implements Node {
+  "Stable orchard id — \"Contract:<contract_id>\"."
+  id: ID!
+
+  "The contract id as written by the plugin."
+  contractId: ID!
+
+  "What the owner committed to deliver."
+  statement: String!
+
+  "Owner session id (Claude session UUID) recorded at creation time."
+  ownerSessionId: String!
+
+  "Owner agent name."
+  ownerAgentName: String!
+
+  "Routing target for status updates and question answers."
+  reportsTo: String
+
+  "Parent contract id when filed under a management contract."
+  parentContractId: ID
+
+  "Folded current status."
+  status: ContractStatus!
+
+  "RFC 3339 timestamp the contract was first created."
+  createdAt: String!
+
+  "RFC 3339 timestamp the contract was last touched."
+  updatedAt: String!
+
+  "Acceptance criteria added via `criterion_added` events, in original order."
+  criteria: [String!]!
+
+  "Questions awaiting an answer. Empty when nothing is pending."
+  openQuestions: [ContractQuestion!]!
+
+  "RFC 3339 timestamp of the most recent event affecting this contract."
+  lastEventAt: String!
+}
+
+"""
+Lifecycle states for Contract.
+"""
+enum ContractStatus {
+  OPEN
+  DELIVERED_PENDING_VALIDATION
+  DELIVERED_PENDING_PARENT_VALIDATION
+  PENDING_DREW_APPROVAL
+  AWAITING_CANCEL_ACK
+  WAITING_EXTERNAL
+  SATISFIED
+  CANCELLED
+  JUDGE_REJECTED_TERMINAL
+}
+
+"A blocking question recorded against a Contract."
+type ContractQuestion {
+  "Question id as written by the plugin."
+  questionId: ID!
+
+  "The question text."
+  text: String!
+
+  "Agent that asked the question."
+  askedBy: String!
+
+  "RFC 3339 timestamp the question was asked."
+  askedAt: String!
+
+  "RFC 3339 deadline after which the question times out."
+  deadline: String
+
+  "Whether this question blocks contract close while open."
+  blocksClose: Boolean!
+}
+
+"""
+Filter for `Query.contracts`. All fields are optional.
+"""
+input ContractFilter {
+  statuses: [ContractStatus!]
+  ownerSessionId: String
+  ownerAgentName: String
+  parentContractId: ID
 }

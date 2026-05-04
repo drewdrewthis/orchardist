@@ -245,6 +245,16 @@ func (r *queryResolver) Conversation(ctx context.Context, id string) (*graphql1.
 	return nil, nil
 }
 
+// Contract is the resolver for the contract field. Stub until commit 3 wires the contracts provider.
+func (r *queryResolver) Contract(ctx context.Context, id string) (*graphql1.Contract, error) {
+	return nil, fmt.Errorf("contracts provider not wired")
+}
+
+// Contracts is the resolver for the contracts field. Stub until commit 3.
+func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.ContractFilter) ([]*graphql1.Contract, error) {
+	return nil, fmt.Errorf("contracts provider not wired")
+}
+
 // ClaudeAccounts is the resolver for the claudeAccounts field.
 func (r *queryResolver) ClaudeAccounts(ctx context.Context) ([]*graphql1.ClaudeAccount, error) {
 	if r.ClaudeAccount == nil {

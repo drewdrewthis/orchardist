@@ -60,6 +60,67 @@ type ClaudeInstance struct {
 	ID string `json:"id"`
 }
 
+// A commitment an agent has made to deliver something. Contracts are
+// authored exclusively by the claude-contracts plugin; orchard reads
+// them via the contracts provider and never writes.
+type Contract struct {
+	// Stable orchard id — "Contract:<contract_id>".
+	ID string `json:"id"`
+	// The contract id as written by the plugin.
+	ContractID string `json:"contractId"`
+	// What the owner committed to deliver.
+	Statement string `json:"statement"`
+	// Owner session id (Claude session UUID) recorded at creation time.
+	OwnerSessionID string `json:"ownerSessionId"`
+	// Owner agent name.
+	OwnerAgentName string `json:"ownerAgentName"`
+	// Routing target for status updates and question answers.
+	ReportsTo *string `json:"reportsTo,omitempty"`
+	// Parent contract id when filed under a management contract.
+	ParentContractID *string `json:"parentContractId,omitempty"`
+	// Folded current status.
+	Status ContractStatus `json:"status"`
+	// RFC 3339 timestamp the contract was first created.
+	CreatedAt string `json:"createdAt"`
+	// RFC 3339 timestamp the contract was last touched.
+	UpdatedAt string `json:"updatedAt"`
+	// Acceptance criteria added via `criterion_added` events, in original order.
+	Criteria []string `json:"criteria"`
+	// Questions awaiting an answer. Empty when nothing is pending.
+	OpenQuestions []*ContractQuestion `json:"openQuestions"`
+	// RFC 3339 timestamp of the most recent event affecting this contract.
+	LastEventAt string `json:"lastEventAt"`
+}
+
+func (Contract) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this Contract) GetID() string { return this.ID }
+
+// Filter for `Query.contracts`. All fields are optional.
+type ContractFilter struct {
+	Statuses         []ContractStatus `json:"statuses,omitempty"`
+	OwnerSessionID   *string          `json:"ownerSessionId,omitempty"`
+	OwnerAgentName   *string          `json:"ownerAgentName,omitempty"`
+	ParentContractID *string          `json:"parentContractId,omitempty"`
+}
+
+// A blocking question recorded against a Contract.
+type ContractQuestion struct {
+	// Question id as written by the plugin.
+	QuestionID string `json:"questionId"`
+	// The question text.
+	Text string `json:"text"`
+	// Agent that asked the question.
+	AskedBy string `json:"askedBy"`
+	// RFC 3339 timestamp the question was asked.
+	AskedAt string `json:"askedAt"`
+	// RFC 3339 deadline after which the question times out.
+	Deadline *string `json:"deadline,omitempty"`
+	// Whether this question blocks contract close while open.
+	BlocksClose bool `json:"blocksClose"`
+}
+
 // A Claude Code conversation, backed by the JSONL transcript that the
 // Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
 //
@@ -444,6 +505,62 @@ func (Worktree) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Worktree) GetID() string { return this.ID }
+
+// Lifecycle states for Contract.
+type ContractStatus string
+
+const (
+	ContractStatusOpen                             ContractStatus = "OPEN"
+	ContractStatusDeliveredPendingValidation       ContractStatus = "DELIVERED_PENDING_VALIDATION"
+	ContractStatusDeliveredPendingParentValidation ContractStatus = "DELIVERED_PENDING_PARENT_VALIDATION"
+	ContractStatusPendingDrewApproval              ContractStatus = "PENDING_DREW_APPROVAL"
+	ContractStatusAwaitingCancelAck                ContractStatus = "AWAITING_CANCEL_ACK"
+	ContractStatusWaitingExternal                  ContractStatus = "WAITING_EXTERNAL"
+	ContractStatusSatisfied                        ContractStatus = "SATISFIED"
+	ContractStatusCancelled                        ContractStatus = "CANCELLED"
+	ContractStatusJudgeRejectedTerminal            ContractStatus = "JUDGE_REJECTED_TERMINAL"
+)
+
+var AllContractStatus = []ContractStatus{
+	ContractStatusOpen,
+	ContractStatusDeliveredPendingValidation,
+	ContractStatusDeliveredPendingParentValidation,
+	ContractStatusPendingDrewApproval,
+	ContractStatusAwaitingCancelAck,
+	ContractStatusWaitingExternal,
+	ContractStatusSatisfied,
+	ContractStatusCancelled,
+	ContractStatusJudgeRejectedTerminal,
+}
+
+func (e ContractStatus) IsValid() bool {
+	switch e {
+	case ContractStatusOpen, ContractStatusDeliveredPendingValidation, ContractStatusDeliveredPendingParentValidation, ContractStatusPendingDrewApproval, ContractStatusAwaitingCancelAck, ContractStatusWaitingExternal, ContractStatusSatisfied, ContractStatusCancelled, ContractStatusJudgeRejectedTerminal:
+		return true
+	}
+	return false
+}
+
+func (e ContractStatus) String() string {
+	return string(e)
+}
+
+func (e *ContractStatus) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ContractStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ContractStatus", str)
+	}
+	return nil
+}
+
+func (e ContractStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
 
 // Lifecycle state of a HostService.
 //
