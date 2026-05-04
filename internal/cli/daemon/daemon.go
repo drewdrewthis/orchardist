@@ -35,6 +35,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
@@ -119,30 +120,52 @@ func runStart(parentCtx context.Context, addr string) error {
 	}
 	defer func() { _ = configProvider.Stop() }()
 
-	// Wire the ps provider for the local host. The host id is "local"
-	// for v1 — the host provider (Workstream G) replaces this with a
-	// real machine id once it lands.
 	psProvider := ps.New(ps.NewAdapter("local"), logger)
 	tmuxProvider := tmux.New(tmux.NewAdapter(localHostID()), logger)
 	claudeProjectsRoot := claudeprojectsRoot()
 	claudeProjectsProvider := claudeprojects.New(claudeProjectsRoot, "local", logger)
 
-	srv := server.New(addr, logger,
+	hsvc, hsvcErr := buildHostServiceProvider(ctx)
+	if hsvcErr != nil {
+		fmt.Fprintf(os.Stderr, "orchard: hostservice unavailable: %v\n", hsvcErr)
+	}
+
+	opts := []server.Option{
 		server.WithProjects(configProvider),
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithClaudeAccount(claudeaccount.New("local", logger)),
-	)
+	}
+	if hsvc != nil {
+		opts = append(opts, server.WithHostService(hsvc))
+	}
+
+	srv := server.New(addr, logger, opts...)
 	return srv.Run(ctx)
 }
 
-// localHostID returns the host id every tmux node carries. v1 stays
-// neutral (`local`); ws-b-host promotes this to the OS-issued machine
-// id, but until that adapter lands on this branch a fixed string is
-// fine — node ids are still per-host stable within one orchard process.
+// localHostID returns the host id for tmux nodes. v1 stays neutral.
 func localHostID() tmux.HostID {
 	return tmux.HostID("local")
+}
+
+// buildHostServiceProvider resolves the local machine id, reads the
+// services watchlist from config, and constructs the hostservice provider.
+func buildHostServiceProvider(ctx context.Context) (*hostservice.Provider, error) {
+	hostID, err := hostservice.LocalHostID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read machine identity: %w", err)
+	}
+	cfgPath, err := orchpaths.ConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("resolve config path: %w", err)
+	}
+	services, err := hostservice.LoadServicesFromConfig(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("load services watchlist: %w", err)
+	}
+	return hostservice.New(hostID, services), nil
 }
 
 // runStop reads the pidfile and signals the running daemon.

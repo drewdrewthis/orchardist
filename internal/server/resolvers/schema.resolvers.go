@@ -16,6 +16,7 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
@@ -106,17 +107,26 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 
 // Host is the resolver for the host field.
 func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
+	var h *graphql1.Host
 	if r.HostProvider != nil {
-		h, _, err := r.HostProvider.Get(ctx, r.HostProvider.LocalID())
+		got, _, err := r.HostProvider.Get(ctx, r.HostProvider.LocalID())
 		if err != nil {
 			return nil, fmt.Errorf("host: %w", err)
 		}
-		return h, nil
+		h = got
+	} else if r.PS != nil {
+		h = &graphql1.Host{ID: r.PS.HostID()}
+	} else if r.HostServiceProvider != nil {
+		hostID := r.HostServiceProvider.HostID()
+		h = &graphql1.Host{ID: "Host:" + hostID, MachineID: hostID}
+	} else {
+		return nil, fmt.Errorf("host provider not initialised")
 	}
-	if r.PS != nil {
-		return &graphql1.Host{ID: r.PS.HostID()}, nil
+	if r.HostServiceProvider != nil {
+		machineID := r.HostServiceProvider.HostID()
+		h.HostServices = buildHostServices(ctx, r.HostServiceProvider, machineID)
 	}
-	return nil, fmt.Errorf("host provider not initialised")
+	return h, nil
 }
 
 // Hosts is the resolver for the hosts field.
@@ -739,6 +749,76 @@ func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{
 
 // Project returns graphql1.ProjectResolver implementation.
 func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
+
+// buildHostServices iterates the configured watchlist and lifts each
+// Snapshot into a graphql.HostService. Unknown services keep
+// state=unknown with all optional fields nil. Adapter errors
+// (ErrServiceManagerMissing, parse failures) collapse the field for
+// the affected service into state=unknown so a missing launchctl
+// doesn't blank the whole list.
+//
+// ADR-011 §6 says cross-provider composition lives in the resolver,
+// not the provider. This is the simplest case — single-provider
+// composition over its watchlist.
+func buildHostServices(ctx context.Context, p *hostservice.Provider, hostID string) []*graphql1.HostService {
+	services := p.Services()
+	out := make([]*graphql1.HostService, 0, len(services))
+	for _, name := range services {
+		key := hostservice.MakeID(hostID, name)
+		snap, _, err := p.Get(ctx, key)
+		if err != nil {
+			out = append(out, hostServiceUnknown(hostID, name))
+			_ = errors.Is(err, hostservice.ErrServiceManagerMissing) // documented
+			continue
+		}
+		out = append(out, hostServiceFromSnapshot(snap))
+	}
+	return out
+}
+
+func hostServiceUnknown(hostID, name string) *graphql1.HostService {
+	return &graphql1.HostService{
+		ID:    "HostService:" + hostID + ":" + name,
+		Host:  &graphql1.Host{ID: "Host:" + hostID, MachineID: hostID},
+		Name:  name,
+		State: graphql1.HostServiceStateUnknown,
+	}
+}
+
+func hostServiceFromSnapshot(s hostservice.Snapshot) *graphql1.HostService {
+	hs := &graphql1.HostService{
+		ID:    "HostService:" + s.HostID + ":" + s.Name,
+		Host:  &graphql1.Host{ID: "Host:" + s.HostID, MachineID: s.HostID},
+		Name:  s.Name,
+		State: mapState(s.State),
+	}
+	if s.Since != nil {
+		ts := s.Since.UTC().Format(time.RFC3339Nano)
+		hs.Since = &ts
+	}
+	if s.ExitCode != nil {
+		v := int64(*s.ExitCode)
+		hs.ExitCode = &v
+	}
+	if s.LogTail != nil {
+		tail := *s.LogTail
+		hs.LogTail = &tail
+	}
+	return hs
+}
+
+func mapState(s hostservice.State) graphql1.HostServiceState {
+	switch s {
+	case hostservice.StateActive:
+		return graphql1.HostServiceStateActive
+	case hostservice.StateInactive:
+		return graphql1.HostServiceStateInactive
+	case hostservice.StateFailed:
+		return graphql1.HostServiceStateFailed
+	default:
+		return graphql1.HostServiceStateUnknown
+	}
+}
 
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
