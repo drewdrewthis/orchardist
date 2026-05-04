@@ -6,6 +6,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
@@ -109,4 +110,16 @@ func (r *Resolver) WithGH(p *gh.Provider) *Resolver {
 func (r *Resolver) WithClaudeInstance(p *claudeinstance.Provider) *Resolver {
 	r.ClaudeInstance = p
 	return r
+}
+
+// LoaderBundle returns the read-side surface the request-scoped
+// dataloaders need. Used as a fallback when no middleware-installed
+// Loaders is on the context (e.g. internal subscription emissions).
+func (r *Resolver) LoaderBundle() *loaders.ProvidersBundle {
+	return &loaders.ProvidersBundle{
+		Host:     r.HostProvider,
+		Git:      r.Git,
+		Ps:       r.PS,
+		Projects: r.ProjectsProvider,
+	}
 }

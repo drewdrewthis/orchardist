@@ -50,7 +50,7 @@ func gqlQuery(t *testing.T, ts *httptest.Server, doc string) []map[string]any {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status %d", resp.StatusCode)
 	}
