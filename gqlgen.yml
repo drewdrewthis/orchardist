@@ -164,3 +164,9 @@ models:
         resolver: true
       currentPane:
         resolver: true
+
+  # Time scalar maps to Go's time.Time so resolvers return native values
+  # and the wire format is RFC 3339Nano (gqlgen's default Time marshaller).
+  Time:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time

@@ -703,6 +703,18 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 	return projectPane(p), nil
 }
 
+// Conversations is the resolver for the conversations field.
+// Stub until commit 2 wires the claudeprojects provider.
+func (r *queryResolver) Conversations(ctx context.Context) ([]*graphql1.Conversation, error) {
+	return nil, fmt.Errorf("claudeprojects provider not wired")
+}
+
+// Conversation is the resolver for the conversation field.
+// Stub until commit 2 wires the claudeprojects provider.
+func (r *queryResolver) Conversation(ctx context.Context, id string) (*graphql1.Conversation, error) {
+	return nil, fmt.Errorf("claudeprojects provider not wired")
+}
+
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 

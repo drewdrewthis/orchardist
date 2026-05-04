@@ -10,6 +10,8 @@
 # Workstream B-git: Worktree node + Project.worktrees back-edge.
 # Workstream B-ps: full Process node + Host.processes(filter).
 # Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
+# Workstream B-claudeprojects: Conversation node + Time scalar; backed by
+# the JSONL files Claude Code writes under ~/.claude/projects/.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -20,6 +22,9 @@ interface Node {
   "Globally-unique id (e.g. \"Host:<machineId>\")."
   id: ID!
 }
+
+"RFC 3339 timestamp string. Mapped to Go's time.Time."
+scalar Time
 
 # Process is an OS-level process surfaced via the `ps` adapter.
 type Process implements Node {
@@ -104,6 +109,12 @@ type Query {
 
   "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
   tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
+
+  "Every Claude Code conversation discovered under the projects root. Latest-first by lastSeenAt."
+  conversations: [Conversation!]!
+
+  "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
+  conversation(id: ID!): Conversation
 }
 
 type Health {
@@ -438,4 +449,45 @@ input TmuxPaneFilter {
 
   "Only include dead (or non-dead) panes."
   dead: Boolean
+}
+
+"""
+A Claude Code conversation, backed by the JSONL transcript that the
+Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
+
+The provider derives every field from the JSONL on disk — there is no
+sidecar metadata. Heavy fields (full transcripts, message bodies)
+deliberately do not surface here; the v1 contract is metadata + a
+single live signal (`open`) and an optional plugin-populated `recap`.
+
+`open` is a heartbeat: true when the JSONL was written within the last
+N seconds (default 60s, see provider.HeartbeatThreshold).
+
+`recap` is reserved for a future conversations plugin to populate; v1
+returns null unconditionally.
+"""
+type Conversation implements Node {
+  "Stable orchard id — \"Conversation:<sessionUuid>\"."
+  id: ID!
+
+  "The session UUID embedded in the JSONL filename — globally unique across Claude Code."
+  sessionUuid: String!
+
+  "Working directory recorded in the JSONL when the session was created. Null when not yet observed."
+  cwd: String
+
+  "RFC 3339 timestamp of the first record in the JSONL."
+  firstSeenAt: Time
+
+  "RFC 3339 timestamp of the last record in the JSONL."
+  lastSeenAt: Time
+
+  "Number of newline-terminated JSON records in the JSONL."
+  messageCount: Int!
+
+  "Heartbeat: true when the JSONL was last written within the heartbeat threshold."
+  open: Boolean!
+
+  "Plugin-populated short summary. Always null in v1."
+  recap: String
 }
