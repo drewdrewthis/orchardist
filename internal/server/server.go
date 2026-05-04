@@ -15,6 +15,9 @@
 // Workstream B-config: providers introduced by later workstreams are
 // wired through the Option pattern (WithFoo(p)), so New keeps a tight
 // signature as the provider set grows.
+//
+// Workstream B-git: WithGit wires the git provider that backs
+// Project.worktrees and Worktree.* resolvers.
 package server
 
 import (
@@ -30,6 +33,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
@@ -46,6 +50,7 @@ type Server struct {
 	logger    *slog.Logger
 	httpSrv   *http.Server
 	host      *host.Provider
+	resolver  *resolvers.Resolver
 }
 
 // Option mutates a Server during construction. Used for wiring optional
@@ -55,6 +60,11 @@ type Option func(*Server, *resolvers.Resolver)
 // WithProjects wires a projects provider into the resolver.
 func WithProjects(p resolvers.ProjectsLister) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithProjects(p) }
+}
+
+// WithGit wires a git provider into the resolver.
+func WithGit(g *gitprovider.Provider) Option {
+	return func(_ *Server, r *resolvers.Resolver) { r.WithGit(g) }
 }
 
 // New constructs a Server bound to addr. The host provider is constructed
@@ -78,6 +88,7 @@ func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 		startedAt: startedAt,
 		logger:    logger,
 		host:      hostProvider,
+		resolver:  res,
 	}
 	for _, opt := range opts {
 		opt(srv, res)
@@ -103,6 +114,17 @@ func (s *Server) Addr() string { return s.addr }
 // HTTPHandler returns the underlying HTTP mux for tests that wrap the
 // daemon in httptest.Server without binding a real port.
 func (s *Server) HTTPHandler() http.Handler { return s.httpSrv.Handler }
+
+// Resolver returns the resolver root the server was built with. Tests
+// that need to inject providers post-construction can use this.
+func (s *Server) Resolver() *resolvers.Resolver { return s.resolver }
+
+// GraphQLHandler returns a fresh handler bound to the server's
+// resolver. Useful for in-process tests that drive the schema through
+// httptest.Server without standing up the full HTTP listener.
+func (s *Server) GraphQLHandler() http.Handler {
+	return graphqlHandlerFor(s.resolver)
+}
 
 // Run starts providers, the HTTP server, and blocks until ctx is
 // cancelled, then drains in-flight requests with a 5-second deadline.

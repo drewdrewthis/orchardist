@@ -5,6 +5,7 @@ import (
 	"time"
 
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 )
 
@@ -28,6 +29,7 @@ type Resolver struct {
 	StartedAt        time.Time
 	HostProvider     *host.Provider
 	ProjectsProvider ProjectsLister
+	Git              *gitprovider.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured. The
@@ -47,5 +49,12 @@ func (r *Resolver) WithHost(h *host.Provider) *Resolver {
 // WithProjects wires the projects-listing dependency.
 func (r *Resolver) WithProjects(p ProjectsLister) *Resolver {
 	r.ProjectsProvider = p
+	return r
+}
+
+// WithGit wires the git provider that backs Project.worktrees and
+// Worktree.* resolvers.
+func (r *Resolver) WithGit(g *gitprovider.Provider) *Resolver {
+	r.Git = g
 	return r
 }

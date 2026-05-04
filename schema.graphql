@@ -14,6 +14,10 @@
 #
 # Workstream B-config: Project node — projects declared in the orchard
 # config. Read-only; mutations go through `orchard config add-repo`.
+#
+# Workstream B-git: Worktree node + Project.worktrees back-edge. Process
+# is forward-declared so Worktree.processes can reference it; ws-b-ps
+# fills in the rest.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -22,6 +26,14 @@ type it is.
 """
 interface Node {
   "Globally-unique id (e.g. \"Host:<machineId>\")."
+  id: ID!
+}
+
+# Process is forward-declared here so Worktree.processes can reference
+# it; the ps provider in ws-b-ps fills in the rest of the type.
+# Until that lands, Worktree.processes resolves to `[]`.
+type Process implements Node {
+  "Stable id formatted as `<host>:<pid>`."
   id: ID!
 }
 
@@ -118,4 +130,28 @@ type Project implements Node {
 
   "Human-readable label. Defaults to the basename of `directory` when not specified in the config."
   name: String!
+
+  "Worktrees discovered for this project — the project's main checkout plus everything under `.git/worktrees/`."
+  worktrees: [Worktree!]!
+}
+
+"A git worktree — either the project's main checkout or one created with `git worktree add`. See ADR-011 §5.1."
+type Worktree implements Node {
+  "Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`."
+  id: ID!
+
+  "Absolute filesystem path to the worktree."
+  path: String!
+
+  "Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees."
+  branch: String!
+
+  "Resolved 40-character SHA the worktree's HEAD points at. Empty string when HEAD cannot be resolved (e.g. an unborn branch)."
+  head: String!
+
+  "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
+  bare: Boolean!
+
+  "Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands."
+  processes: [Process!]!
 }
