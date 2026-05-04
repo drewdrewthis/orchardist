@@ -77,6 +77,7 @@ func Command() *cobra.Command {
 	cmd.AddCommand(conversationsCmd())
 	cmd.AddCommand(claudeAccountCmd())
 	cmd.AddCommand(hostServicesCmd())
+	cmd.AddCommand(contractsCmd())
 	return cmd
 }
 

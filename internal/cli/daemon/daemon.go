@@ -35,6 +35,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
@@ -136,6 +137,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithClaudeAccount(claudeaccount.New("local", logger)),
+		server.WithContracts(contracts.New(logger)),
 	}
 	if hsvc != nil {
 		opts = append(opts, server.WithHostService(hsvc))
