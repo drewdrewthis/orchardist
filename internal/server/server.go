@@ -1,6 +1,5 @@
 // Package server hosts the orchard daemon's HTTP surface: the GraphQL
-// endpoint and the /health probe. It is the deployment shell that runs
-// the gqlgen-generated executable schema.
+// endpoint and the /health probe.
 //
 // Workstream A: GraphQL with the stub Health resolver, /health, graceful shutdown.
 // Workstream B-host: host Provider constructed and started in Run.
@@ -9,6 +8,8 @@
 // Workstream B-ps: WithPS attaches a ps provider; Run() starts it.
 // Workstream B-tmux: WithTmux attaches a tmux provider; Run() starts it
 // + the fsnotify-backed watcher.
+// Workstream B-claudeprojects: WithClaudeProjects attaches the conversation
+// provider; Run() starts it (fsnotify + initial scan).
 package server
 
 import (
@@ -18,12 +19,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
@@ -34,16 +38,20 @@ import (
 // DefaultAddr is where the daemon listens.
 const DefaultAddr = "localhost:7777"
 
+// claudeProjectsRootEnv overrides the Claude transcripts root path.
+const claudeProjectsRootEnv = "CLAUDE_PROJECTS_ROOT"
+
 // Server wraps the http.Server plus the resolver root and provider set.
 type Server struct {
-	addr      string
-	startedAt time.Time
-	logger    *slog.Logger
-	httpSrv   *http.Server
-	host      *host.Provider
-	resolver  *resolvers.Resolver
-	psProv    *ps.Provider
-	tmuxProv  *tmux.Provider
+	addr           string
+	startedAt      time.Time
+	logger         *slog.Logger
+	httpSrv        *http.Server
+	host           *host.Provider
+	resolver       *resolvers.Resolver
+	psProv         *ps.Provider
+	tmuxProv       *tmux.Provider
+	claudeProjects *claudeprojects.Provider
 }
 
 // Option mutates a Server during construction.
@@ -72,6 +80,14 @@ func WithTmux(p *tmux.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.tmuxProv = p
 		r.WithTmux(p)
+	}
+}
+
+// WithClaudeProjects attaches a claudeprojects provider; Run() calls Start().
+func WithClaudeProjects(p *claudeprojects.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.claudeProjects = p
+		r.WithClaudeProjects(p)
 	}
 }
 
@@ -118,7 +134,7 @@ func (s *Server) Addr() string { return s.addr }
 // HTTPHandler returns the underlying HTTP mux for tests.
 func (s *Server) HTTPHandler() http.Handler { return s.httpSrv.Handler }
 
-// Resolver returns the resolver root the server was built with.
+// Resolver returns the resolver root.
 func (s *Server) Resolver() *resolvers.Resolver { return s.resolver }
 
 // GraphQLHandler returns a fresh handler bound to the server's resolver.
@@ -126,8 +142,7 @@ func (s *Server) GraphQLHandler() http.Handler {
 	return graphqlHandlerFor(s.resolver)
 }
 
-// Run starts providers, the HTTP server, and blocks until ctx is
-// cancelled, then drains in-flight requests with a 5-second deadline.
+// Run starts providers, the HTTP server, and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.host.Start(ctx); err != nil {
 		return fmt.Errorf("start host provider: %w", err)
@@ -145,6 +160,11 @@ func (s *Server) Run(ctx context.Context) error {
 			s.logger.Warn("tmux watcher start failed; continuing poll-only", "err", err)
 		}
 	}
+	if s.claudeProjects != nil {
+		if err := s.claudeProjects.Start(ctx); err != nil {
+			return fmt.Errorf("start claudeprojects provider: %w", err)
+		}
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -159,6 +179,9 @@ func (s *Server) Run(ctx context.Context) error {
 		if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
 		}
+		if s.claudeProjects != nil {
+			_ = s.claudeProjects.Stop()
+		}
 		s.logger.Info("orchard daemon stopped")
 		return nil
 	case err := <-errCh:
@@ -167,6 +190,19 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+// claudeProjectsRoot returns the directory the daemon should watch for
+// Claude Code transcripts. Precedence: env var, ~/.claude/projects, fallback.
+func claudeProjectsRoot() string {
+	if v := os.Getenv(claudeProjectsRootEnv); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".claude", "projects")
+	}
+	return filepath.Join(home, ".claude", "projects")
 }
 
 // healthHandler reflects the server's uptime as JSON.
@@ -181,7 +217,7 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 	}
 }
 
-// graphqlHandlerFor wires the gqlgen executable schema with an already-constructed Resolver root.
+// graphqlHandlerFor wires the gqlgen executable schema.
 func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	cfg := gql.Config{Resolvers: res}
 	srv := handler.New(gql.NewExecutableSchema(cfg))

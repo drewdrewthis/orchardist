@@ -8,6 +8,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
@@ -16,21 +17,12 @@ import (
 )
 
 // ProjectsLister is the narrow read-side contract the project resolver
-// depends on. Defined here (consumer-side) so the resolver doesn't reach
-// into the provider package's full surface — accept interfaces, return
-// concretes.
+// depends on.
 type ProjectsLister interface {
 	List(ctx context.Context) ([]configprovider.Project, error)
 }
 
 // Resolver is the dependency-injection root for GraphQL resolvers.
-//
-// gqlgen does NOT regenerate this file, so anything we wire here survives
-// schema iteration. Provider fields are suffixed with `Provider` to
-// avoid colliding with the generated field-resolver method names that
-// embed this struct (e.g. queryResolver.Projects(ctx)). Optional
-// dependencies are wired via With* setters so callers can swap
-// implementations in tests.
 type Resolver struct {
 	StartedAt        time.Time
 	HostProvider     *host.Provider
@@ -38,6 +30,7 @@ type Resolver struct {
 	Git              *gitprovider.Provider
 	PS               *ps.Provider
 	Tmux             *tmux.Provider
+	ClaudeProjects   *claudeprojects.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -57,20 +50,26 @@ func (r *Resolver) WithProjects(p ProjectsLister) *Resolver {
 	return r
 }
 
-// WithGit wires the git provider that backs Project.worktrees and Worktree.*.
+// WithGit wires the git provider.
 func (r *Resolver) WithGit(g *gitprovider.Provider) *Resolver {
 	r.Git = g
 	return r
 }
 
-// WithPS wires the ps provider that backs Host.processes and Process resolution.
+// WithPS wires the ps provider.
 func (r *Resolver) WithPS(p *ps.Provider) *Resolver {
 	r.PS = p
 	return r
 }
 
-// WithTmux wires the tmux provider that backs TmuxServer/Session/Window/Pane/Client.
+// WithTmux wires the tmux provider.
 func (r *Resolver) WithTmux(p *tmux.Provider) *Resolver {
 	r.Tmux = p
+	return r
+}
+
+// WithClaudeProjects wires the claudeprojects provider.
+func (r *Resolver) WithClaudeProjects(p *claudeprojects.Provider) *Resolver {
+	r.ClaudeProjects = p
 	return r
 }

@@ -703,16 +703,51 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 	return projectPane(p), nil
 }
 
-// Conversations is the resolver for the conversations field.
-// Stub until commit 2 wires the claudeprojects provider.
+//
+// Returns every Conversation the provider currently has cached,
+// sorted descending by lastSeenAt (most-recently active first).
 func (r *queryResolver) Conversations(ctx context.Context) ([]*graphql1.Conversation, error) {
-	return nil, fmt.Errorf("claudeprojects provider not wired")
+	if r.ClaudeProjects == nil {
+		return nil, fmt.Errorf("claudeprojects provider not initialised")
+	}
+	rows, err := r.ClaudeProjects.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list conversations: %w", err)
+	}
+	out := make([]*graphql1.Conversation, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, r.ClaudeProjects.ToGraphQL(c))
+	}
+	return out, nil
 }
 
 // Conversation is the resolver for the conversation field.
-// Stub until commit 2 wires the claudeprojects provider.
+//
+// id is the orchard-canonical "Conversation:<sessionUuid>" string.
+// Unknown ids return (nil, nil).
 func (r *queryResolver) Conversation(ctx context.Context, id string) (*graphql1.Conversation, error) {
-	return nil, fmt.Errorf("claudeprojects provider not wired")
+	if r.ClaudeProjects == nil {
+		return nil, fmt.Errorf("claudeprojects provider not initialised")
+	}
+	uuid, ok := strings.CutPrefix(id, "Conversation:")
+	if !ok || uuid == "" {
+		return nil, nil
+	}
+	keys, err := r.ClaudeProjects.Keys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list conversations: %w", err)
+	}
+	for _, k := range keys {
+		if k.SessionUUID != uuid {
+			continue
+		}
+		c, _, err := r.ClaudeProjects.Get(ctx, k)
+		if err != nil {
+			return nil, fmt.Errorf("get conversation %q: %w", uuid, err)
+		}
+		return r.ClaudeProjects.ToGraphQL(c), nil
+	}
+	return nil, nil
 }
 
 // Query returns graphql1.QueryResolver implementation.
