@@ -62,7 +62,7 @@ func Command() *cobra.Command {
 	}
 	var raw string
 	cmd.Flags().StringVar(&raw, "raw", "", "raw GraphQL query string")
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		if raw == "" {
 			return fmt.Errorf("provide a verb (e.g. `host`, `projects`) or --raw '<graphql>'")
 		}
@@ -85,7 +85,7 @@ func projectsCmd() *cobra.Command {
 		Long: "Calls the running daemon's GraphQL `projects` query and prints the\n" +
 			"result as a JSON array. Returns the empty array when no projects are\n" +
 			"configured. Use `orchard config add-repo PATH` to register a new one.",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runProjects(cmd.Context(), cmd.OutOrStdout())
 		},
 	}

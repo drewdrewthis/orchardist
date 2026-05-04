@@ -55,9 +55,9 @@ func TestProvider_FetchAll_NormalisesRows(t *testing.T) {
 	dir := t.TempDir()
 	p, cfgPath := newProviderForTest(t, dir)
 	writeConfig(t, cfgPath, []ProjectRow{
-		{Directory: "/abs/path/to/orchard"},                                 // id+name from directory
-		{Directory: "/abs/foo", Name: "Foo Project"},                        // id from name slug
-		{ID: "explicit", Directory: "/abs/bar", Name: "Custom"},             // all explicit
+		{Directory: "/abs/path/to/orchard"},                     // id+name from directory
+		{Directory: "/abs/foo", Name: "Foo Project"},            // id from name slug
+		{ID: "explicit", Directory: "/abs/bar", Name: "Custom"}, // all explicit
 	})
 	if err := p.Start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)

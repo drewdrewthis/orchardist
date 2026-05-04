@@ -67,14 +67,10 @@ func (r ProjectRow) Normalise() ProjectRow {
 }
 
 // ToProject lifts a ProjectRow into the in-memory Project type after
-// normalisation. The provider calls this on every cache load.
+// normalisation. The provider calls this on every cache load. ProjectRow
+// and Project share the same layout so a struct conversion is sufficient.
 func (r ProjectRow) ToProject() Project {
-	n := r.Normalise()
-	return Project{
-		ID:        n.ID,
-		Directory: n.Directory,
-		Name:      n.Name,
-	}
+	return Project(r.Normalise())
 }
 
 // slugOrHash returns a lowercase slug of name, or the first 12 hex chars

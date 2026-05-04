@@ -40,7 +40,7 @@ func initCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "init",
 		Short: "Write default config and create state directory",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInit(cmd.OutOrStdout(), force)
 		},
 	}
@@ -50,8 +50,8 @@ func initCmd() *cobra.Command {
 
 func addRepoCmd() *cobra.Command {
 	var (
-		name      string
-		id        string
+		name        string
+		id          string
 		allowNonGit bool
 	)
 	c := &cobra.Command{
