@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
@@ -57,6 +58,17 @@ type ComplexityRoot struct {
 		ID func(childComplexity int) int
 	}
 
+	Conversation struct {
+		Cwd          func(childComplexity int) int
+		FirstSeenAt  func(childComplexity int) int
+		ID           func(childComplexity int) int
+		LastSeenAt   func(childComplexity int) int
+		MessageCount func(childComplexity int) int
+		Open         func(childComplexity int) int
+		Recap        func(childComplexity int) int
+		SessionUUID  func(childComplexity int) int
+	}
+
 	Health struct {
 		Status  func(childComplexity int) int
 		UptimeS func(childComplexity int) int
@@ -100,13 +112,15 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Health       func(childComplexity int) int
-		Host         func(childComplexity int) int
-		Hosts        func(childComplexity int) int
-		Projects     func(childComplexity int) int
-		TmuxPanes    func(childComplexity int, filter *TmuxPaneFilter) int
-		TmuxServer   func(childComplexity int) int
-		TmuxSessions func(childComplexity int, filter *TmuxSessionFilter) int
+		Conversation  func(childComplexity int, id string) int
+		Conversations func(childComplexity int) int
+		Health        func(childComplexity int) int
+		Host          func(childComplexity int) int
+		Hosts         func(childComplexity int) int
+		Projects      func(childComplexity int) int
+		TmuxPanes     func(childComplexity int, filter *TmuxPaneFilter) int
+		TmuxServer    func(childComplexity int) int
+		TmuxSessions  func(childComplexity int, filter *TmuxSessionFilter) int
 	}
 
 	ResourceLoad struct {
@@ -215,6 +229,8 @@ type QueryResolver interface {
 	TmuxServer(ctx context.Context) (*TmuxServer, error)
 	TmuxSessions(ctx context.Context, filter *TmuxSessionFilter) ([]*TmuxSession, error)
 	TmuxPanes(ctx context.Context, filter *TmuxPaneFilter) ([]*TmuxPane, error)
+	Conversations(ctx context.Context) ([]*Conversation, error)
+	Conversation(ctx context.Context, id string) (*Conversation, error)
 }
 type TmuxClientResolver interface {
 	Server(ctx context.Context, obj *TmuxClient) (*TmuxServer, error)
@@ -298,6 +314,62 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ClaudeInstance.ID(childComplexity), true
+
+	case "Conversation.cwd":
+		if e.complexity.Conversation.Cwd == nil {
+			break
+		}
+
+		return e.complexity.Conversation.Cwd(childComplexity), true
+
+	case "Conversation.firstSeenAt":
+		if e.complexity.Conversation.FirstSeenAt == nil {
+			break
+		}
+
+		return e.complexity.Conversation.FirstSeenAt(childComplexity), true
+
+	case "Conversation.id":
+		if e.complexity.Conversation.ID == nil {
+			break
+		}
+
+		return e.complexity.Conversation.ID(childComplexity), true
+
+	case "Conversation.lastSeenAt":
+		if e.complexity.Conversation.LastSeenAt == nil {
+			break
+		}
+
+		return e.complexity.Conversation.LastSeenAt(childComplexity), true
+
+	case "Conversation.messageCount":
+		if e.complexity.Conversation.MessageCount == nil {
+			break
+		}
+
+		return e.complexity.Conversation.MessageCount(childComplexity), true
+
+	case "Conversation.open":
+		if e.complexity.Conversation.Open == nil {
+			break
+		}
+
+		return e.complexity.Conversation.Open(childComplexity), true
+
+	case "Conversation.recap":
+		if e.complexity.Conversation.Recap == nil {
+			break
+		}
+
+		return e.complexity.Conversation.Recap(childComplexity), true
+
+	case "Conversation.sessionUuid":
+		if e.complexity.Conversation.SessionUUID == nil {
+			break
+		}
+
+		return e.complexity.Conversation.SessionUUID(childComplexity), true
 
 	case "Health.status":
 		if e.complexity.Health.Status == nil {
@@ -513,6 +585,25 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Project.Worktrees(childComplexity), true
+
+	case "Query.conversation":
+		if e.complexity.Query.Conversation == nil {
+			break
+		}
+
+		args, err := ec.field_Query_conversation_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.Conversation(childComplexity, args["id"].(string)), true
+
+	case "Query.conversations":
+		if e.complexity.Query.Conversations == nil {
+			break
+		}
+
+		return e.complexity.Query.Conversations(childComplexity), true
 
 	case "Query.health":
 		if e.complexity.Query.Health == nil {
@@ -1120,6 +1211,8 @@ var sources = []*ast.Source{
 # Workstream B-git: Worktree node + Project.worktrees back-edge.
 # Workstream B-ps: full Process node + Host.processes(filter).
 # Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
+# Workstream B-claudeprojects: Conversation node + Time scalar; backed by
+# the JSONL files Claude Code writes under ~/.claude/projects/.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -1130,6 +1223,9 @@ interface Node {
   "Globally-unique id (e.g. \"Host:<machineId>\")."
   id: ID!
 }
+
+"RFC 3339 timestamp string. Mapped to Go's time.Time."
+scalar Time
 
 # Process is an OS-level process surfaced via the ` + "`" + `ps` + "`" + ` adapter.
 type Process implements Node {
@@ -1214,6 +1310,12 @@ type Query {
 
   "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
   tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
+
+  "Every Claude Code conversation discovered under the projects root. Latest-first by lastSeenAt."
+  conversations: [Conversation!]!
+
+  "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
+  conversation(id: ID!): Conversation
 }
 
 type Health {
@@ -1549,6 +1651,47 @@ input TmuxPaneFilter {
   "Only include dead (or non-dead) panes."
   dead: Boolean
 }
+
+"""
+A Claude Code conversation, backed by the JSONL transcript that the
+Claude Code CLI writes under ` + "`" + `~/.claude/projects/<project-slug>/<session-uuid>.jsonl` + "`" + `.
+
+The provider derives every field from the JSONL on disk — there is no
+sidecar metadata. Heavy fields (full transcripts, message bodies)
+deliberately do not surface here; the v1 contract is metadata + a
+single live signal (` + "`" + `open` + "`" + `) and an optional plugin-populated ` + "`" + `recap` + "`" + `.
+
+` + "`" + `open` + "`" + ` is a heartbeat: true when the JSONL was written within the last
+N seconds (default 60s, see provider.HeartbeatThreshold).
+
+` + "`" + `recap` + "`" + ` is reserved for a future conversations plugin to populate; v1
+returns null unconditionally.
+"""
+type Conversation implements Node {
+  "Stable orchard id — \"Conversation:<sessionUuid>\"."
+  id: ID!
+
+  "The session UUID embedded in the JSONL filename — globally unique across Claude Code."
+  sessionUuid: String!
+
+  "Working directory recorded in the JSONL when the session was created. Null when not yet observed."
+  cwd: String
+
+  "RFC 3339 timestamp of the first record in the JSONL."
+  firstSeenAt: Time
+
+  "RFC 3339 timestamp of the last record in the JSONL."
+  lastSeenAt: Time
+
+  "Number of newline-terminated JSON records in the JSONL."
+  messageCount: Int!
+
+  "Heartbeat: true when the JSONL was last written within the heartbeat threshold."
+  open: Boolean!
+
+  "Plugin-populated short summary. Always null in v1."
+  recap: String
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -1584,6 +1727,21 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 		}
 	}
 	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_conversation_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["id"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+		arg0, err = ec.unmarshalNID2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["id"] = arg0
 	return args, nil
 }
 
@@ -1766,6 +1924,346 @@ func (ec *executionContext) fieldContext_ClaudeInstance_id(ctx context.Context, 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_id(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_sessionUuid(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_sessionUuid(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SessionUUID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_sessionUuid(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_cwd(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_cwd(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Cwd, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_cwd(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_firstSeenAt(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_firstSeenAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FirstSeenAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_firstSeenAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_lastSeenAt(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_lastSeenAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastSeenAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_lastSeenAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_messageCount(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_messageCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.MessageCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int64)
+	fc.Result = res
+	return ec.marshalNInt2int64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_messageCount(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_open(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_open(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Open, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_open(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_recap(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_recap(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Recap, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_recap(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -3653,6 +4151,138 @@ func (ec *executionContext) fieldContext_Query_tmuxPanes(ctx context.Context, fi
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_tmuxPanes_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_conversations(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_conversations(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Conversations(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*Conversation)
+	fc.Result = res
+	return ec.marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_conversations(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Conversation_id(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_Conversation_sessionUuid(ctx, field)
+			case "cwd":
+				return ec.fieldContext_Conversation_cwd(ctx, field)
+			case "firstSeenAt":
+				return ec.fieldContext_Conversation_firstSeenAt(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Conversation_lastSeenAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Conversation_messageCount(ctx, field)
+			case "open":
+				return ec.fieldContext_Conversation_open(ctx, field)
+			case "recap":
+				return ec.fieldContext_Conversation_recap(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Conversation", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_conversation(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_conversation(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Conversation(rctx, fc.Args["id"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*Conversation)
+	fc.Result = res
+	return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_conversation(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Conversation_id(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_Conversation_sessionUuid(ctx, field)
+			case "cwd":
+				return ec.fieldContext_Conversation_cwd(ctx, field)
+			case "firstSeenAt":
+				return ec.fieldContext_Conversation_firstSeenAt(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Conversation_lastSeenAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Conversation_messageCount(ctx, field)
+			case "open":
+				return ec.fieldContext_Conversation_open(ctx, field)
+			case "recap":
+				return ec.fieldContext_Conversation_recap(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Conversation", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_conversation_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -8842,6 +9472,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._TmuxClient(ctx, sel, obj)
+	case Conversation:
+		return ec._Conversation(ctx, sel, &obj)
+	case *Conversation:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Conversation(ctx, sel, obj)
 	default:
 		panic(fmt.Errorf("unexpected type %T", obj))
 	}
@@ -8867,6 +9504,68 @@ func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var conversationImplementors = []string{"Conversation", "Node"}
+
+func (ec *executionContext) _Conversation(ctx context.Context, sel ast.SelectionSet, obj *Conversation) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, conversationImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Conversation")
+		case "id":
+			out.Values[i] = ec._Conversation_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionUuid":
+			out.Values[i] = ec._Conversation_sessionUuid(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cwd":
+			out.Values[i] = ec._Conversation_cwd(ctx, field, obj)
+		case "firstSeenAt":
+			out.Values[i] = ec._Conversation_firstSeenAt(ctx, field, obj)
+		case "lastSeenAt":
+			out.Values[i] = ec._Conversation_lastSeenAt(ctx, field, obj)
+		case "messageCount":
+			out.Values[i] = ec._Conversation_messageCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "open":
+			out.Values[i] = ec._Conversation_open(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "recap":
+			out.Values[i] = ec._Conversation_recap(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -9530,6 +10229,47 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "conversations":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_conversations(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "conversation":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_conversation(ctx, field)
 				return res
 			}
 
@@ -11695,6 +12435,60 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx context.Context, sel ast.SelectionSet, v []*Conversation) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Conversation(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v interface{}) (float64, error) {
 	res, err := graphql.UnmarshalFloatContext(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -12513,6 +13307,13 @@ func (ec *executionContext) marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthi
 	return ec._ClaudeInstance(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Conversation(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalOInt2ᚕint64ᚄ(ctx context.Context, v interface{}) ([]int64, error) {
 	if v == nil {
 		return nil, nil
@@ -12640,6 +13441,22 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 		return graphql.Null
 	}
 	res := graphql.MarshalString(*v)
+	return res
+}
+
+func (ec *executionContext) unmarshalOTime2ᚖtimeᚐTime(ctx context.Context, v interface{}) (*time.Time, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalTime(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOTime2ᚖtimeᚐTime(ctx context.Context, sel ast.SelectionSet, v *time.Time) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	res := graphql.MarshalTime(*v)
 	return res
 }
 

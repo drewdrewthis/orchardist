@@ -2,6 +2,10 @@
 
 package graphql
 
+import (
+	"time"
+)
+
 // A node in the orchard graph. Every node has a globally-unique id so
 // clients can fetch it via Query.node(id) regardless of which concrete
 // type it is.
@@ -15,6 +19,43 @@ type ClaudeInstance struct {
 	// Stable id; ws-b-claudeinstance formalises (host_id, claudePid).
 	ID string `json:"id"`
 }
+
+// A Claude Code conversation, backed by the JSONL transcript that the
+// Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
+//
+// The provider derives every field from the JSONL on disk — there is no
+// sidecar metadata. Heavy fields (full transcripts, message bodies)
+// deliberately do not surface here; the v1 contract is metadata + a
+// single live signal (`open`) and an optional plugin-populated `recap`.
+//
+// `open` is a heartbeat: true when the JSONL was written within the last
+// N seconds (default 60s, see provider.HeartbeatThreshold).
+//
+// `recap` is reserved for a future conversations plugin to populate; v1
+// returns null unconditionally.
+type Conversation struct {
+	// Stable orchard id — "Conversation:<sessionUuid>".
+	ID string `json:"id"`
+	// The session UUID embedded in the JSONL filename — globally unique across Claude Code.
+	SessionUUID string `json:"sessionUuid"`
+	// Working directory recorded in the JSONL when the session was created. Null when not yet observed.
+	Cwd *string `json:"cwd,omitempty"`
+	// RFC 3339 timestamp of the first record in the JSONL.
+	FirstSeenAt *time.Time `json:"firstSeenAt,omitempty"`
+	// RFC 3339 timestamp of the last record in the JSONL.
+	LastSeenAt *time.Time `json:"lastSeenAt,omitempty"`
+	// Number of newline-terminated JSON records in the JSONL.
+	MessageCount int64 `json:"messageCount"`
+	// Heartbeat: true when the JSONL was last written within the heartbeat threshold.
+	Open bool `json:"open"`
+	// Plugin-populated short summary. Always null in v1.
+	Recap *string `json:"recap,omitempty"`
+}
+
+func (Conversation) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this Conversation) GetID() string { return this.ID }
 
 type Health struct {
 	// Daemon health status — 'ok' when serving.

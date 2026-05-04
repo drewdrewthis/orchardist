@@ -32,6 +32,7 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
@@ -122,11 +123,14 @@ func runStart(parentCtx context.Context, addr string) error {
 	// real machine id once it lands.
 	psProvider := ps.New(ps.NewAdapter("local"), logger)
 	tmuxProvider := tmux.New(tmux.NewAdapter(localHostID()), logger)
+	claudeProjectsRoot := claudeprojectsRoot()
+	claudeProjectsProvider := claudeprojects.New(claudeProjectsRoot, "local", logger)
 
 	srv := server.New(addr, logger,
 		server.WithProjects(configProvider),
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
+		server.WithClaudeProjects(claudeProjectsProvider),
 	)
 	return srv.Run(ctx)
 }
@@ -216,6 +220,20 @@ func probeHealth() (int64, error) {
 		return 0, fmt.Errorf("decode: %w", err)
 	}
 	return payload.UptimeS, nil
+}
+
+// claudeprojectsRoot returns the directory the daemon should watch for
+// Claude Code transcripts. CLAUDE_PROJECTS_ROOT overrides; default is
+// ~/.claude/projects.
+func claudeprojectsRoot() string {
+	if v := os.Getenv("CLAUDE_PROJECTS_ROOT"); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ".claude/projects"
+	}
+	return home + "/.claude/projects"
 }
 
 func ensureParentDir(path string) error {
