@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-// fixture mirrors a verbatim chunk of macOS `ps -ax -o pid,ppid,user,tty,%cpu,rss,lstart,command`.
-// Captured from a live darwin/arm64 host on 2026-05-04 so the parser is
-// exercised against the actual output shape rather than a synthetic
-// approximation.
+// fixture mirrors the column layout of macOS `ps -ax -o pid,ppid,user,tty,%cpu,rss,lstart,command`.
+// Synthesised from the documented column shape so the parser is exercised
+// against the real header/whitespace contract; usernames and pids are
+// generic placeholders.
 const fixturePsHeaderAndRows = `  PID  PPID USER             TTY       %CPU    RSS STARTED                      COMMAND
     1     0 root             ??         1.5  13088 Sun May  3 15:38:46 2026     /sbin/launchd
-  262   797 hope             ??         0.0  18432 Sun May  3 16:06:57 2026     /Applications/Docker.app/Contents/MacOS/com.docker.virtualization --kernel /foo --cmdline init=/initd
-17729 17726 hope             s001       0.0   1856 Tue Mar 23 10:00:00 2026     -zsh
+  262   797 alice            ??         0.0  18432 Sun May  3 16:06:57 2026     /Applications/Docker.app/Contents/MacOS/com.docker.virtualization --kernel /foo --cmdline init=/initd
+17729 17726 alice            s001       0.0   1856 Tue Mar 23 10:00:00 2026     -zsh
 99999     1 root             ??         0.0    100 Mon Jan 12 00:00:00 2026     /usr/libexec/UserEventAgent (System)
 `
 

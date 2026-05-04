@@ -100,16 +100,22 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	}, nil
 }
 
-// Host is the resolver for the host field.
+// Host is the resolver for the host field. When HostProvider is wired,
+// returns the real local Host node. Otherwise (e.g. test harnesses that
+// only wire the ps provider) returns a stub Host carrying the ps
+// provider's host id so Host.processes still resolves.
 func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
-	if r.HostProvider == nil {
-		return nil, fmt.Errorf("host provider not initialised")
+	if r.HostProvider != nil {
+		h, _, err := r.HostProvider.Get(ctx, r.HostProvider.LocalID())
+		if err != nil {
+			return nil, fmt.Errorf("host: %w", err)
+		}
+		return h, nil
 	}
-	h, _, err := r.HostProvider.Get(ctx, r.HostProvider.LocalID())
-	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
+	if r.PS != nil {
+		return &graphql1.Host{ID: r.PS.HostID()}, nil
 	}
-	return h, nil
+	return nil, fmt.Errorf("host provider not initialised")
 }
 
 // Hosts is the resolver for the hosts field.
