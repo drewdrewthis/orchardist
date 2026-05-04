@@ -81,12 +81,12 @@ func (r *processResolver) Cwd(ctx context.Context, obj *graphql1.Process) (*stri
 	return &cwd, nil
 }
 
-// Worktree is the resolver for the process.worktree field. Placeholder until ws-b-git wires the cwd lookup.
+// Worktree is the resolver for the process.worktree field.
 func (r *processResolver) Worktree(_ context.Context, _ *graphql1.Process) (*graphql1.Worktree, error) {
 	return nil, nil
 }
 
-// ClaudeInstance is the resolver for the process.claudeInstance field. Placeholder until ws-b-claudeinstance lands.
+// ClaudeInstance is the resolver for the process.claudeInstance field.
 func (r *processResolver) ClaudeInstance(_ context.Context, _ *graphql1.Process) (*graphql1.ClaudeInstance, error) {
 	return nil, nil
 }
@@ -100,10 +100,7 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	}, nil
 }
 
-// Host is the resolver for the host field. When HostProvider is wired,
-// returns the real local Host node. Otherwise (e.g. test harnesses that
-// only wire the ps provider) returns a stub Host carrying the ps
-// provider's host id so Host.processes still resolves.
+// Host is the resolver for the host field.
 func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
 	if r.HostProvider != nil {
 		h, _, err := r.HostProvider.Get(ctx, r.HostProvider.LocalID())
@@ -148,9 +145,154 @@ func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, erro
 	return out, nil
 }
 
-// Processes is the resolver for the worktree.processes field. Placeholder until cwd-to-worktree join lands.
+// TmuxServer is the resolver for the tmuxServer field. Stub until commit 3 wires the provider.
+func (r *queryResolver) TmuxServer(_ context.Context) (*graphql1.TmuxServer, error) {
+	return nil, fmt.Errorf("tmux provider not wired")
+}
+
+// TmuxSessions is the resolver for the tmuxSessions field. Stub until commit 3.
+func (r *queryResolver) TmuxSessions(_ context.Context, _ *graphql1.TmuxSessionFilter) ([]*graphql1.TmuxSession, error) {
+	return nil, fmt.Errorf("tmux provider not wired")
+}
+
+// TmuxPanes is the resolver for the tmuxPanes field. Stub until commit 3.
+func (r *queryResolver) TmuxPanes(_ context.Context, _ *graphql1.TmuxPaneFilter) ([]*graphql1.TmuxPane, error) {
+	return nil, fmt.Errorf("tmux provider not wired")
+}
+
+// Processes is the resolver for the worktree.processes field.
 func (r *worktreeResolver) Processes(_ context.Context, _ *graphql1.Worktree) ([]*graphql1.Process, error) {
 	return []*graphql1.Process{}, nil
+}
+
+// TmuxServer field-resolver stubs — replaced in commit 3.
+func (r *tmuxServerResolver) Sessions(_ context.Context, _ *graphql1.TmuxServer) ([]*graphql1.TmuxSession, error) {
+	return nil, fmt.Errorf("tmux provider not wired")
+}
+func (r *tmuxServerResolver) Clients(_ context.Context, _ *graphql1.TmuxServer) ([]*graphql1.TmuxClient, error) {
+	return nil, fmt.Errorf("tmux provider not wired")
+}
+func (r *tmuxServerResolver) Pid(_ context.Context, _ *graphql1.TmuxServer) (*int64, error) {
+	return nil, nil
+}
+func (r *tmuxServerResolver) Alive(_ context.Context, _ *graphql1.TmuxServer) (bool, error) {
+	return false, nil
+}
+
+// TmuxSession stubs.
+func (r *tmuxSessionResolver) Server(_ context.Context, _ *graphql1.TmuxSession) (*graphql1.TmuxServer, error) {
+	return nil, fmt.Errorf("tmux provider not wired")
+}
+func (r *tmuxSessionResolver) Attached(_ context.Context, _ *graphql1.TmuxSession) (bool, error) {
+	return false, nil
+}
+func (r *tmuxSessionResolver) ActiveAttached(_ context.Context, _ *graphql1.TmuxSession) (bool, error) {
+	return false, nil
+}
+func (r *tmuxSessionResolver) AttachedClients(_ context.Context, _ *graphql1.TmuxSession) ([]*graphql1.TmuxClient, error) {
+	return nil, nil
+}
+func (r *tmuxSessionResolver) LastActivityAt(_ context.Context, _ *graphql1.TmuxSession) (*string, error) {
+	return nil, nil
+}
+func (r *tmuxSessionResolver) Windows(_ context.Context, _ *graphql1.TmuxSession) ([]*graphql1.TmuxWindow, error) {
+	return nil, nil
+}
+func (r *tmuxSessionResolver) CurrentWindow(_ context.Context, _ *graphql1.TmuxSession) (*graphql1.TmuxWindow, error) {
+	return nil, nil
+}
+func (r *tmuxSessionResolver) CreatedAt(_ context.Context, _ *graphql1.TmuxSession) (string, error) {
+	return "", nil
+}
+
+// TmuxWindow stubs.
+func (r *tmuxWindowResolver) Session(_ context.Context, _ *graphql1.TmuxWindow) (*graphql1.TmuxSession, error) {
+	return nil, nil
+}
+func (r *tmuxWindowResolver) Panes(_ context.Context, _ *graphql1.TmuxWindow) ([]*graphql1.TmuxPane, error) {
+	return nil, nil
+}
+func (r *tmuxWindowResolver) CurrentPane(_ context.Context, _ *graphql1.TmuxWindow) (*graphql1.TmuxPane, error) {
+	return nil, nil
+}
+func (r *tmuxWindowResolver) Active(_ context.Context, _ *graphql1.TmuxWindow) (bool, error) {
+	return false, nil
+}
+func (r *tmuxWindowResolver) Name(_ context.Context, _ *graphql1.TmuxWindow) (string, error) {
+	return "", nil
+}
+
+// TmuxPane stubs.
+func (r *tmuxPaneResolver) Window(_ context.Context, _ *graphql1.TmuxPane) (*graphql1.TmuxWindow, error) {
+	return nil, nil
+}
+func (r *tmuxPaneResolver) Title(_ context.Context, _ *graphql1.TmuxPane) (string, error) {
+	return "", nil
+}
+func (r *tmuxPaneResolver) CurrentCommand(_ context.Context, _ *graphql1.TmuxPane) (string, error) {
+	return "", nil
+}
+func (r *tmuxPaneResolver) CurrentPid(_ context.Context, _ *graphql1.TmuxPane) (*int64, error) {
+	return nil, nil
+}
+func (r *tmuxPaneResolver) Width(_ context.Context, _ *graphql1.TmuxPane) (int64, error) {
+	return 0, nil
+}
+func (r *tmuxPaneResolver) Height(_ context.Context, _ *graphql1.TmuxPane) (int64, error) {
+	return 0, nil
+}
+func (r *tmuxPaneResolver) Dead(_ context.Context, _ *graphql1.TmuxPane) (bool, error) {
+	return false, nil
+}
+func (r *tmuxPaneResolver) WatchingClients(_ context.Context, _ *graphql1.TmuxPane) ([]*graphql1.TmuxClient, error) {
+	return nil, nil
+}
+func (r *tmuxPaneResolver) Process(_ context.Context, _ *graphql1.TmuxPane) (*graphql1.Process, error) {
+	return nil, nil
+}
+func (r *tmuxPaneResolver) ClaudeInstance(_ context.Context, _ *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
+	return nil, nil
+}
+func (r *tmuxPaneResolver) Content(_ context.Context, _ *graphql1.TmuxPane, _ *int64, _ *bool) (string, error) {
+	return "", fmt.Errorf("tmux provider not wired")
+}
+func (r *tmuxPaneResolver) ContentRange(_ context.Context, _ *graphql1.TmuxPane, _ int64, _ int64, _ *bool) (string, error) {
+	return "", fmt.Errorf("tmux provider not wired")
+}
+func (r *tmuxPaneResolver) ContentFull(_ context.Context, _ *graphql1.TmuxPane, _ *bool) (string, error) {
+	return "", fmt.Errorf("tmux provider not wired")
+}
+
+// TmuxClient stubs.
+func (r *tmuxClientResolver) Server(_ context.Context, _ *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
+	return nil, nil
+}
+func (r *tmuxClientResolver) Session(_ context.Context, _ *graphql1.TmuxClient) (*graphql1.TmuxSession, error) {
+	return nil, nil
+}
+func (r *tmuxClientResolver) Tty(_ context.Context, _ *graphql1.TmuxClient) (string, error) {
+	return "", nil
+}
+func (r *tmuxClientResolver) Hostname(_ context.Context, _ *graphql1.TmuxClient) (string, error) {
+	return "", nil
+}
+func (r *tmuxClientResolver) TermName(_ context.Context, _ *graphql1.TmuxClient) (string, error) {
+	return "", nil
+}
+func (r *tmuxClientResolver) AttachedAt(_ context.Context, _ *graphql1.TmuxClient) (string, error) {
+	return "", nil
+}
+func (r *tmuxClientResolver) LastActivityAt(_ context.Context, _ *graphql1.TmuxClient) (*string, error) {
+	return nil, nil
+}
+func (r *tmuxClientResolver) Readonly(_ context.Context, _ *graphql1.TmuxClient) (bool, error) {
+	return false, nil
+}
+func (r *tmuxClientResolver) CurrentWindow(_ context.Context, _ *graphql1.TmuxClient) (*graphql1.TmuxWindow, error) {
+	return nil, nil
+}
+func (r *tmuxClientResolver) CurrentPane(_ context.Context, _ *graphql1.TmuxClient) (*graphql1.TmuxPane, error) {
+	return nil, nil
 }
 
 // Host returns graphql1.HostResolver implementation.
@@ -168,11 +310,31 @@ func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 // Worktree returns graphql1.WorktreeResolver implementation.
 func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
 
+// TmuxServer returns graphql1.TmuxServerResolver implementation.
+func (r *Resolver) TmuxServer() graphql1.TmuxServerResolver { return &tmuxServerResolver{r} }
+
+// TmuxSession returns graphql1.TmuxSessionResolver implementation.
+func (r *Resolver) TmuxSession() graphql1.TmuxSessionResolver { return &tmuxSessionResolver{r} }
+
+// TmuxWindow returns graphql1.TmuxWindowResolver implementation.
+func (r *Resolver) TmuxWindow() graphql1.TmuxWindowResolver { return &tmuxWindowResolver{r} }
+
+// TmuxPane returns graphql1.TmuxPaneResolver implementation.
+func (r *Resolver) TmuxPane() graphql1.TmuxPaneResolver { return &tmuxPaneResolver{r} }
+
+// TmuxClient returns graphql1.TmuxClientResolver implementation.
+func (r *Resolver) TmuxClient() graphql1.TmuxClientResolver { return &tmuxClientResolver{r} }
+
 type hostResolver struct{ *Resolver }
 type processResolver struct{ *Resolver }
 type projectResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type worktreeResolver struct{ *Resolver }
+type tmuxServerResolver struct{ *Resolver }
+type tmuxSessionResolver struct{ *Resolver }
+type tmuxWindowResolver struct{ *Resolver }
+type tmuxPaneResolver struct{ *Resolver }
+type tmuxClientResolver struct{ *Resolver }
 
 // toGraphQLWorktree projects a git provider Worktree into the GraphQL model.
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
@@ -209,7 +371,6 @@ func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
 }
 
 // applyProcessFilter applies the resolver-layer filter.
-// Cheap filters (pidIn, commandIn) run first; cwdPrefix forces a slow lsof batch.
 func applyProcessFilter(ctx context.Context, p *ps.Provider, in []ps.Process, filter *graphql1.ProcessFilter) []ps.Process {
 	if filter == nil {
 		return in

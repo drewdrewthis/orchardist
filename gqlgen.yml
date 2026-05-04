@@ -68,3 +68,99 @@ models:
         resolver: true
       claudeInstance:
         resolver: true
+
+  # Tmux fields that require provider lookups (relationship traversals,
+  # on-demand content captures) are resolved by per-field resolvers, not
+  # by reading the struct. The lightweight identifier-only fields stay on
+  # the generated struct so callers paying for `id` alone don't pay for a
+  # provider hit.
+  TmuxServer:
+    fields:
+      sessions:
+        resolver: true
+      clients:
+        resolver: true
+      pid:
+        resolver: true
+      alive:
+        resolver: true
+  TmuxSession:
+    fields:
+      server:
+        resolver: true
+      attached:
+        resolver: true
+      activeAttached:
+        resolver: true
+      attachedClients:
+        resolver: true
+      lastActivityAt:
+        resolver: true
+      windows:
+        resolver: true
+      currentWindow:
+        resolver: true
+      createdAt:
+        resolver: true
+  TmuxWindow:
+    fields:
+      session:
+        resolver: true
+      panes:
+        resolver: true
+      currentPane:
+        resolver: true
+      active:
+        resolver: true
+      name:
+        resolver: true
+  TmuxPane:
+    fields:
+      window:
+        resolver: true
+      title:
+        resolver: true
+      currentCommand:
+        resolver: true
+      currentPid:
+        resolver: true
+      width:
+        resolver: true
+      height:
+        resolver: true
+      dead:
+        resolver: true
+      watchingClients:
+        resolver: true
+      process:
+        resolver: true
+      claudeInstance:
+        resolver: true
+      content:
+        resolver: true
+      contentRange:
+        resolver: true
+      contentFull:
+        resolver: true
+  TmuxClient:
+    fields:
+      server:
+        resolver: true
+      session:
+        resolver: true
+      tty:
+        resolver: true
+      hostname:
+        resolver: true
+      termName:
+        resolver: true
+      attachedAt:
+        resolver: true
+      lastActivityAt:
+        resolver: true
+      readonly:
+        resolver: true
+      currentWindow:
+        resolver: true
+      currentPane:
+        resolver: true
