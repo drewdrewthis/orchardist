@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
+	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 )
 
 // Command returns the `daemon` subcommand group rooted with three leaves.
@@ -98,7 +100,22 @@ func runStart(parentCtx context.Context, addr string) error {
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	srv := server.New(addr, nil)
+	logger := slog.Default()
+
+	cfgPath, err := orchpaths.ConfigFile()
+	if err != nil {
+		return fmt.Errorf("resolve config path: %w", err)
+	}
+	configProvider := configprovider.NewProvider(
+		configprovider.NewJSONFileAdapter(cfgPath, logger),
+		logger,
+	)
+	if err := configProvider.Start(ctx); err != nil {
+		return fmt.Errorf("start config provider: %w", err)
+	}
+	defer func() { _ = configProvider.Stop() }()
+
+	srv := server.New(addr, logger, server.WithProjects(configProvider))
 	return srv.Run(ctx)
 }
 

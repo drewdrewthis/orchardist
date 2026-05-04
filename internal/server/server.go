@@ -11,6 +11,10 @@
 // in Run, so the resolver root has it ready before any GraphQL request
 // arrives. Subsequent provider workstreams hang their constructors off
 // New the same way.
+//
+// Workstream B-config: providers introduced by later workstreams are
+// wired through the Option pattern (WithFoo(p)), so New keeps a tight
+// signature as the provider set grows.
 package server
 
 import (
@@ -44,10 +48,20 @@ type Server struct {
 	host      *host.Provider
 }
 
-// New constructs a Server bound to addr. Providers are constructed here
-// but not started — Run owns lifecycle so the poll loops are tied to
-// the same ctx as the HTTP listener.
-func New(addr string, logger *slog.Logger) *Server {
+// Option mutates a Server during construction. Used for wiring optional
+// providers without bloating the New signature.
+type Option func(*Server, *resolvers.Resolver)
+
+// WithProjects wires a projects provider into the resolver.
+func WithProjects(p resolvers.ProjectsLister) Option {
+	return func(_ *Server, r *resolvers.Resolver) { r.WithProjects(p) }
+}
+
+// New constructs a Server bound to addr. The host provider is constructed
+// here but not started — Run owns lifecycle so the poll loops are tied
+// to the same ctx as the HTTP listener. Optional providers are wired
+// via the With* options.
+func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	if addr == "" {
 		addr = DefaultAddr
 	}
@@ -57,25 +71,38 @@ func New(addr string, logger *slog.Logger) *Server {
 	startedAt := time.Now()
 
 	hostProvider := host.New()
+	res := resolvers.New(startedAt).WithHost(hostProvider)
+
+	srv := &Server{
+		addr:      addr,
+		startedAt: startedAt,
+		logger:    logger,
+		host:      hostProvider,
+	}
+	for _, opt := range opts {
+		opt(srv, res)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthHandler(startedAt))
-	mux.Handle("/graphql", graphqlHandler(startedAt, hostProvider))
+	mux.Handle("/graphql", graphqlHandlerFor(res))
 
-	httpSrv := &http.Server{
+	srv.httpSrv = &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	return &Server{
-		addr:      addr,
-		startedAt: startedAt,
-		logger:    logger,
-		httpSrv:   httpSrv,
-		host:      hostProvider,
-	}
+	return srv
 }
+
+// Addr returns the configured listen address. Useful for tests using
+// httptest or for callers that need to print the URL.
+func (s *Server) Addr() string { return s.addr }
+
+// HTTPHandler returns the underlying HTTP mux for tests that wrap the
+// daemon in httptest.Server without binding a real port.
+func (s *Server) HTTPHandler() http.Handler { return s.httpSrv.Handler }
 
 // Run starts providers, the HTTP server, and blocks until ctx is
 // cancelled, then drains in-flight requests with a 5-second deadline.
@@ -125,12 +152,13 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 	}
 }
 
-// graphqlHandler wires the gqlgen executable schema with the resolver
-// root that holds every provider. POST + GET (for query strings) are
-// both accepted; multipart and websocket transports stay deferred to
+// graphqlHandlerFor wires the gqlgen executable schema with an
+// already-constructed Resolver root, so callers can inject providers
+// before serving any requests. POST + GET (for query strings) are both
+// accepted; multipart and websocket transports stay deferred to
 // Workstream C.
-func graphqlHandler(startedAt time.Time, hostProvider *host.Provider) http.Handler {
-	cfg := gql.Config{Resolvers: resolvers.New(startedAt, hostProvider)}
+func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
+	cfg := gql.Config{Resolvers: res}
 	srv := handler.New(gql.NewExecutableSchema(cfg))
 	srv.AddTransport(transport.POST{})
 	srv.AddTransport(transport.GET{})

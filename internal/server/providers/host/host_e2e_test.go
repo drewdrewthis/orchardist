@@ -173,7 +173,7 @@ func mustPercent(t *testing.T, name string, v float64) {
 // except the network listener is httptest.
 func newTestDaemon(t *testing.T, provider *host.Provider) *httptest.Server {
 	t.Helper()
-	cfg := gql.Config{Resolvers: resolvers.New(time.Now(), provider)}
+	cfg := gql.Config{Resolvers: resolvers.New(time.Now()).WithHost(provider)}
 	gqlSrv := handler.New(gql.NewExecutableSchema(cfg))
 	gqlSrv.AddTransport(transport.POST{})
 	gqlSrv.AddTransport(transport.GET{})

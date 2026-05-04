@@ -7,6 +7,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
@@ -42,9 +43,27 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 	return []*graphql1.Host{h}, nil
 }
 
-// Projects is the resolver for the projects field.
+// Projects is the resolver for the projects field. It returns the
+// in-memory cached snapshot from the config provider. Order is stable
+// (by id) so consumers get reproducible output.
 func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, error) {
-	panic(fmt.Errorf("not implemented: Projects - projects"))
+	if r.ProjectsProvider == nil {
+		return nil, fmt.Errorf("projects provider not wired: daemon misconfigured")
+	}
+	rows, err := r.ProjectsProvider.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	out := make([]*graphql1.Project, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, &graphql1.Project{
+			ID:        string(row.ID),
+			Directory: row.Directory,
+			Name:      row.Name,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
 }
 
 // Query returns graphql1.QueryResolver implementation.
