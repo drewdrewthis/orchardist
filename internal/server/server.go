@@ -6,6 +6,11 @@
 // JSON endpoint for cheap liveness checks, graceful shutdown on context
 // cancellation. Subscriptions are not wired yet — Workstream C lights
 // them up alongside the rest of the schema.
+//
+// Workstream B-host: the host Provider is constructed here and started
+// in Run, so the resolver root has it ready before any GraphQL request
+// arrives. Subsequent provider workstreams hang their constructors off
+// New the same way.
 package server
 
 import (
@@ -21,6 +26,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
 
@@ -28,17 +34,19 @@ import (
 // config if multi-binding becomes a real need.
 const DefaultAddr = "localhost:7777"
 
-// Server wraps the http.Server plus the resolver root. One instance per
-// daemon process.
+// Server wraps the http.Server plus the resolver root and provider set.
+// One instance per daemon process.
 type Server struct {
 	addr      string
 	startedAt time.Time
 	logger    *slog.Logger
 	httpSrv   *http.Server
+	host      *host.Provider
 }
 
-// New constructs a Server bound to addr. The Resolver captures the start
-// time so /health and the GraphQL `health` field report the same uptime.
+// New constructs a Server bound to addr. Providers are constructed here
+// but not started — Run owns lifecycle so the poll loops are tied to
+// the same ctx as the HTTP listener.
 func New(addr string, logger *slog.Logger) *Server {
 	if addr == "" {
 		addr = DefaultAddr
@@ -48,9 +56,11 @@ func New(addr string, logger *slog.Logger) *Server {
 	}
 	startedAt := time.Now()
 
+	hostProvider := host.New()
+
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthHandler(startedAt))
-	mux.Handle("/graphql", graphqlHandler(startedAt))
+	mux.Handle("/graphql", graphqlHandler(startedAt, hostProvider))
 
 	httpSrv := &http.Server{
 		Addr:              addr,
@@ -63,14 +73,21 @@ func New(addr string, logger *slog.Logger) *Server {
 		startedAt: startedAt,
 		logger:    logger,
 		httpSrv:   httpSrv,
+		host:      hostProvider,
 	}
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled, then
-// drains in-flight requests with a 5-second deadline. Returns the
-// underlying ListenAndServe error unless it is the expected
+// Run starts providers, the HTTP server, and blocks until ctx is
+// cancelled, then drains in-flight requests with a 5-second deadline.
+// Returns the underlying ListenAndServe error unless it is the expected
 // http.ErrServerClosed.
 func (s *Server) Run(ctx context.Context) error {
+	if err := s.host.Start(ctx); err != nil {
+		// Identity is load-bearing — fail fast so the operator sees it
+		// rather than getting half-populated GraphQL responses.
+		return fmt.Errorf("start host provider: %w", err)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		s.logger.Info("orchard daemon listening", "addr", s.addr)
@@ -108,11 +125,12 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 	}
 }
 
-// graphqlHandler wires the gqlgen executable schema. POST + GET (for
-// query strings) are both accepted; multipart and websocket transports
-// stay deferred to Workstream C.
-func graphqlHandler(startedAt time.Time) http.Handler {
-	cfg := gql.Config{Resolvers: resolvers.New(startedAt)}
+// graphqlHandler wires the gqlgen executable schema with the resolver
+// root that holds every provider. POST + GET (for query strings) are
+// both accepted; multipart and websocket transports stay deferred to
+// Workstream C.
+func graphqlHandler(startedAt time.Time, hostProvider *host.Provider) http.Handler {
+	cfg := gql.Config{Resolvers: resolvers.New(startedAt, hostProvider)}
 	srv := handler.New(gql.NewExecutableSchema(cfg))
 	srv.AddTransport(transport.POST{})
 	srv.AddTransport(transport.GET{})

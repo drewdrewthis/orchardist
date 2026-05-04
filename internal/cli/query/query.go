@@ -1,11 +1,10 @@
 // Package query hosts the `orchard query` cobra subcommand group, which
 // dispatches GraphQL queries against the running daemon.
 //
-// Workstream A scope: only the `--raw <gql>` escape hatch is wired
-// end-to-end — it proves the CLI -> daemon -> GraphQL path works against
-// the stub `health` resolver. Verbs like `worktrees`, `panes`,
-// `processes` per the impl guide land in Workstream C alongside the real
-// node types and resolvers.
+// Workstream A wired only `--raw <gql>`. Workstream B-host adds the
+// first named verb — `host` — which proves the verb dispatch pattern
+// against a real provider. Future workstreams add `worktrees`, `panes`,
+// `processes`, `conversations`, `contracts`.
 //
 // The cobra alias `q` mirrors the impl guide's "permitted alias for
 // query" so typing ergonomics match the documented CLI shape.
@@ -32,25 +31,30 @@ func Command() *cobra.Command {
 		Aliases: []string{"q"},
 		Short:   "Query the running orchard daemon via GraphQL",
 		Long: "Dispatch GraphQL queries against the running daemon at " + server.DefaultAddr + ".\n\n" +
-			"Workstream A only wires `--raw <gql>` end-to-end; named verbs (worktrees, panes,\n" +
-			"processes, conversations, contracts, hosts) land with Workstream C.",
+			"Use one of the named verbs (e.g. `host`) for high-level reads, or `--raw '<gql>'` for\n" +
+			"the escape hatch when you need a custom GraphQL query.",
+		Example: "  orchard query host\n" +
+			"  orchard query --raw 'query { health { status } }'",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if raw == "" {
-				return fmt.Errorf("provide --raw '<graphql>' (named verbs land in Workstream C)")
+				return fmt.Errorf("provide a verb (e.g. `host`) or --raw '<graphql>'")
 			}
-			return runRaw(cmd.OutOrStdout(), raw)
+			return runRaw(cmd.OutOrStdout(), server.DefaultAddr, raw)
 		},
 	}
 	cmd.Flags().StringVar(&raw, "raw", "", "raw GraphQL query string")
+	cmd.AddCommand(hostCmd())
 	return cmd
 }
 
-func runRaw(w io.Writer, query string) error {
+// runRaw POSTs `query` to addr's /graphql endpoint and pretty-prints the
+// JSON response. Exported indirectly via verbs that wrap it.
+func runRaw(w io.Writer, addr, query string) error {
 	body, err := json.Marshal(map[string]string{"query": query})
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, "http://"+server.DefaultAddr+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/graphql", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

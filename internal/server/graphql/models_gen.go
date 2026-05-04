@@ -2,6 +2,15 @@
 
 package graphql
 
+// A node in the orchard graph. Every node has a globally-unique id so
+// clients can fetch it via Query.node(id) regardless of which concrete
+// type it is.
+type Node interface {
+	IsNode()
+	// Globally-unique id (e.g. "Host:<machineId>").
+	GetID() string
+}
+
 type Health struct {
 	// Daemon health status — 'ok' when serving.
 	Status string `json:"status"`
@@ -9,5 +18,53 @@ type Health struct {
 	UptimeS int64 `json:"uptimeS"`
 }
 
+// A machine that orchard reflects. Identity is the OS-issued machine id
+// (/etc/machine-id on Linux, IOPlatformUUID on macOS). Resource load
+// samples on a 5s TTL.
+type Host struct {
+	// Stable orchard id — "Host:<machineId>".
+	ID string `json:"id"`
+	// OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID.
+	MachineID string `json:"machineId"`
+	// Hostname as reported by the OS at boot.
+	Hostname string `json:"hostname"`
+	// Operating system family — 'darwin', 'linux', etc.
+	Os string `json:"os"`
+	// Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable.
+	Kernel *string `json:"kernel,omitempty"`
+	// Reachable network address. v1: null for the local host; Workstream F populates for peers.
+	Address *string `json:"address,omitempty"`
+	// True when the daemon last heard from this host. v1: always true for local host.
+	Reachable bool `json:"reachable"`
+	// Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands.
+	ResourceLoad *ResourceLoad `json:"resourceLoad,omitempty"`
+	// RFC 3339 timestamp of the last successful read. v1: time of the last load sample for the local host.
+	LastSeenAt string `json:"lastSeenAt"`
+	// Peer hosts this daemon federates with. v1: always empty; Workstream F populates.
+	Peers []*Host `json:"peers"`
+}
+
+func (Host) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this Host) GetID() string { return this.ID }
+
 type Query struct {
+}
+
+// A snapshot of a host's resource utilisation. Percentages are 0..100.
+// Load averages are the kernel-reported 1/5/15-minute moving averages.
+type ResourceLoad struct {
+	// Aggregate CPU usage 0..100.
+	CPUPercent float64 `json:"cpuPercent"`
+	// Used memory as a percentage of total physical memory, 0..100.
+	MemPercent float64 `json:"memPercent"`
+	// Used disk on the root filesystem as a percentage, 0..100.
+	DiskPercent float64 `json:"diskPercent"`
+	// 1-minute load average.
+	LoadAvg1m float64 `json:"loadAvg1m"`
+	// 5-minute load average.
+	LoadAvg5m float64 `json:"loadAvg5m"`
+	// 15-minute load average.
+	LoadAvg15m float64 `json:"loadAvg15m"`
 }

@@ -6,10 +6,31 @@
 #
 # Workstream A scope: only the `health` field. Real node types come in
 # later workstreams.
+#
+# Workstream B-host: Host node + ResourceLoad. Identity surfaces machine
+# id, hostname, OS, kernel; resourceLoad surfaces live CPU/mem/disk/load
+# averages. peers ships empty until Workstream F federates orchard
+# instances together. Other providers add their own back-edges.
+
+"""
+A node in the orchard graph. Every node has a globally-unique id so
+clients can fetch it via Query.node(id) regardless of which concrete
+type it is.
+"""
+interface Node {
+  "Globally-unique id (e.g. \"Host:<machineId>\")."
+  id: ID!
+}
 
 type Query {
   "Liveness probe — returns daemon health and uptime."
   health: Health!
+
+  "The local machine running this daemon. Identity is one-shot at boot; resource load refreshes every 5s."
+  host: Host!
+
+  "All hosts known to this daemon. v1: only the local host. Workstream F adds federated peers."
+  hosts: [Host!]!
 }
 
 type Health {
@@ -18,4 +39,65 @@ type Health {
 
   "Uptime in seconds since daemon started."
   uptimeS: Int!
+}
+
+"""
+A machine that orchard reflects. Identity is the OS-issued machine id
+(/etc/machine-id on Linux, IOPlatformUUID on macOS). Resource load
+samples on a 5s TTL.
+"""
+type Host implements Node {
+  "Stable orchard id — \"Host:<machineId>\"."
+  id: ID!
+
+  "OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID."
+  machineId: String!
+
+  "Hostname as reported by the OS at boot."
+  hostname: String!
+
+  "Operating system family — 'darwin', 'linux', etc."
+  os: String!
+
+  "Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable."
+  kernel: String
+
+  "Reachable network address. v1: null for the local host; Workstream F populates for peers."
+  address: String
+
+  "True when the daemon last heard from this host. v1: always true for local host."
+  reachable: Boolean!
+
+  "Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands."
+  resourceLoad: ResourceLoad
+
+  "RFC 3339 timestamp of the last successful read. v1: time of the last load sample for the local host."
+  lastSeenAt: String!
+
+  "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
+  peers: [Host!]!
+}
+
+"""
+A snapshot of a host's resource utilisation. Percentages are 0..100.
+Load averages are the kernel-reported 1/5/15-minute moving averages.
+"""
+type ResourceLoad {
+  "Aggregate CPU usage 0..100."
+  cpuPercent: Float!
+
+  "Used memory as a percentage of total physical memory, 0..100."
+  memPercent: Float!
+
+  "Used disk on the root filesystem as a percentage, 0..100."
+  diskPercent: Float!
+
+  "1-minute load average."
+  loadAvg1m: Float!
+
+  "5-minute load average."
+  loadAvg5m: Float!
+
+  "15-minute load average."
+  loadAvg15m: Float!
 }
