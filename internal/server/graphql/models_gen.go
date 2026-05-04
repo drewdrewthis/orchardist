@@ -15,6 +15,43 @@ type Node interface {
 	GetID() string
 }
 
+// A Claude CLI account. v1 surfaces the single account `claude auth
+// status` reports for the local user — and the resolver returns it as
+// the only element of `claudeAccounts`.
+//
+// `quotaUsed`, `quotaCap`, and `quotaResetsAt` are scraped from
+// `ccusage`. They are nullable because:
+//   - `claude` may be installed without `ccusage`, in which case the
+//     fields are unknown rather than zero.
+//   - `ccusage` itself may not yet have observed any traffic for the
+//     current quota window, in which case the cap is unknown.
+//
+// When the numbers come from `ccusage` (the only source v1 supports),
+// `quotaEstimated` is true.
+type ClaudeAccount struct {
+	// Stable orchard id — "ClaudeAccount:<host>:<email>".
+	ID string `json:"id"`
+	// Email address `claude auth status` reports for the active session.
+	Email string `json:"email"`
+	// Quota consumed in the current window. Null when ccusage has not been able to report a number.
+	QuotaUsed *float64 `json:"quotaUsed,omitempty"`
+	// Quota cap for the current window. Null when ccusage cannot determine the cap (e.g. fresh install with no traffic).
+	QuotaCap *float64 `json:"quotaCap,omitempty"`
+	// True when the quota numbers are estimated by `ccusage` rather than reported by a first-party Anthropic API. Always true in v1.
+	QuotaEstimated bool `json:"quotaEstimated"`
+	// When the current quota window resets. Null when ccusage cannot determine the next reset.
+	QuotaResetsAt *time.Time `json:"quotaResetsAt,omitempty"`
+	// The host this account is scoped to.
+	Host *Host `json:"host"`
+	// Claude processes currently running under this account. v1 returns []; populated by Workstream B-claudeinstance.
+	Instances []*ClaudeInstance `json:"instances"`
+}
+
+func (ClaudeAccount) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this ClaudeAccount) GetID() string { return this.ID }
+
 type ClaudeInstance struct {
 	// Stable id; ws-b-claudeinstance formalises (host_id, claudePid).
 	ID string `json:"id"`

@@ -1,15 +1,14 @@
 // Package server hosts the orchard daemon's HTTP surface: the GraphQL
 // endpoint and the /health probe.
 //
-// Workstream A: GraphQL with the stub Health resolver, /health, graceful shutdown.
+// Workstream A: stub Health resolver, /health, graceful shutdown.
 // Workstream B-host: host Provider constructed and started in Run.
 // Workstream B-config: Option pattern (WithFoo) wires optional providers.
 // Workstream B-git: WithGit wires the git provider.
 // Workstream B-ps: WithPS attaches a ps provider; Run() starts it.
-// Workstream B-tmux: WithTmux attaches a tmux provider; Run() starts it
-// + the fsnotify-backed watcher.
-// Workstream B-claudeprojects: WithClaudeProjects attaches the conversation
-// provider; Run() starts it (fsnotify + initial scan).
+// Workstream B-tmux: WithTmux + tmux watcher.
+// Workstream B-claudeprojects: WithClaudeProjects starts on Run().
+// Workstream B-claudeaccount: WithClaudeAccount starts on Run().
 package server
 
 import (
@@ -27,6 +26,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
@@ -52,22 +52,23 @@ type Server struct {
 	psProv         *ps.Provider
 	tmuxProv       *tmux.Provider
 	claudeProjects *claudeprojects.Provider
+	claudeAccount  *claudeaccount.Provider
 }
 
 // Option mutates a Server during construction.
 type Option func(*Server, *resolvers.Resolver)
 
-// WithProjects wires a projects provider into the resolver.
+// WithProjects wires a projects provider.
 func WithProjects(p resolvers.ProjectsLister) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithProjects(p) }
 }
 
-// WithGit wires a git provider into the resolver.
+// WithGit wires a git provider.
 func WithGit(g *gitprovider.Provider) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithGit(g) }
 }
 
-// WithPS attaches a ps provider; Run() calls Start() before the listener opens.
+// WithPS attaches a ps provider; Run() calls Start().
 func WithPS(p *ps.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.psProv = p
@@ -88,6 +89,14 @@ func WithClaudeProjects(p *claudeprojects.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.claudeProjects = p
 		r.WithClaudeProjects(p)
+	}
+}
+
+// WithClaudeAccount attaches a claudeaccount provider; Run() calls Start().
+func WithClaudeAccount(p *claudeaccount.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.claudeAccount = p
+		r.WithClaudeAccount(p)
 	}
 }
 
@@ -165,6 +174,11 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("start claudeprojects provider: %w", err)
 		}
 	}
+	if s.claudeAccount != nil {
+		if err := s.claudeAccount.Start(ctx); err != nil {
+			return fmt.Errorf("start claudeaccount provider: %w", err)
+		}
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -192,8 +206,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// claudeProjectsRoot returns the directory the daemon should watch for
-// Claude Code transcripts. Precedence: env var, ~/.claude/projects, fallback.
+// claudeProjectsRoot returns the directory the daemon should watch.
 func claudeProjectsRoot() string {
 	if v := os.Getenv(claudeProjectsRootEnv); v != "" {
 		return v
