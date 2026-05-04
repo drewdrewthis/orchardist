@@ -49,6 +49,21 @@ func (Host) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Host) GetID() string { return this.ID }
 
+// A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
+type Project struct {
+	// Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration.
+	ID string `json:"id"`
+	// Absolute filesystem path to the project's working tree.
+	Directory string `json:"directory"`
+	// Human-readable label. Defaults to the basename of `directory` when not specified in the config.
+	Name string `json:"name"`
+}
+
+func (Project) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this Project) GetID() string { return this.ID }
+
 type Query struct {
 }
 

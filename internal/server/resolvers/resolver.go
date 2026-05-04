@@ -1,24 +1,51 @@
 package resolvers
 
 import (
+	"context"
 	"time"
 
+	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 )
+
+// ProjectsLister is the narrow read-side contract the project resolver
+// depends on. Defined here (consumer-side) so the resolver doesn't reach
+// into the provider package's full surface — accept interfaces, return
+// concretes.
+type ProjectsLister interface {
+	List(ctx context.Context) ([]configprovider.Project, error)
+}
 
 // Resolver is the dependency-injection root for GraphQL resolvers.
 //
 // gqlgen does NOT regenerate this file, so anything we wire here survives
-// schema iteration. Workstream A only needed StartedAt for the health
-// resolver; Workstream B-host adds the host Provider; later workstreams
-// hang their providers off this struct alongside.
+// schema iteration. Provider fields are suffixed with `Provider` to
+// avoid colliding with the generated field-resolver method names that
+// embed this struct (e.g. queryResolver.Projects(ctx)). Optional
+// dependencies are wired via With* setters so callers can swap
+// implementations in tests.
 type Resolver struct {
-	StartedAt    time.Time
-	HostProvider *host.Provider
+	StartedAt        time.Time
+	HostProvider     *host.Provider
+	ProjectsProvider ProjectsLister
 }
 
-// New constructs a Resolver with the daemon's start time and the host
-// Provider. The caller (the daemon entry point) calls this once at boot.
-func New(startedAt time.Time, h *host.Provider) *Resolver {
-	return &Resolver{StartedAt: startedAt, HostProvider: h}
+// New constructs a Resolver with the daemon's start time captured. The
+// caller (the daemon entry point) calls this once at boot. Optional
+// dependencies (the providers) are wired with the With* setters below
+// so callers can swap implementations in tests.
+func New(startedAt time.Time) *Resolver {
+	return &Resolver{StartedAt: startedAt}
+}
+
+// WithHost wires the host provider.
+func (r *Resolver) WithHost(h *host.Provider) *Resolver {
+	r.HostProvider = h
+	return r
+}
+
+// WithProjects wires the projects-listing dependency.
+func (r *Resolver) WithProjects(p ProjectsLister) *Resolver {
+	r.ProjectsProvider = p
+	return r
 }

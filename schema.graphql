@@ -11,6 +11,9 @@
 # id, hostname, OS, kernel; resourceLoad surfaces live CPU/mem/disk/load
 # averages. peers ships empty until Workstream F federates orchard
 # instances together. Other providers add their own back-edges.
+#
+# Workstream B-config: Project node — projects declared in the orchard
+# config. Read-only; mutations go through `orchard config add-repo`.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -31,6 +34,9 @@ type Query {
 
   "All hosts known to this daemon. v1: only the local host. Workstream F adds federated peers."
   hosts: [Host!]!
+
+  "All projects declared in ~/.config/orchard/config.json. Read-only — projects are added with `orchard config add-repo`."
+  projects: [Project!]!
 }
 
 type Health {
@@ -100,4 +106,16 @@ type ResourceLoad {
 
   "15-minute load average."
   loadAvg15m: Float!
+}
+
+"A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Project implements Node {
+  "Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration."
+  id: ID!
+
+  "Absolute filesystem path to the project's working tree."
+  directory: String!
+
+  "Human-readable label. Defaults to the basename of `directory` when not specified in the config."
+  name: String!
 }
