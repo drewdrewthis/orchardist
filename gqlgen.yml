@@ -30,3 +30,28 @@ models:
   Int:
     model:
       - github.com/99designs/gqlgen/graphql.Int64
+
+  # Host.processes accepts a filter argument, so route it through a custom
+  # resolver instead of struct-field auto-binding. The resolver consults the
+  # ps provider and applies the filter at the resolver layer (ADR-011 §6).
+  Host:
+    fields:
+      processes:
+        resolver: true
+
+  # Process is materialised by the ps provider's resolver layer. `args` and
+  # `cwd` are slow-path fields per ADR-011 §5.1 — they need their own
+  # resolvers so we can opt-in to the extra ps / lsof shellouts only when
+  # the field is actually selected.
+  Process:
+    fields:
+      host:
+        resolver: true
+      args:
+        resolver: true
+      cwd:
+        resolver: true
+      worktree:
+        resolver: true
+      claudeInstance:
+        resolver: true

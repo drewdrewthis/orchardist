@@ -32,16 +32,17 @@ func Command() *cobra.Command {
 		Aliases: []string{"q"},
 		Short:   "Query the running orchard daemon via GraphQL",
 		Long: "Dispatch GraphQL queries against the running daemon at " + server.DefaultAddr + ".\n\n" +
-			"Workstream A only wires `--raw <gql>` end-to-end; named verbs (worktrees, panes,\n" +
-			"processes, conversations, contracts, hosts) land with Workstream C.",
+			"Named verbs land per workstream — Workstream B-ps ships `processes`. The\n" +
+			"`--raw <gql>` escape hatch always works for arbitrary queries.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if raw == "" {
-				return fmt.Errorf("provide --raw '<graphql>' (named verbs land in Workstream C)")
+				return fmt.Errorf("provide a subcommand (e.g. `processes`) or --raw '<graphql>'")
 			}
 			return runRaw(cmd.OutOrStdout(), raw)
 		},
 	}
 	cmd.Flags().StringVar(&raw, "raw", "", "raw GraphQL query string")
+	cmd.AddCommand(processesCmd())
 	return cmd
 }
 

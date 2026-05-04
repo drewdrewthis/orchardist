@@ -6,10 +6,78 @@ package resolvers
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 )
+
+// Processes is the resolver for the processes field.
+func (r *hostResolver) Processes(ctx context.Context, obj *graphql1.Host, filter *graphql1.ProcessFilter) ([]*graphql1.Process, error) {
+	if r.PS == nil {
+		return nil, fmt.Errorf("ps provider not wired")
+	}
+	all := r.PS.List()
+	filtered := applyProcessFilter(ctx, r.PS, all, filter)
+	out := make([]*graphql1.Process, 0, len(filtered))
+	for i := range filtered {
+		out = append(out, projectProcess(&filtered[i], obj.ID))
+	}
+	return out, nil
+}
+
+// Host is the resolver for the host field.
+func (r *processResolver) Host(ctx context.Context, obj *graphql1.Process) (*graphql1.Host, error) {
+	hostID, _ := splitProcessNodeID(obj.ID)
+	return &graphql1.Host{ID: hostID}, nil
+}
+
+// Args is the resolver for the args field.
+func (r *processResolver) Args(ctx context.Context, obj *graphql1.Process) ([]string, error) {
+	if r.PS == nil {
+		return nil, nil
+	}
+	pid := int(obj.Pid)
+	got, err := r.PS.LoadArgs(ctx, []int{pid})
+	if err != nil {
+		return nil, err
+	}
+	return got[pid], nil
+}
+
+// Cwd is the resolver for the cwd field.
+func (r *processResolver) Cwd(ctx context.Context, obj *graphql1.Process) (*string, error) {
+	if r.PS == nil {
+		return nil, nil
+	}
+	cwd, err := r.PS.LoadCwd(ctx, int(obj.Pid))
+	if err != nil {
+		return nil, err
+	}
+	if cwd == "" {
+		return nil, nil
+	}
+	return &cwd, nil
+}
+
+// Worktree is the resolver for the worktree field.
+func (r *processResolver) Worktree(ctx context.Context, obj *graphql1.Process) (*graphql1.Worktree, error) {
+	// Placeholder per BRIEFING AC4. ws-b-git wires the cwd → worktree
+	// lookup once the git provider lands. Returning nil tells GraphQL
+	// "no worktree association"; callers reading this field today get
+	// null and the schema documents the forward reference.
+	return nil, nil
+}
+
+// ClaudeInstance is the resolver for the claudeInstance field.
+func (r *processResolver) ClaudeInstance(ctx context.Context, obj *graphql1.Process) (*graphql1.ClaudeInstance, error) {
+	// Placeholder per BRIEFING AC5. ws-b-claudeinstance (Wave 3) wires
+	// the back-edge from a Claude pid. Returning nil keeps the field
+	// queryable today with a null result.
+	return nil, nil
+}
 
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
@@ -20,7 +88,121 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	}, nil
 }
 
+// Host is the resolver for the host field.
+func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
+	hostID := "local"
+	if r.PS != nil {
+		hostID = r.PS.HostID()
+	}
+	return &graphql1.Host{ID: hostID}, nil
+}
+
+// Host returns graphql1.HostResolver implementation.
+func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
+
+// Process returns graphql1.ProcessResolver implementation.
+func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
+
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 
+type hostResolver struct{ *Resolver }
+type processResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+
+// projectProcess maps the provider's domain Process onto the gqlgen wire
+// type. Slow-path fields (args, cwd, worktree, claudeInstance) are left
+// as zero values — gqlgen calls the per-field resolvers for those.
+func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
+	tty := p.TTY
+	startedAt := p.StartedRaw
+	if !p.StartedAt.IsZero() {
+		startedAt = p.StartedAt.Format(time.RFC3339)
+	}
+	out := &graphql1.Process{
+		ID:         p.ID.String(),
+		Host:       &graphql1.Host{ID: hostID},
+		Pid:        int64(p.ID.PID),
+		Ppid:       int64(p.PPID),
+		Command:    p.Command,
+		StartedAt:  startedAt,
+		CPUPercent: p.CPUPercent,
+		MemBytes:   p.MemBytes,
+	}
+	if tty != "" {
+		out.Tty = &tty
+	}
+	return out
+}
+
+// applyProcessFilter applies the resolver-layer filter per ADR-011 §6.
+// Cheap filters (pidIn, commandIn) run first; cwdPrefix runs last
+// because it forces a slow lsof batch.
+func applyProcessFilter(ctx context.Context, p *ps.Provider, in []ps.Process, filter *graphql1.ProcessFilter) []ps.Process {
+	if filter == nil {
+		return in
+	}
+	out := make([]ps.Process, len(in))
+	copy(out, in)
+
+	if pids := filter.PidIn; len(pids) > 0 {
+		want := make(map[int]struct{}, len(pids))
+		for _, pid := range pids {
+			want[int(pid)] = struct{}{}
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if _, ok := want[proc.ID.PID]; ok {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	if cmds := filter.CommandIn; len(cmds) > 0 {
+		want := make(map[string]struct{}, len(cmds))
+		for _, c := range cmds {
+			want[c] = struct{}{}
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if _, ok := want[proc.Command]; ok {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	if filter.CwdPrefix != nil && *filter.CwdPrefix != "" {
+		prefix := *filter.CwdPrefix
+		pids := make([]int, 0, len(out))
+		for _, proc := range out {
+			pids = append(pids, proc.ID.PID)
+		}
+		cwds, err := p.LoadCwds(ctx, pids)
+		if err != nil {
+			return nil
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if cwd, ok := cwds[proc.ID.PID]; ok && strings.HasPrefix(cwd, prefix) {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	return out
+}
+
+// splitProcessNodeID extracts (host, pid) from a Process node id of the
+// form `<host>:<pid>`. Returns ("local", "") on malformed input — the
+// resolver is best-effort and prefers a slightly-wrong host id over an
+// error in the response.
+func splitProcessNodeID(s string) (string, string) {
+	idx := strings.LastIndexByte(s, ':')
+	if idx <= 0 {
+		return "local", s
+	}
+	return s[:idx], s[idx+1:]
+}

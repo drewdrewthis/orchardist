@@ -31,6 +31,7 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 )
 
 // Command returns the `daemon` subcommand group rooted with three leaves.
@@ -98,7 +99,12 @@ func runStart(parentCtx context.Context, addr string) error {
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	srv := server.New(addr, nil)
+	// Wire the ps provider for the local host. The host id is "local"
+	// for v1 — the host provider (Workstream G) replaces this with a
+	// real machine id once it lands.
+	psProvider := ps.New(ps.NewAdapter("local"), nil)
+
+	srv := server.New(addr, nil, server.WithPSProvider(psProvider))
 	return srv.Run(ctx)
 }
 
