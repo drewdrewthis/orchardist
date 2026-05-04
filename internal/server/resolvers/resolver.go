@@ -16,6 +16,7 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
@@ -39,6 +40,8 @@ type Resolver struct {
 	ContractsProvider   *contracts.Provider
 	ClaudeInstance      *claudeinstance.Provider
 	GH                  *gh.Provider
+	PeerProxy           *peerproxy.Provider
+	LocalEvents         *peerproxy.LocalInvalidator
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -109,6 +112,22 @@ func (r *Resolver) WithGH(p *gh.Provider) *Resolver {
 // WithClaudeInstance wires the claudeinstance provider.
 func (r *Resolver) WithClaudeInstance(p *claudeinstance.Provider) *Resolver {
 	r.ClaudeInstance = p
+	return r
+}
+
+// WithPeerProxy wires the federation provider that backs Host.peers,
+// Subscription.peer, and the node-id forwarder behind Query.node.
+func (r *Resolver) WithPeerProxy(p *peerproxy.Provider) *Resolver {
+	r.PeerProxy = p
+	return r
+}
+
+// WithLocalEvents wires the local-invalidation broker. When set, the
+// `Subscription.peer(host: "*")` resolver streams local events out
+// over the federation surface — this is what upstream peers
+// subscribe to via their peerproxy adapter.
+func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
+	r.LocalEvents = l
 	return r
 }
 

@@ -10,6 +10,8 @@
 // Workstream B-claudeaccount: WithClaudeAccount starts on Run().
 // Workstream B-hostservice: WithHostService starts on Run().
 // Workstream B-contracts: WithContracts starts on Run().
+// Workstream F: WithPeerProxy attaches the federation provider; the GraphQL
+// handler is wrapped in a bearer-secret middleware when peer_secret is set.
 package server
 
 import (
@@ -21,10 +23,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	gqlws "github.com/gorilla/websocket"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
@@ -33,6 +37,7 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
@@ -58,7 +63,15 @@ type Server struct {
 	claudeAccount  *claudeaccount.Provider
 	hostService    *hostservice.Provider
 	contracts      *contracts.Provider
+	peerProxy      *peerproxy.Provider
+	peerSecret     string
+	localEvents    *peerproxy.LocalInvalidator
 }
+
+// LocalEvents exposes the configured local-invalidation broker for
+// callers (typically tests) that need to fire synthetic events.
+// Returns nil when no broker is wired.
+func (s *Server) LocalEvents() *peerproxy.LocalInvalidator { return s.localEvents }
 
 // Option mutates a Server during construction.
 type Option func(*Server, *resolvers.Resolver)
@@ -121,6 +134,37 @@ func WithContracts(p *contracts.Provider) Option {
 	}
 }
 
+// WithPeerProxy attaches the federation provider that surfaces remote
+// orchard daemons as peers. Run() starts the per-peer probe + subscription
+// supervisor; the resolver gains node-id forwarding and Subscription.peer
+// tunneling.
+func WithPeerProxy(p *peerproxy.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.peerProxy = p
+		r.WithPeerProxy(p)
+	}
+}
+
+// WithPeerSecret enables the bearer-secret guard on /graphql. When the
+// secret is the empty string the middleware is a no-op (local-dev mode);
+// any non-empty value requires inbound requests to carry
+// `Authorization: Bearer <secret>`.
+func WithPeerSecret(secret string) Option {
+	return func(s *Server, _ *resolvers.Resolver) {
+		s.peerSecret = strings.TrimSpace(secret)
+	}
+}
+
+// WithLocalEvents wires a LocalInvalidator into the resolver so the
+// federation `Subscription.peer(host: "*")` field can fan local node
+// updates out to upstream peers.
+func WithLocalEvents(l *peerproxy.LocalInvalidator) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.localEvents = l
+		r.WithLocalEvents(l)
+	}
+}
+
 // New constructs a Server bound to addr.
 func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	if addr == "" {
@@ -147,7 +191,7 @@ func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthHandler(startedAt))
-	mux.Handle("/graphql", graphqlHandlerFor(res))
+	mux.Handle("/graphql", srv.bearerGuard(graphqlHandlerFor(res)))
 
 	srv.httpSrv = &http.Server{
 		Addr:              addr,
@@ -167,9 +211,21 @@ func (s *Server) HTTPHandler() http.Handler { return s.httpSrv.Handler }
 // Resolver returns the resolver root.
 func (s *Server) Resolver() *resolvers.Resolver { return s.resolver }
 
+// StartHostProvider hydrates the host provider's identity + load
+// caches. Run() does this implicitly; tests that mount GraphQLHandler
+// directly call this to make Query.host return useful data.
+func (s *Server) StartHostProvider(ctx context.Context) error {
+	if s.host == nil {
+		return nil
+	}
+	return s.host.Start(ctx)
+}
+
 // GraphQLHandler returns a fresh handler bound to the server's resolver.
+// The handler honours the configured peer secret — call sites that need
+// an unguarded handler should use the resolver directly.
 func (s *Server) GraphQLHandler() http.Handler {
-	return graphqlHandlerFor(s.resolver)
+	return s.bearerGuard(graphqlHandlerFor(s.resolver))
 }
 
 // Run starts providers, the HTTP server, and blocks until ctx is cancelled.
@@ -209,6 +265,12 @@ func (s *Server) Run(ctx context.Context) error {
 		if err := s.contracts.Start(ctx); err != nil {
 			return fmt.Errorf("start contracts provider: %w", err)
 		}
+	}
+	if s.peerProxy != nil {
+		if err := s.peerProxy.Start(ctx); err != nil {
+			return fmt.Errorf("peerproxy start: %w", err)
+		}
+		defer func() { _ = s.peerProxy.Stop() }()
 	}
 
 	errCh := make(chan error, 1)
@@ -261,7 +323,12 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 	}
 }
 
-// graphqlHandlerFor wires the gqlgen executable schema.
+// graphqlHandlerFor wires the gqlgen executable schema with an already-constructed Resolver root.
+//
+// The websocket transport carries Subscription operations (Workstream F);
+// the upgrader trusts any origin because the daemon is intended to bind
+// to localhost or a trusted LAN. Production deployments tighten this with
+// a reverse proxy that enforces origin/IP rules.
 func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	cfg := gql.Config{Resolvers: res}
 	srv := handler.New(gql.NewExecutableSchema(cfg))
@@ -269,6 +336,35 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	srv.AddTransport(transport.GET{})
 	srv.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
+		Upgrader: gqlws.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			CheckOrigin:     func(*http.Request) bool { return true },
+			Subprotocols:    []string{"graphql-transport-ws", "graphql-ws"},
+		},
 	})
 	return srv
+}
+
+// bearerGuard wraps next so that requests carrying the wrong (or no)
+// `Authorization: Bearer <secret>` header are rejected with 401. When
+// the configured secret is empty the middleware passes through, keeping
+// local-dev mode auth-free per the §11 backwards-compat rule.
+//
+// The header check applies uniformly to POST queries and the websocket
+// upgrade handshake — gorilla's Upgrader rejects requests it never
+// sees, so the middleware short-circuiting before delegation is the
+// only place we enforce the check.
+func (s *Server) bearerGuard(next http.Handler) http.Handler {
+	if s.peerSecret == "" {
+		return next
+	}
+	want := "Bearer " + s.peerSecret
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != want {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

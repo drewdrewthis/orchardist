@@ -18,9 +18,38 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
+
+// Peers is the resolver for the peers field.
+func (r *hostResolver) Peers(_ context.Context, obj *graphql1.Host) ([]*graphql1.Host, error) {
+	if r.PeerProxy == nil {
+		return []*graphql1.Host{}, nil
+	}
+	if !isLocalHostNode(r, obj) {
+		return []*graphql1.Host{}, nil
+	}
+	cfgs := r.PeerProxy.Peers()
+	out := make([]*graphql1.Host, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		reachable, lastReachedAt, _ := r.PeerProxy.Reachability(cfg.Name)
+		addr := cfg.Address
+		host := &graphql1.Host{
+			ID:         "Host:" + cfg.Name,
+			MachineID:  cfg.Name,
+			Hostname:   cfg.Name,
+			Os:         "remote",
+			Reachable:  reachable,
+			Address:    &addr,
+			Peers:      []*graphql1.Host{},
+			LastSeenAt: peerLastSeen(lastReachedAt),
+		}
+		out = append(out, host)
+	}
+	return out, nil
+}
 
 // Processes is the resolver for the host.processes field.
 func (r *hostResolver) Processes(ctx context.Context, obj *graphql1.Host, filter *graphql1.ProcessFilter) ([]*graphql1.Process, error) {
@@ -311,8 +340,37 @@ func (r *queryResolver) WorkflowRuns(ctx context.Context, repo string) ([]*graph
 }
 
 // Node is the resolver for the node field.
+//
+// The id's host segment selects the dispatch path: when it matches a
+// configured peer, the peerproxy provider forwards the lookup to that
+// remote daemon and the response is materialised back into a stub
+// Node carrying the typename + id. Otherwise the lookup falls through
+// to the local providers via resolveNode; ids whose host segment
+// matches no configured peer and no local provider also return a
+// best-effort stub so callers see a sensible answer instead of an
+// error.
 func (r *queryResolver) Node(ctx context.Context, id string) (graphql1.Node, error) {
-	return resolveNode(ctx, r.Resolver, id)
+	if r.PeerProxy != nil {
+		host := peerproxy.HostFromNodeID(id)
+		if host != "" && r.PeerProxy.HasPeer(host) {
+			pn, err := r.PeerProxy.Get(ctx, peerproxy.NodeID(id))
+			if err != nil {
+				return nil, err
+			}
+			return projectPeerNode(pn)
+		}
+	}
+	node, err := resolveNode(ctx, r.Resolver, id)
+	if err == nil {
+		return node, nil
+	}
+	// Fall back to a stub when the local providers are not wired —
+	// keeps Query.node well-behaved on minimal daemons (federation
+	// fixtures, single-host deployments without tmux/git/etc).
+	if stub, stubErr := resolveLocalNode(r, id); stubErr == nil && stub != nil {
+		return stub, nil
+	}
+	return nil, err
 }
 
 // NodeChanged is the resolver for the nodeChanged field.
@@ -323,6 +381,75 @@ func (r *subscriptionResolver) NodeChanged(ctx context.Context, id string) (<-ch
 // Processes is the resolver for the processes field.
 func (r *subscriptionResolver) Processes(ctx context.Context) (<-chan []*graphql1.Process, error) {
 	return subscribeProcesses(ctx, r.Resolver)
+}
+
+// Peer is the resolver for the peer field.
+func (r *subscriptionResolver) Peer(ctx context.Context, host string) (<-chan graphql1.Node, error) {
+	if host == "*" {
+		return r.streamLocalEvents(ctx)
+	}
+	if r.PeerProxy == nil {
+		return nil, fmt.Errorf("peerproxy provider not wired")
+	}
+	stream, err := r.PeerProxy.SubscribePeer(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan graphql1.Node, 16)
+	go func() {
+		defer close(out)
+		for ev := range stream {
+			if ev.NodeID == "" {
+				continue
+			}
+			node, err := r.PeerProxy.Get(ctx, ev.NodeID)
+			if err != nil || node == nil {
+				continue
+			}
+			projected, err := projectPeerNode(node)
+			if err != nil {
+				continue
+			}
+			select {
+			case out <- projected:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+func (r *subscriptionResolver) streamLocalEvents(ctx context.Context) (<-chan graphql1.Node, error) {
+	if r.LocalEvents == nil {
+		out := make(chan graphql1.Node)
+		go func() {
+			<-ctx.Done()
+			close(out)
+		}()
+		return out, nil
+	}
+	stream := r.LocalEvents.Subscribe(ctx)
+	out := make(chan graphql1.Node, 16)
+	go func() {
+		defer close(out)
+		for ev := range stream {
+			id := string(ev.NodeID)
+			if id == "" {
+				continue
+			}
+			node, err := projectLocalInvalidation(id)
+			if err != nil || node == nil {
+				continue
+			}
+			select {
+			case out <- node:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 // Server is the resolver for tmuxClient.server.

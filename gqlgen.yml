@@ -49,6 +49,8 @@ models:
     fields:
       processes:
         resolver: true
+      peers:
+        resolver: true
 
   # Process is materialised by the ps provider's resolver layer. `args` and
   # `cwd` are slow-path fields per ADR-011 §5.1 — they need their own
