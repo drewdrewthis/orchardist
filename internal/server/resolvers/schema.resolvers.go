@@ -6,10 +6,28 @@ package resolvers
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 )
+
+// Worktrees is the resolver for the worktrees field.
+func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) ([]*graphql1.Worktree, error) {
+	if r.Git == nil {
+		return nil, fmt.Errorf("git provider not configured")
+	}
+	worktrees, err := r.Git.ListByProject(ctx, obj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list worktrees for project %q: %w", obj.ID, err)
+	}
+	out := make([]*graphql1.Worktree, 0, len(worktrees))
+	for _, w := range worktrees {
+		out = append(out, toGraphQLWorktree(w))
+	}
+	return out, nil
+}
 
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
@@ -20,7 +38,60 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	}, nil
 }
 
+// Projects is the resolver for the projects field.
+func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, error) {
+	if r.ProjectsSrc == nil {
+		// No source registered yet (ws-b-config hasn't landed). Return
+		// an empty list rather than erroring — the schema is valid;
+		// there are simply no projects to enumerate.
+		return []*graphql1.Project{}, nil
+	}
+	records, err := r.ProjectsSrc.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	out := make([]*graphql1.Project, 0, len(records))
+	for _, rec := range records {
+		out = append(out, &graphql1.Project{
+			ID:        rec.ID,
+			Directory: rec.Directory,
+			Name:      rec.Name,
+		})
+	}
+	return out, nil
+}
+
+// Processes is the resolver for the processes field.
+//
+// Placeholder until Workstream B-ps lands the ps provider. Returning
+// an empty slice satisfies the non-null `[Process!]!` schema contract
+// and keeps the rest of the graph queryable.
+func (r *worktreeResolver) Processes(_ context.Context, _ *graphql1.Worktree) ([]*graphql1.Process, error) {
+	return []*graphql1.Process{}, nil
+}
+
+// Project returns graphql1.ProjectResolver implementation.
+func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
+
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 
+// Worktree returns graphql1.WorktreeResolver implementation.
+func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
+
+type projectResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type worktreeResolver struct{ *Resolver }
+
+// toGraphQLWorktree projects a git provider Worktree into the GraphQL
+// model. Kept as a free function so the projection logic is testable
+// without a full resolver harness.
+func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
+	return &graphql1.Worktree{
+		ID:     string(w.ID),
+		Path:   w.Path,
+		Branch: w.Branch,
+		Head:   w.Head,
+		Bare:   w.Bare,
+	}
+}

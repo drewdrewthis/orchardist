@@ -35,22 +35,38 @@ type Server struct {
 	startedAt time.Time
 	logger    *slog.Logger
 	httpSrv   *http.Server
+	resolver  *resolvers.Resolver
 }
 
-// New constructs a Server bound to addr. The Resolver captures the start
-// time so /health and the GraphQL `health` field report the same uptime.
+// New constructs a Server bound to addr with a fresh, default-wired
+// resolver. Use [NewWithResolver] when callers (tests, daemon entry
+// points wiring providers) want to supply their own.
 func New(addr string, logger *slog.Logger) *Server {
+	startedAt := time.Now()
+	return NewWithResolver(addr, logger, resolvers.New(startedAt))
+}
+
+// NewWithResolver constructs a Server with an explicit resolver. The
+// resolver's StartedAt drives the health uptime; the function fills it
+// in (now) when the caller left it as the zero value.
+func NewWithResolver(addr string, logger *slog.Logger, resolver *resolvers.Resolver) *Server {
 	if addr == "" {
 		addr = DefaultAddr
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	startedAt := time.Now()
+	if resolver == nil {
+		resolver = resolvers.New(time.Now())
+	}
+	if resolver.StartedAt.IsZero() {
+		resolver.StartedAt = time.Now()
+	}
+	startedAt := resolver.StartedAt
 
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthHandler(startedAt))
-	mux.Handle("/graphql", graphqlHandler(startedAt))
+	mux.Handle("/graphql", graphqlHandler(resolver))
 
 	httpSrv := &http.Server{
 		Addr:              addr,
@@ -63,7 +79,19 @@ func New(addr string, logger *slog.Logger) *Server {
 		startedAt: startedAt,
 		logger:    logger,
 		httpSrv:   httpSrv,
+		resolver:  resolver,
 	}
+}
+
+// Resolver returns the resolver root the server was built with. Tests
+// that need to inject providers post-construction can use this.
+func (s *Server) Resolver() *resolvers.Resolver { return s.resolver }
+
+// GraphQLHandler returns a fresh handler bound to the server's
+// resolver. Useful for in-process tests that drive the schema through
+// httptest.Server without standing up the full HTTP listener.
+func (s *Server) GraphQLHandler() http.Handler {
+	return graphqlHandler(s.resolver)
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled, then
@@ -111,8 +139,8 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 // graphqlHandler wires the gqlgen executable schema. POST + GET (for
 // query strings) are both accepted; multipart and websocket transports
 // stay deferred to Workstream C.
-func graphqlHandler(startedAt time.Time) http.Handler {
-	cfg := gql.Config{Resolvers: resolvers.New(startedAt)}
+func graphqlHandler(resolver *resolvers.Resolver) http.Handler {
+	cfg := gql.Config{Resolvers: resolver}
 	srv := handler.New(gql.NewExecutableSchema(cfg))
 	srv.AddTransport(transport.POST{})
 	srv.AddTransport(transport.GET{})
