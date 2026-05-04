@@ -295,6 +295,21 @@ func (r *queryResolver) ClaudeInstances(ctx context.Context) ([]*graphql1.Claude
 	return r.ClaudeInstance.List(ctx)
 }
 
+// PullRequests is the resolver for the pullRequests field.
+func (r *queryResolver) PullRequests(ctx context.Context, repo string, state *graphql1.PullRequestState) ([]*graphql1.PullRequest, error) {
+	return r.queryPullRequestsResolver(ctx, repo, state)
+}
+
+// Issues is the resolver for the issues field.
+func (r *queryResolver) Issues(ctx context.Context, repo string, state *graphql1.IssueState) ([]*graphql1.Issue, error) {
+	return r.queryIssuesResolver(ctx, repo, state)
+}
+
+// WorkflowRuns is the resolver for the workflowRuns field.
+func (r *queryResolver) WorkflowRuns(ctx context.Context, repo string) ([]*graphql1.WorkflowRun, error) {
+	return r.queryWorkflowRunsResolver(ctx, repo)
+}
+
 // Server is the resolver for tmuxClient.server.
 func (r *tmuxClientResolver) Server(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
 	if r.Tmux == nil {

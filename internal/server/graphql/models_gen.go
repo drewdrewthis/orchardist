@@ -253,6 +253,36 @@ func (HostService) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this HostService) GetID() string { return this.ID }
 
+// An issue on a GitHub repository. Pull requests are excluded.
+type Issue struct {
+	ID          string          `json:"id"`
+	RepoOwner   string          `json:"repoOwner"`
+	RepoName    string          `json:"repoName"`
+	Number      int64           `json:"number"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body"`
+	State       IssueState      `json:"state"`
+	AuthorLogin string          `json:"authorLogin"`
+	URL         string          `json:"url"`
+	CreatedAt   string          `json:"createdAt"`
+	UpdatedAt   string          `json:"updatedAt"`
+	Comments    []*IssueComment `json:"comments,omitempty"`
+}
+
+func (Issue) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this Issue) GetID() string { return this.ID }
+
+// A comment on an issue or pull request thread.
+type IssueComment struct {
+	ID          string `json:"id"`
+	AuthorLogin string `json:"authorLogin"`
+	Body        string `json:"body"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
 type Process struct {
 	// Stable id formatted as `<host>:<pid>`.
 	ID string `json:"id"`
@@ -312,6 +342,40 @@ func (Project) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Project) GetID() string { return this.ID }
+
+// A pull request on a GitHub repository. Sourced from the GitHub REST API.
+type PullRequest struct {
+	ID          string               `json:"id"`
+	RepoOwner   string               `json:"repoOwner"`
+	RepoName    string               `json:"repoName"`
+	Number      int64                `json:"number"`
+	Title       string               `json:"title"`
+	Body        string               `json:"body"`
+	State       PullRequestState     `json:"state"`
+	Draft       bool                 `json:"draft"`
+	AuthorLogin string               `json:"authorLogin"`
+	BaseRef     string               `json:"baseRef"`
+	HeadRef     string               `json:"headRef"`
+	URL         string               `json:"url"`
+	CreatedAt   string               `json:"createdAt"`
+	UpdatedAt   string               `json:"updatedAt"`
+	Reviews     []*PullRequestReview `json:"reviews,omitempty"`
+	Comments    []*IssueComment      `json:"comments,omitempty"`
+}
+
+func (PullRequest) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this PullRequest) GetID() string { return this.ID }
+
+// A review submitted on a pull request.
+type PullRequestReview struct {
+	ID          string `json:"id"`
+	AuthorLogin string `json:"authorLogin"`
+	State       string `json:"state"`
+	Body        string `json:"body"`
+	SubmittedAt string `json:"submittedAt"`
+}
 
 type Query struct {
 }
@@ -509,6 +573,28 @@ func (TmuxWindow) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this TmuxWindow) GetID() string { return this.ID }
 
+// A GitHub Actions workflow run.
+type WorkflowRun struct {
+	ID           string `json:"id"`
+	RepoOwner    string `json:"repoOwner"`
+	RepoName     string `json:"repoName"`
+	RunID        int64  `json:"runId"`
+	Name         string `json:"name"`
+	WorkflowPath string `json:"workflowPath"`
+	Status       string `json:"status"`
+	Conclusion   string `json:"conclusion"`
+	HeadBranch   string `json:"headBranch"`
+	HeadSha      string `json:"headSHA"`
+	URL          string `json:"url"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
+func (WorkflowRun) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this WorkflowRun) GetID() string { return this.ID }
+
 // A git worktree — either the project's main checkout or one created with `git worktree add`. See ADR-011 §5.1.
 type Worktree struct {
 	// Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`.
@@ -690,5 +776,95 @@ func (e *InstanceState) UnmarshalGQL(v interface{}) error {
 }
 
 func (e InstanceState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// State filter for the issues query.
+type IssueState string
+
+const (
+	IssueStateOpen   IssueState = "OPEN"
+	IssueStateClosed IssueState = "CLOSED"
+	IssueStateAll    IssueState = "ALL"
+)
+
+var AllIssueState = []IssueState{
+	IssueStateOpen,
+	IssueStateClosed,
+	IssueStateAll,
+}
+
+func (e IssueState) IsValid() bool {
+	switch e {
+	case IssueStateOpen, IssueStateClosed, IssueStateAll:
+		return true
+	}
+	return false
+}
+
+func (e IssueState) String() string {
+	return string(e)
+}
+
+func (e *IssueState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = IssueState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid IssueState", str)
+	}
+	return nil
+}
+
+func (e IssueState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// State filter for the pullRequests query.
+type PullRequestState string
+
+const (
+	PullRequestStateOpen   PullRequestState = "OPEN"
+	PullRequestStateClosed PullRequestState = "CLOSED"
+	PullRequestStateMerged PullRequestState = "MERGED"
+	PullRequestStateAll    PullRequestState = "ALL"
+)
+
+var AllPullRequestState = []PullRequestState{
+	PullRequestStateOpen,
+	PullRequestStateClosed,
+	PullRequestStateMerged,
+	PullRequestStateAll,
+}
+
+func (e PullRequestState) IsValid() bool {
+	switch e {
+	case PullRequestStateOpen, PullRequestStateClosed, PullRequestStateMerged, PullRequestStateAll:
+		return true
+	}
+	return false
+}
+
+func (e PullRequestState) String() string {
+	return string(e)
+}
+
+func (e *PullRequestState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = PullRequestState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid PullRequestState", str)
+	}
+	return nil
+}
+
+func (e PullRequestState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }

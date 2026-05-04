@@ -155,10 +155,39 @@ func runRaw(ctx context.Context, w io.Writer, query string) error {
 	return nil
 }
 
+// postGraphQLWithVars sends a GraphQL document with optional variables.
+func postGraphQLWithVars(ctx context.Context, query string, variables map[string]any) ([]byte, error) {
+	payload := map[string]any{"query": query}
+	if len(variables) > 0 {
+		payload["variables"] = variables
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, resolveDaemonURL()+"/graphql", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: httpTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon not running, start with `orchard daemon start` (%w)", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
+}
+
 // postGraphQL sends a GraphQL document to the daemon and returns the
-// raw response body. Error messages name the next action ("start with
-// `orchard daemon start`") so users don't have to translate a
-// connection-refused on their own.
+// raw response body.
 func postGraphQL(ctx context.Context, query string) ([]byte, error) {
 	body, err := json.Marshal(map[string]string{"query": query})
 	if err != nil {

@@ -170,6 +170,15 @@ type Query {
 
   "All live Claude instances the daemon is tracking via heartbeat files."
   claudeInstances: [ClaudeInstance!]!
+
+  "Pull requests on a GitHub repository. `repo` is `owner/name`."
+  pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
+
+  "Issues on a GitHub repository. `repo` is `owner/name`."
+  issues(repo: String!, state: IssueState = OPEN): [Issue!]
+
+  "Workflow runs on a GitHub repository. `repo` is `owner/name`."
+  workflowRuns(repo: String!): [WorkflowRun!]
 }
 
 type Health {
@@ -728,4 +737,96 @@ input ContractFilter {
   ownerSessionId: String
   ownerAgentName: String
   parentContractId: ID
+}
+
+"State filter for the pullRequests query."
+enum PullRequestState {
+  OPEN
+  CLOSED
+  MERGED
+  ALL
+}
+
+"State filter for the issues query."
+enum IssueState {
+  OPEN
+  CLOSED
+  ALL
+}
+
+"""
+A pull request on a GitHub repository. Sourced from the GitHub REST API.
+"""
+type PullRequest implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  number: Int!
+  title: String!
+  body: String!
+  state: PullRequestState!
+  draft: Boolean!
+  authorLogin: String!
+  baseRef: String!
+  headRef: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+  reviews: [PullRequestReview!]
+  comments: [IssueComment!]
+}
+
+"A review submitted on a pull request."
+type PullRequestReview {
+  id: ID!
+  authorLogin: String!
+  state: String!
+  body: String!
+  submittedAt: String!
+}
+
+"""
+An issue on a GitHub repository. Pull requests are excluded.
+"""
+type Issue implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  number: Int!
+  title: String!
+  body: String!
+  state: IssueState!
+  authorLogin: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+  comments: [IssueComment!]
+}
+
+"A comment on an issue or pull request thread."
+type IssueComment {
+  id: ID!
+  authorLogin: String!
+  body: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+A GitHub Actions workflow run.
+"""
+type WorkflowRun implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  runId: Int!
+  name: String!
+  workflowPath: String!
+  status: String!
+  conclusion: String!
+  headBranch: String!
+  headSHA: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
 }
