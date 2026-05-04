@@ -23,12 +23,23 @@ func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 
 // Host is the resolver for the host field.
 func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
-	panic(fmt.Errorf("not implemented: Host - host"))
+	if r.HostProvider == nil {
+		return nil, fmt.Errorf("host provider not initialised")
+	}
+	h, _, err := r.HostProvider.Get(ctx, r.HostProvider.LocalID())
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
+	return h, nil
 }
 
 // Hosts is the resolver for the hosts field.
 func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
-	panic(fmt.Errorf("not implemented: Hosts - hosts"))
+	h, err := r.Query().Host(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return []*graphql1.Host{h}, nil
 }
 
 // Query returns graphql1.QueryResolver implementation.
