@@ -18,6 +18,10 @@
 # Workstream B-git: Worktree node + Project.worktrees back-edge. Process
 # is forward-declared so Worktree.processes can reference it; ws-b-ps
 # fills in the rest.
+#
+# Workstream B-ps: full Process node + Host.processes(filter). Edges
+# to Worktree (via cwd) and ClaudeInstance (via foreground claude pid)
+# stay placeholder until their owning workstreams land.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -29,12 +33,74 @@ interface Node {
   id: ID!
 }
 
-# Process is forward-declared here so Worktree.processes can reference
-# it; the ps provider in ws-b-ps fills in the rest of the type.
-# Until that lands, Worktree.processes resolves to `[]`.
+# Process is an OS-level process surfaced via the `ps` adapter.
+# Identity: (host_id, pid). Lifetime: alive AND visible to ps.
+# Not enumerable from root — reach via `host.processes` etc.
+# See ADR-011 §5.1.
 type Process implements Node {
   "Stable id formatted as `<host>:<pid>`."
   id: ID!
+
+  "Host this process is running on."
+  host: Host!
+
+  "Process id."
+  pid: Int!
+
+  "Parent process id (0 for kernel/launchd-rooted processes)."
+  ppid: Int!
+
+  "Command basename (e.g. 'sleep', 'claude'). Cheap, always populated."
+  command: String!
+
+  "Full argv. Slow path — opt-in (separate `ps -wwax -o pid,args` lookup)."
+  args: [String!]
+
+  "Current working directory. Slow path — opt-in (lsof on macOS, /proc on Linux)."
+  cwd: String
+
+  "Process start time (RFC3339 if parseable, otherwise the raw `lstart` field)."
+  startedAt: String!
+
+  "CPU percent as reported by ps."
+  cpuPercent: Float!
+
+  "Resident memory in bytes (RSS * 1024 from ps)."
+  memBytes: Int!
+
+  "Controlling terminal, or null if none."
+  tty: String
+
+  # Cross-provider edges — placeholders until their owning workstreams land.
+  # ws-b-git wires `worktree` via cwd → git worktree lookup;
+  # ws-b-claudeinstance (Wave 3) wires `claudeInstance` as the back-edge
+  # from a Claude pid.
+
+  "Worktree this process is running inside, derived from cwd. Null until ws-b-git wires the lookup."
+  worktree: Worktree
+
+  "Claude instance back-edge — populated when this pid is the foreground claude pid. Null until ws-b-claudeinstance lands."
+  claudeInstance: ClaudeInstance
+}
+
+# Forward-declared placeholder. ws-b-claudeinstance replaces this with the
+# real ClaudeInstance node (pane, process, account, state, …).
+type ClaudeInstance {
+  "Stable id; ws-b-claudeinstance formalises (host_id, claudePid)."
+  id: ID!
+}
+
+# ProcessFilter is applied at the resolver layer over the cached process
+# list. Multiple filters are AND-combined.
+input ProcessFilter {
+  "Match processes whose command basename is in this list."
+  commandIn: [String!]
+
+  "Match processes whose cwd starts with this prefix. Forces cwd resolution."
+  cwdPrefix: String
+
+  "Match processes by pid."
+  pidIn: [Int!]
 }
 
 type Query {
@@ -94,6 +160,9 @@ type Host implements Node {
 
   "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
   peers: [Host!]!
+
+  "Processes visible to this host's `ps` adapter, optionally filtered."
+  processes(filter: ProcessFilter): [Process!]!
 }
 
 """

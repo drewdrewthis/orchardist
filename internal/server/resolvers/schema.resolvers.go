@@ -8,16 +8,15 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 )
 
-// Worktrees is the resolver for the worktrees field. Lists the git
-// worktrees backing this project — the main checkout plus everything
-// under `.git/worktrees/`. Returns an empty list when the git provider
-// has no records yet for this project (e.g. fresh boot before scan).
+// Worktrees is the resolver for the project.worktrees field.
 func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) ([]*graphql1.Worktree, error) {
 	if r.Git == nil {
 		return nil, fmt.Errorf("git provider not configured")
@@ -31,6 +30,65 @@ func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) 
 		out = append(out, toGraphQLWorktree(w))
 	}
 	return out, nil
+}
+
+// Processes is the resolver for the host.processes field.
+func (r *hostResolver) Processes(ctx context.Context, obj *graphql1.Host, filter *graphql1.ProcessFilter) ([]*graphql1.Process, error) {
+	if r.PS == nil {
+		return nil, fmt.Errorf("ps provider not wired")
+	}
+	all := r.PS.List()
+	filtered := applyProcessFilter(ctx, r.PS, all, filter)
+	hostID := r.PS.HostID()
+	out := make([]*graphql1.Process, 0, len(filtered))
+	for i := range filtered {
+		out = append(out, projectProcess(&filtered[i], hostID))
+	}
+	return out, nil
+}
+
+// Host is the resolver for the process.host field.
+func (r *processResolver) Host(_ context.Context, obj *graphql1.Process) (*graphql1.Host, error) {
+	hostID, _ := splitProcessNodeID(obj.ID)
+	return &graphql1.Host{ID: hostID}, nil
+}
+
+// Args is the resolver for the process.args field.
+func (r *processResolver) Args(ctx context.Context, obj *graphql1.Process) ([]string, error) {
+	if r.PS == nil {
+		return nil, nil
+	}
+	pid := int(obj.Pid)
+	got, err := r.PS.LoadArgs(ctx, []int{pid})
+	if err != nil {
+		return nil, err
+	}
+	return got[pid], nil
+}
+
+// Cwd is the resolver for the process.cwd field.
+func (r *processResolver) Cwd(ctx context.Context, obj *graphql1.Process) (*string, error) {
+	if r.PS == nil {
+		return nil, nil
+	}
+	cwd, err := r.PS.LoadCwd(ctx, int(obj.Pid))
+	if err != nil {
+		return nil, err
+	}
+	if cwd == "" {
+		return nil, nil
+	}
+	return &cwd, nil
+}
+
+// Worktree is the resolver for the process.worktree field. Placeholder until ws-b-git wires the cwd lookup.
+func (r *processResolver) Worktree(_ context.Context, _ *graphql1.Process) (*graphql1.Worktree, error) {
+	return nil, nil
+}
+
+// ClaudeInstance is the resolver for the process.claudeInstance field. Placeholder until ws-b-claudeinstance lands.
+func (r *processResolver) ClaudeInstance(_ context.Context, _ *graphql1.Process) (*graphql1.ClaudeInstance, error) {
+	return nil, nil
 }
 
 // Health is the resolver for the health field.
@@ -63,9 +121,7 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 	return []*graphql1.Host{h}, nil
 }
 
-// Projects is the resolver for the projects field. It returns the
-// in-memory cached snapshot from the config provider. Order is stable
-// (by id) so consumers get reproducible output.
+// Projects is the resolver for the projects field.
 func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, error) {
 	if r.ProjectsProvider == nil {
 		return nil, fmt.Errorf("projects provider not wired: daemon misconfigured")
@@ -86,14 +142,16 @@ func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, erro
 	return out, nil
 }
 
-// Processes is the resolver for the processes field.
-//
-// Placeholder until Workstream B-ps lands the ps provider. Returning
-// an empty slice satisfies the non-null `[Process!]!` schema contract
-// and keeps the rest of the graph queryable.
+// Processes is the resolver for the worktree.processes field. Placeholder until cwd-to-worktree join lands.
 func (r *worktreeResolver) Processes(_ context.Context, _ *graphql1.Worktree) ([]*graphql1.Process, error) {
 	return []*graphql1.Process{}, nil
 }
+
+// Host returns graphql1.HostResolver implementation.
+func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
+
+// Process returns graphql1.ProcessResolver implementation.
+func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
 
 // Project returns graphql1.ProjectResolver implementation.
 func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
@@ -104,13 +162,13 @@ func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 // Worktree returns graphql1.WorktreeResolver implementation.
 func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
 
+type hostResolver struct{ *Resolver }
+type processResolver struct{ *Resolver }
 type projectResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type worktreeResolver struct{ *Resolver }
 
-// toGraphQLWorktree projects a git provider Worktree into the GraphQL
-// model. Kept as a free function so the projection logic is testable
-// without a full resolver harness.
+// toGraphQLWorktree projects a git provider Worktree into the GraphQL model.
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 	return &graphql1.Worktree{
 		ID:     string(w.ID),
@@ -119,4 +177,95 @@ func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 		Head:   w.Head,
 		Bare:   w.Bare,
 	}
+}
+
+// projectProcess maps the provider's domain Process onto the gqlgen wire type.
+func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
+	tty := p.TTY
+	startedAt := p.StartedRaw
+	if !p.StartedAt.IsZero() {
+		startedAt = p.StartedAt.Format(time.RFC3339)
+	}
+	out := &graphql1.Process{
+		ID:         p.ID.String(),
+		Host:       &graphql1.Host{ID: hostID},
+		Pid:        int64(p.ID.PID),
+		Ppid:       int64(p.PPID),
+		Command:    p.Command,
+		StartedAt:  startedAt,
+		CPUPercent: p.CPUPercent,
+		MemBytes:   p.MemBytes,
+	}
+	if tty != "" {
+		out.Tty = &tty
+	}
+	return out
+}
+
+// applyProcessFilter applies the resolver-layer filter.
+// Cheap filters (pidIn, commandIn) run first; cwdPrefix forces a slow lsof batch.
+func applyProcessFilter(ctx context.Context, p *ps.Provider, in []ps.Process, filter *graphql1.ProcessFilter) []ps.Process {
+	if filter == nil {
+		return in
+	}
+	out := make([]ps.Process, len(in))
+	copy(out, in)
+
+	if pids := filter.PidIn; len(pids) > 0 {
+		want := make(map[int]struct{}, len(pids))
+		for _, pid := range pids {
+			want[int(pid)] = struct{}{}
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if _, ok := want[proc.ID.PID]; ok {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	if cmds := filter.CommandIn; len(cmds) > 0 {
+		want := make(map[string]struct{}, len(cmds))
+		for _, c := range cmds {
+			want[c] = struct{}{}
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if _, ok := want[proc.Command]; ok {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	if filter.CwdPrefix != nil && *filter.CwdPrefix != "" {
+		prefix := *filter.CwdPrefix
+		pids := make([]int, 0, len(out))
+		for _, proc := range out {
+			pids = append(pids, proc.ID.PID)
+		}
+		cwds, err := p.LoadCwds(ctx, pids)
+		if err != nil {
+			return nil
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if cwd, ok := cwds[proc.ID.PID]; ok && strings.HasPrefix(cwd, prefix) {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	return out
+}
+
+// splitProcessNodeID extracts (host, pid) from a Process node id of the form host:pid.
+func splitProcessNodeID(s string) (string, string) {
+	idx := strings.LastIndexByte(s, ':')
+	if idx <= 0 {
+		return "local", s
+	}
+	return s[:idx], s[idx+1:]
 }

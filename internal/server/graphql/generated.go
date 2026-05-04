@@ -37,6 +37,8 @@ type Config struct {
 }
 
 type ResolverRoot interface {
+	Host() HostResolver
+	Process() ProcessResolver
 	Project() ProjectResolver
 	Query() QueryResolver
 	Worktree() WorktreeResolver
@@ -46,6 +48,10 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	ClaudeInstance struct {
+		ID func(childComplexity int) int
+	}
+
 	Health struct {
 		Status  func(childComplexity int) int
 		UptimeS func(childComplexity int) int
@@ -60,12 +66,25 @@ type ComplexityRoot struct {
 		MachineID    func(childComplexity int) int
 		Os           func(childComplexity int) int
 		Peers        func(childComplexity int) int
+		Processes    func(childComplexity int, filter *ProcessFilter) int
 		Reachable    func(childComplexity int) int
 		ResourceLoad func(childComplexity int) int
 	}
 
 	Process struct {
-		ID func(childComplexity int) int
+		Args           func(childComplexity int) int
+		CPUPercent     func(childComplexity int) int
+		ClaudeInstance func(childComplexity int) int
+		Command        func(childComplexity int) int
+		Cwd            func(childComplexity int) int
+		Host           func(childComplexity int) int
+		ID             func(childComplexity int) int
+		MemBytes       func(childComplexity int) int
+		Pid            func(childComplexity int) int
+		Ppid           func(childComplexity int) int
+		StartedAt      func(childComplexity int) int
+		Tty            func(childComplexity int) int
+		Worktree       func(childComplexity int) int
 	}
 
 	Project struct {
@@ -101,6 +120,18 @@ type ComplexityRoot struct {
 	}
 }
 
+type HostResolver interface {
+	Processes(ctx context.Context, obj *Host, filter *ProcessFilter) ([]*Process, error)
+}
+type ProcessResolver interface {
+	Host(ctx context.Context, obj *Process) (*Host, error)
+
+	Args(ctx context.Context, obj *Process) ([]string, error)
+	Cwd(ctx context.Context, obj *Process) (*string, error)
+
+	Worktree(ctx context.Context, obj *Process) (*Worktree, error)
+	ClaudeInstance(ctx context.Context, obj *Process) (*ClaudeInstance, error)
+}
 type ProjectResolver interface {
 	Worktrees(ctx context.Context, obj *Project) ([]*Worktree, error)
 }
@@ -132,6 +163,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 	ec := executionContext{nil, e, 0, 0, nil}
 	_ = ec
 	switch typeName + "." + field {
+
+	case "ClaudeInstance.id":
+		if e.complexity.ClaudeInstance.ID == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.ID(childComplexity), true
 
 	case "Health.status":
 		if e.complexity.Health.Status == nil {
@@ -203,6 +241,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Host.Peers(childComplexity), true
 
+	case "Host.processes":
+		if e.complexity.Host.Processes == nil {
+			break
+		}
+
+		args, err := ec.field_Host_processes_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Host.Processes(childComplexity, args["filter"].(*ProcessFilter)), true
+
 	case "Host.reachable":
 		if e.complexity.Host.Reachable == nil {
 			break
@@ -217,12 +267,96 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Host.ResourceLoad(childComplexity), true
 
+	case "Process.args":
+		if e.complexity.Process.Args == nil {
+			break
+		}
+
+		return e.complexity.Process.Args(childComplexity), true
+
+	case "Process.cpuPercent":
+		if e.complexity.Process.CPUPercent == nil {
+			break
+		}
+
+		return e.complexity.Process.CPUPercent(childComplexity), true
+
+	case "Process.claudeInstance":
+		if e.complexity.Process.ClaudeInstance == nil {
+			break
+		}
+
+		return e.complexity.Process.ClaudeInstance(childComplexity), true
+
+	case "Process.command":
+		if e.complexity.Process.Command == nil {
+			break
+		}
+
+		return e.complexity.Process.Command(childComplexity), true
+
+	case "Process.cwd":
+		if e.complexity.Process.Cwd == nil {
+			break
+		}
+
+		return e.complexity.Process.Cwd(childComplexity), true
+
+	case "Process.host":
+		if e.complexity.Process.Host == nil {
+			break
+		}
+
+		return e.complexity.Process.Host(childComplexity), true
+
 	case "Process.id":
 		if e.complexity.Process.ID == nil {
 			break
 		}
 
 		return e.complexity.Process.ID(childComplexity), true
+
+	case "Process.memBytes":
+		if e.complexity.Process.MemBytes == nil {
+			break
+		}
+
+		return e.complexity.Process.MemBytes(childComplexity), true
+
+	case "Process.pid":
+		if e.complexity.Process.Pid == nil {
+			break
+		}
+
+		return e.complexity.Process.Pid(childComplexity), true
+
+	case "Process.ppid":
+		if e.complexity.Process.Ppid == nil {
+			break
+		}
+
+		return e.complexity.Process.Ppid(childComplexity), true
+
+	case "Process.startedAt":
+		if e.complexity.Process.StartedAt == nil {
+			break
+		}
+
+		return e.complexity.Process.StartedAt(childComplexity), true
+
+	case "Process.tty":
+		if e.complexity.Process.Tty == nil {
+			break
+		}
+
+		return e.complexity.Process.Tty(childComplexity), true
+
+	case "Process.worktree":
+		if e.complexity.Process.Worktree == nil {
+			break
+		}
+
+		return e.complexity.Process.Worktree(childComplexity), true
 
 	case "Project.directory":
 		if e.complexity.Project.Directory == nil {
@@ -371,7 +505,9 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	rc := graphql.GetOperationContext(ctx)
 	ec := executionContext{rc, e, 0, 0, make(chan graphql.DeferredResult)}
-	inputUnmarshalMap := graphql.BuildUnmarshalerMap()
+	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputProcessFilter,
+	)
 	first := true
 
 	switch rc.Operation.Operation {
@@ -473,6 +609,10 @@ var sources = []*ast.Source{
 # Workstream B-git: Worktree node + Project.worktrees back-edge. Process
 # is forward-declared so Worktree.processes can reference it; ws-b-ps
 # fills in the rest.
+#
+# Workstream B-ps: full Process node + Host.processes(filter). Edges
+# to Worktree (via cwd) and ClaudeInstance (via foreground claude pid)
+# stay placeholder until their owning workstreams land.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -484,12 +624,74 @@ interface Node {
   id: ID!
 }
 
-# Process is forward-declared here so Worktree.processes can reference
-# it; the ps provider in ws-b-ps fills in the rest of the type.
-# Until that lands, Worktree.processes resolves to ` + "`" + `[]` + "`" + `.
+# Process is an OS-level process surfaced via the ` + "`" + `ps` + "`" + ` adapter.
+# Identity: (host_id, pid). Lifetime: alive AND visible to ps.
+# Not enumerable from root — reach via ` + "`" + `host.processes` + "`" + ` etc.
+# See ADR-011 §5.1.
 type Process implements Node {
   "Stable id formatted as ` + "`" + `<host>:<pid>` + "`" + `."
   id: ID!
+
+  "Host this process is running on."
+  host: Host!
+
+  "Process id."
+  pid: Int!
+
+  "Parent process id (0 for kernel/launchd-rooted processes)."
+  ppid: Int!
+
+  "Command basename (e.g. 'sleep', 'claude'). Cheap, always populated."
+  command: String!
+
+  "Full argv. Slow path — opt-in (separate ` + "`" + `ps -wwax -o pid,args` + "`" + ` lookup)."
+  args: [String!]
+
+  "Current working directory. Slow path — opt-in (lsof on macOS, /proc on Linux)."
+  cwd: String
+
+  "Process start time (RFC3339 if parseable, otherwise the raw ` + "`" + `lstart` + "`" + ` field)."
+  startedAt: String!
+
+  "CPU percent as reported by ps."
+  cpuPercent: Float!
+
+  "Resident memory in bytes (RSS * 1024 from ps)."
+  memBytes: Int!
+
+  "Controlling terminal, or null if none."
+  tty: String
+
+  # Cross-provider edges — placeholders until their owning workstreams land.
+  # ws-b-git wires ` + "`" + `worktree` + "`" + ` via cwd → git worktree lookup;
+  # ws-b-claudeinstance (Wave 3) wires ` + "`" + `claudeInstance` + "`" + ` as the back-edge
+  # from a Claude pid.
+
+  "Worktree this process is running inside, derived from cwd. Null until ws-b-git wires the lookup."
+  worktree: Worktree
+
+  "Claude instance back-edge — populated when this pid is the foreground claude pid. Null until ws-b-claudeinstance lands."
+  claudeInstance: ClaudeInstance
+}
+
+# Forward-declared placeholder. ws-b-claudeinstance replaces this with the
+# real ClaudeInstance node (pane, process, account, state, …).
+type ClaudeInstance {
+  "Stable id; ws-b-claudeinstance formalises (host_id, claudePid)."
+  id: ID!
+}
+
+# ProcessFilter is applied at the resolver layer over the cached process
+# list. Multiple filters are AND-combined.
+input ProcessFilter {
+  "Match processes whose command basename is in this list."
+  commandIn: [String!]
+
+  "Match processes whose cwd starts with this prefix. Forces cwd resolution."
+  cwdPrefix: String
+
+  "Match processes by pid."
+  pidIn: [Int!]
 }
 
 type Query {
@@ -549,6 +751,9 @@ type Host implements Node {
 
   "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
   peers: [Host!]!
+
+  "Processes visible to this host's ` + "`" + `ps` + "`" + ` adapter, optionally filtered."
+  processes(filter: ProcessFilter): [Process!]!
 }
 
 """
@@ -618,6 +823,21 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 
 // region    ***************************** args.gotpl *****************************
 
+func (ec *executionContext) field_Host_processes_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 *ProcessFilter
+	if tmp, ok := rawArgs["filter"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
+		arg0, err = ec.unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessFilter(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["filter"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
 	var err error
 	args := map[string]interface{}{}
@@ -670,6 +890,50 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ************************** directives.gotpl **************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _ClaudeInstance_id(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
 
 func (ec *executionContext) _Health_status(ctx context.Context, field graphql.CollectedField, obj *Health) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Health_status(ctx, field)
@@ -1219,9 +1483,94 @@ func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field g
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_processes(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_processes(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Host().Processes(rctx, obj, fc.Args["filter"].(*ProcessFilter))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*Process)
+	fc.Result = res
+	return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_processes(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Process_id(ctx, field)
+			case "host":
+				return ec.fieldContext_Process_host(ctx, field)
+			case "pid":
+				return ec.fieldContext_Process_pid(ctx, field)
+			case "ppid":
+				return ec.fieldContext_Process_ppid(ctx, field)
+			case "command":
+				return ec.fieldContext_Process_command(ctx, field)
+			case "args":
+				return ec.fieldContext_Process_args(ctx, field)
+			case "cwd":
+				return ec.fieldContext_Process_cwd(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_Process_startedAt(ctx, field)
+			case "cpuPercent":
+				return ec.fieldContext_Process_cpuPercent(ctx, field)
+			case "memBytes":
+				return ec.fieldContext_Process_memBytes(ctx, field)
+			case "tty":
+				return ec.fieldContext_Process_tty(ctx, field)
+			case "worktree":
+				return ec.fieldContext_Process_worktree(ctx, field)
+			case "claudeInstance":
+				return ec.fieldContext_Process_claudeInstance(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Process", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Host_processes_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -1265,6 +1614,561 @@ func (ec *executionContext) fieldContext_Process_id(ctx context.Context, field g
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_host(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_host(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Process().Host(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_host(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_pid(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_pid(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Pid, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int64)
+	fc.Result = res
+	return ec.marshalNInt2int64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_pid(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_ppid(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_ppid(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Ppid, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int64)
+	fc.Result = res
+	return ec.marshalNInt2int64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_ppid(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_command(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_command(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Command, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_command(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_args(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_args(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Process().Args(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.([]string)
+	fc.Result = res
+	return ec.marshalOString2ᚕstringᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_args(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_cwd(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_cwd(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Process().Cwd(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_cwd(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_startedAt(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_startedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.StartedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_startedAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_cpuPercent(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_cpuPercent(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CPUPercent, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_cpuPercent(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_memBytes(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_memBytes(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.MemBytes, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int64)
+	fc.Result = res
+	return ec.marshalNInt2int64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_memBytes(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_tty(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_tty(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Tty, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_tty(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_worktree(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_worktree(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Process().Worktree(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*Worktree)
+	fc.Result = res
+	return ec.marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_worktree(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Worktree_id(ctx, field)
+			case "path":
+				return ec.fieldContext_Worktree_path(ctx, field)
+			case "branch":
+				return ec.fieldContext_Worktree_branch(ctx, field)
+			case "head":
+				return ec.fieldContext_Worktree_head(ctx, field)
+			case "bare":
+				return ec.fieldContext_Worktree_bare(ctx, field)
+			case "processes":
+				return ec.fieldContext_Worktree_processes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Process_claudeInstance(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Process_claudeInstance(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Process().ClaudeInstance(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*ClaudeInstance)
+	fc.Result = res
+	return ec.marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Process_claudeInstance(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Process",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_ClaudeInstance_id(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
 	}
 	return fc, nil
@@ -1569,6 +2473,8 @@ func (ec *executionContext) fieldContext_Query_host(ctx context.Context, field g
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -1635,6 +2541,8 @@ func (ec *executionContext) fieldContext_Query_hosts(ctx context.Context, field 
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -2350,6 +3258,30 @@ func (ec *executionContext) fieldContext_Worktree_processes(ctx context.Context,
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_Process_id(ctx, field)
+			case "host":
+				return ec.fieldContext_Process_host(ctx, field)
+			case "pid":
+				return ec.fieldContext_Process_pid(ctx, field)
+			case "ppid":
+				return ec.fieldContext_Process_ppid(ctx, field)
+			case "command":
+				return ec.fieldContext_Process_command(ctx, field)
+			case "args":
+				return ec.fieldContext_Process_args(ctx, field)
+			case "cwd":
+				return ec.fieldContext_Process_cwd(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_Process_startedAt(ctx, field)
+			case "cpuPercent":
+				return ec.fieldContext_Process_cpuPercent(ctx, field)
+			case "memBytes":
+				return ec.fieldContext_Process_memBytes(ctx, field)
+			case "tty":
+				return ec.fieldContext_Process_tty(ctx, field)
+			case "worktree":
+				return ec.fieldContext_Process_worktree(ctx, field)
+			case "claudeInstance":
+				return ec.fieldContext_Process_claudeInstance(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Process", field.Name)
 		},
@@ -4130,6 +5062,47 @@ func (ec *executionContext) fieldContext___Type_specifiedByURL(ctx context.Conte
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputProcessFilter(ctx context.Context, obj interface{}) (ProcessFilter, error) {
+	var it ProcessFilter
+	asMap := map[string]interface{}{}
+	for k, v := range obj.(map[string]interface{}) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"commandIn", "cwdPrefix", "pidIn"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "commandIn":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("commandIn"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CommandIn = data
+		case "cwdPrefix":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("cwdPrefix"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CwdPrefix = data
+		case "pidIn":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("pidIn"))
+			data, err := ec.unmarshalOInt2ᚕint64ᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PidIn = data
+		}
+	}
+
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -4174,6 +5147,45 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
+
+var claudeInstanceImplementors = []string{"ClaudeInstance"}
+
+func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.SelectionSet, obj *ClaudeInstance) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, claudeInstanceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClaudeInstance")
+		case "id":
+			out.Values[i] = ec._ClaudeInstance_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
 
 var healthImplementors = []string{"Health"}
 
@@ -4233,22 +5245,22 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 		case "id":
 			out.Values[i] = ec._Host_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "machineId":
 			out.Values[i] = ec._Host_machineId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "hostname":
 			out.Values[i] = ec._Host_hostname(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "os":
 			out.Values[i] = ec._Host_os(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "kernel":
 			out.Values[i] = ec._Host_kernel(ctx, field, obj)
@@ -4257,20 +5269,56 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 		case "reachable":
 			out.Values[i] = ec._Host_reachable(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "resourceLoad":
 			out.Values[i] = ec._Host_resourceLoad(ctx, field, obj)
 		case "lastSeenAt":
 			out.Values[i] = ec._Host_lastSeenAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "peers":
 			out.Values[i] = ec._Host_peers(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "processes":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Host_processes(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -4308,8 +5356,208 @@ func (ec *executionContext) _Process(ctx context.Context, sel ast.SelectionSet, 
 		case "id":
 			out.Values[i] = ec._Process_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "host":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Process_host(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "pid":
+			out.Values[i] = ec._Process_pid(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "ppid":
+			out.Values[i] = ec._Process_ppid(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "command":
+			out.Values[i] = ec._Process_command(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "args":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Process_args(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "cwd":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Process_cwd(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "startedAt":
+			out.Values[i] = ec._Process_startedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "cpuPercent":
+			out.Values[i] = ec._Process_cpuPercent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "memBytes":
+			out.Values[i] = ec._Process_memBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "tty":
+			out.Values[i] = ec._Process_tty(ctx, field, obj)
+		case "worktree":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Process_worktree(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "claudeInstance":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Process_claudeInstance(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -5629,11 +6877,102 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
+func (ec *executionContext) marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ClaudeInstance(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOInt2ᚕint64ᚄ(ctx context.Context, v interface{}) ([]int64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []interface{}
+	if v != nil {
+		vSlice = graphql.CoerceList(v)
+	}
+	var err error
+	res := make([]int64, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNInt2int64(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOInt2ᚕint64ᚄ(ctx context.Context, sel ast.SelectionSet, v []int64) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNInt2int64(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessFilter(ctx context.Context, v interface{}) (*ProcessFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputProcessFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx context.Context, sel ast.SelectionSet, v *ResourceLoad) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ResourceLoad(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v interface{}) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []interface{}
+	if v != nil {
+		vSlice = graphql.CoerceList(v)
+	}
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v interface{}) (*string, error) {
@@ -5650,6 +6989,13 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 	}
 	res := graphql.MarshalString(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx context.Context, sel ast.SelectionSet, v *Worktree) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Worktree(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalO__EnumValue2ᚕgithubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐEnumValueᚄ(ctx context.Context, sel ast.SelectionSet, v []introspection.EnumValue) graphql.Marshaler {
