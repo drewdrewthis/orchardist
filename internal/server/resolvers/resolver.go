@@ -9,6 +9,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
@@ -32,6 +33,7 @@ type Resolver struct {
 	ClaudeProjects      *claudeprojects.Provider
 	ClaudeAccount       *claudeaccount.Provider
 	HostServiceProvider *hostservice.Provider
+	ContractsProvider   *contracts.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -84,5 +86,11 @@ func (r *Resolver) WithClaudeAccount(p *claudeaccount.Provider) *Resolver {
 // WithHostService wires the hostservice provider.
 func (r *Resolver) WithHostService(p *hostservice.Provider) *Resolver {
 	r.HostServiceProvider = p
+	return r
+}
+
+// WithContracts wires the contracts provider.
+func (r *Resolver) WithContracts(p *contracts.Provider) *Resolver {
+	r.ContractsProvider = p
 	return r
 }

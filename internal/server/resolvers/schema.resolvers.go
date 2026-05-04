@@ -15,6 +15,7 @@ import (
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
@@ -243,16 +244,6 @@ func (r *queryResolver) Conversation(ctx context.Context, id string) (*graphql1.
 		return r.ClaudeProjects.ToGraphQL(c), nil
 	}
 	return nil, nil
-}
-
-// Contract is the resolver for the contract field. Stub until commit 3 wires the contracts provider.
-func (r *queryResolver) Contract(ctx context.Context, id string) (*graphql1.Contract, error) {
-	return nil, fmt.Errorf("contracts provider not wired")
-}
-
-// Contracts is the resolver for the contracts field. Stub until commit 3.
-func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.ContractFilter) ([]*graphql1.Contract, error) {
-	return nil, fmt.Errorf("contracts provider not wired")
 }
 
 // ClaudeAccounts is the resolver for the claudeAccounts field.
@@ -828,6 +819,36 @@ func mapState(s hostservice.State) graphql1.HostServiceState {
 	default:
 		return graphql1.HostServiceStateUnknown
 	}
+}
+
+// Contract is the resolver for the contract field.
+func (r *queryResolver) Contract(ctx context.Context, id string) (*graphql1.Contract, error) {
+	if r.ContractsProvider == nil {
+		return nil, fmt.Errorf("contracts provider not initialised")
+	}
+	key := contracts.ContractID(stripContractIDPrefix(id))
+	c, _, err := r.ContractsProvider.Get(ctx, key)
+	if err != nil {
+		return nil, nil
+	}
+	return c, nil
+}
+
+// Contracts is the resolver for the contracts field.
+func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.ContractFilter) ([]*graphql1.Contract, error) {
+	if r.ContractsProvider == nil {
+		return nil, fmt.Errorf("contracts provider not initialised")
+	}
+	return r.ContractsProvider.List(ctx, filter)
+}
+
+// stripContractIDPrefix tolerates both "Contract:<id>" and bare "<id>".
+func stripContractIDPrefix(id string) string {
+	const prefix = "Contract:"
+	if len(id) > len(prefix) && id[:len(prefix)] == prefix {
+		return id[len(prefix):]
+	}
+	return id
 }
 
 // Query returns graphql1.QueryResolver implementation.

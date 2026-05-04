@@ -9,6 +9,7 @@
 // Workstream B-claudeprojects: WithClaudeProjects starts on Run().
 // Workstream B-claudeaccount: WithClaudeAccount starts on Run().
 // Workstream B-hostservice: WithHostService starts on Run().
+// Workstream B-contracts: WithContracts starts on Run().
 package server
 
 import (
@@ -28,6 +29,7 @@ import (
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
@@ -55,6 +57,7 @@ type Server struct {
 	claudeProjects *claudeprojects.Provider
 	claudeAccount  *claudeaccount.Provider
 	hostService    *hostservice.Provider
+	contracts      *contracts.Provider
 }
 
 // Option mutates a Server during construction.
@@ -107,6 +110,14 @@ func WithHostService(p *hostservice.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.hostService = p
 		r.WithHostService(p)
+	}
+}
+
+// WithContracts attaches a contracts provider.
+func WithContracts(p *contracts.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.contracts = p
+		r.WithContracts(p)
 	}
 }
 
@@ -192,6 +203,11 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.hostService != nil {
 		if err := s.hostService.Start(ctx); err != nil {
 			return fmt.Errorf("start hostservice provider: %w", err)
+		}
+	}
+	if s.contracts != nil {
+		if err := s.contracts.Start(ctx); err != nil {
+			return fmt.Errorf("start contracts provider: %w", err)
 		}
 	}
 
