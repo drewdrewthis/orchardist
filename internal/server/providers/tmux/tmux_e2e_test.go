@@ -154,7 +154,7 @@ func TestEndToEnd_SessionAppearsAndDisappears(t *testing.T) {
 		t.Fatalf("provider start: %v", err)
 	}
 
-	srv := server.New("", nil, server.WithTmuxProvider(provider))
+	srv := server.New("", nil, server.WithTmux(provider))
 	httpSrv := httptest.NewServer(srv.GraphQLHandler())
 	t.Cleanup(httpSrv.Close)
 
@@ -235,7 +235,7 @@ func TestProvider_NoTmux(t *testing.T) {
 		t.Fatalf("provider start: %v", err)
 	}
 
-	srv := server.New("", nil, server.WithTmuxProvider(provider))
+	srv := server.New("", nil, server.WithTmux(provider))
 	httpSrv := httptest.NewServer(srv.GraphQLHandler())
 	t.Cleanup(httpSrv.Close)
 

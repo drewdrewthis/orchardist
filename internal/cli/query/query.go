@@ -54,24 +54,26 @@ func Command() *cobra.Command {
 		Aliases: []string{"q"},
 		Short:   "Query the running orchard daemon via GraphQL",
 		Long: "Dispatch GraphQL queries against the running daemon at " + server.DefaultAddr + ".\n\n" +
-			"Use a named verb (e.g. `host`, `projects`, `processes`) for high-level reads,\n" +
+			"Use a named verb (e.g. `host`, `projects`, `processes`, `panes`) for high-level reads,\n" +
 			"or `--raw '<gql>'` as the escape hatch when you need a custom GraphQL query.",
 		Example: "  orchard query host\n" +
 			"  orchard query projects\n" +
 			"  orchard query processes\n" +
+			"  orchard query panes\n" +
 			"  orchard query --raw 'query { health { status } }'",
 	}
 	var raw string
 	cmd.Flags().StringVar(&raw, "raw", "", "raw GraphQL query string")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		if raw == "" {
-			return fmt.Errorf("provide a verb (e.g. `host`, `projects`, `processes`) or --raw '<graphql>'")
+			return fmt.Errorf("provide a verb (e.g. `host`, `projects`, `processes`, `panes`) or --raw '<graphql>'")
 		}
 		return runRaw(cmd.Context(), cmd.OutOrStdout(), raw)
 	}
 	cmd.AddCommand(hostCmd())
 	cmd.AddCommand(projectsCmd())
 	cmd.AddCommand(processesCmd())
+	cmd.AddCommand(panesCmd())
 	return cmd
 }
 
