@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,9 +26,22 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 )
 
+// daemonURLEnv lets E2E tests redirect the CLI at an httptest.Server
+// without binding the production port.
+const daemonURLEnv = "ORCHARD_DAEMON_URL"
+
 // daemonURL is the base URL of the local daemon's GraphQL endpoint.
-// Overridable in tests via SetDaemonURLForTest.
+// Overridable in tests via SetDaemonURLForTest, or via the
+// ORCHARD_DAEMON_URL env var (which takes precedence per call so a
+// running test process can drive multiple isolated daemons).
 var daemonURL = "http://" + server.DefaultAddr
+
+func resolveDaemonURL() string {
+	if v := os.Getenv(daemonURLEnv); v != "" {
+		return v
+	}
+	return daemonURL
+}
 
 // httpTimeout bounds GraphQL roundtrips. Conservative — the daemon is
 // local and responses are small JSON.
@@ -143,7 +157,7 @@ func postGraphQL(ctx context.Context, query string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, daemonURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, resolveDaemonURL()+"/graphql", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
