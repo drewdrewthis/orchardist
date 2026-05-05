@@ -407,28 +407,10 @@ fn handle_json() {
 /// `SESSIONS_INDEX_VERSION`), so additions here cannot break consumers of the
 /// worktree-centric `--json` output.
 fn handle_sessions(json: bool) {
-    if !json {
-        eprintln!(
-            "orchard-tui sessions: only `--json` output is currently supported.\n\
-             Usage: orchard-tui sessions --json"
-        );
-        std::process::exit(2);
+    let code = orchard::sessions_cli::run(json);
+    if code != 0 {
+        std::process::exit(code);
     }
-
-    let config = global_config::load_global_config();
-
-    // Live refresh: drive the same refresh path that `--json` uses so the
-    // output reflects the actual state of every reachable host. The
-    // sessions index re-reads from the freshly-written caches afterwards.
-    // See `build_state::refresh_and_build` for the full source list.
-    let _state = build_state::refresh_and_build(&config);
-
-    let output = orchard::sessions_index::build_sessions_index(&config);
-    let serialized = serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
-        eprintln!("Error serializing JSON: {e}");
-        std::process::exit(1);
-    });
-    println!("{serialized}");
 }
 
 /// Handles `orchard-tui refresh` — probes hosts, fetches remote data, writes
