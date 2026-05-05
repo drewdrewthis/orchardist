@@ -23,7 +23,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// Returns `(child, bound_port, temp_dir)`.
 fn spawn_server(secret: &str) -> (Child, u16, TempDir) {
     let temp = TempDir::new().unwrap();
-    let bin = cargo_bin("orchard");
+    let bin = cargo_bin("orchard-tui");
 
     let mut child = Command::new(bin)
         .args(["webhook-serve", "--port", "0"])
@@ -190,7 +190,7 @@ fn port_zero_binds_ephemeral_port_and_prints_it() {
 #[test]
 fn refuses_to_start_without_secret() {
     let temp = TempDir::new().unwrap();
-    let bin = cargo_bin("orchard");
+    let bin = cargo_bin("orchard-tui");
 
     let output = Command::new(bin)
         .args(["webhook-serve", "--port", "0"])
