@@ -84,7 +84,7 @@ func (e execCommanderLinux) Run(ctx context.Context, args ...string) ([]byte, []
 // the gate: an unknown unit short-circuits everything else and returns
 // state=unknown.
 func (l linuxAdapter) FetchOne(ctx context.Context, hostID, name string) (Snapshot, error) {
-	stdout, stderr, code, err := l.systemctl.Run(ctx, "--user", "is-active", name)
+	stdout, stderr, _, err := l.systemctl.Run(ctx, "--user", "is-active", name)
 	if errors.Is(err, ErrServiceManagerMissing) {
 		return Snapshot{}, ErrServiceManagerMissing
 	}
