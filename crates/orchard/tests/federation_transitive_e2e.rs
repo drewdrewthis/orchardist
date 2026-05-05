@@ -129,7 +129,7 @@ fn ac9_two_hop_graph_c_worktree_has_discovery_path() {
     let snap_c = make_snapshot("issue2/c");
 
     let mut fake = FakeSshExec::new();
-    fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+    fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
     fake.insert(
         "B",
         "orchard list-remotes --json",
@@ -137,7 +137,7 @@ fn ac9_two_hop_graph_c_worktree_has_discovery_path() {
         // C's own list-remotes returns empty (leaf).
         ok(&list_remotes_json(&[("C", true)])),
     );
-    fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+    fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
     fake.insert(
         "C",
         "orchard list-remotes --json",
@@ -219,20 +219,20 @@ fn ac9_three_hop_graph_d_worktree_has_discovery_path() {
     let snap_d = make_snapshot("issue12/d");
 
     let mut fake = FakeSshExec::new();
-    fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+    fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
     fake.insert(
         "B",
         "orchard list-remotes --json",
         ok(&list_remotes_json(&[("C", true)])),
     );
-    fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+    fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
     fake.insert(
         "C",
         "orchard list-remotes --json",
         // C advertises D with allow_transitive:true.
         ok(&list_remotes_json(&[("D", true)])),
     );
-    fake.insert("D", "orchard --json", ok(&ser(&snap_d)));
+    fake.insert("D", "orchard-tui --json", ok(&ser(&snap_d)));
     fake.insert(
         "D",
         "orchard list-remotes --json",
@@ -306,14 +306,14 @@ fn ac9_cycle_graph_terminates_no_duplicates() {
 
     let mut fake = FakeSshExec::new();
     // A is a root with allow_transitive — it advertises B.
-    fake.insert("A", "orchard --json", ok(&ser(&snap_a)));
+    fake.insert("A", "orchard-tui --json", ok(&ser(&snap_a)));
     fake.insert(
         "A",
         "orchard list-remotes --json",
         ok(&list_remotes_json(&[("B", true)])),
     );
     // B is discovered via A and advertises A back (cycle).
-    fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+    fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
     fake.insert(
         "B",
         "orchard list-remotes --json",

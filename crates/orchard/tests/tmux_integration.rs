@@ -15,7 +15,7 @@ use assert_cmd::Command;
 // json mode does not create a new tmux session
 // ---------------------------------------------------------------------------
 
-/// Running `orchard --json` inside an existing tmux session must not create
+/// Running `orchard-tui --json` inside an existing tmux session must not create
 /// any new tmux sessions. This guards against regressions where `--json` mode
 /// triggers the main-session bootstrap code path.
 ///
@@ -35,8 +35,8 @@ fn json_mode_does_not_create_tmux_session() {
     let repo = common::TestRepo::new();
     let home = tempfile::TempDir::new().unwrap();
 
-    // Run orchard --json inside the current tmux (TMUX env inherited).
-    let _ = Command::cargo_bin("orchard")
+    // Run orchard-tui --json inside the current tmux (TMUX env inherited).
+    let _ = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--json")
         .current_dir(repo.path())
@@ -55,7 +55,7 @@ fn json_mode_does_not_create_tmux_session() {
 
     assert_eq!(
         before_count, after_count,
-        "orchard --json must not create new tmux sessions"
+        "orchard-tui --json must not create new tmux sessions"
     );
 }
 
@@ -63,7 +63,7 @@ fn json_mode_does_not_create_tmux_session() {
 // binary outside tmux does not crash
 // ---------------------------------------------------------------------------
 
-/// Running `orchard --json` outside a tmux environment (no `$TMUX` env var)
+/// Running `orchard-tui --json` outside a tmux environment (no `$TMUX` env var)
 /// must not crash and must not attempt to launch a tmux popup.
 ///
 /// Requires: a running tmux server to confirm no sessions were created; the
@@ -83,7 +83,7 @@ fn binary_outside_tmux_runs_without_crashing() {
         .count();
 
     // Explicitly remove TMUX so the binary sees no tmux context.
-    let result = Command::cargo_bin("orchard")
+    let result = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--json")
         .current_dir(repo.path())

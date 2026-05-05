@@ -1,6 +1,6 @@
 # Webhook Setup
 
-Orchard's webhook receiver (`orchard webhook-serve`) accepts GitHub webhook
+Orchard's webhook receiver (`orchard-tui webhook-serve`) accepts GitHub webhook
 deliveries and appends normalized events to `events.jsonl`. The watch daemon
 tails this file to short-circuit the 60-second poll cycle, reacting to GitHub
 activity within 1–2 seconds.
@@ -10,7 +10,7 @@ only the local `events.jsonl` file. Both must run on the same host.
 
 ## Prerequisites
 
-- `orchard` binary built and on your PATH
+- `orchard-tui` binary built and on your PATH
 - A GitHub repository you have admin or webhook-management access to
 
 ## Environment
@@ -33,9 +33,9 @@ Use `--port 0` to bind an ephemeral port (printed to stderr on startup).
 
 ```bash
 export ORCHARD_WEBHOOK_SECRET="your-secret-here"
-orchard webhook-serve              # binds to 127.0.0.1:8477
-orchard webhook-serve --port 9000  # custom port
-orchard webhook-serve --port 0     # ephemeral port
+orchard-tui webhook-serve              # binds to 127.0.0.1:8477
+orchard-tui webhook-serve --port 9000  # custom port
+orchard-tui webhook-serve --port 0     # ephemeral port
 ```
 
 The server speaks **plain HTTP only**. TLS termination is the operator's
@@ -88,7 +88,7 @@ reverse proxy (nginx, Caddy, etc.) with a public hostname.
 
 1. Start the server on a local port:
    ```bash
-   orchard webhook-serve --port 8477
+   orchard-tui webhook-serve --port 8477
    ```
 2. Configure your reverse proxy to forward `POST /webhook` to
    `http://127.0.0.1:8477/webhook`.

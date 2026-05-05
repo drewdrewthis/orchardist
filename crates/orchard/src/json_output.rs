@@ -2,7 +2,7 @@
 //!
 //! Decouples the public JSON API from internal `OrchardState`, allowing internal refactors
 //! without breaking scripts. All output is camelCase, version-numbered, and backed by tests.
-//! Consumed directly by external tools and scripts that call `orchard --json`.
+//! Consumed directly by external tools and scripts that call `orchard-tui --json`.
 //!
 //! All `Json*` struct definitions live in `json_output_types.rs` — a single source of truth
 //! shared by this module (via `include!`) and `build.rs` (for schema generation). The two
@@ -442,7 +442,7 @@ impl From<&OrchardState> for JsonOutput {
 // Federation ingestion: version-check helper (AC6, Phase 1)
 // ---------------------------------------------------------------------------
 
-/// Version numbers this build can ingest from remote `orchard --json` output.
+/// Version numbers this build can ingest from remote `orchard-tui --json` output.
 ///
 /// Only versions explicitly listed here are accepted. A remote running an older
 /// or newer schema triggers `AdapterError::ParseFailure` so the caller can fall

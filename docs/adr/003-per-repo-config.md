@@ -64,7 +64,7 @@ The global config holds:
 - Repo registry (slug, path, remotes as legacy fallback)
 - Machine-local user preferences that describe the *user's environment*, not any individual repo
 
-**Amendment (issue #30):** Machine-local user preferences are allowed in the global config alongside the repo registry. The first such preference is `terminal_app` — the macOS bundle ID of the terminal app to activate when a notification is clicked (e.g. `"com.googlecode.iterm2"`). These preferences belong in global config because they describe the machine/user environment, not any specific repository. They are set via `orchard init` and persist to `~/.config/orchard/config.json`.
+**Amendment (issue #30):** Machine-local user preferences are allowed in the global config alongside the repo registry. The first such preference is `terminal_app` — the macOS bundle ID of the terminal app to activate when a notification is clicked (e.g. `"com.googlecode.iterm2"`). These preferences belong in global config because they describe the machine/user environment, not any specific repository. They are set via `orchard-tui init` and persist to `~/.config/orchard/config.json`.
 
 ### Migration
 

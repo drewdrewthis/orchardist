@@ -1,7 +1,7 @@
 //! Integration regression test for #239 — worktrees under `.worktrees/` must
-//! appear in `orchard --json` output for flat-clone repositories.
+//! appear in `orchard-tui --json` output for flat-clone repositories.
 //!
-//! Reported symptom (2026-04-13): `orchard --json` only returned the `main`
+//! Reported symptom (2026-04-13): `orchard-tui --json` only returned the `main`
 //! worktree for `drewdrewthis/git-orchard-rs` (a flat clone with worktrees
 //! under `.worktrees/`), while the langwatch submodule repo in the same
 //! config returned all of its worktrees correctly.
@@ -17,7 +17,7 @@
 //!    submodule).
 //! 2. Add a linked worktree under `.worktrees/<name>/` on a feature branch.
 //! 3. Point a fixture global config at the flat clone.
-//! 4. Run `orchard --json` and assert both the main worktree AND the
+//! 4. Run `orchard-tui --json` and assert both the main worktree AND the
 //!    `.worktrees/` entry appear under the repo's `worktrees` array.
 
 mod common;
@@ -39,7 +39,7 @@ fn canon(p: &str) -> String {
 }
 
 /// Creates a flat-clone repo with one `.worktrees/` entry, runs
-/// `orchard --json`, and returns the parsed JSON value (or `None` if the
+/// `orchard-tui --json`, and returns the parsed JSON value (or `None` if the
 /// binary exits non-zero — e.g. `gh` unavailable in CI).
 fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)> {
     let home = tempfile::TempDir::new().expect("create temp HOME");
@@ -87,9 +87,9 @@ fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)
     let home_cache = home.path().join(".cache").join("orchard");
     std::fs::create_dir_all(&home_cache).expect("create cache dir");
 
-    // Post-#329: `orchard --json` is cache-only. Run `orchard refresh`
+    // Post-#329: `orchard-tui --json` is cache-only. Run `orchard refresh`
     // first to populate the worktree cache from the fixture's flat clone.
-    let refresh = Command::cargo_bin("orchard")
+    let refresh = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("refresh")
         .current_dir(repo.path())
@@ -106,7 +106,7 @@ fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)
         return None;
     }
 
-    let output = Command::cargo_bin("orchard")
+    let output = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--json")
         .current_dir(repo.path())
@@ -117,7 +117,7 @@ fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)
 
     if !output.status.success() {
         eprintln!(
-            "SKIP worktree_detection: orchard --json exited with {:?}. stderr: {}",
+            "SKIP worktree_detection: orchard-tui --json exited with {:?}. stderr: {}",
             output.status.code(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
@@ -136,7 +136,7 @@ fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)
 /// Regression guard for #239.
 ///
 /// Given a flat-clone repo with one linked worktree under `.worktrees/`,
-/// `orchard --json` must surface both the main worktree and the
+/// `orchard-tui --json` must surface both the main worktree and the
 /// `.worktrees/` entry for that repo.
 #[test]
 fn json_detects_worktrees_under_dot_worktrees_for_flat_clone() {

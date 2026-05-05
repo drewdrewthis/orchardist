@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonOutput",
-  "description": "Top-level versioned JSON output for `orchard --json`.",
+  "description": "Top-level versioned JSON output for `orchard-tui --json`.",
   "type": "object",
   "required": [
     "hosts",

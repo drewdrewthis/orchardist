@@ -3,7 +3,7 @@
 //! Issues #374 / #375: the orchardist's `/prune` skill needs a single source
 //! of truth for "every tmux session orchard knows about, on every managed
 //! host, classified by relationship to worktrees and protection status." The
-//! existing `orchard --json` output only carries sessions tied to a worktree
+//! existing `orchard-tui --json` output only carries sessions tied to a worktree
 //! plus the explicitly-configured standalone list — that is too narrow for
 //! pruning decisions.
 //!

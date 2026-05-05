@@ -11,7 +11,7 @@
 //!
 //! Each hop makes TWO calls via [`SshExec`]:
 //!
-//! - `orchard --json` — fetches the state snapshot for that host.
+//! - `orchard-tui --json` — fetches the state snapshot for that host.
 //! - `orchard list-remotes --json` — discovers children (grandchildren of root).
 //!   Exit 127 (command not found) is treated as a **leaf** — the host is a
 //!   pre-transitive orchard build. No [`TransitiveError`] is emitted; the
@@ -20,7 +20,7 @@
 //! # Adapter dedup
 //!
 //! A per-walk `HashMap<dedup_key → Arc<OnceLock<…>>>` ensures that a diamond
-//! topology causes only one SSH round-trip for `orchard --json` on a shared leaf.
+//! topology causes only one SSH round-trip for `orchard-tui --json` on a shared leaf.
 //! The snapshot is stored as `Arc<JsonOutput>` so the same value can be
 //! shared across discovery paths without cloning.
 //!
@@ -72,7 +72,7 @@ pub struct WalkerConfig {
     pub per_hop_timeout: Duration,
     /// SSH executor shared across all threads in this walk.
     pub ssh: Arc<dyn SshExec>,
-    /// When `true`, skip `orchard --json` for depth-1 roots.
+    /// When `true`, skip `orchard-tui --json` for depth-1 roots.
     ///
     /// Set by `refresh_and_build_with_walker_config` because those roots were
     /// already fetched by `OrchardProxyAdapter` in the pre-walker phase.
@@ -105,7 +105,7 @@ impl WalkerConfig {
         self
     }
 
-    /// Enables skipping `orchard --json` for depth-1 roots.
+    /// Enables skipping `orchard-tui --json` for depth-1 roots.
     ///
     /// Only set this when the caller has already fetched depth-1 snapshots
     /// via `OrchardProxyAdapter` (i.e., from `refresh_and_build_with_walker_config`).
@@ -167,7 +167,7 @@ struct FrontierNode {
     host: String,
     dedup_key: String,
     discovery_path: Vec<String>,
-    /// When `true`, skip the `orchard --json` call for this node.
+    /// When `true`, skip the `orchard-tui --json` call for this node.
     ///
     /// Set for depth-1 roots whose snapshot was already fetched by
     /// `OrchardProxyAdapter` during the pre-walker refresh phase.
@@ -221,7 +221,7 @@ type SnapshotCache = Arc<Mutex<HashMap<String, Arc<OnceLock<Option<Arc<JsonOutpu
 /// pre-walker refresh phase, and they have no children to discover.
 ///
 /// For `allow_transitive == true` roots (depth-1), the walker skips the
-/// `orchard --json` call (already done by `OrchardProxyAdapter`) and only
+/// `orchard-tui --json` call (already done by `OrchardProxyAdapter`) and only
 /// calls `list-remotes --json` to discover transitive children.
 ///
 /// All SSH calls go through `config.ssh`, making the walker fully testable
@@ -245,7 +245,7 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
     //   already fetched by OrchardProxyAdapter.  Mark them seen so a transitive
     //   child cannot re-introduce them.
     // - Roots with allow_transitive=true are seeded.  When skip_depth1_snapshot
-    //   is set, their orchard --json call is also skipped (pre-fetched by
+    //   is set, their orchard-tui --json call is also skipped (pre-fetched by
     //   OrchardProxyAdapter); only list-remotes is called to find children.
     let mut frontier: Vec<FrontierNode> = Vec::new();
     for &(host, allow) in roots {
@@ -270,7 +270,7 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
             host: host.to_string(),
             dedup_key: key,
             discovery_path: vec!["local".to_string(), host.to_string()],
-            // Skip orchard --json for depth-1 roots when the pre-walker phase
+            // Skip orchard-tui --json for depth-1 roots when the pre-walker phase
             // already fetched them via OrchardProxyAdapter.
             skip_snapshot: config.skip_depth1_snapshot,
         });
@@ -333,7 +333,7 @@ pub fn walk(roots: &[(&str, bool)], config: &WalkerConfig) -> WalkerResult {
                                     host: child_host,
                                     dedup_key: child_key,
                                     discovery_path: child_path,
-                                    // Depth 2+: always fetch orchard --json.
+                                    // Depth 2+: always fetch orchard-tui --json.
                                     skip_snapshot: false,
                                 });
                             }
@@ -428,12 +428,12 @@ fn visit_with_timeout(
 
 /// Executes SSH calls for a node. No timeout enforcement here.
 ///
-/// When `node.skip_snapshot` is `true` (depth-1 roots), the `orchard --json`
+/// When `node.skip_snapshot` is `true` (depth-1 roots), the `orchard-tui --json`
 /// call is skipped because the snapshot was already fetched by
 /// `OrchardProxyAdapter` in the pre-walker phase.  Only `list-remotes --json`
 /// is called to discover transitive children.
 fn visit_inner(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache) -> HopOutcome {
-    // Step 1: fetch orchard --json (unless this node's snapshot is already
+    // Step 1: fetch orchard-tui --json (unless this node's snapshot is already
     // available from the pre-walker OrchardProxyAdapter phase).
     if !node.skip_snapshot {
         let fetch_ok = fetch_snapshot(node, ssh, cache);
@@ -482,10 +482,10 @@ fn visit_inner(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache) ->
 }
 
 // ---------------------------------------------------------------------------
-// Internal: orchard --json with OnceLock dedup
+// Internal: orchard-tui --json with OnceLock dedup
 // ---------------------------------------------------------------------------
 
-/// Fetches `orchard --json` for `node` and stores the result in `cache`.
+/// Fetches `orchard-tui --json` for `node` and stores the result in `cache`.
 ///
 /// Returns `true` on success, `false` on failure. The `OnceLock` ensures
 /// only one thread fires the SSH call; others reuse the cached result.
@@ -499,7 +499,7 @@ fn fetch_snapshot(node: &FrontierNode, ssh: &dyn SshExec, cache: &SnapshotCache)
     };
 
     lock.get_or_init(|| {
-        let output = match ssh.exec(&node.host, "orchard --json") {
+        let output = match ssh.exec(&node.host, "orchard-tui --json") {
             Ok(o) => o,
             Err(_) => return None,
         };
@@ -734,13 +734,13 @@ mod tests {
         let snap_c = make_output_with_branch("issue2/c");
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert(
             "B",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("C", true)])),
         );
-        fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+        fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
         fake.insert(
             "C",
             "orchard list-remotes --json",
@@ -779,19 +779,19 @@ mod tests {
         let snap_d = make_output_with_branch("issue3/d");
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert(
             "B",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("C", true)])),
         );
-        fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+        fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
         fake.insert(
             "C",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("D", true)])),
         );
-        fake.insert("D", "orchard --json", ok(&ser(&snap_d)));
+        fake.insert("D", "orchard-tui --json", ok(&ser(&snap_d)));
         fake.insert(
             "D",
             "orchard list-remotes --json",
@@ -828,14 +828,14 @@ mod tests {
 
         let mut fake = FakeSshExec::new();
         // A's SSH responses (visited at depth 1).
-        fake.insert("A", "orchard --json", ok(&ser(&snap_a)));
+        fake.insert("A", "orchard-tui --json", ok(&ser(&snap_a)));
         fake.insert(
             "A",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("B", true)])),
         );
         // B's SSH responses (visited at depth 2).
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         // B advertises A back — cycle. A is already in seen-set so A is not re-queued.
         fake.insert(
             "B",
@@ -873,7 +873,7 @@ mod tests {
     // AC3: Diamond A -> {B, C} -> D; one SSH call for D
     // -----------------------------------------------------------------------
 
-    /// feature:87 — diamond dedup: D's orchard --json fires exactly once
+    /// feature:87 — diamond dedup: D's orchard-tui --json fires exactly once
     #[test]
     fn diamond_dedup_single_ssh_for_leaf() {
         let snap_b = make_empty_output();
@@ -888,7 +888,7 @@ mod tests {
         }
         impl SshExec for CountingSshExec {
             fn exec(&self, host: &str, cmd: &str) -> anyhow::Result<SshOutput> {
-                if host == "D" && cmd == "orchard --json" {
+                if host == "D" && cmd == "orchard-tui --json" {
                     self.count.fetch_add(1, Ordering::SeqCst);
                 }
                 self.inner.exec(host, cmd)
@@ -896,19 +896,19 @@ mod tests {
         }
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert(
             "B",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("D", true)])),
         );
-        fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+        fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
         fake.insert(
             "C",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("D", true)])),
         );
-        fake.insert("D", "orchard --json", ok(&ser(&snap_d)));
+        fake.insert("D", "orchard-tui --json", ok(&ser(&snap_d)));
         fake.insert(
             "D",
             "orchard list-remotes --json",
@@ -938,7 +938,7 @@ mod tests {
         assert_eq!(
             d_call_count.load(Ordering::SeqCst),
             1,
-            "D's orchard --json must fire exactly once (OnceLock dedup)"
+            "D's orchard-tui --json must fire exactly once (OnceLock dedup)"
         );
     }
 
@@ -953,15 +953,15 @@ mod tests {
         let snap_d = make_output_with_branch("issue5/d");
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert(
             "B",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("D", true)])),
         );
-        fake.insert("C", "orchard --json", exit_code(255));
+        fake.insert("C", "orchard-tui --json", exit_code(255));
         fake.insert("C", "orchard list-remotes --json", exit_code(255));
-        fake.insert("D", "orchard --json", ok(&ser(&snap_d)));
+        fake.insert("D", "orchard-tui --json", ok(&ser(&snap_d)));
         fake.insert(
             "D",
             "orchard list-remotes --json",
@@ -1011,7 +1011,7 @@ mod tests {
         let snap_b = make_output_with_branch("issue6/leaf");
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert("B", "orchard list-remotes --json", exit_code(127));
 
         let result = walk(&[("B", true)], &walker(fake));
@@ -1036,13 +1036,13 @@ mod tests {
         let snap_c = make_empty_output();
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert(
             "B",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("C", true)])),
         );
-        fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+        fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
         fake.insert(
             "C",
             "orchard list-remotes --json",
@@ -1078,13 +1078,13 @@ mod tests {
         let snap_c = make_empty_output();
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         fake.insert(
             "B",
             "orchard list-remotes --json",
             ok(&list_remotes_json(&[("C", true)])),
         );
-        fake.insert("C", "orchard --json", ok(&ser(&snap_c)));
+        fake.insert("C", "orchard-tui --json", ok(&ser(&snap_c)));
         fake.insert(
             "C",
             "orchard list-remotes --json",
@@ -1139,7 +1139,7 @@ mod tests {
     /// Fix 4 — `allow_transitive=false` roots are not seeded into the walker.
     ///
     /// When a root is configured with `allow_transitive=false`, the walker must
-    /// make zero SSH calls for it (no `orchard --json`, no `list-remotes`).
+    /// make zero SSH calls for it (no `orchard-tui --json`, no `list-remotes`).
     /// The snapshot for such a root is handled by OrchardProxyAdapter, not
     /// the walker.
     #[test]
@@ -1185,7 +1185,7 @@ mod tests {
     // Fix 6: list-remotes failure after successful snapshot is surfaced
     // -----------------------------------------------------------------------
 
-    /// Fix 6 — `list-remotes` failure after a successful `orchard --json` fetch
+    /// Fix 6 — `list-remotes` failure after a successful `orchard-tui --json` fetch
     /// surfaces a `TransitiveError` with `phase: "list_remotes_after_snapshot"`.
     ///
     /// Without the fix, the walker silently returned `Success{children: vec![]}`,
@@ -1195,7 +1195,7 @@ mod tests {
         let snap_b = make_output_with_branch("issue99/b");
 
         let mut fake = FakeSshExec::new();
-        fake.insert("B", "orchard --json", ok(&ser(&snap_b)));
+        fake.insert("B", "orchard-tui --json", ok(&ser(&snap_b)));
         // list-remotes fails with a non-127 exit code (network blip).
         fake.insert("B", "orchard list-remotes --json", exit_code(1));
 

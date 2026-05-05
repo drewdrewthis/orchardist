@@ -99,7 +99,7 @@ A single process (existing orchard daemon or a new thin writer — scope of sub-
 
 - Watches `$TMPDIR/orchard-claude-*.json` with fswatch for per-session hook updates.
 - Runs the gh/cache refresh pipeline in the background (already exists as `refresh_parallel.rs`).
-- Produces a single hot `state.json` that all readers (TUI, `orchard --json`, sister sessions, kanban-code) consume.
+- Produces a single hot `state.json` that all readers (TUI, `orchard-tui --json`, sister sessions, kanban-code) consume.
 
 This is a **writer + readers over a hot file**, not a daemon with an RPC interface. Atomic tmp→rename write on each reconcile. Readers always see a consistent snapshot. Fixes or#341 structurally: there is no "per-worktree sessions" vs. "top-level sessions" divergence because both are projections of the same hot file.
 
@@ -145,7 +145,7 @@ Out of scope for this ADR: cross-host card linkage (e.g., an issue on one host w
 - **Card identity stability is new surface.** `CardId` must be stable across reconciles so the TUI and downstream kanban tools don't flicker. Implementation detail for sub-issue #2.
 - **Projection cost.** Reconciler now does card derivation on top of existing joins. On large states this is a concrete CPU cost, though still O(n) in worktrees + sessions + issues.
 - **Column rules are opinionated.** Teams with different workflows may disagree with the Backlog/Waiting/InReview thresholds. Sub-issue #4 must expose hooks or config.
-- **`AllSessions` is a catch-all.** Sessions that *should* link to a card but fail the resolution (path typo, stale jsonl, orchardist itself) end up here. Needs a diagnostic (`orchard doctor` hook) to surface "unlinked sessions with plausible candidates."
+- **`AllSessions` is a catch-all.** Sessions that *should* link to a card but fail the resolution (path typo, stale jsonl, orchardist itself) end up here. Needs a diagnostic (`orchard-tui doctor` hook) to surface "unlinked sessions with plausible candidates."
 
 ### Neutral
 
@@ -164,7 +164,7 @@ Rejected for this ADR. `repos` is still the right container for git meta (defaul
 
 ### C. Do nothing; add `tmuxSessions` union for or#341 only
 
-Rejected as a scope decision. or#341 is a symptom: the deeper issue is that the data model has no place for first-class conversations. A union patch for `tmuxSessions` fixes one reader (`orchard --json`) but leaves the TUI and auto-flow columns still ad-hoc. If we're editing the top-level state, we take the projection upgrade now.
+Rejected as a scope decision. or#341 is a symptom: the deeper issue is that the data model has no place for first-class conversations. A union patch for `tmuxSessions` fixes one reader (`orchard-tui --json`) but leaves the TUI and auto-flow columns still ad-hoc. If we're editing the top-level state, we take the projection upgrade now.
 
 ### D. Full card store (persistent DB, not derived)
 

@@ -32,7 +32,7 @@ Key design choices:
 
 ### 1. `list-remotes --json` protocol extension
 
-Each orchard host exposes `orchard list-remotes --json`, returning:
+Each orchard host exposes `orchard-tui list-remotes --json`, returning:
 
 ```json
 { "version": 1, "remotes": [{ "name": "...", "host": "...", "kind": "orchard-proxy", "path": "...", "allowTransitive": true }] }
@@ -79,10 +79,10 @@ accumulate indefinitely.
 
 | Entry point | Walker invoked? |
 |-------------|----------------|
-| `orchard --json` | No — cache-only (ADR-008 invariant preserved) |
-| `orchard refresh` | Yes — `refresh_and_build_with_walker_config` |
-| `orchard watch` (full poll) | Yes — `refresh_all_sources → refresh_transitive_federation` |
-| `orchard watch` (local poll) | No — local-only refresh |
+| `orchard-tui --json` | No — cache-only (ADR-008 invariant preserved) |
+| `orchard-tui refresh` | Yes — `refresh_and_build_with_walker_config` |
+| `orchard-tui watch` (full poll) | Yes — `refresh_all_sources → refresh_transitive_federation` |
+| `orchard-tui watch` (local poll) | No — local-only refresh |
 | TUI cold start | No — reads topology + cached snapshots |
 
 ### 6. Write-path chaining (`build_ssh_chain`)
@@ -122,13 +122,13 @@ branch does not abort the rest of the walk.
 - `discovery_path` is `None` for data loaded from pre-v7 snapshot files (no
   migration path; field appears on next successful refresh).
 - The `list-remotes --json` call adds one extra SSH round-trip per intermediate
-  host per `orchard refresh` cycle.
+  host per `orchard-tui refresh` cycle.
 - Write-path chaining via `build_ssh_chain` requires the intermediate hosts to
   allow onward SSH (not always guaranteed in locked-down environments).
 
 **Neutral**:
 - Depth limit defaults to 8 hops; overridable with `--max-depth` on
-  `orchard refresh`. Deep topologies are an operational choice.
+  `orchard-tui refresh`. Deep topologies are an operational choice.
 - `host_dedup_key` normalization is best-effort. Two aliases for the same
   physical host that resolve differently will still be fetched twice;
   the snapshot for the second alias overwrites the first (last-writer-wins).

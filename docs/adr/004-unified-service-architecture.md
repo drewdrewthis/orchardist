@@ -111,11 +111,11 @@ After each phase completes, `build_state` re-joins and the TUI re-renders. Two r
 
 On startup: `build_state` from existing cache files (instant), then kick off both phases.
 
-### `orchard --json`
+### `orchard-tui --json`
 
 **Always fetches fresh data.** Unlike the TUI which uses cached data for instant
 startup, `--json` runs a full fetch from all sources before producing output.
-Scripts that pipe `orchard --json | jq` expect real-time data, not stale cache.
+Scripts that pipe `orchard-tui --json | jq` expect real-time data, not stale cache.
 
 A versioned `JsonOutput` struct maps from `OrchardState`. This decouples the
 internal model from the public API.

@@ -1,4 +1,4 @@
-//! Integration tests for `orchard --json` and `orchard sessions --json`
+//! Integration tests for `orchard-tui --json` and `orchard sessions --json`
 //! freshness contracts (issues #374, #375).
 //!
 //! `--json` is a live read: it must reflect a `git worktree remove` (or any
@@ -129,9 +129,9 @@ fn write_orchard_config(home: &Path, slug: &str, repo_path: &Path) {
     .expect("write config.json");
 }
 
-/// Runs `orchard --json` with `home` as `HOME` and returns the parsed output.
+/// Runs `orchard-tui --json` with `home` as `HOME` and returns the parsed output.
 fn run_orchard_json(home: &Path) -> Value {
-    let assert = Command::cargo_bin("orchard")
+    let assert = Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .arg("--json")
         .env("HOME", home)
@@ -146,7 +146,7 @@ fn run_orchard_json(home: &Path) -> Value {
 
 /// Runs `orchard sessions --json` and returns the parsed [`SessionsIndexOutput`].
 fn run_orchard_sessions_json(home: &Path) -> SessionsIndexOutput {
-    let assert = Command::cargo_bin("orchard")
+    let assert = Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .args(["sessions", "--json"])
         .env("HOME", home)
@@ -164,15 +164,15 @@ fn run_orchard_sessions_json(home: &Path) -> SessionsIndexOutput {
 // AC #374-3 — worktree removal reflected in --json output
 // ---------------------------------------------------------------------------
 
-/// `orchard --json` reflects `git worktree remove` immediately on the next
+/// `orchard-tui --json` reflects `git worktree remove` immediately on the next
 /// invocation. This is the headline freshness contract for issue #374.
 ///
 /// Steps:
 /// 1. Build a parent/repo/worktrees layout with one tracked worktree on
 ///    branch `flake`.
-/// 2. First `orchard --json` — assert the worktree path is present.
+/// 2. First `orchard-tui --json` — assert the worktree path is present.
 /// 3. `git worktree remove -f <path>`.
-/// 4. Second `orchard --json` — assert the worktree path is absent.
+/// 4. Second `orchard-tui --json` — assert the worktree path is absent.
 ///
 /// The two invocations are issued back-to-back; no `orchard refresh` is
 /// inserted between them. The contract is that `--json` is the source of
@@ -202,7 +202,7 @@ fn json_reflects_worktree_remove_on_next_invocation() {
     assert!(
         !after_paths.iter().any(|p| p == &wt_str),
         "worktree path must not appear after `git worktree remove`; \
-         orchard --json is supposed to be live, not cached.\n\
+         orchard-tui --json is supposed to be live, not cached.\n\
          got paths: {after_paths:?}"
     );
 }
@@ -270,7 +270,7 @@ fn json_reflects_worktree_add_on_next_invocation() {
 /// don't break the test, but the substrings must be present.
 #[test]
 fn help_documents_json_freshness_contract() {
-    let assert = Command::cargo_bin("orchard")
+    let assert = Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .arg("--help")
         .assert()
@@ -285,7 +285,7 @@ fn help_documents_json_freshness_contract() {
 /// `orchard --help` mentions `orchard sessions --json` so users can discover it.
 #[test]
 fn help_mentions_sessions_subcommand() {
-    let assert = Command::cargo_bin("orchard")
+    let assert = Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .arg("--help")
         .assert()
@@ -626,7 +626,7 @@ fn run_orchard_sessions_json_with_tmux(home: &Path, harness: &TmuxHarness) -> Se
         std::env::var("PATH").unwrap_or_default()
     );
 
-    let assert = Command::cargo_bin("orchard")
+    let assert = Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .args(["sessions", "--json"])
         .env("HOME", home)

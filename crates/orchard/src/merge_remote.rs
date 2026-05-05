@@ -218,7 +218,7 @@ fn worktree_state_from_json(json_wt: JsonWorktree, host: String) -> WorktreeStat
         last_commit_at: json_wt.last_commit_at,
         layout,
         // Preserve the discovery_path serialised into the on-disk snapshot so
-        // that a TUI restart or cache-only `orchard --json` round-trip does not
+        // that a TUI restart or cache-only `orchard-tui --json` round-trip does not
         // lose the transitive hop chain.  `merge_remote_snapshot_with_path` will
         // overwrite with `None`-check semantics, so this is safe to populate here.
         discovery_path: json_wt.discovery_path,
@@ -901,7 +901,7 @@ mod tests {
 
     // ---- AC10: union + dedup ------------------------------------------------
 
-    /// AC10 — `orchard --json` unions local and remote repos/worktrees/sessions.
+    /// AC10 — `orchard-tui --json` unions local and remote repos/worktrees/sessions.
     ///
     /// 1 repo, 2 local worktrees + 3 remote worktrees = 5 entries on the same slug.
     /// 3 remote entries have non-null host; 2 local have null host.

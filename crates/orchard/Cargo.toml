@@ -14,7 +14,7 @@ name = "orchard"
 path = "src/lib.rs"
 
 [[bin]]
-name = "orchard"
+name = "orchard-tui"
 path = "src/main.rs"
 
 [dependencies]

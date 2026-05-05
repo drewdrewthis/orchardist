@@ -1,7 +1,7 @@
-//! Integration tests for the `phase` field in `orchard --json` output.
+//! Integration tests for the `phase` field in `orchard-tui --json` output.
 //!
 //! Each test writes a minimal fixture cache (issues, PRs, worktrees) into a
-//! temp HOME directory, runs `orchard --json`, parses the JSON, and asserts
+//! temp HOME directory, runs `orchard-tui --json`, parses the JSON, and asserts
 //! the `phase` field on the relevant `issue` or `pr` object.
 //!
 //! These tests correspond to the `@integration` scenarios in
@@ -9,7 +9,7 @@
 //!
 //! # Design note
 //!
-//! `orchard --json` calls `refresh_and_build`, which refreshes worktrees via
+//! `orchard-tui --json` calls `refresh_and_build`, which refreshes worktrees via
 //! `git worktree list` (overwriting any pre-written worktrees cache) but will
 //! not overwrite issues/PRs caches because `gh` is unavailable in the test
 //! environment. The worktree cache therefore reflects the real git repo state.
@@ -18,7 +18,7 @@
 //!   1. Creates a temp git repo and makes a commit so `git worktree list` works.
 //!   2. Checks out the target branch (so the worktree is on that branch).
 //!   3. Pre-writes issues/PRs caches with the matching branch and phase labels.
-//!   4. Runs `orchard --json` and asserts `phase` on the found worktree.
+//!   4. Runs `orchard-tui --json` and asserts `phase` on the found worktree.
 //!
 //! If the binary exits non-zero (e.g. because `gh` is not available at all),
 //! the test skips rather than fails — consistent with `binary_integration.rs`.
@@ -117,14 +117,14 @@ impl PhaseFixture {
         }
     }
 
-    /// Runs `orchard refresh && orchard --json` with HOME pointing to the
+    /// Runs `orchard refresh && orchard-tui --json` with HOME pointing to the
     /// fixture and returns the parsed JSON, or `None` if the binary fails
     /// (e.g. `gh` unavailable).
     ///
-    /// Post-#329: `orchard --json` is cache-only, so `orchard refresh` runs
+    /// Post-#329: `orchard-tui --json` is cache-only, so `orchard refresh` runs
     /// first to populate the worktree cache from the fixture's temp git repo.
     fn run(&self) -> Option<Value> {
-        let refresh = Command::cargo_bin("orchard")
+        let refresh = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("refresh")
             .current_dir(self.repo.path())
@@ -142,7 +142,7 @@ impl PhaseFixture {
             return None;
         }
 
-        let output = Command::cargo_bin("orchard")
+        let output = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("--json")
             .current_dir(self.repo.path())
@@ -157,7 +157,7 @@ impl PhaseFixture {
             // hide as a pass.
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
-                "SKIP phase_field_integration: orchard --json exited with {:?}. stderr: {}",
+                "SKIP phase_field_integration: orchard-tui --json exited with {:?}. stderr: {}",
                 output.status.code(),
                 stderr.trim()
             );
@@ -194,7 +194,7 @@ fn find_worktree_by_branch<'a>(output: &'a Value, branch: &str) -> Option<&'a Va
 // Integration scenario: issue with a single phase label
 // ---------------------------------------------------------------------------
 
-/// orchard --json exposes phase on an issue with a single phase label.
+/// orchard-tui --json exposes phase on an issue with a single phase label.
 ///
 /// Feature `@integration` scenario:
 ///   Given a fixture cache with issue #47 having labels `["in-progress"]`
@@ -247,7 +247,7 @@ fn json_exposes_phase_on_issue_with_single_phase_label() {
 // Integration scenario: PR with a single phase label
 // ---------------------------------------------------------------------------
 
-/// orchard --json exposes phase on a PR with a single phase label.
+/// orchard-tui --json exposes phase on a PR with a single phase label.
 ///
 /// Feature `@integration` scenario:
 ///   Given a fixture cache with PR #55 having labels `["pr-ready"]`
@@ -286,7 +286,7 @@ fn json_exposes_phase_on_pr_with_single_phase_label() {
 // Integration scenario: issue with no phase labels → phase null
 // ---------------------------------------------------------------------------
 
-/// orchard --json emits phase null when an issue has no phase labels.
+/// orchard-tui --json emits phase null when an issue has no phase labels.
 ///
 /// Feature `@integration` scenario:
 ///   Given a fixture cache with issue #10 having labels `["bug"]`
@@ -329,7 +329,7 @@ fn json_emits_null_phase_for_issue_with_no_phase_labels() {
 // Integration scenario: multi-phase PR resolved by priority
 // ---------------------------------------------------------------------------
 
-/// orchard --json resolves a multi-phase PR by priority.
+/// orchard-tui --json resolves a multi-phase PR by priority.
 ///
 /// Feature `@integration` scenario:
 ///   Given a fixture cache with PR #60 having labels `["in-progress", "blocked"]`
@@ -368,7 +368,7 @@ fn json_resolves_multi_phase_pr_by_priority() {
 // Integration scenario: PR with no linked issue
 // ---------------------------------------------------------------------------
 
-/// orchard --json exposes phase on a PR with no linked issue.
+/// orchard-tui --json exposes phase on a PR with no linked issue.
 ///
 /// Feature `@integration` scenario:
 ///   Given a fixture cache with PR #70 having `linked_issue: null` and labels `["in-ai-review"]`
@@ -408,7 +408,7 @@ fn json_exposes_phase_on_pr_with_no_linked_issue() {
 // Integration scenario: issue and PR on the same worktree can differ
 // ---------------------------------------------------------------------------
 
-/// orchard --json allows issue and PR on the same worktree to have different phases.
+/// orchard-tui --json allows issue and PR on the same worktree to have different phases.
 ///
 /// Feature `@integration` scenario:
 ///   Given issue #47 has labels `["planned"]` and PR #55 has labels `["in-ai-review"]`

@@ -1,9 +1,9 @@
-//! AC7 (post-#374): `orchard --json` is a live read but is bounded — it
+//! AC7 (post-#374): `orchard-tui --json` is a live read but is bounded — it
 //! never blocks on hosts that aren't configured and the cached-snapshot
 //! merge path stays fast.
 //!
 //! Issues #374 / #375 reversed the original AC7 "cache-only" contract:
-//! `orchard --json` now refreshes every reachable source before serialising.
+//! `orchard-tui --json` now refreshes every reachable source before serialising.
 //! The non-blocking guarantees we still hold are:
 //! - Empty config → zero SSH calls and zero hang risk (proven by the
 //!   no-ssh-spawned test below — a fake ssh in PATH is never invoked).
@@ -24,14 +24,14 @@ use orchard::remote_adapter::RemoteKind;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
-// AC7 scenario 1: `orchard --json` with no configured remotes spawns no SSH
+// AC7 scenario 1: `orchard-tui --json` with no configured remotes spawns no SSH
 //
 // Even though `--json` is now a live read (issue #374), an empty config still
 // means zero SSH activity. We prove this deterministically with a fake `ssh`
 // wrapper that writes a marker on invocation.
 // ---------------------------------------------------------------------------
 
-/// `orchard --json` must not invoke `ssh` when no remotes are configured.
+/// `orchard-tui --json` must not invoke `ssh` when no remotes are configured.
 ///
 /// Post-#374 `--json` is a live read that DOES probe SSH for any configured
 /// remote — but with an empty global config there are no remotes to probe,
@@ -66,7 +66,7 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
 
     let start = Instant::now();
 
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .arg("--json")
         .env("HOME", home_dir.path())
@@ -80,7 +80,7 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
     // Marker file must NOT exist — no SSH was spawned.
     assert!(
         !marker.exists(),
-        "orchard --json must not invoke ssh; marker file was created at {}",
+        "orchard-tui --json must not invoke ssh; marker file was created at {}",
         marker.display()
     );
 
@@ -88,7 +88,7 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
     let elapsed = start.elapsed();
     assert!(
         elapsed.as_millis() < 10_000,
-        "orchard --json must not hang; took {:?}",
+        "orchard-tui --json must not hang; took {:?}",
         elapsed
     );
 }
@@ -191,7 +191,7 @@ fn orchard_json_with_cached_snapshot_returns_quickly() {
 #[test]
 fn orchard_refresh_exists_as_subcommand() {
     // `orchard --help` should list `orchard refresh` in the usage text.
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .arg("--help")
         .assert()
@@ -205,7 +205,7 @@ fn orchard_refresh_exists_as_subcommand() {
 fn orchard_refresh_exits_zero_with_empty_config() {
     let home_dir = TempDir::new().expect("create temp home");
 
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .expect("orchard binary must exist")
         .arg("refresh")
         .env("HOME", home_dir.path())

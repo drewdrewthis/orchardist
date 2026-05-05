@@ -105,7 +105,7 @@ pub enum RemoteKind {
     BoxdShared,
     /// Boxd fork-per-issue adapter: one VM per open issue.
     BoxdFork,
-    /// Federated orchard-proxy: invokes `ssh host orchard --json` and projects
+    /// Federated orchard-proxy: invokes `ssh host orchard-tui --json` and projects
     /// the remote `JsonOutput` into `CachedWorktree` / `CachedTmuxSession`.
     /// On any SSH or parse failure, surfaces the error and emits a
     /// `remote_adapter.proxy_failure` event; the last-known snapshot on disk
@@ -152,7 +152,7 @@ pub trait SshExec: Send + Sync {
 /// orchard-wide SSH multiplexing flags (`ControlMaster=auto`, `ControlPath`,
 /// `ConnectTimeout=5`, `BatchMode=yes`) and, critically, kills the child if
 /// the command does not exit within `DEFAULT_ADAPTER_TIMEOUT`. This bounds
-/// `orchard --json` latency when a remote VM accepts SSH but hangs on the
+/// `orchard-tui --json` latency when a remote VM accepts SSH but hangs on the
 /// actual command — AC6.
 ///
 /// `stderr` is surfaced through the returned error rather than as part of
@@ -232,7 +232,7 @@ pub enum RemoteAdapter {
     BoxdShared(BoxdSharedAdapter),
     /// Boxd fork-per-issue adapter: one VM per open issue.
     BoxdFork(BoxdForkAdapter),
-    /// Federated orchard-proxy adapter: `ssh host orchard --json`.
+    /// Federated orchard-proxy adapter: `ssh host orchard-tui --json`.
     OrchardProxy(OrchardProxyAdapter),
 }
 
@@ -574,7 +574,7 @@ impl BoxdForkAdapter {
 // OrchardProxyAdapter
 // ---------------------------------------------------------------------------
 
-/// Adapter that invokes `ssh host orchard --json`, deserializes the response
+/// Adapter that invokes `ssh host orchard-tui --json`, deserializes the response
 /// into the existing `JsonOutput` wire format, and projects it into
 /// `CachedWorktree` / `CachedTmuxSession` entries.
 ///
@@ -585,7 +585,7 @@ impl BoxdForkAdapter {
 /// shell-discovery; the last-known snapshot on disk stays visible via the
 /// cache-only read path.
 ///
-/// The remote `orchard --json` output is memoized in a [`OnceLock`] so that
+/// The remote `orchard-tui --json` output is memoized in a [`OnceLock`] so that
 /// calling both [`list_worktrees`] and [`list_sessions`] on the same adapter
 /// instance results in at most one SSH invocation.
 pub struct OrchardProxyAdapter {
@@ -596,7 +596,7 @@ pub struct OrchardProxyAdapter {
     pub path: String,
     /// SSH executor (real process or test double).
     pub ssh: Box<dyn SshExec>,
-    /// Memoized result of the single `orchard --json` SSH round-trip.
+    /// Memoized result of the single `orchard-tui --json` SSH round-trip.
     ///
     /// `OnceLock` guarantees at most one call regardless of how many times
     /// `list_worktrees` and `list_sessions` are invoked on the same instance.
@@ -604,14 +604,14 @@ pub struct OrchardProxyAdapter {
 }
 
 impl OrchardProxyAdapter {
-    /// Performs (or reuses) the `ssh host orchard --json` call.
+    /// Performs (or reuses) the `ssh host orchard-tui --json` call.
     ///
     /// On first call, executes the SSH command, checks the exit code,
     /// deserializes the JSON payload, and validates the schema version.
     /// Subsequent calls return a reference to the cached result.
     fn fetch_snapshot(&self) -> &Result<crate::json_output::JsonOutput, AdapterError> {
         self.snapshot.get_or_init(|| {
-            let output = match self.ssh.exec(&self.host, "orchard --json") {
+            let output = match self.ssh.exec(&self.host, "orchard-tui --json") {
                 Ok(o) => o,
                 Err(e) => {
                     return Err(AdapterError::FetchFailure {
@@ -660,7 +660,7 @@ impl OrchardProxyAdapter {
         })
     }
 
-    /// Returns all non-bare worktrees sourced from `ssh host orchard --json`.
+    /// Returns all non-bare worktrees sourced from `ssh host orchard-tui --json`.
     ///
     /// On success, projects each `JsonWorktree` from every `JsonRepo` in the
     /// remote snapshot into a `CachedWorktree` tagged with the configured host.
@@ -703,7 +703,7 @@ impl OrchardProxyAdapter {
         }
     }
 
-    /// Returns all tmux sessions sourced from the same `orchard --json` snapshot.
+    /// Returns all tmux sessions sourced from the same `orchard-tui --json` snapshot.
     ///
     /// Reuses the memoized snapshot so no additional SSH call is made when
     /// `list_worktrees` was already called on this adapter instance.
@@ -823,7 +823,7 @@ fn bounded_chars(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
 
-/// Projects a `JsonSession` from the remote `orchard --json` output into a
+/// Projects a `JsonSession` from the remote `orchard-tui --json` output into a
 /// `CachedTmuxSession` tagged with the given host.
 fn json_session_to_cached(s: &crate::json_output::JsonSession, host: &str) -> CachedTmuxSession {
     CachedTmuxSession {
@@ -1142,7 +1142,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // AC2: OrchardProxyAdapter.list_worktrees() — sources from orchard --json
+    // AC2: OrchardProxyAdapter.list_worktrees() — sources from orchard-tui --json
     // -----------------------------------------------------------------------
 
     /// Returns a minimal valid `JsonOutput` JSON string with one repo containing
@@ -1176,14 +1176,14 @@ mod tests {
         )
     }
 
-    /// AC2 scenario 1: `list_worktrees()` parses `orchard --json` output and
+    /// AC2 scenario 1: `list_worktrees()` parses `orchard-tui --json` output and
     /// returns CachedWorktree entries tagged with the configured host.
     #[test]
     fn orchard_proxy_list_worktrees_parses_json_output() {
         let mut fake = FakeSshExec::new();
         fake.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: canned_json_output_one_worktree("issue329/federated-orchard"),
                 stderr: String::new(),
@@ -1240,7 +1240,7 @@ mod tests {
         let mut inner = FakeSshExec::new();
         inner.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: canned_json_output_one_worktree("main"),
                 stderr: String::new(),
@@ -1266,8 +1266,8 @@ mod tests {
         let cmds: Vec<&str> = recorded.iter().map(|(_, c)| c.as_str()).collect();
 
         assert!(
-            cmds.contains(&"orchard --json"),
-            "orchard --json must be invoked"
+            cmds.contains(&"orchard-tui --json"),
+            "orchard-tui --json must be invoked"
         );
         assert!(
             !cmds.iter().any(|c| c.contains("git worktree list")),
@@ -1279,7 +1279,7 @@ mod tests {
     // AC3: list_sessions() shares the same snapshot; single SSH call
     // -----------------------------------------------------------------------
 
-    /// AC3 scenario 1: `list_sessions()` returns sessions from the `orchard --json` snapshot.
+    /// AC3 scenario 1: `list_sessions()` returns sessions from the `orchard-tui --json` snapshot.
     #[test]
     fn orchard_proxy_list_sessions_parses_sessions_from_snapshot() {
         // Build a JSON output with two sessions on the worktree + one standalone.
@@ -1319,7 +1319,7 @@ mod tests {
         let mut fake = FakeSshExec::new();
         fake.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: json.to_string(),
                 stderr: String::new(),
@@ -1351,7 +1351,7 @@ mod tests {
     }
 
     /// AC3 scenario 2: calling both `list_worktrees()` and `list_sessions()`
-    /// results in at most 1 `orchard --json` SSH invocation.
+    /// results in at most 1 `orchard-tui --json` SSH invocation.
     #[test]
     fn orchard_proxy_list_worktrees_and_sessions_share_single_ssh_call() {
         use std::sync::{Arc, Mutex};
@@ -1363,7 +1363,7 @@ mod tests {
 
         impl SshExec for CountingFakeSshExec {
             fn exec(&self, host: &str, cmd: &str) -> Result<SshOutput> {
-                if cmd == "orchard --json" {
+                if cmd == "orchard-tui --json" {
                     *self.count.lock().unwrap() += 1;
                 }
                 self.inner.exec(host, cmd)
@@ -1374,7 +1374,7 @@ mod tests {
         let mut inner = FakeSshExec::new();
         inner.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: canned_json_output_one_worktree("main"),
                 stderr: String::new(),
@@ -1404,7 +1404,7 @@ mod tests {
         let invocations = *count.lock().unwrap();
         assert_eq!(
             invocations, 1,
-            "exactly 1 `orchard --json` SSH call expected; got {invocations}"
+            "exactly 1 `orchard-tui --json` SSH call expected; got {invocations}"
         );
     }
 
@@ -1436,7 +1436,7 @@ mod tests {
         let mut inner = FakeSshExec::new();
         inner.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: String::new(),
                 stderr: "orchard: not found".to_string(),
@@ -1464,10 +1464,10 @@ mod tests {
 
         let recorded = calls.lock().unwrap();
 
-        // AC5: the positive assertion — `orchard --json` must have been attempted.
+        // AC5: the positive assertion — `orchard-tui --json` must have been attempted.
         assert!(
-            recorded.iter().any(|c| c.contains("orchard --json")),
-            "orchard --json must be in the recorded commands; got: {recorded:?}"
+            recorded.iter().any(|c| c.contains("orchard-tui --json")),
+            "orchard-tui --json must be in the recorded commands; got: {recorded:?}"
         );
 
         // AC5: legacy git discovery must NOT be triggered on failure.
@@ -1496,7 +1496,7 @@ mod tests {
         let mut fake = FakeSshExec::new();
         fake.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: r#"{ "repos": [malformed..."#.to_string(),
                 stderr: String::new(),
@@ -1533,7 +1533,7 @@ mod tests {
         let json = r#"{"version": 0, "tmuxSessions": [], "repos": [], "hosts": {}}"#;
         fake.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: json.to_string(),
                 stderr: String::new(),
@@ -1568,7 +1568,7 @@ mod tests {
         let mut fake = FakeSshExec::new();
         fake.insert(
             "boxd@vm.boxd.sh",
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: String::new(),
                 stderr: "ssh: connect to host vm.boxd.sh port 22: Connection refused".to_string(),
@@ -1664,7 +1664,7 @@ mod tests {
         let mut fake = FakeSshExec::new();
         fake.insert(
             host,
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: String::new(),
                 stderr: String::new(),
@@ -1960,9 +1960,9 @@ mod tests {
 
     /// AC6 scenario B: For a non-proxy remote (here `BoxdSharedAdapter`),
     /// `list_sessions()` is sourced from a direct `tmux list-panes` SSH call —
-    /// never from `orchard --json`.
+    /// never from `orchard-tui --json`.
     ///
-    /// Satisfies the contract: "no `ssh host orchard --json` call is made for
+    /// Satisfies the contract: "no `ssh host orchard-tui --json` call is made for
     /// hosts that are not orchard-proxy". Verified by recording every SSH
     /// command the adapter issues and asserting the negative.
     #[test]
@@ -2028,10 +2028,10 @@ mod tests {
             "list_sessions for a non-proxy remote must use tmux list-panes; got: {recorded:?}"
         );
 
-        // Negative assertion: `orchard --json` must NEVER be invoked on a non-proxy adapter.
+        // Negative assertion: `orchard-tui --json` must NEVER be invoked on a non-proxy adapter.
         assert!(
-            !recorded.iter().any(|c| c.contains("orchard --json")),
-            "list_sessions for a non-proxy remote must NOT invoke orchard --json; got: {recorded:?}"
+            !recorded.iter().any(|c| c.contains("orchard-tui --json")),
+            "list_sessions for a non-proxy remote must NOT invoke orchard-tui --json; got: {recorded:?}"
         );
 
         // The adapter is the authoritative source — returned sessions are non-empty.
@@ -2054,10 +2054,10 @@ mod tests {
     /// snapshot, non-proxy host uses legacy probe".
     ///
     /// Two adapters, each with its own recording SSH executor:
-    ///  - Host A (`OrchardProxy`): must issue `orchard --json` and must NOT
+    ///  - Host A (`OrchardProxy`): must issue `orchard-tui --json` and must NOT
     ///    issue any `tmux list-panes` or `git worktree list` commands.
     ///  - Host B (`BoxdShared`): must issue `tmux list-panes` and must NOT
-    ///    issue `orchard --json`.
+    ///    issue `orchard-tui --json`.
     ///
     /// This locks the dispatch invariant in `RemoteAdapter::from_config` and
     /// each adapter's command vocabulary without spawning a binary or requiring
@@ -2090,7 +2090,7 @@ mod tests {
         // list_sessions() succeeds without needing a worktree entry.
         inner_a.insert(
             host_a,
-            "orchard --json",
+            "orchard-tui --json",
             SshOutput {
                 stdout: r#"{"version":6,"tmuxSessions":[],"repos":[],"hosts":{}}"#.to_string(),
                 stderr: String::new(),
@@ -2150,10 +2150,10 @@ mod tests {
         // --- Assert Host A (OrchardProxy) ---
         let recorded_a = calls_a.lock().unwrap();
 
-        // Positive: orchard --json was issued to host A.
+        // Positive: orchard-tui --json was issued to host A.
         assert!(
-            recorded_a.iter().any(|c| c.contains("orchard --json")),
-            "host A (OrchardProxy) must invoke `orchard --json`; recorded: {recorded_a:?}"
+            recorded_a.iter().any(|c| c.contains("orchard-tui --json")),
+            "host A (OrchardProxy) must invoke `orchard-tui --json`; recorded: {recorded_a:?}"
         );
 
         // Negative: no tmux list-panes on the proxy host.
@@ -2179,10 +2179,10 @@ mod tests {
             "host B (BoxdShared) must invoke `tmux list-panes`; recorded: {recorded_b:?}"
         );
 
-        // Negative: no orchard --json on the legacy host.
+        // Negative: no orchard-tui --json on the legacy host.
         assert!(
-            !recorded_b.iter().any(|c| c.contains("orchard --json")),
-            "host B (BoxdShared) must NOT invoke `orchard --json`; recorded: {recorded_b:?}"
+            !recorded_b.iter().any(|c| c.contains("orchard-tui --json")),
+            "host B (BoxdShared) must NOT invoke `orchard-tui --json`; recorded: {recorded_b:?}"
         );
 
         drop(recorded_b);

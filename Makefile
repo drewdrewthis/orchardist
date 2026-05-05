@@ -7,7 +7,7 @@
 # Per ADR-011 the Go binary is the new orchard daemon + CLI. The Rust CLI
 # stays for the time being and will sunset organically.
 
-.PHONY: daemon generate rust gui all clean install test test-go test-rust
+.PHONY: daemon generate rust gui all clean install install-daemon install-tui test test-go test-rust
 
 # Go binary — built from cmd/orchard, packages all subcommand groups.
 daemon:
@@ -21,15 +21,20 @@ generate:
 	go generate ./...
 
 rust:
-	cargo build --release
+	cargo build --release -p orchard
 
 gui:
 	cd crates/orchard-gui/src-tauri && cargo tauri build
 
 all: daemon rust
 
-install: daemon
+install: install-daemon install-tui
+
+install-daemon: daemon
 	install -m 755 bin/orchard /usr/local/bin/orchard
+
+install-tui: rust
+	install -m 755 target/release/orchard-tui /usr/local/bin/orchard-tui
 
 clean:
 	rm -rf bin/ target/

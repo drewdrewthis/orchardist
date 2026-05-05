@@ -18,7 +18,7 @@ use std::time::Duration;
 
 /// Hard wall-clock deadline for a single host reachability probe.
 ///
-/// Tighter than SSH's own `ConnectTimeout=5` so that `orchard --json`
+/// Tighter than SSH's own `ConnectTimeout=5` so that `orchard-tui --json`
 /// can complete in under 5s even when every configured host is dead
 /// (see #246 ACs #4/#5). A silently-dropping VM or hung remote sshd
 /// can otherwise let the probe run well past the intended budget;
@@ -44,7 +44,7 @@ pub fn remotes_from_config(config: &GlobalConfig) -> Vec<RemoteConfig> {
 /// Each remote kind requires a different health-check command:
 /// - `Remmy` / `BoxdShared`: general-purpose shell accepts `true` as a no-op probe.
 /// - `BoxdFork`: restricted Boxd CLI rejects `true`; `list --json` is the canonical check.
-/// - `OrchardProxy`: must be probed with an orchard-specific command (`orchard --version`)
+/// - `OrchardProxy`: must be probed with an orchard-specific command (`orchard-tui --version`)
 ///   so that the probe exercises the orchard binary, not just SSH connectivity (AC7).
 pub fn probe_command_for(kind: crate::remote_adapter::RemoteKind) -> &'static str {
     match kind {
@@ -53,7 +53,7 @@ pub fn probe_command_for(kind: crate::remote_adapter::RemoteKind) -> &'static st
         | crate::remote_adapter::RemoteKind::BoxdShared => "true",
         // AC7: OrchardProxy requires an orchard-specific probe — verifies the orchard
         // binary is present and responsive, not just that SSH itself works.
-        crate::remote_adapter::RemoteKind::OrchardProxy => "orchard --version",
+        crate::remote_adapter::RemoteKind::OrchardProxy => "orchard-tui --version",
     }
 }
 
@@ -64,7 +64,7 @@ pub fn probe_command_for(kind: crate::remote_adapter::RemoteKind) -> &'static st
 /// so `true` is a valid probe. `BoxdFork` targets the Boxd controller
 /// (e.g. `boxd.sh`), which is a restricted CLI that rejects `true` —
 /// `list --json` is the canonical health check there. `OrchardProxy` uses
-/// `orchard --version` to verify the orchard binary is present and responsive
+/// `orchard-tui --version` to verify the orchard binary is present and responsive
 /// (AC7 mandate), not merely that SSH connectivity exists.
 ///
 /// Returns `true` if the host responds within [`PROBE_TIMEOUT`], `false` if

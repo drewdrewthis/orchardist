@@ -441,7 +441,7 @@ fn restrict_cache_permissions(_path: &Path) {}
 
 /// Returns the cache file path for host reachability state.
 ///
-/// Written by `orchard refresh`, read by `orchard --json`, TUI cold start,
+/// Written by `orchard refresh`, read by `orchard-tui --json`, TUI cold start,
 /// and the watch daemon to populate `OrchardState.hosts`.
 pub fn host_reachability_cache_path() -> PathBuf {
     cache_dir().join("hosts.json")
@@ -450,7 +450,7 @@ pub fn host_reachability_cache_path() -> PathBuf {
 /// Persists host reachability state to `~/.cache/orchard/hosts.json`.
 ///
 /// Called by `orchard refresh` after probing hosts so that subsequent
-/// cache-only reads (`orchard --json`, TUI cold start, watch daemon) can
+/// cache-only reads (`orchard-tui --json`, TUI cold start, watch daemon) can
 /// populate `OrchardState.hosts` without re-probing.
 ///
 /// Uses atomic tmp→rename write to prevent partial reads. Errors are

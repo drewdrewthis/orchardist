@@ -49,11 +49,11 @@ Orchard gives you a single dashboard showing everything happening across your re
 - **Cleanup** — select and delete worktrees with merged PRs or closed issues
 - **Click-to-switch notifications** — desktop notifications when Claude finishes; click to jump to the session
 - **Remote worktrees** — manage worktrees on remote machines via SSH, with reachability indicators
-- **JSON output** — `orchard --json` returns complete, fresh data for scripting
+- **JSON output** — `orchard-tui --json` returns complete, fresh data for scripting
 - **Auto-refresh** — background refresh with two-phase loading (fast locals, then slow remotes)
 - **Mouse support** — click to select worktrees, scroll to navigate
 - **Transfer** — push/pull worktrees between local and remote machines
-- **Self-healing** — `orchard heal` audits and repairs drifted state
+- **Self-healing** — `orchard-tui heal` audits and repairs drifted state
 - **Theme system** — centralized semantic color definitions for consistent styling
 
 ## Install
@@ -61,16 +61,19 @@ Orchard gives you a single dashboard showing everything happening across your re
 ### From source
 
 ```bash
-cargo install --git https://github.com/drewdrewthis/git-orchard-rs orchard
+cargo install --git https://github.com/drewdrewthis/git-orchard-rs orchard --bin orchard-tui
 
 # Or from a local checkout:
-cargo install --path crates/orchard
+cargo install --path crates/orchard --bin orchard-tui
 ```
+
+The Rust TUI binary is named `orchard-tui` so it can coexist with the
+Go daemon's `orchard` CLI on the same `$PATH`.
 
 ### Setup
 
 ```bash
-orchard init
+orchard-tui init
 ```
 
 This will:
@@ -82,14 +85,14 @@ This will:
 ## Usage
 
 ```
-orchard                    Interactive dashboard
-orchard cleanup            Jump straight to cleanup view
-orchard heal               Audit state for drift (dry-run by default)
-orchard heal --fix         Apply repairs
-orchard setup-remote HOST  Provision a remote host for SSH worktrees
-orchard init               Setup wizard
-orchard --json             Full state as JSON (always fresh, never cached)
-orchard --schema           Print the JSON Schema for --json output and exit
+orchard-tui                    Interactive dashboard
+orchard-tui cleanup            Jump straight to cleanup view
+orchard-tui heal               Audit state for drift (dry-run by default)
+orchard-tui heal --fix         Apply repairs
+orchard-tui setup-remote HOST  Provision a remote host for SSH worktrees
+orchard-tui init               Setup wizard
+orchard-tui --json             Full state as JSON (always fresh, never cached)
+orchard-tui --schema           Print the JSON Schema for --json output and exit
 ```
 
 ### Agent-oriented output
@@ -99,7 +102,7 @@ encoding should pipe through [`@toon-format/cli`](https://www.npmjs.com/package/
 
 ```sh
 npm i -g @toon-format/cli
-orchard --json | jq '.repos' | toon
+orchard-tui --json | jq '.repos' | toon
 ```
 
 `--schema` emits the JSON Schema for `--json` output — field names
@@ -108,7 +111,7 @@ it before writing jq filters so they target the real wire format instead
 of guessing from Rust types:
 
 ```sh
-orchard --schema | jq '.properties | keys'
+orchard-tui --schema | jq '.properties | keys'
 # ["hosts", "repos", "tmuxSessions", "version"]
 ```
 
@@ -213,7 +216,7 @@ The **orchardist** is a persistent Claude Code session attached to a repo that a
 The recommended path is automated — no JSON editing required:
 
 - From a Claude Code session inside the repo, run `/install-orchard` and follow the prompts, **or**
-- Re-run `orchard init`, which can offer to configure an orchardist for you.
+- Re-run `orchard-tui init`, which can offer to configure an orchardist for you.
 
 Either option writes the right `tmux_sessions` entry into your config and starts the session.
 
@@ -256,7 +259,7 @@ This is the same snippet the automated setup writes for you; edit it only if you
 Orchard detects Claude session state via hooks (not terminal scraping):
 
 ```bash
-orchard init  # installs hooks automatically
+orchard-tui init  # installs hooks automatically
 ```
 
 The hooks write structured JSON on every Claude event (tool use, stop, notification). Orchard reads these for accurate working/idle/input detection, plus context window usage and cost tracking.
