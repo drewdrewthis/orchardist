@@ -18,7 +18,8 @@ import (
 //     active   → StateActive
 //     inactive → StateInactive
 //     failed   → StateFailed
-//     any non-zero exit + "Unit not loaded" stderr → StateUnknown
+//     any non-zero exit + "Unit not loaded" stderr → StateNotInstalled
+//     any non-zero exit + unrecognised stderr      → StateUnknown
 //   - since    : `systemctl --user show -p ActiveEnterTimestamp <name>`
 //   - exitCode : `systemctl --user show -p ExecMainStatus <name>`
 //   - logTail  : `journalctl --user -u <name> --no-pager -n 20`
@@ -99,16 +100,24 @@ func (l linuxAdapter) FetchOne(ctx context.Context, hostID, name string) (Snapsh
 	state, knownUnit := mapIsActive(rawState)
 	if !knownUnit {
 		// stderr contains "Unit X not loaded" or "Failed to get
-		// properties" when the unit is unknown. Either way, that's
-		// state=unknown per the brief.
-		if isUnknownUnitMessage(string(stderr)) || rawState == "" || rawState == "inactive" && code != 0 && isUnknownUnitMessage(string(stderr)) {
+		// properties" when the unit isn't installed. Disambiguate from
+		// genuinely uninterpretable output — `not_installed` for the
+		// former, `unknown` for the latter.
+		if isUnknownUnitMessage(string(stderr)) {
 			return Snapshot{
 				HostID: hostID,
 				Name:   name,
-				State:  StateUnknown,
+				State:  StateNotInstalled,
 			}, nil
 		}
-		return Snapshot{}, fmt.Errorf("systemctl is-active %s: unrecognised state %q (exit %d, stderr %q)", name, rawState, code, strings.TrimSpace(string(stderr)))
+		// Empty stdout + non-zero exit + unrecognised stderr: surface
+		// as state=unknown so peers keep resolving and the operator
+		// notices something unexpected.
+		return Snapshot{
+			HostID: hostID,
+			Name:   name,
+			State:  StateUnknown,
+		}, nil
 	}
 
 	snap := Snapshot{HostID: hostID, Name: name, State: state}

@@ -1031,6 +1031,8 @@ func mapState(s hostservice.State) graphql1.HostServiceState {
 		return graphql1.HostServiceStateInactive
 	case hostservice.StateFailed:
 		return graphql1.HostServiceStateFailed
+	case hostservice.StateNotInstalled:
+		return graphql1.HostServiceStateNotInstalled
 	default:
 		return graphql1.HostServiceStateUnknown
 	}
