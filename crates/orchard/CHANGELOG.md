@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.12.0...orchard-v0.12.1) (2026-05-05)
+
+
+### Bug Fixes
+
+* rename rust binary to orchard-tui (resolves [#409](https://github.com/drewdrewthis/git-orchard-rs/issues/409)) ([#414](https://github.com/drewdrewthis/git-orchard-rs/issues/414)) ([82392a2](https://github.com/drewdrewthis/git-orchard-rs/commit/82392a272d5d84e1849fb3385fa190bbacbd69e9))
+
 ## [0.12.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.11.0...orchard-v0.12.0) (2026-04-27)
 
 
