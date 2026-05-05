@@ -13,3 +13,4 @@ node_modules/
 .claude-context/
 .merge-helper-context/
 .claude/ralph-loop.local.md
+.prove-it-context/
