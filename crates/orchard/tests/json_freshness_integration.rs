@@ -282,7 +282,7 @@ fn help_documents_json_freshness_contract() {
     );
 }
 
-/// `orchard --help` mentions `orchard sessions --json` so users can discover it.
+/// `orchard-tui --help` mentions `orchard-tui sessions --json` so users can discover it.
 #[test]
 fn help_mentions_sessions_subcommand() {
     let assert = Command::cargo_bin("orchard-tui")
@@ -292,8 +292,8 @@ fn help_mentions_sessions_subcommand() {
         .success();
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(
-        stderr.contains("orchard sessions --json"),
-        "help text must mention `orchard sessions --json`; got:\n{stderr}"
+        stderr.contains("orchard-tui sessions --json"),
+        "help text must mention `orchard-tui sessions --json`; got:\n{stderr}"
     );
 }
 
