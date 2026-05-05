@@ -33,9 +33,11 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
+	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
@@ -127,6 +129,16 @@ func runStart(parentCtx context.Context, addr string) error {
 	claudeProjectsRoot := claudeprojectsRoot()
 	claudeProjectsProvider := claudeprojects.New(claudeProjectsRoot, "local", logger)
 
+	gitProvider, err := buildGitProvider(ctx, configProvider, logger)
+	if err != nil {
+		return fmt.Errorf("build git provider: %w", err)
+	}
+
+	claudeInstanceProvider := claudeinstance.New(
+		"local",
+		claudeinstance.NewComposer("local", nil, nil, nil),
+	)
+
 	hsvc, hsvcErr := buildHostServiceProvider(ctx)
 	if hsvcErr != nil {
 		fmt.Fprintf(os.Stderr, "orchard: hostservice unavailable: %v\n", hsvcErr)
@@ -141,10 +153,12 @@ func runStart(parentCtx context.Context, addr string) error {
 
 	opts := []server.Option{
 		server.WithProjects(configProvider),
+		server.WithGit(gitProvider),
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithClaudeAccount(claudeaccount.New("local", logger)),
+		server.WithClaudeInstance(claudeInstanceProvider),
 		server.WithContracts(contracts.New(logger)),
 		server.WithPeerProxy(peerProvider),
 		server.WithPeerSecret(fedCfg.PeerSecret),
@@ -161,6 +175,30 @@ func runStart(parentCtx context.Context, addr string) error {
 // localHostID returns the host id for tmux nodes. v1 stays neutral.
 func localHostID() tmux.HostID {
 	return tmux.HostID("local")
+}
+
+// buildGitProvider constructs the git provider and registers every
+// project the config provider has currently loaded. The git provider
+// owns a watcher per project; resolvers query it for `Project.worktrees`
+// and node-id lookups.
+//
+// Per-project AddProject failures (e.g. an fsnotify watcher couldn't be
+// installed) are logged and skipped so the daemon still boots — the
+// affected project simply won't surface live worktree updates until it
+// is reconfigured.
+func buildGitProvider(ctx context.Context, projects *configprovider.Provider, logger *slog.Logger) (*gitprovider.Provider, error) {
+	gp := gitprovider.NewProvider(logger)
+	configured, err := projects.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list configured projects: %w", err)
+	}
+	for _, p := range configured {
+		if err := gp.AddProject(gitprovider.Project{ID: string(p.ID), Dir: p.Directory}); err != nil {
+			logger.Warn("git: skipping project, watcher unavailable",
+				"project", p.ID, "dir", p.Directory, "err", err)
+		}
+	}
+	return gp, nil
 }
 
 // buildHostServiceProvider resolves the local machine id, reads the

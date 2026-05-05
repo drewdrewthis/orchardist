@@ -32,6 +32,7 @@ import (
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
@@ -57,10 +58,12 @@ type Server struct {
 	httpSrv        *http.Server
 	host           *host.Provider
 	resolver       *resolvers.Resolver
+	gitProv        *gitprovider.Provider
 	psProv         *ps.Provider
 	tmuxProv       *tmux.Provider
 	claudeProjects *claudeprojects.Provider
 	claudeAccount  *claudeaccount.Provider
+	claudeInstance *claudeinstance.Provider
 	hostService    *hostservice.Provider
 	contracts      *contracts.Provider
 	peerProxy      *peerproxy.Provider
@@ -81,9 +84,15 @@ func WithProjects(p resolvers.ProjectsLister) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithProjects(p) }
 }
 
-// WithGit wires a git provider.
+// WithGit wires a git provider. Run() owns the provider's lifecycle —
+// it does not start anything (NewProvider already kicks off the
+// per-project watchers), but Stop is called on shutdown so watcher
+// goroutines drain cleanly before the daemon exits.
 func WithGit(g *gitprovider.Provider) Option {
-	return func(_ *Server, r *resolvers.Resolver) { r.WithGit(g) }
+	return func(s *Server, r *resolvers.Resolver) {
+		s.gitProv = g
+		r.WithGit(g)
+	}
 }
 
 // WithPS attaches a ps provider.
@@ -115,6 +124,15 @@ func WithClaudeAccount(p *claudeaccount.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.claudeAccount = p
 		r.WithClaudeAccount(p)
+	}
+}
+
+// WithClaudeInstance attaches a claudeinstance provider. Run() starts
+// the provider (initial heartbeat sweep) and the fsnotify+poll watcher.
+func WithClaudeInstance(p *claudeinstance.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.claudeInstance = p
+		r.WithClaudeInstance(p)
 	}
 }
 
@@ -266,11 +284,26 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("start contracts provider: %w", err)
 		}
 	}
+	if s.claudeInstance != nil {
+		if err := s.claudeInstance.Start(ctx); err != nil {
+			return fmt.Errorf("start claudeinstance provider: %w", err)
+		}
+		// The watcher drives Refresh on fsnotify + 5s poll. Errors are
+		// non-fatal — the watcher itself logs and falls back to poll-only
+		// — so we ignore the Run return.
+		watcher := claudeinstance.NewWatcher(s.claudeInstance, s.logger)
+		go func() { _ = watcher.Run(ctx) }()
+	}
 	if s.peerProxy != nil {
 		if err := s.peerProxy.Start(ctx); err != nil {
 			return fmt.Errorf("peerproxy start: %w", err)
 		}
 		defer func() { _ = s.peerProxy.Stop() }()
+	}
+	if s.gitProv != nil {
+		// The git provider's watchers are spawned by AddProject; Stop
+		// drains them on shutdown.
+		defer s.gitProv.Stop()
 	}
 
 	errCh := make(chan error, 1)
@@ -288,6 +321,9 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		if s.claudeProjects != nil {
 			_ = s.claudeProjects.Stop()
+		}
+		if s.claudeInstance != nil {
+			_ = s.claudeInstance.Stop()
 		}
 		s.logger.Info("orchard daemon stopped")
 		return nil

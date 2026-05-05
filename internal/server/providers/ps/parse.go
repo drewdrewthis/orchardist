@@ -50,16 +50,38 @@ func parsePs(host, raw string) ([]Process, error) {
 	return out, nil
 }
 
-// validateHeader normalises the ps header (collapsing repeated spaces)
+// validateHeader normalises the ps header (collapsing repeated spaces,
+// promoting the standalone `TT` token to `TTY` for procps-ng on Linux)
 // and compares against the expected column ordering. A mismatch means
 // the adapter was invoked with a different -o flag, or ps has been
 // upgraded to a format the parser doesn't understand.
+//
+// Why the TT normalisation: `ps -ax -o ...,tty,...` emits the column
+// header as `TTY` on macOS / BSD ps, but as `TT` on procps-ng 4.x
+// (Debian bookworm-class boxes). The data row is identical either way
+// — only the header label differs — so we collapse `TT` to `TTY` in
+// the inbound string and validate against the canonical constant.
 func validateHeader(line string) error {
 	got := strings.Join(strings.Fields(line), " ")
+	got = normaliseTTYHeader(got)
 	if got != psHeader {
 		return fmt.Errorf("ps: unexpected header %q (want %q)", got, psHeader)
 	}
 	return nil
+}
+
+// normaliseTTYHeader replaces a standalone `TT` token with `TTY` so
+// procps-ng 4.x output matches the canonical header. Operates only on
+// the standalone token to avoid corrupting headers that legitimately
+// embed `TT` in another column name.
+func normaliseTTYHeader(line string) string {
+	tokens := strings.Fields(line)
+	for i, tok := range tokens {
+		if tok == "TT" {
+			tokens[i] = "TTY"
+		}
+	}
+	return strings.Join(tokens, " ")
 }
 
 // parseLine consumes one ps data line. Returns ok=false on malformed
