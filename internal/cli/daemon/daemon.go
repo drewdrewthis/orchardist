@@ -37,6 +37,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
@@ -144,6 +145,18 @@ func runStart(parentCtx context.Context, addr string) error {
 		fmt.Fprintf(os.Stderr, "orchard: hostservice unavailable: %v\n", hsvcErr)
 	}
 
+	// Wire the gh provider unconditionally. Auth failures (gh CLI
+	// missing, user not logged in) are non-fatal: the provider remembers
+	// the error and surfaces it as a per-field GraphQL error on
+	// `pullRequests`/`issues`/`workflowRuns`, while sibling fields keep
+	// resolving (ADR-011 §6 / §12). We probe auth here purely so a
+	// missing setup is loud at boot time — matching the hostservice
+	// fallback pattern above.
+	ghProvider := gh.New(logger, os.Getenv(gh.EnvAPIBaseURL))
+	if err := ghProvider.AuthError(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "orchard: gh unavailable: %v\n", err)
+	}
+
 	fedCfg, err := peerproxy.LoadFederationConfig(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load federation config: %w", err)
@@ -160,6 +173,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithClaudeAccount(claudeaccount.New("local", logger)),
 		server.WithClaudeInstance(claudeInstanceProvider),
 		server.WithContracts(contracts.New(logger)),
+		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),
 		server.WithPeerSecret(fedCfg.PeerSecret),
 		server.WithLocalEvents(localEvents),
