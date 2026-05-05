@@ -68,7 +68,14 @@ echo '{"number":999999,"title":"test PR","state":"OPEN","isDraft":false}'
 EOF
 chmod +x "${FAKE_BIN_DIR}/gh"
 
-# Also stub 'orchard' in case the driver calls it
+# Also stub 'orchard-tui' (Rust TUI) and 'orchard' (Go daemon) in case the
+# driver shells out to either.
+cat > "${FAKE_BIN_DIR}/orchard-tui" <<'EOF'
+#!/usr/bin/env bash
+echo '{}'
+EOF
+chmod +x "${FAKE_BIN_DIR}/orchard-tui"
+
 cat > "${FAKE_BIN_DIR}/orchard" <<'EOF'
 #!/usr/bin/env bash
 echo '{}'

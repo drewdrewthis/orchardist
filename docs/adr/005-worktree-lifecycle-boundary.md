@@ -43,7 +43,7 @@ Rationale:
 
 - **Trigger creation via configurable command.** A keybinding in the TUI that shells out to a user-defined command (e.g., `wt switch -c`, a custom script, or `git worktree add`). Orchard provides the UI affordance; the user provides the implementation. This would require a config option like `worktree_create_command` in `.orchard.json`.
 
-- **Surface build cache guidance.** Worktrees that don't share `target/` or `node_modules/` waste disk and compile time. Orchard could detect this and suggest symlinks or `.worktreeinclude`-style sharing during `orchard init`.
+- **Surface build cache guidance.** Worktrees that don't share `target/` or `node_modules/` waste disk and compile time. Orchard could detect this and suggest symlinks or `.worktreeinclude`-style sharing during `orchard-tui init`.
 
 - **LLM-generated worktree summaries.** Enriching dashboard rows with AI-generated descriptions of what each worktree is doing (based on diffs or commit messages). Deferred due to cost concerns and TUI layout challenges — needs a detail pane or on-demand expansion, not inline text.
 

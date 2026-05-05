@@ -5,7 +5,7 @@ and drive long-running work to green.
 
 | Script | Purpose |
 |--------|---------|
-| `orchard-monitor.sh` | Polls `orchard --json`, detects state changes, signals the orchardist pane via `tmux send-keys`. Also throttles a watchlist check. |
+| `orchard-monitor.sh` | Polls `orchard-tui --json`, detects state changes, signals the orchardist pane via `tmux send-keys`. Also throttles a watchlist check. |
 | `orchard-decide.sh`  | State-diff decision tree: classifies per-PR transitions (auto-merge, nudge, alert) and signals the orchardist. |
 
 ## Running
@@ -21,7 +21,7 @@ must live in the same directory.
 ## Requirements
 
 - `bash`, `python3` on PATH
-- `orchard` CLI on PATH (produces `--json` output)
+- `orchard-tui` CLI on PATH (produces `--json` output)
 - a tmux session named `orchardist` with at least one pane
 
 ## Environment
@@ -29,7 +29,7 @@ must live in the same directory.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `ORCHARDIST_PANE` | `orchardist:0.0` | tmux target for signals. Use a session-name target — pane IDs (`%0`) are not stable across tmux restarts. |
-| `POLL_INTERVAL` | `60` | Seconds between orchard polls. |
+| `POLL_INTERVAL` | `60` | Seconds between orchard-tui polls. |
 | `WATCH_INTERVAL` | `300` | Seconds between watchlist alert checks. |
 | `REPORT_INTERVAL` | `300` | Seconds between `ORCHARD_REPORT_CMD` refreshes. |
 | `ORCHARD_REPORT_CMD` | _(unset)_ | Optional path to an executable that publishes a dashboard (e.g. to Telegram, Slack). Invoked on every state change and every `REPORT_INTERVAL` seconds. If unset, no dashboard is published. |

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Orchard session monitor — polls orchard --json, sends changes to orchardist tmux session
+# Orchard session monitor — polls orchard-tui --json, sends changes to orchardist tmux session
 # Also checks a watchlist for issues that should be driven to green
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,7 @@ LAST_REPORT_FILE="/tmp/orchard-monitor-last-report"
 [ -f "$LAST_WATCH_FILE" ] || echo "0" > "$LAST_WATCH_FILE"
 
 while true; do
-  CURRENT=$(orchard --json 2>/dev/null)
+  CURRENT=$(orchard-tui --json 2>/dev/null)
   if [ -z "$CURRENT" ]; then
     sleep 60
     continue

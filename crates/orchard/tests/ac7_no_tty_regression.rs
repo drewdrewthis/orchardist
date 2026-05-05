@@ -11,10 +11,10 @@ use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
 fn orchard_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_orchard"))
+    Command::new(env!("CARGO_BIN_EXE_orchard-tui"))
 }
 
-/// Non-TTY invocation of `orchard --version` must succeed (it's
+/// Non-TTY invocation of `orchard-tui --version` must succeed (it's
 /// dispatched before any work and is a common health probe from
 /// shell scripts).
 #[test]
@@ -65,7 +65,7 @@ fn orchard_refresh_succeeds_without_controlling_tty() {
     );
 }
 
-/// Non-TTY invocation of `orchard --json` must succeed and emit valid
+/// Non-TTY invocation of `orchard-tui --json` must succeed and emit valid
 /// JSON on stdout (cache-only read path, AC7).
 #[test]
 fn orchard_json_succeeds_without_controlling_tty() {
@@ -85,11 +85,11 @@ fn orchard_json_succeeds_without_controlling_tty() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("orchard --json must exec");
+        .expect("orchard-tui --json must exec");
 
     assert!(
         output.status.success(),
-        "orchard --json exited non-zero: stdout={}, stderr={}",
+        "orchard-tui --json exited non-zero: stdout={}, stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );

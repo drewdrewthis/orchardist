@@ -15,7 +15,7 @@
 //! Each test:
 //! 1. Records `t0`
 //! 2. Invokes the production launch flow against a configured remote
-//! 3. Polls `orchard refresh && orchard --json` for the new session row
+//! 3. Polls `orchard refresh && orchard-tui --json` for the new session row
 //! 4. Records `t1` when the session appears
 //! 5. Asserts visibility under the AC's budget (30s) and prints elapsed time
 //!
@@ -31,7 +31,7 @@
 //! - The launch flow is a markdown skill (not the orchard binary), so we can
 //!   only invoke its constituent pieces here, not the user-facing entry point.
 //! - The contract being verified is "after `/launch-remote` completes, the
-//!   session appears in `orchard --json` within 30s". The harness measures
+//!   session appears in `orchard-tui --json` within 30s". The harness measures
 //!   the second half (refresh + --json visibility) given a session that
 //!   already exists on the remote — the first half (skill execution) is out
 //!   of scope for an in-tree test.
@@ -44,7 +44,7 @@ const VISIBILITY_BUDGET: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// AC1: After a session appears on a boxd-fork host (e.g., the LangWatch
-/// fleet's per-issue forks), `orchard refresh && orchard --json` surfaces
+/// fleet's per-issue forks), `orchard refresh && orchard-tui --json` surfaces
 /// it locally within `VISIBILITY_BUDGET`.
 ///
 /// Setup before running:
@@ -75,7 +75,7 @@ fn launch_remote_boxd_fork_visibility_within_30s() {
 }
 
 /// AC2: After a session appears on a boxd-shared remote (e.g.,
-/// `boxd@orchard-rs.boxd.sh`), `orchard refresh && orchard --json` surfaces
+/// `boxd@orchard-rs.boxd.sh`), `orchard refresh && orchard-tui --json` surfaces
 /// it locally within `VISIBILITY_BUDGET`.
 ///
 /// Setup before running:
@@ -106,7 +106,7 @@ fn launch_remote_boxd_shared_visibility_within_30s() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Polls `orchard refresh && orchard --json` until the output contains a
+/// Polls `orchard refresh && orchard-tui --json` until the output contains a
 /// session row whose name references the issue number (substring match on
 /// `issue<N>`), or until `VISIBILITY_BUDGET` elapses. Returns the elapsed
 /// `Duration` on success; panics on timeout.
@@ -116,19 +116,19 @@ fn poll_for_session_visibility(repo_slug: &str, issue_number: &str) -> Duration 
 
     loop {
         // Run the same two-step the user runs: refresh, then read.
-        let _ = Command::cargo_bin("orchard")
+        let _ = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("refresh")
             .timeout(Duration::from_secs(15))
             .output()
             .expect("orchard refresh must run");
 
-        let output = Command::cargo_bin("orchard")
+        let output = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("--json")
             .timeout(Duration::from_secs(10))
             .output()
-            .expect("orchard --json must run");
+            .expect("orchard-tui --json must run");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         if session_row_visible(&stdout, repo_slug, &needle) {
@@ -138,7 +138,7 @@ fn poll_for_session_visibility(repo_slug: &str, issue_number: &str) -> Duration 
         if started.elapsed() >= VISIBILITY_BUDGET {
             panic!(
                 "session referencing '{needle}' on repo '{repo_slug}' did not appear within \
-                 {VISIBILITY_BUDGET:?}; last orchard --json stdout begins with:\n{}",
+                 {VISIBILITY_BUDGET:?}; last orchard-tui --json stdout begins with:\n{}",
                 stdout.lines().take(20).collect::<Vec<_>>().join("\n")
             );
         }

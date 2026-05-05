@@ -273,7 +273,7 @@ fn enrichment_comes_from_snapshot_not_from_cached_worktree_projection() {
 // ---------------------------------------------------------------------------
 
 /// Proves that host reachability written by `orchard refresh` survives the
-/// cache-only read path (`orchard --json`, TUI cold start, watch daemon).
+/// cache-only read path (`orchard-tui --json`, TUI cold start, watch daemon).
 ///
 /// Pre-writes a `hosts.json` file using the production helpers, then builds
 /// state via the production entry point and asserts `OrchardState.hosts`
@@ -423,7 +423,7 @@ fn cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged() {
     let mut fake = FakeSshExec::new();
     fake.insert(
         host,
-        "orchard --json",
+        "orchard-tui --json",
         SshOutput {
             stdout: String::new(),
             stderr: "orchard: not found".to_string(),

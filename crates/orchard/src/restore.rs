@@ -176,7 +176,7 @@ pub fn live_local_session_names() -> Option<Vec<String>> {
 }
 
 /// Minimum interval between two consecutive restore attempts across orchard
-/// processes. A cron-polling `orchard --json` every minute would otherwise
+/// processes. A cron-polling `orchard-tui --json` every minute would otherwise
 /// keep re-probing tmux and risk `kill-session` + recreate against sessions
 /// tmux just failed to list.
 const RESTORE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
@@ -205,7 +205,7 @@ static RESTORE_RAN: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 ///    same binary (e.g. `App::new` + `refresh_and_build` both invoking restore).
 /// 2. **Cross-process**: a sentinel file in the cache dir records the last
 ///    restore timestamp. If the previous run was within [`RESTORE_COOLDOWN`],
-///    this call is a no-op. That keeps `orchard --json` in a cron loop from
+///    this call is a no-op. That keeps `orchard-tui --json` in a cron loop from
 ///    re-probing every minute.
 ///
 /// Silently returns an empty report on any IO failure so startup is never

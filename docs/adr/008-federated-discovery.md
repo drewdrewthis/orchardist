@@ -37,7 +37,7 @@ Three pressures surfaced together:
 
 The remote orchard is the **authority** on its own worktrees, sessions, and
 enrichment. The local orchard proxies read-path discovery through
-`ssh host orchard --json` and trusts the returned `JsonOutput`.
+`ssh host orchard-tui --json` and trusts the returned `JsonOutput`.
 
 ### Wire protocol
 
@@ -63,14 +63,14 @@ with preference `proxy > legacy`.
 ### Transport
 
 SSH. Not a new HTTP endpoint, not a unix socket, not a custom RPC — `ssh
-host orchard --json`. The existing `SshExec` seam (`ProcessSshExec` +
+host orchard-tui --json`. The existing `SshExec` seam (`ProcessSshExec` +
 `FakeSshExec`) is reused; `OrchardProxyAdapter` wraps one adapter-scoped
 `OnceLock<Result<JsonOutput, _>>` so `list_worktrees()` + `list_sessions()`
 share one round-trip.
 
 ### Reachability
 
-`OrchardProxy` probes with `orchard --version` (not `true`) bounded by
+`OrchardProxy` probes with `orchard-tui --version` (not `true`) bounded by
 `PROBE_TIMEOUT = 3s`. A host that accepts SSH but lacks orchard fails this
 probe and falls back.
 
@@ -130,9 +130,9 @@ webhook event streams between machines is a different problem.
   never makes `gh api` calls about remote repos.
 - SSH round-trips per remote collapse from N (one per source) to 1.
 - Per-host snapshot cache means TUI cold start is instant; remote rows
-  render from cache, then refresh in background via `orchard watch` or
-  `orchard refresh`.
-- Dashboard reads (`orchard --json`, TUI render) never block on network.
+  render from cache, then refresh in background via `orchard-tui watch` or
+  `orchard-tui refresh`.
+- Dashboard reads (`orchard-tui --json`, TUI render) never block on network.
   Unreachable hosts cannot delay a read, regardless of probe timeouts.
 - Adding a new source type on the remote (e.g. future claude enrichment
   fields) requires no local change — it rides the existing `JsonOutput`.
@@ -150,8 +150,8 @@ webhook event streams between machines is a different problem.
 - Remote orchard must be available and working for fresh data. If it's
   down, users see the last-known snapshot plus an error event — never
   silently stale-but-plausible data from a different code path.
-- Users running `orchard --json` get cache-only output. For fresh data
-  they must run `orchard refresh` first (or have `orchard watch`
+- Users running `orchard-tui --json` get cache-only output. For fresh data
+  they must run `orchard-tui refresh` first (or have `orchard-tui watch`
   running). This is a deliberate trade — reads are instant, freshness
   is explicit.
 - `OrchardProxyAdapter` holds a `OnceLock` snapshot per instance; callers
@@ -181,7 +181,7 @@ Running an HTTP server on each orchard machine and hitting it over
 
 Each orchard binary exposes a socket; a fleet control plane forwards over
 SSH tunnels. Rejected for the same lifecycle reasons — plus, `ssh host
-orchard --json` works today without any new socket.
+orchard-tui --json` works today without any new socket.
 
 ### C. Continue recomputing locally
 
@@ -191,7 +191,7 @@ remotes and silently diverges from the remote's own dashboard.
 ### D. Federate mutations too, in this PR
 
 Kill-session, create-worktree, transfer would all route through
-`ssh host orchard --<cmd>`. Deferred: read-path failures are safe
+`ssh host orchard-tui --<cmd>`. Deferred: read-path failures are safe
 (missing rows), mutation failures are not (orphaned resources, dual
 writes). Mutations deserve their own ADR and their own rollout.
 

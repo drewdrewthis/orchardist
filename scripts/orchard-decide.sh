@@ -3,7 +3,7 @@
 # for the orchardist to triage. Never takes action itself.
 #
 # Signals read:
-#   - orchard --json (PR state, CI, labels, threads, session, activity)
+#   - orchard-tui --json (PR state, CI, labels, threads, session, activity)
 #   - gh GraphQL reviewThreads (per PR, on demand when thread count changes)
 #   - per-PR state diff file at ~/.claude/state/orchard-decide-state.json
 #
@@ -40,9 +40,9 @@ done
 mkdir -p "$STATE_DIR"
 [ -f "$DECIDE_STATE" ] || echo '{}' > "$DECIDE_STATE"
 
-JSON=$(orchard --json 2>/dev/null)
+JSON=$(orchard-tui --json 2>/dev/null)
 if [ -z "$JSON" ]; then
-  echo "orchard --json empty" >&2
+  echo "orchard-tui --json empty" >&2
   exit 1
 fi
 

@@ -5,7 +5,7 @@
 //   2. `build.rs`        — provides the types the schema generator derives from.
 //
 // Because both callers use the same physical file, the schema always describes
-// the exact shape that `orchard --json` emits.  Drift is structurally impossible.
+// the exact shape that `orchard-tui --json` emits.  Drift is structurally impossible.
 //
 // Constraints:
 //   - Must be self-contained: only `serde`, `schemars`, and `std::collections::HashMap`
@@ -89,7 +89,7 @@ pub struct JsonTransitiveError {
     pub phase: String,
 }
 
-/// Top-level versioned JSON output for `orchard --json`.
+/// Top-level versioned JSON output for `orchard-tui --json`.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonOutput {

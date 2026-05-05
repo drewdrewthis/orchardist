@@ -1,8 +1,11 @@
-//! Binary entry point for the `orchard` CLI.
+//! Binary entry point for the `orchard-tui` CLI.
 //!
 //! Parses CLI flags (`--json`, `--version`, `--help`), handles the `init` and
 //! `upgrade` sub-commands, and dispatches to either the JSON output path or the
 //! Ratatui TUI (re-launching itself inside a tmux popup when appropriate).
+//!
+//! The binary is named `orchard-tui` so it can coexist with the Go daemon's
+//! `orchard` CLI on the same `$PATH`.
 use std::env;
 use std::io::IsTerminal;
 
@@ -26,7 +29,7 @@ use orchard::tui;
 fn main() {
     // color_eyre's HookBuilder probes the terminal (opens /dev/tty) during
     // install. That fails with ENXIO in non-interactive contexts — cron,
-    // systemd, CI runners, `ssh host "orchard refresh"` without `-t`. Skip
+    // systemd, CI runners, `ssh host "orchard-tui refresh"` without `-t`. Skip
     // panic-hook installation when stderr isn't a TTY; the default panic
     // handler is fine for batch invocations, and AC7 requires background
     // services (refresh / watch / --json) to work without a controlling TTY.
@@ -56,7 +59,7 @@ fn main() {
             "--schema" => schema_flag = true,
             "--fix" => fix_flag = true,
             "--version" | "-V" => {
-                println!("orchard {}", env!("CARGO_PKG_VERSION"));
+                println!("orchard-tui {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             "--help" | "-h" => {
@@ -86,7 +89,7 @@ fn main() {
     }
 
     logger::LOG.info(&format!(
-        "startup: orchard{}",
+        "startup: orchard-tui{}",
         if command.is_empty() {
             String::new()
         } else {
@@ -131,7 +134,7 @@ fn handle_setup_remote(args: &[String]) {
     let host = args.get(2).map(|s| s.as_str()).unwrap_or("");
 
     if host.is_empty() {
-        eprintln!("Usage: orchard setup-remote <host>");
+        eprintln!("Usage: orchard-tui setup-remote <host>");
         eprintln!("  <host> may be a remote name from config or a direct SSH target (user@host)");
         std::process::exit(1);
     }
@@ -257,7 +260,7 @@ fn handle_heal(fix: bool, json: bool) {
     // so consumers see the is_self danger flag without triggering the abort.
     if fix && let Some(self_err) = heal::detect_self_error(&report) {
         eprintln!(
-            "orchard heal: refusing to kill the session I'm running in; run from outside tmux"
+            "orchard-tui heal: refusing to kill the session I'm running in; run from outside tmux"
         );
         eprintln!("  finding: {}", self_err.message);
         std::process::exit(1);
@@ -319,7 +322,7 @@ fn build_heal_worktrees_for_cli(config: &global_config::GlobalConfig) -> Vec<hea
     result
 }
 
-/// Handles `orchard chat [--target <session>] [--message <text>]`.
+/// Handles `orchard-tui chat [--target <session>] [--message <text>]`.
 ///
 /// Resolves the orchardist session and delivers the message via `tmux send-keys`.
 /// Exits non-zero with usage if `--message` is missing or empty — the no-op-on-empty
@@ -330,7 +333,7 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
         _ => {
             eprintln!("Error: --message is required and must not be empty");
             eprintln!();
-            eprintln!("Usage: orchard chat [--target <session>] --message <text>");
+            eprintln!("Usage: orchard-tui chat [--target <session>] --message <text>");
             std::process::exit(1);
         }
     };
@@ -352,7 +355,7 @@ fn handle_chat(target: Option<&str>, message: Option<&str>) {
 
 /// Builds the versioned JSON output from a **live** refresh — never cache.
 ///
-/// Freshness contract (issue #374): `orchard --json` is the source of truth,
+/// Freshness contract (issue #374): `orchard-tui --json` is the source of truth,
 /// not a cache view. It runs the same refresh path as `orchard refresh`
 /// (probes hosts, fetches remote worktrees and tmux sessions over SSH,
 /// re-runs `git worktree list` and `tmux list-panes` locally, refreshes
@@ -387,7 +390,7 @@ fn handle_json() {
     println!("{json}");
 }
 
-/// Handles `orchard sessions --json` — comprehensive sessions index keyed by host.
+/// Handles `orchard-tui sessions --json` — comprehensive sessions index keyed by host.
 ///
 /// Returns every tmux session known to orchard across all managed hosts (not
 /// just orchard-managed ones), classified by relationship to worktrees and
@@ -406,8 +409,8 @@ fn handle_json() {
 fn handle_sessions(json: bool) {
     if !json {
         eprintln!(
-            "orchard sessions: only `--json` output is currently supported.\n\
-             Usage: orchard sessions --json"
+            "orchard-tui sessions: only `--json` output is currently supported.\n\
+             Usage: orchard-tui sessions --json"
         );
         std::process::exit(2);
     }
@@ -428,12 +431,12 @@ fn handle_sessions(json: bool) {
     println!("{serialized}");
 }
 
-/// Handles `orchard refresh` — probes hosts, fetches remote data, writes
+/// Handles `orchard-tui refresh` — probes hosts, fetches remote data, writes
 /// caches and snapshots, then exits.
 ///
 /// This is the **only** entry point that makes SSH connections and writes
-/// fresh data to disk. `orchard --json` and the TUI cold-start both read
-/// the caches written here. `orchard watch` calls `refresh_and_build`
+/// fresh data to disk. `orchard-tui --json` and the TUI cold-start both read
+/// the caches written here. `orchard-tui watch` calls `refresh_and_build`
 /// internally on its own schedule.
 ///
 /// Flags:
@@ -532,7 +535,7 @@ fn handle_tui(command: &str) {
             }
             let _ = cmd.status();
         } else {
-            eprintln!("Wrapper script not found. Run `orchard init` first.");
+            eprintln!("Wrapper script not found. Run `orchard-tui init` first.");
             std::process::exit(1);
         }
         return;
@@ -579,7 +582,7 @@ fn install_panic_hooks() {
 /// `color_eyre::HookBuilder::default()` probes the terminal during install,
 /// which opens `/dev/tty` and fails with ENXIO in any non-interactive
 /// context (cron, systemd, CI runner, `ssh` with no `-t`). Batch commands
-/// like `orchard refresh`, `orchard --json`, and `orchard hook-enrich`
+/// like `orchard-tui refresh`, `orchard-tui --json`, and `orchard-tui hook-enrich`
 /// must not require a controlling TTY (AC7: background services never
 /// block or fail on terminal absence), so we gate the install on
 /// `stderr` being a TTY. The default Rust panic handler works fine for
@@ -589,7 +592,7 @@ fn should_install_panic_hooks() -> bool {
     std::io::stderr().is_terminal()
 }
 
-/// Handles `orchard hook-enrich --transcript <path>`.
+/// Handles `orchard-tui hook-enrich --transcript <path>`.
 ///
 /// Reads the JSONL transcript and prints a JSON enrichment object to stdout.
 /// Prints `{}` and exits 0 on any error (missing path, missing file, etc.).
@@ -603,42 +606,42 @@ fn handle_hook_enrich(transcript: Option<&str>) {
 fn print_usage() {
     eprintln!(
         r#"Usage:
-  orchard                        Interactive worktree manager (popup mode)
-  orchard init                   Interactive setup wizard for popup mode
-  orchard chat --message <msg>   Send a prompt to the orchardist tmux session
-  orchard chat [--target <s>] [--message <msg>]
-                                   Default target: global_config.chat_target or first tmux_session
-  orchard setup-remote <host>    Provision a remote host for orchard
-  orchard upgrade                Upgrade to the latest version
-  orchard heal                   Audit and repair drifted state (dry run)
-  orchard heal --fix             Apply all safe automatic repairs
-  orchard heal --json            Output health check results as JSON
-  orchard sessions --json        Print every tmux session across all managed hosts
-                                   (worktree-attached, orphan, detached-claude, or
-                                   protected) — host-tagged at the data plane.
-                                   Live read: refreshes every reachable remote
-                                   tmux source over SSH plus the local tmux state
-                                   before classifying.
-  orchard refresh                Probe hosts, fetch from remotes, update caches, exit.
-                                   Hot-loads the same caches that `orchard --json`
-                                   and `orchard sessions --json` already refresh;
-                                   useful when you want the side effects (warmed
-                                   caches for the TUI cold start) without the JSON
-                                   output. Use `orchard watch` for a continuous
-                                   background refresh.
-  orchard watch                  Run event-driven watch daemon (Ctrl-C to stop)
-  orchard watch --subscribe --id <id> --session <session> [--pane <pane>]
-                                   Register a tmux subscriber for watch events
-  orchard watch --unsubscribe --id <id>
-                                   Unregister a tmux subscriber
-  orchard webhook-serve [--port <n>]
-                                   Receive GitHub webhooks and append to events.jsonl
-                                   Requires ORCHARD_WEBHOOK_SECRET env var
+  orchard-tui                        Interactive worktree manager (popup mode)
+  orchard-tui init                   Interactive setup wizard for popup mode
+  orchard-tui chat --message <msg>   Send a prompt to the orchardist tmux session
+  orchard-tui chat [--target <s>] [--message <msg>]
+                                       Default target: global_config.chat_target or first tmux_session
+  orchard-tui setup-remote <host>    Provision a remote host for orchard
+  orchard-tui upgrade                Upgrade to the latest version
+  orchard-tui heal                   Audit and repair drifted state (dry run)
+  orchard-tui heal --fix             Apply all safe automatic repairs
+  orchard-tui heal --json            Output health check results as JSON
+  orchard-tui sessions --json        Print every tmux session across all managed hosts
+                                       (worktree-attached, orphan, detached-claude, or
+                                       protected) — host-tagged at the data plane.
+                                       Live read: refreshes every reachable remote
+                                       tmux source over SSH plus the local tmux state
+                                       before classifying.
+  orchard-tui refresh                Probe hosts, fetch from remotes, update caches, exit.
+                                       Hot-loads the same caches that `orchard-tui --json`
+                                       and `orchard-tui sessions --json` already refresh;
+                                       useful when you want the side effects (warmed
+                                       caches for the TUI cold start) without the JSON
+                                       output. Use `orchard-tui watch` for a continuous
+                                       background refresh.
+  orchard-tui watch                  Run event-driven watch daemon (Ctrl-C to stop)
+  orchard-tui watch --subscribe --id <id> --session <session> [--pane <pane>]
+                                       Register a tmux subscriber for watch events
+  orchard-tui watch --unsubscribe --id <id>
+                                       Unregister a tmux subscriber
+  orchard-tui webhook-serve [--port <n>]
+                                       Receive GitHub webhooks and append to events.jsonl
+                                       Requires ORCHARD_WEBHOOK_SECRET env var
 
 Options:
   --version, -V  Print version and exit
   --json         Output worktree data as JSON and exit. Live read — performs
-                 the same refresh as `orchard refresh` (SSH probes, remote
+                 the same refresh as `orchard-tui refresh` (SSH probes, remote
                  worktree + tmux fetches, local git/tmux re-stat, GitHub
                  issue/PR refresh) before serialising. The TUI uses a cache
                  path; --json does not.
@@ -654,13 +657,13 @@ Navigation:
   r       Refresh list
   q/Esc   Close popup (no switch)
 
-Keybindings (after orchard init --install):
+Keybindings (after orchard-tui init --install):
   prefix + o   Open orchard TUI popup
   prefix + O   Quick-chat to orchardist"#
     );
 }
 
-/// Handles the `orchard watch` command.
+/// Handles the `orchard-tui watch` command.
 ///
 /// Without flags: runs the event-driven daemon loop (Ctrl-C to stop).
 /// With `--subscribe`: registers a tmux subscriber.
@@ -702,7 +705,7 @@ fn handle_watch(args: &[String]) {
     if subscribe {
         if id.is_empty() || session.is_empty() {
             eprintln!(
-                "Usage: orchard watch --subscribe --id <id> --session <session> [--pane <pane>]"
+                "Usage: orchard-tui watch --subscribe --id <id> --session <session> [--pane <pane>]"
             );
             std::process::exit(1);
         }
@@ -718,7 +721,7 @@ fn handle_watch(args: &[String]) {
 
     if unsubscribe {
         if id.is_empty() {
-            eprintln!("Usage: orchard watch --unsubscribe --id <id>");
+            eprintln!("Usage: orchard-tui watch --unsubscribe --id <id>");
             std::process::exit(1);
         }
         match orchard::watch::subscription::unregister(&id) {
@@ -738,7 +741,7 @@ fn handle_watch(args: &[String]) {
     }
 }
 
-/// Handles the `orchard webhook-serve` command.
+/// Handles the `orchard-tui webhook-serve` command.
 ///
 /// Parses `--port <n>`, resolves the final port via
 /// `webhook::port::resolve_port(flag, env, config)`, validates

@@ -1,6 +1,6 @@
 //! End-to-end integration tests for Issue #252.
 //!
-//! `orchard --json` must expose four camelCase fields per PR:
+//! `orchard-tui --json` must expose four camelCase fields per PR:
 //! `unresolvedReviewThreads`, `lastReviewCommentAt`, `lastReviewCommentAuthor`,
 //! and `hasUnaddressedAuthorComment`. Legacy `unresolvedThreads` must be
 //! retained as an alias. Corresponds to the `@e2e` scenarios in
@@ -81,9 +81,9 @@ impl ReviewFixture {
     }
 
     fn run(&self) -> Option<Value> {
-        // Post-#329: `orchard --json` is cache-only. Run `orchard refresh`
+        // Post-#329: `orchard-tui --json` is cache-only. Run `orchard refresh`
         // first to populate the worktree cache from the fixture's temp repo.
-        let refresh = Command::cargo_bin("orchard")
+        let refresh = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("refresh")
             .current_dir(self.repo.path())
@@ -101,7 +101,7 @@ impl ReviewFixture {
             return None;
         }
 
-        let output = Command::cargo_bin("orchard")
+        let output = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("--json")
             .current_dir(self.repo.path())
@@ -113,7 +113,7 @@ impl ReviewFixture {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
-                "SKIP review_comment_json_integration: orchard --json exited with {:?}. stderr: {}",
+                "SKIP review_comment_json_integration: orchard-tui --json exited with {:?}. stderr: {}",
                 output.status.code(),
                 stderr.trim()
             );
@@ -135,7 +135,7 @@ fn find_pr_by_branch<'a>(output: &'a Value, branch: &str) -> Option<&'a Value> {
     })
 }
 
-/// `@e2e` Orchardist sees all four new fields on every PR in `orchard --json`.
+/// `@e2e` Orchardist sees all four new fields on every PR in `orchard-tui --json`.
 #[test]
 fn json_exposes_all_four_review_comment_fields_on_pr() {
     let fixture = ReviewFixture::new();

@@ -1,12 +1,12 @@
-//! Integration tests for the `labels` field in `orchard --json` output.
+//! Integration tests for the `labels` field in `orchard-tui --json` output.
 //!
 //! Each test writes a minimal fixture cache (issues, PRs, worktrees) into a
-//! temp HOME directory, runs `orchard --json`, parses the JSON, and asserts
+//! temp HOME directory, runs `orchard-tui --json`, parses the JSON, and asserts
 //! the `labels` field on the relevant `issue` or `pr` object.
 //!
 //! # Design note
 //!
-//! `orchard --json` calls `refresh_and_build`, which refreshes worktrees via
+//! `orchard-tui --json` calls `refresh_and_build`, which refreshes worktrees via
 //! `git worktree list` (overwriting any pre-written worktrees cache) but will
 //! not overwrite issues/PRs caches because `gh` is unavailable in the test
 //! environment. The worktree cache therefore reflects the real git repo state.
@@ -15,7 +15,7 @@
 //!   1. Creates a temp git repo and makes a commit so `git worktree list` works.
 //!   2. Checks out the target branch (so the worktree is on that branch).
 //!   3. Pre-writes issues/PRs caches with the matching branch and labels.
-//!   4. Runs `orchard --json` and asserts `labels` (and `phase`) on the found worktree.
+//!   4. Runs `orchard-tui --json` and asserts `labels` (and `phase`) on the found worktree.
 //!
 //! If the binary exits non-zero (e.g. because `gh` is not available at all),
 //! the test skips rather than fails — consistent with `binary_integration.rs`.
@@ -114,17 +114,17 @@ impl LabelsFixture {
         }
     }
 
-    /// Runs `orchard refresh && orchard --json` with HOME pointing to the
+    /// Runs `orchard refresh && orchard-tui --json` with HOME pointing to the
     /// fixture and returns the parsed JSON, or `None` if the binary fails
     /// (e.g. `gh` unavailable).
     ///
-    /// Post-#329: `orchard --json` is cache-only. `orchard refresh` is the
+    /// Post-#329: `orchard-tui --json` is cache-only. `orchard refresh` is the
     /// explicit entry point that refreshes worktrees via `git worktree list`
     /// (so the local git repo's current branch surfaces in the cache) and
     /// leaves any pre-written issues/PRs caches untouched when `gh` is
     /// unavailable. The test then reads the cache via `--json`.
     fn run(&self) -> Option<Value> {
-        let refresh = Command::cargo_bin("orchard")
+        let refresh = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("refresh")
             .current_dir(self.repo.path())
@@ -142,7 +142,7 @@ impl LabelsFixture {
             return None;
         }
 
-        let output = Command::cargo_bin("orchard")
+        let output = Command::cargo_bin("orchard-tui")
             .unwrap()
             .arg("--json")
             .current_dir(self.repo.path())
@@ -154,7 +154,7 @@ impl LabelsFixture {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
-                "SKIP labels_integration: orchard --json exited with {:?}. stderr: {}",
+                "SKIP labels_integration: orchard-tui --json exited with {:?}. stderr: {}",
                 output.status.code(),
                 stderr.trim()
             );
@@ -191,7 +191,7 @@ fn find_worktree_by_branch<'a>(output: &'a Value, branch: &str) -> Option<&'a Va
 // Integration scenario: issue with labels
 // ---------------------------------------------------------------------------
 
-/// orchard --json exposes labels on an issue and derives phase from them.
+/// orchard-tui --json exposes labels on an issue and derives phase from them.
 ///
 /// Given a fixture cache with issue #47 having labels `["in-progress", "enhancement"]`
 /// Then the worktree's `issue.labels` is `["in-progress", "enhancement"]`
@@ -239,7 +239,7 @@ fn json_includes_labels_on_issue() {
 // Integration scenario: PR with labels
 // ---------------------------------------------------------------------------
 
-/// orchard --json exposes labels on a PR and derives phase from them.
+/// orchard-tui --json exposes labels on a PR and derives phase from them.
 ///
 /// Given a fixture cache with PR #55 having labels `["pr-ready", "needs-review"]`
 /// Then the worktree's `pr.labels` is `["pr-ready", "needs-review"]`

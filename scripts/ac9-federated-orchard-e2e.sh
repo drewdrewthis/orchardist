@@ -2,13 +2,13 @@
 #
 # AC9 end-to-end validation for #329 (federated orchard).
 #
-# Forks a Boxd VM from golden, installs the built `orchard` binary, creates
+# Forks a Boxd VM from golden, installs the built `orchard-tui` binary, creates
 # a test worktree + tmux session on the VM, configures the VM as an
-# OrchardProxy remote locally, runs `orchard --json`, and asserts:
+# OrchardProxy remote locally, runs `orchard-tui --json`, and asserts:
 #
 # 1. Happy path: the remote worktree is visible with PR/issue enrichment
 #    computed on the VM (not re-derived locally).
-# 2. Fallback: after removing the orchard binary on the VM, the same
+# 2. Fallback: after removing the orchard-tui binary on the VM, the same
 #    worktree is still visible via the legacy shell-discovery path, and a
 #    `remote_adapter.fallback` diagnostic is written to events.jsonl.
 # 3. Destroys the VM on exit.
@@ -18,8 +18,8 @@
 #   - SSH from the host machine running this script to `*.boxd.sh` hosts
 #     already linked (run `ssh <some-vm>.boxd.sh` once interactively to
 #     complete Boxd's account-linking flow).
-#   - Orchard release binary at `target/release/orchard` (run
-#     `cargo build --release -p orchard` first).
+#   - Orchard TUI release binary at `target/release/orchard-tui` (run
+#     `cargo build --release -p orchard` first; package name stays `orchard`).
 #
 # Usage:
 #   scripts/ac9-federated-orchard-e2e.sh
@@ -38,7 +38,7 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-readonly BINARY="$REPO_ROOT/target/release/orchard"
+readonly BINARY="$REPO_ROOT/target/release/orchard-tui"
 
 readonly VM_NAME="orchard-federated-$(date +%s)"
 readonly VM_HOST="$VM_NAME.boxd.sh"
@@ -77,7 +77,7 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
-# 1. Fork VM + install orchard
+# 1. Fork VM + install orchard-tui
 # ---------------------------------------------------------------------------
 
 log "forking VM from current golden as $VM_NAME"
@@ -92,8 +92,8 @@ done
 [ "$status" = "running" ] || fail "VM never reached running state (status=$status)" 1
 
 log "copying release binary to VM ($VM_HOST)"
-boxd cp "$BINARY" "$VM_NAME:/home/boxd/.local/bin/orchard"
-boxd exec "$VM_NAME" "chmod +x /home/boxd/.local/bin/orchard"
+boxd cp "$BINARY" "$VM_NAME:/home/boxd/.local/bin/orchard-tui"
+boxd exec "$VM_NAME" "chmod +x /home/boxd/.local/bin/orchard-tui"
 
 log "creating test worktree on VM (branch $TEST_BRANCH)"
 boxd exec "$VM_NAME" "cd /home/boxd/workspace/git-orchard-rs \
@@ -133,9 +133,9 @@ log "test HOME: $TEST_HOME"
 # 3. Happy-path assertion
 # ---------------------------------------------------------------------------
 
-log "running orchard --json (happy path)"
+log "running orchard-tui --json (happy path)"
 output=$("$BINARY" --json 2>/dev/null)
-echo "$output" | jq . >/dev/null || fail "orchard --json emitted invalid JSON" 2
+echo "$output" | jq . >/dev/null || fail "orchard-tui --json emitted invalid JSON" 2
 
 if ! echo "$output" | jq -e \
     --arg host "$VM_HOST" --arg branch "$TEST_BRANCH" \
@@ -149,12 +149,12 @@ log "happy path: remote worktree visible with host=$VM_HOST branch=$TEST_BRANCH"
 # 4. Remove orchard binary on VM → fallback path
 # ---------------------------------------------------------------------------
 
-log "removing remote orchard binary (forces fallback to legacy path)"
-boxd exec "$VM_NAME" "rm -f /home/boxd/.local/bin/orchard"
+log "removing remote orchard-tui binary (forces fallback to legacy path)"
+boxd exec "$VM_NAME" "rm -f /home/boxd/.local/bin/orchard-tui"
 
 events_before=$(wc -l < "$EVENTS_LOG" 2>/dev/null || echo 0)
 
-log "running orchard --json (fallback path)"
+log "running orchard-tui --json (fallback path)"
 output=$("$BINARY" --json 2>/dev/null)
 
 if ! echo "$output" | jq -e \

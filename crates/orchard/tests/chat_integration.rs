@@ -84,7 +84,7 @@ fn chat_delivers_message_to_tmux_pane() {
     );
 
     // Run `orchard chat --target <session> --message "hello"`.
-    let result = Command::cargo_bin("orchard")
+    let result = Command::cargo_bin("orchard-tui")
         .unwrap()
         .args(["chat", "--target", &session, "--message", "hello"])
         .current_dir(repo.path())
@@ -131,7 +131,7 @@ fn chat_exits_nonzero_for_missing_session() {
     let repo = common::TestRepo::new();
     let home = tempfile::TempDir::new().unwrap();
 
-    let result = Command::cargo_bin("orchard")
+    let result = Command::cargo_bin("orchard-tui")
         .unwrap()
         .args([
             "chat",
@@ -190,7 +190,7 @@ fn chat_noop_on_empty_message() {
         .output()
         .expect("capture before");
 
-    let result = Command::cargo_bin("orchard")
+    let result = Command::cargo_bin("orchard-tui")
         .unwrap()
         .args(["chat", "--target", &session])
         .current_dir(repo.path())

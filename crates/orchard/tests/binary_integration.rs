@@ -15,7 +15,7 @@ use predicates::str::contains;
 /// `orchard --help` exits 0 and prints usage text to stderr.
 #[test]
 fn help_flag_exits_zero() {
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--help")
         .assert()
@@ -26,7 +26,7 @@ fn help_flag_exits_zero() {
 /// `orchard -h` (short form) also exits 0.
 #[test]
 fn help_flag_short_exits_zero() {
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("-h")
         .assert()
@@ -48,7 +48,7 @@ fn binary_exits_with_non_zero_on_fatal_error() {
     let home = tempfile::TempDir::new().unwrap();
     let repo = common::TestRepo::new();
 
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .current_dir(repo.path())
         .env("HOME", home.path())
@@ -61,7 +61,7 @@ fn binary_exits_with_non_zero_on_fatal_error() {
 // JSON mode test
 // ---------------------------------------------------------------------------
 
-/// `orchard --json` run from a real git repo exits 0 and outputs valid JSON.
+/// `orchard-tui --json` run from a real git repo exits 0 and outputs valid JSON.
 ///
 /// We create a minimal git repo and set HOME to a temp dir (no cache, no
 /// GitHub config) so the binary runs with empty data rather than touching
@@ -74,7 +74,7 @@ fn json_mode_outputs_valid_json() {
 
     // Prevent the `gh` CLI from being used for auth-dependent operations by
     // pointing HOME at a clean dir (no .config/orchard/config.json).
-    let output = Command::cargo_bin("orchard")
+    let output = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--json")
         .current_dir(repo.path())
@@ -107,18 +107,18 @@ fn json_mode_outputs_valid_json() {
 /// `orchard --help` must mention the `chat` subcommand so users can discover it.
 #[test]
 fn help_includes_chat_subcommand() {
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--help")
         .assert()
         .success()
-        .stderr(contains("orchard chat"));
+        .stderr(contains("orchard-tui chat"));
 }
 
 /// `orchard --help` must mention the `--message` flag.
 #[test]
 fn help_includes_chat_message_flag() {
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--help")
         .assert()
@@ -129,7 +129,7 @@ fn help_includes_chat_message_flag() {
 /// `orchard --help` must mention the quick-chat keybinding (`prefix + O`).
 #[test]
 fn help_includes_chat_keybinding() {
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--help")
         .assert()
@@ -145,7 +145,7 @@ fn help_includes_chat_keybinding() {
 /// is wired up and the embedded schema parses as valid JSON.
 #[test]
 fn schema_flag_prints_valid_schema() {
-    let output = Command::cargo_bin("orchard")
+    let output = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--schema")
         .assert()
@@ -184,7 +184,7 @@ fn chat_missing_message_exits_nonzero() {
     let repo = common::TestRepo::new();
     let home = tempfile::TempDir::new().unwrap();
 
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .args(["chat"])
         .current_dir(repo.path())
@@ -200,7 +200,7 @@ fn chat_empty_message_exits_nonzero() {
     let repo = common::TestRepo::new();
     let home = tempfile::TempDir::new().unwrap();
 
-    Command::cargo_bin("orchard")
+    Command::cargo_bin("orchard-tui")
         .unwrap()
         .args(["chat", "--message", ""])
         .current_dir(repo.path())
