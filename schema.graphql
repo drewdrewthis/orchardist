@@ -68,11 +68,54 @@ type Process implements Node {
   claudeInstance: ClaudeInstance
 }
 
-# Forward-declared placeholder. ws-b-claudeinstance replaces this with the
-# real ClaudeInstance node (pane, process, account, state, …).
-type ClaudeInstance {
-  "Stable id; ws-b-claudeinstance formalises (host_id, claudePid)."
+"""
+A live Claude Code session running on a host. Identity is the
+foreground claude pid scoped to a host. The provider tracks the
+heartbeat file the Claude Code SessionStart hook writes.
+"""
+type ClaudeInstance implements Node {
+  "Stable orchard id — \"ClaudeInstance:<host>:<claudePid>\"."
   id: ID!
+
+  "Tmux pane hosting this Claude process. Null if no pane could be matched."
+  pane: TmuxPane
+
+  "OS-level process. Null until the process can be matched by pid."
+  process: Process
+
+  "Claude CLI account this session is authenticated under."
+  account: ClaudeAccount
+
+  "Lifecycle state derived from the heartbeat file plus pid liveness."
+  state: InstanceState!
+
+  "claude.ai Remote Control URL when the session has it enabled."
+  rcUrl: String
+
+  "True when remote-control is enabled for this session."
+  rcEnabled: Boolean!
+
+  "Claude session UUID. Mirrors the heartbeat's session_id field."
+  sessionUuid: String
+
+  "RFC3339 timestamp the session was started."
+  startedAt: String
+}
+
+"Lifecycle states for a Claude instance."
+enum InstanceState {
+  "Claude is actively executing a tool or generating a response."
+  working
+  "Claude has finished its turn and is waiting for the next prompt."
+  idle
+  "Claude is paused and waiting for user input."
+  input
+  "The session has been alive but is no longer answering heartbeats."
+  stalled
+  "Tracked but the underlying process is gone."
+  dead
+  "No Claude session has ever been observed for this pane/process."
+  no_claude
 }
 
 # ProcessFilter is applied at the resolver layer over the cached process
@@ -124,6 +167,9 @@ type Query {
 
   "Every Contract the daemon currently knows about, optionally filtered."
   contracts(filter: ContractFilter): [Contract!]!
+
+  "All live Claude instances the daemon is tracking via heartbeat files."
+  claudeInstances: [ClaudeInstance!]!
 }
 
 type Health {

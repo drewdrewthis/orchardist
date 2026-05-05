@@ -266,6 +266,35 @@ func (r *queryResolver) ClaudeAccounts(ctx context.Context) ([]*graphql1.ClaudeA
 	return out, nil
 }
 
+// Contract is the resolver for the contract field.
+func (r *queryResolver) Contract(ctx context.Context, id string) (*graphql1.Contract, error) {
+	if r.ContractsProvider == nil {
+		return nil, fmt.Errorf("contracts provider not initialised")
+	}
+	key := contracts.ContractID(stripContractIDPrefix(id))
+	c, _, err := r.ContractsProvider.Get(ctx, key)
+	if err != nil {
+		return nil, nil
+	}
+	return c, nil
+}
+
+// Contracts is the resolver for the contracts field.
+func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.ContractFilter) ([]*graphql1.Contract, error) {
+	if r.ContractsProvider == nil {
+		return nil, fmt.Errorf("contracts provider not initialised")
+	}
+	return r.ContractsProvider.List(ctx, filter)
+}
+
+// ClaudeInstances is the resolver for the claudeInstances field.
+func (r *queryResolver) ClaudeInstances(ctx context.Context) ([]*graphql1.ClaudeInstance, error) {
+	if r.ClaudeInstance == nil {
+		return nil, fmt.Errorf("claudeinstance provider not initialised")
+	}
+	return r.ClaudeInstance.List(ctx)
+}
+
 // Server is the resolver for tmuxClient.server.
 func (r *tmuxClientResolver) Server(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
 	if r.Tmux == nil {
@@ -751,106 +780,6 @@ func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{
 // Project returns graphql1.ProjectResolver implementation.
 func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
 
-// buildHostServices iterates the configured watchlist and lifts each
-// Snapshot into a graphql.HostService. Unknown services keep
-// state=unknown with all optional fields nil. Adapter errors
-// (ErrServiceManagerMissing, parse failures) collapse the field for
-// the affected service into state=unknown so a missing launchctl
-// doesn't blank the whole list.
-//
-// ADR-011 §6 says cross-provider composition lives in the resolver,
-// not the provider. This is the simplest case — single-provider
-// composition over its watchlist.
-func buildHostServices(ctx context.Context, p *hostservice.Provider, hostID string) []*graphql1.HostService {
-	services := p.Services()
-	out := make([]*graphql1.HostService, 0, len(services))
-	for _, name := range services {
-		key := hostservice.MakeID(hostID, name)
-		snap, _, err := p.Get(ctx, key)
-		if err != nil {
-			out = append(out, hostServiceUnknown(hostID, name))
-			_ = errors.Is(err, hostservice.ErrServiceManagerMissing) // documented
-			continue
-		}
-		out = append(out, hostServiceFromSnapshot(snap))
-	}
-	return out
-}
-
-func hostServiceUnknown(hostID, name string) *graphql1.HostService {
-	return &graphql1.HostService{
-		ID:    "HostService:" + hostID + ":" + name,
-		Host:  &graphql1.Host{ID: "Host:" + hostID, MachineID: hostID},
-		Name:  name,
-		State: graphql1.HostServiceStateUnknown,
-	}
-}
-
-func hostServiceFromSnapshot(s hostservice.Snapshot) *graphql1.HostService {
-	hs := &graphql1.HostService{
-		ID:    "HostService:" + s.HostID + ":" + s.Name,
-		Host:  &graphql1.Host{ID: "Host:" + s.HostID, MachineID: s.HostID},
-		Name:  s.Name,
-		State: mapState(s.State),
-	}
-	if s.Since != nil {
-		ts := s.Since.UTC().Format(time.RFC3339Nano)
-		hs.Since = &ts
-	}
-	if s.ExitCode != nil {
-		v := int64(*s.ExitCode)
-		hs.ExitCode = &v
-	}
-	if s.LogTail != nil {
-		tail := *s.LogTail
-		hs.LogTail = &tail
-	}
-	return hs
-}
-
-func mapState(s hostservice.State) graphql1.HostServiceState {
-	switch s {
-	case hostservice.StateActive:
-		return graphql1.HostServiceStateActive
-	case hostservice.StateInactive:
-		return graphql1.HostServiceStateInactive
-	case hostservice.StateFailed:
-		return graphql1.HostServiceStateFailed
-	default:
-		return graphql1.HostServiceStateUnknown
-	}
-}
-
-// Contract is the resolver for the contract field.
-func (r *queryResolver) Contract(ctx context.Context, id string) (*graphql1.Contract, error) {
-	if r.ContractsProvider == nil {
-		return nil, fmt.Errorf("contracts provider not initialised")
-	}
-	key := contracts.ContractID(stripContractIDPrefix(id))
-	c, _, err := r.ContractsProvider.Get(ctx, key)
-	if err != nil {
-		return nil, nil
-	}
-	return c, nil
-}
-
-// Contracts is the resolver for the contracts field.
-func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.ContractFilter) ([]*graphql1.Contract, error) {
-	if r.ContractsProvider == nil {
-		return nil, fmt.Errorf("contracts provider not initialised")
-	}
-	return r.ContractsProvider.List(ctx, filter)
-}
-
-// stripContractIDPrefix tolerates both "Contract:<id>" and bare "<id>".
-func stripContractIDPrefix(id string) string {
-	const prefix = "Contract:"
-	if len(id) > len(prefix) && id[:len(prefix)] == prefix {
-		return id[len(prefix):]
-	}
-	return id
-}
-
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 
@@ -889,6 +818,69 @@ type worktreeResolver struct{ *Resolver }
 //   - When renaming or deleting a resolver the old code will be put in here. You can safely delete
 //     it when you're done.
 //   - You have helper methods in this file. Move them out to keep these resolver files clean.
+func buildHostServices(ctx context.Context, p *hostservice.Provider, hostID string) []*graphql1.HostService {
+	services := p.Services()
+	out := make([]*graphql1.HostService, 0, len(services))
+	for _, name := range services {
+		key := hostservice.MakeID(hostID, name)
+		snap, _, err := p.Get(ctx, key)
+		if err != nil {
+			out = append(out, hostServiceUnknown(hostID, name))
+			_ = errors.Is(err, hostservice.ErrServiceManagerMissing) // documented
+			continue
+		}
+		out = append(out, hostServiceFromSnapshot(snap))
+	}
+	return out
+}
+func hostServiceUnknown(hostID, name string) *graphql1.HostService {
+	return &graphql1.HostService{
+		ID:    "HostService:" + hostID + ":" + name,
+		Host:  &graphql1.Host{ID: "Host:" + hostID, MachineID: hostID},
+		Name:  name,
+		State: graphql1.HostServiceStateUnknown,
+	}
+}
+func hostServiceFromSnapshot(s hostservice.Snapshot) *graphql1.HostService {
+	hs := &graphql1.HostService{
+		ID:    "HostService:" + s.HostID + ":" + s.Name,
+		Host:  &graphql1.Host{ID: "Host:" + s.HostID, MachineID: s.HostID},
+		Name:  s.Name,
+		State: mapState(s.State),
+	}
+	if s.Since != nil {
+		ts := s.Since.UTC().Format(time.RFC3339Nano)
+		hs.Since = &ts
+	}
+	if s.ExitCode != nil {
+		v := int64(*s.ExitCode)
+		hs.ExitCode = &v
+	}
+	if s.LogTail != nil {
+		tail := *s.LogTail
+		hs.LogTail = &tail
+	}
+	return hs
+}
+func mapState(s hostservice.State) graphql1.HostServiceState {
+	switch s {
+	case hostservice.StateActive:
+		return graphql1.HostServiceStateActive
+	case hostservice.StateInactive:
+		return graphql1.HostServiceStateInactive
+	case hostservice.StateFailed:
+		return graphql1.HostServiceStateFailed
+	default:
+		return graphql1.HostServiceStateUnknown
+	}
+}
+func stripContractIDPrefix(id string) string {
+	const prefix = "Contract:"
+	if len(id) > len(prefix) && id[:len(prefix)] == prefix {
+		return id[len(prefix):]
+	}
+	return id
+}
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 	return &graphql1.Worktree{
 		ID:     string(w.ID),

@@ -66,7 +66,15 @@ type ComplexityRoot struct {
 	}
 
 	ClaudeInstance struct {
-		ID func(childComplexity int) int
+		Account     func(childComplexity int) int
+		ID          func(childComplexity int) int
+		Pane        func(childComplexity int) int
+		Process     func(childComplexity int) int
+		RcEnabled   func(childComplexity int) int
+		RcURL       func(childComplexity int) int
+		SessionUUID func(childComplexity int) int
+		StartedAt   func(childComplexity int) int
+		State       func(childComplexity int) int
 	}
 
 	Contract struct {
@@ -159,18 +167,19 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		ClaudeAccounts func(childComplexity int) int
-		Contract       func(childComplexity int, id string) int
-		Contracts      func(childComplexity int, filter *ContractFilter) int
-		Conversation   func(childComplexity int, id string) int
-		Conversations  func(childComplexity int) int
-		Health         func(childComplexity int) int
-		Host           func(childComplexity int) int
-		Hosts          func(childComplexity int) int
-		Projects       func(childComplexity int) int
-		TmuxPanes      func(childComplexity int, filter *TmuxPaneFilter) int
-		TmuxServer     func(childComplexity int) int
-		TmuxSessions   func(childComplexity int, filter *TmuxSessionFilter) int
+		ClaudeAccounts  func(childComplexity int) int
+		ClaudeInstances func(childComplexity int) int
+		Contract        func(childComplexity int, id string) int
+		Contracts       func(childComplexity int, filter *ContractFilter) int
+		Conversation    func(childComplexity int, id string) int
+		Conversations   func(childComplexity int) int
+		Health          func(childComplexity int) int
+		Host            func(childComplexity int) int
+		Hosts           func(childComplexity int) int
+		Projects        func(childComplexity int) int
+		TmuxPanes       func(childComplexity int, filter *TmuxPaneFilter) int
+		TmuxServer      func(childComplexity int) int
+		TmuxSessions    func(childComplexity int, filter *TmuxSessionFilter) int
 	}
 
 	ResourceLoad struct {
@@ -284,6 +293,7 @@ type QueryResolver interface {
 	ClaudeAccounts(ctx context.Context) ([]*ClaudeAccount, error)
 	Contract(ctx context.Context, id string) (*Contract, error)
 	Contracts(ctx context.Context, filter *ContractFilter) ([]*Contract, error)
+	ClaudeInstances(ctx context.Context) ([]*ClaudeInstance, error)
 }
 type TmuxClientResolver interface {
 	Server(ctx context.Context, obj *TmuxClient) (*TmuxServer, error)
@@ -417,12 +427,68 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ClaudeAccount.QuotaUsed(childComplexity), true
 
+	case "ClaudeInstance.account":
+		if e.complexity.ClaudeInstance.Account == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.Account(childComplexity), true
+
 	case "ClaudeInstance.id":
 		if e.complexity.ClaudeInstance.ID == nil {
 			break
 		}
 
 		return e.complexity.ClaudeInstance.ID(childComplexity), true
+
+	case "ClaudeInstance.pane":
+		if e.complexity.ClaudeInstance.Pane == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.Pane(childComplexity), true
+
+	case "ClaudeInstance.process":
+		if e.complexity.ClaudeInstance.Process == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.Process(childComplexity), true
+
+	case "ClaudeInstance.rcEnabled":
+		if e.complexity.ClaudeInstance.RcEnabled == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.RcEnabled(childComplexity), true
+
+	case "ClaudeInstance.rcUrl":
+		if e.complexity.ClaudeInstance.RcURL == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.RcURL(childComplexity), true
+
+	case "ClaudeInstance.sessionUuid":
+		if e.complexity.ClaudeInstance.SessionUUID == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.SessionUUID(childComplexity), true
+
+	case "ClaudeInstance.startedAt":
+		if e.complexity.ClaudeInstance.StartedAt == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.StartedAt(childComplexity), true
+
+	case "ClaudeInstance.state":
+		if e.complexity.ClaudeInstance.State == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.State(childComplexity), true
 
 	case "Contract.contractId":
 		if e.complexity.Contract.ContractID == nil {
@@ -890,6 +956,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Query.ClaudeAccounts(childComplexity), true
+
+	case "Query.claudeInstances":
+		if e.complexity.Query.ClaudeInstances == nil {
+			break
+		}
+
+		return e.complexity.Query.ClaudeInstances(childComplexity), true
 
 	case "Query.contract":
 		if e.complexity.Query.Contract == nil {
@@ -1599,11 +1672,54 @@ type Process implements Node {
   claudeInstance: ClaudeInstance
 }
 
-# Forward-declared placeholder. ws-b-claudeinstance replaces this with the
-# real ClaudeInstance node (pane, process, account, state, …).
-type ClaudeInstance {
-  "Stable id; ws-b-claudeinstance formalises (host_id, claudePid)."
+"""
+A live Claude Code session running on a host. Identity is the
+foreground claude pid scoped to a host. The provider tracks the
+heartbeat file the Claude Code SessionStart hook writes.
+"""
+type ClaudeInstance implements Node {
+  "Stable orchard id — \"ClaudeInstance:<host>:<claudePid>\"."
   id: ID!
+
+  "Tmux pane hosting this Claude process. Null if no pane could be matched."
+  pane: TmuxPane
+
+  "OS-level process. Null until the process can be matched by pid."
+  process: Process
+
+  "Claude CLI account this session is authenticated under."
+  account: ClaudeAccount
+
+  "Lifecycle state derived from the heartbeat file plus pid liveness."
+  state: InstanceState!
+
+  "claude.ai Remote Control URL when the session has it enabled."
+  rcUrl: String
+
+  "True when remote-control is enabled for this session."
+  rcEnabled: Boolean!
+
+  "Claude session UUID. Mirrors the heartbeat's session_id field."
+  sessionUuid: String
+
+  "RFC3339 timestamp the session was started."
+  startedAt: String
+}
+
+"Lifecycle states for a Claude instance."
+enum InstanceState {
+  "Claude is actively executing a tool or generating a response."
+  working
+  "Claude has finished its turn and is waiting for the next prompt."
+  idle
+  "Claude is paused and waiting for user input."
+  input
+  "The session has been alive but is no longer answering heartbeats."
+  stalled
+  "Tracked but the underlying process is gone."
+  dead
+  "No Claude session has ever been observed for this pane/process."
+  no_claude
 }
 
 # ProcessFilter is applied at the resolver layer over the cached process
@@ -1655,6 +1771,9 @@ type Query {
 
   "Every Contract the daemon currently knows about, optionally filtered."
   contracts(filter: ContractFilter): [Contract!]!
+
+  "All live Claude instances the daemon is tracking via heartbeat files."
+  claudeInstances: [ClaudeInstance!]!
 }
 
 type Health {
@@ -2803,6 +2922,22 @@ func (ec *executionContext) fieldContext_ClaudeAccount_instances(ctx context.Con
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_ClaudeInstance_id(ctx, field)
+			case "pane":
+				return ec.fieldContext_ClaudeInstance_pane(ctx, field)
+			case "process":
+				return ec.fieldContext_ClaudeInstance_process(ctx, field)
+			case "account":
+				return ec.fieldContext_ClaudeInstance_account(ctx, field)
+			case "state":
+				return ec.fieldContext_ClaudeInstance_state(ctx, field)
+			case "rcUrl":
+				return ec.fieldContext_ClaudeInstance_rcUrl(ctx, field)
+			case "rcEnabled":
+				return ec.fieldContext_ClaudeInstance_rcEnabled(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -2849,6 +2984,418 @@ func (ec *executionContext) fieldContext_ClaudeInstance_id(ctx context.Context, 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_pane(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_pane(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Pane, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*TmuxPane)
+	fc.Result = res
+	return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_pane(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_TmuxPane_id(ctx, field)
+			case "window":
+				return ec.fieldContext_TmuxPane_window(ctx, field)
+			case "paneId":
+				return ec.fieldContext_TmuxPane_paneId(ctx, field)
+			case "title":
+				return ec.fieldContext_TmuxPane_title(ctx, field)
+			case "currentCommand":
+				return ec.fieldContext_TmuxPane_currentCommand(ctx, field)
+			case "currentPid":
+				return ec.fieldContext_TmuxPane_currentPid(ctx, field)
+			case "width":
+				return ec.fieldContext_TmuxPane_width(ctx, field)
+			case "height":
+				return ec.fieldContext_TmuxPane_height(ctx, field)
+			case "dead":
+				return ec.fieldContext_TmuxPane_dead(ctx, field)
+			case "watchingClients":
+				return ec.fieldContext_TmuxPane_watchingClients(ctx, field)
+			case "process":
+				return ec.fieldContext_TmuxPane_process(ctx, field)
+			case "claudeInstance":
+				return ec.fieldContext_TmuxPane_claudeInstance(ctx, field)
+			case "content":
+				return ec.fieldContext_TmuxPane_content(ctx, field)
+			case "contentRange":
+				return ec.fieldContext_TmuxPane_contentRange(ctx, field)
+			case "contentFull":
+				return ec.fieldContext_TmuxPane_contentFull(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TmuxPane", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_process(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_process(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Process, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*Process)
+	fc.Result = res
+	return ec.marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_process(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Process_id(ctx, field)
+			case "host":
+				return ec.fieldContext_Process_host(ctx, field)
+			case "pid":
+				return ec.fieldContext_Process_pid(ctx, field)
+			case "ppid":
+				return ec.fieldContext_Process_ppid(ctx, field)
+			case "command":
+				return ec.fieldContext_Process_command(ctx, field)
+			case "args":
+				return ec.fieldContext_Process_args(ctx, field)
+			case "cwd":
+				return ec.fieldContext_Process_cwd(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_Process_startedAt(ctx, field)
+			case "cpuPercent":
+				return ec.fieldContext_Process_cpuPercent(ctx, field)
+			case "memBytes":
+				return ec.fieldContext_Process_memBytes(ctx, field)
+			case "tty":
+				return ec.fieldContext_Process_tty(ctx, field)
+			case "worktree":
+				return ec.fieldContext_Process_worktree(ctx, field)
+			case "claudeInstance":
+				return ec.fieldContext_Process_claudeInstance(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Process", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_account(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_account(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Account, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*ClaudeAccount)
+	fc.Result = res
+	return ec.marshalOClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_account(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_ClaudeAccount_id(ctx, field)
+			case "email":
+				return ec.fieldContext_ClaudeAccount_email(ctx, field)
+			case "quotaUsed":
+				return ec.fieldContext_ClaudeAccount_quotaUsed(ctx, field)
+			case "quotaCap":
+				return ec.fieldContext_ClaudeAccount_quotaCap(ctx, field)
+			case "quotaEstimated":
+				return ec.fieldContext_ClaudeAccount_quotaEstimated(ctx, field)
+			case "quotaResetsAt":
+				return ec.fieldContext_ClaudeAccount_quotaResetsAt(ctx, field)
+			case "host":
+				return ec.fieldContext_ClaudeAccount_host(ctx, field)
+			case "instances":
+				return ec.fieldContext_ClaudeAccount_instances(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClaudeAccount", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_state(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_state(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.State, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(InstanceState)
+	fc.Result = res
+	return ec.marshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_state(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type InstanceState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_rcUrl(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_rcUrl(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RcURL, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_rcUrl(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_rcEnabled(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_rcEnabled(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RcEnabled, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_rcEnabled(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_sessionUuid(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SessionUUID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_sessionUuid(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_startedAt(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.StartedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_startedAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -5656,6 +6203,22 @@ func (ec *executionContext) fieldContext_Process_claudeInstance(ctx context.Cont
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_ClaudeInstance_id(ctx, field)
+			case "pane":
+				return ec.fieldContext_ClaudeInstance_pane(ctx, field)
+			case "process":
+				return ec.fieldContext_ClaudeInstance_process(ctx, field)
+			case "account":
+				return ec.fieldContext_ClaudeInstance_account(ctx, field)
+			case "state":
+				return ec.fieldContext_ClaudeInstance_state(ctx, field)
+			case "rcUrl":
+				return ec.fieldContext_ClaudeInstance_rcUrl(ctx, field)
+			case "rcEnabled":
+				return ec.fieldContext_ClaudeInstance_rcEnabled(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -6669,6 +7232,70 @@ func (ec *executionContext) fieldContext_Query_contracts(ctx context.Context, fi
 	if fc.Args, err = ec.field_Query_contracts_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_claudeInstances(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_claudeInstances(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().ClaudeInstances(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*ClaudeInstance)
+	fc.Result = res
+	return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_claudeInstances(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_ClaudeInstance_id(ctx, field)
+			case "pane":
+				return ec.fieldContext_ClaudeInstance_pane(ctx, field)
+			case "process":
+				return ec.fieldContext_ClaudeInstance_process(ctx, field)
+			case "account":
+				return ec.fieldContext_ClaudeInstance_account(ctx, field)
+			case "state":
+				return ec.fieldContext_ClaudeInstance_state(ctx, field)
+			case "rcUrl":
+				return ec.fieldContext_ClaudeInstance_rcUrl(ctx, field)
+			case "rcEnabled":
+				return ec.fieldContext_ClaudeInstance_rcEnabled(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
+		},
 	}
 	return fc, nil
 }
@@ -8209,6 +8836,22 @@ func (ec *executionContext) fieldContext_TmuxPane_claudeInstance(ctx context.Con
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_ClaudeInstance_id(ctx, field)
+			case "pane":
+				return ec.fieldContext_ClaudeInstance_pane(ctx, field)
+			case "process":
+				return ec.fieldContext_ClaudeInstance_process(ctx, field)
+			case "account":
+				return ec.fieldContext_ClaudeInstance_account(ctx, field)
+			case "state":
+				return ec.fieldContext_ClaudeInstance_state(ctx, field)
+			case "rcUrl":
+				return ec.fieldContext_ClaudeInstance_rcUrl(ctx, field)
+			case "rcEnabled":
+				return ec.fieldContext_ClaudeInstance_rcEnabled(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -11848,6 +12491,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Process(ctx, sel, obj)
+	case ClaudeInstance:
+		return ec._ClaudeInstance(ctx, sel, &obj)
+	case *ClaudeInstance:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ClaudeInstance(ctx, sel, obj)
 	case Host:
 		return ec._Host(ctx, sel, &obj)
 	case *Host:
@@ -12006,7 +12656,7 @@ func (ec *executionContext) _ClaudeAccount(ctx context.Context, sel ast.Selectio
 	return out
 }
 
-var claudeInstanceImplementors = []string{"ClaudeInstance"}
+var claudeInstanceImplementors = []string{"ClaudeInstance", "Node"}
 
 func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.SelectionSet, obj *ClaudeInstance) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, claudeInstanceImplementors)
@@ -12022,6 +12672,28 @@ func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "pane":
+			out.Values[i] = ec._ClaudeInstance_pane(ctx, field, obj)
+		case "process":
+			out.Values[i] = ec._ClaudeInstance_process(ctx, field, obj)
+		case "account":
+			out.Values[i] = ec._ClaudeInstance_account(ctx, field, obj)
+		case "state":
+			out.Values[i] = ec._ClaudeInstance_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rcUrl":
+			out.Values[i] = ec._ClaudeInstance_rcUrl(ctx, field, obj)
+		case "rcEnabled":
+			out.Values[i] = ec._ClaudeInstance_rcEnabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionUuid":
+			out.Values[i] = ec._ClaudeInstance_sessionUuid(ctx, field, obj)
+		case "startedAt":
+			out.Values[i] = ec._ClaudeInstance_startedAt(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -13067,6 +13739,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_contracts(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "claudeInstances":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_claudeInstances(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -15681,6 +16375,16 @@ func (ec *executionContext) marshalNID2string(ctx context.Context, sel ast.Selec
 	return res
 }
 
+func (ec *executionContext) unmarshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx context.Context, v interface{}) (InstanceState, error) {
+	var res InstanceState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx context.Context, sel ast.SelectionSet, v InstanceState) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) unmarshalNInt2int64(ctx context.Context, v interface{}) (int64, error) {
 	res, err := graphql.UnmarshalInt64(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -16420,6 +17124,13 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	}
 	res := graphql.MarshalBoolean(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx context.Context, sel ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ClaudeAccount(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {

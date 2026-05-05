@@ -55,10 +55,34 @@ func (ClaudeAccount) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this ClaudeAccount) GetID() string { return this.ID }
 
+// A live Claude Code session running on a host. Identity is the
+// foreground claude pid scoped to a host. The provider tracks the
+// heartbeat file the Claude Code SessionStart hook writes.
 type ClaudeInstance struct {
-	// Stable id; ws-b-claudeinstance formalises (host_id, claudePid).
+	// Stable orchard id — "ClaudeInstance:<host>:<claudePid>".
 	ID string `json:"id"`
+	// Tmux pane hosting this Claude process. Null if no pane could be matched.
+	Pane *TmuxPane `json:"pane,omitempty"`
+	// OS-level process. Null until the process can be matched by pid.
+	Process *Process `json:"process,omitempty"`
+	// Claude CLI account this session is authenticated under.
+	Account *ClaudeAccount `json:"account,omitempty"`
+	// Lifecycle state derived from the heartbeat file plus pid liveness.
+	State InstanceState `json:"state"`
+	// claude.ai Remote Control URL when the session has it enabled.
+	RcURL *string `json:"rcUrl,omitempty"`
+	// True when remote-control is enabled for this session.
+	RcEnabled bool `json:"rcEnabled"`
+	// Claude session UUID. Mirrors the heartbeat's session_id field.
+	SessionUUID *string `json:"sessionUuid,omitempty"`
+	// RFC3339 timestamp the session was started.
+	StartedAt *string `json:"startedAt,omitempty"`
 }
+
+func (ClaudeInstance) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this ClaudeInstance) GetID() string { return this.ID }
 
 // A commitment an agent has made to deliver something. Contracts are
 // authored exclusively by the claude-contracts plugin; orchard reads
@@ -610,5 +634,61 @@ func (e *HostServiceState) UnmarshalGQL(v interface{}) error {
 }
 
 func (e HostServiceState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// Lifecycle states for a Claude instance.
+type InstanceState string
+
+const (
+	// Claude is actively executing a tool or generating a response.
+	InstanceStateWorking InstanceState = "working"
+	// Claude has finished its turn and is waiting for the next prompt.
+	InstanceStateIdle InstanceState = "idle"
+	// Claude is paused and waiting for user input.
+	InstanceStateInput InstanceState = "input"
+	// The session has been alive but is no longer answering heartbeats.
+	InstanceStateStalled InstanceState = "stalled"
+	// Tracked but the underlying process is gone.
+	InstanceStateDead InstanceState = "dead"
+	// No Claude session has ever been observed for this pane/process.
+	InstanceStateNoClaude InstanceState = "no_claude"
+)
+
+var AllInstanceState = []InstanceState{
+	InstanceStateWorking,
+	InstanceStateIdle,
+	InstanceStateInput,
+	InstanceStateStalled,
+	InstanceStateDead,
+	InstanceStateNoClaude,
+}
+
+func (e InstanceState) IsValid() bool {
+	switch e {
+	case InstanceStateWorking, InstanceStateIdle, InstanceStateInput, InstanceStateStalled, InstanceStateDead, InstanceStateNoClaude:
+		return true
+	}
+	return false
+}
+
+func (e InstanceState) String() string {
+	return string(e)
+}
+
+func (e *InstanceState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = InstanceState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid InstanceState", str)
+	}
+	return nil
+}
+
+func (e InstanceState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
