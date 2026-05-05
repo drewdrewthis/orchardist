@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
@@ -89,6 +90,44 @@ func projectTmuxPane(p tmuxprovider.Pane) *graphql1.TmuxPane {
 		PaneID: p.Key.PaneID,
 	}
 }
+
+// projectWindowAtomic mirrors `projectWindow` in schema.resolvers.go so
+// node.resolvers.go can build a TmuxWindow value without depending on
+// the schema-level helper (gqlgen routinely shuffles those).
+func projectWindowAtomic(w tmuxprovider.Window) *graphql1.TmuxWindow {
+	return &graphql1.TmuxWindow{
+		ID:    "TmuxWindow:" + string(w.Key.Host) + ":" + w.Key.Session + ":" + strconv.Itoa(w.Key.Index),
+		Index: int64(w.Key.Index),
+	}
+}
+
+// projectClientAtomic mirrors `projectClient` in schema.resolvers.go.
+func projectClientAtomic(c tmuxprovider.Client) *graphql1.TmuxClient {
+	return &graphql1.TmuxClient{
+		ID: "TmuxClient:" + string(c.Key.Host) + ":" + c.Key.ClientName,
+	}
+}
+
+// findTmuxWindow scans the tmux provider's window snapshot for the
+// window matching (host, session, index). Returns ok=false when no match.
+func findTmuxWindow(p *tmuxprovider.Provider, host, session string, index int) (tmuxprovider.Window, bool) {
+	if p == nil {
+		return tmuxprovider.Window{}, false
+	}
+	w, ok := p.Snapshot().Windows[tmuxprovider.WindowKey{Host: tmuxprovider.HostID(host), Session: session, Index: index}]
+	return w, ok
+}
+
+// findTmuxClient scans the tmux provider's client snapshot for the
+// client matching (host, name).
+func findTmuxClient(p *tmuxprovider.Provider, host, name string) (tmuxprovider.Client, bool) {
+	if p == nil {
+		return tmuxprovider.Client{}, false
+	}
+	c, ok := p.Snapshot().Clients[tmuxprovider.ClientKey{Host: tmuxprovider.HostID(host), ClientName: name}]
+	return c, ok
+}
+
 
 // findTmuxSession scans the tmux provider's session snapshot for the
 // session matching (host, name). Returns ok=false when no match.
