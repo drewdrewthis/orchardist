@@ -88,6 +88,51 @@ func TestParsePs_HappyPath(t *testing.T) {
 	}
 }
 
+// fixturePsHeaderTT mirrors procps-ng 4.x output (Debian bookworm-class
+// boxes): identical column data to the macOS layout but the 4th header
+// token spells `TT` instead of `TTY`. The parser must accept both.
+const fixturePsHeaderTT = `  PID  PPID USER             TT        %CPU    RSS STARTED                      COMMAND
+    1     0 root             ??         1.5  13088 Sun May  3 15:38:46 2026     /sbin/launchd
+  262   797 alice            ??         0.0  18432 Sun May  3 16:06:57 2026     /Applications/Docker.app/Contents/MacOS/com.docker.virtualization --kernel /foo --cmdline init=/initd
+17729 17726 alice            s001       0.0   1856 Tue Mar 23 10:00:00 2026     -zsh
+99999     1 root             ??         0.0    100 Mon Jan 12 00:00:00 2026     /usr/libexec/UserEventAgent (System)
+`
+
+// TestParsePs_AcceptsLinuxTTHeader is the AC-1 regression: the daemon
+// must boot on procps-ng 4.x even though `-o tty` produces a `TT`
+// column header. Identical row count and field values to the macOS
+// fixture — only the header label differs.
+func TestParsePs_AcceptsLinuxTTHeader(t *testing.T) {
+	procsTTY, err := parsePs("local", fixturePsHeaderAndRows)
+	if err != nil {
+		t.Fatalf("parsePs (TTY header): %v", err)
+	}
+	procsTT, err := parsePs("local", fixturePsHeaderTT)
+	if err != nil {
+		t.Fatalf("parsePs (TT header): %v", err)
+	}
+	if got, want := len(procsTT), len(procsTTY); got != want {
+		t.Fatalf("len(TT) = %d, len(TTY) = %d — must match", got, want)
+	}
+	for i := range procsTT {
+		if procsTT[i].ID != procsTTY[i].ID {
+			t.Errorf("row %d: ID mismatch TT=%v TTY=%v", i, procsTT[i].ID, procsTTY[i].ID)
+		}
+		if procsTT[i].User != procsTTY[i].User {
+			t.Errorf("row %d: User mismatch TT=%q TTY=%q", i, procsTT[i].User, procsTTY[i].User)
+		}
+		if procsTT[i].TTY != procsTTY[i].TTY {
+			t.Errorf("row %d: TTY mismatch TT=%q TTY=%q", i, procsTT[i].TTY, procsTTY[i].TTY)
+		}
+		if procsTT[i].Command != procsTTY[i].Command {
+			t.Errorf("row %d: Command mismatch TT=%q TTY=%q", i, procsTT[i].Command, procsTTY[i].Command)
+		}
+		if procsTT[i].CommandRaw != procsTTY[i].CommandRaw {
+			t.Errorf("row %d: CommandRaw mismatch TT=%q TTY=%q", i, procsTT[i].CommandRaw, procsTTY[i].CommandRaw)
+		}
+	}
+}
+
 func TestParsePs_RejectsUnknownHeader(t *testing.T) {
 	bad := "PID NAME\n1 launchd\n"
 	if _, err := parsePs("local", bad); err == nil {
