@@ -31,7 +31,7 @@ func Command() *cobra.Command {
 		Short: "Manage orchard configuration files",
 		Long:  "Initialise and edit ~/.config/orchard/config.json. The running daemon reflects changes via fsnotify.",
 	}
-	cmd.AddCommand(initCmd(), addRepoCmd())
+	cmd.AddCommand(initCmd(), addRepoCmd(), addPeerCmd())
 	return cmd
 }
 

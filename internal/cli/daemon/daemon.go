@@ -175,7 +175,6 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithContracts(contracts.New(logger)),
 		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),
-		server.WithPeerSecret(fedCfg.PeerSecret),
 		server.WithLocalEvents(localEvents),
 	}
 	if hsvc != nil {

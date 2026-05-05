@@ -13,8 +13,10 @@
 // Workstream D-gh: WithGh wires the gh provider; Run() calls Start to prime
 // the auth bootstrap (failure is non-fatal — gh-derived fields surface
 // per-field GraphQL errors when auth is unavailable).
-// Workstream F: WithPeerProxy attaches the federation provider; the GraphQL
-// handler is wrapped in a bearer-secret middleware when peer_secret is set.
+// Workstream F: WithPeerProxy attaches the federation provider. Peer
+// authentication is delegated to the transport (TLS + boxd subdomain
+// allowlists); the daemon does not enforce a bearer-secret guard
+// (issue #412).
 package server
 
 import (
@@ -26,7 +28,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
@@ -72,7 +73,6 @@ type Server struct {
 	contracts      *contracts.Provider
 	gh             *gh.Provider
 	peerProxy      *peerproxy.Provider
-	peerSecret     string
 	localEvents    *peerproxy.LocalInvalidator
 }
 
@@ -178,16 +178,6 @@ func WithPeerProxy(p *peerproxy.Provider) Option {
 	}
 }
 
-// WithPeerSecret enables the bearer-secret guard on /graphql. When the
-// secret is the empty string the middleware is a no-op (local-dev mode);
-// any non-empty value requires inbound requests to carry
-// `Authorization: Bearer <secret>`.
-func WithPeerSecret(secret string) Option {
-	return func(s *Server, _ *resolvers.Resolver) {
-		s.peerSecret = strings.TrimSpace(secret)
-	}
-}
-
 // WithLocalEvents wires a LocalInvalidator into the resolver so the
 // federation `Subscription.peer(host: "*")` field can fan local node
 // updates out to upstream peers.
@@ -224,7 +214,7 @@ func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthHandler(startedAt))
-	mux.Handle("/graphql", srv.bearerGuard(graphqlHandlerFor(res)))
+	mux.Handle("/graphql", graphqlHandlerFor(res))
 
 	srv.httpSrv = &http.Server{
 		Addr:              addr,
@@ -255,10 +245,11 @@ func (s *Server) StartHostProvider(ctx context.Context) error {
 }
 
 // GraphQLHandler returns a fresh handler bound to the server's resolver.
-// The handler honours the configured peer secret — call sites that need
-// an unguarded handler should use the resolver directly.
+// Tests that need to mount the handler with custom middleware should
+// call this and wrap the result; production wires the handler via the
+// daemon's mux in New().
 func (s *Server) GraphQLHandler() http.Handler {
-	return s.bearerGuard(graphqlHandlerFor(s.resolver))
+	return graphqlHandlerFor(s.resolver)
 }
 
 // Run starts providers, the HTTP server, and blocks until ctx is cancelled.
@@ -406,25 +397,3 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	return srv
 }
 
-// bearerGuard wraps next so that requests carrying the wrong (or no)
-// `Authorization: Bearer <secret>` header are rejected with 401. When
-// the configured secret is empty the middleware passes through, keeping
-// local-dev mode auth-free per the §11 backwards-compat rule.
-//
-// The header check applies uniformly to POST queries and the websocket
-// upgrade handshake — gorilla's Upgrader rejects requests it never
-// sees, so the middleware short-circuiting before delegation is the
-// only place we enforce the check.
-func (s *Server) bearerGuard(next http.Handler) http.Handler {
-	if s.peerSecret == "" {
-		return next
-	}
-	want := "Bearer " + s.peerSecret
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != want {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}

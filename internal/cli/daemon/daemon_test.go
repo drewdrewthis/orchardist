@@ -218,7 +218,6 @@ func TestDaemonWiring_AllProvidersBoot(t *testing.T) {
 		server.WithClaudeInstance(claudeInstance),
 		server.WithContracts(contracts.New(logger)),
 		server.WithPeerProxy(peerProvider),
-		server.WithPeerSecret(fedCfg.PeerSecret),
 		server.WithLocalEvents(localEvents),
 	)
 	ts := httptest.NewServer(srv.HTTPHandler())

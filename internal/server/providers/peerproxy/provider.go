@@ -2,10 +2,14 @@ package peerproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // InvalidationEvent is the resolver-facing notification that a node on
@@ -42,6 +46,28 @@ type Provider struct {
 	closed      bool
 }
 
+// ProviderOption configures a Provider at construction time. The only
+// option today (`WithTLSConfig`) lets callers — most importantly tests
+// against `httptest.NewTLSServer` — supply a custom *tls.Config without
+// having to override `http.DefaultClient` globally.
+type ProviderOption func(*providerOptions)
+
+type providerOptions struct {
+	tlsConfig *tls.Config
+}
+
+// WithTLSConfig overrides the *tls.Config the Provider's per-peer
+// Clients use when peer.TLS is true. Production code should leave this
+// unset (the default trust store applies); tests pass the cert bundle
+// from `httptest.NewTLSServer().Client().Transport` so the self-signed
+// cert is accepted.
+//
+// Callers MUST NOT set `InsecureSkipVerify: true` outside tests — the
+// daemon's only defence against MITM on a TLS peer is cert verification.
+func WithTLSConfig(cfg *tls.Config) ProviderOption {
+	return func(o *providerOptions) { o.tlsConfig = cfg }
+}
+
 // NewProvider constructs a provider from a fully-loaded
 // FederationConfig. The provider does not read the config file itself;
 // the daemon owns the config-loading lifecycle.
@@ -49,9 +75,13 @@ type Provider struct {
 // Each peer gets its own Client — websocket multiplexing is per-
 // connection, and one connection per peer keeps the failure model
 // simple.
-func NewProvider(cfg FederationConfig, logger *slog.Logger) *Provider {
+func NewProvider(cfg FederationConfig, logger *slog.Logger, opts ...ProviderOption) *Provider {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	options := providerOptions{}
+	for _, opt := range opts {
+		opt(&options)
 	}
 	p := &Provider{
 		logger:   logger,
@@ -60,11 +90,26 @@ func NewProvider(cfg FederationConfig, logger *slog.Logger) *Provider {
 		subs:     map[chan InvalidationEvent]struct{}{},
 	}
 	for _, peer := range cfg.Peers {
-		client := NewClient(peer.Address, cfg.PeerSecret)
+		client := buildClient(peer, options.tlsConfig)
 		p.adapters[peer.Name] = NewPeerAdapter(peer, client)
 		p.clients[peer.Name] = client
 	}
 	return p
+}
+
+// buildClient assembles a per-peer Client. When peer.TLS is true and
+// tlsCfg is non-nil, the resulting http.Client + websocket.Dialer share
+// the supplied tls.Config; otherwise the package defaults apply.
+func buildClient(peer PeerConfig, tlsCfg *tls.Config) *Client {
+	if !peer.TLS || tlsCfg == nil {
+		return NewClient(peer.Address, peer.TLS)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsCfg
+	httpc := &http.Client{Transport: transport}
+	dialer := *websocket.DefaultDialer
+	dialer.TLSClientConfig = tlsCfg
+	return newClient(peer.Address, peer.TLS, httpc, &dialer, time.Now)
 }
 
 // Start kicks off the per-peer probe + subscription goroutines. Safe
