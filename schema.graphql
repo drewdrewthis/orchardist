@@ -27,6 +27,14 @@ interface Node {
 "RFC 3339 timestamp string. Mapped to Go's time.Time."
 scalar Time
 
+"""
+Opaque JSON value — any GraphQL-compatible type, marshalled verbatim.
+Used by `Query.gh` to forward GitHub GraphQL responses without imposing
+an orchard-side schema on them. Callers deserialise against their
+knowledge of GitHub's schema.
+"""
+scalar JSON
+
 # Process is an OS-level process surfaced via the `ps` adapter.
 type Process implements Node {
   "Stable id formatted as `<host>:<pid>`."
@@ -180,6 +188,23 @@ type Query {
 
   "Workflow runs on a GitHub repository. `repo` is `owner/name`."
   workflowRuns(repo: String!): [WorkflowRun!]
+
+  """
+  Forward an arbitrary GraphQL query to GitHub's API using the daemon's
+  configured gh credentials. The `query` argument is a GitHub-schema
+  GraphQL document (string); the returned JSON is GitHub's full envelope
+  including the `data` and any `errors` keys.
+
+  Pass-through is read-only by design: it is exposed as a Query field,
+  not a Mutation, so callers cannot bypass orchardist guardrails by
+  routing mutations through the daemon. Auth, rate limiting, and base
+  URL come from the gh provider; callers do not pass tokens.
+
+  Federation: peers can call `gh` through the peerproxy surface. The
+  result is opaque JSON on the orchard side — the consumer typecheks
+  against GitHub's schema directly.
+  """
+  gh(query: String!, variables: JSON): JSON
 
   """
   Generic node lookup by globally-unique id. Returns the node if it
