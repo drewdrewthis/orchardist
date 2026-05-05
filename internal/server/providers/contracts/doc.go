@@ -21,21 +21,20 @@
 //
 // Mirrors the host and claudeprojects sibling providers:
 //
-//   - [Adapter] does raw I/O — opens the JSONL, returns events. No
-//     state, no caching.
+//   - [Adapter] does raw I/O — scans the directory of per-contract
+//     jsonl files, returns events. No state, no caching.
 //   - [Provider] holds the fold result, exposes the [adapter.Provider]
 //     surface, and runs the watcher loop.
-//   - [Watcher] uses fsnotify on the file (when it exists) and on its
-//     parent directory (so a fresh install picks up the file's first
-//     creation without polling).
+//   - [Watcher] uses fsnotify on the directory (always) and on each
+//     `.jsonl` file under it, so a fresh install picks up the
+//     directory's first creation without polling.
 //   - [Fold] is a pure function — exhaustively unit-tested without
 //     touching the filesystem.
 //
-// # Configurable log path
+// # Configurable log directory
 //
-// The default location is
-// $XDG_STATE_HOME/claude-contracts/contracts.jsonl, falling back to
-// $HOME/.local/state/claude-contracts/contracts.jsonl when XDG_STATE_HOME
-// is unset. The CLAUDE_CONTRACTS_LOG environment variable overrides
-// the default for ad-hoc runs and tests.
+// The default location is $HOME/.claude/contracts — the directory
+// that the claude-contracts plugin writes per-contract jsonl files
+// to. The CLAUDE_CONTRACTS_DIR environment variable overrides the
+// default for ad-hoc runs and tests.
 package contracts

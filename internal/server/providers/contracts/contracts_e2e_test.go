@@ -37,14 +37,14 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 	defer cancel()
 
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "contracts.jsonl")
+	logPath := contractFilePath(dir, happyContractID)
 
 	// Seed the log with a happy-path lifecycle: created → judge_run
 	// (PASS) → status_change to delivered_pending_validation →
 	// status_change to satisfied. Mirrors the live plugin's JSONL.
 	writeEvents(t, logPath, lifecycleHappyPathEvents()...)
 
-	provider := contracts.NewWithPath(logPath, nil)
+	provider := contracts.NewWithPath(dir, nil)
 	if err := provider.Start(ctx); err != nil {
 		t.Fatalf("start contracts provider: %v", err)
 	}
@@ -106,10 +106,9 @@ func TestContracts_E2E_MissingFileEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "contracts.jsonl") // intentionally not created.
+	dir := filepath.Join(t.TempDir(), "intentionally-missing")
 
-	provider := contracts.NewWithPath(logPath, nil)
+	provider := contracts.NewWithPath(dir, nil)
 	if err := provider.Start(ctx); err != nil {
 		t.Fatalf("start contracts provider: %v", err)
 	}
@@ -135,22 +134,24 @@ func TestContracts_E2E_StatusFilter(t *testing.T) {
 	defer cancel()
 
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "contracts.jsonl")
 
-	// Two contracts: one open, one satisfied.
+	// Two contracts: one open, one satisfied. Each lives in its own
+	// per-contract jsonl file under the directory.
 	openID := "C-2026-05-04-deadbeef"
 	satID := "C-2026-05-04-cafef00d"
 	t0 := mustParseTime(t, "2026-05-04T12:00:00Z")
 	t1 := t0.Add(30 * time.Minute)
-	writeEvents(t, logPath,
+	writeEvents(t, contractFilePath(dir, openID),
 		creationEvent(openID, "open thing", "agent-2", "session-2", t0),
+	)
+	writeEvents(t, contractFilePath(dir, satID),
 		creationEvent(satID, "done thing", "agent-1", "session-1", t0),
 		judgeRunEvent(satID, t0.Add(5*time.Minute), "PASS"),
 		statusChangeEvent(satID, t0.Add(10*time.Minute), "open", "delivered_pending_validation", "owner_judge_pass"),
 		statusChangeEvent(satID, t1, "delivered_pending_validation", "satisfied", "drew_approve"),
 	)
 
-	provider := contracts.NewWithPath(logPath, nil)
+	provider := contracts.NewWithPath(dir, nil)
 	if err := provider.Start(ctx); err != nil {
 		t.Fatalf("start contracts provider: %v", err)
 	}
@@ -279,6 +280,13 @@ func statusChangeEvent(id string, at time.Time, from, to, trigger string) map[st
 		"trigger":   trigger,
 		"id":        id,
 	}
+}
+
+// contractFilePath returns the per-contract jsonl path under dir,
+// matching the layout the claude-contracts plugin writes
+// (`<dir>/<contract-id>.jsonl`).
+func contractFilePath(dir, contractID string) string {
+	return filepath.Join(dir, contractID+".jsonl")
 }
 
 // writeEvents writes the given events as a freshly created JSONL file.

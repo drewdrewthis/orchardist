@@ -36,9 +36,10 @@ type Provider struct {
 	loaded bool
 	last   time.Time
 
-	// offset is the byte position the Provider has folded up to in the
-	// log. Tail reads resume from here.
-	offset int64
+	// offsets is the per-file byte position the Provider has folded up
+	// to. Keyed by file basename (e.g. `C-2026-04-27-0398e48e.jsonl`).
+	// Tail reads resume from these offsets.
+	offsets map[string]int64
 
 	subMu sync.Mutex
 	subs  map[chan adapter.InvalidationEvent[ContractID]]struct{}
@@ -49,24 +50,24 @@ type Provider struct {
 	doneCh    chan struct{}
 }
 
-// New constructs a Provider using the platform-default log path
-// resolved by [DefaultLogPath].
+// New constructs a Provider using the platform-default log directory
+// resolved by [DefaultLogDir].
 func New(logger *slog.Logger) *Provider {
-	return NewWithPath(DefaultLogPath(), logger)
+	return NewWithPath(DefaultLogDir(), logger)
 }
 
 // NewWithPath is the test-friendly constructor — accepts an explicit
-// log path so unit tests can point at a t.TempDir() file. The clock is
+// log directory so unit tests can point at a t.TempDir(). The clock is
 // fixed to time.Now in production; NewForTest swaps it for callers
 // that need deterministic timestamps.
-func NewWithPath(path string, logger *slog.Logger) *Provider {
-	return NewForTest(path, logger, time.Now)
+func NewWithPath(dir string, logger *slog.Logger) *Provider {
+	return NewForTest(dir, logger, time.Now)
 }
 
 // NewForTest is the constructor with every dependency injectable.
 // Production callers use [New] / [NewWithPath]; test callers use this
 // to drive the provider with a fake clock.
-func NewForTest(path string, logger *slog.Logger, clock func() time.Time) *Provider {
+func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provider {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -74,11 +75,12 @@ func NewForTest(path string, logger *slog.Logger, clock func() time.Time) *Provi
 		clock = time.Now
 	}
 	return &Provider{
-		adapterIO: NewAdapter(path),
-		watcher:   NewWatcher(path, logger),
+		adapterIO: NewAdapter(dir),
+		watcher:   NewWatcher(dir, logger),
 		logger:    logger,
 		clock:     clock,
 		state:     map[ContractID]Contract{},
+		offsets:   map[string]int64{},
 		subs:      map[chan adapter.InvalidationEvent[ContractID]]struct{}{},
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
@@ -87,29 +89,30 @@ func NewForTest(path string, logger *slog.Logger, clock func() time.Time) *Provi
 
 // LogPath returns the absolute path the Provider reads from. Surfaces
 // the resolved default for diagnostics (e.g. `orchard query contracts
-// --help`).
+// --help`). The path points at a directory of per-contract jsonl
+// files, not a single aggregate file.
 func (p *Provider) LogPath() string {
-	return p.adapterIO.Path()
+	return p.adapterIO.Dir()
 }
 
 // Start hydrates the cache from a Snapshot read, then launches the
 // watcher loop. Subsequent calls are no-ops.
 //
-// A missing log file is not an error — Start returns nil and the
-// watcher waits for the file to be created.
+// A missing log directory is not an error — Start returns nil and the
+// watcher waits for the directory to be created.
 func (p *Provider) Start(ctx context.Context) error {
 	var startErr error
 	p.startOnce.Do(func() {
-		events, offset, err := p.adapterIO.Snapshot(ctx)
+		events, offsets, err := p.adapterIO.Snapshot(ctx)
 		if err != nil {
 			// Surface the error but let the daemon continue — a
 			// transient read failure should not collapse boot.
 			p.logger.Warn("contracts provider: snapshot read failed",
-				"path", p.adapterIO.Path(), "err", err)
+				"dir", p.adapterIO.Dir(), "err", err)
 		}
 		p.mu.Lock()
 		p.state = Fold(events)
-		p.offset = offset
+		p.offsets = offsets
 		p.loaded = true
 		p.last = p.clock()
 		p.mu.Unlock()
@@ -284,21 +287,25 @@ func (p *Provider) consume(ctx context.Context) {
 	}
 }
 
-// refresh tails the JSONL from the saved offset, applies new events to
-// the in-memory state, advances the offset, and fans out
-// InvalidationEvents for every id touched. Run on every watcher poke.
+// refresh tails every jsonl in the dir from the saved per-file
+// offsets, applies new events to the in-memory state, advances the
+// offsets, and fans out InvalidationEvents for every id touched. Run
+// on every watcher poke.
 func (p *Provider) refresh(ctx context.Context) {
 	p.mu.RLock()
-	from := p.offset
+	from := make(map[string]int64, len(p.offsets))
+	for k, v := range p.offsets {
+		from[k] = v
+	}
 	p.mu.RUnlock()
 
-	events, advanced, err := p.adapterIO.FollowFromOffset(ctx, from)
+	events, advanced, err := p.adapterIO.FollowFromOffsets(ctx, from)
 	if err != nil {
 		p.logger.Warn("contracts provider: tail read failed",
-			"path", p.adapterIO.Path(), "err", err)
+			"dir", p.adapterIO.Dir(), "err", err)
 	}
 
-	if len(events) == 0 && advanced == from {
+	if len(events) == 0 && offsetsEqual(advanced, from) {
 		return
 	}
 
@@ -311,17 +318,9 @@ func (p *Provider) refresh(ctx context.Context) {
 			touched[ContractID(ev.ID)] = struct{}{}
 		}
 	}
-	p.offset = advanced
+	p.offsets = advanced
 	p.last = now
 	p.mu.Unlock()
-
-	if advanced < from {
-		// File rotated — re-fold from scratch on next tick. We dropped
-		// state; emit invalidations for every known id so subscribers
-		// re-read.
-		p.logger.Info("contracts provider: log rotated; cache may be stale",
-			"path", p.adapterIO.Path())
-	}
 
 	if len(touched) == 0 {
 		return
@@ -333,6 +332,20 @@ func (p *Provider) refresh(ctx context.Context) {
 			At:     now,
 		})
 	}
+}
+
+// offsetsEqual compares two per-file offset maps for exact equality.
+// A short-circuit "no change" check inside refresh.
+func offsetsEqual(a, b map[string]int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // fanOut broadcasts an invalidation event to every active subscriber.
