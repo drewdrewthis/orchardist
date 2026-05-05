@@ -8,11 +8,19 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"path/filepath"
 	"strings"
 )
+
+// Lister is the narrow read-side contract the resolvers and the
+// request-scoped DataLoader depend on. Defined here (consumer-side) so
+// callers don't reach into the full Provider surface.
+type Lister interface {
+	List(ctx context.Context) ([]Project, error)
+}
 
 // ProjectID is the stable identifier for a project across config edits
 // and daemon restarts.

@@ -310,6 +310,21 @@ func (r *queryResolver) WorkflowRuns(ctx context.Context, repo string) ([]*graph
 	return r.queryWorkflowRunsResolver(ctx, repo)
 }
 
+// Node is the resolver for the node field.
+func (r *queryResolver) Node(ctx context.Context, id string) (graphql1.Node, error) {
+	return resolveNode(ctx, r.Resolver, id)
+}
+
+// NodeChanged is the resolver for the nodeChanged field.
+func (r *subscriptionResolver) NodeChanged(ctx context.Context, id string) (<-chan graphql1.Node, error) {
+	return subscribeNodeChanged(ctx, r.Resolver, id)
+}
+
+// Processes is the resolver for the processes field.
+func (r *subscriptionResolver) Processes(ctx context.Context) (<-chan []*graphql1.Process, error) {
+	return subscribeProcesses(ctx, r.Resolver)
+}
+
 // Server is the resolver for tmuxClient.server.
 func (r *tmuxClientResolver) Server(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
 	if r.Tmux == nil {
@@ -798,6 +813,9 @@ func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
 
+// Subscription returns graphql1.SubscriptionResolver implementation.
+func (r *Resolver) Subscription() graphql1.SubscriptionResolver { return &subscriptionResolver{r} }
+
 // TmuxClient returns graphql1.TmuxClientResolver implementation.
 func (r *Resolver) TmuxClient() graphql1.TmuxClientResolver { return &tmuxClientResolver{r} }
 
@@ -820,6 +838,7 @@ type hostResolver struct{ *Resolver }
 type processResolver struct{ *Resolver }
 type projectResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type subscriptionResolver struct{ *Resolver }
 type tmuxClientResolver struct{ *Resolver }
 type tmuxPaneResolver struct{ *Resolver }
 type tmuxServerResolver struct{ *Resolver }

@@ -397,6 +397,11 @@ type ResourceLoad struct {
 	LoadAvg15m float64 `json:"loadAvg15m"`
 }
 
+// Push-on-change channels backed by each provider's invalidation broadcast.
+// Subscriptions are GraphQL-over-WebSocket only.
+type Subscription struct {
+}
+
 // A client (terminal) attached to a tmux server. Multiple clients may share
 // the same session/window/pane.
 type TmuxClient struct {

@@ -179,6 +179,21 @@ type Query {
 
   "Workflow runs on a GitHub repository. `repo` is `owner/name`."
   workflowRuns(repo: String!): [WorkflowRun!]
+
+  "Look up any node by its global id. Returns null when no node matches."
+  node(id: ID!): Node
+}
+
+"""
+Push-on-change channels backed by each provider's invalidation broadcast.
+Subscriptions are GraphQL-over-WebSocket only.
+"""
+type Subscription {
+  "Receive the freshly-loaded node value each time its provider's invalidation channel fires for that id."
+  nodeChanged(id: ID!): Node!
+
+  "Receive a snapshot of every cached process whenever the ps provider invalidates."
+  processes: [Process!]!
 }
 
 type Health {

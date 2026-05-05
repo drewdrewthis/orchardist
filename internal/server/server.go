@@ -267,5 +267,8 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	srv := handler.New(gql.NewExecutableSchema(cfg))
 	srv.AddTransport(transport.POST{})
 	srv.AddTransport(transport.GET{})
+	srv.AddTransport(transport.Websocket{
+		KeepAlivePingInterval: 10 * time.Second,
+	})
 	return srv
 }
