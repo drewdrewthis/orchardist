@@ -501,27 +501,15 @@ fn derive_ci_state_graphql(
 /// Parses `git worktree list --porcelain` and resolves `.git/modules/<name>`
 /// submodule paths to their actual working-tree root.
 ///
-/// Delegates the pure parse to `git_parse::parse_worktree_porcelain`; the
-/// submodule resolution is IO (shells out to `git rev-parse --show-toplevel`)
-/// and therefore cannot live in the pure parser.
+/// Delegates the pure parse to `git_parse::parse_worktree_porcelain`. The
+/// previous submodule-resolution branch (`git rev-parse --show-toplevel` from
+/// inside `.git/modules/<name>`) was ripped as part of #426's thin-shell
+/// rip-out: the daemon owns worktree discovery now and submodule reporting
+/// flows through it. If a `.git/modules/` path slips through, the caller
+/// sees the raw module path and surfaces the issue rather than silently
+/// shell-resolving it.
 pub fn parse_worktree_porcelain(output: &str) -> Vec<CachedWorktree> {
-    let mut worktrees = crate::git_parse::parse_worktree_porcelain(output);
-    for wt in &mut worktrees {
-        // Git submodules report the main worktree as .git/modules/<name>.
-        // Resolve to the actual working directory so session path matching works.
-        if wt.path.contains(".git/modules/")
-            && let Ok(out) = std::process::Command::new("git")
-                .args(["rev-parse", "--show-toplevel"])
-                .current_dir(&wt.path)
-                .output()
-        {
-            let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !resolved.is_empty() {
-                wt.path = resolved;
-            }
-        }
-    }
-    worktrees
+    crate::git_parse::parse_worktree_porcelain(output)
 }
 
 /// The `-F` format string passed to `tmux list-panes -a` for all session

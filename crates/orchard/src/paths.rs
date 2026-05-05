@@ -43,6 +43,39 @@ pub fn truncate_left(path: &str, max_width: usize) -> String {
     format!("…{tail}")
 }
 
+/// Resolves the git directory for a repo root using only filesystem reads —
+/// no `git` shell-out. Handles both shapes:
+///
+/// - `<repo_root>/.git` is a directory: return its absolute path.
+/// - `<repo_root>/.git` is a file (the worktree marker): parse the
+///   `gitdir: <path>` line and return that path absolutely.
+///
+/// Returns `None` when the repo has no `.git` entry at all (the caller is not
+/// inside a checked-out tree). This is the pure-Rust replacement for
+/// `git rev-parse --absolute-git-dir`; see #426 thin-shell rip-out.
+pub fn resolve_git_dir(repo_root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dot_git = repo_root.join(".git");
+    let meta = std::fs::metadata(&dot_git).ok()?;
+    if meta.is_dir() {
+        return std::fs::canonicalize(&dot_git).ok();
+    }
+    // .git is a file (worktree). Each line is "key: value"; we want gitdir.
+    let contents = std::fs::read_to_string(&dot_git).ok()?;
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix("gitdir:") {
+            let target = std::path::Path::new(rest.trim());
+            // Resolve relative paths against the repo root.
+            let resolved = if target.is_absolute() {
+                target.to_path_buf()
+            } else {
+                repo_root.join(target)
+            };
+            return std::fs::canonicalize(&resolved).ok().or(Some(resolved));
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Worktree path helpers
 // ---------------------------------------------------------------------------
@@ -188,6 +221,40 @@ mod tests {
     }
 
     // --- derive_local_worktree_path ---
+
+    #[test]
+    fn resolve_git_dir_finds_dir_form() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let resolved = resolve_git_dir(tmp.path()).expect("resolved");
+        assert!(resolved.ends_with(".git"));
+        assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn resolve_git_dir_follows_worktree_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Create a fake main repo .git dir.
+        let main_git = tmp.path().join("main").join(".git");
+        std::fs::create_dir_all(&main_git).unwrap();
+        // Create a worktree directory whose .git is a file pointing at main.
+        let worktree = tmp.path().join("wt");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", main_git.display()),
+        )
+        .unwrap();
+        let resolved = resolve_git_dir(&worktree).expect("resolved");
+        // Canonicalised should match the canonical form of main_git.
+        assert_eq!(resolved, std::fs::canonicalize(&main_git).unwrap());
+    }
+
+    #[test]
+    fn resolve_git_dir_returns_none_outside_repo() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(resolve_git_dir(tmp.path()).is_none());
+    }
 
     #[test]
     fn local_path_uses_parent_and_slug() {
