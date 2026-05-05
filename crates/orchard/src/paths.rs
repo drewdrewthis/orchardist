@@ -247,10 +247,7 @@ mod tests {
         .unwrap();
         let resolved = resolve_git_dir(&worktree).expect("resolved");
         // Canonicalised should match the canonical form of main_git.
-        assert_eq!(
-            resolved,
-            std::fs::canonicalize(&main_git).unwrap()
-        );
+        assert_eq!(resolved, std::fs::canonicalize(&main_git).unwrap());
     }
 
     #[test]
