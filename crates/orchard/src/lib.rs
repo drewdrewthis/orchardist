@@ -14,6 +14,7 @@ pub mod ci_state;
 pub mod classify;
 pub mod claude_state;
 pub mod config;
+pub mod daemon;
 pub mod derive;
 pub mod events;
 pub mod federation;
