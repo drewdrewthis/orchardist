@@ -6,7 +6,7 @@
 //! describe the *user's environment*, not the repository.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -618,7 +618,7 @@ fn fallback_single_repo() -> GlobalConfig {
 /// - `{ "remote": { "host": "...", "path": "..." } }` (singular, wrapped as "default")
 ///
 /// Returns an empty vec if the file does not exist or contains no valid remotes.
-fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
+fn load_orchard_json_remotes(repo_root: &Path) -> Vec<RemoteConfig> {
     // Pure-fs replacement for `git rev-parse --absolute-git-dir` — handles
     // both `.git` directory and worktree-pointer file forms. See #426
     // thin-shell rip-out.
