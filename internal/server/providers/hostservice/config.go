@@ -11,10 +11,13 @@ import (
 // DefaultServices is the watchlist used when `services` is missing from
 // `~/.config/orchard/config.json` (or the file itself is absent).
 //
-// Aligned with the briefing: the orchardist cares about the daemon
-// supervising itself (`orchard`), the launch surface for remote claude
-// sessions (`claude-remote`), and dotfile sync (`chezmoi`).
-var DefaultServices = []string{"claude-remote", "orchard", "chezmoi"}
+// The default list is platform-dependent — macOS launchd identifies
+// units by reverse-DNS Label (e.g. `com.gitorchard.orchard`), while
+// systemd uses `.service` unit names (e.g. `orchard.service`). The
+// per-OS values live in `default_services_{darwin,linux}.go`; this
+// declaration is the public symbol every caller (provider, tests,
+// config loader) reaches for.
+var DefaultServices = defaultServicesPerOS
 
 // configFile is a *narrow* view of `~/.config/orchard/config.json`.
 //

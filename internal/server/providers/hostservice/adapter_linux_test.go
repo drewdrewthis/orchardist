@@ -140,9 +140,12 @@ func TestLinuxAdapter_StateFailed(t *testing.T) {
 	}
 }
 
-// TestLinuxAdapter_StateUnknown — systemctl exits non-zero with
-// stderr like "Unit example-test-missing.service not loaded."
-func TestLinuxAdapter_StateUnknown(t *testing.T) {
+// TestLinuxAdapter_StateNotInstalled — systemctl exits non-zero with
+// stderr like "Unit example-test-missing.service not loaded." The
+// adapter recognises this as "unit absent" and surfaces
+// state=not_installed (ADR-011 §5.1: `unknown` is reserved for
+// uninterpretable output).
+func TestLinuxAdapter_StateNotInstalled(t *testing.T) {
 	a := linuxAdapter{
 		systemctl: stubSystemctl{
 			isActiveStderr: map[string]string{
@@ -156,11 +159,38 @@ func TestLinuxAdapter_StateUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchOne: %v", err)
 	}
+	if snap.State != StateNotInstalled {
+		t.Errorf("State = %q, want not_installed", snap.State)
+	}
+	if snap.Since != nil || snap.ExitCode != nil || snap.LogTail != nil {
+		t.Errorf("optional fields populated for not-installed unit: since=%v exitCode=%v logTail=%v", snap.Since, snap.ExitCode, snap.LogTail)
+	}
+}
+
+// TestLinuxAdapter_StateUnknown — systemctl exits non-zero with stderr
+// the adapter does NOT recognise as "unit not loaded". Surfaces as
+// state=unknown so the operator notices something unexpected without
+// the daemon erroring the field. Distinguishes from
+// state=not_installed (the explicit "unit absent" case).
+func TestLinuxAdapter_StateUnknown(t *testing.T) {
+	a := linuxAdapter{
+		systemctl: stubSystemctl{
+			isActiveStderr: map[string]string{
+				"example-test-weird": "systemctl: an unrecognised internal error occurred (-42)\n",
+			},
+			isActiveCode: map[string]int{"example-test-weird": 1},
+		},
+	}
+
+	snap, err := a.FetchOne(context.Background(), "host-id", "example-test-weird")
+	if err != nil {
+		t.Fatalf("FetchOne: %v", err)
+	}
 	if snap.State != StateUnknown {
 		t.Errorf("State = %q, want unknown", snap.State)
 	}
 	if snap.Since != nil || snap.ExitCode != nil || snap.LogTail != nil {
-		t.Errorf("optional fields populated for unknown unit: since=%v exitCode=%v logTail=%v", snap.Since, snap.ExitCode, snap.LogTail)
+		t.Errorf("optional fields populated for unknown stderr: %+v", snap)
 	}
 }
 

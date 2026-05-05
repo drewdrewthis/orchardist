@@ -23,8 +23,9 @@ import (
 
 // TestHostService_E2E_FullStack drives the brief's primary AC: stub PATH
 // with fake `launchctl`/`systemctl` scripts emitting canned outputs that
-// cover all four states (active, inactive, failed, unknown) and assert
-// each maps correctly through the full GraphQL pipeline.
+// cover all five states (active, inactive, failed, not_installed,
+// unknown) and assert each maps correctly through the full GraphQL
+// pipeline.
 //
 // Real shellouts via the production NewAdapter() — no provider/adapter
 // mocks. The test owns the OS service-manager binary path via PATH.
@@ -39,6 +40,7 @@ func TestHostService_E2E_FullStack(t *testing.T) {
 		serviceForState("active"),
 		serviceForState("inactive"),
 		serviceForState("failed"),
+		serviceForState("not_installed"),
 		serviceForState("unknown"),
 	}
 	provider := hostservice.NewWith(hostservice.NewAdapter(), "test-host-id", services, time.Now)
@@ -75,7 +77,7 @@ func TestHostService_E2E_FullStack(t *testing.T) {
 	if got, want := resp.Data.Host.MachineID, "test-host-id"; got != want {
 		t.Errorf("machineId = %q, want %q", got, want)
 	}
-	if got, want := len(resp.Data.Host.HostServices), 4; got != want {
+	if got, want := len(resp.Data.Host.HostServices), 5; got != want {
 		t.Fatalf("hostServices length = %d, want %d", got, want)
 	}
 
@@ -90,6 +92,7 @@ func TestHostService_E2E_FullStack(t *testing.T) {
 		{serviceForState("active"), "active"},
 		{serviceForState("inactive"), "inactive"},
 		{serviceForState("failed"), "failed"},
+		{serviceForState("not_installed"), "not_installed"},
 		{serviceForState("unknown"), "unknown"},
 	} {
 		got, ok := byName[want.name]
@@ -104,9 +107,12 @@ func TestHostService_E2E_FullStack(t *testing.T) {
 		if got.ID != expectedID {
 			t.Errorf("%s: id = %q, want %q", want.name, got.ID, expectedID)
 		}
-		if want.state == "unknown" {
+		if want.state == "active" && got.Since == nil {
+			t.Errorf("%s: since is nil; want non-null timestamp for active service", want.name)
+		}
+		if want.state == "not_installed" || want.state == "unknown" {
 			if got.Since != nil || got.ExitCode != nil || got.LogTail != nil {
-				t.Errorf("unknown service has non-nil optional fields: %+v", got)
+				t.Errorf("%s service has non-nil optional fields: %+v", want.state, got)
 			}
 		}
 	}
@@ -205,9 +211,13 @@ EOF
 EOF
     exit 0
     ;;
-  com.example.test.unknown)
-    echo "Could not find service \"com.example.test.unknown\" in domain for system" 1>&2
+  com.example.test.not_installed)
+    echo "Could not find service \"com.example.test.not_installed\" in domain for system" 1>&2
     exit 113
+    ;;
+  com.example.test.unknown)
+    echo "launchctl: an unrecognised internal error occurred (-42)" 1>&2
+    exit 1
     ;;
   *)
     echo "stub launchctl: unhandled label $2" 1>&2
@@ -233,10 +243,15 @@ case "$verb" in
       example-test-active) echo "active"; exit 0 ;;
       example-test-inactive) echo "inactive"; exit 3 ;;
       example-test-failed) echo "failed"; exit 3 ;;
-      example-test-unknown)
-        echo "Unit example-test-unknown.service not loaded." 1>&2
+      example-test-not_installed)
+        echo "Unit example-test-not_installed.service not loaded." 1>&2
         echo ""
         exit 4
+        ;;
+      example-test-unknown)
+        echo "systemctl: an unrecognised internal error occurred (-42)" 1>&2
+        echo ""
+        exit 1
         ;;
       *)
         echo "stub systemctl: unhandled name $name" 1>&2

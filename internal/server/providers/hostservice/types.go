@@ -24,11 +24,17 @@ func MakeID(hostID, name string) HostServiceID {
 type State string
 
 // State constants align 1:1 with the GraphQL enum HostServiceState.
+//
+// `StateNotInstalled` and `StateUnknown` are kept distinct on purpose
+// (see ADR-011 / issue #394). Use `StateNotInstalled` when the OS
+// service manager confirmed the unit is absent, and reserve
+// `StateUnknown` for output the daemon could not interpret.
 const (
-	StateActive   State = "active"
-	StateInactive State = "inactive"
-	StateFailed   State = "failed"
-	StateUnknown  State = "unknown"
+	StateActive       State = "active"
+	StateInactive     State = "inactive"
+	StateFailed       State = "failed"
+	StateNotInstalled State = "not_installed"
+	StateUnknown      State = "unknown"
 )
 
 // Snapshot is the in-memory representation of one watched service. The
@@ -72,10 +78,13 @@ type Adapter interface {
 	//
 	// Contract:
 	//   - The unit not existing on the host is NOT an error — the
-	//     adapter returns a Snapshot with State == StateUnknown and no
-	//     Since/ExitCode/LogTail.
+	//     adapter returns a Snapshot with State == StateNotInstalled
+	//     and no Since/ExitCode/LogTail.
 	//   - Only the OS service-manager binary itself missing returns
 	//     ErrServiceManagerMissing.
+	//   - StateUnknown is reserved for service-manager output the
+	//     adapter could not interpret (e.g. an unrecognised state
+	//     token) — never for "unit absent".
 	//   - Any other failure (parse error, timeout) is wrapped and
 	//     returned so the Provider can surface it once on the affected
 	//     key without poisoning peers.

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // macAdapter shells `launchctl list <Label>` per watched name.
@@ -26,13 +27,19 @@ import (
 // PID present + LastExitStatus 0 → active.
 // PID absent + LastExitStatus 0 → inactive (clean stop).
 // PID absent + LastExitStatus != 0 → failed.
-// Unknown unit → exit code != 0 + stderr "Could not find service" → state=unknown.
+// Unit not loaded → exit code != 0 + stderr "Could not find service" → state=not_installed.
+// Anything else (parse error, unrecognised stderr) → state=unknown.
 //
 // `launchctl print` would give us a richer record (start time, last exit
 // reason) but it requires a domain target (gui/<uid>/<label>) and is far
-// chattier — `list` is enough for v1's four-state surface.
+// chattier — `list` is enough for v1's surface.
 type macAdapter struct {
 	commander launchctlCommander
+	// psCommander reads `ps -p <pid> -o lstart=` to recover the process
+	// start time when the unit is active. launchctl itself does not
+	// surface a per-unit start timestamp, so we lift the wall-clock
+	// `lstart` from ps for `since`.
+	psCommander psRunner
 }
 
 // launchctlCommander is the indirection that lets tests stub PATH-based
@@ -42,9 +49,21 @@ type launchctlCommander interface {
 	Run(ctx context.Context, args ...string) (stdout, stderr []byte, exitCode int, err error)
 }
 
-// NewAdapter returns the macOS Adapter wired to the on-PATH launchctl.
-// Tests should construct macAdapter{commander: ...} directly.
-func NewAdapter() Adapter { return macAdapter{commander: execCommander{bin: "launchctl"}} }
+// psRunner reads a single line of `ps -p <pid> -o lstart=` output. Split
+// from launchctlCommander so the production wiring resolves a different
+// PATH binary (`ps`) and tests can stub the start time independently.
+type psRunner interface {
+	LStart(ctx context.Context, pid int) (time.Time, error)
+}
+
+// NewAdapter returns the macOS Adapter wired to the on-PATH launchctl
+// and ps binaries. Tests should construct macAdapter{...} directly.
+func NewAdapter() Adapter {
+	return macAdapter{
+		commander:   execCommander{bin: "launchctl"},
+		psCommander: psExec{},
+	}
+}
 
 // execCommander runs a binary located via $PATH. If the binary is
 // missing it returns ErrServiceManagerMissing so the caller can surface
@@ -71,6 +90,42 @@ func (e execCommander) Run(ctx context.Context, args ...string) ([]byte, []byte,
 	return []byte(outBuf.String()), []byte(errBuf.String()), exitCode, err
 }
 
+// psExec is the production psRunner — `ps -p <pid> -o lstart=` returns
+// the wall-clock start time as a single line, e.g.
+// `Mon May  4 11:36:02 2026`. ps prints with a trailing newline; the
+// caller trims and time.Parse-es. ps missing from PATH yields an error
+// so the FetchOne caller can fall back to time.Now() — the unit is up
+// right now, so "now" is the truthful upper bound for `since`.
+type psExec struct{}
+
+func (psExec) LStart(ctx context.Context, pid int) (time.Time, error) {
+	if _, err := exec.LookPath("ps"); err != nil {
+		return time.Time{}, fmt.Errorf("ps not on PATH: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
+	out, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("ps -p %d: %w", pid, err)
+	}
+	return parsePsLStart(string(out))
+}
+
+// parsePsLStart parses a single `ps -o lstart=` line. macOS / BSD ps
+// uses two whitespace runs around single-digit days
+// (`Mon May  4 11:36:02 2026`), so we collapse runs before parsing.
+func parsePsLStart(out string) (time.Time, error) {
+	line := strings.TrimSpace(out)
+	if line == "" {
+		return time.Time{}, fmt.Errorf("ps lstart: empty output")
+	}
+	collapsed := strings.Join(strings.Fields(line), " ")
+	t, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", collapsed, time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse %q: %w", line, err)
+	}
+	return t, nil
+}
+
 // FetchOne calls `launchctl list <Label>` and parses the dictionary
 // output into a Snapshot. See type docs for the state-mapping table.
 func (m macAdapter) FetchOne(ctx context.Context, hostID, name string) (Snapshot, error) {
@@ -84,22 +139,39 @@ func (m macAdapter) FetchOne(ctx context.Context, hostID, name string) (Snapshot
 	}
 
 	if code != 0 {
-		// launchctl returns non-zero for unknown labels with stderr
-		// "Could not find service ...". Treat as state=unknown rather
-		// than an error so the resolver can keep going on other names.
+		// launchctl returns non-zero for absent Labels with stderr
+		// "Could not find service ...". Treat as state=not_installed
+		// so the resolver can keep going on other names.
 		if isUnknownLabelMessage(string(stderr)) {
 			return Snapshot{
 				HostID: hostID,
 				Name:   name,
-				State:  StateUnknown,
+				State:  StateNotInstalled,
 			}, nil
 		}
-		return Snapshot{}, fmt.Errorf("launchctl list %s exited %d: %s", label, code, strings.TrimSpace(string(stderr)))
+		// launchctl returned a non-zero exit with stderr we don't
+		// recognise. Surface as state=unknown rather than erroring —
+		// the resolver should keep going for peers, and the operator
+		// sees that we hit *something* unexpected without the daemon
+		// crashing the field.
+		return Snapshot{
+			HostID: hostID,
+			Name:   name,
+			State:  StateUnknown,
+		}, nil
 	}
 
-	state, exitCode, err := parseLaunchctlList(string(stdout))
+	state, pid, exitCode, err := parseLaunchctlList(string(stdout))
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("parse launchctl list %s: %w", label, err)
+		// Parse failure on a successful exit: the dictionary shape
+		// drifted (a future macOS release reformatted the output, or
+		// a third-party launchctl is on PATH). Same logic as above —
+		// state=unknown, no error, peers keep resolving.
+		return Snapshot{
+			HostID: hostID,
+			Name:   name,
+			State:  StateUnknown,
+		}, nil
 	}
 	snap := Snapshot{
 		HostID: hostID,
@@ -109,47 +181,67 @@ func (m macAdapter) FetchOne(ctx context.Context, hostID, name string) (Snapshot
 	if exitCode != nil {
 		snap.ExitCode = exitCode
 	}
-	// macOS does NOT surface a per-unit start time in `launchctl list`;
-	// `since` stays nil. logTail is also nil — `launchctl` does not
-	// emit a per-unit log stream comparable to journalctl.
+	if state == StateActive && pid != nil {
+		// `launchctl list` omits a start timestamp; lift `lstart` from
+		// `ps -p <pid> -o lstart=` instead. ps unavailable / pid
+		// already reaped → fall back to "now" so the resolver still
+		// returns a non-null `since` (the GraphQL contract requires a
+		// timestamp for active units, and the unit is verifiably up at
+		// FetchOne time).
+		var since time.Time
+		if m.psCommander != nil {
+			if t, perr := m.psCommander.LStart(ctx, *pid); perr == nil {
+				since = t
+			}
+		}
+		if since.IsZero() {
+			since = time.Now()
+		}
+		snap.Since = &since
+	}
+	// logTail is nil — `launchctl` does not emit a per-unit log stream
+	// comparable to journalctl.
 	return snap, nil
 }
 
-// parseLaunchctlList extracts the State + ExitCode from a `launchctl
-// list <Label>` dictionary block.
+// parseLaunchctlList extracts the State + PID + ExitCode from a
+// `launchctl list <Label>` dictionary block.
 //
 // Mapping:
 //
 //	PID present  + LastExitStatus 0   → active.
 //	PID absent   + LastExitStatus 0   → inactive (clean stop or never run).
 //	PID absent   + LastExitStatus != 0 → failed.
-func parseLaunchctlList(out string) (State, *int, error) {
-	pidPresent, lastExit, err := scanLaunchctlPairs(out)
+//
+// Returned `pid` is non-nil only when the dictionary carried a numeric
+// PID — caller uses it for the ps lstart shellout that fills `since`.
+func parseLaunchctlList(out string) (State, *int, *int, error) {
+	pid, lastExit, err := scanLaunchctlPairs(out)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	switch {
-	case pidPresent:
+	case pid != nil:
 		// LastExitStatus from a previous run is irrelevant once the unit
 		// is running again. Surface the previous code only when the unit
 		// is not currently active.
-		return StateActive, nil, nil
+		return StateActive, pid, nil, nil
 	case lastExit != nil && *lastExit == 0:
 		zero := 0
-		return StateInactive, &zero, nil
+		return StateInactive, nil, &zero, nil
 	case lastExit != nil && *lastExit != 0:
-		return StateFailed, lastExit, nil
+		return StateFailed, nil, lastExit, nil
 	default:
 		// No PID, no LastExitStatus — the unit is loaded but has never run.
-		return StateInactive, nil, nil
+		return StateInactive, nil, nil, nil
 	}
 }
 
 // scanLaunchctlPairs walks the dictionary lines and pulls out the two
 // fields we care about. Tolerant of arbitrary key order, indentation,
 // trailing semicolons, and quote styles.
-func scanLaunchctlPairs(out string) (pidPresent bool, lastExit *int, err error) {
+func scanLaunchctlPairs(out string) (pid *int, lastExit *int, err error) {
 	for _, raw := range strings.Split(out, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || line == "{" || line == "}" || line == "};" {
@@ -164,18 +256,18 @@ func scanLaunchctlPairs(out string) (pidPresent bool, lastExit *int, err error) 
 			// PID appears only when the unit is running. Any numeric
 			// value indicates a live process; -1 / "no value" is
 			// represented by omission.
-			if _, parseErr := strconv.Atoi(value); parseErr == nil {
-				pidPresent = true
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				pid = &n
 			}
 		case "LastExitStatus":
 			n, parseErr := strconv.Atoi(value)
 			if parseErr != nil {
-				return false, nil, fmt.Errorf("LastExitStatus %q: %w", value, parseErr)
+				return nil, nil, fmt.Errorf("LastExitStatus %q: %w", value, parseErr)
 			}
 			lastExit = &n
 		}
 	}
-	return pidPresent, lastExit, nil
+	return pid, lastExit, nil
 }
 
 // splitLaunchctlPair pulls "Key" = value; into (key, value, true). Each

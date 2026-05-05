@@ -227,10 +227,12 @@ func (this Host) GetID() string { return this.ID }
 // A curated launchd (macOS) or systemd-user (Linux) unit on a host.
 //
 // Per ADR-011 §5.1 the watchlist is config-driven — `services` in
-// `~/.config/orchard/config.json`. Defaults to
-// `["claude-remote", "orchard", "chezmoi"]` if the key is absent.
-// Watched services that don't exist on the host surface as
-// `state: unknown` rather than failing the resolver.
+// `~/.config/orchard/config.json`. Defaults to platform-correct unit
+// labels (macOS: reverse-DNS launchd Labels such as
+// `com.gitorchard.orchard`; Linux: `.service` unit names such as
+// `orchard.service`). Watched services that don't exist on the host
+// surface as `state: not_installed` rather than failing the resolver;
+// `state: unknown` is reserved for unrecognised service-manager output.
 type HostService struct {
 	// Stable orchard id — "HostService:<host_machineId>:<name>".
 	ID string `json:"id"`
@@ -680,29 +682,33 @@ func (e ContractStatus) MarshalGQL(w io.Writer) {
 
 // Lifecycle state of a HostService.
 //
-//   - `active`   — running and healthy.
-//   - `inactive` — stopped cleanly; not currently running.
-//   - `failed`   — exited with non-zero status or crashed.
-//   - `unknown`  — watched in config but not present on this host.
+//   - `active`        — running and healthy.
+//   - `inactive`      — stopped cleanly; not currently running.
+//   - `failed`        — exited with non-zero status or crashed.
+//   - `not_installed` — no corresponding service-manager unit on this host.
+//   - `unknown`       — service-manager returned output the daemon could
+//     not interpret (parse failure, unexpected error).
 type HostServiceState string
 
 const (
-	HostServiceStateActive   HostServiceState = "active"
-	HostServiceStateInactive HostServiceState = "inactive"
-	HostServiceStateFailed   HostServiceState = "failed"
-	HostServiceStateUnknown  HostServiceState = "unknown"
+	HostServiceStateActive       HostServiceState = "active"
+	HostServiceStateInactive     HostServiceState = "inactive"
+	HostServiceStateFailed       HostServiceState = "failed"
+	HostServiceStateNotInstalled HostServiceState = "not_installed"
+	HostServiceStateUnknown      HostServiceState = "unknown"
 )
 
 var AllHostServiceState = []HostServiceState{
 	HostServiceStateActive,
 	HostServiceStateInactive,
 	HostServiceStateFailed,
+	HostServiceStateNotInstalled,
 	HostServiceStateUnknown,
 }
 
 func (e HostServiceState) IsValid() bool {
 	switch e {
-	case HostServiceStateActive, HostServiceStateInactive, HostServiceStateFailed, HostServiceStateUnknown:
+	case HostServiceStateActive, HostServiceStateInactive, HostServiceStateFailed, HostServiceStateNotInstalled, HostServiceStateUnknown:
 		return true
 	}
 	return false
