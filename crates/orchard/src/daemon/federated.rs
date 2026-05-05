@@ -14,9 +14,9 @@
 //! can render the federated list with explicit "<host> unreachable" rows
 //! instead of failing the whole call.
 
+use super::DaemonError;
 use super::client::{Client, peer_url};
 use super::types::{HostNode, TmuxSession};
-use super::DaemonError;
 
 /// One row in the federated session view: a session plus the host it lives on.
 #[derive(Debug, Clone)]
@@ -96,10 +96,7 @@ impl FederatedFanout {
 /// `hosts` should come from `local.hosts()`. We pick the first host as
 /// "local" (v1 of the daemon only ever returns one host with peers nested
 /// under it).
-pub fn fan_out(
-    local: &Client,
-    hosts: &[HostNode],
-) -> Result<FederatedFanout, DaemonError> {
+pub fn fan_out(local: &Client, hosts: &[HostNode]) -> Result<FederatedFanout, DaemonError> {
     let local_host = hosts
         .first()
         .ok_or_else(|| DaemonError::Parse("hosts query returned 0 hosts".to_string()))?;
@@ -137,11 +134,13 @@ pub fn fan_out(
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| PeerFetchResult {
-                hostname: "<panicked>".to_string(),
-                address: String::new(),
-                sessions: Err(DaemonError::Transport("peer fetch thread panicked".into())),
-            }))
+            .map(|h| {
+                h.join().unwrap_or_else(|_| PeerFetchResult {
+                    hostname: "<panicked>".to_string(),
+                    address: String::new(),
+                    sessions: Err(DaemonError::Transport("peer fetch thread panicked".into())),
+                })
+            })
             .collect()
     });
 
@@ -158,9 +157,7 @@ fn fetch_peer(hostname: &str, address: &str) -> PeerFetchResult {
         return PeerFetchResult {
             hostname: hostname.to_string(),
             address: address.to_string(),
-            sessions: Err(DaemonError::Transport(
-                "peer has empty address".to_string(),
-            )),
+            sessions: Err(DaemonError::Transport("peer has empty address".to_string())),
         };
     }
     let client = match Client::for_url(&url) {

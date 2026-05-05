@@ -21,7 +21,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use crate::daemon::{fan_out, Client, FederatedFanout, FederatedSession};
+use crate::daemon::{Client, FederatedFanout, FederatedSession, fan_out};
 
 /// Wire-format version for `orchard-tui sessions --json` (federated).
 ///
@@ -305,10 +305,7 @@ fn run_interactive(output: &FederatedSessionsOutput) -> i32 {
             );
         }
     }
-    let _ = write!(
-        out,
-        "\nEnter a row number to attach (or blank to exit): "
-    );
+    let _ = write!(out, "\nEnter a row number to attach (or blank to exit): ");
     let _ = out.flush();
 
     let stdin = io::stdin();
@@ -349,9 +346,7 @@ fn run_interactive(output: &FederatedSessionsOutput) -> i32 {
 /// transport error. Currently calls `health` directly; if that succeeds we
 /// know the daemon is up.
 pub fn daemon_is_up() -> bool {
-    Client::local()
-        .and_then(|c| c.health().map(|_| ()))
-        .is_ok()
+    Client::local().and_then(|c| c.health().map(|_| ())).is_ok()
 }
 
 #[cfg(test)]
@@ -507,20 +502,24 @@ mod tests {
         let out = build_output(&fanout);
         assert_eq!(out.peer_results.len(), 1);
         assert!(!out.peer_results[0].ok);
-        assert!(out.peer_results[0].error.as_deref().unwrap().contains("not reachable"));
+        assert!(
+            out.peer_results[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("not reachable")
+        );
     }
 
     #[test]
     fn build_output_includes_local_and_peer_when_both_have_sessions() {
-        let local = vec![
-            crate::daemon::types::TmuxSession {
-                id: "TmuxSession:drudru:l".into(),
-                name: "l".into(),
-                attached: true,
-                active_attached: true,
-                last_activity_at: None,
-            },
-        ];
+        let local = vec![crate::daemon::types::TmuxSession {
+            id: "TmuxSession:drudru:l".into(),
+            name: "l".into(),
+            attached: true,
+            active_attached: true,
+            last_activity_at: None,
+        }];
         let peer = fed_session("box-1", false, "p", Some("https://graphql.box-1/graphql"));
         let fanout = FederatedFanout {
             local_hostname: "drudru".into(),
@@ -537,6 +536,9 @@ mod tests {
         let peer_record = out.sessions.iter().find(|r| !r.is_local).expect("has peer");
         assert_eq!(local_record.host, "drudru");
         assert_eq!(peer_record.host, "box-1");
-        assert_eq!(peer_record.host_address.as_deref(), Some("https://graphql.box-1/graphql"));
+        assert_eq!(
+            peer_record.host_address.as_deref(),
+            Some("https://graphql.box-1/graphql")
+        );
     }
 }

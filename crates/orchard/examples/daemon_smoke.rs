@@ -1,4 +1,4 @@
-use orchard::daemon::{fan_out, Client};
+use orchard::daemon::{Client, fan_out};
 
 fn main() {
     let c = Client::local().expect("client");

@@ -66,15 +66,16 @@ fn spawn_fake_daemon(handler: HandlerFn) -> FakeDaemon {
         });
     });
 
-    let port = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("port");
+    let port = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("port");
     FakeDaemon {
         url: format!("http://127.0.0.1:{port}/graphql"),
         request_count,
     }
 }
 
-type HandlerFn =
-    Box<dyn Fn(&str) -> serde_json::Value + Send + Sync + 'static>;
+type HandlerFn = Box<dyn Fn(&str) -> serde_json::Value + Send + Sync + 'static>;
 
 async fn serve_request(
     req: Request<Incoming>,
@@ -93,10 +94,7 @@ async fn serve_request(
     };
     let parsed: HashMap<String, serde_json::Value> =
         serde_json::from_slice(&body_bytes).unwrap_or_default();
-    let query = parsed
-        .get("query")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let query = parsed.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let resp = handler(query);
     let body = serde_json::to_vec(&resp).expect("encode");
     Ok(Response::builder()
