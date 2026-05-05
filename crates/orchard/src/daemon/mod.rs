@@ -85,37 +85,41 @@ impl std::error::Error for DaemonError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialises env-mutating tests in this module; cargo runs lib tests in
+    /// parallel and `set_var` / `remove_var` are process-global.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_url_is_local_daemon() {
-        // SAFETY: setting an env var in tests; serial because env is global.
-        // We don't unset because cargo test runs each test in its own process by default
-        // for binaries; lib tests share, so we restore.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = env::var(DAEMON_URL_ENV).ok();
         unsafe {
             env::remove_var(DAEMON_URL_ENV);
         }
-        assert_eq!(resolve_daemon_url(), DEFAULT_DAEMON_URL);
+        let actual = resolve_daemon_url();
+        // Restore BEFORE asserting so a panic doesn't leak state to other tests.
         if let Some(v) = prior {
             unsafe {
                 env::set_var(DAEMON_URL_ENV, v);
             }
         }
+        assert_eq!(actual, DEFAULT_DAEMON_URL);
     }
 
     #[test]
     fn env_var_overrides_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = env::var(DAEMON_URL_ENV).ok();
         unsafe {
             env::set_var(DAEMON_URL_ENV, "http://example.invalid:9999/graphql");
         }
-        assert_eq!(
-            resolve_daemon_url(),
-            "http://example.invalid:9999/graphql"
-        );
+        let actual = resolve_daemon_url();
         match prior {
             Some(v) => unsafe { env::set_var(DAEMON_URL_ENV, v) },
             None => unsafe { env::remove_var(DAEMON_URL_ENV) },
         }
+        assert_eq!(actual, "http://example.invalid:9999/graphql");
     }
 }
