@@ -180,6 +180,27 @@ type Query {
   "All live Claude instances the daemon is tracking via heartbeat files."
   claudeInstances: [ClaudeInstance!]!
 
+  """
+  All peer hosts known to this daemon, flattened across `hosts[*].peers`.
+
+  Sugar for the common case where callers want every peer without
+  traversing the (currently single-element) `hosts` list. Equivalent to
+  `{ hosts { peers { ... } } }` with dedup by `id`. The local host is not
+  itself a peer — it is `Query.host`.
+  """
+  peers: [Host!]!
+
+  """
+  All host services known to this daemon, flattened across
+  `hosts[*].hostServices` and optionally filtered. Filter clauses are
+  AND-combined when multiple are set.
+
+  Sugar for the common case where callers want every service without
+  traversing `hosts`. Per-host scoping is still available via
+  `Host.hostServices`.
+  """
+  hostServices(filter: HostServiceFilter): [HostService!]!
+
   "Pull requests on a GitHub repository. `repo` is `owner/name`."
   pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
 
@@ -553,6 +574,23 @@ input TmuxSessionFilter {
 
   "Only include sessions with active-attached clients within the freshness window."
   activeAttachedOnly: Boolean
+}
+
+"""
+Filter for `Query.hostServices`. AND-combined when multiple are set.
+
+`host` matches a `Host.machineId`. `name` is an exact-match service
+name (no glob, no substring). `state` filters by lifecycle state.
+"""
+input HostServiceFilter {
+  "Match services on this host machine id."
+  host: String
+
+  "Exact service name (e.g. \"com.gitorchard.orchard\")."
+  name: String
+
+  "Lifecycle state."
+  state: HostServiceState
 }
 
 "Filter for `Query.tmuxPanes`. AND-combined when multiple are set."

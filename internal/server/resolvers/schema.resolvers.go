@@ -24,7 +24,7 @@ import (
 )
 
 // Peers is the resolver for the peers field.
-func (r *hostResolver) Peers(_ context.Context, obj *graphql1.Host) ([]*graphql1.Host, error) {
+func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphql1.Host, error) {
 	if r.PeerProxy == nil {
 		return []*graphql1.Host{}, nil
 	}
@@ -324,6 +324,60 @@ func (r *queryResolver) ClaudeInstances(ctx context.Context) ([]*graphql1.Claude
 	return r.ClaudeInstance.List(ctx)
 }
 
+// Peers is the resolver for the peers field.
+func (r *queryResolver) Peers(ctx context.Context) ([]*graphql1.Host, error) {
+	hosts, err := r.Query().Hosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	hostRes := r.Resolver.Host()
+	seen := make(map[string]struct{})
+	out := make([]*graphql1.Host, 0)
+	for _, h := range hosts {
+		peers, err := hostRes.Peers(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range peers {
+			if p == nil {
+				continue
+			}
+			if _, dup := seen[p.ID]; dup {
+				continue
+			}
+			seen[p.ID] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// HostServices is the resolver for the hostServices field.
+func (r *queryResolver) HostServices(ctx context.Context, filter *graphql1.HostServiceFilter) ([]*graphql1.HostService, error) {
+	hosts, err := r.Query().Hosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	out := make([]*graphql1.HostService, 0)
+	for _, h := range hosts {
+		for _, svc := range h.HostServices {
+			if svc == nil {
+				continue
+			}
+			if !hostServiceMatchesFilter(svc, filter) {
+				continue
+			}
+			if _, dup := seen[svc.ID]; dup {
+				continue
+			}
+			seen[svc.ID] = struct{}{}
+			out = append(out, svc)
+		}
+	}
+	return out, nil
+}
+
 // PullRequests is the resolver for the pullRequests field.
 func (r *queryResolver) PullRequests(ctx context.Context, repo string, state *graphql1.PullRequestState) ([]*graphql1.PullRequest, error) {
 	return r.queryPullRequestsResolver(ctx, repo, state)
@@ -345,15 +399,6 @@ func (r *queryResolver) Gh(ctx context.Context, query string, variables interfac
 }
 
 // Node is the resolver for the node field.
-//
-// The id's host segment selects the dispatch path: when it matches a
-// configured peer, the peerproxy provider forwards the lookup to that
-// remote daemon and the response is materialised back into a stub
-// Node carrying the typename + id. Otherwise the lookup falls through
-// to the local providers via resolveNode; ids whose host segment
-// matches no configured peer and no local provider also return a
-// best-effort stub so callers see a sensible answer instead of an
-// error.
 func (r *queryResolver) Node(ctx context.Context, id string) (graphql1.Node, error) {
 	if r.PeerProxy != nil {
 		host := peerproxy.HostFromNodeID(id)
@@ -417,38 +462,6 @@ func (r *subscriptionResolver) Peer(ctx context.Context, host string) (<-chan gr
 			}
 			select {
 			case out <- projected:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return out, nil
-}
-
-func (r *subscriptionResolver) streamLocalEvents(ctx context.Context) (<-chan graphql1.Node, error) {
-	if r.LocalEvents == nil {
-		out := make(chan graphql1.Node)
-		go func() {
-			<-ctx.Done()
-			close(out)
-		}()
-		return out, nil
-	}
-	stream := r.LocalEvents.Subscribe(ctx)
-	out := make(chan graphql1.Node, 16)
-	go func() {
-		defer close(out)
-		for ev := range stream {
-			id := string(ev.NodeID)
-			if id == "" {
-				continue
-			}
-			node, err := projectLocalInvalidation(id)
-			if err != nil || node == nil {
-				continue
-			}
-			select {
-			case out <- node:
 			case <-ctx.Done():
 				return
 			}
@@ -984,6 +997,37 @@ type worktreeResolver struct{ *Resolver }
 //   - When renaming or deleting a resolver the old code will be put in here. You can safely delete
 //     it when you're done.
 //   - You have helper methods in this file. Move them out to keep these resolver files clean.
+func (r *subscriptionResolver) streamLocalEvents(ctx context.Context) (<-chan graphql1.Node, error) {
+	if r.LocalEvents == nil {
+		out := make(chan graphql1.Node)
+		go func() {
+			<-ctx.Done()
+			close(out)
+		}()
+		return out, nil
+	}
+	stream := r.LocalEvents.Subscribe(ctx)
+	out := make(chan graphql1.Node, 16)
+	go func() {
+		defer close(out)
+		for ev := range stream {
+			id := string(ev.NodeID)
+			if id == "" {
+				continue
+			}
+			node, err := projectLocalInvalidation(id)
+			if err != nil || node == nil {
+				continue
+			}
+			select {
+			case out <- node:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
 func buildHostServices(ctx context.Context, p *hostservice.Provider, hostID string) []*graphql1.HostService {
 	services := p.Services()
 	out := make([]*graphql1.HostService, 0, len(services))

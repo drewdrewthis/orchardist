@@ -188,6 +188,67 @@ func TestPeers_Reachable(t *testing.T) {
 	}
 }
 
+// TestQueryPeers_TopLevel boots a local daemon with one configured
+// peer and asserts the top-level `Query.peers` aggregate returns that
+// peer without traversing `hosts`. This is the AC for #425: callers
+// should not have to thread through `hosts[0].peers`.
+func TestQueryPeers_TopLevel(t *testing.T) {
+	remote := startOrchard(t, peerproxy.FederationConfig{})
+	local := startOrchard(t, peerproxy.FederationConfig{
+		Peers: []peerproxy.PeerConfig{
+			{Name: remoteName, Address: remote.addr},
+		},
+	})
+
+	// Poll the top-level `peers` field — same flat shape as
+	// `tmuxSessions` and `claudeInstances`. Local has one peer, so the
+	// flat aggregate must surface exactly that peer.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		envelope := graphQLPost(t, local,
+			`{ peers { id hostname address reachable } }`)
+		if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
+			t.Fatalf("graphql errors: %v", errs)
+		}
+		data, _ := envelope["data"].(map[string]any)
+		peers, _ := data["peers"].([]any)
+		if len(peers) == 1 {
+			peer := peers[0].(map[string]any)
+			if peer["id"] != "Host:"+remoteName {
+				t.Fatalf("unexpected peer id %v", peer["id"])
+			}
+			if peer["hostname"] != remoteName {
+				t.Fatalf("unexpected hostname %v", peer["hostname"])
+			}
+			if peer["reachable"] == true {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("top-level peers never surfaced reachable peer; envelope=%v", envelope)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// TestQueryHostServices_TopLevel asserts `Query.hostServices` returns
+// the same shape as `host.hostServices` on a daemon with no
+// hostservice provider wired (defaulting to an empty list). Even with
+// no services the flat field must not error.
+func TestQueryHostServices_TopLevel(t *testing.T) {
+	local := startOrchard(t, peerproxy.FederationConfig{})
+
+	envelope := graphQLPost(t, local,
+		`{ hostServices { id name state } }`)
+	if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
+		t.Fatalf("graphql errors: %v", errs)
+	}
+	data, _ := envelope["data"].(map[string]any)
+	if _, ok := data["hostServices"].([]any); !ok {
+		t.Fatalf("expected hostServices array, got %v", data)
+	}
+}
+
 // TestNode_ProxiedLookup queries `node(id: "TmuxPane:<remote>:%26")`
 // against the local daemon and asserts the response was forwarded —
 // the typename + id come back from the remote, not from a local

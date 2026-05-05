@@ -255,6 +255,19 @@ func (HostService) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this HostService) GetID() string { return this.ID }
 
+// Filter for `Query.hostServices`. AND-combined when multiple are set.
+//
+// `host` matches a `Host.machineId`. `name` is an exact-match service
+// name (no glob, no substring). `state` filters by lifecycle state.
+type HostServiceFilter struct {
+	// Match services on this host machine id.
+	Host *string `json:"host,omitempty"`
+	// Exact service name (e.g. "com.gitorchard.orchard").
+	Name *string `json:"name,omitempty"`
+	// Lifecycle state.
+	State *HostServiceState `json:"state,omitempty"`
+}
+
 // An issue on a GitHub repository. Pull requests are excluded.
 type Issue struct {
 	ID          string          `json:"id"`
