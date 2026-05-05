@@ -5,37 +5,35 @@ import (
 	"path/filepath"
 )
 
-// EnvLogPath is the environment variable that overrides the log path.
-// Set CLAUDE_CONTRACTS_LOG=/abs/path/contracts.jsonl to point the
-// daemon at a non-default file (useful for tests + per-machine
-// experiments).
-const EnvLogPath = "CLAUDE_CONTRACTS_LOG"
+// EnvLogDir is the environment variable that overrides the log
+// directory. Set CLAUDE_CONTRACTS_DIR=/abs/path to point the daemon
+// at a non-default directory of per-contract jsonl files (useful for
+// tests + per-machine experiments).
+const EnvLogDir = "CLAUDE_CONTRACTS_DIR"
 
-// DefaultLogPath returns the path the contracts provider reads from
-// when no override is configured.
+// DefaultLogDir returns the directory the contracts provider scans
+// when no override is configured. Each contract is one file inside
+// the directory: `<dir>/<contract-id>.jsonl`.
 //
 // Resolution order:
 //
-//  1. $CLAUDE_CONTRACTS_LOG, if non-empty.
-//  2. $XDG_STATE_HOME/claude-contracts/contracts.jsonl, if XDG_STATE_HOME
-//     is set.
-//  3. $HOME/.local/state/claude-contracts/contracts.jsonl as the
-//     XDG fallback.
-//  4. ./contracts.jsonl as a last resort when $HOME is unresolvable
+//  1. $CLAUDE_CONTRACTS_DIR, if non-empty.
+//  2. $HOME/.claude/contracts — the path the claude-contracts plugin
+//     writes to. This is the live location on every machine running
+//     the plugin.
+//  3. ./contracts as a last resort when $HOME is unresolvable
 //     (should never happen on a real workstation).
 //
-// Per the brief, the daemon never creates the file or its parent
-// directory — that responsibility belongs to the writer. The provider
-// tolerates the path being missing.
-func DefaultLogPath() string {
-	if override := os.Getenv(EnvLogPath); override != "" {
+// Per the brief, the daemon never creates the directory or its
+// contents — that responsibility belongs to the writer. The provider
+// tolerates the directory being missing (returns an empty contract
+// list, no error).
+func DefaultLogDir() string {
+	if override := os.Getenv(EnvLogDir); override != "" {
 		return override
 	}
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "claude-contracts", "contracts.jsonl")
-	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".local", "state", "claude-contracts", "contracts.jsonl")
+		return filepath.Join(home, ".claude", "contracts")
 	}
-	return "contracts.jsonl"
+	return "contracts"
 }
