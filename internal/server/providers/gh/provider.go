@@ -2,7 +2,9 @@ package gh
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -400,6 +402,28 @@ func (p *Provider) GetRepository(ctx context.Context, owner, name string) (Repos
 		return Repository{}, err
 	}
 	return c.GetRepo(ctx, owner, name)
+}
+
+// GraphQL forwards an arbitrary GraphQL query to GitHub's API and
+// returns the parsed `{ data, errors, extensions }` envelope as a Go
+// map. Backed by Client.GraphQL, which never caches: query strings are
+// arbitrary, so caching by query+variables would be both surprising
+// and easily defeated. Per-resolver auth/rate-limit shaping mirrors
+// the REST path (issue #418).
+func (p *Provider) GraphQL(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {
+	c, err := p.httpClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := c.GraphQL(ctx, query, variables)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode graphql envelope: %w", err)
+	}
+	return out, nil
 }
 
 // Subscribe returns a channel that receives invalidation events when

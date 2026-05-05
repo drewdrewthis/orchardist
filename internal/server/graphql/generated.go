@@ -225,6 +225,7 @@ type ComplexityRoot struct {
 		Contracts       func(childComplexity int, filter *ContractFilter) int
 		Conversation    func(childComplexity int, id string) int
 		Conversations   func(childComplexity int) int
+		Gh              func(childComplexity int, query string, variables interface{}) int
 		Health          func(childComplexity int) int
 		Host            func(childComplexity int) int
 		Hosts           func(childComplexity int) int
@@ -376,6 +377,7 @@ type QueryResolver interface {
 	PullRequests(ctx context.Context, repo string, state *PullRequestState) ([]*PullRequest, error)
 	Issues(ctx context.Context, repo string, state *IssueState) ([]*Issue, error)
 	WorkflowRuns(ctx context.Context, repo string) ([]*WorkflowRun, error)
+	Gh(ctx context.Context, query string, variables interface{}) (interface{}, error)
 	Node(ctx context.Context, id string) (Node, error)
 }
 type SubscriptionResolver interface {
@@ -1361,6 +1363,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.Conversations(childComplexity), true
 
+	case "Query.gh":
+		if e.complexity.Query.Gh == nil {
+			break
+		}
+
+		args, err := ec.field_Query_gh_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.Gh(childComplexity, args["query"].(string), args["variables"].(interface{})), true
+
 	case "Query.health":
 		if e.complexity.Query.Health == nil {
 			break
@@ -2172,6 +2186,14 @@ interface Node {
 "RFC 3339 timestamp string. Mapped to Go's time.Time."
 scalar Time
 
+"""
+Opaque JSON value — any GraphQL-compatible type, marshalled verbatim.
+Used by ` + "`" + `Query.gh` + "`" + ` to forward GitHub GraphQL responses without imposing
+an orchard-side schema on them. Callers deserialise against their
+knowledge of GitHub's schema.
+"""
+scalar JSON
+
 # Process is an OS-level process surfaced via the ` + "`" + `ps` + "`" + ` adapter.
 type Process implements Node {
   "Stable id formatted as ` + "`" + `<host>:<pid>` + "`" + `."
@@ -2325,6 +2347,23 @@ type Query {
 
   "Workflow runs on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   workflowRuns(repo: String!): [WorkflowRun!]
+
+  """
+  Forward an arbitrary GraphQL query to GitHub's API using the daemon's
+  configured gh credentials. The ` + "`" + `query` + "`" + ` argument is a GitHub-schema
+  GraphQL document (string); the returned JSON is GitHub's full envelope
+  including the ` + "`" + `data` + "`" + ` and any ` + "`" + `errors` + "`" + ` keys.
+
+  Pass-through is read-only by design: it is exposed as a Query field,
+  not a Mutation, so callers cannot bypass orchardist guardrails by
+  routing mutations through the daemon. Auth, rate limiting, and base
+  URL come from the gh provider; callers do not pass tokens.
+
+  Federation: peers can call ` + "`" + `gh` + "`" + ` through the peerproxy surface. The
+  result is opaque JSON on the orchard side — the consumer typecheks
+  against GitHub's schema directly.
+  """
+  gh(query: String!, variables: JSON): JSON
 
   """
   Generic node lookup by globally-unique id. Returns the node if it
@@ -3090,6 +3129,30 @@ func (ec *executionContext) field_Query_conversation_args(ctx context.Context, r
 		}
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_gh_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["query"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("query"))
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["query"] = arg0
+	var arg1 interface{}
+	if tmp, ok := rawArgs["variables"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("variables"))
+		arg1, err = ec.unmarshalOJSON2interface(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["variables"] = arg1
 	return args, nil
 }
 
@@ -10022,6 +10085,64 @@ func (ec *executionContext) fieldContext_Query_workflowRuns(ctx context.Context,
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_workflowRuns_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_gh(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_gh(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Gh(rctx, fc.Args["query"].(string),
+			func() interface{} {
+				if fc.Args["variables"] == nil {
+					return nil
+				}
+				return fc.Args["variables"].(interface{})
+			}())
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(interface{})
+	fc.Result = res
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_gh(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_gh_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -17772,6 +17893,25 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "gh":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_gh(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "node":
 			field := field
 
@@ -21644,6 +21784,22 @@ func (ec *executionContext) marshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋ
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) unmarshalOJSON2interface(ctx context.Context, v interface{}) (interface{}, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalAny(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOJSON2interface(ctx context.Context, sel ast.SelectionSet, v interface{}) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	res := graphql.MarshalAny(v)
+	return res
 }
 
 func (ec *executionContext) marshalONode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx context.Context, sel ast.SelectionSet, v Node) graphql.Marshaler {

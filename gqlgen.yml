@@ -170,3 +170,11 @@ models:
   Time:
     model:
       - github.com/99designs/gqlgen/graphql.Time
+
+  # JSON scalar binds to gqlgen's Any marshaller, which round-trips any
+  # JSON-shaped value (`map[string]any`, `[]any`, primitives) verbatim.
+  # Used by Query.gh to forward GitHub GraphQL responses without imposing
+  # an orchard-side schema (issue #418).
+  JSON:
+    model:
+      - github.com/99designs/gqlgen/graphql.Any

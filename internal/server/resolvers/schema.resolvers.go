@@ -339,6 +339,11 @@ func (r *queryResolver) WorkflowRuns(ctx context.Context, repo string) ([]*graph
 	return r.queryWorkflowRunsResolver(ctx, repo)
 }
 
+// Gh is the resolver for the gh field.
+func (r *queryResolver) Gh(ctx context.Context, query string, variables interface{}) (interface{}, error) {
+	return r.queryGhResolver(ctx, query, variables)
+}
+
 // Node is the resolver for the node field.
 //
 // The id's host segment selects the dispatch path: when it matches a

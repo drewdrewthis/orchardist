@@ -91,6 +91,45 @@ func (r *queryResolver) queryWorkflowRunsResolver(ctx context.Context, repo stri
 	return out, nil
 }
 
+// queryGhResolver implements `Query.gh(query, variables)` — the
+// pass-through into GitHub's GraphQL API. Issue #418.
+//
+// The `variables` argument arrives as `interface{}` because the JSON
+// scalar can carry any shape. Two valid shapes: nil (no variables) or
+// a `map[string]any` keyed by GraphQL variable name. Anything else is
+// a caller bug; reject it as a per-field error rather than panicking.
+//
+// Auth-not-bootstrapped returns the typed `errGHNotConfigured` /
+// `gh.ErrNotAuthenticated` so the resolver layer surfaces it as a
+// per-field GraphQL error (the rest of the schema keeps resolving).
+// GitHub-level GraphQL errors ride through inside the returned envelope
+// — they are not Go errors here.
+func (r *queryResolver) queryGhResolver(ctx context.Context, query string, variables interface{}) (interface{}, error) {
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+	vars, err := coerceGhVariables(variables)
+	if err != nil {
+		return nil, err
+	}
+	return r.GH.GraphQL(ctx, query, vars)
+}
+
+// coerceGhVariables narrows the JSON-scalar input to the shape the gh
+// client wants. nil is allowed (no variables); a `map[string]any` is
+// the happy path. We tolerate `nil` from an absent argument; anything
+// else is a misuse of the field that should surface clearly rather
+// than smuggle a typed-cast panic into the resolver.
+func coerceGhVariables(v interface{}) (map[string]any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m, nil
+	}
+	return nil, fmt.Errorf("gh: variables must be a JSON object or null, got %T", v)
+}
+
 // projectPullRequestsResolver implements `Project.pullRequests(state)`.
 //
 // Resolves the project's `origin` remote → `owner/repo` and delegates
