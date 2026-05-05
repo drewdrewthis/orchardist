@@ -380,17 +380,18 @@ fn reload_tmux_config_step(home: &Path) {
             .args(["set-hook", "-gu", "session-closed[99]"])
             .status();
 
-        // Kill any legacy *_orchard sessions so they don't interfere.
-        if let Ok(output) = std::process::Command::new("tmux")
-            .args(["list-sessions", "-F", "#{session_name}"])
-            .output()
+        // Kill any legacy *_orchard sessions so they don't interfere. Source
+        // the session list from the daemon (#426 thin-shell rip-out); fall
+        // through silently when the daemon isn't reachable — `init` runs at
+        // upgrade time and the legacy-cleanup step is best-effort.
+        if let Ok(client) = crate::daemon::Client::local()
+            && let Ok(sessions) = client.tmux_sessions()
         {
-            let sessions = String::from_utf8_lossy(&output.stdout);
-            for session in sessions.lines() {
-                if session.ends_with("_orchard") {
-                    eprintln!("  Killing legacy session: {session}");
+            for session in &sessions {
+                if session.name.ends_with("_orchard") {
+                    eprintln!("  Killing legacy session: {}", session.name);
                     let _ = std::process::Command::new("tmux")
-                        .args(["kill-session", "-t", session])
+                        .args(["kill-session", "-t", &session.name])
                         .status();
                 }
             }

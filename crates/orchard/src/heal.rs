@@ -186,7 +186,7 @@ pub struct HealClaudeState {
 /// inputs. The function only analyzes and classifies findings.
 ///
 /// # Parameters
-/// - `sessions`: live tmux sessions from `tmux::list_tmux_sessions()`
+/// - `sessions`: live tmux sessions from the daemon (or any equivalent source)
 /// - `worktrees`: enriched worktrees to check
 /// - `claude_states`: stale-check candidates from `/tmp/orchard-claude-*.json`
 /// - `cache_files`: cache file names from `~/.cache/orchard/`

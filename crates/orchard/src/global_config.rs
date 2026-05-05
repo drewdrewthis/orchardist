@@ -619,17 +619,14 @@ fn fallback_single_repo() -> GlobalConfig {
 ///
 /// Returns an empty vec if the file does not exist or contains no valid remotes.
 fn load_orchard_json_remotes(repo_root: &PathBuf) -> Vec<RemoteConfig> {
-    let out = match std::process::Command::new("git")
-        .args(["rev-parse", "--absolute-git-dir"])
-        .current_dir(repo_root)
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
+    // Pure-fs replacement for `git rev-parse --absolute-git-dir` — handles
+    // both `.git` directory and worktree-pointer file forms. See #426
+    // thin-shell rip-out.
+    let git_dir = match crate::paths::resolve_git_dir(repo_root) {
+        Some(p) => p,
+        None => return Vec::new(),
     };
-
-    let git_dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let orchard_json = PathBuf::from(&git_dir).join("orchard.json");
+    let orchard_json = git_dir.join("orchard.json");
 
     let data = match std::fs::read(&orchard_json) {
         Ok(d) => d,
