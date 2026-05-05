@@ -20,11 +20,6 @@ import (
 // subprotocol) is intentionally not implemented.
 const graphqlTransportWSProtocol = "graphql-transport-ws"
 
-// authHeader is the HTTP / WebSocket header carrying the shared-secret
-// bearer. Centralised so the client and the server-side middleware
-// stay in lockstep.
-const authHeader = "Authorization"
-
 // QueryResult is the payload of a single GraphQL response. The Data
 // field is left as a json.RawMessage so callers can decode into the
 // concrete shape they expect.
@@ -68,9 +63,14 @@ type GraphQLError struct {
 // Lifecycle: NewClient is cheap (no I/O). The websocket is opened on
 // the first Subscribe() call and reused across subsequent calls. Close
 // tears it down; subsequent Subscribe() calls reopen.
+//
+// When tls is true the client speaks HTTPS for queries and WSS for
+// subscriptions; the underlying http.Client and websocket.Dialer carry
+// the TLS configuration the caller supplied (system trust store by
+// default — production code MUST verify certificates).
 type Client struct {
 	address    string
-	secret     string
+	tls        bool
 	httpClient *http.Client
 	dialer     *websocket.Dialer
 	now        func() time.Time
@@ -89,17 +89,21 @@ type Client struct {
 	writeMu sync.Mutex
 }
 
-// NewClient constructs a Client targeting `host:port` with the given
-// shared secret. The secret may be empty (local-dev mode); in that case
-// no Authorization header is sent.
-func NewClient(address, secret string) *Client {
-	return newClient(address, secret, http.DefaultClient, websocket.DefaultDialer, time.Now)
+// NewClient constructs a Client targeting `host:port`. When tls is true
+// the client speaks HTTPS/WSS using the default trust store — callers
+// needing a custom tls.Config can construct via newClient with a
+// configured http.Client + websocket.Dialer.
+//
+// No bearer-secret is supported: peer authentication is delegated to
+// the transport (TLS + boxd-fronted endpoint allowlists). See issue #412.
+func NewClient(address string, tls bool) *Client {
+	return newClient(address, tls, http.DefaultClient, websocket.DefaultDialer, time.Now)
 }
 
 // newClient is the test-friendly constructor. Production callers go
 // through NewClient; tests inject a stub HTTP client (httptest), a
 // configured dialer (httptest.NewServer URL), and a frozen clock.
-func newClient(address, secret string, httpc *http.Client, dialer *websocket.Dialer, clock func() time.Time) *Client {
+func newClient(address string, tls bool, httpc *http.Client, dialer *websocket.Dialer, clock func() time.Time) *Client {
 	if httpc == nil {
 		httpc = http.DefaultClient
 	}
@@ -116,7 +120,7 @@ func newClient(address, secret string, httpc *http.Client, dialer *websocket.Dia
 	}
 	return &Client{
 		address:    address,
-		secret:     secret,
+		tls:        tls,
 		httpClient: httpc,
 		dialer:     &d,
 		now:        clock,
@@ -132,10 +136,10 @@ func (c *Client) Address() string { return c.address }
 // Used for transparent node-lookup proxying — Subscribe() is for
 // long-lived streams.
 //
-// The remote endpoint is `http://<address>/graphql`; HTTPS is not
-// supported in v1. Workstream F operates on a trusted localhost-only
-// LAN — the shared secret is the security boundary, not transport
-// encryption.
+// The endpoint URL is `<scheme>://<address>/graphql` where scheme is
+// `https` when the client was constructed with tls=true (boxd-fronted
+// peers) and `http` otherwise (trusted-LAN peers — the LAN itself is
+// then the security boundary).
 func (c *Client) Query(ctx context.Context, query string, variables map[string]any) (QueryResult, error) {
 	body, err := json.Marshal(map[string]any{
 		"query":     query,
@@ -149,9 +153,6 @@ func (c *Client) Query(ctx context.Context, query string, variables map[string]a
 		return QueryResult{}, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.secret != "" {
-		req.Header.Set(authHeader, "Bearer "+c.secret)
-	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return QueryResult{}, fmt.Errorf("http: %w", err)
@@ -160,9 +161,6 @@ func (c *Client) Query(ctx context.Context, query string, variables map[string]a
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return QueryResult{}, fmt.Errorf("read body: %w", err)
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return QueryResult{}, fmt.Errorf("unauthorized: peer rejected shared secret")
 	}
 	if resp.StatusCode/100 != 2 {
 		return QueryResult{}, fmt.Errorf("http status %d: %s", resp.StatusCode, string(raw))
@@ -270,11 +268,7 @@ func (c *Client) ensureConn(ctx context.Context) error {
 	c.mu.Unlock()
 
 	once.Do(func() {
-		hdr := http.Header{}
-		if c.secret != "" {
-			hdr.Set(authHeader, "Bearer "+c.secret)
-		}
-		conn, _, err := c.dialer.DialContext(ctx, c.wsURL(), hdr)
+		conn, _, err := c.dialer.DialContext(ctx, c.wsURL(), nil)
 		if err != nil {
 			c.mu.Lock()
 			c.connErr = fmt.Errorf("dial %s: %w", c.wsURL(), err)
@@ -286,9 +280,6 @@ func (c *Client) ensureConn(ctx context.Context) error {
 		// server → connection_ack. The server may attach a payload to
 		// the ack; we ignore it in v1.
 		init := map[string]any{"type": "connection_init"}
-		if c.secret != "" {
-			init["payload"] = map[string]any{"authToken": c.secret}
-		}
 		if err := c.writeJSON(conn, init); err != nil {
 			_ = conn.Close()
 			c.mu.Lock()
@@ -441,11 +432,19 @@ func (c *Client) writeJSON(conn *websocket.Conn, v any) error {
 }
 
 func (c *Client) httpURL() string {
-	u := url.URL{Scheme: "http", Host: c.address, Path: "/graphql"}
+	scheme := "http"
+	if c.tls {
+		scheme = "https"
+	}
+	u := url.URL{Scheme: scheme, Host: c.address, Path: "/graphql"}
 	return u.String()
 }
 
 func (c *Client) wsURL() string {
-	u := url.URL{Scheme: "ws", Host: c.address, Path: "/graphql"}
+	scheme := "ws"
+	if c.tls {
+		scheme = "wss"
+	}
+	u := url.URL{Scheme: scheme, Host: c.address, Path: "/graphql"}
 	return u.String()
 }

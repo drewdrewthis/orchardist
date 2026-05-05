@@ -14,6 +14,7 @@ package peerproxy_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,7 +22,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,10 +31,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 )
 
-const (
-	remoteName  = "remote-host"
-	sharedToken = "test-secret-shhh"
-)
+const remoteName = "remote-host"
 
 // orchardFixture wraps an httptest.Server bound to a peerproxy-aware
 // orchard daemon plus the LocalInvalidator the test uses to inject
@@ -45,18 +42,32 @@ type orchardFixture struct {
 	events *peerproxy.LocalInvalidator
 }
 
+// fixtureOpts tunes startOrchard for TLS variants and TLS-config
+// injection. Plain federation tests use the zero value.
+type fixtureOpts struct {
+	tlsServer bool
+	tlsConfig *tls.Config
+}
+
 // startOrchard boots an orchard daemon attached to httptest. fedCfg is
-// the federation slice (peers + peer_secret); pass an empty FederationConfig
-// for a "leaf" daemon that has no peers of its own.
+// the federation slice (peers); pass an empty FederationConfig for a
+// "leaf" daemon that has no peers of its own.
 func startOrchard(t *testing.T, fedCfg peerproxy.FederationConfig) *orchardFixture {
+	return startOrchardOpts(t, fedCfg, fixtureOpts{})
+}
+
+func startOrchardOpts(t *testing.T, fedCfg peerproxy.FederationConfig, opts fixtureOpts) *orchardFixture {
 	t.Helper()
 	logger := slog.Default()
-	peerProvider := peerproxy.NewProvider(fedCfg, logger)
+	provOpts := []peerproxy.ProviderOption{}
+	if opts.tlsConfig != nil {
+		provOpts = append(provOpts, peerproxy.WithTLSConfig(opts.tlsConfig))
+	}
+	peerProvider := peerproxy.NewProvider(fedCfg, logger, provOpts...)
 	localEvents := peerproxy.NewLocalInvalidator()
 
 	srv := server.New("", logger,
 		server.WithPeerProxy(peerProvider),
-		server.WithPeerSecret(fedCfg.PeerSecret),
 		server.WithLocalEvents(localEvents),
 	)
 
@@ -74,7 +85,12 @@ func startOrchard(t *testing.T, fedCfg peerproxy.FederationConfig) *orchardFixtu
 
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", srv.GraphQLHandler())
-	ts := httptest.NewServer(mux)
+	var ts *httptest.Server
+	if opts.tlsServer {
+		ts = httptest.NewTLSServer(mux)
+	} else {
+		ts = httptest.NewServer(mux)
+	}
 	t.Cleanup(ts.Close)
 
 	addr, err := stripScheme(ts.URL)
@@ -99,8 +115,9 @@ func stripScheme(rawURL string) (string, error) {
 }
 
 // graphQLPost issues a single POST against the fixture and returns the
-// decoded envelope. Authorization header is attached when secret != "".
-func graphQLPost(t *testing.T, fix *orchardFixture, secret, query string) map[string]any {
+// decoded envelope. Uses the fixture's own http.Client so TLS-fronted
+// fixtures (httptest.NewTLSServer) accept the self-signed cert.
+func graphQLPost(t *testing.T, fix *orchardFixture, query string) map[string]any {
 	t.Helper()
 	body, err := json.Marshal(map[string]string{"query": query})
 	if err != nil {
@@ -111,10 +128,7 @@ func graphQLPost(t *testing.T, fix *orchardFixture, secret, query string) map[st
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if secret != "" {
-		req.Header.Set("Authorization", "Bearer "+secret)
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fix.srv.Client().Do(req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -137,9 +151,8 @@ func graphQLPost(t *testing.T, fix *orchardFixture, secret, query string) map[st
 // peer, polls until the local probe succeeds, then asserts
 // `host.peers[*].reachable == true`.
 func TestPeers_Reachable(t *testing.T) {
-	remote := startOrchard(t, peerproxy.FederationConfig{PeerSecret: sharedToken})
+	remote := startOrchard(t, peerproxy.FederationConfig{})
 	local := startOrchard(t, peerproxy.FederationConfig{
-		PeerSecret: sharedToken,
 		Peers: []peerproxy.PeerConfig{
 			{Name: remoteName, Address: remote.addr},
 		},
@@ -150,7 +163,7 @@ func TestPeers_Reachable(t *testing.T) {
 	// supervisor's first probe lands the answer flips to true.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		envelope := graphQLPost(t, local, sharedToken,
+		envelope := graphQLPost(t, local,
 			`{ host { peers { id reachable } } }`)
 		errs, _ := envelope["errors"].([]any)
 		if len(errs) > 0 {
@@ -175,30 +188,13 @@ func TestPeers_Reachable(t *testing.T) {
 	}
 }
 
-// TestPeers_AuthRequired confirms the bearer middleware rejects
-// requests missing the configured secret. Belt-and-braces for §11.
-func TestPeers_AuthRequired(t *testing.T) {
-	fix := startOrchard(t, peerproxy.FederationConfig{PeerSecret: sharedToken})
-	resp, err := http.Post(fix.srv.URL+"/graphql", "application/json",
-		strings.NewReader(`{"query":"{ __typename }"}`))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusUnauthorized {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 401, got %d: %s", resp.StatusCode, body)
-	}
-}
-
 // TestNode_ProxiedLookup queries `node(id: "TmuxPane:<remote>:%26")`
 // against the local daemon and asserts the response was forwarded —
 // the typename + id come back from the remote, not from a local
 // fallback.
 func TestNode_ProxiedLookup(t *testing.T) {
-	remote := startOrchard(t, peerproxy.FederationConfig{PeerSecret: sharedToken})
+	remote := startOrchard(t, peerproxy.FederationConfig{})
 	local := startOrchard(t, peerproxy.FederationConfig{
-		PeerSecret: sharedToken,
 		Peers: []peerproxy.PeerConfig{
 			{Name: remoteName, Address: remote.addr},
 		},
@@ -206,7 +202,7 @@ func TestNode_ProxiedLookup(t *testing.T) {
 
 	const wantID = "TmuxPane:remote-host:%fake"
 	query := fmt.Sprintf(`{ node(id: %q) { __typename id } }`, wantID)
-	envelope := graphQLPost(t, local, sharedToken, query)
+	envelope := graphQLPost(t, local, query)
 	if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
 		t.Fatalf("graphql errors: %v", errs)
 	}
@@ -228,17 +224,14 @@ func TestNode_ProxiedLookup(t *testing.T) {
 // fires a synthetic invalidation on the remote's LocalInvalidator.
 // The subscriber must observe the touched node within the timeout.
 func TestSubscription_PeerTunnel(t *testing.T) {
-	remote := startOrchard(t, peerproxy.FederationConfig{PeerSecret: sharedToken})
+	remote := startOrchard(t, peerproxy.FederationConfig{})
 	local := startOrchard(t, peerproxy.FederationConfig{
-		PeerSecret: sharedToken,
 		Peers: []peerproxy.PeerConfig{
 			{Name: remoteName, Address: remote.addr},
 		},
 	})
 
 	wsURL := "ws://" + local.addr + "/graphql"
-	hdr := http.Header{}
-	hdr.Set("Authorization", "Bearer "+sharedToken)
 
 	dialer := *websocket.DefaultDialer
 	dialer.Subprotocols = []string{"graphql-transport-ws"}
@@ -247,7 +240,7 @@ func TestSubscription_PeerTunnel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn, _, err := dialer.DialContext(ctx, wsURL, hdr)
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial local ws: %v", err)
 	}
@@ -357,7 +350,7 @@ func TestSubscription_PeerTunnel(t *testing.T) {
 func TestNode_UnknownPeer(t *testing.T) {
 	local := startOrchard(t, peerproxy.FederationConfig{}) // no peers
 
-	envelope := graphQLPost(t, local, "",
+	envelope := graphQLPost(t, local,
 		`{ node(id: "TmuxPane:not-a-peer:%abc") { __typename id } }`)
 	if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
 		t.Fatalf("graphql errors: %v", errs)
@@ -370,6 +363,113 @@ func TestNode_UnknownPeer(t *testing.T) {
 	if node["id"] != "TmuxPane:not-a-peer:%abc" {
 		t.Fatalf("expected echoed id, got %v", node["id"])
 	}
+}
+
+// TestPeers_TLS_ReachableAndProxiedLookup is the AC-5 coverage for
+// HTTPS/WSS support: a TLS-fronted "remote" daemon, a "local" daemon
+// configured with `tls=true` for that peer, and the same `host.peers`
+// + `node(id)` round-trips that the plain-HTTP suite exercises.
+//
+// The remote uses `httptest.NewTLSServer` (self-signed cert). The local
+// daemon's peerproxy is given the corresponding *tls.Config so its
+// dialer accepts the test cert — this MUST stay test-scoped:
+// production code never sets InsecureSkipVerify.
+func TestPeers_TLS_ReachableAndProxiedLookup(t *testing.T) {
+	remote := startOrchardOpts(t,
+		peerproxy.FederationConfig{},
+		fixtureOpts{tlsServer: true},
+	)
+	clientTLS := tlsConfigFromTestServer(remote.srv)
+	local := startOrchardOpts(t,
+		peerproxy.FederationConfig{
+			Peers: []peerproxy.PeerConfig{
+				{Name: remoteName, Address: remote.addr, TLS: true},
+			},
+		},
+		fixtureOpts{tlsConfig: clientTLS},
+	)
+
+	// Wait until the local supervisor's HTTPS probe of the remote lands.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		envelope := graphQLPost(t, local,
+			`{ host { peers { id reachable } } }`)
+		if errs, _ := envelope["errors"].([]any); len(errs) > 0 {
+			t.Fatalf("graphql errors: %v", errs)
+		}
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		if len(peers) == 1 {
+			peer := peers[0].(map[string]any)
+			if peer["reachable"] == true {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("TLS peer never reachable; envelope=%v", envelope)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Proxied node lookup over HTTPS.
+	const wantID = "TmuxPane:remote-host:%fake"
+	q := fmt.Sprintf(`{ node(id: %q) { __typename id } }`, wantID)
+	envelope := graphQLPost(t, local, q)
+	if errs, _ := envelope["errors"].([]any); len(errs) > 0 {
+		t.Fatalf("graphql errors: %v", errs)
+	}
+	data, _ := envelope["data"].(map[string]any)
+	node, _ := data["node"].(map[string]any)
+	if node == nil {
+		t.Fatalf("expected node, got %v", data)
+	}
+	if node["id"] != wantID {
+		t.Fatalf("expected echoed id %q, got %v", wantID, node["id"])
+	}
+}
+
+// TestPeers_TLS_WSSHandshake confirms the local supervisor's
+// `peerproxy.Client.Subscribe` upgrades to WSS against the TLS-fronted
+// remote. Once the supervisor's subscription is registered on the
+// remote's LocalInvalidator, we know the WSS handshake + connection_init
+// completed — covering AC-2's wsURL() change end-to-end.
+func TestPeers_TLS_WSSHandshake(t *testing.T) {
+	remote := startOrchardOpts(t,
+		peerproxy.FederationConfig{},
+		fixtureOpts{tlsServer: true},
+	)
+	clientTLS := tlsConfigFromTestServer(remote.srv)
+	_ = startOrchardOpts(t,
+		peerproxy.FederationConfig{
+			Peers: []peerproxy.PeerConfig{
+				{Name: remoteName, Address: remote.addr, TLS: true},
+			},
+		},
+		fixtureOpts{tlsConfig: clientTLS},
+	)
+
+	if !waitForCondition(5*time.Second, func() bool {
+		return remote.events.SubscriberCount() >= 1
+	}) {
+		t.Fatalf("expected ≥1 upstream WSS subscription on remote, saw %d",
+			remote.events.SubscriberCount())
+	}
+}
+
+// tlsConfigFromTestServer extracts a *tls.Config that trusts ts's
+// self-signed cert. This is the standard httptest pattern — `ts.Client()`
+// returns an http.Client whose Transport's TLSClientConfig has the
+// test CA in its RootCAs pool. Cloning it gives peerproxy a config it
+// can install on its own dialer.
+func tlsConfigFromTestServer(ts *httptest.Server) *tls.Config {
+	tr, ok := ts.Client().Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		// Fallback for older httptest internals — accept the test cert
+		// only. Production code MUST NOT do this.
+		return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test-only
+	}
+	return tr.TLSClientConfig.Clone()
 }
 
 // waitForCondition polls fn until it returns true or the timeout fires.

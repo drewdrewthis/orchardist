@@ -12,16 +12,18 @@
 //	              fans the watcher channel out as InvalidationEvent.
 //	client.go   — websocket + HTTP transport; speaks the
 //	              graphql-transport-ws subprotocol for subscriptions
-//	              and POSTs JSON for one-shot queries. Owns the
-//	              shared-secret bearer header.
-//	config.go   — loads peer addresses + shared secret from
+//	              and POSTs JSON for one-shot queries. HTTPS/WSS
+//	              enabled per-peer via `tls: true` in config.
+//	config.go   — loads peer addresses from
 //	              ~/.config/orchard/config.json. Read-only.
 //
-// Auth (§11): the client attaches `Authorization: Bearer <secret>` to
-// every websocket open and HTTP request when a non-empty secret is
-// configured. The server side mirrors this — when `peer_secret` is set
-// in config the daemon enforces the bearer; when unset, no auth is
-// required (local-dev escape hatch).
+// Auth: peer authentication is delegated to the transport. For TLS-enabled
+// peers (e.g. boxd-fronted endpoints), the transport-level allowlist on
+// the boxd subdomain is the security boundary. For plaintext peers, the
+// LAN itself is the boundary. The daemon does not implement an
+// application-level bearer-secret guard — that approach was removed in
+// issue #412 because the operational complexity (CLI auth lockout,
+// fsnotify reload edge cases) outweighed the security gain over TLS.
 //
 // Failure model: the adapter never silently swallows errors. A failed
 // websocket open marks the peer unreachable, the next dashboard query
