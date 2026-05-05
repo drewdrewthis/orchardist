@@ -228,9 +228,11 @@ type ComplexityRoot struct {
 		Gh              func(childComplexity int, query string, variables interface{}) int
 		Health          func(childComplexity int) int
 		Host            func(childComplexity int) int
+		HostServices    func(childComplexity int, filter *HostServiceFilter) int
 		Hosts           func(childComplexity int) int
 		Issues          func(childComplexity int, repo string, state *IssueState) int
 		Node            func(childComplexity int, id string) int
+		Peers           func(childComplexity int) int
 		Projects        func(childComplexity int) int
 		PullRequests    func(childComplexity int, repo string, state *PullRequestState) int
 		TmuxPanes       func(childComplexity int, filter *TmuxPaneFilter) int
@@ -374,6 +376,8 @@ type QueryResolver interface {
 	Contract(ctx context.Context, id string) (*Contract, error)
 	Contracts(ctx context.Context, filter *ContractFilter) ([]*Contract, error)
 	ClaudeInstances(ctx context.Context) ([]*ClaudeInstance, error)
+	Peers(ctx context.Context) ([]*Host, error)
+	HostServices(ctx context.Context, filter *HostServiceFilter) ([]*HostService, error)
 	PullRequests(ctx context.Context, repo string, state *PullRequestState) ([]*PullRequest, error)
 	Issues(ctx context.Context, repo string, state *IssueState) ([]*Issue, error)
 	WorkflowRuns(ctx context.Context, repo string) ([]*WorkflowRun, error)
@@ -1389,6 +1393,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.Host(childComplexity), true
 
+	case "Query.hostServices":
+		if e.complexity.Query.HostServices == nil {
+			break
+		}
+
+		args, err := ec.field_Query_hostServices_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.HostServices(childComplexity, args["filter"].(*HostServiceFilter)), true
+
 	case "Query.hosts":
 		if e.complexity.Query.Hosts == nil {
 			break
@@ -1419,6 +1435,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Query.Node(childComplexity, args["id"].(string)), true
+
+	case "Query.peers":
+		if e.complexity.Query.Peers == nil {
+			break
+		}
+
+		return e.complexity.Query.Peers(childComplexity), true
 
 	case "Query.projects":
 		if e.complexity.Query.Projects == nil {
@@ -2055,6 +2078,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := executionContext{rc, e, 0, 0, make(chan graphql.DeferredResult)}
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputContractFilter,
+		ec.unmarshalInputHostServiceFilter,
 		ec.unmarshalInputProcessFilter,
 		ec.unmarshalInputTmuxPaneFilter,
 		ec.unmarshalInputTmuxSessionFilter,
@@ -2338,6 +2362,27 @@ type Query {
 
   "All live Claude instances the daemon is tracking via heartbeat files."
   claudeInstances: [ClaudeInstance!]!
+
+  """
+  All peer hosts known to this daemon, flattened across ` + "`" + `hosts[*].peers` + "`" + `.
+
+  Sugar for the common case where callers want every peer without
+  traversing the (currently single-element) ` + "`" + `hosts` + "`" + ` list. Equivalent to
+  ` + "`" + `{ hosts { peers { ... } } }` + "`" + ` with dedup by ` + "`" + `id` + "`" + `. The local host is not
+  itself a peer — it is ` + "`" + `Query.host` + "`" + `.
+  """
+  peers: [Host!]!
+
+  """
+  All host services known to this daemon, flattened across
+  ` + "`" + `hosts[*].hostServices` + "`" + ` and optionally filtered. Filter clauses are
+  AND-combined when multiple are set.
+
+  Sugar for the common case where callers want every service without
+  traversing ` + "`" + `hosts` + "`" + `. Per-host scoping is still available via
+  ` + "`" + `Host.hostServices` + "`" + `.
+  """
+  hostServices(filter: HostServiceFilter): [HostService!]!
 
   "Pull requests on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
@@ -2712,6 +2757,23 @@ input TmuxSessionFilter {
 
   "Only include sessions with active-attached clients within the freshness window."
   activeAttachedOnly: Boolean
+}
+
+"""
+Filter for ` + "`" + `Query.hostServices` + "`" + `. AND-combined when multiple are set.
+
+` + "`" + `host` + "`" + ` matches a ` + "`" + `Host.machineId` + "`" + `. ` + "`" + `name` + "`" + ` is an exact-match service
+name (no glob, no substring). ` + "`" + `state` + "`" + ` filters by lifecycle state.
+"""
+input HostServiceFilter {
+  "Match services on this host machine id."
+  host: String
+
+  "Exact service name (e.g. \"com.gitorchard.orchard\")."
+  name: String
+
+  "Lifecycle state."
+  state: HostServiceState
 }
 
 "Filter for ` + "`" + `Query.tmuxPanes` + "`" + `. AND-combined when multiple are set."
@@ -3153,6 +3215,21 @@ func (ec *executionContext) field_Query_gh_args(ctx context.Context, rawArgs map
 		}
 	}
 	args["variables"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_hostServices_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 *HostServiceFilter
+	if tmp, ok := rawArgs["filter"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
+		arg0, err = ec.unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["filter"] = arg0
 	return args, nil
 }
 
@@ -9847,6 +9924,147 @@ func (ec *executionContext) fieldContext_Query_claudeInstances(ctx context.Conte
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_peers(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_peers(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Peers(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*Host)
+	fc.Result = res
+	return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_peers(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Host_id(ctx, field)
+			case "machineId":
+				return ec.fieldContext_Host_machineId(ctx, field)
+			case "hostname":
+				return ec.fieldContext_Host_hostname(ctx, field)
+			case "os":
+				return ec.fieldContext_Host_os(ctx, field)
+			case "kernel":
+				return ec.fieldContext_Host_kernel(ctx, field)
+			case "address":
+				return ec.fieldContext_Host_address(ctx, field)
+			case "reachable":
+				return ec.fieldContext_Host_reachable(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "peers":
+				return ec.fieldContext_Host_peers(ctx, field)
+			case "processes":
+				return ec.fieldContext_Host_processes(ctx, field)
+			case "hostServices":
+				return ec.fieldContext_Host_hostServices(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_hostServices(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_hostServices(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().HostServices(rctx, fc.Args["filter"].(*HostServiceFilter))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*HostService)
+	fc.Result = res
+	return ec.marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_hostServices(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_HostService_id(ctx, field)
+			case "host":
+				return ec.fieldContext_HostService_host(ctx, field)
+			case "name":
+				return ec.fieldContext_HostService_name(ctx, field)
+			case "state":
+				return ec.fieldContext_HostService_state(ctx, field)
+			case "since":
+				return ec.fieldContext_HostService_since(ctx, field)
+			case "exitCode":
+				return ec.fieldContext_HostService_exitCode(ctx, field)
+			case "logTail":
+				return ec.fieldContext_HostService_logTail(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HostService", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_hostServices_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_pullRequests(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_pullRequests(ctx, field)
 	if err != nil {
@@ -16033,6 +16251,47 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputHostServiceFilter(ctx context.Context, obj interface{}) (HostServiceFilter, error) {
+	var it HostServiceFilter
+	asMap := map[string]interface{}{}
+	for k, v := range obj.(map[string]interface{}) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"host", "name", "state"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "host":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("host"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Host = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "state":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("state"))
+			data, err := ec.unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.State = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputProcessFilter(ctx context.Context, obj interface{}) (ProcessFilter, error) {
 	var it ProcessFilter
 	asMap := map[string]interface{}{}
@@ -17824,6 +18083,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_claudeInstances(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "peers":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_peers(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "hostServices":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_hostServices(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -21604,6 +21907,30 @@ func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel as
 	}
 	res := graphql.MarshalFloatContext(*v)
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx context.Context, v interface{}) (*HostServiceFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputHostServiceFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, v interface{}) (*HostServiceState, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(HostServiceState)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, sel ast.SelectionSet, v *HostServiceState) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) unmarshalOID2ᚖstring(ctx context.Context, v interface{}) (*string, error) {
