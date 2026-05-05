@@ -10,6 +10,9 @@
 // Workstream B-claudeaccount: WithClaudeAccount starts on Run().
 // Workstream B-hostservice: WithHostService starts on Run().
 // Workstream B-contracts: WithContracts starts on Run().
+// Workstream D-gh: WithGh wires the gh provider; Run() calls Start to prime
+// the auth bootstrap (failure is non-fatal — gh-derived fields surface
+// per-field GraphQL errors when auth is unavailable).
 // Workstream F: WithPeerProxy attaches the federation provider; the GraphQL
 // handler is wrapped in a bearer-secret middleware when peer_secret is set.
 package server
@@ -35,6 +38,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
@@ -66,6 +70,7 @@ type Server struct {
 	claudeInstance *claudeinstance.Provider
 	hostService    *hostservice.Provider
 	contracts      *contracts.Provider
+	gh             *gh.Provider
 	peerProxy      *peerproxy.Provider
 	peerSecret     string
 	localEvents    *peerproxy.LocalInvalidator
@@ -149,6 +154,16 @@ func WithContracts(p *contracts.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.contracts = p
 		r.WithContracts(p)
+	}
+}
+
+// WithGh wires a gh provider. Run() calls Start to prime the auth
+// bootstrap; any failure there is non-fatal and surfaces as per-field
+// GraphQL errors on gh-derived queries (ADR-011 §6 / §12).
+func WithGh(p *gh.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.gh = p
+		r.WithGH(p)
 	}
 }
 
@@ -282,6 +297,15 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.contracts != nil {
 		if err := s.contracts.Start(ctx); err != nil {
 			return fmt.Errorf("start contracts provider: %w", err)
+		}
+	}
+	if s.gh != nil {
+		// gh.Provider.Start primes the auth bootstrap and intentionally
+		// returns nil even when auth is unavailable — failures surface
+		// per-field via the resolver layer. We still propagate any
+		// unexpected non-nil error so an obvious wiring bug is loud.
+		if err := s.gh.Start(ctx); err != nil {
+			return fmt.Errorf("start gh provider: %w", err)
 		}
 	}
 	if s.claudeInstance != nil {
