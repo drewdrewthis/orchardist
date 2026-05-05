@@ -249,6 +249,7 @@ type ComplexityRoot struct {
 
 	Subscription struct {
 		NodeChanged func(childComplexity int, id string) int
+		Peer        func(childComplexity int, host string) int
 		Processes   func(childComplexity int) int
 	}
 
@@ -343,6 +344,7 @@ type ComplexityRoot struct {
 }
 
 type HostResolver interface {
+	Peers(ctx context.Context, obj *Host) ([]*Host, error)
 	Processes(ctx context.Context, obj *Host, filter *ProcessFilter) ([]*Process, error)
 }
 type ProcessResolver interface {
@@ -379,6 +381,7 @@ type QueryResolver interface {
 type SubscriptionResolver interface {
 	NodeChanged(ctx context.Context, id string) (<-chan Node, error)
 	Processes(ctx context.Context) (<-chan []*Process, error)
+	Peer(ctx context.Context, host string) (<-chan Node, error)
 }
 type TmuxClientResolver interface {
 	Server(ctx context.Context, obj *TmuxClient) (*TmuxServer, error)
@@ -1519,6 +1522,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Subscription.NodeChanged(childComplexity, args["id"].(string)), true
 
+	case "Subscription.peer":
+		if e.complexity.Subscription.Peer == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_peer_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Subscription.Peer(childComplexity, args["host"].(string)), true
+
 	case "Subscription.processes":
 		if e.complexity.Subscription.Processes == nil {
 			break
@@ -2142,6 +2157,7 @@ var sources = []*ast.Source{
 # Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
 # Workstream B-claudeprojects: Conversation node + Time scalar; backed by
 # the JSONL files Claude Code writes under ~/.claude/projects/.
+# Workstream F: Federation — Host.peers populated, Query.node lookup, Subscription.peer tunnel.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -2310,13 +2326,19 @@ type Query {
   "Workflow runs on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   workflowRuns(repo: String!): [WorkflowRun!]
 
-  "Look up any node by its global id. Returns null when no node matches."
+  """
+  Generic node lookup by globally-unique id. Returns the node if it
+  resides on the local daemon; ids whose host prefix matches a configured
+  peer are transparently proxied through the peerproxy provider
+  (Workstream F). Unknown hosts return null.
+  """
   node(id: ID!): Node
 }
 
 """
 Push-on-change channels backed by each provider's invalidation broadcast.
-Subscriptions are GraphQL-over-WebSocket only.
+Subscriptions are GraphQL-over-WebSocket only. Workstream F adds the
+federation tunnel.
 """
 type Subscription {
   "Receive the freshly-loaded node value each time its provider's invalidation channel fires for that id."
@@ -2324,6 +2346,14 @@ type Subscription {
 
   "Receive a snapshot of every cached process whenever the ps provider invalidates."
   processes: [Process!]!
+
+  """
+  Tunnel a subscription to a remote peer. The daemon opens (or reuses) a
+  websocket to the named peer and re-emits node updates locally.
+  Returns the touched Node on each remote invalidation. Unknown peers
+  raise an error and close the stream.
+  """
+  peer(host: String!): Node
 }
 
 type Health {
@@ -3178,6 +3208,21 @@ func (ec *executionContext) field_Subscription_nodeChanged_args(ctx context.Cont
 		}
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_peer_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["host"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("host"))
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["host"] = arg0
 	return args, nil
 }
 
@@ -5820,7 +5865,7 @@ func (ec *executionContext) _Host_peers(ctx context.Context, field graphql.Colle
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.Peers, nil
+		return ec.resolvers.Host().Peers(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -5841,8 +5886,8 @@ func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field g
 	fc = &graphql.FieldContext{
 		Object:     "Host",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "id":
@@ -10574,6 +10619,72 @@ func (ec *executionContext) fieldContext_Subscription_processes(ctx context.Cont
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Process", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_peer(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	fc, err := ec.fieldContext_Subscription_peer(ctx, field)
+	if err != nil {
+		return nil
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = nil
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Subscription().Peer(rctx, fc.Args["host"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return nil
+	}
+	if resTmp == nil {
+		return nil
+	}
+	return func(ctx context.Context) graphql.Marshaler {
+		select {
+		case res, ok := <-resTmp.(<-chan Node):
+			if !ok {
+				return nil
+			}
+			return graphql.WriterFunc(func(w io.Writer) {
+				w.Write([]byte{'{'})
+				graphql.MarshalString(field.Alias).MarshalGQL(w)
+				w.Write([]byte{':'})
+				ec.marshalONode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx, field.Selections, res).MarshalGQL(w)
+				w.Write([]byte{'}'})
+			})
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func (ec *executionContext) fieldContext_Subscription_peer(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("FieldContext.Child cannot be called on type INTERFACE")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_peer_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -16503,10 +16614,41 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "peers":
-			out.Values[i] = ec._Host_peers(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Host_peers(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "processes":
 			field := field
 
@@ -17756,6 +17898,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_nodeChanged(ctx, fields[0])
 	case "processes":
 		return ec._Subscription_processes(ctx, fields[0])
+	case "peer":
+		return ec._Subscription_peer(ctx, fields[0])
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}

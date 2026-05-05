@@ -12,6 +12,7 @@
 # Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
 # Workstream B-claudeprojects: Conversation node + Time scalar; backed by
 # the JSONL files Claude Code writes under ~/.claude/projects/.
+# Workstream F: Federation — Host.peers populated, Query.node lookup, Subscription.peer tunnel.
 
 """
 A node in the orchard graph. Every node has a globally-unique id so
@@ -180,13 +181,19 @@ type Query {
   "Workflow runs on a GitHub repository. `repo` is `owner/name`."
   workflowRuns(repo: String!): [WorkflowRun!]
 
-  "Look up any node by its global id. Returns null when no node matches."
+  """
+  Generic node lookup by globally-unique id. Returns the node if it
+  resides on the local daemon; ids whose host prefix matches a configured
+  peer are transparently proxied through the peerproxy provider
+  (Workstream F). Unknown hosts return null.
+  """
   node(id: ID!): Node
 }
 
 """
 Push-on-change channels backed by each provider's invalidation broadcast.
-Subscriptions are GraphQL-over-WebSocket only.
+Subscriptions are GraphQL-over-WebSocket only. Workstream F adds the
+federation tunnel.
 """
 type Subscription {
   "Receive the freshly-loaded node value each time its provider's invalidation channel fires for that id."
@@ -194,6 +201,14 @@ type Subscription {
 
   "Receive a snapshot of every cached process whenever the ps provider invalidates."
   processes: [Process!]!
+
+  """
+  Tunnel a subscription to a remote peer. The daemon opens (or reuses) a
+  websocket to the named peer and re-emits node updates locally.
+  Returns the touched Node on each remote invalidation. Unknown peers
+  raise an error and close the stream.
+  """
+  peer(host: String!): Node
 }
 
 type Health {

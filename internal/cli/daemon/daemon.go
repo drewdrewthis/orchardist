@@ -37,6 +37,7 @@ import (
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
@@ -131,6 +132,13 @@ func runStart(parentCtx context.Context, addr string) error {
 		fmt.Fprintf(os.Stderr, "orchard: hostservice unavailable: %v\n", hsvcErr)
 	}
 
+	fedCfg, err := peerproxy.LoadFederationConfig(cfgPath)
+	if err != nil {
+		return fmt.Errorf("load federation config: %w", err)
+	}
+	peerProvider := peerproxy.NewProvider(fedCfg, logger)
+	localEvents := peerproxy.NewLocalInvalidator()
+
 	opts := []server.Option{
 		server.WithProjects(configProvider),
 		server.WithPS(psProvider),
@@ -138,6 +146,9 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithClaudeAccount(claudeaccount.New("local", logger)),
 		server.WithContracts(contracts.New(logger)),
+		server.WithPeerProxy(peerProvider),
+		server.WithPeerSecret(fedCfg.PeerSecret),
+		server.WithLocalEvents(localEvents),
 	}
 	if hsvc != nil {
 		opts = append(opts, server.WithHostService(hsvc))

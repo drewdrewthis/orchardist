@@ -398,7 +398,8 @@ type ResourceLoad struct {
 }
 
 // Push-on-change channels backed by each provider's invalidation broadcast.
-// Subscriptions are GraphQL-over-WebSocket only.
+// Subscriptions are GraphQL-over-WebSocket only. Workstream F adds the
+// federation tunnel.
 type Subscription struct {
 }
 
