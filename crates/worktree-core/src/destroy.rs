@@ -39,15 +39,27 @@ pub fn remove_worktree(path: &str, force: bool) -> Result<()> {
         ));
     }
 
-    Command::new("rm")
+    let rm_status = Command::new("rm")
         .args(["-rf", &resolved_str])
         .status()
         .context("rm -rf worktree")?;
+    if !rm_status.success() {
+        return Err(anyhow!(
+            "rm -rf {resolved_str} failed (exit {:?})",
+            rm_status.code()
+        ));
+    }
 
-    Command::new("git")
+    let prune_status = Command::new("git")
         .args(["worktree", "prune"])
         .status()
         .context("git worktree prune")?;
+    if !prune_status.success() {
+        return Err(anyhow!(
+            "git worktree prune failed (exit {:?})",
+            prune_status.code()
+        ));
+    }
 
     Ok(())
 }
@@ -59,9 +71,57 @@ fn is_known_worktree(path: &str) -> bool {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            s.contains(&format!("worktree {path}"))
-        })
+        .map(|o| porcelain_lists_worktree(&String::from_utf8_lossy(&o.stdout), path))
         .unwrap_or(false)
+}
+
+/// Whole-line match for a `worktree <path>` entry in porcelain output.
+///
+/// Substring matching here is wrong: `worktree /foo/bar` would otherwise also
+/// match a line for `/foo/bar-extra`. We need an exact line match.
+fn porcelain_lists_worktree(porcelain: &str, path: &str) -> bool {
+    let target = format!("worktree {path}");
+    porcelain.lines().any(|line| line == target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PORCELAIN: &str = "\
+worktree /home/user/repo
+HEAD abc
+
+worktree /home/user/repo-feature
+HEAD def
+branch refs/heads/feature
+
+worktree /home/user/repo-extra
+HEAD ghi
+";
+
+    #[test]
+    fn porcelain_lists_worktree_exact_match() {
+        assert!(porcelain_lists_worktree(PORCELAIN, "/home/user/repo"));
+        assert!(porcelain_lists_worktree(PORCELAIN, "/home/user/repo-feature"));
+    }
+
+    #[test]
+    fn porcelain_lists_worktree_does_not_prefix_match() {
+        // `/home/user/repo` is a prefix of `/home/user/repo-feature` and
+        // `/home/user/repo-extra` — but querying for the unrelated path
+        // `/home/user/rep` (a true prefix that does not appear as a worktree)
+        // must not match.
+        assert!(!porcelain_lists_worktree(PORCELAIN, "/home/user/rep"));
+    }
+
+    #[test]
+    fn porcelain_lists_worktree_returns_false_for_missing_path() {
+        assert!(!porcelain_lists_worktree(PORCELAIN, "/home/user/other"));
+    }
+
+    #[test]
+    fn porcelain_lists_worktree_returns_false_for_empty_porcelain() {
+        assert!(!porcelain_lists_worktree("", "/anything"));
+    }
 }

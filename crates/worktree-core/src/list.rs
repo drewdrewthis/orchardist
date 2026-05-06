@@ -34,6 +34,9 @@ pub struct WorktreeEntry {
 /// via `core.worktree` config so the returned path matches the actual checkout.
 pub fn list_worktrees() -> Result<Vec<WorktreeEntry>> {
     let root = crate::repo::find_repo_root();
+    if root.is_empty() {
+        return Err(anyhow!("not in a git repository"));
+    }
     let out = Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&root)
