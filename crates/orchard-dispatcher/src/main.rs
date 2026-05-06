@@ -27,6 +27,7 @@
 //! argv handling keeps this file small and the dispatch contract obvious.
 
 use std::env;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -75,11 +76,13 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None => exec("tui", &[]),
         Some("--help" | "-h") => {
-            print!("{HELP}");
+            // Ignore broken-pipe so `orchard --help | head` exits cleanly
+            // instead of panicking with "failed printing to stdout".
+            let _ = io::stdout().write_all(HELP.as_bytes());
             ExitCode::SUCCESS
         }
         Some("--version" | "-V") => {
-            println!("orchard {VERSION}");
+            let _ = writeln!(io::stdout(), "orchard {VERSION}");
             ExitCode::SUCCESS
         }
         Some(verb) if WORKTREE_BARE_VERBS.contains(&verb) => {
@@ -123,15 +126,31 @@ fn exec(verb: &str, forwarded: &[String]) -> ExitCode {
     let status = Command::new(&resolved).args(forwarded).status();
 
     match status {
-        Ok(s) => match s.code() {
-            Some(code) => ExitCode::from(code as u8),
-            None => ExitCode::from(1),
-        },
+        Ok(s) => ExitCode::from(child_exit_code(&s)),
         Err(e) => {
             eprintln!("orchard: failed to exec '{}': {}", resolved.display(), e);
             ExitCode::from(126)
         }
     }
+}
+
+/// Maps a child's `ExitStatus` to a `u8` exit code.
+///
+/// On Unix, signal-killed children encode as `128 + signum` (POSIX shell
+/// convention — `kill -9` → 137). Normal exits return their status code.
+/// On non-Unix or when neither is available, returns 1 as a fallback.
+fn child_exit_code(status: &std::process::ExitStatus) -> u8 {
+    if let Some(code) = status.code() {
+        return code as u8;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signum) = status.signal() {
+            return (128 + (signum as u32 & 0x7f)) as u8;
+        }
+    }
+    1
 }
 
 /// Resolves a helper binary by name.
@@ -162,11 +181,18 @@ fn resolve_helper(binary_name: &str) -> Option<PathBuf> {
 }
 
 /// Reports whether `path` exists and is executable by the current user.
+#[cfg(unix)]
 fn is_executable(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.metadata()
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
+}
+
+/// Windows fallback: existence-check only (no posix permission bits).
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.metadata().map(|m| m.is_file()).unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -119,6 +119,31 @@ fn child_exit_code_is_propagated() {
 }
 
 #[test]
+fn signal_killed_child_returns_128_plus_signum() {
+    // SIGTERM = 15 → expected exit code 143 (POSIX convention).
+    let dir = tempfile::TempDir::with_prefix("orchard-signal-test").expect("dir");
+    let dispatcher_dest = dir.path().join("orchard");
+    fs::copy(dispatcher_path(), &dispatcher_dest).expect("copy dispatcher");
+    fs::set_permissions(&dispatcher_dest, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Helper that kills itself with SIGTERM.
+    let helper = dir.path().join("orchard-signal");
+    fs::write(&helper, "#!/bin/sh\nkill -15 $$\n").unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(&dispatcher_dest)
+        .args(["signal"])
+        .env("PATH", "")
+        .output()
+        .expect("run dispatcher");
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(
+        code, 143,
+        "SIGTERM-killed child should return 128+15=143; got {code}"
+    );
+}
+
+#[test]
 fn unknown_verb_returns_127_when_no_helper_exists() {
     let dir = with_helpers(&[]); // no helpers at all
     let (_stdout, stderr, code) = run_dispatcher(dir.path(), &["nonexistent"]);
@@ -132,8 +157,7 @@ fn unknown_verb_returns_127_when_no_helper_exists() {
 #[test]
 fn unknown_verb_dispatches_to_third_party_plugin_on_path() {
     // Plugin lives in a SEPARATE dir from the dispatcher; only PATH points to it.
-    let plugin_dir =
-        tempfile::TempDir::with_prefix("orchard-plugin-test").expect("plugin dir");
+    let plugin_dir = tempfile::TempDir::with_prefix("orchard-plugin-test").expect("plugin dir");
     let plugin = plugin_dir.path().join("orchard-myplugin");
     fs::write(
         &plugin,
