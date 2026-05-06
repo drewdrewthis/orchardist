@@ -1,0 +1,21 @@
+[package]
+name = "orchard-worktree"
+version = "0.1.0"
+edition = "2024"
+description = "Worktree mutation CLI: thin clap wrapper on worktree-core (orchard new/rm/prune/ls/path)"
+license = "MIT"
+repository = "https://github.com/drewdrewthis/git-orchard-rs"
+
+[[bin]]
+name = "orchard-worktree"
+path = "src/main.rs"
+
+[dependencies]
+worktree-core = { path = "../worktree-core" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
