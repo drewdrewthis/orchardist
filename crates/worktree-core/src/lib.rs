@@ -33,7 +33,5 @@ pub mod list;
 pub mod repo;
 
 pub use destroy::remove_worktree;
-pub use list::{
-    WorktreeEntry, list_worktrees, parse_porcelain, worktree_has_conflicts,
-};
+pub use list::{WorktreeEntry, list_worktrees, parse_porcelain, worktree_has_conflicts};
 pub use repo::{find_repo_root, get_repo_name};

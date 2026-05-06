@@ -99,10 +99,10 @@ mapped to the same `Message` variants as their keyboard equivalents.
 
 ## Workspace crates
 
-```
+```text
 crates/
 ├── orchard/               # The TUI binary + library (src layout below)
-├── worktree-core/         # Pure git worktree operations (list/create/destroy/parse).
+├── worktree-core/         # Pure git worktree operations (list/destroy/parse).
 │                          #   Backs orchard-tui dialogs + future orchard-worktree CLI.
 └── orchard-gui/src-tauri/ # Tauri-based GUI shell (preview)
 ```

@@ -103,7 +103,10 @@ HEAD ghi
     #[test]
     fn porcelain_lists_worktree_exact_match() {
         assert!(porcelain_lists_worktree(PORCELAIN, "/home/user/repo"));
-        assert!(porcelain_lists_worktree(PORCELAIN, "/home/user/repo-feature"));
+        assert!(porcelain_lists_worktree(
+            PORCELAIN,
+            "/home/user/repo-feature"
+        ));
     }
 
     #[test]
