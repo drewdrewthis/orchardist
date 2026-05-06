@@ -2930,6 +2930,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "orchard-dispatcher"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "orchard-gui"
 version = "0.0.1"
 dependencies = [
