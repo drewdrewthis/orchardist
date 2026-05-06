@@ -19,7 +19,6 @@ pub mod derive;
 pub mod events;
 pub mod federation;
 pub mod federation_topology;
-pub mod git;
 pub mod git_parse;
 pub mod github;
 pub mod global_config;

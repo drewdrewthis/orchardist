@@ -1,40 +1,39 @@
-//! Git worktree introspection and manipulation.
+//! `git worktree list` parsing and merge-conflict detection.
 //!
-//! Wraps `git worktree list --porcelain`, conflict detection, and worktree
-//! removal. This is part of the imperative shell — all functions spawn
-//! subprocess calls to `git`.
+//! Returns [`WorktreeEntry`] values containing only the fields produced by
+//! `git worktree list --porcelain` plus a derived `has_conflicts` flag.
+//! Higher-level enrichment (PR, tmux, issue) belongs to consuming crates.
+
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
+use serde::{Deserialize, Serialize};
 
-use crate::logger::LOG;
-use crate::types::Worktree;
-
-/// Returns the absolute path of the git repository root, or an empty string on failure.
-pub fn find_repo_root() -> String {
-    Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
-/// Returns the directory name of the git repository root.
-pub fn get_repo_name() -> String {
-    let root = find_repo_root();
-    Path::new(&root)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string()
+/// A single git worktree as reported by `git worktree list --porcelain`.
+///
+/// This is the *unenriched* shape — no PR, tmux, or issue data. Consumers that
+/// need an enriched view convert this into their own type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WorktreeEntry {
+    /// Absolute filesystem path to the worktree root.
+    pub path: String,
+    /// The branch checked out in this worktree, if any.
+    pub branch: Option<String>,
+    /// The commit SHA at HEAD.
+    pub head: String,
+    /// Whether this entry represents the bare repository (`.git` root).
+    pub is_bare: bool,
+    /// Whether the worktree has unresolved merge conflicts.
+    pub has_conflicts: bool,
 }
 
 /// Returns all git worktrees for the current repository with conflict status populated.
-pub fn list_worktrees() -> Result<Vec<Worktree>> {
-    let root = find_repo_root();
+///
+/// Bare-repo worktrees whose path lives inside a `.git` directory are resolved
+/// via `core.worktree` config so the returned path matches the actual checkout.
+pub fn list_worktrees() -> Result<Vec<WorktreeEntry>> {
+    let root = crate::repo::find_repo_root();
     let out = Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&root)
@@ -52,7 +51,6 @@ pub fn list_worktrees() -> Result<Vec<Worktree>> {
     let mut trees = Vec::with_capacity(raw.len());
 
     for mut wt in raw {
-        // Resolve paths that live inside a .git directory (bare-repo worktrees).
         if wt.path.contains("/.git/") {
             wt.path = resolve_main_worktree_path(&wt.path);
         }
@@ -62,13 +60,13 @@ pub fn list_worktrees() -> Result<Vec<Worktree>> {
         trees.push(wt);
     }
 
-    LOG.info(&format!("listWorktrees: {} trees", trees.len()));
     Ok(trees)
 }
 
-/// Parses the output of `git worktree list --porcelain` into a `Vec<Worktree>`.
-/// Blocks are separated by blank lines.
-pub fn parse_porcelain(output: &str) -> Vec<Worktree> {
+/// Parses the output of `git worktree list --porcelain` into [`WorktreeEntry`] values.
+///
+/// Blocks are separated by blank lines; each block describes one worktree.
+pub fn parse_porcelain(output: &str) -> Vec<WorktreeEntry> {
     let mut worktrees = Vec::new();
 
     for block in output.trim().split("\n\n") {
@@ -101,13 +99,12 @@ pub fn parse_porcelain(output: &str) -> Vec<Worktree> {
             continue;
         }
 
-        worktrees.push(Worktree {
+        worktrees.push(WorktreeEntry {
             path,
             head,
             branch,
             is_bare,
             has_conflicts: false,
-            ..Default::default()
         });
     }
 
@@ -126,53 +123,6 @@ pub fn worktree_has_conflicts(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Removes the worktree at `path`. If `force` is true, passes `--force` to git.
-/// Falls back to `rm -rf` + `git worktree prune` if git worktree remove fails,
-/// but only after verifying the path is a known worktree.
-pub fn remove_worktree(path: &str, force: bool) -> Result<()> {
-    let mut args = vec!["worktree", "remove", path];
-    if force {
-        args.push("--force");
-    }
-
-    if Command::new("git")
-        .args(&args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        LOG.info(&format!("removeWorktree: removed {}", path));
-        return Ok(());
-    }
-
-    // Fallback: worktree may be in a broken state.
-    LOG.warn(&format!(
-        "removeWorktree: git remove failed for {}, falling back to rm + prune",
-        path
-    ));
-    let resolved =
-        std::fs::canonicalize(path).with_context(|| format!("canonicalizing path: {path}"))?;
-    let resolved_str = resolved.to_string_lossy();
-
-    if !is_known_worktree(&resolved_str) {
-        return Err(anyhow!(
-            "refusing to rm path not listed as a git worktree: {path}"
-        ));
-    }
-
-    Command::new("rm")
-        .args(["-rf", &resolved_str])
-        .status()
-        .context("rm -rf worktree")?;
-
-    Command::new("git")
-        .args(["worktree", "prune"])
-        .status()
-        .context("git worktree prune")?;
-
-    Ok(())
-}
-
 // Resolves the actual worktree path by consulting core.worktree config with GIT_DIR set.
 fn resolve_main_worktree_path(git_dir: &str) -> String {
     let out = Command::new("git")
@@ -184,7 +134,6 @@ fn resolve_main_worktree_path(git_dir: &str) -> String {
         Ok(o) if o.status.success() => {
             let rel = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let joined = Path::new(git_dir).join(&rel);
-            // Try filesystem canonicalize first, fall back to logical normalization.
             joined
                 .canonicalize()
                 .unwrap_or_else(|_| normalize_path(&joined))
@@ -196,7 +145,7 @@ fn resolve_main_worktree_path(git_dir: &str) -> String {
 }
 
 /// Normalize a path by resolving `.` and `..` components without hitting the filesystem.
-fn normalize_path(path: &Path) -> std::path::PathBuf {
+pub(crate) fn normalize_path(path: &Path) -> std::path::PathBuf {
     use std::path::Component;
     let mut components: Vec<Component> = Vec::new();
     for component in path.components() {
@@ -211,20 +160,6 @@ fn normalize_path(path: &Path) -> std::path::PathBuf {
         }
     }
     components.iter().collect()
-}
-
-// Reports whether `path` appears in `git worktree list --porcelain`.
-fn is_known_worktree(path: &str) -> bool {
-    Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            s.contains(&format!("worktree {path}"))
-        })
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -318,7 +253,6 @@ bare";
     #[test]
     fn normalize_path_resolves_git_modules_path() {
         use std::path::PathBuf;
-        // .git/modules/sub is 3 components deep from repo root, so 3 x ".." = repo root
         let p = Path::new("/home/user/repo/.git/modules/sub/../../../actual");
         assert_eq!(normalize_path(p), PathBuf::from("/home/user/repo/actual"));
     }

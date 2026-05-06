@@ -18,6 +18,7 @@ name = "orchard-tui"
 path = "src/main.rs"
 
 [dependencies]
+worktree-core = { path = "../worktree-core" }
 ratatui = "0.30"
 crossterm = "0.29"
 serde = { version = "1", features = ["derive"] }

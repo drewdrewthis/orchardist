@@ -3,7 +3,6 @@
 //! Contains stale-filtering logic and worktree deletion (both local and remote).
 
 use crate::derive;
-use crate::git;
 use crate::global_config;
 use crate::remote;
 use crate::tmux;
@@ -70,8 +69,8 @@ pub(super) fn delete_task_row(
     if let Some(sess) = session_name {
         let _ = tmux::kill_tmux_session(sess);
     }
-    if git::remove_worktree(&row.worktree_path, false).is_err() {
-        git::remove_worktree(&row.worktree_path, true)?;
+    if worktree_core::remove_worktree(&row.worktree_path, false).is_err() {
+        worktree_core::remove_worktree(&row.worktree_path, true)?;
     }
     Ok(())
 }

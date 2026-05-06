@@ -126,7 +126,7 @@ impl<'a> Drop for TimingGuard<'a> {
 /// # Example
 /// ```ignore
 /// let result = timed!("phase:git", {
-///     git::list_worktrees().unwrap_or_default()
+///     worktree_core::list_worktrees().unwrap_or_default()
 /// });
 /// ```
 #[macro_export]
