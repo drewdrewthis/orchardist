@@ -97,7 +97,21 @@ actions, dialog interactions). This separates input handling from state mutation
 making the event loop testable and predictable. Mouse events (click, scroll) are
 mapped to the same `Message` variants as their keyboard equivalents.
 
-## Module Structure
+## Workspace crates
+
+```text
+crates/
+├── orchard/               # The TUI binary + library (src layout below)
+├── worktree-core/         # Pure git worktree operations (list/destroy/parse).
+│                          #   Backs orchard-tui dialogs + future orchard-worktree CLI.
+└── orchard-gui/src-tauri/ # Tauri-based GUI shell (preview)
+```
+
+`worktree-core` is the single source of truth for worktree mutation primitives.
+The orchard binary depends on it; future binaries (`orchard-worktree`) will
+depend on it directly. See ADR-013 for the dispatcher architecture this enables.
+
+## Module Structure (orchard crate)
 
 ```
 src/
@@ -131,7 +145,6 @@ src/
 ├── browser.rs             # Open URLs in browser
 │
 ├── claude_state.rs        # Claude Code hook state file parsing
-├── git.rs                 # Git operations (worktree create/delete, branch ops)
 ├── github.rs              # GitHub API helpers (issue/PR queries)
 ├── remote.rs              # Remote operations over SSH
 ├── tmux.rs                # Tmux session management (create, switch, kill)
@@ -175,6 +188,7 @@ src/
 | Add global config options | `global_config.rs` |
 | Fix self-healing/repair | `heal.rs` |
 | Fix worktree transfer | `transfer.rs` |
+| Change git worktree create/destroy/list logic | `crates/worktree-core/` |
 
 ## Data Model
 
@@ -396,3 +410,4 @@ discovery only. See ADR-008 for the decision rationale.
 - **ADR-007**: Session data model (TmuxSessionInfo → EnrichedSession composition)
 - **ADR-008**: Federated discovery — remote `orchard-tui --json` is the wire protocol for read-path enrichment; failures surface explicitly (no silent legacy fallback); dashboard reads are cache-only
 - **ADR-010**: `orchard-tui --json` (and `orchard-tui sessions --json`) is the live read; the TUI keeps the cached fast path. Reverses ADR-008's cache-only `--json` clause.
+- **ADR-013**: Orchard CLI ecosystem — one user-facing `orchard` binary as a thin dispatcher; `orchard-tui`, `orchard-daemon`, `orchard-worktree` as helper binaries; `crates/worktree-core/` is the shared library backing worktree mutation in TUI + CLI. Hybrid grammar (namespaced verbs + bare-verb shortcuts for the worktree primary unit).

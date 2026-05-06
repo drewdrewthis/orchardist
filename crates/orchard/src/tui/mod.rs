@@ -30,7 +30,6 @@ use std::cell::Cell;
 use crate::cache;
 use crate::cache_sources;
 use crate::derive;
-use crate::git;
 use crate::global_config;
 use crate::navigation;
 use crate::session::{StandaloneSessionRow, WindowInfo};
@@ -210,8 +209,8 @@ pub struct App {
 
 impl App {
     fn new(command: &str) -> Self {
-        let repo_root = git::find_repo_root();
-        let repo_name = git::get_repo_name();
+        let repo_root = worktree_core::find_repo_root();
+        let repo_name = worktree_core::get_repo_name();
         let mut global_cfg = global_config::load_global_config();
         global_config::register_cwd_repo_if_new(&mut global_cfg);
 

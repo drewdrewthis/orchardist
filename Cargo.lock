@@ -2926,6 +2926,7 @@ dependencies = [
  "throbber-widgets-tui",
  "tokio",
  "tui-scrollview",
+ "worktree-core",
 ]
 
 [[package]]
@@ -6544,6 +6545,14 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "worktree-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/orchard",
     "crates/orchard-gui/src-tauri",
+    "crates/worktree-core",
 ]
 
 [profile.release]

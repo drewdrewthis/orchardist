@@ -4,9 +4,10 @@
 //! returns `CachedWorktree` entries. Used by both `cache_sources` (local
 //! worktrees) and `remote_adapter` (remote adapters over SSH).
 //!
-//! A separate `git::parse_porcelain` exists and returns `Vec<Worktree>` (a
-//! different shape predating `CachedWorktree`); it is not consolidated here
-//! to keep this change surgical.
+//! A separate `worktree_core::parse_porcelain` exists and returns
+//! `Vec<WorktreeEntry>` (the unenriched git-only shape used by the
+//! worktree-core library); it is not consolidated here because `CachedWorktree`
+//! carries enrichment metadata that core does not.
 
 use crate::cache::{CachedWorktree, WorktreeLayout};
 
