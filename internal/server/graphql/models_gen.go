@@ -186,6 +186,18 @@ func (Conversation) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Conversation) GetID() string { return this.ID }
 
+// Daemon-wide health/diagnostic snapshot. v1 returns provider-level
+// counters and the global startedAt / uptime; future versions can grow
+// subscription/connection counts.
+type DaemonState struct {
+	// RFC3339 timestamp the daemon started serving.
+	StartedAt string `json:"startedAt"`
+	// Daemon uptime in seconds.
+	UptimeS int64 `json:"uptimeS"`
+	// Per-provider freshness/error rollup.
+	Providers []*ProviderHealth `json:"providers"`
+}
+
 type Health struct {
 	// Daemon health status — 'ok' when serving.
 	Status string `json:"status"`
@@ -302,6 +314,24 @@ type IssueComment struct {
 	UpdatedAt   string `json:"updatedAt"`
 }
 
+// Provenance and freshness envelope used to disambiguate "valid empty"
+// from "data unavailable" (#469 F1). Returned alongside list/composite
+// fields whose underlying providers can fail or be uninitialised.
+//
+// `provider` is a stable label (e.g. "tmux", "git", "gh"). `failureReason`
+// is non-null when the most recent refresh did not succeed.
+// `lastSuccessfulFetchAt` is the RFC3339 timestamp of the most recent
+// provider refresh that completed cleanly; null when no successful
+// refresh has happened yet.
+type Meta struct {
+	// Provider this envelope describes. Matches the labels in DaemonState.providers[].
+	Provider string `json:"provider"`
+	// RFC3339 timestamp of the most recent successful refresh; null when never observed.
+	LastSuccessfulFetchAt *string `json:"lastSuccessfulFetchAt,omitempty"`
+	// Human-readable reason the most recent refresh failed; null when healthy or never attempted.
+	FailureReason *string `json:"failureReason,omitempty"`
+}
+
 type Process struct {
 	// Stable id formatted as `<host>:<pid>`.
 	ID string `json:"id"`
@@ -361,6 +391,23 @@ func (Project) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Project) GetID() string { return this.ID }
+
+// A daemon provider's health snapshot — what its most recent refresh
+// did, when, and how it ended.
+type ProviderHealth struct {
+	// Stable provider name (e.g. "tmux", "git", "gh", "ps").
+	Name string `json:"name"`
+	// True when the provider has been wired into this daemon.
+	Configured bool `json:"configured"`
+	// RFC3339 timestamp of the last successful refresh; null until first success.
+	LastSuccessfulRefresh *string `json:"lastSuccessfulRefresh,omitempty"`
+	// Reason for the most recent failure; null when none observed since startup.
+	LastFailureReason *string `json:"lastFailureReason,omitempty"`
+	// Total successful refreshes since daemon boot.
+	RefreshCount int64 `json:"refreshCount"`
+	// Total refresh failures since daemon boot.
+	FailureCount int64 `json:"failureCount"`
+}
 
 // A pull request on a GitHub repository. Sourced from the GitHub REST API.
 type PullRequest struct {
@@ -624,6 +671,20 @@ func (TmuxWindow) IsNode() {}
 
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this TmuxWindow) GetID() string { return this.ID }
+
+// Top-level composite view that the orchardist dashboard asks for first.
+// Returns the same data the per-type resolvers return, joined into a
+// single tree to save round trips.
+type WorkView struct {
+	// Projects in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked.
+	Projects []*Project `json:"projects"`
+	// Tmux sessions on the local host — same as Query.tmuxSessions with no filter.
+	TmuxSessions []*TmuxSession `json:"tmuxSessions"`
+	// Live Claude instances — same shape as Query.claudeInstances.
+	ClaudeInstances []*ClaudeInstance `json:"claudeInstances"`
+	// Meta envelope describing freshness/availability for this view.
+	Meta *Meta `json:"meta"`
+}
 
 // A GitHub Actions workflow run.
 type WorkflowRun struct {

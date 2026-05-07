@@ -1,4 +1,6 @@
-// Tests for introspection gating — issue #401.
+// Tests for introspection gating — issues #401 (original gate) and
+// #469 F4 (default flipped to ON now that federation rides SSH tunnels
+// per issue #474).
 //
 // We test the env-var helper directly (cheap, no daemon boot needed) and
 // confirm via httptest that a daemon with introspection disabled returns
@@ -21,10 +23,10 @@ import (
 
 // --- env-var gate ---
 
-func TestIntrospectionEnabled_DefaultsOff(t *testing.T) {
+func TestIntrospectionEnabled_DefaultsOn(t *testing.T) {
 	t.Setenv("ORCHARD_INTROSPECTION", "")
-	if introspectionEnabled() {
-		t.Errorf("default (unset) must be off; got on")
+	if !introspectionEnabled() {
+		t.Errorf("default (unset) must be on; got off")
 	}
 }
 
@@ -32,6 +34,27 @@ func TestIntrospectionEnabled_OffWhenZero(t *testing.T) {
 	t.Setenv("ORCHARD_INTROSPECTION", "0")
 	if introspectionEnabled() {
 		t.Errorf("ORCHARD_INTROSPECTION=0 must be off; got on")
+	}
+}
+
+func TestIntrospectionEnabled_OffWhenFalse(t *testing.T) {
+	t.Setenv("ORCHARD_INTROSPECTION", "false")
+	if introspectionEnabled() {
+		t.Errorf("ORCHARD_INTROSPECTION=false must be off; got on")
+	}
+}
+
+func TestIntrospectionEnabled_OffWhenNo(t *testing.T) {
+	t.Setenv("ORCHARD_INTROSPECTION", "no")
+	if introspectionEnabled() {
+		t.Errorf("ORCHARD_INTROSPECTION=no must be off; got on")
+	}
+}
+
+func TestIntrospectionEnabled_OffWhenOff(t *testing.T) {
+	t.Setenv("ORCHARD_INTROSPECTION", "off")
+	if introspectionEnabled() {
+		t.Errorf("ORCHARD_INTROSPECTION=off must be off; got on")
 	}
 }
 
@@ -49,32 +72,35 @@ func TestIntrospectionEnabled_OnWhenTrue(t *testing.T) {
 	}
 }
 
-func TestIntrospectionEnabled_OnWhenYes(t *testing.T) {
-	t.Setenv("ORCHARD_INTROSPECTION", "yes")
-	if !introspectionEnabled() {
-		t.Errorf("ORCHARD_INTROSPECTION=yes must be on; got off")
-	}
-}
-
-func TestIntrospectionEnabled_OnWhenOn(t *testing.T) {
-	t.Setenv("ORCHARD_INTROSPECTION", "on")
-	if !introspectionEnabled() {
-		t.Errorf("ORCHARD_INTROSPECTION=on must be on; got off")
-	}
-}
-
-func TestIntrospectionEnabled_OffOnGarbage(t *testing.T) {
+func TestIntrospectionEnabled_OnOnGarbage(t *testing.T) {
+	// Anything not in the explicit OFF allow-list keeps introspection on.
 	t.Setenv("ORCHARD_INTROSPECTION", "maybe")
-	if introspectionEnabled() {
-		t.Errorf("ORCHARD_INTROSPECTION=maybe must be off (strict allow-list); got on")
+	if !introspectionEnabled() {
+		t.Errorf("ORCHARD_INTROSPECTION=maybe must keep default on; got off")
 	}
 }
 
-// --- end-to-end: daemon refuses __schema with introspection off ---
+// --- end-to-end: daemon serves __schema by default ---
 
-func TestIntrospection_HTTPDisabledByDefault(t *testing.T) {
-	// Default empty env — server should refuse __schema.
+func TestIntrospection_HTTPEnabledByDefault(t *testing.T) {
+	// Default empty env — server should serve __schema.
 	t.Setenv("ORCHARD_INTROSPECTION", "")
+
+	res := &resolvers.Resolver{}
+	srv := httptest.NewServer(graphqlHandlerFor(res))
+	t.Cleanup(srv.Close)
+
+	body := postQuery(t, srv.URL, `{ __schema { queryType { name } } }`)
+	if strings.Contains(body, "introspection disabled") {
+		t.Errorf("expected schema response by default; got error: %s", body)
+	}
+	if !strings.Contains(body, "Query") {
+		t.Errorf("expected 'Query' in schema response; got: %s", body)
+	}
+}
+
+func TestIntrospection_HTTPDisabledWhenEnvOff(t *testing.T) {
+	t.Setenv("ORCHARD_INTROSPECTION", "0")
 
 	res := &resolvers.Resolver{}
 	srv := httptest.NewServer(graphqlHandlerFor(res))
@@ -83,22 +109,6 @@ func TestIntrospection_HTTPDisabledByDefault(t *testing.T) {
 	body := postQuery(t, srv.URL, `{ __schema { types { name } } }`)
 	if !strings.Contains(body, "introspection disabled") {
 		t.Errorf("expected 'introspection disabled' in response; got: %s", body)
-	}
-}
-
-func TestIntrospection_HTTPEnabledWhenEnvSet(t *testing.T) {
-	t.Setenv("ORCHARD_INTROSPECTION", "1")
-
-	res := &resolvers.Resolver{}
-	srv := httptest.NewServer(graphqlHandlerFor(res))
-	t.Cleanup(srv.Close)
-
-	body := postQuery(t, srv.URL, `{ __schema { queryType { name } } }`)
-	if strings.Contains(body, "introspection disabled") {
-		t.Errorf("expected schema response; got error: %s", body)
-	}
-	if !strings.Contains(body, "Query") {
-		t.Errorf("expected 'Query' in schema response; got: %s", body)
 	}
 }
 
