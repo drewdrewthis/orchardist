@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.12.1...orchard-v0.13.0) (2026-05-07)
+
+
+### Features
+
+* **tui:** thin-shell sessions over the daemon — federated + tmux-into-any ([#426](https://github.com/drewdrewthis/git-orchard-rs/issues/426)) ([#430](https://github.com/drewdrewthis/git-orchard-rs/issues/430)) ([f9bec04](https://github.com/drewdrewthis/git-orchard-rs/commit/f9bec0442c204866e73b0c20e66a6eb5025461f3))
+
+
+### Bug Fixes
+
+* **tmux:** self-protection invariant for kill_tmux_session callers (resolves [#369](https://github.com/drewdrewthis/git-orchard-rs/issues/369)) ([#457](https://github.com/drewdrewthis/git-orchard-rs/issues/457)) ([ce7e6bf](https://github.com/drewdrewthis/git-orchard-rs/commit/ce7e6bf74edffd51abb9a127b5ed2aaf86b27ae3))
+
 ## [0.12.1](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.12.0...orchard-v0.12.1) (2026-05-05)
 
 
