@@ -36,6 +36,7 @@ import (
 	gqlws "github.com/gorilla/websocket"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
@@ -215,7 +216,10 @@ func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthHandler(startedAt))
-	mux.Handle("/graphql", graphqlHandlerFor(res))
+	// Wrap the GraphQL handler with the request-scoped DataLoader middleware.
+	// The bundle is built from the resolver's provider set so the Pr resolver
+	// can batch ListPullRequests calls across all worktrees in one request.
+	mux.Handle("/graphql", loaders.Middleware(res.LoaderBundle(), graphqlHandlerFor(res)))
 
 	srv.httpSrv = &http.Server{
 		Addr:              addr,

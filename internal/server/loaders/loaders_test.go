@@ -11,6 +11,7 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
@@ -186,4 +187,152 @@ func (f *fixedLister) List(_ context.Context) ([]configprovider.Project, error) 
 	out := make([]configprovider.Project, len(f.rows))
 	copy(out, f.rows)
 	return out, nil
+}
+
+// --- PullRequestsForRepo loader tests ---
+
+// TestPullRequestsForRepo_BatchesIntraRepo asserts that many concurrent
+// loads for the same repo collapse into a single batch and one provider
+// call.
+func TestPullRequestsForRepo_BatchesIntraRepo(t *testing.T) {
+	stub := &prStub{prs: map[string]int{}}
+	stub.prs["owner/repo"] = 2 // 2 PRs for this repo
+
+	bundle := &loaders.ProvidersBundle{GH: stub}
+	l := loaders.NewLoaders(bundle)
+
+	ctx := context.Background()
+	const N = 8
+	thunks := make([]func() ([]*graphql1.PullRequest, error), 0, N)
+	for i := 0; i < N; i++ {
+		thunks = append(thunks, l.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: "owner", Name: "repo"}))
+	}
+	for i, thunk := range thunks {
+		got, err := thunk()
+		if err != nil {
+			t.Fatalf("thunk %d error: %v", i, err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("thunk %d returned %d PRs, want 2", i, len(got))
+		}
+	}
+
+	if got := l.PullRequestsForRepoBatchCount(); got != 1 {
+		t.Errorf("batch count = %d, want 1 (n+1 detection)", got)
+	}
+	if got := stub.CallCount(); got != 1 {
+		t.Errorf("provider calls = %d, want 1", got)
+	}
+}
+
+// TestPullRequestsForRepo_BatchesAcrossRepos asserts that concurrent
+// loads for 5 distinct repos collapse into 1 batch and 5 provider calls
+// (one per unique repo).
+func TestPullRequestsForRepo_BatchesAcrossRepos(t *testing.T) {
+	repos := []string{
+		"org/alpha",
+		"org/beta",
+		"org/gamma",
+		"org/delta",
+		"org/epsilon",
+	}
+	stub := &prStub{prs: map[string]int{}}
+	for _, r := range repos {
+		stub.prs[r] = 1
+	}
+
+	bundle := &loaders.ProvidersBundle{GH: stub}
+	l := loaders.NewLoaders(bundle)
+
+	ctx := context.Background()
+	const perRepo = 8
+	thunks := make([]func() ([]*graphql1.PullRequest, error), 0, len(repos)*perRepo)
+	for _, slug := range repos {
+		parts := strings.SplitN(slug, "/", 2)
+		owner, name := parts[0], parts[1]
+		for i := 0; i < perRepo; i++ {
+			thunks = append(thunks, l.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: owner, Name: name}))
+		}
+	}
+	for i, thunk := range thunks {
+		if _, err := thunk(); err != nil {
+			t.Fatalf("thunk %d error: %v", i, err)
+		}
+	}
+
+	if got := l.PullRequestsForRepoBatchCount(); got != 1 {
+		t.Errorf("batch count = %d, want 1 (all repos coalesced into one batch)", got)
+	}
+	if got := stub.CallCount(); got != len(repos) {
+		t.Errorf("provider calls = %d, want %d (one per repo)", got, len(repos))
+	}
+}
+
+// TestPullRequestsForRepo_PerRequestScoped asserts that two separate
+// Loaders instances do not share state: each fires its own batch, so
+// the provider receives two calls for the same repo.
+func TestPullRequestsForRepo_PerRequestScoped(t *testing.T) {
+	stub := &prStub{prs: map[string]int{"owner/repo": 1}}
+
+	ctx := context.Background()
+
+	// First "request"
+	bundle1 := &loaders.ProvidersBundle{GH: stub}
+	l1 := loaders.NewLoaders(bundle1)
+	if _, err := l1.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: "owner", Name: "repo"})(); err != nil {
+		t.Fatalf("l1 load error: %v", err)
+	}
+
+	// Second "request" — separate Loaders instance.
+	bundle2 := &loaders.ProvidersBundle{GH: stub}
+	l2 := loaders.NewLoaders(bundle2)
+	if _, err := l2.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: "owner", Name: "repo"})(); err != nil {
+		t.Fatalf("l2 load error: %v", err)
+	}
+
+	// Each loader should have batched exactly once.
+	if got := l1.PullRequestsForRepoBatchCount(); got != 1 {
+		t.Errorf("l1 batch count = %d, want 1", got)
+	}
+	if got := l2.PullRequestsForRepoBatchCount(); got != 1 {
+		t.Errorf("l2 batch count = %d, want 1", got)
+	}
+	// Provider should have been called twice — once per loader.
+	if got := stub.CallCount(); got != 2 {
+		t.Errorf("provider calls = %d, want 2 (per-request scoping)", got)
+	}
+}
+
+// prStub implements loaders.GHPullRequestLister with a call counter.
+// prs maps "owner/name" to the number of dummy PRs to return.
+type prStub struct {
+	mu    sync.Mutex
+	calls int
+	prs   map[string]int // slug → PR count
+}
+
+func (s *prStub) ListPullRequests(_ context.Context, owner, name string, _ ghprovider.PullRequestState) ([]ghprovider.PullRequest, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+
+	slug := owner + "/" + name
+	n := s.prs[slug]
+	out := make([]ghprovider.PullRequest, n)
+	for i := range out {
+		out[i] = ghprovider.PullRequest{
+			RepoOwner: owner,
+			RepoName:  name,
+			Number:    100 + i,
+			HeadRef:   fmt.Sprintf("feature/%s-%d", name, i),
+			State:     ghprovider.PullRequestStateOpen,
+		}
+	}
+	return out, nil
+}
+
+func (s *prStub) CallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }

@@ -1,0 +1,355 @@
+package resolvers
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+
+	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
+	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+)
+
+// writeGitConfig writes a minimal .git/config under dir with the given
+// origin URL. Passing an empty originURL omits the [remote "origin"] block
+// entirely — simulating a repo that has no configured origin.
+func writeGitConfig(t *testing.T, dir string, originURL string) {
+	t.Helper()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	cfg := "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n"
+	if originURL != "" {
+		cfg += "\n[remote \"origin\"]\n\turl = " + originURL + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
+	}
+	cfgPath := filepath.Join(gitDir, "config")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write .git/config: %v", err)
+	}
+}
+
+// newWorktreeResolver returns a worktreeResolver backed by a minimal
+// Resolver with no providers wired — enough for Host and Repo tests.
+func newWorktreeResolver() *worktreeResolver {
+	return &worktreeResolver{&Resolver{}}
+}
+
+// --- Host resolver tests ---
+
+// TestWorktreeHost_ReturnsLocal verifies the v1 sentinel: any worktree
+// resolves to the literal string "local", regardless of path or branch.
+func TestWorktreeHost_ReturnsLocal(t *testing.T) {
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "myproject:main", Path: "/some/path", Branch: "main"}
+
+	got, err := r.Host(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Host() returned error: %v", err)
+	}
+	if got != "local" {
+		t.Errorf("Host() = %q, want %q", got, "local")
+	}
+}
+
+// --- Repo resolver tests ---
+
+// TestWorktreeRepo_GitHubSSHURL verifies that a git@ GitHub SSH remote
+// produces the owner/repo slug.
+func TestWorktreeRepo_GitHubSSHURL(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:main", Path: dir}
+
+	got, err := r.Repo(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Repo() returned unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Repo() returned nil, want non-nil")
+	}
+	want := "drewdrewthis/git-orchard-rs"
+	if *got != want {
+		t.Errorf("Repo() = %q, want %q", *got, want)
+	}
+}
+
+// TestWorktreeRepo_NonGitHubURL verifies that a non-GitHub origin
+// (e.g. GitLab) causes the resolver to return nil.
+func TestWorktreeRepo_NonGitHubURL(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@gitlab.com:other/repo.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir}
+
+	got, err := r.Repo(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Repo() returned unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Repo() = %q, want nil for non-GitHub origin", *got)
+	}
+}
+
+// TestWorktreeRepo_NoOriginRemote verifies that a repo with no origin
+// configured causes the resolver to return nil.
+func TestWorktreeRepo_NoOriginRemote(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "") // no origin
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir}
+
+	got, err := r.Repo(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Repo() returned unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Repo() = %q, want nil when no origin remote", *got)
+	}
+}
+
+// --- Issue resolver tests ---
+
+// TestWorktreeIssue_EmptyBranch verifies that a detached-HEAD worktree
+// (empty branch) causes the resolver to return nil, nil without calling
+// the gh provider.
+func TestWorktreeIssue_EmptyBranch(t *testing.T) {
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:", Path: "/any/path", Branch: ""}
+
+	got, err := r.Issue(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Issue() returned unexpected error for empty branch: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil for empty branch (detached HEAD)", got)
+	}
+}
+
+// TestWorktreeIssue_UnparseableBranch verifies that a branch with no
+// parseable issue number causes the resolver to return nil without error.
+func TestWorktreeIssue_UnparseableBranch(t *testing.T) {
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:main", Path: "/any/path", Branch: "main"}
+
+	got, err := r.Issue(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Issue() returned unexpected error for unparseable branch: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil for branch with no parseable issue number", got)
+	}
+}
+
+// TestWorktreeIssue_BelowFloor verifies that a bare leading-numeric branch
+// whose number is below the 100 floor causes the resolver to return nil.
+func TestWorktreeIssue_BelowFloor(t *testing.T) {
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: "/any/path", Branch: "12-some-thing"}
+
+	got, err := r.Issue(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Issue() returned unexpected error for below-100 branch: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil for branch below 100 floor", got)
+	}
+}
+
+// TestWorktreeIssue_NilObject verifies that a nil worktree object returns
+// nil, nil gracefully.
+func TestWorktreeIssue_NilObject(t *testing.T) {
+	r := newWorktreeResolver()
+
+	got, err := r.Issue(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Issue() returned unexpected error for nil object: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil for nil worktree object", got)
+	}
+}
+
+// TestWorktreeIssue_NoGitDir verifies that a parseable branch but missing
+// .git directory causes the resolver to return nil without error (origin
+// unreadable → graceful nil).
+func TestWorktreeIssue_NoGitDir(t *testing.T) {
+	dir := t.TempDir() // no .git config written
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:issue441", Path: dir, Branch: "issue441/something"}
+
+	got, err := r.Issue(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Issue() returned unexpected error when .git is absent: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil when .git directory is absent", got)
+	}
+}
+
+// TestWorktreeIssue_NonGitHubOrigin verifies that a parseable branch but
+// a non-GitHub origin causes the resolver to return nil without error.
+func TestWorktreeIssue_NonGitHubOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@gitlab.com:other/repo.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:issue441", Path: dir, Branch: "issue441/something"}
+
+	got, err := r.Issue(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Issue() returned unexpected error for non-GitHub origin: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil for non-GitHub origin", got)
+	}
+}
+
+// TestWorktreeIssue_GHNotConfigured verifies that when the gh provider is
+// nil and a valid issue branch + GitHub origin exist, the resolver returns
+// errGHNotConfigured.
+func TestWorktreeIssue_GHNotConfigured(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+
+	r := newWorktreeResolver() // GH is nil by default
+
+	obj := &graphql1.Worktree{ID: "proj:issue441", Path: dir, Branch: "issue441/something"}
+
+	got, err := r.Issue(context.Background(), obj)
+	if err == nil {
+		t.Fatal("Issue() expected errGHNotConfigured but got nil error")
+	}
+	if err != errGHNotConfigured {
+		t.Errorf("Issue() error = %v, want errGHNotConfigured", err)
+	}
+	if got != nil {
+		t.Errorf("Issue() = %v, want nil when gh provider is not configured", got)
+	}
+}
+
+// --- Pr resolver tests ---
+
+// TestWorktreePr_NilObj verifies that a nil worktree object returns nil, nil.
+func TestWorktreePr_NilObj(t *testing.T) {
+	r := newWorktreeResolver()
+
+	got, err := r.Pr(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error for nil obj: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for nil worktree object", got)
+	}
+}
+
+// TestWorktreePr_DetachedHead verifies that an empty branch (detached HEAD)
+// causes the resolver to return nil without touching the DataLoader.
+func TestWorktreePr_DetachedHead(t *testing.T) {
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:", Path: "/any/path", Branch: ""}
+
+	got, err := r.Pr(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error for empty branch: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for detached HEAD (empty branch)", got)
+	}
+}
+
+// TestWorktreePr_NonGitHubOrigin verifies that a non-GitHub origin (e.g.
+// GitLab) causes the resolver to return nil without error.
+func TestWorktreePr_NonGitHubOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@gitlab.com:other/repo.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir, Branch: "feature/something"}
+
+	got, err := r.Pr(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error for non-GitHub origin: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for non-GitHub origin", got)
+	}
+}
+
+// TestWorktreePr_NoLoadersInContext verifies that when no DataLoader is
+// attached to the context and the origin is a valid GitHub URL, the
+// resolver returns a non-nil error (not nil, nil — that would silently
+// swallow the misconfiguration).
+func TestWorktreePr_NoLoadersInContext(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir, Branch: "feature/something"}
+
+	// context.Background() has no loaders attached.
+	got, err := r.Pr(context.Background(), obj)
+	if err == nil {
+		t.Fatal("Pr() expected an error when loaders not in context, but got nil")
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil on error path", got)
+	}
+}
+
+// neverCallStub satisfies loaders.GHPullRequestLister but fails the
+// surrounding test if its ListPullRequests is invoked. Used to prove
+// that a code path short-circuits before the DataLoader fires.
+type neverCallStub struct {
+	t      *testing.T
+	called atomic.Int32
+}
+
+func (s *neverCallStub) ListPullRequests(_ context.Context, _, _ string, _ ghprovider.PullRequestState) ([]ghprovider.PullRequest, error) {
+	s.called.Add(1)
+	s.t.Errorf("gh.ListPullRequests was called but the resolver should have skipped the loader")
+	return nil, nil
+}
+
+// TestWorktreePr_DefaultBranchSkipsLoader verifies that a worktree on the
+// project's default branch returns nil AND does not invoke the
+// PullRequestsForRepo DataLoader. This is the second half of the AC 3
+// scenario "pr resolver returns null when worktree branch is the project's
+// default branch ... And no PR list is fetched for this worktree".
+func TestWorktreePr_DefaultBranchSkipsLoader(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+
+	// Write .git/HEAD pointing at refs/heads/main so readDefaultBranch
+	// returns ("main", true).
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write .git/HEAD: %v", err)
+	}
+
+	stub := &neverCallStub{t: t}
+	bundle := &loaders.ProvidersBundle{GH: stub}
+	ldrs := loaders.NewLoaders(bundle)
+	ctx := loaders.WithLoaders(context.Background(), ldrs)
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:main", Path: dir, Branch: "main"}
+
+	got, err := r.Pr(ctx, obj)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for default-branch worktree", got)
+	}
+	if n := stub.called.Load(); n != 0 {
+		t.Errorf("gh.ListPullRequests was called %d times, want 0 (loader must be skipped)", n)
+	}
+}

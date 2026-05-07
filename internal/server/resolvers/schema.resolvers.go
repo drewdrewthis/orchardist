@@ -14,8 +14,10 @@ import (
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
@@ -954,6 +956,130 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 		return nil, nil
 	}
 	return projectPane(p), nil
+}
+
+// Host is the resolver for the host field.
+// v1 sentinel: all locally-discovered worktrees report "local".
+// Workstream F populates per-peer hostnames in a later iteration.
+func (r *worktreeResolver) Host(ctx context.Context, obj *graphql1.Worktree) (string, error) {
+	return "local", nil
+}
+
+// Repo is the resolver for the repo field.
+// Derives owner/repo from the worktree's origin remote URL.
+// Returns nil (null in GraphQL) when origin is absent, or not a GitHub URL.
+func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*string, error) {
+	if obj == nil || obj.Path == "" {
+		return nil, nil
+	}
+	url, err := gh.ReadOriginURL(obj.Path)
+	if err != nil {
+		return nil, nil
+	}
+	owner, name, ok := gh.ParseGitHubURL(url)
+	if !ok {
+		return nil, nil
+	}
+	slug := owner + "/" + name
+	return &slug, nil
+}
+
+// Pr is the resolver for the pr field.
+//
+// Looks up the open PR whose headRef matches the worktree's branch.
+// Uses the PullRequestsForRepo DataLoader so concurrent resolver calls
+// for multiple worktrees in the same repo collapse into one underlying
+// gh.Provider.ListPullRequests call.
+//
+// Returns nil (null in GraphQL) when:
+//   - obj is nil.
+//   - Branch is empty (detached HEAD).
+//   - Branch is the project's default branch (skip the lookup — the
+//     default branch never has an open PR targeting itself).
+//   - Origin is absent or not a GitHub URL.
+//   - No open PR has a headRef matching the branch.
+//
+// Returns an error only when the DataLoader is missing from context
+// (daemon misconfiguration) or when the gh provider returns a hard
+// error.
+func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*graphql1.PullRequest, error) {
+	if obj == nil || obj.Branch == "" {
+		return nil, nil
+	}
+	// Default-branch exclusion: the default branch never has an open PR
+	// targeting itself, so skip the DataLoader call entirely.
+	if defaultBranch, ok := readDefaultBranch(obj.Path); ok && defaultBranch == obj.Branch {
+		return nil, nil
+	}
+	// Derive the repo slug from the worktree's origin remote.
+	url, err := gh.ReadOriginURL(obj.Path)
+	if err != nil {
+		return nil, nil // missing origin → null (graceful)
+	}
+	owner, name, ok := gh.ParseGitHubURL(url)
+	if !ok {
+		return nil, nil // non-GitHub origin → null
+	}
+	// Load all open PRs for the repo via the DataLoader.
+	ldrs := loaders.FromContext(ctx)
+	if ldrs == nil {
+		return nil, fmt.Errorf("loaders not in context")
+	}
+	prs, err := ldrs.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: owner, Name: name})()
+	if err != nil {
+		return nil, err
+	}
+	for _, pr := range prs {
+		if pr != nil && pr.HeadRef == obj.Branch {
+			return pr, nil
+		}
+	}
+	return nil, nil
+}
+
+// Issue is the resolver for the issue field.
+//
+// Derives the GitHub issue number from the worktree's branch name using the
+// branch-parse rules ported from crates/orchard/src/github.rs, then fetches
+// the issue via the gh provider.
+//
+// Returns nil (null in GraphQL) when:
+//   - The branch is empty (detached HEAD).
+//   - No issue number can be parsed from the branch.
+//   - The origin remote is absent or not a GitHub URL.
+//   - The gh provider is not wired (returns errGHNotConfigured).
+//   - The issue is not found on GitHub (404).
+func (r *worktreeResolver) Issue(ctx context.Context, obj *graphql1.Worktree) (*graphql1.Issue, error) {
+	if obj == nil || obj.Branch == "" {
+		return nil, nil
+	}
+
+	n, ok := gh.ExtractIssueNumber(obj.Branch)
+	if !ok {
+		return nil, nil
+	}
+
+	url, err := gh.ReadOriginURL(obj.Path)
+	if err != nil {
+		return nil, nil
+	}
+	owner, name, ok := gh.ParseGitHubURL(url)
+	if !ok {
+		return nil, nil
+	}
+
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+
+	issue, err := r.GH.GetIssue(ctx, gh.IssueKey{Owner: owner, Name: name, Number: n})
+	if err != nil {
+		if gh.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toGraphQLIssue(issue), nil
 }
 
 // Processes is the resolver for the worktree.processes field.

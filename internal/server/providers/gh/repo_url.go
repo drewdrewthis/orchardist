@@ -17,7 +17,7 @@ import (
 // "origin"]` block has a `url =` entry; errNoGitDir when there is no
 // `.git` at the path; other I/O errors propagate.
 func ReadOriginURL(workdir string) (string, error) {
-	gitDir, err := resolveGitDirForWorktree(workdir)
+	gitDir, err := ResolveGitDirForWorktree(workdir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", errNoGitDir
@@ -117,11 +117,19 @@ func splitOwnerName(s string) (string, string, bool) {
 	return parts[0], parts[1], true
 }
 
-// resolveGitDirForWorktree mirrors the git provider's logic so this
+// ResolveGitDirForWorktree mirrors the git provider's logic so this
 // package doesn't need to depend on it. Handles both `.git` as a
 // directory and as a file pointing at the actual git directory
 // (linked-worktree case).
-func resolveGitDirForWorktree(workdir string) (string, error) {
+//
+// For linked worktrees, git writes a `gitdir` file in the checkout
+// pointing at `<project>/.git/worktrees/<name>/`. That directory in
+// turn contains a `commondir` file whose content is a relative or
+// absolute path back to the project's bare `.git` directory where
+// `config` lives. This function follows `commondir` so that callers
+// (notably ReadOriginURL) always read `config` from the project root
+// rather than from the per-worktree directory.
+func ResolveGitDirForWorktree(workdir string) (string, error) {
 	candidate := filepath.Join(workdir, ".git")
 	info, err := os.Stat(candidate)
 	if err != nil {
@@ -141,5 +149,22 @@ func resolveGitDirForWorktree(workdir string) (string, error) {
 	if !filepath.IsAbs(gd) {
 		gd = filepath.Join(workdir, gd)
 	}
-	return filepath.Clean(gd), nil
+	gd = filepath.Clean(gd)
+
+	// Linked-worktree case: `gd` points at `<project>/.git/worktrees/<name>/`.
+	// Follow `commondir` (if present) to reach the project's bare git dir,
+	// where `config` is stored. The commondir file contains a relative or
+	// absolute path from `gd` to the project root git dir.
+	commondirPath := filepath.Join(gd, "commondir")
+	if raw, cdErr := os.ReadFile(commondirPath); cdErr == nil { //nolint:gosec
+		cd := strings.TrimSpace(string(raw))
+		if cd != "" {
+			if !filepath.IsAbs(cd) {
+				cd = filepath.Join(gd, cd)
+			}
+			gd = filepath.Clean(cd)
+		}
+	}
+
+	return gd, nil
 }

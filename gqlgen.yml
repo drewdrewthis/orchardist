@@ -39,6 +39,14 @@ models:
         resolver: true
   Worktree:
     fields:
+      host:
+        resolver: true
+      repo:
+        resolver: true
+      pr:
+        resolver: true
+      issue:
+        resolver: true
       processes:
         resolver: true
 

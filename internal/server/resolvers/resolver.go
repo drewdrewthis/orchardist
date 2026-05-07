@@ -140,5 +140,6 @@ func (r *Resolver) LoaderBundle() *loaders.ProvidersBundle {
 		Git:      r.Git,
 		Ps:       r.PS,
 		Projects: r.ProjectsProvider,
+		GH:       r.GH,
 	}
 }
