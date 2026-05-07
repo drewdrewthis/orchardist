@@ -900,6 +900,30 @@ input ContractFilter {
   parentContractId: ID
 }
 
+"Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
+enum MergeableState {
+  MERGEABLE
+  CONFLICTING
+  UNKNOWN
+}
+
+"Reviewer decision on a PR. Null when no review activity yet."
+enum ReviewDecisionEnum {
+  APPROVED
+  CHANGES_REQUESTED
+  REVIEW_REQUIRED
+  COMMENTED
+  DISMISSED
+}
+
+"Aggregated CI status across all check runs and statuses on the PR head sha."
+enum CiStatus {
+  SUCCESS
+  FAILURE
+  PENDING
+  UNKNOWN
+}
+
 "State filter for the pullRequests query."
 enum PullRequestState {
   OPEN
@@ -935,6 +959,11 @@ type PullRequest implements Node {
   updatedAt: String!
   reviews: [PullRequestReview!]
   comments: [IssueComment!]
+  mergeable: MergeableState!
+  mergeStateStatus: String!
+  reviewDecision: ReviewDecisionEnum
+  statusCheckRollup: CiStatus!
+  labels: [String!]!
 }
 
 "A review submitted on a pull request."

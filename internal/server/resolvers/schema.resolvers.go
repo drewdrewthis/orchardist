@@ -1087,11 +1087,98 @@ func (r *worktreeResolver) Processes(ctx context.Context, obj *graphql1.Worktree
 	return []*graphql1.Process{}, nil
 }
 
+// prKeyFromGraphQL extracts the gh.PullRequestKey from a graphql1.PullRequest
+// by parsing the stable node ID ("PullRequest:owner/repo#number"). Returns ok=false
+// when the ID is malformed or the gh provider is not wired.
+func prKeyFromGraphQL(r *Resolver, obj *graphql1.PullRequest) (gh.PullRequestKey, bool) {
+	if r.GH == nil || obj == nil {
+		return gh.PullRequestKey{}, false
+	}
+	owner, name, number, ok := splitGHNodeID(obj.ID, "PullRequest:")
+	if !ok {
+		return gh.PullRequestKey{}, false
+	}
+	return gh.PullRequestKey{Owner: owner, Name: name, Number: number}, true
+}
+
+// Mergeable is the resolver for the pullRequest.mergeable field.
+// Calls EnrichPullRequest which fetches (or returns cached) GraphQL enrichment.
+func (r *pullRequestResolver) Mergeable(ctx context.Context, obj *graphql1.PullRequest) (graphql1.MergeableState, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return graphql1.MergeableStateUnknown, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return graphql1.MergeableStateUnknown, err
+	}
+	return mapMergeableState(pr.Mergeable), nil
+}
+
+// MergeStateStatus is the resolver for the pullRequest.mergeStateStatus field.
+func (r *pullRequestResolver) MergeStateStatus(ctx context.Context, obj *graphql1.PullRequest) (string, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return "", nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return pr.MergeStateStatus, nil
+}
+
+// ReviewDecision is the resolver for the pullRequest.reviewDecision field.
+func (r *pullRequestResolver) ReviewDecision(ctx context.Context, obj *graphql1.PullRequest) (*graphql1.ReviewDecisionEnum, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return nil, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return mapReviewDecision(pr.ReviewDecision), nil
+}
+
+// StatusCheckRollup is the resolver for the pullRequest.statusCheckRollup field.
+func (r *pullRequestResolver) StatusCheckRollup(ctx context.Context, obj *graphql1.PullRequest) (graphql1.CiStatus, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return graphql1.CiStatusUnknown, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return graphql1.CiStatusUnknown, err
+	}
+	return mapCiStatus(pr.StatusCheckRollup), nil
+}
+
+// Labels is the resolver for the pullRequest.labels field.
+// Returns user-assigned labels with orchard phase labels excluded.
+func (r *pullRequestResolver) Labels(ctx context.Context, obj *graphql1.PullRequest) ([]string, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return []string{}, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if pr.Labels == nil {
+		return []string{}, nil
+	}
+	return append([]string(nil), pr.Labels...), nil
+}
+
 // Host returns graphql1.HostResolver implementation.
 func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
 
 // Process returns graphql1.ProcessResolver implementation.
 func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
+
+// PullRequest returns graphql1.PullRequestResolver implementation.
+func (r *Resolver) PullRequest() graphql1.PullRequestResolver { return &pullRequestResolver{r} }
 
 // Project returns graphql1.ProjectResolver implementation.
 func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
@@ -1123,6 +1210,7 @@ func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolv
 type hostResolver struct{ *Resolver }
 type processResolver struct{ *Resolver }
 type projectResolver struct{ *Resolver }
+type pullRequestResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 type tmuxClientResolver struct{ *Resolver }

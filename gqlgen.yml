@@ -179,6 +179,23 @@ models:
     model:
       - github.com/99designs/gqlgen/graphql.Time
 
+  # PullRequest enrichment fields are populated lazily by EnrichPullRequest
+  # (a GraphQL round-trip). Marking them resolver: true lets the five
+  # field resolvers share one EnrichPullRequest call per request via the
+  # provider's 60s cache.
+  PullRequest:
+    fields:
+      mergeable:
+        resolver: true
+      mergeStateStatus:
+        resolver: true
+      reviewDecision:
+        resolver: true
+      statusCheckRollup:
+        resolver: true
+      labels:
+        resolver: true
+
   # JSON scalar binds to gqlgen's Any marshaller, which round-trips any
   # JSON-shaped value (`map[string]any`, `[]any`, primitives) verbatim.
   # Used by Query.gh to forward GitHub GraphQL responses without imposing

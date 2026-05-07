@@ -221,6 +221,7 @@ func clockOrNow(c func() time.Time) time.Time {
 func (p *Provider) dropPRCache(k PullRequestKey) {
 	p.prMu.Lock()
 	delete(p.prs, k)
+	delete(p.enrichAt, k)
 	p.prMu.Unlock()
 	p.listMu.Lock()
 	for lk := range p.listPRsCache {

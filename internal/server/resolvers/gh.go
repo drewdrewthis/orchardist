@@ -433,3 +433,59 @@ func toGraphQLComment(c gh.IssueComment) *graphql1.IssueComment {
 		UpdatedAt:   c.UpdatedAt,
 	}
 }
+
+// mapMergeableState projects the provider MergeableState onto the GraphQL enum.
+func mapMergeableState(s gh.MergeableState) graphql1.MergeableState {
+	switch s {
+	case gh.MergeableStateMergeable:
+		return graphql1.MergeableStateMergeable
+	case gh.MergeableStateConflicting:
+		return graphql1.MergeableStateConflicting
+	default:
+		return graphql1.MergeableStateUnknown
+	}
+}
+
+// mapReviewDecision projects a nullable provider ReviewDecision onto the
+// nullable GraphQL ReviewDecisionEnum. Returns nil when the provider value is nil.
+func mapReviewDecision(rd *gh.ReviewDecision) *graphql1.ReviewDecisionEnum {
+	if rd == nil {
+		return nil
+	}
+	switch *rd {
+	case gh.ReviewDecisionApproved:
+		v := graphql1.ReviewDecisionEnumApproved
+		return &v
+	case gh.ReviewDecisionChangesRequested:
+		v := graphql1.ReviewDecisionEnumChangesRequested
+		return &v
+	case gh.ReviewDecisionReviewRequired:
+		v := graphql1.ReviewDecisionEnumReviewRequired
+		return &v
+	case gh.ReviewDecisionCommented:
+		v := graphql1.ReviewDecisionEnumCommented
+		return &v
+	case gh.ReviewDecisionDismissed:
+		v := graphql1.ReviewDecisionEnumDismissed
+		return &v
+	default:
+		// Unknown wire value (GitHub may add new ReviewDecision values
+		// over time). The schema permits null; surface that rather than
+		// silently misclassifying as REVIEW_REQUIRED.
+		return nil
+	}
+}
+
+// mapCiStatus projects the provider CiStatus onto the GraphQL CiStatus enum.
+func mapCiStatus(s gh.CiStatus) graphql1.CiStatus {
+	switch s {
+	case gh.CiStatusSuccess:
+		return graphql1.CiStatusSuccess
+	case gh.CiStatusFailure:
+		return graphql1.CiStatusFailure
+	case gh.CiStatusPending:
+		return graphql1.CiStatusPending
+	default:
+		return graphql1.CiStatusUnknown
+	}
+}
