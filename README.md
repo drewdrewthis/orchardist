@@ -8,20 +8,28 @@ Built with [Rust](https://www.rust-lang.org/) + [Ratatui](https://ratatui.rs/).
 
 This repo is polyglot as of **2026-05-04**:
 
-- **Rust CLI** (`crates/orchard`, `crates/orchard-gui`) — the original
-  TUI / GUI / `--json` worktree manager. Build with `cargo build` or
-  `make rust`. Still the production binary today.
-- **Go daemon** (`cmd/orchard`, `internal/`) — the new GraphQL daemon
-  introduced in [ADR-011](https://github.com/drewdrewthis/orchard-codex/blob/main/adrs/011-orchard-node-model-and-providers.md):
+Per [ADR-013](docs/adr/013-orchard-cli-ecosystem.md), one user-facing
+binary `orchard` dispatches to helper binaries under the hood:
+
+- **`orchard`** (`crates/orchard-dispatcher`) — thin Rust dispatcher.
+  Routes verbs to helpers (`orchard tui` → `orchard-tui`, etc.).
+  This is the only binary users invoke directly.
+- **`orchard-tui`** (`crates/orchard`, `crates/orchard-gui`) — TUI / GUI
+  / `--json` worktree manager. Build with `make rust` →
+  `target/release/orchard-tui`.
+- **`orchard-daemon`** (`cmd/orchard-daemon`, `internal/`) — Go GraphQL
+  daemon introduced in [ADR-011](https://github.com/drewdrewthis/orchard-codex/blob/main/adrs/011-orchard-node-model-and-providers.md):
   a read-only join layer over git, tmux, claude, and processes,
   exposed over `localhost:7777`. Build with `make daemon` →
-  `bin/orchard`. Run `bin/orchard daemon start` to bring it up,
+  `bin/orchard-daemon`. Run `bin/orchard-daemon daemon start` (or
+  `orchard daemon start` after install) to bring it up,
   `curl localhost:7777/health` to probe.
+- **`orchard-worktree`** (`crates/orchard-worktree`) — worktree mutation
+  CLI. Dispatched as `orchard worktree …` and via bare-verb shortcuts
+  (`orchard new <issue>`, `orchard rm <id>`, etc.).
 
 The repo name still ends in `-rs` because URL stability is worth more
-than the suffix. The Rust CLI and the Go daemon coexist; the Go binary
-is the long-term direction and will absorb feature parity workstream by
-workstream. See `scripts/init/` for launchd / systemd units.
+than the suffix. See `scripts/init/` for launchd / systemd units.
 
 The schema lives in `schema.graphql` at the repo root — schema-first.
 Run `make generate` to regenerate Go types from it. The Rust TUI client

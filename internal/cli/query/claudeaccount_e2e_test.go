@@ -1,6 +1,6 @@
 // Package query — CLI E2E for `orchard query claude-account`.
 //
-// Compiles the binary from cmd/orchard, spins the daemon's GraphQL
+// Compiles the binary from cmd/orchard-daemon, spins the daemon's GraphQL
 // handler in an httptest.Server (so the test does not compete for the
 // hard-coded localhost port), points the binary at that URL via the
 // --addr flag, and asserts stdout JSON. No mocks beyond the PATH
