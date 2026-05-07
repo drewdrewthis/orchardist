@@ -71,6 +71,61 @@ func (r *queryResolver) queryIssuesResolver(ctx context.Context, repo string, st
 	return out, nil
 }
 
+// queryIssueByNumberResolver implements `Query.issue(repo, number)`.
+//
+// Resolves null when the issue isn't found (404), the daemon isn't
+// authenticated, or the repo is otherwise inaccessible. The "not found"
+// case must be `(nil, nil)` so GraphQL surfaces it as `null` rather
+// than as a per-field error — this lets callers cross-reference numbers
+// without errors propagating into otherwise-healthy responses.
+//
+// Resolves issue #436.
+func (r *queryResolver) queryIssueByNumberResolver(ctx context.Context, repo string, number int64) (*graphql1.Issue, error) {
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+	owner, name, err := gh.SplitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	issue, err := r.GH.GetIssue(ctx, gh.IssueKey{
+		Owner:  owner,
+		Name:   name,
+		Number: int(number),
+	})
+	if err != nil {
+		if gh.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toGraphQLIssue(issue), nil
+}
+
+// queryPullRequestByNumberResolver implements `Query.pullRequest(repo, number)`.
+// Same shape as `queryIssueByNumberResolver`. Resolves issue #436.
+func (r *queryResolver) queryPullRequestByNumberResolver(ctx context.Context, repo string, number int64) (*graphql1.PullRequest, error) {
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+	owner, name, err := gh.SplitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	pr, err := r.GH.GetPullRequest(ctx, gh.PullRequestKey{
+		Owner:  owner,
+		Name:   name,
+		Number: int(number),
+	})
+	if err != nil {
+		if gh.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toGraphQLPullRequest(pr), nil
+}
+
 // queryWorkflowRunsResolver implements `Query.workflowRuns(repo)`.
 func (r *queryResolver) queryWorkflowRunsResolver(ctx context.Context, repo string) ([]*graphql1.WorkflowRun, error) {
 	if r.GH == nil {

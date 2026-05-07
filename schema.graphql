@@ -207,6 +207,22 @@ type Query {
   "Issues on a GitHub repository. `repo` is `owner/name`."
   issues(repo: String!, state: IssueState = OPEN): [Issue!]
 
+  """
+  Look up a single issue by repo + number. Resolves null when the issue
+  doesn't exist, the daemon isn't authenticated against GitHub, or the
+  repo isn't accessible. Use this for "is this number still open?"
+  cross-references against numbers from external sources (Slack lists,
+  comments, docs) — replaces ad-hoc `gh api repos/.../issues/N`
+  shellouts. Resolves issue #436.
+  """
+  issue(repo: String!, number: Int!): Issue
+
+  """
+  Look up a single pull request by repo + number. Same shape as
+  `issue(...)`. Returns null when not found. Resolves issue #436.
+  """
+  pullRequest(repo: String!, number: Int!): PullRequest
+
   "Workflow runs on a GitHub repository. `repo` is `owner/name`."
   workflowRuns(repo: String!): [WorkflowRun!]
 

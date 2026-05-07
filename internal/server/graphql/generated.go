@@ -230,10 +230,12 @@ type ComplexityRoot struct {
 		Host            func(childComplexity int) int
 		HostServices    func(childComplexity int, filter *HostServiceFilter) int
 		Hosts           func(childComplexity int) int
+		Issue           func(childComplexity int, repo string, number int64) int
 		Issues          func(childComplexity int, repo string, state *IssueState) int
 		Node            func(childComplexity int, id string) int
 		Peers           func(childComplexity int) int
 		Projects        func(childComplexity int) int
+		PullRequest     func(childComplexity int, repo string, number int64) int
 		PullRequests    func(childComplexity int, repo string, state *PullRequestState) int
 		TmuxPanes       func(childComplexity int, filter *TmuxPaneFilter) int
 		TmuxServer      func(childComplexity int) int
@@ -380,6 +382,8 @@ type QueryResolver interface {
 	HostServices(ctx context.Context, filter *HostServiceFilter) ([]*HostService, error)
 	PullRequests(ctx context.Context, repo string, state *PullRequestState) ([]*PullRequest, error)
 	Issues(ctx context.Context, repo string, state *IssueState) ([]*Issue, error)
+	Issue(ctx context.Context, repo string, number int64) (*Issue, error)
+	PullRequest(ctx context.Context, repo string, number int64) (*PullRequest, error)
 	WorkflowRuns(ctx context.Context, repo string) ([]*WorkflowRun, error)
 	Gh(ctx context.Context, query string, variables interface{}) (interface{}, error)
 	Node(ctx context.Context, id string) (Node, error)
@@ -1412,6 +1416,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.Hosts(childComplexity), true
 
+	case "Query.issue":
+		if e.complexity.Query.Issue == nil {
+			break
+		}
+
+		args, err := ec.field_Query_issue_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.Issue(childComplexity, args["repo"].(string), args["number"].(int64)), true
+
 	case "Query.issues":
 		if e.complexity.Query.Issues == nil {
 			break
@@ -1449,6 +1465,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Query.Projects(childComplexity), true
+
+	case "Query.pullRequest":
+		if e.complexity.Query.PullRequest == nil {
+			break
+		}
+
+		args, err := ec.field_Query_pullRequest_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.PullRequest(childComplexity, args["repo"].(string), args["number"].(int64)), true
 
 	case "Query.pullRequests":
 		if e.complexity.Query.PullRequests == nil {
@@ -2390,6 +2418,22 @@ type Query {
   "Issues on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   issues(repo: String!, state: IssueState = OPEN): [Issue!]
 
+  """
+  Look up a single issue by repo + number. Resolves null when the issue
+  doesn't exist, the daemon isn't authenticated against GitHub, or the
+  repo isn't accessible. Use this for "is this number still open?"
+  cross-references against numbers from external sources (Slack lists,
+  comments, docs) — replaces ad-hoc ` + "`" + `gh api repos/.../issues/N` + "`" + `
+  shellouts. Resolves issue #436.
+  """
+  issue(repo: String!, number: Int!): Issue
+
+  """
+  Look up a single pull request by repo + number. Same shape as
+  ` + "`" + `issue(...)` + "`" + `. Returns null when not found. Resolves issue #436.
+  """
+  pullRequest(repo: String!, number: Int!): PullRequest
+
   "Workflow runs on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   workflowRuns(repo: String!): [WorkflowRun!]
 
@@ -3233,6 +3277,30 @@ func (ec *executionContext) field_Query_hostServices_args(ctx context.Context, r
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_issue_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["repo"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repo"))
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["repo"] = arg0
+	var arg1 int64
+	if tmp, ok := rawArgs["number"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("number"))
+		arg1, err = ec.unmarshalNInt2int64(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["number"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_issues_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
 	var err error
 	args := map[string]interface{}{}
@@ -3269,6 +3337,30 @@ func (ec *executionContext) field_Query_node_args(ctx context.Context, rawArgs m
 		}
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_pullRequest_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["repo"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repo"))
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["repo"] = arg0
+	var arg1 int64
+	if tmp, ok := rawArgs["number"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("number"))
+		arg1, err = ec.unmarshalNInt2int64(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["number"] = arg1
 	return args, nil
 }
 
@@ -10223,6 +10315,170 @@ func (ec *executionContext) fieldContext_Query_issues(ctx context.Context, field
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_issues_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_issue(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_issue(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Issue(rctx, fc.Args["repo"].(string), fc.Args["number"].(int64))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*Issue)
+	fc.Result = res
+	return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_issue(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Issue_id(ctx, field)
+			case "repoOwner":
+				return ec.fieldContext_Issue_repoOwner(ctx, field)
+			case "repoName":
+				return ec.fieldContext_Issue_repoName(ctx, field)
+			case "number":
+				return ec.fieldContext_Issue_number(ctx, field)
+			case "title":
+				return ec.fieldContext_Issue_title(ctx, field)
+			case "body":
+				return ec.fieldContext_Issue_body(ctx, field)
+			case "state":
+				return ec.fieldContext_Issue_state(ctx, field)
+			case "authorLogin":
+				return ec.fieldContext_Issue_authorLogin(ctx, field)
+			case "url":
+				return ec.fieldContext_Issue_url(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Issue_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Issue_updatedAt(ctx, field)
+			case "comments":
+				return ec.fieldContext_Issue_comments(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Issue", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_issue_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_pullRequest(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_pullRequest(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().PullRequest(rctx, fc.Args["repo"].(string), fc.Args["number"].(int64))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*PullRequest)
+	fc.Result = res
+	return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_pullRequest(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_PullRequest_id(ctx, field)
+			case "repoOwner":
+				return ec.fieldContext_PullRequest_repoOwner(ctx, field)
+			case "repoName":
+				return ec.fieldContext_PullRequest_repoName(ctx, field)
+			case "number":
+				return ec.fieldContext_PullRequest_number(ctx, field)
+			case "title":
+				return ec.fieldContext_PullRequest_title(ctx, field)
+			case "body":
+				return ec.fieldContext_PullRequest_body(ctx, field)
+			case "state":
+				return ec.fieldContext_PullRequest_state(ctx, field)
+			case "draft":
+				return ec.fieldContext_PullRequest_draft(ctx, field)
+			case "authorLogin":
+				return ec.fieldContext_PullRequest_authorLogin(ctx, field)
+			case "baseRef":
+				return ec.fieldContext_PullRequest_baseRef(ctx, field)
+			case "headRef":
+				return ec.fieldContext_PullRequest_headRef(ctx, field)
+			case "url":
+				return ec.fieldContext_PullRequest_url(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_PullRequest_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_PullRequest_updatedAt(ctx, field)
+			case "reviews":
+				return ec.fieldContext_PullRequest_reviews(ctx, field)
+			case "comments":
+				return ec.fieldContext_PullRequest_comments(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_pullRequest_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -18177,6 +18433,44 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "issue":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_issue(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "pullRequest":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_pullRequest(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "workflowRuns":
 			field := field
 
@@ -22050,6 +22344,13 @@ func (ec *executionContext) marshalOIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ret
 }
 
+func (ec *executionContext) marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx context.Context, sel ast.SelectionSet, v *Issue) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Issue(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx context.Context, sel ast.SelectionSet, v []*IssueComment) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -22196,6 +22497,13 @@ func (ec *executionContext) marshalOPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthi
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v *PullRequest) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._PullRequest(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOPullRequestReview2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestReviewᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequestReview) graphql.Marshaler {
