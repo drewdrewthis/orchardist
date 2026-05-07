@@ -14,6 +14,7 @@ import (
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
@@ -984,8 +985,56 @@ func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*s
 }
 
 // Pr is the resolver for the pr field.
+//
+// Looks up the open PR whose headRef matches the worktree's branch.
+// Uses the PullRequestsForRepo DataLoader so concurrent resolver calls
+// for multiple worktrees in the same repo collapse into one underlying
+// gh.Provider.ListPullRequests call.
+//
+// Returns nil (null in GraphQL) when:
+//   - obj is nil.
+//   - Branch is empty (detached HEAD).
+//   - Branch is the project's default branch (skip the lookup — the
+//     default branch never has an open PR targeting itself).
+//   - Origin is absent or not a GitHub URL.
+//   - No open PR has a headRef matching the branch.
+//
+// Returns an error only when the DataLoader is missing from context
+// (daemon misconfiguration) or when the gh provider returns a hard
+// error.
 func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*graphql1.PullRequest, error) {
-	panic(fmt.Errorf("not implemented: Pr - pr"))
+	if obj == nil || obj.Branch == "" {
+		return nil, nil
+	}
+	// Default-branch exclusion: the default branch never has an open PR
+	// targeting itself, so skip the DataLoader call entirely.
+	if defaultBranch, ok := readDefaultBranch(obj.Path); ok && defaultBranch == obj.Branch {
+		return nil, nil
+	}
+	// Derive the repo slug from the worktree's origin remote.
+	url, err := gh.ReadOriginURL(obj.Path)
+	if err != nil {
+		return nil, nil // missing origin → null (graceful)
+	}
+	owner, name, ok := gh.ParseGitHubURL(url)
+	if !ok {
+		return nil, nil // non-GitHub origin → null
+	}
+	// Load all open PRs for the repo via the DataLoader.
+	ldrs := loaders.FromContext(ctx)
+	if ldrs == nil {
+		return nil, fmt.Errorf("loaders not in context")
+	}
+	prs, err := ldrs.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: owner, Name: name})()
+	if err != nil {
+		return nil, err
+	}
+	for _, pr := range prs {
+		if pr != nil && pr.HeadRef == obj.Branch {
+			return pr, nil
+		}
+	}
+	return nil, nil
 }
 
 // Issue is the resolver for the issue field.

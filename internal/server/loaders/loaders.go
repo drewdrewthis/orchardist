@@ -16,6 +16,7 @@ package loaders
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -24,10 +25,18 @@ import (
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 )
+
+// GHPullRequestLister is the narrow gh surface the PullRequestsForRepo
+// loader needs. *gh.Provider satisfies this automatically. Defined as
+// an interface so tests can inject a stub without standing up HTTP.
+type GHPullRequestLister interface {
+	ListPullRequests(ctx context.Context, owner, name string, state ghprovider.PullRequestState) ([]ghprovider.PullRequest, error)
+}
 
 // ProvidersBundle is the read-side surface the loaders need from the
 // resolver root. A struct (not an interface) because the loaders only
@@ -38,6 +47,10 @@ type ProvidersBundle struct {
 	Git      *gitprovider.Provider
 	Ps       *psprovider.Provider
 	Projects configprovider.Lister
+	// GH is the narrow gh surface the PullRequestsForRepo loader needs.
+	// *gh.Provider satisfies GHPullRequestLister automatically; tests
+	// can inject a stub without standing up HTTP.
+	GH GHPullRequestLister
 }
 
 // loaderKey is the private context key for the per-request loaders.
@@ -48,14 +61,29 @@ type loaderKey struct{}
 // emission). Every dataloader instance holds its own batched promise
 // state.
 type Loaders struct {
-	Host           *dataloader.Loader[string, *graphql1.Host]
-	WorktreeForCwd *dataloader.Loader[string, *graphql1.Worktree]
-	Process        *dataloader.Loader[ProcessKey, *graphql1.Process]
+	Host               *dataloader.Loader[string, *graphql1.Host]
+	WorktreeForCwd     *dataloader.Loader[string, *graphql1.Worktree]
+	Process            *dataloader.Loader[ProcessKey, *graphql1.Process]
+	PullRequestsForRepo *dataloader.Loader[RepoKey, []*graphql1.PullRequest]
 
 	// metrics — provider call counts, used by the n+1 detector test.
 	hostBatches     *batchCounter
 	worktreeBatches *batchCounter
 	processBatches  *batchCounter
+	prBatches       *batchCounter
+}
+
+// RepoKey is the composite key for the PullRequestsForRepo loader.
+// It identifies a GitHub repository by owner and name.
+type RepoKey struct {
+	Owner string
+	Name  string
+}
+
+// String renders a RepoKey as "owner/name" — the canonical repo slug
+// used in GraphQL IDs and human-readable log output.
+func (k RepoKey) String() string {
+	return fmt.Sprintf("%s/%s", k.Owner, k.Name)
 }
 
 // ProcessKey is the composite key for the [TmuxPane].process edge.
@@ -80,6 +108,7 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	hostBatches := &batchCounter{}
 	worktreeBatches := &batchCounter{}
 	processBatches := &batchCounter{}
+	prBatches := &batchCounter{}
 
 	hostBatch := func(_ context.Context, ids []string) []*dataloader.Result[*graphql1.Host] {
 		hostBatches.inc()
@@ -92,6 +121,10 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	processBatch := func(_ context.Context, keys []ProcessKey) []*dataloader.Result[*graphql1.Process] {
 		processBatches.inc()
 		return loadProcesses(providers, keys)
+	}
+	prBatch := func(ctx context.Context, keys []RepoKey) []*dataloader.Result[[]*graphql1.PullRequest] {
+		prBatches.inc()
+		return loadPullRequestsForRepo(ctx, providers, keys)
 	}
 
 	hostOpts := []dataloader.Option[string, *graphql1.Host]{
@@ -106,14 +139,20 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 		dataloader.WithWait[ProcessKey, *graphql1.Process](1 * time.Millisecond),
 		dataloader.WithCache[ProcessKey, *graphql1.Process](&dataloader.NoCache[ProcessKey, *graphql1.Process]{}),
 	}
+	prOpts := []dataloader.Option[RepoKey, []*graphql1.PullRequest]{
+		dataloader.WithWait[RepoKey, []*graphql1.PullRequest](1 * time.Millisecond),
+		dataloader.WithCache[RepoKey, []*graphql1.PullRequest](&dataloader.NoCache[RepoKey, []*graphql1.PullRequest]{}),
+	}
 
 	return &Loaders{
-		Host:            dataloader.NewBatchedLoader(hostBatch, hostOpts...),
-		WorktreeForCwd:  dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
-		Process:         dataloader.NewBatchedLoader(processBatch, processOpts...),
-		hostBatches:     hostBatches,
-		worktreeBatches: worktreeBatches,
-		processBatches:  processBatches,
+		Host:                dataloader.NewBatchedLoader(hostBatch, hostOpts...),
+		WorktreeForCwd:      dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
+		Process:             dataloader.NewBatchedLoader(processBatch, processOpts...),
+		PullRequestsForRepo: dataloader.NewBatchedLoader(prBatch, prOpts...),
+		hostBatches:         hostBatches,
+		worktreeBatches:     worktreeBatches,
+		processBatches:      processBatches,
+		prBatches:           prBatches,
 	}
 }
 
@@ -128,6 +167,10 @@ func (l *Loaders) WorktreeBatchCount() int { return l.worktreeBatches.value() }
 // ProcessBatchCount returns the number of process-loader batch
 // invocations.
 func (l *Loaders) ProcessBatchCount() int { return l.processBatches.value() }
+
+// PullRequestsForRepoBatchCount returns the number of PR-loader batch
+// invocations since this Loaders was constructed. Used by n+1 tests.
+func (l *Loaders) PullRequestsForRepoBatchCount() int { return l.prBatches.value() }
 
 // Middleware wraps an http.Handler to attach a fresh *Loaders to the
 // request context. Mount it once around the GraphQL handler.
@@ -299,6 +342,105 @@ func loadProcesses(providers *ProvidersBundle, keys []ProcessKey) []*dataloader.
 		out[i] = &dataloader.Result[*graphql1.Process]{Data: projectProcess(&v, k.HostID)}
 	}
 	return out
+}
+
+// loadPullRequestsForRepo is the DataLoader batch function for the
+// PullRequestsForRepo loader. Each key is a RepoKey (owner/name pair);
+// the batch collapses all concurrent resolver calls for the same repo
+// into one underlying gh.Provider.ListPullRequests call.
+//
+// When NoCache is configured (as in production), the DataLoader may
+// present duplicate keys in the same batch. This function deduplicates
+// internally so the gh provider is called at most once per unique repo,
+// regardless of how many Load calls arrived with the same key.
+//
+// Returns the full open-PR slice for each position in keys (including
+// duplicate positions). The resolver layer does the headRef→branch match
+// locally against this slice.
+func loadPullRequestsForRepo(ctx context.Context, providers *ProvidersBundle, keys []RepoKey) []*dataloader.Result[[]*graphql1.PullRequest] {
+	out := make([]*dataloader.Result[[]*graphql1.PullRequest], len(keys))
+	ghp := providers.GH
+	if ghp == nil {
+		for i := range out {
+			out[i] = &dataloader.Result[[]*graphql1.PullRequest]{Data: nil}
+		}
+		return out
+	}
+
+	// Deduplicate: fetch each unique repo exactly once, even when the
+	// NoCache loader sends the same key multiple times in one batch.
+	type repoResult struct {
+		prs []*graphql1.PullRequest
+		err error
+	}
+	cache := make(map[RepoKey]*repoResult, len(keys))
+	for _, key := range keys {
+		if _, seen := cache[key]; seen {
+			continue
+		}
+		prs, err := ghp.ListPullRequests(ctx, key.Owner, key.Name, ghprovider.PullRequestStateOpen)
+		if err != nil {
+			cache[key] = &repoResult{err: err}
+			continue
+		}
+		gqlPRs := make([]*graphql1.PullRequest, 0, len(prs))
+		for _, p := range prs {
+			pr := p // avoid loop-var capture
+			gqlPRs = append(gqlPRs, projectPullRequest(pr))
+		}
+		cache[key] = &repoResult{prs: gqlPRs}
+	}
+
+	for i, key := range keys {
+		r := cache[key]
+		if r.err != nil {
+			out[i] = &dataloader.Result[[]*graphql1.PullRequest]{Error: r.err}
+		} else {
+			out[i] = &dataloader.Result[[]*graphql1.PullRequest]{Data: r.prs}
+		}
+	}
+	return out
+}
+
+// projectPullRequest projects a provider PullRequest into the GraphQL
+// model. Duplicated from resolvers/gh.go (toGraphQLPullRequest) to
+// keep the loaders package free of a circular import — the resolvers
+// package imports loaders, so loaders cannot import resolvers.
+func projectPullRequest(p ghprovider.PullRequest) *graphql1.PullRequest {
+	return &graphql1.PullRequest{
+		ID:          p.ID(),
+		RepoOwner:   p.RepoOwner,
+		RepoName:    p.RepoName,
+		Number:      int64(p.Number),
+		Title:       p.Title,
+		Body:        p.Body,
+		State:       mapPullRequestState(p.State),
+		Draft:       p.Draft,
+		AuthorLogin: p.AuthorLogin,
+		BaseRef:     p.BaseRef,
+		HeadRef:     p.HeadRef,
+		URL:         p.URL,
+		CreatedAt:   p.CreatedAt,
+		UpdatedAt:   p.UpdatedAt,
+	}
+}
+
+// mapPullRequestState maps the provider's PullRequestState enum to the
+// generated GraphQL enum. Mirrors resolvers/gh.go mapPRStateBack without
+// importing that package.
+func mapPullRequestState(s ghprovider.PullRequestState) graphql1.PullRequestState {
+	switch s {
+	case ghprovider.PullRequestStateOpen:
+		return graphql1.PullRequestStateOpen
+	case ghprovider.PullRequestStateClosed:
+		return graphql1.PullRequestStateClosed
+	case ghprovider.PullRequestStateMerged:
+		return graphql1.PullRequestStateMerged
+	case ghprovider.PullRequestStateAll:
+		return graphql1.PullRequestStateAll
+	default:
+		return graphql1.PullRequestStateOpen
+	}
 }
 
 // projectProcess mirrors the resolver-layer projection so the loader

@@ -231,3 +231,72 @@ func TestWorktreeIssue_GHNotConfigured(t *testing.T) {
 		t.Errorf("Issue() = %v, want nil when gh provider is not configured", got)
 	}
 }
+
+// --- Pr resolver tests ---
+
+// TestWorktreePr_NilObj verifies that a nil worktree object returns nil, nil.
+func TestWorktreePr_NilObj(t *testing.T) {
+	r := newWorktreeResolver()
+
+	got, err := r.Pr(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error for nil obj: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for nil worktree object", got)
+	}
+}
+
+// TestWorktreePr_DetachedHead verifies that an empty branch (detached HEAD)
+// causes the resolver to return nil without touching the DataLoader.
+func TestWorktreePr_DetachedHead(t *testing.T) {
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:", Path: "/any/path", Branch: ""}
+
+	got, err := r.Pr(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error for empty branch: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for detached HEAD (empty branch)", got)
+	}
+}
+
+// TestWorktreePr_NonGitHubOrigin verifies that a non-GitHub origin (e.g.
+// GitLab) causes the resolver to return nil without error.
+func TestWorktreePr_NonGitHubOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@gitlab.com:other/repo.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir, Branch: "feature/something"}
+
+	got, err := r.Pr(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error for non-GitHub origin: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for non-GitHub origin", got)
+	}
+}
+
+// TestWorktreePr_NoLoadersInContext verifies that when no DataLoader is
+// attached to the context and the origin is a valid GitHub URL, the
+// resolver returns a non-nil error (not nil, nil — that would silently
+// swallow the misconfiguration).
+func TestWorktreePr_NoLoadersInContext(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir, Branch: "feature/something"}
+
+	// context.Background() has no loaders attached.
+	got, err := r.Pr(context.Background(), obj)
+	if err == nil {
+		t.Fatal("Pr() expected an error when loaders not in context, but got nil")
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil on error path", got)
+	}
+}
