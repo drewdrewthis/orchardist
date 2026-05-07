@@ -2737,7 +2737,24 @@ type TmuxPane implements Node {
   "Pane title (tmux ` + "`" + `pane_title` + "`" + `)."
   title: String!
 
-  "Foreground command basename (tmux ` + "`" + `pane_current_command` + "`" + `, e.g. 'claude', 'zsh')."
+  """
+  Foreground command name as reported by ` + "`" + `tmux #{pane_current_command}` + "`" + `.
+  This is **whatever string tmux's pane_current_command emits**, NOT a
+  guaranteed basename. In practice that means:
+
+  - For most processes: a basename like ` + "`" + `'zsh'` + "`" + ` or ` + "`" + `'vim'` + "`" + `.
+  - For Node-wrapped CLIs (claude, npx tools, etc.): often the wrapper's
+    version string (` + "`" + `'2.1.126'` + "`" + `) instead of the friendly name. tmux reads
+    this from /proc/$pid/comm or the macOS equivalent, which Node sets
+    to its own runtime version when the script doesn't override argv[0].
+
+  Operators filtering by command should not assume a stable name —
+  ` + "`" + `currentCommandIn: ["claude"]` + "`" + ` will silently miss panes running the
+  Claude CLI when its wrapper has set comm to a version string. To
+  identify panes by program intent, walk to the foreground process via
+  ` + "`" + `Pane.process` + "`" + ` (when wired — see #394/#395) and inspect that node's
+  command/args instead.
+  """
   currentCommand: String!
 
   "Pid of the foreground process. Null when tmux reports no current pid."
@@ -2848,7 +2865,16 @@ input TmuxPaneFilter {
   "Pane ids (e.g. ` + "`" + `%26` + "`" + `) to include."
   paneIdIn: [String!]
 
-  "Only include panes whose ` + "`" + `currentCommand` + "`" + ` is in this list."
+  """
+  Only include panes whose ` + "`" + `currentCommand` + "`" + ` is in this list.
+
+  Note: ` + "`" + `currentCommand` + "`" + ` is the raw tmux ` + "`" + `pane_current_command` + "`" + ` value,
+  not a normalised basename. Wrapper processes (notably Node-based CLIs
+  like the Claude CLI) often surface as their version string rather
+  than the program name, so a filter like ` + "`" + `["claude"]` + "`" + ` may match zero
+  panes that are clearly running Claude. See the doc on
+  ` + "`" + `TmuxPane.currentCommand` + "`" + ` for the full caveat.
+  """
   currentCommandIn: [String!]
 
   "Only include panes in these session names."
