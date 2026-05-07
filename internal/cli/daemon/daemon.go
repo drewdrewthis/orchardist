@@ -290,9 +290,17 @@ func runStatus(w io.Writer) error {
 }
 
 // probeHealth fetches /health and returns the reported uptime in seconds.
+//
+// Issue #405: Go's HTTP client resolves `localhost` via the system
+// resolver, which on IPv6-enabled Linux boxes returns `::1` first.
+// The daemon's default listener binds 127.0.0.1 (IPv4 only), so the
+// probe sees `dial tcp [::1]:7777: connection refused` and `daemon
+// status` reports a false negative even when the daemon is healthy.
+// We rewrite a leading `localhost` to `127.0.0.1` so the probe
+// targets the same address space the listener uses.
 func probeHealth() (int64, error) {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + server.DefaultAddr + "/health")
+	resp, err := client.Get("http://" + probeAddr(server.DefaultAddr) + "/health")
 	if err != nil {
 		return 0, err
 	}
@@ -309,6 +317,22 @@ func probeHealth() (int64, error) {
 		return 0, fmt.Errorf("decode: %w", err)
 	}
 	return payload.UptimeS, nil
+}
+
+// probeAddr rewrites a `host:port` so the health probe doesn't go
+// through the system resolver. Specifically: a leading `localhost`
+// becomes `127.0.0.1`. Any other host (explicit `127.0.0.1`, an
+// `--addr 0.0.0.0:8000` override, an FQDN, an IP literal) is returned
+// unchanged. This is the only place we need this rewrite — production
+// HTTP clients can resolve normally.
+func probeAddr(addr string) string {
+	if strings.HasPrefix(addr, "localhost:") {
+		return "127.0.0.1:" + strings.TrimPrefix(addr, "localhost:")
+	}
+	if addr == "localhost" {
+		return "127.0.0.1"
+	}
+	return addr
 }
 
 // claudeprojectsRoot returns the directory the daemon should watch for
