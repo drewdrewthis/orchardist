@@ -455,7 +455,8 @@ pub fn apply_fixes(findings: &[HealFinding]) -> Vec<FixResult> {
                 // The `is_self` guard above makes the cross-cutting
                 // wrapper redundant here, but use it anyway so the code
                 // path matches every other in-process kill site.
-                let result = tmux::kill_tmux_session_safe(name, tmux::current_session_name().as_deref());
+                let result =
+                    tmux::kill_tmux_session_safe(name, tmux::current_session_name().as_deref());
                 results.push(FixResult {
                     message: format!("Killed session \"{}\"", name),
                     success: result.is_ok(),

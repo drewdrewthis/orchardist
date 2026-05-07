@@ -652,8 +652,7 @@ mod tests {
     /// must NOT see is the "refusing to kill" guard message.
     #[test]
     fn kill_tmux_session_safe_passes_through_for_other_targets() {
-        let result =
-            kill_tmux_session_safe("some_other_session", Some("my_current_session"));
+        let result = kill_tmux_session_safe("some_other_session", Some("my_current_session"));
         if let Err(e) = result {
             let msg = format!("{e}");
             assert!(
