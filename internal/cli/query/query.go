@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -181,6 +182,9 @@ func postGraphQLWithVars(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if pretty := prettyGraphQLErrors(data); pretty != "" {
+			return nil, fmt.Errorf("daemon returned %d:\n%s", resp.StatusCode, pretty)
+		}
 		return nil, fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(data))
 	}
 	return data, nil
@@ -211,9 +215,61 @@ func postGraphQL(ctx context.Context, query string) ([]byte, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if pretty := prettyGraphQLErrors(data); pretty != "" {
+			return nil, fmt.Errorf("daemon returned %d:\n%s", resp.StatusCode, pretty)
+		}
 		return nil, fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(data))
 	}
 	return data, nil
+}
+
+// prettyGraphQLErrors decodes a GraphQL error body and returns a
+// human-readable rendering, or "" if the body isn't a recognisable
+// GraphQL error envelope. Each error message is followed by its
+// `locations` (line:col) when present.
+//
+// Resolves issue #398. Today's raw 422 dumps `{"errors":[{...}]}` JSON,
+// which forces operators to eyeball line/column. The new format reads
+//
+//	error: Cannot query field "services" on type "Host". Did you mean "hostServices"?
+//	  at line 1, col 16
+//
+// — readable in a terminal without copy/pasting through `jq`.
+func prettyGraphQLErrors(body []byte) string {
+	var env struct {
+		Errors []struct {
+			Message   string `json:"message"`
+			Locations []struct {
+				Line   int `json:"line"`
+				Column int `json:"column"`
+			} `json:"locations"`
+			Path []any `json:"path"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ""
+	}
+	if len(env.Errors) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, e := range env.Errors {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "error: %s\n", e.Message)
+		for _, loc := range e.Locations {
+			fmt.Fprintf(&b, "  at line %d, col %d\n", loc.Line, loc.Column)
+		}
+		if len(e.Path) > 0 {
+			parts := make([]string, 0, len(e.Path))
+			for _, p := range e.Path {
+				parts = append(parts, fmt.Sprintf("%v", p))
+			}
+			fmt.Fprintf(&b, "  path: %s\n", strings.Join(parts, "."))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // SetDaemonURLForTest overrides the daemon URL. Tests that drive the
