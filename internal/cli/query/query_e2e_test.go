@@ -1,7 +1,7 @@
 package query_test
 
 // CLI E2E for `orchard query projects`. The test compiles the binary
-// from cmd/orchard, spins the daemon's HTTP handler in an
+// from cmd/orchard-daemon, spins the daemon's HTTP handler in an
 // httptest.Server (so we don't compete for the hard-coded localhost
 // port), points the binary at that URL via ORCHARD_DAEMON_URL, and
 // asserts stdout JSON. No mocks — real binary, real GraphQL
@@ -59,11 +59,11 @@ func buildOrchard(t *testing.T) string {
 		// Note: dir is intentionally not removed — the binary stays
 		// for the duration of the test process and is small enough
 		// not to matter.
-		out := filepath.Join(dir, "orchard")
+		out := filepath.Join(dir, "orchard-daemon")
 		root := repoRoot(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "./cmd/orchard")
+		cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "./cmd/orchard-daemon")
 		cmd.Dir = root
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr

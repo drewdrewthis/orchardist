@@ -1,17 +1,34 @@
 # Top-level Makefile for the polyglot git-orchard-rs repo.
 #
-# Two halves coexist:
-#   - Rust workspace at crates/{orchard,orchard-gui} — built via cargo.
-#   - Go module at repo root (cmd/orchard) — built via go.
+# Three binaries coexist (per ADR-013):
+#   - `orchard` (Rust)        — thin dispatcher; routes verbs to helpers.
+#   - `orchard-tui` (Rust)    — TUI dashboard. Dispatched as `orchard tui`.
+#   - `orchard-daemon` (Go)   — GraphQL daemon + read queries + config.
+#                               Dispatched as `orchard daemon ...`.
+#   - `orchard-worktree` (Rust) — worktree mutation CLI. Dispatched as
+#                               `orchard worktree ...` and via bare verbs
+#                               (`orchard new`, `orchard rm`, etc.).
 #
-# Per ADR-011 the Go binary is the new orchard daemon + CLI. The Rust CLI
-# stays for the time being and will sunset organically.
+# Build artifacts:
+#   bin/orchard-daemon                    — Go binary
+#   target/release/orchard                — dispatcher (Rust)
+#   target/release/orchard-tui            — TUI (Rust)
+#   target/release/orchard-worktree       — worktree CLI (Rust)
+#
+# Install layout (after `make install`):
+#   /usr/local/bin/orchard                → dispatcher (the only binary
+#                                            users invoke directly)
+#   /usr/local/bin/orchard-{tui,daemon,worktree}
+#                                         → helper binaries the dispatcher
+#                                            execs by name
 
-.PHONY: daemon generate rust gui all clean install install-daemon install-tui test test-go test-rust
+.PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
+        install install-daemon install-dispatcher install-tui install-worktree-cli \
+        test test-go test-rust
 
-# Go binary — built from cmd/orchard, packages all subcommand groups.
+# Go binary — orchard-daemon. Built from cmd/orchard-daemon.
 daemon:
-	go build -o bin/orchard ./cmd/orchard
+	go build -o bin/orchard-daemon ./cmd/orchard-daemon
 
 # Generate gqlgen types/stubs from schema.graphql + gqlgen.yml.
 # Generated files live under internal/server/graphql/ and are committed
@@ -20,21 +37,35 @@ daemon:
 generate:
 	go generate ./...
 
-rust:
+# Rust release builds — one target per crate.
+rust: dispatcher
 	cargo build --release -p orchard
+	cargo build --release -p orchard-worktree
+
+dispatcher:
+	cargo build --release -p orchard-dispatcher
+
+worktree-cli:
+	cargo build --release -p orchard-worktree
 
 gui:
 	cd crates/orchard-gui/src-tauri && cargo tauri build
 
 all: daemon rust
 
-install: install-daemon install-tui
+install: install-dispatcher install-daemon install-tui install-worktree-cli
+
+install-dispatcher: dispatcher
+	install -m 755 target/release/orchard /usr/local/bin/orchard
 
 install-daemon: daemon
-	install -m 755 bin/orchard /usr/local/bin/orchard
+	install -m 755 bin/orchard-daemon /usr/local/bin/orchard-daemon
 
 install-tui: rust
 	install -m 755 target/release/orchard-tui /usr/local/bin/orchard-tui
+
+install-worktree-cli: worktree-cli
+	install -m 755 target/release/orchard-worktree /usr/local/bin/orchard-worktree
 
 clean:
 	rm -rf bin/ target/
