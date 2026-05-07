@@ -989,8 +989,48 @@ func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*gra
 }
 
 // Issue is the resolver for the issue field.
+//
+// Derives the GitHub issue number from the worktree's branch name using the
+// branch-parse rules ported from crates/orchard/src/github.rs, then fetches
+// the issue via the gh provider.
+//
+// Returns nil (null in GraphQL) when:
+//   - The branch is empty (detached HEAD).
+//   - No issue number can be parsed from the branch.
+//   - The origin remote is absent or not a GitHub URL.
+//   - The gh provider is not wired (returns errGHNotConfigured).
+//   - The issue is not found on GitHub (404).
 func (r *worktreeResolver) Issue(ctx context.Context, obj *graphql1.Worktree) (*graphql1.Issue, error) {
-	panic(fmt.Errorf("not implemented: Issue - issue"))
+	if obj == nil || obj.Branch == "" {
+		return nil, nil
+	}
+
+	n, ok := gh.ExtractIssueNumber(obj.Branch)
+	if !ok {
+		return nil, nil
+	}
+
+	url, err := gh.ReadOriginURL(obj.Path)
+	if err != nil {
+		return nil, nil
+	}
+	owner, name, ok := gh.ParseGitHubURL(url)
+	if !ok {
+		return nil, nil
+	}
+
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+
+	issue, err := r.GH.GetIssue(ctx, gh.IssueKey{Owner: owner, Name: name, Number: n})
+	if err != nil {
+		if gh.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toGraphQLIssue(issue), nil
 }
 
 // Processes is the resolver for the worktree.processes field.
