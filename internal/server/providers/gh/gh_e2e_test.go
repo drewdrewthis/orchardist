@@ -633,6 +633,8 @@ type graphqlResponse struct {
 		// from "zero-valued row".
 		Issue       *issueNode `json:"issue"`
 		PullRequest *prNode    `json:"pullRequest"`
+		// All-open list with optional author filter — added with #435.
+		OpenPullRequests []prNode `json:"openPullRequests"`
 	} `json:"data"`
 	Errors []map[string]any `json:"errors,omitempty"`
 }
@@ -745,6 +747,94 @@ func TestGH_E2E_PullRequestByNumber(t *testing.T) {
 	}
 	if resp.Data.PullRequest.ID != "PullRequest:alice/repo#42" {
 		t.Errorf("id = %q, want PullRequest:alice/repo#42", resp.Data.PullRequest.ID)
+	}
+}
+
+// TestGH_E2E_OpenPullRequests asserts `Query.openPullRequests(repo)`
+// returns every OPEN PR on the repo. Resolves issue #435.
+func TestGH_E2E_OpenPullRequests(t *testing.T) {
+	installFakeGH(t)
+	api := stubAPI(t)
+	tlsClient := httpClientForTLS(t, api)
+
+	auth := gh.NewCommandAuthSource()
+	provider := newGHProviderForTest(t, api.URL, auth, tlsClient)
+
+	srv := newDaemon(t, provider)
+	defer srv.Close()
+
+	resp := postQuery(t, srv.URL, `query {
+		openPullRequests(repo: "alice/repo") {
+			id
+			number
+			authorLogin
+		}
+	}`)
+	if len(resp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp.Errors)
+	}
+	// canonPullsBody has 2 PRs: bob/#42 and carol/#7.
+	if got := len(resp.Data.OpenPullRequests); got != 2 {
+		t.Fatalf("expected 2 open PRs, got %d", got)
+	}
+}
+
+// TestGH_E2E_OpenPullRequests_AuthorFilter asserts the optional `author`
+// argument filters server-side. Resolves issue #435.
+func TestGH_E2E_OpenPullRequests_AuthorFilter(t *testing.T) {
+	installFakeGH(t)
+	api := stubAPI(t)
+	tlsClient := httpClientForTLS(t, api)
+
+	auth := gh.NewCommandAuthSource()
+	provider := newGHProviderForTest(t, api.URL, auth, tlsClient)
+
+	srv := newDaemon(t, provider)
+	defer srv.Close()
+
+	resp := postQuery(t, srv.URL, `query {
+		openPullRequests(repo: "alice/repo", author: "bob") {
+			number
+			authorLogin
+		}
+	}`)
+	if len(resp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp.Errors)
+	}
+	if got := len(resp.Data.OpenPullRequests); got != 1 {
+		t.Fatalf("expected 1 PR by bob, got %d", got)
+	}
+	if resp.Data.OpenPullRequests[0].AuthorLogin != "bob" {
+		t.Errorf("authorLogin = %q, want bob", resp.Data.OpenPullRequests[0].AuthorLogin)
+	}
+	if resp.Data.OpenPullRequests[0].Number != 42 {
+		t.Errorf("number = %d, want 42", resp.Data.OpenPullRequests[0].Number)
+	}
+}
+
+// TestGH_E2E_OpenPullRequests_AuthorFilter_NoMatch asserts an unknown
+// author returns an empty list, not an error. Resolves issue #435.
+func TestGH_E2E_OpenPullRequests_AuthorFilter_NoMatch(t *testing.T) {
+	installFakeGH(t)
+	api := stubAPI(t)
+	tlsClient := httpClientForTLS(t, api)
+
+	auth := gh.NewCommandAuthSource()
+	provider := newGHProviderForTest(t, api.URL, auth, tlsClient)
+
+	srv := newDaemon(t, provider)
+	defer srv.Close()
+
+	resp := postQuery(t, srv.URL, `query {
+		openPullRequests(repo: "alice/repo", author: "noone") {
+			number
+		}
+	}`)
+	if len(resp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp.Errors)
+	}
+	if got := len(resp.Data.OpenPullRequests); got != 0 {
+		t.Fatalf("expected 0 PRs for unknown author, got %d", got)
 	}
 }
 

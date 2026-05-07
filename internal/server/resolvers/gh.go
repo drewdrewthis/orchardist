@@ -126,6 +126,41 @@ func (r *queryResolver) queryPullRequestByNumberResolver(ctx context.Context, re
 	return toGraphQLPullRequest(pr), nil
 }
 
+// queryOpenPullRequestsResolver implements `Query.openPullRequests(repo, author)`.
+//
+// Lists every OPEN pull request on the repo, optionally filtered by
+// author login. Unlike `Project.pullRequests` (which lists only PRs
+// whose branch is locally checked out), this returns the full repo set.
+//
+// Author filtering happens server-side in this resolver — gh's REST
+// `/repos/.../pulls` endpoint doesn't support an author filter, so we
+// fetch all open PRs and filter the slice. For repos with thousands
+// of open PRs this is wasteful; for the dashboards / standup workflows
+// targeted by #435 it's well within the per_page=100 budget.
+//
+// Resolves issue #435.
+func (r *queryResolver) queryOpenPullRequestsResolver(ctx context.Context, repo string, author *string) ([]*graphql1.PullRequest, error) {
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+	owner, name, err := gh.SplitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	prs, err := r.GH.ListPullRequests(ctx, owner, name, gh.PullRequestStateOpen)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*graphql1.PullRequest, 0, len(prs))
+	for _, p := range prs {
+		if author != nil && *author != "" && p.AuthorLogin != *author {
+			continue
+		}
+		out = append(out, toGraphQLPullRequest(p))
+	}
+	return out, nil
+}
+
 // queryWorkflowRunsResolver implements `Query.workflowRuns(repo)`.
 func (r *queryResolver) queryWorkflowRunsResolver(ctx context.Context, repo string) ([]*graphql1.WorkflowRun, error) {
 	if r.GH == nil {
