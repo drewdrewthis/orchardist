@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.13.0...orchard-v0.14.0) (2026-05-07)
+
+
+### Features
+
+* **daemon:** ClaudeInstance.lastActivityAt for TUI v2 LAST column ([#443](https://github.com/drewdrewthis/git-orchard-rs/issues/443)) ([#472](https://github.com/drewdrewthis/git-orchard-rs/issues/472)) ([d279ebf](https://github.com/drewdrewthis/git-orchard-rs/commit/d279ebf6a33b78f55af35e52f99aeab786518637))
+
 ## [0.13.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.12.1...orchard-v0.13.0) (2026-05-07)
 
 
