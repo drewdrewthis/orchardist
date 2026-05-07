@@ -28,10 +28,14 @@
 //! list --porcelain`. Higher layers (orchard) wrap or convert this into their
 //! own enriched types that join PR/issue/tmux data.
 
+pub mod create;
 pub mod destroy;
 pub mod list;
+pub mod prune;
 pub mod repo;
 
+pub use create::{CreateOutcome, create_worktree};
 pub use destroy::remove_worktree;
 pub use list::{WorktreeEntry, list_worktrees, parse_porcelain, worktree_has_conflicts};
+pub use prune::prune;
 pub use repo::{find_repo_root, get_repo_name};

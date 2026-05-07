@@ -4,6 +4,7 @@ members = [
     "crates/orchard",
     "crates/orchard-dispatcher",
     "crates/orchard-gui/src-tauri",
+    "crates/orchard-worktree",
     "crates/worktree-core",
 ]
 

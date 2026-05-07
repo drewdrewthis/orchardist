@@ -104,16 +104,18 @@ crates/
 ├── orchard/                # The orchard-tui binary + library (src layout below)
 ├── orchard-dispatcher/     # The user-facing `orchard` binary; routes verbs
 │                           #   to orchard-{tui,daemon,worktree,chat} per ADR-013.
-├── worktree-core/          # Pure git worktree operations (list/destroy/parse).
-│                           #   Backs orchard-tui dialogs + future orchard-worktree CLI.
+├── orchard-worktree/       # CLI for worktree mutations: clap wrapper on
+│                           #   worktree-core (orchard new/rm/prune/ls/path).
+├── worktree-core/          # Pure git worktree operations (list/create/destroy/prune/parse).
+│                           #   Backs orchard-tui dialogs + orchard-worktree CLI.
 └── orchard-gui/src-tauri/  # Tauri-based GUI shell (preview)
 ```
 
 `worktree-core` is the single source of truth for worktree mutation primitives.
-The orchard binary depends on it; future binaries (`orchard-worktree`) will
-depend on it directly. `orchard-dispatcher` is a thin (~150 LOC) router with
-no orchard dependencies — it just execs the right helper binary. See ADR-013
-for the dispatcher architecture.
+The orchard-tui binary and `orchard-worktree` CLI both depend on it directly.
+`orchard-dispatcher` is a thin (~150 LOC) router with no orchard dependencies
+— it just execs the right helper binary. See ADR-013 for the dispatcher
+architecture.
 
 ## Module Structure (orchard crate)
 
