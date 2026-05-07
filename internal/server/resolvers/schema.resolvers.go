@@ -16,6 +16,7 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
@@ -957,13 +958,29 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 }
 
 // Host is the resolver for the host field.
+// v1 sentinel: all locally-discovered worktrees report "local".
+// Workstream F populates per-peer hostnames in a later iteration.
 func (r *worktreeResolver) Host(ctx context.Context, obj *graphql1.Worktree) (string, error) {
-	panic(fmt.Errorf("not implemented: Host - host"))
+	return "local", nil
 }
 
 // Repo is the resolver for the repo field.
+// Derives owner/repo from the worktree's origin remote URL.
+// Returns nil (null in GraphQL) when origin is absent, or not a GitHub URL.
 func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*string, error) {
-	panic(fmt.Errorf("not implemented: Repo - repo"))
+	if obj == nil || obj.Path == "" {
+		return nil, nil
+	}
+	url, err := gh.ReadOriginURL(obj.Path)
+	if err != nil {
+		return nil, nil
+	}
+	owner, name, ok := gh.ParseGitHubURL(url)
+	if !ok {
+		return nil, nil
+	}
+	slug := owner + "/" + name
+	return &slug, nil
 }
 
 // Pr is the resolver for the pr field.
