@@ -69,15 +69,16 @@ type ComplexityRoot struct {
 	}
 
 	ClaudeInstance struct {
-		Account     func(childComplexity int) int
-		ID          func(childComplexity int) int
-		Pane        func(childComplexity int) int
-		Process     func(childComplexity int) int
-		RcEnabled   func(childComplexity int) int
-		RcURL       func(childComplexity int) int
-		SessionUUID func(childComplexity int) int
-		StartedAt   func(childComplexity int) int
-		State       func(childComplexity int) int
+		Account        func(childComplexity int) int
+		ID             func(childComplexity int) int
+		LastActivityAt func(childComplexity int) int
+		Pane           func(childComplexity int) int
+		Process        func(childComplexity int) int
+		RcEnabled      func(childComplexity int) int
+		RcURL          func(childComplexity int) int
+		SessionUUID    func(childComplexity int) int
+		StartedAt      func(childComplexity int) int
+		State          func(childComplexity int) int
 	}
 
 	Contract struct {
@@ -596,6 +597,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ClaudeInstance.SessionUUID(childComplexity), true
+
+	case "ClaudeInstance.lastActivityAt":
+		if e.complexity.ClaudeInstance.LastActivityAt == nil {
+			break
+		}
+
+		return e.complexity.ClaudeInstance.LastActivityAt(childComplexity), true
 
 	case "ClaudeInstance.startedAt":
 		if e.complexity.ClaudeInstance.StartedAt == nil {
@@ -2418,6 +2426,13 @@ type ClaudeInstance implements Node {
 
   "RFC3339 timestamp the session was started."
   startedAt: String
+
+  """
+  ISO8601 timestamp of the most recent activity for this Claude instance —
+  derived from the heartbeat's last_activity field, falling back to
+  TmuxPane.lastActivityAt, falling back to null when neither is available.
+  """
+  lastActivityAt: String
 }
 
 "Lifecycle states for a Claude instance."
@@ -4153,6 +4168,8 @@ func (ec *executionContext) fieldContext_ClaudeAccount_instances(ctx context.Con
 				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
 			case "startedAt":
 				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
+			case "lastActivityAt":
+				return ec.fieldContext_ClaudeInstance_lastActivityAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -4604,6 +4621,47 @@ func (ec *executionContext) _ClaudeInstance_startedAt(ctx context.Context, field
 }
 
 func (ec *executionContext) fieldContext_ClaudeInstance_startedAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_lastActivityAt(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClaudeInstance_lastActivityAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastActivityAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClaudeInstance_lastActivityAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ClaudeInstance",
 		Field:      field,
@@ -8199,6 +8257,8 @@ func (ec *executionContext) fieldContext_Process_claudeInstance(ctx context.Cont
 				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
 			case "startedAt":
 				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
+			case "lastActivityAt":
+				return ec.fieldContext_ClaudeInstance_lastActivityAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -10440,6 +10500,8 @@ func (ec *executionContext) fieldContext_Query_claudeInstances(ctx context.Conte
 				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
 			case "startedAt":
 				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
+			case "lastActivityAt":
+				return ec.fieldContext_ClaudeInstance_lastActivityAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -12998,6 +13060,8 @@ func (ec *executionContext) fieldContext_TmuxPane_claudeInstance(ctx context.Con
 				return ec.fieldContext_ClaudeInstance_sessionUuid(ctx, field)
 			case "startedAt":
 				return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
+			case "lastActivityAt":
+				return ec.fieldContext_ClaudeInstance_lastActivityAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
 		},
@@ -17711,6 +17775,8 @@ func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._ClaudeInstance_sessionUuid(ctx, field, obj)
 		case "startedAt":
 			out.Values[i] = ec._ClaudeInstance_startedAt(ctx, field, obj)
+		case "lastActivityAt":
+			out.Values[i] = ec._ClaudeInstance_lastActivityAt(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

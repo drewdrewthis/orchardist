@@ -178,6 +178,14 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 		v := hb.Timestamp.UTC().Format(time.RFC3339Nano)
 		inst.StartedAt = &v
 	}
+	if !hb.LastActivity.IsZero() {
+		// Preserve sub-second precision from the original value by using
+		// RFC3339Nano. When the source had no nanoseconds, RFC3339Nano
+		// still produces a valid RFC3339 string (trailing zeros are
+		// stripped by Go's time formatter).
+		v := hb.LastActivity.UTC().Format(time.RFC3339Nano)
+		inst.LastActivityAt = &v
+	}
 	return inst
 }
 
