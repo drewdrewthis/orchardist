@@ -219,28 +219,29 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		ClaudeAccounts  func(childComplexity int) int
-		ClaudeInstances func(childComplexity int) int
-		Contract        func(childComplexity int, id string) int
-		Contracts       func(childComplexity int, filter *ContractFilter) int
-		Conversation    func(childComplexity int, id string) int
-		Conversations   func(childComplexity int) int
-		Gh              func(childComplexity int, query string, variables interface{}) int
-		Health          func(childComplexity int) int
-		Host            func(childComplexity int) int
-		HostServices    func(childComplexity int, filter *HostServiceFilter) int
-		Hosts           func(childComplexity int) int
-		Issue           func(childComplexity int, repo string, number int64) int
-		Issues          func(childComplexity int, repo string, state *IssueState) int
-		Node            func(childComplexity int, id string) int
-		Peers           func(childComplexity int) int
-		Projects        func(childComplexity int) int
-		PullRequest     func(childComplexity int, repo string, number int64) int
-		PullRequests    func(childComplexity int, repo string, state *PullRequestState) int
-		TmuxPanes       func(childComplexity int, filter *TmuxPaneFilter) int
-		TmuxServer      func(childComplexity int) int
-		TmuxSessions    func(childComplexity int, filter *TmuxSessionFilter) int
-		WorkflowRuns    func(childComplexity int, repo string) int
+		ClaudeAccounts   func(childComplexity int) int
+		ClaudeInstances  func(childComplexity int) int
+		Contract         func(childComplexity int, id string) int
+		Contracts        func(childComplexity int, filter *ContractFilter) int
+		Conversation     func(childComplexity int, id string) int
+		Conversations    func(childComplexity int) int
+		Gh               func(childComplexity int, query string, variables interface{}) int
+		Health           func(childComplexity int) int
+		Host             func(childComplexity int) int
+		HostServices     func(childComplexity int, filter *HostServiceFilter) int
+		Hosts            func(childComplexity int) int
+		Issue            func(childComplexity int, repo string, number int64) int
+		Issues           func(childComplexity int, repo string, state *IssueState) int
+		Node             func(childComplexity int, id string) int
+		OpenPullRequests func(childComplexity int, repo string, author *string) int
+		Peers            func(childComplexity int) int
+		Projects         func(childComplexity int) int
+		PullRequest      func(childComplexity int, repo string, number int64) int
+		PullRequests     func(childComplexity int, repo string, state *PullRequestState) int
+		TmuxPanes        func(childComplexity int, filter *TmuxPaneFilter) int
+		TmuxServer       func(childComplexity int) int
+		TmuxSessions     func(childComplexity int, filter *TmuxSessionFilter) int
+		WorkflowRuns     func(childComplexity int, repo string) int
 	}
 
 	ResourceLoad struct {
@@ -381,6 +382,7 @@ type QueryResolver interface {
 	Peers(ctx context.Context) ([]*Host, error)
 	HostServices(ctx context.Context, filter *HostServiceFilter) ([]*HostService, error)
 	PullRequests(ctx context.Context, repo string, state *PullRequestState) ([]*PullRequest, error)
+	OpenPullRequests(ctx context.Context, repo string, author *string) ([]*PullRequest, error)
 	Issues(ctx context.Context, repo string, state *IssueState) ([]*Issue, error)
 	Issue(ctx context.Context, repo string, number int64) (*Issue, error)
 	PullRequest(ctx context.Context, repo string, number int64) (*PullRequest, error)
@@ -1452,6 +1454,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.Node(childComplexity, args["id"].(string)), true
 
+	case "Query.openPullRequests":
+		if e.complexity.Query.OpenPullRequests == nil {
+			break
+		}
+
+		args, err := ec.field_Query_openPullRequests_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.OpenPullRequests(childComplexity, args["repo"].(string), args["author"].(*string)), true
+
 	case "Query.peers":
 		if e.complexity.Query.Peers == nil {
 			break
@@ -2415,6 +2429,15 @@ type Query {
   "Pull requests on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
 
+  """
+  All open pull requests on a GitHub repository, optionally filtered by
+  author login. Unlike ` + "`" + `Project.pullRequests` + "`" + ` (which only sees PRs whose
+  branch is locally checked out), this returns every open PR on the
+  repo. Used by /standup-style "give me all my open PRs" gathers.
+  Resolves issue #435.
+  """
+  openPullRequests(repo: String!, author: String): [PullRequest!]!
+
   "Issues on a GitHub repository. ` + "`" + `repo` + "`" + ` is ` + "`" + `owner/name` + "`" + `."
   issues(repo: String!, state: IssueState = OPEN): [Issue!]
 
@@ -3337,6 +3360,30 @@ func (ec *executionContext) field_Query_node_args(ctx context.Context, rawArgs m
 		}
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_openPullRequests_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["repo"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repo"))
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["repo"] = arg0
+	var arg1 *string
+	if tmp, ok := rawArgs["author"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("author"))
+		arg1, err = ec.unmarshalOString2ᚖstring(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["author"] = arg1
 	return args, nil
 }
 
@@ -10237,6 +10284,95 @@ func (ec *executionContext) fieldContext_Query_pullRequests(ctx context.Context,
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_pullRequests_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_openPullRequests(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_openPullRequests(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().OpenPullRequests(rctx, fc.Args["repo"].(string), fc.Args["author"].(*string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*PullRequest)
+	fc.Result = res
+	return ec.marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_openPullRequests(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_PullRequest_id(ctx, field)
+			case "repoOwner":
+				return ec.fieldContext_PullRequest_repoOwner(ctx, field)
+			case "repoName":
+				return ec.fieldContext_PullRequest_repoName(ctx, field)
+			case "number":
+				return ec.fieldContext_PullRequest_number(ctx, field)
+			case "title":
+				return ec.fieldContext_PullRequest_title(ctx, field)
+			case "body":
+				return ec.fieldContext_PullRequest_body(ctx, field)
+			case "state":
+				return ec.fieldContext_PullRequest_state(ctx, field)
+			case "draft":
+				return ec.fieldContext_PullRequest_draft(ctx, field)
+			case "authorLogin":
+				return ec.fieldContext_PullRequest_authorLogin(ctx, field)
+			case "baseRef":
+				return ec.fieldContext_PullRequest_baseRef(ctx, field)
+			case "headRef":
+				return ec.fieldContext_PullRequest_headRef(ctx, field)
+			case "url":
+				return ec.fieldContext_PullRequest_url(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_PullRequest_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_PullRequest_updatedAt(ctx, field)
+			case "reviews":
+				return ec.fieldContext_PullRequest_reviews(ctx, field)
+			case "comments":
+				return ec.fieldContext_PullRequest_comments(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_openPullRequests_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -18414,6 +18550,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "openPullRequests":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_openPullRequests(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "issues":
 			field := field
 
@@ -21424,6 +21582,50 @@ func (ec *executionContext) marshalNProject2ᚖgithubᚗcomᚋdrewdrewthisᚋgit
 		return graphql.Null
 	}
 	return ec._Project(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v *PullRequest) graphql.Marshaler {

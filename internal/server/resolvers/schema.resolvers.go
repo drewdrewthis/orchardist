@@ -383,6 +383,11 @@ func (r *queryResolver) PullRequests(ctx context.Context, repo string, state *gr
 	return r.queryPullRequestsResolver(ctx, repo, state)
 }
 
+// OpenPullRequests is the resolver for the openPullRequests field.
+func (r *queryResolver) OpenPullRequests(ctx context.Context, repo string, author *string) ([]*graphql1.PullRequest, error) {
+	return r.queryOpenPullRequestsResolver(ctx, repo, author)
+}
+
 // Issues is the resolver for the issues field.
 func (r *queryResolver) Issues(ctx context.Context, repo string, state *graphql1.IssueState) ([]*graphql1.Issue, error) {
 	return r.queryIssuesResolver(ctx, repo, state)

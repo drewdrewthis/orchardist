@@ -204,6 +204,15 @@ type Query {
   "Pull requests on a GitHub repository. `repo` is `owner/name`."
   pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
 
+  """
+  All open pull requests on a GitHub repository, optionally filtered by
+  author login. Unlike `Project.pullRequests` (which only sees PRs whose
+  branch is locally checked out), this returns every open PR on the
+  repo. Used by /standup-style "give me all my open PRs" gathers.
+  Resolves issue #435.
+  """
+  openPullRequests(repo: String!, author: String): [PullRequest!]!
+
   "Issues on a GitHub repository. `repo` is `owner/name`."
   issues(repo: String!, state: IssueState = OPEN): [Issue!]
 
