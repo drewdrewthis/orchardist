@@ -112,6 +112,42 @@ fn bare_verb_ls_dispatches_to_orchard_worktree_ls() {
 }
 
 #[test]
+fn tui_verb_heal_routes_to_orchard_tui_with_verb_prepended() {
+    // `orchard heal --fix` must exec `orchard-tui heal --fix`. The verb
+    // itself stays as the first argv entry so orchard-tui's argv parser
+    // recognises it.
+    let dir = with_helpers(&[("tui", 0)]);
+    let (stdout, _stderr, code) = run_dispatcher(dir.path(), &["heal", "--fix"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("[helper:tui] argv=heal --fix"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
+fn tui_verb_setup_remote_routes_to_orchard_tui() {
+    let dir = with_helpers(&[("tui", 0)]);
+    let (stdout, _stderr, code) = run_dispatcher(dir.path(), &["setup-remote", "drew-mac"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("[helper:tui] argv=setup-remote drew-mac"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
+fn tui_verb_refresh_routes_to_orchard_tui() {
+    let dir = with_helpers(&[("tui", 0)]);
+    let (stdout, _stderr, code) = run_dispatcher(dir.path(), &["refresh"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("[helper:tui] argv=refresh"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
 fn child_exit_code_is_propagated() {
     let dir = with_helpers(&[("daemon", 7)]);
     let (_stdout, _stderr, code) = run_dispatcher(dir.path(), &["daemon", "status"]);
