@@ -13,7 +13,7 @@
 //! pr/issue fields).
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use orchard::global_config::{GlobalConfig, RemoteConfig, RepoConfig};
 use orchard::json_output::{
@@ -28,6 +28,19 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Serialises tests that mutate `ORCHARD_EVENTS_PATH`.
+///
+/// `set_var` / `remove_var` are process-global. cargo runs integration tests
+/// in parallel by default, so without serialisation two tests can race:
+/// test A sets the env var to its tempdir, test B sets it to ITS tempdir
+/// while A's adapter is mid-write, and a `remote_adapter.proxy_failure` event
+/// from A lands in B's `events.jsonl` (or vice versa). The reader test then
+/// fails with `trailing characters` because two complete JSON events
+/// concatenated on one line.
+///
+/// Resolves issue #420.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_config_with_proxy(host: &str) -> GlobalConfig {
     GlobalConfig {
@@ -398,6 +411,11 @@ fn make_json_output_with_two_worktrees() -> JsonOutput {
 fn cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged() {
     use std::io::Read as _;
 
+    // Hold the env lock for the entire critical section: from setting the
+    // env var to reading the events file. Releasing earlier would let a
+    // parallel test stomp the env var while our adapter is still writing.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let cache_dir = TempDir::new().expect("create temp cache dir");
     let events_dir = TempDir::new().expect("create temp events dir");
     let events_file = events_dir.path().join("events.jsonl");
@@ -416,7 +434,9 @@ fn cached_snapshot_survives_proxy_failure_with_proxy_failure_event_logged() {
     );
 
     // Step 5: redirect events.jsonl to tempdir.
-    // SAFETY: process-global mutation; isolated per-test via unique tempdir path.
+    // SAFETY: process-global mutation; serialised via ENV_LOCK above so
+    // concurrent tests in this file cannot race to overwrite each other's
+    // events files.
     unsafe { std::env::set_var("ORCHARD_EVENTS_PATH", events_file.as_os_str()) };
 
     // Step 6: build an OrchardProxyAdapter primed to fail with exit 127.
