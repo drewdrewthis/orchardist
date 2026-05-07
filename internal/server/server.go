@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	gqlws "github.com/gorilla/websocket"
 
@@ -394,6 +395,28 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 			Subprotocols:    []string{"graphql-transport-ws", "graphql-ws"},
 		},
 	})
+	// Introspection is gated by env var. Off by default in prod (gqlgen
+	// sets DisableIntrospection: true unless extension.Introspection is
+	// registered) so adversarial probes can't enumerate the surface; on
+	// for dev/CLI when ORCHARD_INTROSPECTION=1 so operators can run
+	// `__schema { types { name } }` without round-tripping through
+	// schema.graphql. Resolves issue #401.
+	if introspectionEnabled() {
+		srv.Use(extension.Introspection{})
+	}
 	return srv
+}
+
+// introspectionEnabled returns true when the daemon should respond to
+// `__schema` / `__type` queries. The toggle is intentionally an env var
+// rather than a CLI flag so daemons started by launchd / systemd can
+// opt in without a wrapper script that re-execs with `--introspection`.
+func introspectionEnabled() bool {
+	switch os.Getenv("ORCHARD_INTROSPECTION") {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
