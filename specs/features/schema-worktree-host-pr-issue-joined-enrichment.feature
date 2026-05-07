@@ -1,7 +1,9 @@
-Feature: Schema Worktree.host, repo, pr, issue, priorityFlag — joined enrichment for TUI dashboard
+Feature: Schema Worktree.host, repo, pr, issue — read-side joined enrichment for TUI dashboard
   As a thin-shell TUI consuming the orchard daemon's GraphQL schema
-  I want the Worktree type to expose host, repo, joined PR/issue, and priorityFlag
+  I want the Worktree type to expose host, repo, joined PR, and joined issue
   So that the TUI renders the federated dashboard without re-doing joins client-side
+
+  # Phase 1 of #441 (split). priorityFlag is owned by #466; typed gh-error codes are owned by #467.
 
   Background:
     Given the daemon serves a GraphQL schema at 127.0.0.1:7777
@@ -147,66 +149,7 @@ Feature: Schema Worktree.host, repo, pr, issue, priorityFlag — joined enrichme
     And the precedence mirrors crates/orchard/src/github.rs:82-114
 
   # ===================================================================
-  # AC 5 — Worktree.priorityFlag: Boolean! + Mutation.setWorktreePriority
-  # ===================================================================
-
-  @unit
-  Scenario: priorityFlag returns false when no priority is recorded for the worktree path
-    Given the daemon's priorities store contains no entry for the worktree's path
-    When the priorityFlag field is resolved
-    Then the resolver returns false
-
-  @unit
-  Scenario: priorityFlag returns true when the worktree's path is in the priorities store
-    Given the daemon's priorities store contains the worktree's absolute path
-    When the priorityFlag field is resolved
-    Then the resolver returns true
-
-  @unit
-  Scenario: priorityFlag is non-nullable in the schema
-    Given the generated GraphQL schema
-    When the Worktree.priorityFlag field is inspected
-    Then its type is Boolean! (non-null)
-
-  @integration
-  Scenario: setWorktreePriority(path, true) persists and reflects in the next read
-    Given a worktree at path "/Users/dev/repo/.worktrees/wt-1" with priorityFlag false
-    When Mutation.setWorktreePriority(path, true) is invoked
-    Then the mutation returns true
-    And a subsequent query for that worktree's priorityFlag returns true
-    And the priorities.json file on disk contains "/Users/dev/repo/.worktrees/wt-1"
-
-  @integration
-  Scenario: setWorktreePriority(path, false) removes the entry and persists
-    Given a worktree at path "/Users/dev/repo/.worktrees/wt-1" with priorityFlag true
-    When Mutation.setWorktreePriority(path, false) is invoked
-    Then the mutation returns false
-    And a subsequent query for that worktree's priorityFlag returns false
-    And the priorities.json file on disk does not contain that path
-
-  @integration
-  Scenario: priorities store reuses Rust's existing JSON file shape (zero-migration)
-    Given an existing ~/.cache/orchard/priorities.json with shape {"priorities":["/abs/path"]}
-    When the daemon starts and reads the file
-    Then the loaded set contains "/abs/path"
-    And subsequent writes preserve the same shape
-
-  @integration
-  Scenario: priorities store uses flock and atomic temp+rename on writes
-    Given two concurrent setWorktreePriority calls on different paths
-    When both mutations execute
-    Then both updates persist atomically with no lost write
-    And the on-disk file is never observed mid-write (atomic rename)
-
-  @integration
-  Scenario: Rust TUI's toggle_priority callsites cut over to the daemon mutation
-    Given the Rust TUI has been recompiled in this PR
-    When the user toggles priority on a worktree row
-    Then the TUI invokes Mutation.setWorktreePriority via GraphQL
-    And the Rust crate no longer writes priorities.json directly
-
-  # ===================================================================
-  # AC 6 — PullRequestsForRepo DataLoader batches multi-repo queries
+  # AC 5 — PullRequestsForRepo DataLoader batches multi-repo queries
   # ===================================================================
 
   @integration
@@ -231,73 +174,31 @@ Feature: Schema Worktree.host, repo, pr, issue, priorityFlag — joined enrichme
     And the loaders do not leak state across requests
 
   # ===================================================================
-  # AC 7 — Typed error codes on gh-derived field failures
-  # ===================================================================
-
-  @integration
-  Scenario: pr field surfaces GH_NOT_AUTHED when gh CLI is not authenticated
-    Given the gh provider returns an authentication failure
-    When Worktree.pr is resolved
-    Then the field value is null
-    And the per-field GraphQL error has extensions.code == "GH_NOT_AUTHED"
-    And sibling fields on the same Worktree continue to resolve
-
-  @integration
-  Scenario: pr field surfaces NOT_GITHUB_REPO when repo cannot be derived
-    Given a worktree whose project's origin is not a GitHub URL
-    When Worktree.pr is resolved
-    Then the field value is null
-    And the per-field GraphQL error has extensions.code == "NOT_GITHUB_REPO"
-
-  @integration
-  Scenario: issue field surfaces typed error codes the same way as pr field
-    Given the gh provider returns an authentication failure
-    When Worktree.issue is resolved
-    Then the field value is null
-    And the per-field GraphQL error has extensions.code == "GH_NOT_AUTHED"
-
-  @integration
-  Scenario: typed errors let TUI collapse N identical errors into one indicator
-    Given 50 worktrees and a broken gh auth
-    When the TUI fetches the federated dashboard
-    Then 50 per-field errors arrive each carrying extensions.code == "GH_NOT_AUTHED"
-    And the TUI can deduplicate by code into a single status indicator
-
-  # ===================================================================
-  # End-to-end — full federated dashboard query against the live daemon
+  # End-to-end — full dashboard query against the live daemon
   # ===================================================================
 
   @e2e
-  Scenario: Full dashboard query returns host, repo, pr, issue, priorityFlag for every worktree
+  Scenario: Full dashboard query returns host, repo, pr, issue for every worktree
     Given the daemon is running with at least one project and one worktree on a branch like "issue441/foo"
     And the worktree's repo has an open PR with headRef "issue441/foo"
-    When a GraphQL query selects { worktree { host repo branch pr { number } issue { number } priorityFlag } }
+    When a GraphQL query selects { worktree { host repo branch pr { number } issue { number } } }
     Then host == "local"
     And repo matches "owner/name"
     And pr.number is the open PR's number
     And issue.number == 441
-    And priorityFlag is a boolean
-
-  @e2e
-  Scenario: Toggling priority via mutation updates a subsequent dashboard query
-    Given the daemon is running with at least one worktree
-    And the worktree's priorityFlag is initially false
-    When Mutation.setWorktreePriority(path, true) is invoked
-    And a subsequent { worktree { priorityFlag } } query runs
-    Then priorityFlag is true
 
   # --- AC Coverage Map ---
   # AC 1: "Worktree.host: String! returns 'local' sentinel for v1"
   #   -> @unit "host resolver returns the literal 'local' sentinel for a locally-discovered worktree"
   #   -> @unit "host is non-nullable in the schema"
-  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue, priorityFlag for every worktree"
+  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue for every worktree"
   #
   # AC 2: "Worktree.repo: String — owner/repo slug derived from project origin; null when origin is not a GitHub URL"
   #   -> @unit "repo resolver returns owner/repo slug when origin is a GitHub URL"
   #   -> @unit "repo resolver returns null when origin is not a GitHub URL"
   #   -> @unit "repo resolver returns null when project has no origin remote"
   #   -> @unit "repo field is nullable in the schema"
-  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue, priorityFlag for every worktree"
+  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue for every worktree"
   #
   # AC 3: "Worktree.pr: PullRequest — joined via headRef = branch, scoped to the worktree's repo, default branch excluded"
   #   -> @unit "pr resolver matches PR by exact headRef equality with worktree branch"
@@ -305,7 +206,7 @@ Feature: Schema Worktree.host, repo, pr, issue, priorityFlag — joined enrichme
   #   -> @unit "pr resolver returns null when worktree branch is the project's default branch"
   #   -> @unit "pr resolver returns null when worktree is in detached-head state"
   #   -> @unit "pr resolver scopes the PR search to the worktree's own repo"
-  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue, priorityFlag for every worktree"
+  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue for every worktree"
   #
   # AC 4: "Worktree.issue: Issue — joined by issue<N>/... branch parse for v1"
   #   -> @unit "issue resolver parses 'issue<N>/...' branch convention"
@@ -315,28 +216,11 @@ Feature: Schema Worktree.host, repo, pr, issue, priorityFlag — joined enrichme
   #   -> @unit "issue resolver enforces N>=100 floor on bare-leading numeric branches"
   #   -> @unit "issue resolver returns null when branch has no parseable issue number"
   #   -> @unit "issue resolver matches Rust's regex precedence exactly"
-  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue, priorityFlag for every worktree"
+  #   -> @e2e  "Full dashboard query returns host, repo, pr, issue for every worktree"
   #
-  # AC 5: "Worktree.priorityFlag: Boolean! — daemon-owned read+write store; pair with Mutation.setWorktreePriority(path, value)"
-  #   -> @unit "priorityFlag returns false when no priority is recorded for the worktree path"
-  #   -> @unit "priorityFlag returns true when the worktree's path is in the priorities store"
-  #   -> @unit "priorityFlag is non-nullable in the schema"
-  #   -> @integration "setWorktreePriority(path, true) persists and reflects in the next read"
-  #   -> @integration "setWorktreePriority(path, false) removes the entry and persists"
-  #   -> @integration "priorities store reuses Rust's existing JSON file shape (zero-migration)"
-  #   -> @integration "priorities store uses flock and atomic temp+rename on writes"
-  #   -> @integration "Rust TUI's toggle_priority callsites cut over to the daemon mutation"
-  #   -> @e2e  "Toggling priority via mutation updates a subsequent dashboard query"
-  #
-  # AC 6: "PR fetches go through a PullRequestsForRepo DataLoader so a multi-repo dashboard query collapses to one round-trip per repo"
+  # AC 5: "PR fetches go through a PullRequestsForRepo DataLoader so a multi-repo dashboard query collapses to one round-trip per repo"
   #   -> @integration "Multi-repo dashboard query collapses to one PR fetch per repo"
   #   -> @integration "PullRequestsForRepo loader batches concurrent worktree pr resolutions"
   #   -> @integration "PullRequestsForRepo loader is per-request scoped (mirrors WorktreeForCwd)"
   #
-  # AC 7: "gh-derived field failures (pr, issue) carry typed error codes (e.g. GH_NOT_AUTHED, NOT_GITHUB_REPO)"
-  #   -> @integration "pr field surfaces GH_NOT_AUTHED when gh CLI is not authenticated"
-  #   -> @integration "pr field surfaces NOT_GITHUB_REPO when repo cannot be derived"
-  #   -> @integration "issue field surfaces typed error codes the same way as pr field"
-  #   -> @integration "typed errors let TUI collapse N identical errors into one indicator"
-  #
-  # Math: 7 issue ACs -> all mapped, every AC has >=1 scenario. No drops.
+  # Phase-1 scope only. AC 5 (priorityFlag) split to #466. AC 7 (typed gh errors) split to #467.
