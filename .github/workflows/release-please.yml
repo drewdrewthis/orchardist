@@ -15,9 +15,13 @@ env:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    # Manifest-mode outputs are namespaced by path (e.g. `crates/orchard--tag_name`)
+    # and never populate the singular root-level `release_created`. `paths_released`
+    # is the aggregate gate; `outputs_json` forwards the full output map so downstream
+    # jobs can look up per-path values dynamically. See issue #335.
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      paths_released: ${{ steps.release.outputs.paths_released }}
+      outputs_json: ${{ toJSON(steps.release.outputs) }}
     steps:
       - uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
         id: release
@@ -27,55 +31,63 @@ jobs:
 
   build:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    if: ${{ needs.release-please.outputs.paths_released != '' && needs.release-please.outputs.paths_released != '[]' }}
+    name: Build ${{ matrix.path }} ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.os }}
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-14
-            cross: false
-          - target: x86_64-apple-darwin
-            os: macos-14
-            cross: false
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: false
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: true
+        path: ${{ fromJSON(needs.release-please.outputs.paths_released) }}
+        target:
+          - { name: aarch64-apple-darwin, os: macos-14, cross: false }
+          - { name: x86_64-apple-darwin, os: macos-14, cross: false }
+          - { name: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross: false }
+          - { name: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross: true }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target.name }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.path }}-${{ matrix.target.name }}
+      - name: Derive package name and tag
+        id: meta
+        env:
+          OUTPUTS_JSON: ${{ needs.release-please.outputs.outputs_json }}
+          PATH_KEY: ${{ matrix.path }}
+        run: |
+          pkg=$(basename "$PATH_KEY")
+          tag=$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg key "${PATH_KEY}--tag_name" '.[$key]')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "error: no tag found for path $PATH_KEY" >&2
+            exit 1
+          fi
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Install cross-compilation tools
-        if: matrix.cross
+        if: matrix.target.cross
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target.name }} -p ${{ steps.meta.outputs.pkg }}
       - name: Package
-        run: tar czf orchard-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release orchard
+        run: tar czf ${{ steps.meta.outputs.pkg }}-${{ matrix.target.name }}.tar.gz -C target/${{ matrix.target.name }}/release ${{ steps.meta.outputs.pkg }}
       - name: Checksum
-        run: shasum -a 256 orchard-${{ matrix.target }}.tar.gz > orchard-${{ matrix.target }}.tar.gz.sha256
+        run: shasum -a 256 ${{ steps.meta.outputs.pkg }}-${{ matrix.target.name }}.tar.gz > ${{ steps.meta.outputs.pkg }}-${{ matrix.target.name }}.tar.gz.sha256
       - name: Upload
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
           files: |
-            orchard-${{ matrix.target }}.tar.gz
-            orchard-${{ matrix.target }}.tar.gz.sha256
+            ${{ steps.meta.outputs.pkg }}-${{ matrix.target.name }}.tar.gz
+            ${{ steps.meta.outputs.pkg }}-${{ matrix.target.name }}.tar.gz.sha256
 
   npm-publish:
     needs: [release-please, build]
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ needs.release-please.outputs.paths_released != '' && needs.release-please.outputs.paths_released != '[]' && contains(fromJSON(needs.release-please.outputs.paths_released), 'crates/orchard') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,9 +99,15 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - name: Set version from release tag
+        env:
+          OUTPUTS_JSON: ${{ needs.release-please.outputs.outputs_json }}
         run: |
-          VERSION="${{ needs.release-please.outputs.tag_name }}"
-          VERSION="${VERSION##*v}"
+          tag=$(printf '%s' "$OUTPUTS_JSON" | jq -r '."crates/orchard--tag_name"')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "error: no crates/orchard tag found in release-please outputs" >&2
+            exit 1
+          fi
+          VERSION="${tag##*v}"
           cd npm
           npm version "$VERSION" --no-git-tag-version
       - name: Publish to npm
