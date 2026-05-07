@@ -2051,32 +2051,14 @@ impl App {
         std::thread::spawn(move || {
             let worktree_path = crate::paths::derive_local_worktree_path(&repo_root, &branch);
 
-            // Try creating a new branch; fall back to checking out an existing one.
-            let new_branch_result = Command::new("git")
-                .args(["worktree", "add", "-b", &branch, &worktree_path])
-                .current_dir(&repo_root)
-                .output();
-
-            let add_ok = matches!(new_branch_result, Ok(out) if out.status.success());
-
-            if !add_ok {
-                // Branch may already exist — try checking it out directly.
-                let out = Command::new("git")
-                    .args(["worktree", "add", &worktree_path, &branch])
-                    .current_dir(&repo_root)
-                    .output();
-                match out {
-                    Ok(o) if o.status.success() => {}
-                    Ok(o) => {
-                        let stderr = String::from_utf8_lossy(&o.stderr);
-                        let _ = tx.send(AppMsg::CreateWorktreeErr(stderr.trim().to_string()));
-                        return;
-                    }
-                    Err(e) => {
-                        let _ = tx.send(AppMsg::CreateWorktreeErr(format!("{e}")));
-                        return;
-                    }
-                }
+            // Delegate the new-branch-then-fallback dance to worktree-core.
+            // The shared library is the single source of truth for git worktree
+            // mutation; the TUI just collects intent and reports outcomes.
+            if let Err(e) =
+                worktree_core::create_worktree(Path::new(&repo_root), &branch, &worktree_path)
+            {
+                let _ = tx.send(AppMsg::CreateWorktreeErr(format!("{e}")));
+                return;
             }
 
             // Run setup script if configured.
