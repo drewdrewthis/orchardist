@@ -317,6 +317,9 @@ func instancesEqual(a, b *graphql.ClaudeInstance) bool {
 	if !ptrStringEqual(a.StartedAt, b.StartedAt) {
 		return false
 	}
+	if !ptrStringEqual(a.LastActivityAt, b.LastActivityAt) {
+		return false
+	}
 	return true
 }
 
