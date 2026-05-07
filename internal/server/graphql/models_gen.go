@@ -77,6 +77,10 @@ type ClaudeInstance struct {
 	SessionUUID *string `json:"sessionUuid,omitempty"`
 	// RFC3339 timestamp the session was started.
 	StartedAt *string `json:"startedAt,omitempty"`
+	// ISO8601 timestamp of the most recent activity for this Claude instance —
+	// derived from the heartbeat's last_activity field, falling back to
+	// TmuxPane.lastActivityAt, falling back to null when neither is available.
+	LastActivityAt *string `json:"lastActivityAt,omitempty"`
 }
 
 func (ClaudeInstance) IsNode() {}

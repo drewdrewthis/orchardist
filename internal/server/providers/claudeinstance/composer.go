@@ -178,6 +178,28 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 		v := hb.Timestamp.UTC().Format(time.RFC3339Nano)
 		inst.StartedAt = &v
 	}
+	if !hb.LastActivity.IsZero() {
+		// Primary source: heartbeat's last_activity field.
+		// Preserve sub-second precision from the original value by using
+		// RFC3339Nano. When the source had no nanoseconds, RFC3339Nano
+		// still produces a valid RFC3339 string (trailing zeros are
+		// stripped by Go's time formatter).
+		v := hb.LastActivity.UTC().Format(time.RFC3339Nano)
+		inst.LastActivityAt = &v
+	} else {
+		// Fallback (option a): read pane.Window.Session.LastActivityAt.
+		// TmuxPane has no lastActivityAt field of its own; the session-level
+		// timestamp is the same conceptual recency for the user's purposes
+		// ("when was this claude instance last touched"). Option (b) — adding
+		// TmuxPane.lastActivityAt as a new schema field — can be layered on
+		// top later when pane-level granularity is needed, without breaking
+		// this fallback.
+		if pane != nil && pane.Window != nil && pane.Window.Session != nil &&
+			pane.Window.Session.LastActivityAt != nil {
+			v := *pane.Window.Session.LastActivityAt
+			inst.LastActivityAt = &v
+		}
+	}
 	return inst
 }
 

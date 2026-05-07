@@ -169,6 +169,19 @@ write_state() {
         > "$tmp" && mv "$tmp" "$state_file"
 }
 
+# Emits last_activity (RFC3339Nano) as a JSON fragment for use as the $extra
+# argument to write_state. Called by events that mark real user-facing
+# activity: UserPromptSubmit (user sent a prompt) and PostToolUse / PostToolUseFailure
+# (tool call completed). PreToolUse is intentionally excluded — it fires before
+# the tool runs, not after, so it doesn't signal completed work.
+#
+# The value is the current UTC time in nanosecond-precision RFC3339 so the
+# orchard daemon's ClaudeInstance.lastActivityAt resolver can surface
+# "last touched N seconds ago" without consulting tmux pane state.
+last_activity_extra() {
+    jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" '{last_activity: $ts}'
+}
+
 # ---------------------------------------------------------------------------
 # Event dispatch
 # ---------------------------------------------------------------------------
@@ -201,7 +214,8 @@ case "$event" in
         inflight=$(echo "$inflight" | jq --arg id "$tool_use_id" '[.[] | select(. != $id)]')
         write_inflight "$inflight"
     fi
-    write_state "working"
+    # Emit last_activity: tool completion is user-facing activity.
+    write_state "working" "$(last_activity_extra)"
     ;;
 
   Stop)
@@ -346,7 +360,9 @@ case "$event" in
     # Keep first line only and truncate to 80 characters.
     first_line=$(printf '%s' "$prompt" | head -n 1)
     task=$(printf '%.80s' "$first_line")
-    write_state "working" "$(jq -n --arg t "$task" '{current_task: $t}')"
+    # Emit last_activity: the user just sent a prompt — this is the most
+    # direct signal of recency for the LAST column in the TUI.
+    write_state "working" "$(jq -n --arg t "$task" --arg la "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" '{current_task: $t, last_activity: $la}')"
     ;;
 
   SessionEnd)

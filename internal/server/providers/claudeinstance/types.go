@@ -78,6 +78,12 @@ type Heartbeat struct {
 	// field is absent — the schema's `rcEnabled` is non-nullable so we
 	// default to false rather than nil.
 	RcEnabled bool
+	// LastActivity is the RFC3339/RFC3339Nano timestamp of the most recent
+	// Claude activity as recorded by the hook script in the last_activity /
+	// lastActivity field. Zero when the heartbeat file does not include the
+	// field (e.g. older hook versions). Used as the primary source for
+	// ClaudeInstance.lastActivityAt; zero means "fall back to pane".
+	LastActivity time.Time
 }
 
 // HostID returns the host id this provider was constructed with. Useful
