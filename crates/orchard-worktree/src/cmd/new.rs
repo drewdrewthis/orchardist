@@ -25,15 +25,16 @@ pub fn run(args: Args) -> Result<()> {
     let target = worktree_path_for(&repo_root, &args.branch);
     let target_str = target.to_string_lossy();
 
-    // Idempotency: if a worktree for this branch already exists at this path,
-    // succeed silently (matches `orchard new <issue>` re-run semantics).
-    if let Ok(trees) = worktree_core::list_worktrees() {
-        for t in &trees {
-            if t.branch.as_deref() == Some(args.branch.as_ref()) && t.path == target_str {
-                println!("already exists: {target_str}");
-                return Ok(());
-            }
-        }
+    // Idempotency: if a worktree for this branch is already checked out
+    // anywhere, succeed and surface its path. This makes `orchard new <issue>`
+    // safe to re-run from scripts and matches the ADR-013 §5 contract.
+    if let Ok(trees) = worktree_core::list_worktrees()
+        && let Some(existing) = trees
+            .iter()
+            .find(|t| t.branch.as_deref() == Some(args.branch.as_str()))
+    {
+        println!("already exists at {}", existing.path);
+        return Ok(());
     }
 
     let outcome = worktree_core::create_worktree(

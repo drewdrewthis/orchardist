@@ -24,6 +24,12 @@ pub struct WorktreeEntry {
     pub head: String,
     /// Whether this entry represents the bare repository (`.git` root).
     pub is_bare: bool,
+    /// Whether this is the **main** worktree (the one the repo was originally
+    /// cloned into). Always true for the first non-bare entry returned by
+    /// `git worktree list --porcelain`. Distinct from `is_bare`: a bare
+    /// repository has no main worktree at all.
+    #[serde(default)]
+    pub is_main: bool,
     /// Whether the worktree has unresolved merge conflicts.
     pub has_conflicts: bool,
 }
@@ -52,6 +58,7 @@ pub fn list_worktrees() -> Result<Vec<WorktreeEntry>> {
 
     let raw = parse_porcelain(&String::from_utf8_lossy(&out.stdout));
     let mut trees = Vec::with_capacity(raw.len());
+    let mut seen_non_bare = false;
 
     for mut wt in raw {
         if wt.path.contains("/.git/") {
@@ -59,6 +66,13 @@ pub fn list_worktrees() -> Result<Vec<WorktreeEntry>> {
         }
         if !wt.is_bare {
             wt.has_conflicts = worktree_has_conflicts(&wt.path);
+            // `git worktree list --porcelain` always lists the main worktree
+            // first among non-bare entries; subsequent non-bare entries are
+            // additional worktrees.
+            if !seen_non_bare {
+                wt.is_main = true;
+                seen_non_bare = true;
+            }
         }
         trees.push(wt);
     }
@@ -107,6 +121,7 @@ pub fn parse_porcelain(output: &str) -> Vec<WorktreeEntry> {
             head,
             branch,
             is_bare,
+            is_main: false,
             has_conflicts: false,
         });
     }
@@ -230,6 +245,16 @@ bare";
         let input = "\n\nworktree /tmp/x\nHEAD abc\nbranch refs/heads/main\n\n\n";
         let wts = parse_porcelain(input);
         assert_eq!(wts.len(), 1);
+    }
+
+    #[test]
+    fn parse_porcelain_does_not_set_is_main() {
+        // is_main is set by list_worktrees() based on porcelain ordering,
+        // not by the parser itself — the parser doesn't know which is main.
+        let wts = parse_porcelain(SAMPLE);
+        for wt in &wts {
+            assert!(!wt.is_main);
+        }
     }
 
     #[test]

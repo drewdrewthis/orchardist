@@ -4,6 +4,7 @@
 //! `run(args) -> anyhow::Result<()>` entry point. Keep each file ≤ 100 lines.
 
 pub mod ls;
+pub mod mv;
 pub mod new;
 pub mod path;
 pub mod prune;
@@ -33,4 +34,33 @@ pub fn resolve_worktree_path(branch: &str) -> Result<String> {
         .find(|t| t.branch.as_deref() == Some(branch))
         .map(|t| t.path.clone())
         .ok_or_else(|| anyhow!("no worktree found for branch '{branch}'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worktree_path_for_simple_branch() {
+        assert_eq!(
+            worktree_path_for("/repo", "feature").to_string_lossy(),
+            "/repo/.worktrees/feature"
+        );
+    }
+
+    #[test]
+    fn worktree_path_for_slashed_branch_replaces_with_hyphen() {
+        assert_eq!(
+            worktree_path_for("/repo", "feature/foo").to_string_lossy(),
+            "/repo/.worktrees/feature-foo"
+        );
+    }
+
+    #[test]
+    fn worktree_path_for_double_slash_branch() {
+        assert_eq!(
+            worktree_path_for("/repo", "issue123/feature/sub").to_string_lossy(),
+            "/repo/.worktrees/issue123-feature-sub"
+        );
+    }
 }

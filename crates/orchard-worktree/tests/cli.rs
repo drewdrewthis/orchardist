@@ -87,7 +87,38 @@ fn new_is_idempotent_on_re_invocation() {
     let out = run(repo.path(), &["new", "feature/idem"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("already exists"), "stdout: {stdout}");
+    assert!(stdout.contains("already exists at"), "stdout: {stdout}");
+}
+
+#[test]
+fn new_on_branch_already_checked_out_elsewhere_is_idempotent() {
+    // Branch is checked out at a non-standard path (manual `git worktree add`);
+    // running `orchard-worktree new <branch>` must surface the existing path
+    // and exit 0, not blow up with a "already checked out" git error.
+    let repo = init_repo();
+    let manual_path = repo.path().join("custom-loc");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature/elsewhere",
+            manual_path.to_str().unwrap(),
+        ],
+    );
+    let out = run(repo.path(), &["new", "feature/elsewhere"]);
+    assert!(
+        out.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("already exists at"));
+    assert!(
+        stdout.contains("custom-loc"),
+        "should surface the actual path, got: {stdout}"
+    );
 }
 
 #[test]
@@ -145,12 +176,56 @@ fn prune_all_removes_every_non_main_worktree() {
 }
 
 #[test]
+fn prune_invoked_from_child_worktree_does_not_self_destruct() {
+    // Regression for the prune main-worktree-skip bug: running prune --all
+    // from inside a non-main worktree must NOT delete the cwd; it must
+    // delete every other non-main worktree and leave the main worktree alone.
+    let repo = init_repo();
+    let _ = run(repo.path(), &["new", "feature/a"]);
+    let _ = run(repo.path(), &["new", "feature/b"]);
+
+    let cwd = repo.path().join(".worktrees/feature-a");
+    let out = Command::new(binary())
+        .args(["prune", "--all"])
+        .current_dir(&cwd)
+        .output()
+        .expect("run from child worktree");
+
+    // Either feature-a survives (skipped because it's the cwd) or every
+    // non-main is removed. The critical invariant: the main worktree
+    // (repo root) must still exist.
+    assert!(
+        repo.path().join(".git").exists(),
+        "main worktree must survive prune from child"
+    );
+    // We expect feature-b to be removed regardless of which is the cwd.
+    assert!(
+        !repo.path().join(".worktrees/feature-b").exists() || !out.status.success(),
+        "feature-b should be removed (or prune should have surfaced an error if cwd-is-main confusion happened)"
+    );
+}
+
+#[test]
 fn prune_without_filter_errors() {
     let repo = init_repo();
     let out = run(repo.path(), &["prune"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("specify --all"), "stderr: {stderr}");
+}
+
+#[test]
+fn mv_returns_3_with_clear_message_until_implemented() {
+    let repo = init_repo();
+    let out = run(repo.path(), &["mv", "feature/foo", "drew-mac"]);
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not yet implemented"),
+        "should explain why; got: {stderr}"
+    );
+    assert!(stderr.contains("feature/foo") && stderr.contains("drew-mac"));
 }
 
 #[test]

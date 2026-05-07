@@ -3,6 +3,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use serde::Serialize;
+use worktree_core::WorktreeEntry;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -15,16 +16,7 @@ pub struct Args {
 struct JsonOutput {
     /// Schema version. Bump on breaking changes.
     version: u32,
-    worktrees: Vec<JsonWorktree>,
-}
-
-#[derive(Serialize)]
-struct JsonWorktree {
-    path: String,
-    branch: Option<String>,
-    head: String,
-    is_bare: bool,
-    has_conflicts: bool,
+    worktrees: Vec<WorktreeEntry>,
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -35,16 +27,7 @@ pub fn run(args: Args) -> Result<()> {
     if args.json {
         let output = JsonOutput {
             version: SCHEMA_VERSION,
-            worktrees: trees
-                .into_iter()
-                .map(|t| JsonWorktree {
-                    path: t.path,
-                    branch: t.branch,
-                    head: t.head,
-                    is_bare: t.is_bare,
-                    has_conflicts: t.has_conflicts,
-                })
-                .collect(),
+            worktrees: trees,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {

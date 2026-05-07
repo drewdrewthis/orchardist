@@ -27,12 +27,13 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let trees = worktree_core::list_worktrees()?;
-    let repo_root = worktree_core::find_repo_root();
 
-    // Skip the bare repo and the main worktree (path == repo_root).
+    // Skip the bare repo and the main worktree. `is_main` is set by
+    // worktree-core based on porcelain ordering — robust regardless of
+    // which worktree the user invoked us from.
     let targets: Vec<&str> = trees
         .iter()
-        .filter(|t| !t.is_bare && t.path != repo_root)
+        .filter(|t| !t.is_bare && !t.is_main)
         .map(|t| t.path.as_str())
         .collect();
 

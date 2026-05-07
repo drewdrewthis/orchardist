@@ -12,10 +12,9 @@
 //! |------|---------|
 //! | 0    | Success |
 //! | 2    | Invalid arguments (clap default) |
-//! | 3    | Precondition failed (dirty worktree, missing branch, etc.) |
+//! | 3    | Precondition failed (not in repo, branch missing, dirty worktree, etc.) |
 //! | 4    | (reserved) Remote unreachable |
 //! | 5    | (reserved) Conflict (mid-merge, mid-rebase) |
-//! | 1    | Generic failure |
 //!
 //! # JSON output
 //!
@@ -56,6 +55,11 @@ enum Command {
 
     /// Print the absolute path of a worktree by branch name.
     Path(cmd::path::Args),
+
+    /// Move a worktree to a different host (cross-machine transfer).
+    /// Not yet implemented — exits 3 with a clear message until the
+    /// remote-coordinator lands. See ADR-013 follow-up.
+    Mv(cmd::mv::Args),
 }
 
 fn main() -> ExitCode {
@@ -66,6 +70,7 @@ fn main() -> ExitCode {
         Command::Prune(args) => cmd::prune::run(args),
         Command::Ls(args) => cmd::ls::run(args),
         Command::Path(args) => cmd::path::run(args),
+        Command::Mv(args) => cmd::mv::run(args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
