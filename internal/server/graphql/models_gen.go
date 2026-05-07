@@ -360,22 +360,27 @@ func (this Project) GetID() string { return this.ID }
 
 // A pull request on a GitHub repository. Sourced from the GitHub REST API.
 type PullRequest struct {
-	ID          string               `json:"id"`
-	RepoOwner   string               `json:"repoOwner"`
-	RepoName    string               `json:"repoName"`
-	Number      int64                `json:"number"`
-	Title       string               `json:"title"`
-	Body        string               `json:"body"`
-	State       PullRequestState     `json:"state"`
-	Draft       bool                 `json:"draft"`
-	AuthorLogin string               `json:"authorLogin"`
-	BaseRef     string               `json:"baseRef"`
-	HeadRef     string               `json:"headRef"`
-	URL         string               `json:"url"`
-	CreatedAt   string               `json:"createdAt"`
-	UpdatedAt   string               `json:"updatedAt"`
-	Reviews     []*PullRequestReview `json:"reviews,omitempty"`
-	Comments    []*IssueComment      `json:"comments,omitempty"`
+	ID                string               `json:"id"`
+	RepoOwner         string               `json:"repoOwner"`
+	RepoName          string               `json:"repoName"`
+	Number            int64                `json:"number"`
+	Title             string               `json:"title"`
+	Body              string               `json:"body"`
+	State             PullRequestState     `json:"state"`
+	Draft             bool                 `json:"draft"`
+	AuthorLogin       string               `json:"authorLogin"`
+	BaseRef           string               `json:"baseRef"`
+	HeadRef           string               `json:"headRef"`
+	URL               string               `json:"url"`
+	CreatedAt         string               `json:"createdAt"`
+	UpdatedAt         string               `json:"updatedAt"`
+	Reviews           []*PullRequestReview `json:"reviews,omitempty"`
+	Comments          []*IssueComment      `json:"comments,omitempty"`
+	Mergeable         MergeableState       `json:"mergeable"`
+	MergeStateStatus  string               `json:"mergeStateStatus"`
+	ReviewDecision    *ReviewDecisionEnum  `json:"reviewDecision,omitempty"`
+	StatusCheckRollup CiStatus             `json:"statusCheckRollup"`
+	Labels            []string             `json:"labels"`
 }
 
 func (PullRequest) IsNode() {}
@@ -667,6 +672,52 @@ func (Worktree) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Worktree) GetID() string { return this.ID }
 
+// Aggregated CI status across all check runs and statuses on the PR head sha.
+type CiStatus string
+
+const (
+	CiStatusSuccess CiStatus = "SUCCESS"
+	CiStatusFailure CiStatus = "FAILURE"
+	CiStatusPending CiStatus = "PENDING"
+	CiStatusUnknown CiStatus = "UNKNOWN"
+)
+
+var AllCiStatus = []CiStatus{
+	CiStatusSuccess,
+	CiStatusFailure,
+	CiStatusPending,
+	CiStatusUnknown,
+}
+
+func (e CiStatus) IsValid() bool {
+	switch e {
+	case CiStatusSuccess, CiStatusFailure, CiStatusPending, CiStatusUnknown:
+		return true
+	}
+	return false
+}
+
+func (e CiStatus) String() string {
+	return string(e)
+}
+
+func (e *CiStatus) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CiStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CiStatus", str)
+	}
+	return nil
+}
+
+func (e CiStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
 // Lifecycle states for Contract.
 type ContractStatus string
 
@@ -878,6 +929,50 @@ func (e IssueState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
+// Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing.
+type MergeableState string
+
+const (
+	MergeableStateMergeable   MergeableState = "MERGEABLE"
+	MergeableStateConflicting MergeableState = "CONFLICTING"
+	MergeableStateUnknown     MergeableState = "UNKNOWN"
+)
+
+var AllMergeableState = []MergeableState{
+	MergeableStateMergeable,
+	MergeableStateConflicting,
+	MergeableStateUnknown,
+}
+
+func (e MergeableState) IsValid() bool {
+	switch e {
+	case MergeableStateMergeable, MergeableStateConflicting, MergeableStateUnknown:
+		return true
+	}
+	return false
+}
+
+func (e MergeableState) String() string {
+	return string(e)
+}
+
+func (e *MergeableState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MergeableState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MergeableState", str)
+	}
+	return nil
+}
+
+func (e MergeableState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
 // State filter for the pullRequests query.
 type PullRequestState string
 
@@ -921,5 +1016,53 @@ func (e *PullRequestState) UnmarshalGQL(v interface{}) error {
 }
 
 func (e PullRequestState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// Reviewer decision on a PR. Null when no review activity yet.
+type ReviewDecisionEnum string
+
+const (
+	ReviewDecisionEnumApproved         ReviewDecisionEnum = "APPROVED"
+	ReviewDecisionEnumChangesRequested ReviewDecisionEnum = "CHANGES_REQUESTED"
+	ReviewDecisionEnumReviewRequired   ReviewDecisionEnum = "REVIEW_REQUIRED"
+	ReviewDecisionEnumCommented        ReviewDecisionEnum = "COMMENTED"
+	ReviewDecisionEnumDismissed        ReviewDecisionEnum = "DISMISSED"
+)
+
+var AllReviewDecisionEnum = []ReviewDecisionEnum{
+	ReviewDecisionEnumApproved,
+	ReviewDecisionEnumChangesRequested,
+	ReviewDecisionEnumReviewRequired,
+	ReviewDecisionEnumCommented,
+	ReviewDecisionEnumDismissed,
+}
+
+func (e ReviewDecisionEnum) IsValid() bool {
+	switch e {
+	case ReviewDecisionEnumApproved, ReviewDecisionEnumChangesRequested, ReviewDecisionEnumReviewRequired, ReviewDecisionEnumCommented, ReviewDecisionEnumDismissed:
+		return true
+	}
+	return false
+}
+
+func (e ReviewDecisionEnum) String() string {
+	return string(e)
+}
+
+func (e *ReviewDecisionEnum) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ReviewDecisionEnum(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ReviewDecisionEnum", str)
+	}
+	return nil
+}
+
+func (e ReviewDecisionEnum) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }

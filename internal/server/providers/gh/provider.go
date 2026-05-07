@@ -45,8 +45,9 @@ type Provider struct {
 
 	// Per-node-type caches. Keyed by their typed key, value is the
 	// node + freshness.
-	prMu sync.RWMutex
-	prs  map[PullRequestKey]prEntry
+	prMu     sync.RWMutex
+	prs      map[PullRequestKey]prEntry
+	enrichAt map[PullRequestKey]time.Time // when EnrichPullRequest last populated the enrichment fields
 
 	issueMu sync.RWMutex
 	issues  map[IssueKey]issueEntry
@@ -142,6 +143,7 @@ func NewWith(logger *slog.Logger, baseURL string, auth AuthSource, clock func() 
 		auth:         newAuthCache(auth),
 		baseURL:      baseURL,
 		prs:          map[PullRequestKey]prEntry{},
+		enrichAt:     map[PullRequestKey]time.Time{},
 		issues:       map[IssueKey]issueEntry{},
 		runs:         map[WorkflowRunKey]runEntry{},
 		listPRsCache: map[listPRsKey]listPRsEntry{},

@@ -9,7 +9,7 @@
 //
 //   - auth.go     — boot-time `gh auth token` shellout + caching
 //   - client.go   — net/http client with Bearer header, base-URL
-//                   override (GH_API_BASE_URL), rate-limit awareness
+//     override (GH_API_BASE_URL), rate-limit awareness
 //   - adapter.go  — Adapter[K, V] over the client for each node type
 //   - provider.go — Provider[K, V] with 2-minute read TTL
 //   - webhook.go  — POST /webhook/github stub (ADR-011 §12 post-v1)
@@ -87,10 +87,47 @@ func (k WorkflowRunKey) String() string {
 	return fmt.Sprintf("%s/%s#%d", k.Owner, k.Name, k.RunID)
 }
 
+// MergeableState mirrors GitHub's MergeableState enum.
+// UNKNOWN means GitHub is still computing the mergeability.
+type MergeableState string
+
+const (
+	MergeableStateMergeable   MergeableState = "MERGEABLE"
+	MergeableStateConflicting MergeableState = "CONFLICTING"
+	MergeableStateUnknown     MergeableState = "UNKNOWN"
+)
+
+// ReviewDecision mirrors GitHub's PullRequestReviewDecision enum.
+// Nil when no review activity has occurred yet.
+type ReviewDecision string
+
+const (
+	ReviewDecisionApproved         ReviewDecision = "APPROVED"
+	ReviewDecisionChangesRequested ReviewDecision = "CHANGES_REQUESTED"
+	ReviewDecisionReviewRequired   ReviewDecision = "REVIEW_REQUIRED"
+	ReviewDecisionCommented        ReviewDecision = "COMMENTED"
+	ReviewDecisionDismissed        ReviewDecision = "DISMISSED"
+)
+
+// CiStatus is the aggregated CI status across all check runs and commit
+// statuses on the PR head SHA.
+type CiStatus string
+
+const (
+	CiStatusSuccess CiStatus = "SUCCESS"
+	CiStatusFailure CiStatus = "FAILURE"
+	CiStatusPending CiStatus = "PENDING"
+	CiStatusUnknown CiStatus = "UNKNOWN"
+)
+
 // PullRequest is the provider-facing pull request. It mirrors the
 // fields the GraphQL `PullRequest` type exposes, with one addition:
 // the `State` is already projected into the schema's enum (OPEN,
 // CLOSED, MERGED) so resolvers don't need to repeat the mapping.
+//
+// The enrichment fields (Mergeable, MergeStateStatus, ReviewDecision,
+// StatusCheckRollup, Labels) are populated lazily by EnrichPullRequest
+// and are zero-valued until that call succeeds.
 type PullRequest struct {
 	RepoOwner   string
 	RepoName    string
@@ -105,6 +142,14 @@ type PullRequest struct {
 	URL         string
 	CreatedAt   string
 	UpdatedAt   string
+
+	// GraphQL-only enrichment fields. Zero-valued until EnrichPullRequest
+	// has been called for this PR key.
+	Mergeable         MergeableState
+	MergeStateStatus  string          // raw GitHub mergeStateStatus string
+	ReviewDecision    *ReviewDecision // nil when GitHub returns null
+	StatusCheckRollup CiStatus
+	Labels            []string // user labels only; phase labels excluded
 }
 
 // ID is the GraphQL-stable id `PullRequest:<owner>/<repo>#<number>`.

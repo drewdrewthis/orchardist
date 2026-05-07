@@ -42,6 +42,7 @@ type ResolverRoot interface {
 	Host() HostResolver
 	Process() ProcessResolver
 	Project() ProjectResolver
+	PullRequest() PullRequestResolver
 	Query() QueryResolver
 	Subscription() SubscriptionResolver
 	TmuxClient() TmuxClientResolver
@@ -192,22 +193,27 @@ type ComplexityRoot struct {
 	}
 
 	PullRequest struct {
-		AuthorLogin func(childComplexity int) int
-		BaseRef     func(childComplexity int) int
-		Body        func(childComplexity int) int
-		Comments    func(childComplexity int) int
-		CreatedAt   func(childComplexity int) int
-		Draft       func(childComplexity int) int
-		HeadRef     func(childComplexity int) int
-		ID          func(childComplexity int) int
-		Number      func(childComplexity int) int
-		RepoName    func(childComplexity int) int
-		RepoOwner   func(childComplexity int) int
-		Reviews     func(childComplexity int) int
-		State       func(childComplexity int) int
-		Title       func(childComplexity int) int
-		URL         func(childComplexity int) int
-		UpdatedAt   func(childComplexity int) int
+		AuthorLogin       func(childComplexity int) int
+		BaseRef           func(childComplexity int) int
+		Body              func(childComplexity int) int
+		Comments          func(childComplexity int) int
+		CreatedAt         func(childComplexity int) int
+		Draft             func(childComplexity int) int
+		HeadRef           func(childComplexity int) int
+		ID                func(childComplexity int) int
+		Labels            func(childComplexity int) int
+		MergeStateStatus  func(childComplexity int) int
+		Mergeable         func(childComplexity int) int
+		Number            func(childComplexity int) int
+		RepoName          func(childComplexity int) int
+		RepoOwner         func(childComplexity int) int
+		ReviewDecision    func(childComplexity int) int
+		Reviews           func(childComplexity int) int
+		State             func(childComplexity int) int
+		StatusCheckRollup func(childComplexity int) int
+		Title             func(childComplexity int) int
+		URL               func(childComplexity int) int
+		UpdatedAt         func(childComplexity int) int
 	}
 
 	PullRequestReview struct {
@@ -368,6 +374,13 @@ type ProcessResolver interface {
 }
 type ProjectResolver interface {
 	Worktrees(ctx context.Context, obj *Project) ([]*Worktree, error)
+}
+type PullRequestResolver interface {
+	Mergeable(ctx context.Context, obj *PullRequest) (MergeableState, error)
+	MergeStateStatus(ctx context.Context, obj *PullRequest) (string, error)
+	ReviewDecision(ctx context.Context, obj *PullRequest) (*ReviewDecisionEnum, error)
+	StatusCheckRollup(ctx context.Context, obj *PullRequest) (CiStatus, error)
+	Labels(ctx context.Context, obj *PullRequest) ([]string, error)
 }
 type QueryResolver interface {
 	Health(ctx context.Context) (*Health, error)
@@ -1233,6 +1246,27 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.PullRequest.ID(childComplexity), true
 
+	case "PullRequest.labels":
+		if e.complexity.PullRequest.Labels == nil {
+			break
+		}
+
+		return e.complexity.PullRequest.Labels(childComplexity), true
+
+	case "PullRequest.mergeStateStatus":
+		if e.complexity.PullRequest.MergeStateStatus == nil {
+			break
+		}
+
+		return e.complexity.PullRequest.MergeStateStatus(childComplexity), true
+
+	case "PullRequest.mergeable":
+		if e.complexity.PullRequest.Mergeable == nil {
+			break
+		}
+
+		return e.complexity.PullRequest.Mergeable(childComplexity), true
+
 	case "PullRequest.number":
 		if e.complexity.PullRequest.Number == nil {
 			break
@@ -1254,6 +1288,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.PullRequest.RepoOwner(childComplexity), true
 
+	case "PullRequest.reviewDecision":
+		if e.complexity.PullRequest.ReviewDecision == nil {
+			break
+		}
+
+		return e.complexity.PullRequest.ReviewDecision(childComplexity), true
+
 	case "PullRequest.reviews":
 		if e.complexity.PullRequest.Reviews == nil {
 			break
@@ -1267,6 +1308,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.PullRequest.State(childComplexity), true
+
+	case "PullRequest.statusCheckRollup":
+		if e.complexity.PullRequest.StatusCheckRollup == nil {
+			break
+		}
+
+		return e.complexity.PullRequest.StatusCheckRollup(childComplexity), true
 
 	case "PullRequest.title":
 		if e.complexity.PullRequest.Title == nil {
@@ -3161,6 +3209,30 @@ input ContractFilter {
   parentContractId: ID
 }
 
+"Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
+enum MergeableState {
+  MERGEABLE
+  CONFLICTING
+  UNKNOWN
+}
+
+"Reviewer decision on a PR. Null when no review activity yet."
+enum ReviewDecisionEnum {
+  APPROVED
+  CHANGES_REQUESTED
+  REVIEW_REQUIRED
+  COMMENTED
+  DISMISSED
+}
+
+"Aggregated CI status across all check runs and statuses on the PR head sha."
+enum CiStatus {
+  SUCCESS
+  FAILURE
+  PENDING
+  UNKNOWN
+}
+
 "State filter for the pullRequests query."
 enum PullRequestState {
   OPEN
@@ -3196,6 +3268,11 @@ type PullRequest implements Node {
   updatedAt: String!
   reviews: [PullRequestReview!]
   comments: [IssueComment!]
+  mergeable: MergeableState!
+  mergeStateStatus: String!
+  reviewDecision: ReviewDecisionEnum
+  statusCheckRollup: CiStatus!
+  labels: [String!]!
 }
 
 "A review submitted on a pull request."
@@ -9049,6 +9126,223 @@ func (ec *executionContext) fieldContext_PullRequest_comments(ctx context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _PullRequest_mergeable(ctx context.Context, field graphql.CollectedField, obj *PullRequest) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PullRequest_mergeable(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.PullRequest().Mergeable(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(MergeableState)
+	fc.Result = res
+	return ec.marshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PullRequest_mergeable(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MergeableState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PullRequest_mergeStateStatus(ctx context.Context, field graphql.CollectedField, obj *PullRequest) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.PullRequest().MergeStateStatus(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PullRequest_mergeStateStatus(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PullRequest_reviewDecision(ctx context.Context, field graphql.CollectedField, obj *PullRequest) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.PullRequest().ReviewDecision(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*ReviewDecisionEnum)
+	fc.Result = res
+	return ec.marshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PullRequest_reviewDecision(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ReviewDecisionEnum does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PullRequest_statusCheckRollup(ctx context.Context, field graphql.CollectedField, obj *PullRequest) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.PullRequest().StatusCheckRollup(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(CiStatus)
+	fc.Result = res
+	return ec.marshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PullRequest_statusCheckRollup(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type CiStatus does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PullRequest_labels(ctx context.Context, field graphql.CollectedField, obj *PullRequest) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PullRequest_labels(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.PullRequest().Labels(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]string)
+	fc.Result = res
+	return ec.marshalNString2ᚕstringᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PullRequest_labels(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PullRequestReview_id(ctx context.Context, field graphql.CollectedField, obj *PullRequestReview) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_PullRequestReview_id(ctx, field)
 	if err != nil {
@@ -10362,6 +10656,16 @@ func (ec *executionContext) fieldContext_Query_pullRequests(ctx context.Context,
 				return ec.fieldContext_PullRequest_reviews(ctx, field)
 			case "comments":
 				return ec.fieldContext_PullRequest_comments(ctx, field)
+			case "mergeable":
+				return ec.fieldContext_PullRequest_mergeable(ctx, field)
+			case "mergeStateStatus":
+				return ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
+			case "reviewDecision":
+				return ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+			case "statusCheckRollup":
+				return ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+			case "labels":
+				return ec.fieldContext_PullRequest_labels(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
 		},
@@ -10451,6 +10755,16 @@ func (ec *executionContext) fieldContext_Query_openPullRequests(ctx context.Cont
 				return ec.fieldContext_PullRequest_reviews(ctx, field)
 			case "comments":
 				return ec.fieldContext_PullRequest_comments(ctx, field)
+			case "mergeable":
+				return ec.fieldContext_PullRequest_mergeable(ctx, field)
+			case "mergeStateStatus":
+				return ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
+			case "reviewDecision":
+				return ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+			case "statusCheckRollup":
+				return ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+			case "labels":
+				return ec.fieldContext_PullRequest_labels(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
 		},
@@ -10693,6 +11007,16 @@ func (ec *executionContext) fieldContext_Query_pullRequest(ctx context.Context, 
 				return ec.fieldContext_PullRequest_reviews(ctx, field)
 			case "comments":
 				return ec.fieldContext_PullRequest_comments(ctx, field)
+			case "mergeable":
+				return ec.fieldContext_PullRequest_mergeable(ctx, field)
+			case "mergeStateStatus":
+				return ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
+			case "reviewDecision":
+				return ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+			case "statusCheckRollup":
+				return ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+			case "labels":
+				return ec.fieldContext_PullRequest_labels(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
 		},
@@ -14993,6 +15317,16 @@ func (ec *executionContext) fieldContext_Worktree_pr(ctx context.Context, field 
 				return ec.fieldContext_PullRequest_reviews(ctx, field)
 			case "comments":
 				return ec.fieldContext_PullRequest_comments(ctx, field)
+			case "mergeable":
+				return ec.fieldContext_PullRequest_mergeable(ctx, field)
+			case "mergeStateStatus":
+				return ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
+			case "reviewDecision":
+				return ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+			case "statusCheckRollup":
+				return ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+			case "labels":
+				return ec.fieldContext_PullRequest_labels(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
 		},
@@ -18355,77 +18689,254 @@ func (ec *executionContext) _PullRequest(ctx context.Context, sel ast.SelectionS
 		case "id":
 			out.Values[i] = ec._PullRequest_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "repoOwner":
 			out.Values[i] = ec._PullRequest_repoOwner(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "repoName":
 			out.Values[i] = ec._PullRequest_repoName(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "number":
 			out.Values[i] = ec._PullRequest_number(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "title":
 			out.Values[i] = ec._PullRequest_title(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "body":
 			out.Values[i] = ec._PullRequest_body(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "state":
 			out.Values[i] = ec._PullRequest_state(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "draft":
 			out.Values[i] = ec._PullRequest_draft(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "authorLogin":
 			out.Values[i] = ec._PullRequest_authorLogin(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "baseRef":
 			out.Values[i] = ec._PullRequest_baseRef(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "headRef":
 			out.Values[i] = ec._PullRequest_headRef(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "url":
 			out.Values[i] = ec._PullRequest_url(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "createdAt":
 			out.Values[i] = ec._PullRequest_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "updatedAt":
 			out.Values[i] = ec._PullRequest_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "reviews":
 			out.Values[i] = ec._PullRequest_reviews(ctx, field, obj)
 		case "comments":
 			out.Values[i] = ec._PullRequest_comments(ctx, field, obj)
+		case "mergeable":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_mergeable(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "mergeStateStatus":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_mergeStateStatus(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "reviewDecision":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_reviewDecision(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "statusCheckRollup":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_statusCheckRollup(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "labels":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_labels(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -21417,6 +21928,16 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) unmarshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx context.Context, v interface{}) (CiStatus, error) {
+	var res CiStatus
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx context.Context, sel ast.SelectionSet, v CiStatus) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeAccount) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
@@ -21915,6 +22436,16 @@ func (ec *executionContext) unmarshalNIssueState2githubᚗcomᚋdrewdrewthisᚋg
 }
 
 func (ec *executionContext) marshalNIssueState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, sel ast.SelectionSet, v IssueState) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, v interface{}) (MergeableState, error) {
+	var res MergeableState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, sel ast.SelectionSet, v MergeableState) graphql.Marshaler {
 	return v
 }
 
@@ -23228,6 +23759,22 @@ func (ec *executionContext) marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthis�
 		return graphql.Null
 	}
 	return ec._ResourceLoad(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx context.Context, v interface{}) (*ReviewDecisionEnum, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(ReviewDecisionEnum)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx context.Context, sel ast.SelectionSet, v *ReviewDecisionEnum) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v interface{}) ([]string, error) {
