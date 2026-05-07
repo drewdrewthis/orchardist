@@ -343,9 +343,13 @@ type ComplexityRoot struct {
 		Bare      func(childComplexity int) int
 		Branch    func(childComplexity int) int
 		Head      func(childComplexity int) int
+		Host      func(childComplexity int) int
 		ID        func(childComplexity int) int
+		Issue     func(childComplexity int) int
 		Path      func(childComplexity int) int
+		Pr        func(childComplexity int) int
 		Processes func(childComplexity int) int
+		Repo      func(childComplexity int) int
 	}
 }
 
@@ -449,6 +453,10 @@ type TmuxWindowResolver interface {
 	CurrentPane(ctx context.Context, obj *TmuxWindow) (*TmuxPane, error)
 }
 type WorktreeResolver interface {
+	Host(ctx context.Context, obj *Worktree) (string, error)
+	Repo(ctx context.Context, obj *Worktree) (*string, error)
+	Pr(ctx context.Context, obj *Worktree) (*PullRequest, error)
+	Issue(ctx context.Context, obj *Worktree) (*Issue, error)
 	Processes(ctx context.Context, obj *Worktree) ([]*Process, error)
 }
 
@@ -2090,12 +2098,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Worktree.Head(childComplexity), true
 
+	case "Worktree.host":
+		if e.complexity.Worktree.Host == nil {
+			break
+		}
+
+		return e.complexity.Worktree.Host(childComplexity), true
+
 	case "Worktree.id":
 		if e.complexity.Worktree.ID == nil {
 			break
 		}
 
 		return e.complexity.Worktree.ID(childComplexity), true
+
+	case "Worktree.issue":
+		if e.complexity.Worktree.Issue == nil {
+			break
+		}
+
+		return e.complexity.Worktree.Issue(childComplexity), true
 
 	case "Worktree.path":
 		if e.complexity.Worktree.Path == nil {
@@ -2104,12 +2126,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Worktree.Path(childComplexity), true
 
+	case "Worktree.pr":
+		if e.complexity.Worktree.Pr == nil {
+			break
+		}
+
+		return e.complexity.Worktree.Pr(childComplexity), true
+
 	case "Worktree.processes":
 		if e.complexity.Worktree.Processes == nil {
 			break
 		}
 
 		return e.complexity.Worktree.Processes(childComplexity), true
+
+	case "Worktree.repo":
+		if e.complexity.Worktree.Repo == nil {
+			break
+		}
+
+		return e.complexity.Worktree.Repo(childComplexity), true
 
 	}
 	return 0, false
@@ -2613,6 +2649,18 @@ type Worktree implements Node {
 
   "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
   bare: Boolean!
+
+  "Hostname this worktree was discovered on. v1: always 'local'. Workstream F populates per-peer."
+  host: String!
+
+  "owner/repo slug derived from origin remote. Null when origin is not a GitHub URL."
+  repo: String
+
+  "Open PR whose headRef matches this worktree's branch. Null when no match, branch is detached, or branch is the project's default branch."
+  pr: PullRequest
+
+  "Issue linked from the worktree's branch (issue<N>/... convention). Null when the branch doesn't carry an issue number."
+  issue: Issue
 
   "Processes whose cwd lies under ` + "`" + `path` + "`" + `. Resolved by the ps provider (ws-b-ps); returns ` + "`" + `[]` + "`" + ` until that provider lands."
   processes: [Process!]!
@@ -8003,6 +8051,14 @@ func (ec *executionContext) fieldContext_Process_worktree(ctx context.Context, f
 				return ec.fieldContext_Worktree_head(ctx, field)
 			case "bare":
 				return ec.fieldContext_Worktree_bare(ctx, field)
+			case "host":
+				return ec.fieldContext_Worktree_host(ctx, field)
+			case "repo":
+				return ec.fieldContext_Worktree_repo(ctx, field)
+			case "pr":
+				return ec.fieldContext_Worktree_pr(ctx, field)
+			case "issue":
+				return ec.fieldContext_Worktree_issue(ctx, field)
 			case "processes":
 				return ec.fieldContext_Worktree_processes(ctx, field)
 			}
@@ -8254,6 +8310,14 @@ func (ec *executionContext) fieldContext_Project_worktrees(ctx context.Context, 
 				return ec.fieldContext_Worktree_head(ctx, field)
 			case "bare":
 				return ec.fieldContext_Worktree_bare(ctx, field)
+			case "host":
+				return ec.fieldContext_Worktree_host(ctx, field)
+			case "repo":
+				return ec.fieldContext_Worktree_repo(ctx, field)
+			case "pr":
+				return ec.fieldContext_Worktree_pr(ctx, field)
+			case "issue":
+				return ec.fieldContext_Worktree_issue(ctx, field)
 			case "processes":
 				return ec.fieldContext_Worktree_processes(ctx, field)
 			}
@@ -14776,6 +14840,233 @@ func (ec *executionContext) fieldContext_Worktree_bare(ctx context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _Worktree_host(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_host(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Worktree().Host(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_host(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_repo(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_repo(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Worktree().Repo(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_repo(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_pr(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_pr(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Worktree().Pr(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*PullRequest)
+	fc.Result = res
+	return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_pr(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_PullRequest_id(ctx, field)
+			case "repoOwner":
+				return ec.fieldContext_PullRequest_repoOwner(ctx, field)
+			case "repoName":
+				return ec.fieldContext_PullRequest_repoName(ctx, field)
+			case "number":
+				return ec.fieldContext_PullRequest_number(ctx, field)
+			case "title":
+				return ec.fieldContext_PullRequest_title(ctx, field)
+			case "body":
+				return ec.fieldContext_PullRequest_body(ctx, field)
+			case "state":
+				return ec.fieldContext_PullRequest_state(ctx, field)
+			case "draft":
+				return ec.fieldContext_PullRequest_draft(ctx, field)
+			case "authorLogin":
+				return ec.fieldContext_PullRequest_authorLogin(ctx, field)
+			case "baseRef":
+				return ec.fieldContext_PullRequest_baseRef(ctx, field)
+			case "headRef":
+				return ec.fieldContext_PullRequest_headRef(ctx, field)
+			case "url":
+				return ec.fieldContext_PullRequest_url(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_PullRequest_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_PullRequest_updatedAt(ctx, field)
+			case "reviews":
+				return ec.fieldContext_PullRequest_reviews(ctx, field)
+			case "comments":
+				return ec.fieldContext_PullRequest_comments(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_issue(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_issue(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Worktree().Issue(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*Issue)
+	fc.Result = res
+	return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_issue(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Issue_id(ctx, field)
+			case "repoOwner":
+				return ec.fieldContext_Issue_repoOwner(ctx, field)
+			case "repoName":
+				return ec.fieldContext_Issue_repoName(ctx, field)
+			case "number":
+				return ec.fieldContext_Issue_number(ctx, field)
+			case "title":
+				return ec.fieldContext_Issue_title(ctx, field)
+			case "body":
+				return ec.fieldContext_Issue_body(ctx, field)
+			case "state":
+				return ec.fieldContext_Issue_state(ctx, field)
+			case "authorLogin":
+				return ec.fieldContext_Issue_authorLogin(ctx, field)
+			case "url":
+				return ec.fieldContext_Issue_url(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Issue_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Issue_updatedAt(ctx, field)
+			case "comments":
+				return ec.fieldContext_Issue_comments(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Issue", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Worktree_processes(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Worktree_processes(ctx, field)
 	if err != nil {
@@ -20591,6 +20882,141 @@ func (ec *executionContext) _Worktree(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "host":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Worktree_host(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "repo":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Worktree_repo(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "pr":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Worktree_pr(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "issue":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Worktree_issue(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "processes":
 			field := field
 

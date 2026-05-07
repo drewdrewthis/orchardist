@@ -650,6 +650,14 @@ type Worktree struct {
 	Head string `json:"head"`
 	// True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch.
 	Bare bool `json:"bare"`
+	// Hostname this worktree was discovered on. v1: always 'local'. Workstream F populates per-peer.
+	Host string `json:"host"`
+	// owner/repo slug derived from origin remote. Null when origin is not a GitHub URL.
+	Repo *string `json:"repo,omitempty"`
+	// Open PR whose headRef matches this worktree's branch. Null when no match, branch is detached, or branch is the project's default branch.
+	Pr *PullRequest `json:"pr,omitempty"`
+	// Issue linked from the worktree's branch (issue<N>/... convention). Null when the branch doesn't carry an issue number.
+	Issue *Issue `json:"issue,omitempty"`
 	// Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands.
 	Processes []*Process `json:"processes"`
 }

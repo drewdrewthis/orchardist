@@ -389,6 +389,18 @@ type Worktree implements Node {
   "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
   bare: Boolean!
 
+  "Hostname this worktree was discovered on. v1: always 'local'. Workstream F populates per-peer."
+  host: String!
+
+  "owner/repo slug derived from origin remote. Null when origin is not a GitHub URL."
+  repo: String
+
+  "Open PR whose headRef matches this worktree's branch. Null when no match, branch is detached, or branch is the project's default branch."
+  pr: PullRequest
+
+  "Issue linked from the worktree's branch (issue<N>/... convention). Null when the branch doesn't carry an issue number."
+  issue: Issue
+
   "Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands."
   processes: [Process!]!
 }

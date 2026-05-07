@@ -956,6 +956,26 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 	return projectPane(p), nil
 }
 
+// Host is the resolver for the host field.
+func (r *worktreeResolver) Host(ctx context.Context, obj *graphql1.Worktree) (string, error) {
+	panic(fmt.Errorf("not implemented: Host - host"))
+}
+
+// Repo is the resolver for the repo field.
+func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*string, error) {
+	panic(fmt.Errorf("not implemented: Repo - repo"))
+}
+
+// Pr is the resolver for the pr field.
+func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*graphql1.PullRequest, error) {
+	panic(fmt.Errorf("not implemented: Pr - pr"))
+}
+
+// Issue is the resolver for the issue field.
+func (r *worktreeResolver) Issue(ctx context.Context, obj *graphql1.Worktree) (*graphql1.Issue, error) {
+	panic(fmt.Errorf("not implemented: Issue - issue"))
+}
+
 // Processes is the resolver for the worktree.processes field.
 func (r *worktreeResolver) Processes(ctx context.Context, obj *graphql1.Worktree) ([]*graphql1.Process, error) {
 	return []*graphql1.Process{}, nil
