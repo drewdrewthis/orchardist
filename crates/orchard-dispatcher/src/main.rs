@@ -40,6 +40,30 @@ const WORKTREE_BARE_VERBS: &[&str] = &["new", "rm", "prune", "mv", "ls", "path"]
 /// Verbs that map directly to a helper binary `orchard-<verb>`.
 const NAMESPACE_VERBS: &[&str] = &["tui", "daemon", "worktree", "chat"];
 
+/// Verbs that orchard-tui handles internally.
+///
+/// These flat verbs predate ADR-013 and live inside the orchard-tui binary's
+/// argv parser (see `crates/orchard/src/main.rs::main`). The dispatcher
+/// forwards `orchard <verb> <args>` to `orchard-tui <verb> <args>` for each
+/// of these. Backwards-compat: every name listed here matches what
+/// `orchard-tui` accepts today.
+///
+/// Step 6's namespaced grammar (`remote setup`, `hook ingest`, etc.) is
+/// future work — these flat names continue to work and remain documented
+/// for at least one minor version per ADR-013.
+const TUI_VERBS: &[&str] = &[
+    "init",
+    "upgrade",
+    "heal",
+    "refresh",
+    "watch",
+    "sessions",
+    "setup-remote",
+    "list-remotes",
+    "hook-enrich",
+    "webhook-serve",
+];
+
 const HELP: &str = "\
 orchard — Git worktree, tmux session, and PR dashboard.
 
@@ -54,6 +78,17 @@ Commands:
   daemon <subcmd>               Manage the daemon (start, stop, status, ...).
   worktree <subcmd>             Manage worktrees (new, rm, prune, mv, ls, path).
   chat <subcmd>                 Agent-to-agent chat (send, broadcast, tail).
+
+  init                          Run the first-time setup wizard.
+  upgrade                       Print upgrade instructions.
+  heal [--fix] [--json]         Diagnose and repair local state.
+  refresh                       Refresh cached worktree/PR data.
+  watch                         Tail the local event stream.
+  sessions [--json]             Inspect active tmux/claude sessions.
+  setup-remote <host>           Provision orchard on a remote SSH host.
+  list-remotes [--json]         List configured remotes.
+  hook-enrich --transcript ...  Claude Code hook entry point.
+  webhook-serve                 Run the GitHub webhook receiver.
 
 Worktree shortcuts (the worktree is Orchard's primary unit):
   orchard new <issue>           ≡ orchard worktree new <issue>
@@ -94,6 +129,14 @@ fn main() -> ExitCode {
         Some(verb) if NAMESPACE_VERBS.contains(&verb) => {
             let forwarded: Vec<String> = args.iter().skip(1).cloned().collect();
             exec(verb, &forwarded)
+        }
+        Some(verb) if TUI_VERBS.contains(&verb) => {
+            // `orchard heal` / `orchard refresh` / `orchard setup-remote …` —
+            // forward the verb itself plus the remaining args to orchard-tui,
+            // which has the original argv parser for these.
+            let mut forwarded = vec![verb.to_string()];
+            forwarded.extend(args.iter().skip(1).cloned());
+            exec("tui", &forwarded)
         }
         Some(verb) => {
             // Unknown verb — try to dispatch anyway so third-party plugins on
@@ -240,6 +283,52 @@ mod tests {
             assert!(
                 HELP.contains(&format!("orchard {v} ")) || HELP.contains(&format!("orchard {v}\n")),
                 "HELP must document the bare verb '{v}'"
+            );
+        }
+    }
+
+    #[test]
+    fn tui_verbs_do_not_collide_with_other_verb_sets() {
+        for v in TUI_VERBS {
+            assert!(
+                !NAMESPACE_VERBS.contains(v),
+                "TUI verb '{v}' must not also be a namespace verb"
+            );
+            assert!(
+                !WORKTREE_BARE_VERBS.contains(v),
+                "TUI verb '{v}' must not also be a bare-worktree verb"
+            );
+        }
+    }
+
+    #[test]
+    fn tui_verbs_cover_orchard_tui_argv_parser() {
+        // Anchor: orchard-tui's main.rs accepts these as the first positional
+        // argument. If a verb is added/removed there, this list must follow.
+        // See `crates/orchard/src/main.rs::main` match arms.
+        assert_eq!(
+            TUI_VERBS,
+            &[
+                "init",
+                "upgrade",
+                "heal",
+                "refresh",
+                "watch",
+                "sessions",
+                "setup-remote",
+                "list-remotes",
+                "hook-enrich",
+                "webhook-serve",
+            ]
+        );
+    }
+
+    #[test]
+    fn help_lists_every_tui_verb() {
+        for v in TUI_VERBS {
+            assert!(
+                HELP.contains(&format!("  {v}")),
+                "HELP must document the TUI verb '{v}'"
             );
         }
     }
