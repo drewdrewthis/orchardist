@@ -48,3 +48,15 @@ type httpError struct {
 func (e *httpError) Error() string {
 	return fmt.Sprintf("github %s returned %d: %s", e.Endpoint, e.Status, e.Message)
 }
+
+// IsNotFound reports whether `err` is a GitHub API 404. Callers use this
+// to distinguish "this number doesn't exist" from other failures so a
+// `null` response can be returned cleanly (for `Query.issue(repo,
+// number)` and `Query.pullRequest(repo, number)`).
+func IsNotFound(err error) bool {
+	var h *httpError
+	if errors.As(err, &h) {
+		return h.Status == 404
+	}
+	return false
+}

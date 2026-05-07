@@ -624,10 +624,15 @@ func newDaemon(t *testing.T, p *gh.Provider) *httptest.Server {
 // in the Data field for the query it ran; missing fields are zero-valued.
 type graphqlResponse struct {
 	Data struct {
-		PullRequests []prNode      `json:"pullRequests"`
-		Issues       []issueNode   `json:"issues"`
-		WorkflowRuns []runNode     `json:"workflowRuns"`
-		Health       *healthNode   `json:"health"`
+		PullRequests []prNode    `json:"pullRequests"`
+		Issues       []issueNode `json:"issues"`
+		WorkflowRuns []runNode   `json:"workflowRuns"`
+		Health       *healthNode `json:"health"`
+		// Singular look-ups by number — added with #436. Nullable on the
+		// wire; pointer on this side so tests can distinguish "no row"
+		// from "zero-valued row".
+		Issue       *issueNode `json:"issue"`
+		PullRequest *prNode    `json:"pullRequest"`
 	} `json:"data"`
 	Errors []map[string]any `json:"errors,omitempty"`
 }
@@ -651,6 +656,7 @@ type issueNode struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	State  string `json:"state"`
+	URL    string `json:"url"`
 }
 
 type runNode struct {
@@ -663,6 +669,83 @@ type runNode struct {
 
 type healthNode struct {
 	Status string `json:"status"`
+}
+
+// TestGH_E2E_IssueByNumber asserts `Query.issue(repo, number)` returns
+// the canned issue. Resolves issue #436.
+func TestGH_E2E_IssueByNumber(t *testing.T) {
+	installFakeGH(t)
+	api := stubAPI(t)
+	tlsClient := httpClientForTLS(t, api)
+
+	auth := gh.NewCommandAuthSource()
+	provider := newGHProviderForTest(t, api.URL, auth, tlsClient)
+
+	srv := newDaemon(t, provider)
+	defer srv.Close()
+
+	resp := postQuery(t, srv.URL, `query {
+		issue(repo: "alice/repo", number: 100) {
+			id
+			number
+			title
+			state
+			url
+		}
+	}`)
+	if len(resp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp.Errors)
+	}
+	if resp.Data.Issue == nil {
+		t.Fatalf("expected non-null issue, got null")
+	}
+	if resp.Data.Issue.Number != 100 {
+		t.Errorf("number = %d, want 100", resp.Data.Issue.Number)
+	}
+	if resp.Data.Issue.ID != "Issue:alice/repo#100" {
+		t.Errorf("id = %q, want Issue:alice/repo#100", resp.Data.Issue.ID)
+	}
+	if resp.Data.Issue.State != "OPEN" {
+		t.Errorf("state = %q, want OPEN", resp.Data.Issue.State)
+	}
+}
+
+// TestGH_E2E_PullRequestByNumber asserts `Query.pullRequest(repo, number)`
+// returns the canned PR. Resolves issue #436.
+func TestGH_E2E_PullRequestByNumber(t *testing.T) {
+	installFakeGH(t)
+	api := stubAPI(t)
+	tlsClient := httpClientForTLS(t, api)
+
+	auth := gh.NewCommandAuthSource()
+	provider := newGHProviderForTest(t, api.URL, auth, tlsClient)
+
+	srv := newDaemon(t, provider)
+	defer srv.Close()
+
+	resp := postQuery(t, srv.URL, `query {
+		pullRequest(repo: "alice/repo", number: 42) {
+			id
+			number
+			title
+			state
+			authorLogin
+			baseRef
+			headRef
+		}
+	}`)
+	if len(resp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp.Errors)
+	}
+	if resp.Data.PullRequest == nil {
+		t.Fatalf("expected non-null pullRequest, got null")
+	}
+	if resp.Data.PullRequest.Number != 42 {
+		t.Errorf("number = %d, want 42", resp.Data.PullRequest.Number)
+	}
+	if resp.Data.PullRequest.ID != "PullRequest:alice/repo#42" {
+		t.Errorf("id = %q, want PullRequest:alice/repo#42", resp.Data.PullRequest.ID)
+	}
 }
 
 func postQuery(t *testing.T, url, query string) graphqlResponse {

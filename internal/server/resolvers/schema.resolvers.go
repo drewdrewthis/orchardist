@@ -388,6 +388,16 @@ func (r *queryResolver) Issues(ctx context.Context, repo string, state *graphql1
 	return r.queryIssuesResolver(ctx, repo, state)
 }
 
+// Issue is the resolver for the issue field.
+func (r *queryResolver) Issue(ctx context.Context, repo string, number int64) (*graphql1.Issue, error) {
+	return r.queryIssueByNumberResolver(ctx, repo, number)
+}
+
+// PullRequest is the resolver for the pullRequest field.
+func (r *queryResolver) PullRequest(ctx context.Context, repo string, number int64) (*graphql1.PullRequest, error) {
+	return r.queryPullRequestByNumberResolver(ctx, repo, number)
+}
+
 // WorkflowRuns is the resolver for the workflowRuns field.
 func (r *queryResolver) WorkflowRuns(ctx context.Context, repo string) ([]*graphql1.WorkflowRun, error) {
 	return r.queryWorkflowRunsResolver(ctx, repo)
