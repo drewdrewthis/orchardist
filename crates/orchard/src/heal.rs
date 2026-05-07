@@ -135,9 +135,41 @@ pub fn detect_self_error(report: &HealReport) -> Option<&HealFinding> {
         .find(|f| f.is_self && f.severity == Severity::Error)
 }
 
+/// Typed outcome of a single heal action.
+///
+/// `message` (on `FixResult`) stays for human display, but tests and
+/// programmatic consumers should branch on this enum — string-prefix
+/// matching on the message is brittle (a localized or reformatted
+/// message silently breaks the kill-vs-skip distinction).
+///
+/// Resolves issue #371.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixOutcome {
+    /// A KillSession action killed the named tmux session.
+    Killed,
+    /// A KillSession action targeted the invoking session and was skipped
+    /// per the self-protection invariant (see `is_self` on HealFinding).
+    SkippedSelf,
+    /// A DeleteFile action removed the file.
+    Deleted,
+    /// A FlagForCleanup action surfaced the item to the operator.
+    Flagged,
+    /// A DeleteFile action refused the path (outside cache/tmp).
+    Skipped,
+    /// The underlying syscall (`tmux kill-session`, `fs::remove_file`,
+    /// etc.) returned an error. The error string is in
+    /// [`FixResult::error`]; the action shape is in the originating
+    /// HealFinding.
+    Failed,
+}
+
 /// Result of applying a single heal action.
 #[derive(Debug, Serialize)]
 pub struct FixResult {
+    /// The typed outcome — branch on this in tests and programmatic
+    /// consumers. The `message` field below is for human display only.
+    pub outcome: FixOutcome,
     /// The finding that was addressed.
     pub message: String,
     /// Whether the fix succeeded.
@@ -446,6 +478,7 @@ pub fn apply_fixes(findings: &[HealFinding]) -> Vec<FixResult> {
             HealAction::KillSession(name) => {
                 if finding.is_self {
                     results.push(FixResult {
+                        outcome: FixOutcome::SkippedSelf,
                         message: format!("Skipped session \"{}\" — refusing to kill self", name),
                         success: true,
                         error: None,
@@ -457,9 +490,15 @@ pub fn apply_fixes(findings: &[HealFinding]) -> Vec<FixResult> {
                 // path matches every other in-process kill site.
                 let result =
                     tmux::kill_tmux_session_safe(name, tmux::current_session_name().as_deref());
+                let success = result.is_ok();
                 results.push(FixResult {
+                    outcome: if success {
+                        FixOutcome::Killed
+                    } else {
+                        FixOutcome::Failed
+                    },
                     message: format!("Killed session \"{}\"", name),
-                    success: result.is_ok(),
+                    success,
                     error: result.err().map(|e| e.to_string()),
                 });
             }
@@ -471,6 +510,7 @@ pub fn apply_fixes(findings: &[HealFinding]) -> Vec<FixResult> {
                         .is_some_and(|n| n.to_string_lossy().starts_with("orchard-claude-"));
                 if !in_cache && !in_tmp {
                     results.push(FixResult {
+                        outcome: FixOutcome::Skipped,
                         message: format!("Skipped file outside expected directories: \"{}\"", path),
                         success: false,
                         error: Some("path not in ~/.cache/orchard/ or /tmp/orchard-*".to_string()),
@@ -478,14 +518,21 @@ pub fn apply_fixes(findings: &[HealFinding]) -> Vec<FixResult> {
                     continue;
                 }
                 let result = std::fs::remove_file(path);
+                let success = result.is_ok();
                 results.push(FixResult {
+                    outcome: if success {
+                        FixOutcome::Deleted
+                    } else {
+                        FixOutcome::Failed
+                    },
                     message: format!("Deleted file \"{}\"", path),
-                    success: result.is_ok(),
+                    success,
                     error: result.err().map(|e| e.to_string()),
                 });
             }
             HealAction::FlagForCleanup(desc) => {
                 results.push(FixResult {
+                    outcome: FixOutcome::Flagged,
                     message: format!("Flagged for manual cleanup: {}", desc),
                     success: true,
                     error: None,
@@ -929,7 +976,7 @@ mod tests {
         let results = apply_fixes(&report.findings);
         // FlagForCleanup produces a result but does not kill/delete anything.
         for r in &results {
-            assert!(r.message.starts_with("Flagged for manual cleanup"));
+            assert_eq!(r.outcome, FixOutcome::Flagged);
         }
     }
 
@@ -1080,6 +1127,7 @@ mod tests {
     #[test]
     fn format_report_shows_fix_results() {
         let fix_results = vec![FixResult {
+            outcome: FixOutcome::Killed,
             message: "Killed session \"orphan\"".to_string(),
             success: true,
             error: None,
@@ -1305,9 +1353,10 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert!(results[0].success, "skip result must be success=true");
-        assert!(
-            results[0].message.starts_with("Skipped session"),
-            "message must start with 'Skipped session', got: {}",
+        assert_eq!(
+            results[0].outcome,
+            FixOutcome::SkippedSelf,
+            "outcome must be SkippedSelf when is_self gate fires; got message: {}",
             results[0].message
         );
         assert!(results[0].error.is_none(), "skip result must have no error");
@@ -1330,9 +1379,10 @@ mod tests {
         let results = apply_fixes(&[finding]);
 
         assert_eq!(results.len(), 1);
-        assert!(
-            results[0].message.starts_with("Killed session"),
-            "non-self finding must go through kill path, got: {}",
+        assert_eq!(
+            results[0].outcome,
+            FixOutcome::Killed,
+            "non-self finding must take the Killed path; got message: {}",
             results[0].message
         );
     }
