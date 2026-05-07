@@ -17,7 +17,7 @@ import (
 // "origin"]` block has a `url =` entry; errNoGitDir when there is no
 // `.git` at the path; other I/O errors propagate.
 func ReadOriginURL(workdir string) (string, error) {
-	gitDir, err := resolveGitDirForWorktree(workdir)
+	gitDir, err := ResolveGitDirForWorktree(workdir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", errNoGitDir
@@ -117,7 +117,7 @@ func splitOwnerName(s string) (string, string, bool) {
 	return parts[0], parts[1], true
 }
 
-// resolveGitDirForWorktree mirrors the git provider's logic so this
+// ResolveGitDirForWorktree mirrors the git provider's logic so this
 // package doesn't need to depend on it. Handles both `.git` as a
 // directory and as a file pointing at the actual git directory
 // (linked-worktree case).
@@ -129,7 +129,7 @@ func splitOwnerName(s string) (string, string, bool) {
 // `config` lives. This function follows `commondir` so that callers
 // (notably ReadOriginURL) always read `config` from the project root
 // rather than from the per-worktree directory.
-func resolveGitDirForWorktree(workdir string) (string, error) {
+func ResolveGitDirForWorktree(workdir string) (string, error) {
 	candidate := filepath.Join(workdir, ".git")
 	info, err := os.Stat(candidate)
 	if err != nil {

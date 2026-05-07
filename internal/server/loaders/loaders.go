@@ -357,6 +357,13 @@ func loadProcesses(providers *ProvidersBundle, keys []ProcessKey) []*dataloader.
 // Returns the full open-PR slice for each position in keys (including
 // duplicate positions). The resolver layer does the headRef→branch match
 // locally against this slice.
+//
+// Slice-sharing contract: when multiple positions in keys map to the same
+// RepoKey, every position receives the SAME *graphql1.PullRequest slice
+// pointer. Callers MUST treat the slice as read-only — appending,
+// sorting, or otherwise mutating the slice would corrupt sibling
+// consumers in the same batch. The Worktree.pr resolver only iterates
+// for headRef equality, which is safe.
 func loadPullRequestsForRepo(ctx context.Context, providers *ProvidersBundle, keys []RepoKey) []*dataloader.Result[[]*graphql1.PullRequest] {
 	out := make([]*dataloader.Result[[]*graphql1.PullRequest], len(keys))
 	ghp := providers.GH
@@ -406,6 +413,11 @@ func loadPullRequestsForRepo(ctx context.Context, providers *ProvidersBundle, ke
 // model. Duplicated from resolvers/gh.go (toGraphQLPullRequest) to
 // keep the loaders package free of a circular import — the resolvers
 // package imports loaders, so loaders cannot import resolvers.
+//
+// MUST mirror resolvers/gh.go::toGraphQLPullRequest field-for-field.
+// When you add a field to one, add it to the other in the same commit
+// (and consider extracting to a shared internal/server/graphql/projection
+// package if the duplication grows beyond two sites).
 func projectPullRequest(p ghprovider.PullRequest) *graphql1.PullRequest {
 	return &graphql1.PullRequest{
 		ID:          p.ID(),

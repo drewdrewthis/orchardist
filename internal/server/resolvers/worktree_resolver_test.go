@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
+	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 )
 
 // writeGitConfig writes a minimal .git/config under dir with the given
@@ -298,5 +301,55 @@ func TestWorktreePr_NoLoadersInContext(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("Pr() = %v, want nil on error path", got)
+	}
+}
+
+// neverCallStub satisfies loaders.GHPullRequestLister but fails the
+// surrounding test if its ListPullRequests is invoked. Used to prove
+// that a code path short-circuits before the DataLoader fires.
+type neverCallStub struct {
+	t      *testing.T
+	called atomic.Int32
+}
+
+func (s *neverCallStub) ListPullRequests(_ context.Context, _, _ string, _ ghprovider.PullRequestState) ([]ghprovider.PullRequest, error) {
+	s.called.Add(1)
+	s.t.Errorf("gh.ListPullRequests was called but the resolver should have skipped the loader")
+	return nil, nil
+}
+
+// TestWorktreePr_DefaultBranchSkipsLoader verifies that a worktree on the
+// project's default branch returns nil AND does not invoke the
+// PullRequestsForRepo DataLoader. This is the second half of the AC 3
+// scenario "pr resolver returns null when worktree branch is the project's
+// default branch ... And no PR list is fetched for this worktree".
+func TestWorktreePr_DefaultBranchSkipsLoader(t *testing.T) {
+	dir := t.TempDir()
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+
+	// Write .git/HEAD pointing at refs/heads/main so readDefaultBranch
+	// returns ("main", true).
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write .git/HEAD: %v", err)
+	}
+
+	stub := &neverCallStub{t: t}
+	bundle := &loaders.ProvidersBundle{GH: stub}
+	ldrs := loaders.NewLoaders(bundle)
+	ctx := loaders.WithLoaders(context.Background(), ldrs)
+
+	r := newWorktreeResolver()
+	obj := &graphql1.Worktree{ID: "proj:main", Path: dir, Branch: "main"}
+
+	got, err := r.Pr(ctx, obj)
+	if err != nil {
+		t.Fatalf("Pr() returned unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Pr() = %v, want nil for default-branch worktree", got)
+	}
+	if n := stub.called.Load(); n != 0 {
+		t.Errorf("gh.ListPullRequests was called %d times, want 0 (loader must be skipped)", n)
 	}
 }
