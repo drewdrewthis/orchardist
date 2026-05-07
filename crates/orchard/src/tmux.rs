@@ -150,13 +150,51 @@ pub fn session_exists(name: &str) -> bool {
 }
 
 /// Kills the tmux session with the given name.
-pub fn kill_tmux_session(name: &str) -> Result<()> {
+///
+/// **Direct callers should use [`kill_tmux_session_safe`] instead** —
+/// the raw function does not protect the invoking process's host session
+/// from being killed (which would terminate orchard itself when run inside
+/// tmux). The raw function stays accessible for cases where the safety
+/// check has already been performed (e.g. inside `kill_tmux_session_safe`)
+/// or where the target session is provably not the host (e.g. a remote
+/// SSH-targeted kill, where "current session" is meaningless).
+///
+/// Resolves issue #369.
+pub(crate) fn kill_tmux_session(name: &str) -> Result<()> {
     Command::new("tmux")
         .args(["kill-session", "-t", name])
         .status()
         .context("tmux kill-session")?;
     LOG.info(&format!("killTmuxSession: {}", name));
     Ok(())
+}
+
+/// Kills `name`, refusing if `name == current_session`.
+///
+/// Pass `current_session = current_session_name().as_deref()` from the
+/// caller. When the target equals the invoking process's host session,
+/// returns `Err(SelfKillRefused)` and emits no tmux command — this is
+/// the cross-cutting invariant that prevents orchard from self-immolating
+/// when run inside tmux. Pass `None` for `current_session` only when the
+/// caller is provably not inside tmux (background services, remote
+/// shellouts).
+///
+/// All in-process callers of `kill_tmux_session` should funnel through
+/// this wrapper; raw `kill_tmux_session` is `pub(crate)` so the safety
+/// check cannot be bypassed from outside the module.
+///
+/// Resolves issue #369.
+pub fn kill_tmux_session_safe(name: &str, current_session: Option<&str>) -> Result<()> {
+    if let Some(current) = current_session
+        && current == name
+    {
+        anyhow::bail!(
+            "refusing to kill tmux session '{name}': it is the host session of \
+             the orchard process. This guard prevents self-immolation when \
+             orchard runs inside tmux. See issue #369."
+        );
+    }
+    kill_tmux_session(name)
 }
 
 /// Captures the pane content of a tmux session, returning the last `lines` lines.
@@ -583,5 +621,60 @@ mod tests {
             !name.contains('\n'),
             "session name must not contain newlines"
         );
+    }
+
+    // -------- kill_tmux_session_safe — issue #369 invariant --------
+
+    /// Regression test: `kill_tmux_session_safe` MUST refuse to kill the
+    /// host session of the invoking process. This is the cross-cutting
+    /// invariant from issue #369; if any caller forgets the safety
+    /// wrapper they get the public function which can't bypass this
+    /// check.
+    #[test]
+    fn kill_tmux_session_safe_refuses_to_kill_self() {
+        let result = kill_tmux_session_safe("my_session", Some("my_session"));
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("refusing to kill"),
+            "error message must say so: {msg}"
+        );
+        assert!(msg.contains("my_session"), "must name the session: {msg}");
+    }
+
+    /// When the target differs from the host session, the wrapper
+    /// passes through to the raw kill. We can't test the actual tmux
+    /// call without a real tmux server (and that would require mocking
+    /// process spawn) — but we can at least confirm the guard does NOT
+    /// short-circuit for differing names. The downstream Command::new
+    /// will fail in a unit test environment where tmux isn't running,
+    /// so we accept either an error from tmux or success — what we
+    /// must NOT see is the "refusing to kill" guard message.
+    #[test]
+    fn kill_tmux_session_safe_passes_through_for_other_targets() {
+        let result =
+            kill_tmux_session_safe("some_other_session", Some("my_current_session"));
+        if let Err(e) = result {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("refusing to kill"),
+                "must not trigger the self-kill guard for a different target: {msg}"
+            );
+        }
+    }
+
+    /// When `current_session` is None (caller is not inside tmux), the
+    /// guard cannot apply and the wrapper simply passes through. This
+    /// is the contract for background services / non-TTY callers.
+    #[test]
+    fn kill_tmux_session_safe_no_current_session_skips_guard() {
+        let result = kill_tmux_session_safe("any_session", None);
+        if let Err(e) = result {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("refusing to kill"),
+                "no-current-session callers must not trip the guard: {msg}"
+            );
+        }
     }
 }

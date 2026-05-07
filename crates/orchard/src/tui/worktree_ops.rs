@@ -65,9 +65,11 @@ pub(super) fn delete_task_row(
         return Ok(());
     }
 
-    // Local deletion
+    // Local deletion. Use the safety wrapper so a TUI delete action
+    // can never kill the orchard-tui process's own host session
+    // (which would terminate the dialog mid-action). Resolves #369.
     if let Some(sess) = session_name {
-        let _ = tmux::kill_tmux_session(sess);
+        let _ = tmux::kill_tmux_session_safe(sess, tmux::current_session_name().as_deref());
     }
     if worktree_core::remove_worktree(&row.worktree_path, false).is_err() {
         worktree_core::remove_worktree(&row.worktree_path, true)?;
