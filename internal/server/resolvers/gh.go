@@ -469,8 +469,10 @@ func mapReviewDecision(rd *gh.ReviewDecision) *graphql1.ReviewDecisionEnum {
 		v := graphql1.ReviewDecisionEnumDismissed
 		return &v
 	default:
-		v := graphql1.ReviewDecisionEnumReviewRequired
-		return &v
+		// Unknown wire value (GitHub may add new ReviewDecision values
+		// over time). The schema permits null; surface that rather than
+		// silently misclassifying as REVIEW_REQUIRED.
+		return nil
 	}
 }
 

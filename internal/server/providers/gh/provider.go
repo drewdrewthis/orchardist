@@ -219,11 +219,15 @@ func (p *Provider) ListPullRequests(ctx context.Context, owner, name string, sta
 	p.listMu.Unlock()
 
 	// Also seed the per-key cache so a follow-up GetPullRequest is
-	// cheap.
+	// cheap. The REST list endpoint does not return enrichment fields
+	// (mergeable, mergeStateStatus, reviewDecision, statusCheckRollup,
+	// labels), so we drop any stale enrichment timestamp here — the
+	// next EnrichPullRequest call must refetch via GraphQL.
 	p.prMu.Lock()
 	for _, pr := range prs {
 		k := PullRequestKey{Owner: pr.RepoOwner, Name: pr.RepoName, Number: pr.Number}
 		p.prs[k] = prEntry{value: pr, at: now}
+		delete(p.enrichAt, k)
 	}
 	p.prMu.Unlock()
 
@@ -251,6 +255,9 @@ func (p *Provider) GetPullRequest(ctx context.Context, key PullRequestKey) (Pull
 	}
 	p.prMu.Lock()
 	p.prs[key] = prEntry{value: pr, at: p.clock()}
+	// REST GetPull does not populate enrichment fields; drop any stale
+	// enrichment timestamp so the next EnrichPullRequest refetches.
+	delete(p.enrichAt, key)
 	p.prMu.Unlock()
 	return pr, nil
 }
@@ -493,6 +500,7 @@ var (
 	_ = (*Provider)(nil).GetIssue
 	_ = (*Provider)(nil).GetWorkflowRun
 	_ = (*Provider)(nil).GetRepository
+	_ = (*Provider)(nil).EnrichPullRequest
 )
 
 // errNoGitDir / errNoOriginRemote differentiate "no .git" from "no

@@ -227,6 +227,15 @@ func TestEnrichPullRequest_UnknownMergeableNotCachedAsDefinitive(t *testing.T) {
 		t.Fatalf("expected 1 HTTP call, got %d", c)
 	}
 
+	// Direct invariant check: enrichAt MUST be the zero time after an
+	// UNKNOWN response. A future regression that wrote enrichAt[key]
+	// while still treating Mergeable==UNKNOWN as a cache miss would
+	// pass the HTTP-count assertion but break the contract — this
+	// catches that drift directly.
+	if ts := p.ExportEnrichTimestamp(key); !ts.IsZero() {
+		t.Errorf("enrichAt[key] = %v after UNKNOWN, want zero time", ts)
+	}
+
 	// Do NOT advance clock — still within TTL window.
 	// Call 2 — UNKNOWN means no cache; must still hit the wire.
 	_, err = p.EnrichPullRequest(context.Background(), key)

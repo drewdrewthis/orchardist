@@ -101,7 +101,6 @@ type prEnrichEntry struct {
 // We reuse the existing prs map value for storage — the enrichment is
 // merged into the PullRequest struct in place, and the enrichAt map
 // tracks when that last happened.
-var _ = (*Provider)(nil).EnrichPullRequest // compile-time method existence check
 
 // EnrichPullRequest fetches the GraphQL-only enrichment fields
 // (mergeable, mergeStateStatus, reviewDecision, statusCheckRollup,
