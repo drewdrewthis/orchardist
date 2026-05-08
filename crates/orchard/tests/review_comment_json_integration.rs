@@ -40,7 +40,7 @@ impl ReviewFixture {
             .output()
             .expect("git commit");
 
-        let config_dir = home.path().join(".config").join("orchard");
+        let config_dir = home.path().join(".orchard");
         std::fs::create_dir_all(&config_dir).expect("create config dir");
         let config_json = format!(
             r#"{{"repos":[{{"slug":"{SLUG}","path":"{}"}}]}}"#,

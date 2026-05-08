@@ -75,7 +75,7 @@ fn run_json_against_flat_clone_with_worktree() -> Option<(Value, String, String)
     assert!(status.success(), "git worktree add must succeed");
 
     // Write a global config pointing to our flat clone.
-    let config_dir = home.path().join(".config").join("orchard");
+    let config_dir = home.path().join(".orchard");
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     let config_json = format!(
         r#"{{"repos":[{{"slug":"{SLUG}","path":"{}"}}]}}"#,
