@@ -6,15 +6,9 @@
 //!
 //! # Why subprocess, not in-process
 //!
-//! `restore_all_local` is guarded by a process-global `OnceLock<()>` called
-//! `RESTORE_RAN`. Once set, it short-circuits all subsequent calls in the same
-//! process. Running the assertion in a subprocess gives us:
-//!   - A fresh `RESTORE_RAN` state every time.
-//!   - No cross-test contamination from the OnceLock.
-//!   - A clean filesystem (HOME redirected to a tempdir).
-//!
-//! After AC 6 removes `RESTORE_RAN`, the subprocess approach is still correct
-//! because it exercises the binary exactly as a real user would.
+//! Running the assertion in a subprocess exercises the binary exactly as a
+//! real user would: HOME redirected to a tempdir, fake tmux on PATH, and a
+//! pristine cache file. No risk of in-process state leaking between tests.
 //!
 //! # Mechanism
 //!
@@ -122,8 +116,8 @@ fn write_ghost_session_cache(cache_dir: &std::path::Path, worktree_path: &std::p
 /// Design invariants:
 /// - Deterministic: no real tmux server needed; fake tmux is deterministic.
 /// - No flakes: the marker file is either written (restore happened) or absent.
-/// - Subprocess: avoids the process-global `RESTORE_RAN` OnceLock contaminating
-///   other tests in this suite.
+/// - Subprocess: exercises the binary like a real user, with HOME and PATH
+///   redirected to test fixtures.
 #[test]
 fn refresh_and_build_does_not_invoke_restore_session_for_dead_cached_session() {
     // -----------------------------------------------------------------------
