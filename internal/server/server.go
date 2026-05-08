@@ -399,12 +399,12 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 			Subprotocols:    []string{"graphql-transport-ws", "graphql-ws"},
 		},
 	})
-	// Introspection is gated by env var. Off by default in prod (gqlgen
-	// sets DisableIntrospection: true unless extension.Introspection is
-	// registered) so adversarial probes can't enumerate the surface; on
-	// for dev/CLI when ORCHARD_INTROSPECTION=1 so operators can run
-	// `__schema { types { name } }` without round-tripping through
-	// schema.graphql. Resolves issue #401.
+	// Introspection is gated by env var. ON by default — the daemon binds
+	// to localhost (federation runs over SSH tunnels per issue #474), so
+	// schema introspection is local-only and worth the ergonomic win.
+	// Operators on shared hosts can disable with ORCHARD_INTROSPECTION=0.
+	// Resolves issue #469 F4 (and reverses the original gate from #401
+	// now that auth is delegated to the SSH transport).
 	if introspectionEnabled() {
 		srv.Use(extension.Introspection{})
 	}
@@ -412,15 +412,16 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 }
 
 // introspectionEnabled returns true when the daemon should respond to
-// `__schema` / `__type` queries. The toggle is intentionally an env var
+// `__schema` / `__type` queries. Defaults to ON; ORCHARD_INTROSPECTION=0
+// (or false/no/off) opts out. The toggle is intentionally an env var
 // rather than a CLI flag so daemons started by launchd / systemd can
-// opt in without a wrapper script that re-execs with `--introspection`.
+// opt out without a wrapper script that re-execs with a custom flag.
 func introspectionEnabled() bool {
 	switch os.Getenv("ORCHARD_INTROSPECTION") {
-	case "1", "true", "yes", "on":
-		return true
-	default:
+	case "0", "false", "no", "off":
 		return false
+	default:
+		return true
 	}
 }
 

@@ -36,6 +36,9 @@ daemon:
 # keeps the build hermetic in CI without forcing a gqlgen install).
 generate:
 	go generate ./...
+	# Mirror schema.graphql into the resolvers package so go:embed can
+	# bake it into the daemon binary for Query.schemaSDL (#469 F10).
+	cp schema.graphql internal/server/resolvers/schema.graphql
 
 # Rust release builds — one target per crate.
 rust: dispatcher
