@@ -21,7 +21,7 @@ Feature: Split CI state into code-failing vs gate-failing
   # reads PR comments/labels to reclassify pre-existing main failures.
 
   Background:
-    Given the global config file is "~/.config/orchard/config.json"
+    Given the global config file is "~/.orchard/config.json"
     And the default gate patterns are:
       | pattern                 | match type  |
       | check-approval-or-label | exact       |
@@ -172,7 +172,7 @@ Feature: Split CI state into code-failing vs gate-failing
 
   @integration
   Scenario: Gate patterns are loaded from GlobalConfig with defaults when unset
-    Given `~/.config/orchard/config.json` does not contain a `ci_gate_patterns` field
+    Given `~/.orchard/config.json` does not contain a `ci_gate_patterns` field
     When the global config is loaded
     Then `ci_gate_patterns` equals ["check-approval-or-label", "Mintlify Deployment", "license/*"]
 
@@ -184,7 +184,7 @@ Feature: Split CI state into code-failing vs gate-failing
 
   @integration
   Scenario: Orchardist adds a custom gate pattern via GlobalConfig
-    Given `~/.config/orchard/config.json` contains:
+    Given `~/.orchard/config.json` contains:
       """json
       {
         "ci_gate_patterns": [

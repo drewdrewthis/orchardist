@@ -14,7 +14,7 @@ Feature: Validate launch-remote + TUI Enter + federation end-to-end on v0.9.0
 
   Background:
     Given local orchard is built at v0.9.0 or later
-    And `~/.config/orchard/config.json` contains the user's remotes
+    And `~/.orchard/config.json` contains the user's remotes
     And the per-host cache directory is "~/.cache/orchard/"
     And `events.jsonl` is at "~/.local/state/git-orchard/events.jsonl"
     And the `JsonOutput.version` supported list is `[6]` for this branch
@@ -152,7 +152,7 @@ Feature: Validate launch-remote + TUI Enter + federation end-to-end on v0.9.0
   @e2e
   Scenario: Single host flipped to orchard-proxy shows remote-sourced data in local --json
     Given the host "boxd@orchard-rs.boxd.sh" has `orchard --version` returning >= "0.9.0"
-    And `~/.config/orchard/config.json` for that remote is updated to `"type": "orchard-proxy"`
+    And `~/.orchard/config.json` for that remote is updated to `"type": "orchard-proxy"`
     When the user runs `orchard refresh`
     Then a file matching `~/.cache/orchard/*orchard-rs*orchard_snapshot.json` is written
     And `orchard --json` includes worktrees attributed to that host
