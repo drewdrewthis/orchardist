@@ -1,10 +1,10 @@
 /// Integration tests for `orchard::global_config`.
 ///
-/// `load_global_config()` reads from a fixed path derived from `dirs::config_dir()`,
-/// so it cannot easily be redirected in tests. Instead these tests verify the
-/// config schema end-to-end by deserializing JSON directly into `GlobalConfig`
-/// (and the related `RepoConfig` / `RemoteConfig` types), which exercises the
-/// same serde derivations used at runtime.
+/// `load_global_config()` reads from a fixed path derived from `dirs::home_dir()`
+/// joined with `.orchard/config.json`, so it cannot easily be redirected in tests.
+/// Instead these tests verify the config schema end-to-end by deserializing JSON
+/// directly into `GlobalConfig` (and the related `RepoConfig` / `RemoteConfig`
+/// types), which exercises the same serde derivations used at runtime.
 ///
 /// For the file-level roundtrip (write → read → parse) we use the internal
 /// struct layout plus `serde_json` directly, mirroring how `load_global_config`
