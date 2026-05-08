@@ -46,18 +46,11 @@ Feature: Session restore — reconstruct tmux geometry + cwds (#190)
     And tmux list-panes reports 2 panes
     And each pane's current path matches its saved cwd
 
-  @unit
-  Scenario: Startup restore runs at most once per process
-    Given restore_all_local() has already run in this process
-    When restore_all_local() is called again
-    Then an empty RestoreReport is returned
-
-  @unit
-  Scenario: Startup restore respects a cross-process cooldown
-    Given the restore-sentinel file was touched under the cooldown
-    When restore_all_local() is called in a fresh process
-    Then an empty RestoreReport is returned
-    And no tmux subprocess is spawned
+  # NOTE: Issue #460 removed the OnceLock + cross-process cooldown that
+  # used to short-circuit repeated calls to restore_all_local. The user is
+  # now the only trigger (`orchard restore` subcommand), so per-process and
+  # per-cooldown short-circuits are no longer needed. See
+  # specs/features/restore-explicit-subcommand.feature for current contract.
 
   @unit
   Scenario: live_local_session_names returns None on tmux error
@@ -94,5 +87,6 @@ Feature: Session restore — reconstruct tmux geometry + cwds (#190)
     - Persisting Claude session IDs in the cache (the hook files in $TMPDIR
       remain the live source of truth for telemetry)
     - Shell history replay
-    - An explicit `orchard restore` CLI subcommand (restore is automatic)
     - TUI "restored" indicator (dropped — user verifies via the session list itself)
+    # Restore is now invoked explicitly via `orchard restore` (see #460);
+    # the v1 "automatic on startup" model was reversed.

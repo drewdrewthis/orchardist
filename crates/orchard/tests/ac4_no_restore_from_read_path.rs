@@ -152,6 +152,13 @@ fn refresh_and_build_does_not_invoke_restore_session_for_dead_cached_session() {
 
     // 2. tmux session cache: one dead-but-restorable local session "ghost".
     write_ghost_session_cache(&cache_dir, &worktree_path);
+    let cache_file = cache_dir.join("tmux_sessions.json");
+    let cache_meta = std::fs::metadata(&cache_file)
+        .expect("precondition: cache file must exist after write_ghost_session_cache");
+    assert!(
+        cache_meta.len() > 0,
+        "precondition: cache file must be non-empty (else marker absence proves nothing)"
+    );
 
     // 3. A minimal git repo so orchard-tui doesn't complain about cwd.
     let repo = common::TestRepo::new();

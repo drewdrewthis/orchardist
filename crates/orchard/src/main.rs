@@ -465,15 +465,35 @@ fn handle_restore() {
             }
             restore::SessionRestoreOutcome::Skipped(reason) => {
                 skipped += 1;
-                println!("  skipped:  {name} ({reason:?})");
+                println!("  skipped:  {name} ({})", skip_reason_str(reason));
             }
             restore::SessionRestoreOutcome::Failed { step, error } => {
                 failed += 1;
-                println!("  failed:   {name} (step={step:?}, error={error})");
+                println!(
+                    "  failed:   {name} ({}: {error})",
+                    restore_step_str(step)
+                );
             }
         }
     }
     println!("restore: {restored} restored, {skipped} skipped, {failed} failed");
+}
+
+/// Maps a [`restore::SkipReason`] to a short user-facing phrase.
+fn skip_reason_str(reason: &restore::SkipReason) -> &'static str {
+    match reason {
+        restore::SkipReason::AlreadyRunning => "already running",
+        restore::SkipReason::WorktreeGone => "worktree gone",
+        restore::SkipReason::RemoteNotSupported => "remote (not supported in v1)",
+    }
+}
+
+/// Maps a [`restore::RestoreStep`] to a short user-facing phrase.
+fn restore_step_str(step: &restore::RestoreStep) -> &'static str {
+    match step {
+        restore::RestoreStep::NewSession => "tmux new-session failed",
+        restore::RestoreStep::InputValidation => "cache input rejected",
+    }
 }
 
 /// Handles `orchard-tui refresh` — probes hosts, fetches remote data, writes
@@ -682,6 +702,9 @@ fn print_usage() {
   orchard-tui webhook-serve [--port <n>]
                                        Receive GitHub webhooks and append to events.jsonl
                                        Requires ORCHARD_WEBHOOK_SECRET env var
+  orchard-tui restore                Reconstruct dead tmux sessions from the local
+                                       cache. Read paths never resurrect killed
+                                       sessions — this is the only deliberate path.
 
 Options:
   --version, -V  Print version and exit
