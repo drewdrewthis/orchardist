@@ -1623,6 +1623,67 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // save_to_path preserves unknown fields (issue #432)
+    // -----------------------------------------------------------------------
+
+    /// Regression test for issue #432: `save_to_path` must not clobber unknown
+    /// top-level fields that are present in the on-disk config but not modeled
+    /// by `GlobalConfig`.
+    ///
+    /// The current implementation serializes the struct directly, which drops
+    /// any fields not in the struct (e.g. a future `peers` array). This test
+    /// is intentionally written to FAIL against the pre-fix implementation so
+    /// that the fix can be verified.
+    #[test]
+    fn save_to_path_preserves_unknown_top_level_peers_field() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        // Write a config that contains both modeled fields AND an unknown `peers`
+        // top-level array that the GlobalConfig struct does not model.
+        let initial_json = r#"{
+  "repos": [],
+  "terminal_app": "com.apple.Terminal",
+  "peers": [{"name": "boxd-vm", "address": "user@vm.example", "tls": true}]
+}"#;
+        std::fs::write(&path, initial_json).unwrap();
+
+        // Call save_to_path with a mutated terminal_app (everything else default).
+        let cfg = GlobalConfig {
+            repos: vec![],
+            terminal_app: "com.googlecode.iterm2".to_string(),
+            tmux_sessions: vec![],
+            chat_target: None,
+            watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
+        };
+        save_to_path(&cfg, &path).expect("save_to_path must not fail");
+
+        // Read back the raw JSON as an untyped Value to inspect what was written.
+        let written = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+
+        // The struct mutation must have taken effect.
+        assert_eq!(
+            value["terminal_app"].as_str(),
+            Some("com.googlecode.iterm2"),
+            "terminal_app must reflect the saved GlobalConfig value"
+        );
+
+        // The unknown `peers` array must still be present — save_to_path must
+        // not clobber fields it doesn't know about (issue #432).
+        let peers = value["peers"].as_array().expect(
+            "peers array must be preserved after save_to_path (issue #432: unknown fields are being dropped)"
+        );
+        assert_eq!(peers.len(), 1, "peers array must retain its single entry");
+        assert_eq!(
+            peers[0]["name"].as_str(),
+            Some("boxd-vm"),
+            "peers[0].name must be 'boxd-vm'"
+        );
+    }
+
     /// Legacy path is never loaded as a fallback (issue #424, scenario line 165-169).
     ///
     /// Simulates the situation where `~/.config/orchard/config.json` exists but
