@@ -469,10 +469,7 @@ fn handle_restore() {
             }
             restore::SessionRestoreOutcome::Failed { step, error } => {
                 failed += 1;
-                println!(
-                    "  failed:   {name} ({}: {error})",
-                    restore_step_str(step)
-                );
+                println!("  failed:   {name} ({}: {error})", restore_step_str(step));
             }
         }
     }
