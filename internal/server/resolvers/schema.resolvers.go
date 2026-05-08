@@ -54,18 +54,27 @@ func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphq
 }
 
 // Processes is the resolver for the host.processes field.
+//
+// For the local host the resolver consults the in-process `ps` provider.
+// For a peer Host (returned via `host.peers`) the resolver federates the
+// query to the peer's daemon over the peerproxy transport — without
+// federation, the local `ps` snapshot would be returned for every peer
+// (#465: confidently-wrong is the worst error mode).
 func (r *hostResolver) Processes(ctx context.Context, obj *graphql1.Host, filter *graphql1.ProcessFilter) ([]*graphql1.Process, error) {
-	if r.PS == nil {
-		return nil, fmt.Errorf("ps provider not wired")
+	if isLocalHostNode(r, obj) {
+		if r.PS == nil {
+			return nil, fmt.Errorf("ps provider not wired")
+		}
+		all := r.PS.List()
+		filtered := applyProcessFilter(ctx, r.PS, all, filter)
+		hostID := r.PS.HostID()
+		out := make([]*graphql1.Process, 0, len(filtered))
+		for i := range filtered {
+			out = append(out, projectProcess(&filtered[i], hostID))
+		}
+		return out, nil
 	}
-	all := r.PS.List()
-	filtered := applyProcessFilter(ctx, r.PS, all, filter)
-	hostID := r.PS.HostID()
-	out := make([]*graphql1.Process, 0, len(filtered))
-	for i := range filtered {
-		out = append(out, projectProcess(&filtered[i], hostID))
-	}
-	return out, nil
+	return federatePeerProcesses(ctx, r, obj, filter)
 }
 
 // Host is the resolver for the process.host field.
