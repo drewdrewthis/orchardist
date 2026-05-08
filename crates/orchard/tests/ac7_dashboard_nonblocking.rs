@@ -71,7 +71,7 @@ fn orchard_json_reads_cache_only_no_ssh_spawned() {
         .arg("--json")
         .env("HOME", home_dir.path())
         // XDG_CONFIG_HOME must also be redirected so load_global_config()
-        // doesn't read the real ~/.config/orchard/config.json.
+        // doesn't read the real ~/.orchard/config.json.
         .env("XDG_CONFIG_HOME", home_dir.path().join(".config"))
         .env("PATH", &new_path)
         .assert()

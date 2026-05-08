@@ -9,7 +9,7 @@ Feature: Boxd as first-class backend — hexagonal RemoteWorktreeService with un
   # Scope rule: SWR is the framework for ALL outbound calls, not Boxd-specific.
 
   Background:
-    Given a global config at "~/.config/orchard/config.json"
+    Given a global config at "~/.orchard/config.json"
     And the per-repo `remotes[]` array contains zero or more remote entries
     And each remote entry has fields: name, host, path, type
     And the cache directory is "~/.cache/orchard/"
@@ -124,7 +124,7 @@ Feature: Boxd as first-class backend — hexagonal RemoteWorktreeService with un
     And a single `boxd-fork` remote with golden host "boxd.sh"
     When discovery runs
     Then the set of fork hosts is obtained by parsing `ssh boxd.sh list --json`
-    And the operator is NOT required to edit "~/.config/orchard/config.json" for any individual fork
+    And the operator is NOT required to edit "~/.orchard/config.json" for any individual fork
 
   @unit
   Scenario: Flat-clone layout is parsed without bare-repo assumption

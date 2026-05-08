@@ -134,7 +134,7 @@ src/
 ├── types.rs               # Shared type definitions (OrchardConfig, RemoteConfig)
 │
 ├── config.rs              # Per-repo config loader (.orchard.json + .git/orchard.json)
-├── global_config.rs       # Global config (~/.config/orchard/config.json)
+├── global_config.rs       # Global config (~/.orchard/config.json)
 ├── cache.rs               # Generic cache read/write helpers
 ├── cache_sources.rs       # Orchestrates multi-source cache refresh
 │
@@ -417,3 +417,4 @@ discovery only. See ADR-008 for the decision rationale.
 - **ADR-008**: Federated discovery — remote `orchard-tui --json` is the wire protocol for read-path enrichment; failures surface explicitly (no silent legacy fallback); dashboard reads are cache-only
 - **ADR-010**: `orchard-tui --json` (and `orchard-tui sessions --json`) is the live read; the TUI keeps the cached fast path. Reverses ADR-008's cache-only `--json` clause.
 - **ADR-013**: Orchard CLI ecosystem — one user-facing `orchard` binary as a thin dispatcher; `orchard-tui`, `orchard-daemon`, `orchard-worktree` as helper binaries; `crates/worktree-core/` is the shared library backing worktree mutation in TUI + CLI. Hybrid grammar (namespaced verbs + bare-verb shortcuts for the worktree primary unit).
+- **ADR-014**: Global config location — `~/.orchard/config.json` (dotdir) instead of `~/.config/orchard/config.json` (XDG). Matches every other dotdir tool in the stack (`~/.aws`, `~/.kube`, `~/.ssh`, `~/.cargo`, `~/.claude`). Clean break — daemon and CLI emit a migration hint when the legacy path is detected.

@@ -9,7 +9,7 @@ import (
 )
 
 // DefaultServices is the watchlist used when `services` is missing from
-// `~/.config/orchard/config.json` (or the file itself is absent).
+// `~/.orchard/config.json` (or the file itself is absent).
 //
 // The default list is platform-dependent — macOS launchd identifies
 // units by reverse-DNS Label (e.g. `com.gitorchard.orchard`), while
@@ -19,7 +19,7 @@ import (
 // config loader) reaches for.
 var DefaultServices = defaultServicesPerOS
 
-// configFile is a *narrow* view of `~/.config/orchard/config.json`.
+// configFile is a *narrow* view of `~/.orchard/config.json`.
 //
 // Only `services` is decoded here; the file's other top-level keys
 // (e.g. `version`, `projects` from ws-b-config) are tolerated by

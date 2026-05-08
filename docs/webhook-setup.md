@@ -135,5 +135,5 @@ openssl rand -hex 32
 Add it to your shell profile or a `.env` file sourced before running:
 
 ```bash
-export ORCHARD_WEBHOOK_SECRET="$(cat ~/.config/orchard/webhook-secret)"
+export ORCHARD_WEBHOOK_SECRET="$(cat ~/.orchard/webhook-secret)"
 ```

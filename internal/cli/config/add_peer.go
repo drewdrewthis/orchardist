@@ -16,7 +16,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 )
 
-// peeredFile is the on-disk view of ~/.config/orchard/config.json that
+// peeredFile is the on-disk view of ~/.orchard/config.json that
 // `add-peer` cares about. It tracks `version` + `projects` (owned by the
 // projects-config provider) plus the `peers` key peerproxy consumes.
 // Any other top-level keys — including legacy `peer_secret` from configs
@@ -98,7 +98,7 @@ func addPeerCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "add-peer",
-		Short: "Append a peer to ~/.config/orchard/config.json",
+		Short: "Append a peer to ~/.orchard/config.json",
 		Long: "Validate the supplied name + address, append a peer entry,\n" +
 			"and rely on the running daemon's fsnotify watcher to pick up\n" +
 			"the change. Pass --tls (or use an `https://`/`wss://` address)\n" +

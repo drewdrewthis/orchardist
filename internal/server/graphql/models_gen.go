@@ -231,7 +231,7 @@ type Host struct {
 	Peers []*Host `json:"peers"`
 	// Processes visible to this host's `ps` adapter, optionally filtered.
 	Processes []*Process `json:"processes"`
-	// Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.config/orchard/config.json.
+	// Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json.
 	HostServices []*HostService `json:"hostServices"`
 }
 
@@ -243,7 +243,7 @@ func (this Host) GetID() string { return this.ID }
 // A curated launchd (macOS) or systemd-user (Linux) unit on a host.
 //
 // Per ADR-011 §5.1 the watchlist is config-driven — `services` in
-// `~/.config/orchard/config.json`. Defaults to platform-correct unit
+// `~/.orchard/config.json`. Defaults to platform-correct unit
 // labels (macOS: reverse-DNS launchd Labels such as
 // `com.gitorchard.orchard`; Linux: `.service` unit names such as
 // `orchard.service`). Watched services that don't exist on the host

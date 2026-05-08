@@ -1,6 +1,6 @@
 // Package config implements the orchard `Project` provider.
 //
-// Per ADR-011 §5.1 a Project is declared in ~/.config/orchard/config.json
+// Per ADR-011 §5.1 a Project is declared in ~/.orchard/config.json
 // and is read-only from orchard's POV. Mutations are CLI-driven edits to
 // the config file; the running daemon reflects them via fsnotify. This
 // package owns the file format, the JSON adapter, and the provider that
@@ -35,7 +35,7 @@ type Project struct {
 	Name      string    `json:"name"`
 }
 
-// File is the on-disk shape of ~/.config/orchard/config.json.
+// File is the on-disk shape of ~/.orchard/config.json.
 //
 // Versioning is explicit so future schema bumps can be detected. v1
 // carries only `projects`; later workstreams may add fields. Unknown

@@ -87,7 +87,7 @@ pub fn resolve_target(
 
     Err(ChatError::NoTarget(
         "orchardist session not running — start it with `claude` in a tmux session and configure \
-         `chat_target` in ~/.config/orchard/config.json, or pass --target <session>"
+         `chat_target` in ~/.orchard/config.json, or pass --target <session>"
             .to_string(),
     ))
 }

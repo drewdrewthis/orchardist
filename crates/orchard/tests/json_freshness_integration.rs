@@ -109,10 +109,10 @@ fn run_git(cwd: &Path, args: &[&str]) {
 
 /// Writes a global orchard config with a single managed repo at `repo_path`.
 ///
-/// Schema mirrors `~/.config/orchard/config.json`. The `slug` is intentionally
+/// Schema mirrors `~/.orchard/config.json`. The `slug` is intentionally
 /// deterministic so the per-repo cache filenames are stable across runs.
 fn write_orchard_config(home: &Path, slug: &str, repo_path: &Path) {
-    let config_dir = home.join(".config/orchard");
+    let config_dir = home.join(".orchard");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config = serde_json::json!({
         "repos": [{
@@ -308,7 +308,7 @@ fn help_mentions_sessions_subcommand() {
 fn sessions_json_returns_versioned_output_with_empty_config() {
     let home = TempDir::new().expect("create home");
     // Minimal config so load_global_config doesn't read the host's real one.
-    let config_dir = home.path().join(".config/orchard");
+    let config_dir = home.path().join(".orchard");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config = serde_json::json!({"repos": [], "tmux_sessions": []});
     std::fs::write(
@@ -543,7 +543,7 @@ fn collect_worktree_branches(out: &Value, slug: &str) -> Vec<String> {
 /// Writes a minimal config (no repos, no remotes) so `load_global_config`
 /// doesn't read the host's real config.
 fn write_minimal_config(home: &Path) {
-    let config_dir = home.join(".config/orchard");
+    let config_dir = home.join(".orchard");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config = serde_json::json!({"repos": [], "tmux_sessions": []});
     std::fs::write(

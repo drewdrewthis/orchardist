@@ -1,4 +1,4 @@
-//! Global Orchard configuration loaded from `~/.config/orchard/config.json`.
+//! Global Orchard configuration loaded from `~/.orchard/config.json`.
 //!
 //! Holds the repo registry (slug + path + optional remotes) and user-local
 //! preferences such as the preferred terminal app bundle ID for notifications.
@@ -211,28 +211,61 @@ fn default_terminal_app() -> String {
 // Config location
 // ---------------------------------------------------------------------------
 
-/// Returns the canonical path for writing the global config.
+/// Returns the canonical path for the global config: `~/.orchard/config.json`.
 ///
-/// Always writes to `~/.config/orchard/config.json` (XDG location).
-fn global_config_write_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".config").join("orchard").join("config.json"))
+/// Both read and write operations use this path. XDG_CONFIG_HOME and the
+/// macOS `~/Library/Application Support` directory are intentionally ignored —
+/// orchard follows the dotdir convention (`~/.aws`, `~/.kube`, `~/.cargo`,
+/// `~/.claude`) rather than platform-native config dirs.
+pub fn global_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".orchard").join("config.json"))
 }
 
-fn global_config_path() -> Option<PathBuf> {
-    // Check XDG-style ~/.config first (cross-platform convention),
-    // then fall back to platform-native config dir (~/Library/Application Support on macOS).
-    let xdg = dirs::home_dir().map(|h| h.join(".config").join("orchard").join("config.json"));
-    if let Some(ref p) = xdg
-        && p.exists()
-    {
-        return xdg;
-    }
-    dirs::config_dir().map(|d| d.join("orchard").join("config.json"))
+/// Returns the canonical write path for the global config: `~/.orchard/config.json`.
+///
+/// Identical to [`global_config_path`]. Both functions exist so callers can
+/// be explicit about intent (read vs. write) without the path differing.
+pub fn global_config_write_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".orchard").join("config.json"))
 }
 
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
+
+/// Returns `true` when the legacy config file at `<base>/.config/orchard/config.json`
+/// exists. Used exclusively at the config-load failure site to decide whether to
+/// emit a migration hint.
+///
+/// `base` is the user's home directory. Accepting it as a parameter makes this
+/// testable without touching the real home directory.
+pub(crate) fn legacy_config_exists_at(base: &std::path::Path) -> bool {
+    base.join(".config")
+        .join("orchard")
+        .join("config.json")
+        .exists()
+}
+
+/// Returns `true` when `~/.config/orchard/config.json` exists.
+///
+/// Performs a single `stat` call. Called at most once per process at the
+/// config-load failure site — never from `global_config_path()`,
+/// `global_config_write_path()`, or any other helper.
+fn legacy_config_exists() -> bool {
+    dirs::home_dir()
+        .map(|h| legacy_config_exists_at(&h))
+        .unwrap_or(false)
+}
+
+/// Builds the migration hint message text.
+///
+/// Separated from the LOG call so the text itself is unit-testable.
+pub(crate) fn migration_hint_message() -> String {
+    "Found legacy config at ~/.config/orchard/config.json — \
+     the canonical location is now ~/.orchard/config.json. \
+     To migrate: mv ~/.config/orchard ~/.orchard"
+        .to_string()
+}
 
 /// Loads the global Orchard configuration.
 ///
@@ -240,16 +273,27 @@ fn global_config_path() -> Option<PathBuf> {
 /// side effects. Does not auto-register the current directory.
 ///
 /// Resolution order:
-/// 1. `~/.config/orchard/config.json` — explicit multi-repo config.
+/// 1. `~/.orchard/config.json` — explicit multi-repo config.
 /// 2. CWD-based single-repo fallback: calls `gh repo view` to detect the
 ///    current repo slug, uses CWD as the path, and reads `.git/orchard.json`
 ///    for optional remote config.
 /// 3. Empty `GlobalConfig` if neither succeeds.
+///
+/// When `~/.orchard/config.json` does not exist but the legacy path
+/// `~/.config/orchard/config.json` does, a migration hint is logged to
+/// `stderr` via [`LOG`] to guide the user. The legacy file is **never**
+/// deserialized as a fallback — the hint is informational only.
 pub fn load_global_config() -> GlobalConfig {
     if let Some(path) = global_config_path()
         && path.exists()
     {
         return load_from_path(&path);
+    }
+
+    // Emit a migration hint (once, at the failure site) when the new path is
+    // absent but the legacy path still exists. The legacy file is never read.
+    if legacy_config_exists() {
+        LOG.warn(&migration_hint_message());
     }
 
     fallback_single_repo()
@@ -279,7 +323,7 @@ pub fn register_cwd_repo_if_new(cfg: &mut GlobalConfig) -> bool {
     true
 }
 
-/// Persists the given `GlobalConfig` to `~/.config/orchard/config.json`.
+/// Persists the given `GlobalConfig` to `~/.orchard/config.json`.
 ///
 /// Thin wrapper around [`save_to_path`] that resolves the canonical write
 /// path. Creates the parent directory if it does not exist.
@@ -293,7 +337,7 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
 ///
 /// Creates the parent directory if needed. Writes atomically via a temporary
 /// file to avoid partial writes. Used directly in tests to avoid touching
-/// the real `~/.config/orchard/config.json`.
+/// the real `~/.orchard/config.json`.
 pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), String> {
     let dir = path
         .parent()
@@ -1445,5 +1489,165 @@ mod tests {
         }"#;
         // Should not panic.
         warn_legacy_fallback_kind(json.as_bytes());
+    }
+
+    // -----------------------------------------------------------------------
+    // Config location — dotdir convention tests (issue #424)
+    // -----------------------------------------------------------------------
+
+    /// global_config_path() returns a path ending in `.orchard/config.json`.
+    #[test]
+    fn config_path_ends_with_dotdir_config() {
+        let path = global_config_path().expect("home dir must be resolvable in test env");
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".orchard/config.json"),
+            "expected path ending in .orchard/config.json, got: {path_str}"
+        );
+    }
+
+    /// global_config_write_path() returns the same path as global_config_path().
+    #[test]
+    fn write_path_matches_read_path() {
+        let read_path = global_config_path().expect("home dir must be resolvable");
+        let write_path = global_config_write_path().expect("home dir must be resolvable");
+        assert_eq!(
+            read_path, write_path,
+            "global_config_path and global_config_write_path must return identical paths"
+        );
+    }
+
+    /// global_config_path() is anchored to the real home dir (not some other base).
+    #[test]
+    fn config_path_is_inside_home_dir() {
+        let home = dirs::home_dir().expect("home dir must be resolvable in test env");
+        let path = global_config_path().expect("global_config_path must return Some");
+        // The canonical path is <home>/.orchard/config.json
+        let expected = home.join(".orchard").join("config.json");
+        assert_eq!(
+            path, expected,
+            "global_config_path must equal {{home}}/.orchard/config.json"
+        );
+    }
+
+    /// The returned path must NOT contain the legacy XDG component.
+    #[test]
+    fn config_path_does_not_contain_xdg_config_orchard() {
+        let path = global_config_path().expect("home dir must be resolvable");
+        let path_str = path.to_string_lossy();
+        assert!(
+            !path_str.contains(".config/orchard"),
+            "path must not reference the legacy .config/orchard location, got: {path_str}"
+        );
+    }
+
+    /// The returned path must NOT contain the macOS Application Support component.
+    #[test]
+    fn config_path_does_not_contain_application_support() {
+        let path = global_config_path().expect("home dir must be resolvable");
+        let path_str = path.to_string_lossy();
+        assert!(
+            !path_str.contains("Library/Application Support"),
+            "path must not reference macOS Application Support, got: {path_str}"
+        );
+    }
+
+    /// XDG_CONFIG_HOME is structurally irrelevant: the implementation uses
+    /// `dirs::home_dir()` rather than `dirs::config_dir()`, so XDG is never
+    /// consulted. We avoid mutating the process env (Rust 2024 made
+    /// `std::env::set_var` unsafe and parallel test runs would race anyway)
+    /// and instead inspect the resolved path directly.
+    #[test]
+    fn config_path_ignores_xdg_config_home() {
+        let path = global_config_path().expect("home dir must be resolvable");
+        let path_str = path.to_string_lossy();
+        assert!(
+            !path_str.contains(".config/orchard"),
+            "path must not reference .config/orchard even when XDG_CONFIG_HOME is set elsewhere, got: {path_str}"
+        );
+        let xdg_value = std::env::var("XDG_CONFIG_HOME").unwrap_or_default();
+        if !xdg_value.is_empty() {
+            assert!(
+                !path_str.contains(&xdg_value),
+                "path must not include the active XDG_CONFIG_HOME value {xdg_value}, got: {path_str}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration hint tests (issue #424, task 3 of 8)
+    // -----------------------------------------------------------------------
+
+    /// `legacy_config_exists_at` returns false when the legacy file is absent.
+    #[test]
+    fn legacy_config_exists_at_returns_false_when_absent() {
+        let dir = tempdir().unwrap();
+        assert!(
+            !legacy_config_exists_at(dir.path()),
+            "expected false when .config/orchard/config.json does not exist"
+        );
+    }
+
+    /// `legacy_config_exists_at` returns true when the legacy file is present.
+    #[test]
+    fn legacy_config_exists_at_returns_true_when_present() {
+        let dir = tempdir().unwrap();
+        let legacy = dir
+            .path()
+            .join(".config")
+            .join("orchard")
+            .join("config.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"{}").unwrap();
+        assert!(
+            legacy_config_exists_at(dir.path()),
+            "expected true when .config/orchard/config.json exists"
+        );
+    }
+
+    /// `migration_hint_message` contains all required hint substrings.
+    #[test]
+    fn migration_hint_message_contains_required_substrings() {
+        let msg = migration_hint_message();
+        assert!(
+            msg.contains("Found legacy config at ~/.config/orchard/config.json"),
+            "hint must name the legacy path, got: {msg}"
+        );
+        assert!(
+            msg.contains("mv ~/.config/orchard ~/.orchard"),
+            "hint must include the migration command, got: {msg}"
+        );
+        assert!(
+            msg.contains("~/.orchard/config.json"),
+            "hint must point at the new canonical path, got: {msg}"
+        );
+    }
+
+    /// Legacy path is never loaded as a fallback (issue #424, scenario line 165-169).
+    ///
+    /// Simulates the situation where `~/.config/orchard/config.json` exists but
+    /// `~/.orchard/config.json` does not. Verifies that `load_global_config`
+    /// does NOT return data from the legacy file.
+    ///
+    /// Note: this test cannot redirect `dirs::home_dir()` at runtime, so it
+    /// tests the property indirectly: `global_config_path()` never points at
+    /// `.config/orchard`, so `load_from_path` is never called with a legacy
+    /// path by the production code path.
+    #[test]
+    fn legacy_path_is_never_loaded_as_fallback() {
+        // global_config_path() is the sole gating function. If it never
+        // returns a path containing ".config/orchard", the legacy file can
+        // never be opened by load_global_config.
+        let path = global_config_path().expect("home dir must be resolvable");
+        let path_str = path.to_string_lossy();
+        assert!(
+            !path_str.contains(".config/orchard"),
+            "global_config_path must not point at legacy path .config/orchard, got: {path_str}"
+        );
+        // Additionally confirm the path ends with the new dotdir location.
+        assert!(
+            path_str.ends_with(".orchard/config.json"),
+            "global_config_path must end with .orchard/config.json, got: {path_str}"
+        );
     }
 }

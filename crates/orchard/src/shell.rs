@@ -3,7 +3,7 @@
 //! Guides users through installing the tmux popup wrapper script, configuring
 //! keybindings, selecting their preferred terminal app for notifications, and
 //! optionally installing Claude Code hooks. Writes the resulting choices back
-//! to `~/.config/orchard/config.json` via [`crate::global_config::save_global_config`].
+//! to `~/.orchard/config.json` via [`crate::global_config::save_global_config`].
 
 use std::io::Write;
 use std::path::Path;
@@ -105,7 +105,7 @@ const TOTAL_STEPS: usize = 9;
 ///  7. Installing Claude Code hooks
 ///  8. Selecting the terminal app for notifications (macOS only)
 ///
-/// Persists the chosen terminal app to `~/.config/orchard/config.json`.
+/// Persists the chosen terminal app to `~/.orchard/config.json`.
 pub fn run_init_wizard() -> Result<(), String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
 
@@ -535,7 +535,7 @@ fn suggest_shepherd_session_step() -> Option<crate::session::StandaloneConfig> {
             start_on_launch: true,
         })
     } else {
-        eprintln!("  Skipped. You can add one later in ~/.config/orchard/config.json");
+        eprintln!("  Skipped. You can add one later in ~/.orchard/config.json");
         None
     }
 }

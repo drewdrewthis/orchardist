@@ -32,7 +32,7 @@ type PeerConfig struct {
 
 // FederationConfig is the slice of the daemon's on-disk config that
 // peerproxy cares about. It lives next to the existing project list in
-// ~/.config/orchard/config.json under the `peers` key; older configs
+// ~/.orchard/config.json under the `peers` key; older configs
 // without it yield an empty list (no peers configured).
 //
 // The struct is intentionally tolerant of unknown fields so workstreams

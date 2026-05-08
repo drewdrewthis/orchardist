@@ -5,7 +5,7 @@ Feature: Per-source cache architecture
 
   Background:
     Given the cache directory is "~/.cache/orchard/"
-    And the config file is "~/.config/orchard/config.json"
+    And the config file is "~/.orchard/config.json"
 
   # ===================================================================
   # Cache module — per-source files
@@ -309,7 +309,7 @@ Feature: Per-source cache architecture
 
   @integration
   Scenario: Global config declares repos to manage
-    Given a config file "~/.config/orchard/config.json" containing:
+    Given a config file "~/.orchard/config.json" containing:
       """json
       {
         "repos": [

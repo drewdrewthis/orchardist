@@ -65,7 +65,7 @@ Display groups are **computed at render time** by joining the cached data. The j
 
 The config declares repos to manage:
 ```json
-// ~/.config/orchard/config.json
+// ~/.orchard/config.json
 {
   "repos": [
     { "slug": "acme/webapp", "path": "/home/user/workspace/webapp", "remote": { "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/webapp-workspace" } },

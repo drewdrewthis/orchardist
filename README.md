@@ -155,7 +155,7 @@ drifts from the live types.
 
 ### Global config
 
-`~/.config/orchard/config.json` — register multiple repos:
+`~/.orchard/config.json` — register multiple repos:
 
 ```json
 {
@@ -242,7 +242,7 @@ Once configured, the orchardist shows up as a row in the orchard dashboard:
 
 ### Manual config (reference)
 
-If you'd rather configure it by hand, add a `tmux_sessions` entry to `~/.config/orchard/config.json`:
+If you'd rather configure it by hand, add a `tmux_sessions` entry to `~/.orchard/config.json`:
 
 ```json
 "tmux_sessions": [

@@ -2,7 +2,7 @@
 //!
 //! These tests are gated behind `#[ignore]` because they require:
 //! - A real boxd VM (or shared VM) reachable from the test runner
-//! - The user's `~/.config/orchard/config.json` configured for that remote
+//! - The user's `~/.orchard/config.json` configured for that remote
 //! - Real GitHub credentials available to `gh`
 //! - A real test issue number on the target repo
 //!
@@ -48,7 +48,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// it locally within `VISIBILITY_BUDGET`.
 ///
 /// Setup before running:
-/// 1. Have a boxd-fork remote configured in `~/.config/orchard/config.json`
+/// 1. Have a boxd-fork remote configured in `~/.orchard/config.json`
 ///    for `langwatch/langwatch` (or any repo with `type: boxd-fork`).
 /// 2. Manually create a tmux session on a real boxd fork (or run
 ///    `/launch-remote langwatch/langwatch#$ORCHARD_E2E_TEST_ISSUE` in

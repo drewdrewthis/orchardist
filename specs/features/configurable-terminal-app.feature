@@ -5,7 +5,7 @@ Feature: Configurable terminal app for notifications
 
   Background:
     Given the user has orchard installed
-    And the user has a global config at ~/.config/orchard/config.json
+    And the user has a global config at ~/.orchard/config.json
 
   # ===================================================================
   # GlobalConfig — terminal_app field
@@ -141,6 +141,6 @@ Feature: Configurable terminal app for notifications
   #    (terminal_app) are allowed in global config alongside repo registry.
   #
   # 3. The wizard needs save_global_config() to persist the terminal_app
-  #    choice back to ~/.config/orchard/config.json.
+  #    choice back to ~/.orchard/config.json.
   #
   # 4. Terminal selection step must be gated on macOS (cfg! or runtime check).
