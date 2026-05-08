@@ -821,7 +821,11 @@ fn run_local(program: &str, args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<String> {
+/// Runs a local command in the given working directory and returns its stdout.
+///
+/// Used by the ahead/behind carve-out in `tui::App::start_full_refresh` to
+/// shell out to `git branch -vv` per project directory.
+pub fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<String> {
     let out = Command::new(program).args(args).current_dir(cwd).output()?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();

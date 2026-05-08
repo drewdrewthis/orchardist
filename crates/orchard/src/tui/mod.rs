@@ -214,6 +214,20 @@ pub struct App {
     /// the message handler can share it across the channel boundary.
     work_view_snapshot: std::sync::Arc<std::sync::Mutex<Option<crate::daemon::WorkViewSnapshot>>>,
 
+    /// Ahead/behind counts fetched via `git branch -vv` in `start_full_refresh`.
+    ///
+    /// Keyed by project directory path → branch name → `(ahead, behind)`.
+    ///
+    /// # Carve-out: ahead/behind via `git branch -vv`
+    ///
+    /// The daemon's `Worktree` schema does not yet expose `ahead`/`behind`
+    /// counts. Until the daemon exposes these fields, the refresh thread
+    /// shells out to `git branch -vv` per project directory to populate them.
+    /// Remove this field and the corresponding `git branch -vv` call in
+    /// `start_full_refresh` once the daemon exposes `Worktree.ahead` and
+    /// `Worktree.behind` (tracked as daemon issue #483).
+    ahead_behind_snapshot: std::sync::Arc<std::sync::Mutex<Option<std::collections::HashMap<String, std::collections::HashMap<String, (u32, u32)>>>>>,
+
     /// Injectable source for `workView` GraphQL queries.
     ///
     /// In production this is a real [`crate::daemon::Client`].
@@ -319,6 +333,7 @@ impl App {
                 let initial_snap = crate::daemon::work_view_cache::read_snapshot();
                 std::sync::Arc::new(std::sync::Mutex::new(initial_snap))
             },
+            ahead_behind_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
             work_view_source: {
                 // Build the daemon client; fall back to a no-op source if the
                 // client cannot be constructed (e.g. invalid URL env var).
@@ -744,6 +759,7 @@ impl App {
         let config = self.global_config.clone();
         let tx = self.tx.clone();
         let work_view_slot = self.work_view_snapshot.clone();
+        let ahead_behind_slot = self.ahead_behind_snapshot.clone();
         let work_view_source = self.work_view_source.clone();
         std::thread::spawn(move || {
             // Probe each unique remote host concurrently before attempting remote
@@ -767,6 +783,32 @@ impl App {
             //           refresh_worktrees + refresh_tmux_sessions
             match work_view_source.work_view() {
                 Ok(snapshot) => {
+                    // Carve-out: ahead/behind via `git branch -vv` — the daemon's
+                    // Worktree schema does not yet expose ahead/behind counts. Run
+                    // `git branch -vv` per project directory from the snapshot and
+                    // store results so `rebuild_state_from_snapshot` can patch them
+                    // into the adapter output. Remove once the daemon exposes the field
+                    // (tracked as daemon issue #483).
+                    {
+                        let mut ab_map: std::collections::HashMap<String, std::collections::HashMap<String, (u32, u32)>> =
+                            std::collections::HashMap::new();
+                        for project in &snapshot.projects {
+                            let dir = &project.directory;
+                            if let Ok(out) = crate::cache_sources::run_local_in(
+                                "git",
+                                &["branch", "-vv"],
+                                dir,
+                            ) {
+                                ab_map.insert(
+                                    dir.clone(),
+                                    crate::cache_sources::parse_git_ahead_behind(&out),
+                                );
+                            }
+                        }
+                        if let Ok(mut slot) = ahead_behind_slot.lock() {
+                            *slot = Some(ab_map);
+                        }
+                    }
                     // Persist snapshot so cold-start fallback has fresh data.
                     if let Err(e) = crate::daemon::work_view_cache::write_snapshot(&snapshot) {
                         crate::logger::LOG.warn(&format!("work_view_cache write failed: {e}"));
@@ -866,12 +908,18 @@ impl App {
             .lock()
             .ok()
             .and_then(|g| g.clone());
+        let ahead_behind_opt = self
+            .ahead_behind_snapshot
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
 
         let mut state = if let Some(snapshot) = snapshot_opt {
             crate::daemon::work_view_adapter::build_local_state(
                 &snapshot,
                 &self.global_config,
                 &hosts,
+                ahead_behind_opt.as_ref(),
             )
         } else {
             crate::build_state::build_state_with_hosts(&self.global_config, &hosts)
@@ -2283,6 +2331,7 @@ impl App {
             seen_expandable_keys: HashSet::new(),
             seen_window_keys: HashSet::new(),
             work_view_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            ahead_behind_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
             work_view_source: std::sync::Arc::new(crate::tui::refresh::NullWorkViewSource),
             daemon_status: DaemonStatus::Unknown,
         };

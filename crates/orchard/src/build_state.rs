@@ -242,7 +242,7 @@ pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
-    let mut claude_states = crate::claude_state::read_all_state_files(&std::env::temp_dir());
+    let mut claude_states = crate::claude_state::read_local_state_files();
     claude_states.extend(remote_claude_states);
     crate::derive::derive_all_repos(&repo_caches, &claude_states, &[])
 }
@@ -258,7 +258,7 @@ pub fn build_state_with_hosts(
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
-    let mut claude_states = crate::claude_state::read_all_state_files(&std::env::temp_dir());
+    let mut claude_states = crate::claude_state::read_local_state_files();
     claude_states.extend(remote_claude_states);
     let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states, &[]);
 

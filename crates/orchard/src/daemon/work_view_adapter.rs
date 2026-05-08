@@ -56,10 +56,19 @@ use crate::session::{
 /// The output is a partial [`OrchardState`] containing only LOCAL data.
 /// Remote enrichment (`*_remote_worktrees.json` / `*_remote_tmux_sessions.json`)
 /// is folded in by the existing `merge_remote::merge_remote_snapshot` path.
+///
+/// # ahead_behind carve-out
+///
+/// `ahead_behind` is a two-level map `project_dir → branch → (ahead, behind)`.
+/// It is populated by `tui::App::start_full_refresh` via `git branch -vv` per
+/// project directory. Pass `None` when ahead/behind data is unavailable (daemon
+/// unreachable, cold start, or local-only refresh). Remove once the daemon's
+/// `Worktree` type exposes `ahead`/`behind` directly.
 pub fn build_local_state(
     snapshot: &WorkViewSnapshot,
     config: &GlobalConfig,
     hosts: &HashMap<String, HostState>,
+    ahead_behind: Option<&HashMap<String, HashMap<String, (u32, u32)>>>,
 ) -> OrchardState {
     // 1. Convert ClaudeInstances → ClaudeStateFiles (indexed by session name).
     let claude_states: Vec<ClaudeStateFile> = snapshot
@@ -97,8 +106,12 @@ pub fn build_local_state(
                 }
             }
 
-            // Worktree entry.
-            entry.3.push(work_view_worktree_to_cached(wt));
+            // Worktree entry (with ahead/behind from git branch -vv carve-out).
+            let wt_ab = ahead_behind
+                .and_then(|ab| ab.get(&project.directory))
+                .and_then(|branch_map| branch_map.get(&wt.branch))
+                .copied();
+            entry.3.push(work_view_worktree_to_cached(wt, wt_ab));
         }
     }
 
@@ -290,7 +303,14 @@ fn build_standalone_sessions(
 // ---------------------------------------------------------------------------
 
 /// Converts a [`WorkViewWorktree`] into a [`CachedWorktree`].
-fn work_view_worktree_to_cached(wt: &crate::daemon::types::WorkViewWorktree) -> CachedWorktree {
+///
+/// `ahead_behind` carries the `(ahead, behind)` counts from the `git branch -vv`
+/// carve-out in `tui::App::start_full_refresh`. Pass `None` when unavailable.
+fn work_view_worktree_to_cached(
+    wt: &crate::daemon::types::WorkViewWorktree,
+    ahead_behind: Option<(u32, u32)>,
+) -> CachedWorktree {
+    let (ahead, behind) = ahead_behind.unwrap_or((0, 0));
     CachedWorktree {
         path: wt.path.clone(),
         branch: wt.branch.clone(),
@@ -301,8 +321,8 @@ fn work_view_worktree_to_cached(wt: &crate::daemon::types::WorkViewWorktree) -> 
         } else {
             Some(wt.host.clone())
         },
-        ahead: None,
-        behind: None,
+        ahead: if ahead > 0 { Some(ahead) } else { None },
+        behind: if behind > 0 { Some(behind) } else { None },
         last_commit_at: None,
         layout: WorktreeLayout::Bare,
     }
@@ -326,11 +346,11 @@ fn work_view_pr_to_cached(
     // The daemon carries `statusCheckRollup` (e.g. "SUCCESS") which maps to
     // `ci_code_state` ("passing"/"failing"/"pending"). Translate conservatively.
     let ci_code_state = pr.status_check_rollup.as_deref().map(rollup_to_ci_state);
-    let merge_blocked = pr
-        .merge_state_status
-        .as_deref()
-        .map(|s| !matches!(s, "CLEAN" | "HAS_HOOKS"))
-        .unwrap_or(false);
+    // `has_conflicts` maps to actual file-level merge conflicts only.
+    // The pre-rip cache_sources path used `mergeable == "CONFLICTING"`.
+    // `merge_state_status == "BLOCKED"` can mean CI failure or missing reviews —
+    // not conflicts — so we must not conflate the two.
+    let merge_blocked = pr.mergeable.as_deref() == Some("CONFLICTING");
     // Normalise review_decision to lowercase to match cache_sources convention.
     let review_decision = pr.review_decision.as_deref().map(|s| match s {
         "APPROVED" => "approved".to_string(),
@@ -374,7 +394,7 @@ fn work_view_issue_to_cached(issue: &crate::daemon::types::WorkViewIssue) -> Cac
         number: issue.number as u32,
         title: issue.title.clone(),
         state: issue.state.to_lowercase(),
-        labels: Vec::new(),
+        labels: issue.labels.clone(),
         assignees: Vec::new(),
         created_at: None,
         updated_at: None,
@@ -449,24 +469,39 @@ pub(crate) fn claude_instance_to_state_file(ci: &ClaudeInstance) -> Option<Claud
 /// Extracts the session name from a pane ID of the form
 /// `TmuxPane:<host>:<session>:<window>:<index>`.
 ///
-/// Returns `None` when the format is not recognised.
+/// Session names may contain colons (tmux allows this), so this function
+/// peels fields from the **right** rather than splitting left-to-right.
+/// The format is positionally anchored from the right:
+/// - rightmost field: `<pane_index>`
+/// - second-from-right: `<window>`
+/// - everything between `TmuxPane:<host>:` and `:<window>:<index>` is the session name.
+///
+/// Returns `None` when the format is not recognised (fewer than 5 colon-separated
+/// fields, or the leading token is not `"TmuxPane"`).
 fn extract_session_from_pane(pane: &str) -> Option<String> {
-    // Expected format: "TmuxPane:<host>:<session>:<window>:<pane_index>"
-    let parts: Vec<&str> = pane.splitn(5, ':').collect();
-    if parts.len() < 5 || parts[0] != "TmuxPane" {
+    // Peel trailing :<pane_index>
+    let (without_index, _pane_index) = pane.rsplit_once(':')?;
+    // Peel trailing :<window>
+    let (without_window, _window) = without_index.rsplit_once(':')?;
+    // without_window is now "TmuxPane:<host>:<session...>" where session may contain colons.
+    // Strip the leading "TmuxPane:<host>:" prefix.
+    let after_prefix = without_window.strip_prefix("TmuxPane:")?;
+    // after_prefix is "<host>:<session...>"; strip the host.
+    let (_host, session) = after_prefix.split_once(':')?;
+    if session.is_empty() {
         return None;
     }
-    Some(parts[2].to_string())
+    Some(session.to_string())
 }
 
 /// Maps a GitHub status-check rollup string to the internal `ci_code_state` vocabulary.
 ///
-/// | GitHub value | Internal value |
-/// |-------------|----------------|
-/// | SUCCESS     | passing        |
-/// | FAILURE / ERROR | failing    |
-/// | PENDING / EXPECTED | pending |
-/// | anything else | None (no CI) |
+/// | GitHub value     | Internal value |
+/// |------------------|----------------|
+/// | SUCCESS          | "passing"      |
+/// | FAILURE / ERROR  | "failing"      |
+/// | PENDING / EXPECTED | "pending"    |
+/// | anything else    | "pending"      |
 fn rollup_to_ci_state(rollup: &str) -> String {
     match rollup {
         "SUCCESS" => "passing".to_string(),
@@ -501,8 +536,8 @@ mod tests {
 
     /// Builder for constructing a [`WorkViewSnapshot`] in tests.
     ///
-    /// Used by the derive.rs tests and any Phase 8 tests that want
-    /// WorkView-shaped inputs.
+    /// Used by tests in this module. For cross-module fixture sharing, expose
+    /// via `#[cfg(test)] pub(crate)` in a future refactor.
     pub struct WorkViewFixture {
         snapshot: WorkViewSnapshot,
     }
@@ -600,6 +635,7 @@ mod tests {
             status_check_rollup: Some("SUCCESS".to_string()),
             review_decision: Some("APPROVED".to_string()),
             merge_state_status: Some("CLEAN".to_string()),
+            mergeable: Some("MERGEABLE".to_string()),
             draft: false,
             labels: Vec::new(),
         }
@@ -610,6 +646,7 @@ mod tests {
             number,
             state: "OPEN".to_string(),
             title: format!("Issue {}", number),
+            labels: Vec::new(),
         }
     }
 
@@ -634,7 +671,7 @@ mod tests {
             )
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
 
         assert_eq!(state.repos.len(), 1);
         let repo = &state.repos[0];
@@ -682,7 +719,7 @@ mod tests {
             .session("issue429", Some(wt_path))
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
 
         let wt = state
             .repos
@@ -718,7 +755,7 @@ mod tests {
             .claude("issue429", "working", session_uuid)
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
 
         let wt = state
             .repos
@@ -760,7 +797,7 @@ mod tests {
             .session("shepherd", Some("/home/user"))
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
 
         // The shepherd session should be standalone, not attached to a worktree.
         let worktree_sessions: Vec<&str> = state
@@ -803,7 +840,7 @@ mod tests {
             HostState { reachable: true },
         );
 
-        let state = build_local_state(&snapshot, &empty_config(), &hosts);
+        let state = build_local_state(&snapshot, &empty_config(), &hosts, None);
 
         assert!(state.repos.is_empty());
         assert!(state.standalone_sessions.is_empty());
@@ -847,5 +884,127 @@ mod tests {
     #[test]
     fn rollup_maps_pending_to_pending() {
         assert_eq!(rollup_to_ci_state("PENDING"), "pending");
+    }
+
+    // -----------------------------------------------------------------------
+    // Concern #1: issue_labels_round_trip_through_adapter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn issue_labels_round_trip_through_adapter() {
+        let issue = WorkViewIssue {
+            number: 42,
+            state: "OPEN".to_string(),
+            title: "Test issue".to_string(),
+            labels: vec!["bug".to_string(), "needs-investigation".to_string()],
+        };
+        let cached = work_view_issue_to_cached(&issue);
+        assert_eq!(cached.labels, vec!["bug", "needs-investigation"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Concern #3: pr_has_conflicts_only_when_mergeable_conflicting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pr_has_conflicts_only_when_mergeable_conflicting() {
+        let make_pr = |mergeable: Option<&str>, merge_state_status: Option<&str>| WorkViewPr {
+            number: 1,
+            state: "OPEN".to_string(),
+            title: "PR".to_string(),
+            status_check_rollup: None,
+            review_decision: None,
+            merge_state_status: merge_state_status.map(|s| s.to_string()),
+            mergeable: mergeable.map(|s| s.to_string()),
+            draft: false,
+            labels: Vec::new(),
+        };
+
+        // CONFLICTING → has_conflicts true
+        let pr = make_pr(Some("CONFLICTING"), Some("BLOCKED"));
+        let cached = work_view_pr_to_cached(&pr, "feat/x", None);
+        assert!(cached.has_conflicts, "CONFLICTING should yield has_conflicts true");
+
+        // MERGEABLE → has_conflicts false
+        let pr = make_pr(Some("MERGEABLE"), Some("CLEAN"));
+        let cached = work_view_pr_to_cached(&pr, "feat/x", None);
+        assert!(!cached.has_conflicts, "MERGEABLE should yield has_conflicts false");
+
+        // UNKNOWN → has_conflicts false
+        let pr = make_pr(Some("UNKNOWN"), None);
+        let cached = work_view_pr_to_cached(&pr, "feat/x", None);
+        assert!(!cached.has_conflicts, "UNKNOWN should yield has_conflicts false");
+
+        // None → has_conflicts false
+        let pr = make_pr(None, None);
+        let cached = work_view_pr_to_cached(&pr, "feat/x", None);
+        assert!(!cached.has_conflicts, "None mergeable should yield has_conflicts false");
+
+        // Regression case: BLOCKED merge_state_status but MERGEABLE → has_conflicts false
+        let pr = make_pr(Some("MERGEABLE"), Some("BLOCKED"));
+        let cached = work_view_pr_to_cached(&pr, "feat/x", None);
+        assert!(
+            !cached.has_conflicts,
+            "BLOCKED merge_state_status with MERGEABLE should yield has_conflicts false"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Concern #4: extract_session_from_pane_handles_colons_in_session_name
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_session_from_pane_handles_colons_in_session_name() {
+        // Session name "my:session" contains a colon
+        assert_eq!(
+            extract_session_from_pane("TmuxPane:local:my:session:1:0"),
+            Some("my:session".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_session_simple_name_still_works() {
+        // Existing behaviour preserved
+        assert_eq!(
+            extract_session_from_pane("TmuxPane:local:issue429:editor:0"),
+            Some("issue429".to_string())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Concern #5: rollup fallthrough test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pr_rollup_maps_unknown_to_pending() {
+        // Any unrecognised rollup value should map to "pending" per the doc table.
+        assert_eq!(rollup_to_ci_state("ACTION_REQUIRED"), "pending");
+        assert_eq!(rollup_to_ci_state("SKIPPED"), "pending");
+        assert_eq!(rollup_to_ci_state(""), "pending");
+    }
+
+    // -----------------------------------------------------------------------
+    // Concern #7: linked_issue_carries_through_to_cached_pr
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn linked_issue_carries_through_to_cached_pr() {
+        let pr = WorkViewPr {
+            number: 100,
+            state: "OPEN".to_string(),
+            title: "Fix something".to_string(),
+            status_check_rollup: None,
+            review_decision: None,
+            merge_state_status: None,
+            mergeable: Some("MERGEABLE".to_string()),
+            draft: false,
+            labels: Vec::new(),
+        };
+        let cached = work_view_pr_to_cached(&pr, "fix/something", Some(429));
+        assert_eq!(
+            cached.linked_issue,
+            Some(429),
+            "linked issue 429 should carry through to CachedPr"
+        );
     }
 }

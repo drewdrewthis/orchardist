@@ -185,6 +185,7 @@ impl Client {
                       statusCheckRollup
                       reviewDecision
                       mergeStateStatus
+                      mergeable
                       draft
                       labels
                     }
@@ -192,6 +193,7 @@ impl Client {
                       number
                       state
                       title
+                      labels
                     }
                   }
                 }

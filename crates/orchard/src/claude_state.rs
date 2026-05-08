@@ -116,6 +116,15 @@ pub fn read_all_state_files(dir: &Path) -> Vec<ClaudeStateFile> {
     results
 }
 
+/// Convenience for reading the standard local hook directory; non-test callers should prefer this.
+///
+/// Reads all Claude hook state files from `std::env::temp_dir()` (the standard location
+/// written by the orchard-state.sh hook script). Equivalent to
+/// `read_all_state_files(&std::env::temp_dir())`.
+pub fn read_local_state_files() -> Vec<ClaudeStateFile> {
+    read_all_state_files(&std::env::temp_dir())
+}
+
 /// Finds the state for a specific tmux session name.
 pub fn state_for_session<'a>(
     states: &'a [ClaudeStateFile],

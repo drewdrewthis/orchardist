@@ -216,6 +216,15 @@ pub struct WorkViewPr {
     #[serde(default, rename = "mergeStateStatus")]
     pub merge_state_status: Option<String>,
 
+    /// GitHub mergeable state: `"MERGEABLE"`, `"CONFLICTING"`, or `"UNKNOWN"`.
+    ///
+    /// Used to derive `has_conflicts`: only `"CONFLICTING"` indicates actual
+    /// file-level conflicts. `merge_state_status == "BLOCKED"` can mean CI
+    /// failure, missing reviews, etc. — not conflicts. Mirror of the pre-rip
+    /// `cache_sources` path which checked `mergeable == "CONFLICTING"`.
+    #[serde(default)]
+    pub mergeable: Option<String>,
+
     /// Whether the PR is a draft.
     #[serde(default)]
     pub draft: bool,
@@ -236,6 +245,10 @@ pub struct WorkViewIssue {
 
     /// Issue title.
     pub title: String,
+
+    /// Label names applied to the issue.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// One tmux session as exposed by `workView.tmuxSessions`. Extends the
