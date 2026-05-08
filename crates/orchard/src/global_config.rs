@@ -335,7 +335,9 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
 
 /// Persists `cfg` to the given `path`.
 ///
-/// Creates the parent directory if needed. Writes atomically via a temporary
+/// Creates the parent directory if needed. Performs a shallow merge with the
+/// existing on-disk config so that unknown top-level fields (fields not modeled
+/// by [`GlobalConfig`]) are preserved as-is. Writes atomically via a temporary
 /// file to avoid partial writes. Used directly in tests to avoid touching
 /// the real `~/.orchard/config.json`.
 pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), String> {
@@ -345,7 +347,15 @@ pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), St
 
     std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
 
-    let json = serde_json::to_string_pretty(cfg).map_err(|e| format!("serializing config: {e}"))?;
+    let cfg_value = serde_json::to_value(cfg).map_err(|e| format!("serializing config: {e}"))?;
+    let serde_json::Value::Object(cfg_map) = cfg_value else {
+        return Err("serialized config is not a JSON object".to_string());
+    };
+
+    let merged = merge_with_existing(path, cfg_map);
+
+    let json =
+        serde_json::to_string_pretty(&merged).map_err(|e| format!("serializing config: {e}"))?;
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
@@ -353,6 +363,47 @@ pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), St
 
     LOG.info(&format!("global_config: saved to {}", path.display()));
     Ok(())
+}
+
+/// Reads the existing JSON object at `path` and shallow-merges `new_fields`
+/// into it.
+///
+/// Keys from `new_fields` overwrite matching keys in the existing object.
+/// Keys present in the existing object but absent from `new_fields` are
+/// preserved as-is. If the file does not exist, cannot be read, or does not
+/// parse as a top-level JSON object, `new_fields` is returned as-is.
+fn merge_with_existing(
+    path: &std::path::Path,
+    new_fields: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        // File does not exist or is unreadable — no existing data to preserve.
+        Err(_) => return serde_json::Value::Object(new_fields),
+    };
+
+    let existing: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "global_config: could not parse existing config for merge — skipping: {e}"
+            ));
+            return serde_json::Value::Object(new_fields);
+        }
+    };
+
+    match existing {
+        serde_json::Value::Object(mut existing_map) => {
+            for (key, value) in new_fields {
+                existing_map.insert(key, value);
+            }
+            serde_json::Value::Object(existing_map)
+        }
+        _ => {
+            LOG.warn("global_config: existing config is not a JSON object — skipping merge");
+            serde_json::Value::Object(new_fields)
+        }
+    }
 }
 
 /// Pure inner logic: appends `(cwd, slug, remotes)` to `cfg` if not already present.
