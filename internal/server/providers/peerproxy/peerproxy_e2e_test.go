@@ -29,6 +29,7 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 )
 
 const remoteName = "remote-host"
@@ -44,9 +45,22 @@ type orchardFixture struct {
 
 // fixtureOpts tunes startOrchard for TLS variants and TLS-config
 // injection. Plain federation tests use the zero value.
+//
+// psHostID, when non-empty, wires a real ps provider to the daemon
+// using the given host id. Federation tests for `Host.processes` use
+// this to give each daemon a distinct host namespace so id prefixes
+// can be asserted on across the federation boundary (#465).
+//
+// psRunner, when non-nil, replaces the real shellout with a stub. The
+// federation test uses this to give each daemon a deterministic and
+// distinct process table — without it both daemons would shell out to
+// the same OS `ps`, making "did the data come from the local or peer
+// daemon?" unverifiable.
 type fixtureOpts struct {
 	tlsServer bool
 	tlsConfig *tls.Config
+	psHostID  string
+	psRunner  ps.CommandRunner
 }
 
 // startOrchard boots an orchard daemon attached to httptest. fedCfg is
@@ -66,10 +80,20 @@ func startOrchardOpts(t *testing.T, fedCfg peerproxy.FederationConfig, opts fixt
 	peerProvider := peerproxy.NewProvider(fedCfg, logger, provOpts...)
 	localEvents := peerproxy.NewLocalInvalidator()
 
-	srv := server.New("", logger,
+	serverOpts := []server.Option{
 		server.WithPeerProxy(peerProvider),
 		server.WithLocalEvents(localEvents),
-	)
+	}
+	var psProv *ps.Provider
+	if opts.psHostID != "" {
+		adapter := ps.NewAdapter(opts.psHostID).WithPollInterval(time.Hour)
+		if opts.psRunner != nil {
+			adapter = adapter.WithRunner(opts.psRunner)
+		}
+		psProv = ps.New(adapter, logger)
+		serverOpts = append(serverOpts, server.WithPS(psProv))
+	}
+	srv := server.New("", logger, serverOpts...)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -78,6 +102,12 @@ func startOrchardOpts(t *testing.T, fedCfg peerproxy.FederationConfig, opts fixt
 		t.Fatalf("start peerproxy: %v", err)
 	}
 	t.Cleanup(func() { _ = peerProvider.Stop() })
+
+	if psProv != nil {
+		if err := psProv.Start(ctx); err != nil {
+			t.Fatalf("start ps provider: %v", err)
+		}
+	}
 
 	if err := srv.StartHostProvider(ctx); err != nil {
 		t.Fatalf("start host provider: %v", err)
@@ -515,6 +545,197 @@ func TestPeers_TLS_WSSHandshake(t *testing.T) {
 	}) {
 		t.Fatalf("expected ≥1 upstream WSS subscription on remote, saw %d",
 			remote.events.SubscriberCount())
+	}
+}
+
+// fixedPsRunner returns a CommandRunner whose `ps -ax -o pid,...`
+// output is deterministic and tagged with `tag` in the COMMAND column.
+// Lets the federation test prove that data on the wire actually came
+// from the remote daemon's table, not the local one.
+type fixedPsRunner struct {
+	tag string
+	pid int
+}
+
+func (r fixedPsRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name != "ps" {
+		return nil, fmt.Errorf("unexpected exec %q", name)
+	}
+	header := "  PID  PPID USER             TT  %CPU    RSS                 STARTED COMMAND\n"
+	row := fmt.Sprintf(" %4d     1 testuser         ??   0.0    100 Mon Jan  1 00:00:00 2024 %s\n", r.pid, r.tag)
+	return []byte(header + row), nil
+}
+
+// TestPeers_Processes_FederatedPerPeer is the load-bearing regression
+// test for #465: querying `host { peers { processes } }` on the local
+// daemon must return the *peer's* process table, not the local one.
+//
+// Setup: two daemons in the same process. Each runs a stub `ps` that
+// emits exactly one process whose COMMAND column is the daemon's tag —
+// "local-cmd" on the local, "remote-cmd" on the remote. Local is
+// configured with the remote as a peer.
+//
+// Assertion: `peers[0].processes[0].command == "remote-cmd"` AND
+// `peers[0].processes[0].id` carries the remote-host prefix. If the
+// federation glue regresses, the test sees "local-cmd" and fails — the
+// exact symptom the bug report describes.
+func TestPeers_Processes_FederatedPerPeer(t *testing.T) {
+	const localHostID = "local-mac"
+	remote := startOrchardOpts(t,
+		peerproxy.FederationConfig{},
+		fixtureOpts{
+			psHostID: remoteName,
+			psRunner: fixedPsRunner{tag: "remote-cmd", pid: 7777},
+		},
+	)
+	local := startOrchardOpts(t,
+		peerproxy.FederationConfig{
+			Peers: []peerproxy.PeerConfig{
+				{Name: remoteName, Address: remote.addr},
+			},
+		},
+		fixtureOpts{
+			psHostID: localHostID,
+			psRunner: fixedPsRunner{tag: "local-cmd", pid: 1111},
+		},
+	)
+
+	// Wait for the local supervisor to mark the remote reachable, then
+	// query peers[].processes. Without reachability the federate path
+	// short-circuits with an error.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		envelope := graphQLPost(t, local,
+			`{ host { peers { id reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		if len(peers) == 1 {
+			peer := peers[0].(map[string]any)
+			if peer["reachable"] == true {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer never reachable; envelope=%v", envelope)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	envelope := graphQLPost(t, local,
+		`{ host { peers { id processes { id pid command } } } }`)
+	if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
+		t.Fatalf("graphql errors: %v", errs)
+	}
+	data, _ := envelope["data"].(map[string]any)
+	host, _ := data["host"].(map[string]any)
+	peers, _ := host["peers"].([]any)
+	if len(peers) != 1 {
+		t.Fatalf("expected exactly 1 peer, got %d (%v)", len(peers), peers)
+	}
+	peer := peers[0].(map[string]any)
+	if peer["id"] != "Host:"+remoteName {
+		t.Fatalf("unexpected peer id %v", peer["id"])
+	}
+	procs, _ := peer["processes"].([]any)
+	if len(procs) == 0 {
+		t.Fatalf("peer.processes empty; expected federated remote process table")
+	}
+	// Find the seeded remote-cmd row. Stub `ps` only emits one process,
+	// so any COMMAND other than "remote-cmd" means we got the local
+	// daemon's table — i.e. the bug regressed.
+	var seenRemote bool
+	for _, p := range procs {
+		row := p.(map[string]any)
+		cmd, _ := row["command"].(string)
+		id, _ := row["id"].(string)
+		if cmd == "local-cmd" {
+			t.Fatalf("FEDERATION REGRESSION: peer.processes contains local daemon's row %+v (#465)", row)
+		}
+		if cmd == "remote-cmd" {
+			seenRemote = true
+			// id is built remote-side as `<remoteHostID>:<pid>`. The
+			// federation glue MUST NOT rewrite it to the local prefix.
+			if id != remoteName+":7777" {
+				t.Fatalf("expected remote-prefixed id %q, got %q (federation rewrote the prefix)",
+					remoteName+":7777", id)
+			}
+		}
+	}
+	if !seenRemote {
+		t.Fatalf("peer.processes did not include the seeded remote-cmd row; got %v", procs)
+	}
+}
+
+// TestPeers_Processes_UnreachablePeer asserts the second half of #465:
+// when a peer is configured but not reachable, `peers[].processes` must
+// surface a typed error rather than silently returning the local
+// daemon's process table. The bug report explicitly calls out this
+// confidently-wrong shape for unreachable peers.
+func TestPeers_Processes_UnreachablePeer(t *testing.T) {
+	const localHostID = "local-mac"
+	const deadPeer = "fork-orchardist-punch"
+	local := startOrchardOpts(t,
+		peerproxy.FederationConfig{
+			Peers: []peerproxy.PeerConfig{
+				// Address points to a closed port so reachability stays false.
+				{Name: deadPeer, Address: "127.0.0.1:1"},
+			},
+		},
+		fixtureOpts{
+			psHostID: localHostID,
+			psRunner: fixedPsRunner{tag: "local-cmd", pid: 1111},
+		},
+	)
+
+	// Wait until the supervisor's first probe fails — reachable=false.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		envelope := graphQLPost(t, local,
+			`{ host { peers { reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		if len(peers) == 1 {
+			peer := peers[0].(map[string]any)
+			// reachable can be reported as false (probe completed) or
+			// nil (probe pending). Either is fine — we just need it
+			// not-true.
+			if r, ok := peer["reachable"].(bool); ok && !r {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer reachability never resolved; envelope=%v", envelope)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	envelope := graphQLPost(t, local,
+		`{ host { peers { id processes { id command } } } }`)
+	// Either the field surfaces an error AND processes is null, OR the
+	// processes list is empty. Returning the local daemon's table is
+	// the regression — assert it never appears.
+	data, _ := envelope["data"].(map[string]any)
+	host, _ := data["host"].(map[string]any)
+	peers, _ := host["peers"].([]any)
+	if len(peers) == 1 {
+		peer := peers[0].(map[string]any)
+		if procs, ok := peer["processes"].([]any); ok {
+			for _, p := range procs {
+				row := p.(map[string]any)
+				if cmd, _ := row["command"].(string); cmd == "local-cmd" {
+					t.Fatalf("FEDERATION REGRESSION: unreachable peer returned local daemon's row %+v (#465)", row)
+				}
+			}
+		}
+	}
+	// Errors slice should mention the unreachable peer when present —
+	// this is the typed-error half of the AC. Silent success with []
+	// processes would mask the real failure mode.
+	errs, _ := envelope["errors"].([]any)
+	if len(errs) == 0 {
+		t.Fatalf("expected GraphQL errors for unreachable peer.processes; envelope=%v", envelope)
 	}
 }
 

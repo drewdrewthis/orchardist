@@ -230,6 +230,25 @@ func (p *Provider) Get(ctx context.Context, id NodeID) (*PeerNode, error) {
 	return a.FetchNode(ctx, id)
 }
 
+// Query forwards an arbitrary GraphQL query to a configured peer and
+// returns the decoded result. Used by federation-aware resolvers (e.g.
+// `Host.processes`) that need richer shapes than the node-id forwarder
+// provides.
+//
+// Returns an error when the peer is not configured. The result's Errors
+// slice (if any) is left for the caller to inspect — peerproxy does not
+// translate GraphQL errors into Go errors here, since some callers want
+// to surface partial data.
+func (p *Provider) Query(ctx context.Context, peer string, query string, vars map[string]any) (QueryResult, error) {
+	p.mu.RLock()
+	c, ok := p.clients[peer]
+	p.mu.RUnlock()
+	if !ok {
+		return QueryResult{}, fmt.Errorf("unknown peer %q", peer)
+	}
+	return c.Query(ctx, query, vars)
+}
+
 // Subscribe returns a channel that emits InvalidationEvent for every
 // node any peer pushes. Closing ctx (or calling Stop) tears the
 // subscription down.
