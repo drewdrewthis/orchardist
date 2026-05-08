@@ -226,6 +226,15 @@ pub struct App {
     /// Remove this field and the corresponding `git branch -vv` call in
     /// `start_full_refresh` once the daemon exposes `Worktree.ahead` and
     /// `Worktree.behind` (tracked as daemon issue #483).
+    ///
+    /// **Staleness note**: this slot is populated by `start_full_refresh` only —
+    /// the local-only refresh path (`start_local_refresh`) does NOT re-run
+    /// `git branch -vv` per project to keep the local tick fast. Worst-case
+    /// staleness for ahead/behind data is bounded by the full refresh cadence
+    /// (~60s + focus events). New branches that appear between full refreshes
+    /// render with stale (or zero) ahead/behind until the next full tick. This
+    /// is acceptable because ahead/behind is a hint, not a contract — and
+    /// tracked-for-removal in #483 (daemon to expose ahead/behind directly).
     ahead_behind_snapshot: std::sync::Arc<std::sync::Mutex<Option<std::collections::HashMap<String, std::collections::HashMap<String, (u32, u32)>>>>>,
 
     /// Injectable source for `workView` GraphQL queries.
@@ -783,31 +792,13 @@ impl App {
             //           refresh_worktrees + refresh_tmux_sessions
             match work_view_source.work_view() {
                 Ok(snapshot) => {
-                    // Carve-out: ahead/behind via `git branch -vv` — the daemon's
-                    // Worktree schema does not yet expose ahead/behind counts. Run
-                    // `git branch -vv` per project directory from the snapshot and
-                    // store results so `rebuild_state_from_snapshot` can patch them
-                    // into the adapter output. Remove once the daemon exposes the field
-                    // (tracked as daemon issue #483).
-                    {
-                        let mut ab_map: std::collections::HashMap<String, std::collections::HashMap<String, (u32, u32)>> =
-                            std::collections::HashMap::new();
-                        for project in &snapshot.projects {
-                            let dir = &project.directory;
-                            if let Ok(out) = crate::cache_sources::run_local_in(
-                                "git",
-                                &["branch", "-vv"],
-                                dir,
-                            ) {
-                                ab_map.insert(
-                                    dir.clone(),
-                                    crate::cache_sources::parse_git_ahead_behind(&out),
-                                );
-                            }
-                        }
-                        if let Ok(mut slot) = ahead_behind_slot.lock() {
-                            *slot = Some(ab_map);
-                        }
+                    // Carve-out: ahead/behind via `git branch -vv` — runs in
+                    // parallel across all configured repos via
+                    // `fetch_ahead_behind_for_snapshot`. Remove once the daemon
+                    // exposes `Worktree.ahead`/`Worktree.behind` (tracked as #483).
+                    let ahead_behind = fetch_ahead_behind_for_snapshot(&config);
+                    if let Ok(mut slot) = ahead_behind_slot.lock() {
+                        *slot = Some(ahead_behind);
                     }
                     // Persist snapshot so cold-start fallback has fresh data.
                     if let Err(e) = crate::daemon::work_view_cache::write_snapshot(&snapshot) {
@@ -867,6 +858,16 @@ impl App {
     /// `cache_sources::refresh_tmux_sessions` calls with a single round-trip
     /// to the daemon. No remote host probing, no GitHub API calls.
     /// Sends `AppMsg::LocalCacheRefreshed` when done.
+    ///
+    /// **Staleness note**: `ahead_behind_snapshot` is populated by
+    /// `start_full_refresh` only — this local-only refresh path does NOT
+    /// re-run `git branch -vv` per project to keep the local tick fast.
+    /// Worst-case staleness for ahead/behind data is bounded by the full
+    /// refresh cadence (~60s + focus events). New branches that appear
+    /// between full refreshes render with stale (or zero) ahead/behind
+    /// until the next full tick. This is acceptable because ahead/behind
+    /// is a hint, not a contract — and tracked-for-removal in #483
+    /// (daemon to expose ahead/behind directly).
     fn start_local_refresh(&self) {
         let tx = self.tx.clone();
         let work_view_slot = self.work_view_snapshot.clone();
@@ -2540,6 +2541,33 @@ fn dedup_key(remote: &crate::global_config::RemoteConfig) -> String {
         crate::cache_sources::kind_str(remote.kind),
         remote.host
     )
+}
+
+/// Fetches ahead/behind commit counts for every configured repo by running
+/// `git branch -vv` per repo directory, in parallel.
+///
+/// The daemon's `Worktree` schema does not yet expose `ahead`/`behind` counts
+/// (tracked in #483); this is a temporary carve-out that will be removed when
+/// the daemon ships those fields.
+///
+/// Returns a `HashMap` keyed by repo directory path → branch name →
+/// `(ahead, behind)`.
+fn fetch_ahead_behind_for_snapshot(
+    config: &global_config::GlobalConfig,
+) -> HashMap<String, HashMap<String, (u32, u32)>> {
+    let result: std::sync::Mutex<HashMap<String, HashMap<String, (u32, u32)>>> =
+        std::sync::Mutex::new(HashMap::new());
+    crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
+        if let Ok(out) =
+            crate::cache_sources::run_local_in("git", &["branch", "-vv"], &repo.path)
+        {
+            let branch_map = crate::cache_sources::parse_git_ahead_behind(&out);
+            if let Ok(mut acc) = result.lock() {
+                acc.insert(repo.path.clone(), branch_map);
+            }
+        }
+    });
+    result.into_inner().unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

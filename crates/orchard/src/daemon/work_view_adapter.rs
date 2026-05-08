@@ -350,7 +350,7 @@ fn work_view_pr_to_cached(
     // The pre-rip cache_sources path used `mergeable == "CONFLICTING"`.
     // `merge_state_status == "BLOCKED"` can mean CI failure or missing reviews —
     // not conflicts — so we must not conflate the two.
-    let merge_blocked = pr.mergeable.as_deref() == Some("CONFLICTING");
+    let has_conflicts = pr.mergeable.as_deref() == Some("CONFLICTING");
     // Normalise review_decision to lowercase to match cache_sources convention.
     let review_decision = pr.review_decision.as_deref().map(|s| match s {
         "APPROVED" => "approved".to_string(),
@@ -370,7 +370,7 @@ fn work_view_pr_to_cached(
         ci_code_state,
         ci_gate_state: None,
         ci_checks: crate::ci_state::CiChecks::default(),
-        has_conflicts: merge_blocked,
+        has_conflicts,
         unresolved_threads: 0,
         linked_issue_state: None,
         labels: pr.labels.clone(),
