@@ -335,9 +335,17 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
 
 /// Persists `cfg` to the given `path`.
 ///
-/// Creates the parent directory if needed. Writes atomically via a temporary
+/// Creates the parent directory if needed. Performs a shallow merge with the
+/// existing on-disk config so that unknown top-level fields (fields not modeled
+/// by [`GlobalConfig`]) are preserved as-is. Writes atomically via a temporary
 /// file to avoid partial writes. Used directly in tests to avoid touching
 /// the real `~/.orchard/config.json`.
+///
+/// Not safe against concurrent writers. The read-then-write window can lose
+/// updates if another process writes between the read and the rename. The
+/// merge narrows the clobber window from "any save wipes unknown keys" to
+/// "concurrent saves race" — file a follow-up issue if multi-writer safety
+/// is needed (e.g. advisory `flock`).
 pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), String> {
     let dir = path
         .parent()
@@ -345,7 +353,15 @@ pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), St
 
     std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
 
-    let json = serde_json::to_string_pretty(cfg).map_err(|e| format!("serializing config: {e}"))?;
+    let cfg_value = serde_json::to_value(cfg).map_err(|e| format!("serializing config: {e}"))?;
+    let serde_json::Value::Object(cfg_map) = cfg_value else {
+        return Err("serialized config is not a JSON object".to_string());
+    };
+
+    let merged = merge_with_existing(path, cfg_map);
+
+    let json =
+        serde_json::to_string_pretty(&merged).map_err(|e| format!("serializing config: {e}"))?;
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
@@ -353,6 +369,47 @@ pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), St
 
     LOG.info(&format!("global_config: saved to {}", path.display()));
     Ok(())
+}
+
+/// Reads the existing JSON object at `path` and shallow-merges `new_fields`
+/// into it.
+///
+/// Keys from `new_fields` overwrite matching keys in the existing object.
+/// Keys present in the existing object but absent from `new_fields` are
+/// preserved as-is. If the file does not exist, cannot be read, or does not
+/// parse as a top-level JSON object, `new_fields` is returned as-is.
+fn merge_with_existing(
+    path: &std::path::Path,
+    new_fields: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        // File does not exist or is unreadable — no existing data to preserve.
+        Err(_) => return serde_json::Value::Object(new_fields),
+    };
+
+    let existing: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            LOG.warn(&format!(
+                "global_config: could not parse existing config for merge — skipping: {e}"
+            ));
+            return serde_json::Value::Object(new_fields);
+        }
+    };
+
+    match existing {
+        serde_json::Value::Object(mut existing_map) => {
+            for (key, value) in new_fields {
+                existing_map.insert(key, value);
+            }
+            serde_json::Value::Object(existing_map)
+        }
+        _ => {
+            LOG.warn("global_config: existing config is not a JSON object — skipping merge");
+            serde_json::Value::Object(new_fields)
+        }
+    }
 }
 
 /// Pure inner logic: appends `(cwd, slug, remotes)` to `cfg` if not already present.
@@ -1621,6 +1678,363 @@ mod tests {
             msg.contains("~/.orchard/config.json"),
             "hint must point at the new canonical path, got: {msg}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // save_to_path preserves unknown fields (issue #432)
+    // -----------------------------------------------------------------------
+
+    /// Regression test for issue #432: `save_to_path` must not clobber unknown
+    /// top-level fields that are present in the on-disk config but not modeled
+    /// by `GlobalConfig`.
+    ///
+    /// The current implementation serializes the struct directly, which drops
+    /// any fields not in the struct (e.g. a future `peers` array). This test
+    /// is intentionally written to FAIL against the pre-fix implementation so
+    /// that the fix can be verified.
+    #[test]
+    fn save_to_path_preserves_unknown_top_level_peers_field() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        // Write a config that contains both modeled fields AND an unknown `peers`
+        // top-level array that the GlobalConfig struct does not model.
+        let initial_json = r#"{
+  "repos": [],
+  "terminal_app": "com.apple.Terminal",
+  "peers": [{"name": "boxd-vm", "address": "user@vm.example", "tls": true}]
+}"#;
+        std::fs::write(&path, initial_json).unwrap();
+
+        // Call save_to_path with a mutated terminal_app (everything else default).
+        let cfg = GlobalConfig {
+            repos: vec![],
+            terminal_app: "com.googlecode.iterm2".to_string(),
+            tmux_sessions: vec![],
+            chat_target: None,
+            watch: WatchConfig::default(),
+            ci_gate_patterns: default_ci_gate_patterns(),
+        };
+        save_to_path(&cfg, &path).expect("save_to_path must not fail");
+
+        // Read back the raw JSON as an untyped Value to inspect what was written.
+        let written = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+
+        // The struct mutation must have taken effect.
+        assert_eq!(
+            value["terminal_app"].as_str(),
+            Some("com.googlecode.iterm2"),
+            "terminal_app must reflect the saved GlobalConfig value"
+        );
+
+        // The unknown `peers` array must still be present — save_to_path must
+        // not clobber fields it doesn't know about (issue #432).
+        let peers = value["peers"].as_array().expect(
+            "peers array must be preserved after save_to_path (issue #432: unknown fields are being dropped)"
+        );
+        assert_eq!(peers.len(), 1, "peers array must retain its single entry");
+        assert_eq!(
+            peers[0]["name"].as_str(),
+            Some("boxd-vm"),
+            "peers[0].name must be 'boxd-vm'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional save_to_path scenario tests (issue #432, BDD feature coverage)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_to_path_preserves_multiple_unknown_top_level_keys() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "repos": [],
+            "terminal_app": "com.apple.Terminal",
+            "peers": [{"name": "boxd-vm"}],
+            "watch_observability": {"enabled": true},
+            "federation_tls_pin": "sha256:abc123"
+        }"#,
+        );
+        let cfg = GlobalConfig {
+            terminal_app: "com.googlecode.iterm2".to_string(),
+            ..GlobalConfig::default()
+        };
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(v["peers"].is_array(), "peers must be preserved");
+        assert!(
+            v["watch_observability"].is_object(),
+            "watch_observability must be preserved"
+        );
+        assert_eq!(
+            v["federation_tls_pin"].as_str(),
+            Some("sha256:abc123"),
+            "federation_tls_pin must be preserved"
+        );
+    }
+
+    #[test]
+    fn save_to_path_preserves_nested_values_inside_unknown_top_level_key() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "repos": [],
+            "peers": [{"name": "boxd-vm", "address": "user@vm.example", "tls": true, "metadata": {"region": "us-east-1"}}]
+        }"#,
+        );
+        let cfg = GlobalConfig::default();
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let peer = &v["peers"][0];
+        assert_eq!(peer["name"].as_str(), Some("boxd-vm"));
+        assert_eq!(peer["address"].as_str(), Some("user@vm.example"));
+        assert_eq!(peer["tls"].as_bool(), Some(true));
+        assert_eq!(peer["metadata"]["region"].as_str(), Some("us-east-1"));
+    }
+
+    #[test]
+    fn save_to_path_overwrites_known_keys_present_in_struct() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "repos": [],
+            "terminal_app": "old.app",
+            "peers": [{"name": "boxd-vm"}]
+        }"#,
+        );
+        let cfg = GlobalConfig {
+            terminal_app: "new.app".to_string(),
+            ..GlobalConfig::default()
+        };
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["terminal_app"].as_str(),
+            Some("new.app"),
+            "struct must win for known keys"
+        );
+        assert!(v["peers"].is_array(), "unknown peers must still exist");
+    }
+
+    #[test]
+    fn save_to_path_writes_struct_when_file_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let cfg = GlobalConfig {
+            terminal_app: "com.mitchellh.ghostty".to_string(),
+            ..GlobalConfig::default()
+        };
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["terminal_app"].as_str(), Some("com.mitchellh.ghostty"));
+        // No spurious keys beyond what GlobalConfig serializes.
+        let known_keys = [
+            "repos",
+            "terminal_app",
+            "tmux_sessions",
+            "chat_target",
+            "watch",
+            "ci_gate_patterns",
+        ];
+        let obj = v.as_object().unwrap();
+        for key in obj.keys() {
+            assert!(
+                known_keys.contains(&key.as_str()),
+                "unexpected key on disk: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_to_path_falls_back_to_struct_write_on_malformed_existing_file() {
+        let dir = tempdir().unwrap();
+        let path = write_config(dir.path(), "not valid {");
+        let cfg = GlobalConfig::default();
+        let result = save_to_path(&cfg, &path);
+        assert!(
+            result.is_ok(),
+            "save must succeed even when existing file is malformed"
+        );
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            v.is_object(),
+            "file must contain valid JSON after fallback write"
+        );
+    }
+
+    #[test]
+    fn save_to_path_preserves_unknown_keys_with_edge_case_values() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "repos": [],
+            "peers": [],
+            "watch_observability": null,
+            "feature_flag_x": false,
+            "empty_object_field": {}
+        }"#,
+        );
+        let cfg = GlobalConfig::default();
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["peers"],
+            serde_json::Value::Array(vec![]),
+            "empty array must be preserved"
+        );
+        assert_eq!(
+            v["watch_observability"],
+            serde_json::Value::Null,
+            "null must be preserved"
+        );
+        assert_eq!(
+            v["feature_flag_x"],
+            serde_json::Value::Bool(false),
+            "false must be preserved"
+        );
+        assert_eq!(
+            v["empty_object_field"],
+            serde_json::json!({}),
+            "empty object must be preserved"
+        );
+    }
+
+    #[test]
+    fn save_to_path_shallow_merge_drops_nested_unknown_under_known_key() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{
+            "repos": [],
+            "watch": {"local_poll_secs": 10, "full_poll_secs": 60, "threshold_cooldown_secs": 300, "notifications": true, "experimental_flag": true}
+        }"#,
+        );
+        let cfg = GlobalConfig::default();
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // Shallow merge: `watch` is overwritten by the struct's serialization.
+        // The unknown nested key `experimental_flag` is dropped — by design.
+        assert!(
+            v["watch"]["experimental_flag"].is_null(),
+            "nested unknown under known key must be dropped (shallow merge)"
+        );
+    }
+
+    #[test]
+    fn save_to_path_remains_atomic() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#,
+        );
+        let tmp = path.with_extension("json.tmp");
+        let cfg = GlobalConfig::default();
+        save_to_path(&cfg, &path).unwrap();
+        // After a successful save the .tmp staging file must not remain.
+        assert!(
+            !tmp.exists(),
+            ".tmp file must not remain after successful atomic save"
+        );
+        // And the final file must be valid JSON.
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(v["peers"].is_array(), "peers must be present in final file");
+    }
+
+    #[test]
+    fn save_to_path_struct_only_round_trip_unchanged_when_no_unknown_keys() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let cfg = GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: "owner/repo".to_string(),
+                path: "/ws/repo".to_string(),
+                remotes: vec![],
+            }],
+            terminal_app: "org.alacritty".to_string(),
+            tmux_sessions: vec![],
+            chat_target: Some("orchardist".to_string()),
+            watch: WatchConfig {
+                local_poll_secs: 7,
+                ..WatchConfig::default()
+            },
+            ci_gate_patterns: vec!["custom-gate".to_string()],
+        };
+        save_to_path(&cfg, &path).unwrap();
+        save_to_path(&cfg, &path).unwrap(); // Second save: no unknown keys to merge.
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["terminal_app"].as_str(), Some("org.alacritty"));
+        assert_eq!(v["chat_target"].as_str(), Some("orchardist"));
+        assert_eq!(v["watch"]["local_poll_secs"].as_u64(), Some(7));
+        assert_eq!(v["ci_gate_patterns"][0].as_str(), Some("custom-gate"));
+        assert_eq!(v["repos"][0]["slug"].as_str(), Some("owner/repo"));
+        // No extra keys beyond the struct fields.
+        let known_keys = [
+            "repos",
+            "terminal_app",
+            "tmux_sessions",
+            "chat_target",
+            "watch",
+            "ci_gate_patterns",
+        ];
+        for key in v.as_object().unwrap().keys() {
+            assert!(
+                known_keys.contains(&key.as_str()),
+                "unexpected key after round-trip: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_to_path_preserves_peers_across_back_to_back_saves() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#,
+        );
+        let cfg1 = GlobalConfig {
+            terminal_app: "org.alacritty".to_string(),
+            ..GlobalConfig::default()
+        };
+        save_to_path(&cfg1, &path).unwrap();
+        let cfg2 = GlobalConfig {
+            chat_target: Some("orchardist".to_string()),
+            ..GlobalConfig::default()
+        };
+        save_to_path(&cfg2, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let peers = v["peers"]
+            .as_array()
+            .expect("peers must survive back-to-back saves");
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0]["name"].as_str(), Some("boxd-vm"));
+    }
+
+    #[test]
+    fn save_to_path_preserves_peers_when_auto_registering_new_repo() {
+        let dir = tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#,
+        );
+        let mut cfg = GlobalConfig::default();
+        append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
+        save_to_path(&cfg, &path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            v["repos"].as_array().map(|a| a.len() == 1).unwrap_or(false),
+            "new repo must be in repos[]"
+        );
+        let peers = v["peers"]
+            .as_array()
+            .expect("peers must survive append_repo_if_new + save");
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0]["name"].as_str(), Some("boxd-vm"));
     }
 
     /// Legacy path is never loaded as a fallback (issue #424, scenario line 165-169).
