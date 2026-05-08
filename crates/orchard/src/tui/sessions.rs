@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use crate::cache;
-use crate::cache_sources;
 use crate::derive;
 use crate::global_config;
 use crate::session::StandaloneSessionRow;
@@ -73,8 +72,13 @@ pub(super) fn compute_sessions_to_create(
 /// Idempotent: skips repos whose session already exists.
 /// Errors from individual repos are logged but do not block others.
 ///
-/// After creating any sessions, refreshes the local tmux sessions cache so
-/// that `build_state::build_task_rows` picks them up.
+/// The `cache_sources::refresh_tmux_sessions` call that previously followed
+/// session creation has been removed (Phase 4, issue #429). The TUI no longer
+/// reads the local tmux cache for its own state assembly — it fetches from the
+/// daemon WorkView instead. After this function returns, the calling code path
+/// triggers an `AppMsg::CacheRefreshed` or `AppMsg::LocalCacheRefreshed` tick
+/// which calls `work_view()` from the daemon; the daemon scans tmux directly
+/// and will include the newly-created session automatically.
 pub(super) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
     let existing_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
@@ -94,13 +98,10 @@ pub(super) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
         .collect();
 
     let to_create = compute_sessions_to_create(&repo_data);
-    let mut any_created = false;
 
     for session in &to_create {
         match tmux::new_detached_session(&session.name, &session.start_dir) {
-            Ok(()) => {
-                any_created = true;
-            }
+            Ok(()) => {}
             Err(e) => {
                 crate::logger::LOG.warn(&format!(
                     "ensure_main_sessions: failed to create session '{}' for repo '{}': {}",
@@ -109,10 +110,10 @@ pub(super) fn ensure_main_sessions(config: &global_config::GlobalConfig) {
             }
         }
     }
-
-    if any_created {
-        let _ = cache_sources::refresh_tmux_sessions(None);
-    }
+    // The `cache_sources::refresh_tmux_sessions` call that previously followed
+    // session creation has been intentionally removed (Phase 4, issue #429).
+    // The TUI reads state from the daemon WorkView, not from disk. The next
+    // refresh tick will pick up newly-created sessions via work_view().
 }
 
 /// Creates standalone tmux sessions with `start_on_launch: true` if they don't already exist.

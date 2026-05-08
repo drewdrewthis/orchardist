@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use super::types::{
     GraphQlResponse, HealthPayload, HostsPayload, TmuxSession, TmuxSessionsPayload,
+    WorkViewPayload, WorkViewSnapshot,
 };
 use super::{DaemonError, resolve_daemon_url};
 
@@ -143,6 +144,83 @@ impl Client {
         "#;
         let payload: HostsPayload = self.query(&GraphQlRequest::new(Q))?;
         Ok(payload.hosts)
+    }
+
+    /// Fetches a complete local-data snapshot via `Query.workView`.
+    ///
+    /// Returns a [`WorkViewSnapshot`] containing all projects (with their
+    /// worktrees, pre-joined with open PR and issue data), all local tmux
+    /// sessions, and all local Claude instances. This is the primary read path
+    /// for TUI dashboard refresh (Phase 1: local data only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaemonError::Unreachable`] when the daemon is not reachable.
+    /// Returns [`DaemonError::Parse`] when the response cannot be decoded.
+    /// Returns [`DaemonError::GraphQl`] when the daemon returns GraphQL errors.
+    ///
+    /// # Notes
+    ///
+    /// In daemon v1 all worktrees carry `host == "local"`. Remote worktrees
+    /// continue to be sourced from `cache_sources::refresh_remote_worktrees`
+    /// until daemon Workstream F populates per-peer worktrees in `WorkView`.
+    pub fn work_view(&self) -> Result<WorkViewSnapshot, DaemonError> {
+        const Q: &str = r#"
+            {
+              workView {
+                projects {
+                  name
+                  directory
+                  worktrees {
+                    path
+                    branch
+                    head
+                    bare
+                    host
+                    repo
+                    pr {
+                      number
+                      state
+                      title
+                      statusCheckRollup
+                      reviewDecision
+                      mergeStateStatus
+                      mergeable
+                      draft
+                      labels
+                    }
+                    issue {
+                      number
+                      state
+                      title
+                      labels
+                    }
+                  }
+                }
+                tmuxSessions {
+                  id
+                  name
+                  attached
+                  activeAttached
+                  lastActivityAt
+                  attachedClients
+                  windows
+                  currentWindow
+                }
+                claudeInstances {
+                  id
+                  pane
+                  process
+                  state
+                  sessionUuid
+                  rcEnabled
+                  lastActivityAt
+                }
+              }
+            }
+        "#;
+        let payload: WorkViewPayload = self.query(&GraphQlRequest::new(Q))?;
+        Ok(payload.work_view)
     }
 }
 

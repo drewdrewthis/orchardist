@@ -17,10 +17,38 @@
 pub mod client;
 pub mod federated;
 pub mod types;
+pub mod work_view_adapter;
+pub mod work_view_cache;
 
 pub use client::Client;
 pub use federated::{FederatedFanout, FederatedSession, PeerFetchResult, fan_out};
 pub use types::*;
+
+// ---------------------------------------------------------------------------
+// WorkViewSource — injectable abstraction for `work_view()` calls
+// ---------------------------------------------------------------------------
+
+/// Abstraction over the daemon's `workView` query.
+///
+/// The default implementation is [`Client`], which issues a real GraphQL request.
+/// In tests, inject a fake that returns a canned snapshot and records calls.
+///
+/// Only used by `tui::App::start_full_refresh` (Phase 3) and
+/// `tui::App::start_local_refresh` (Phase 4).
+pub trait WorkViewSource: Send + Sync {
+    /// Fetches the current [`WorkViewSnapshot`] from the daemon.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaemonError::Unreachable`] when the daemon is not reachable.
+    fn work_view(&self) -> Result<WorkViewSnapshot, DaemonError>;
+}
+
+impl WorkViewSource for Client {
+    fn work_view(&self) -> Result<WorkViewSnapshot, DaemonError> {
+        self.work_view()
+    }
+}
 
 use std::env;
 use std::fmt;

@@ -107,6 +107,15 @@ pub struct WatchConfig {
     /// Precedence: CLI --port > ORCHARD_WEBHOOK_PORT env > this field > 8477 default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_port: Option<u16>,
+    /// Write `*_issues.json` + `*_prs.json` diagnostic cache files on every full
+    /// refresh cycle. Defaults to `false` — post-#429 these files are orphans for
+    /// the TUI dashboard (it reads issues + PRs from `daemon::Client::work_view`
+    /// instead). Enable only for debugging the GitHub API fetch pipeline.
+    ///
+    /// Settable via `orchard-tui watch --keep-diagnostic-caches` on the command
+    /// line; persisting `true` here has the same effect permanently.
+    #[serde(default)]
+    pub keep_diagnostic_caches: bool,
 }
 
 fn default_local_poll_secs() -> u64 {
@@ -130,6 +139,7 @@ impl Default for WatchConfig {
             threshold_cooldown_secs: default_threshold_cooldown_secs(),
             notifications: default_notifications(),
             webhook_port: None,
+            keep_diagnostic_caches: false,
         }
     }
 }

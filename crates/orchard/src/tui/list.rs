@@ -14,7 +14,7 @@ use crate::derive::{DisplayGroup, WorktreeRow};
 use crate::paths;
 use crate::remote;
 use crate::tmux;
-use crate::tui::state::{CleanupState, InputPhase, Phase, ViewState};
+use crate::tui::state::{CleanupState, DaemonStatus, InputPhase, Phase, ViewState};
 use crate::tui::theme::{Theme, display_group_color, repo_color};
 use crate::tui::{ATTRIBUTION_URL, App, Reachability, WARNING_DURATION_SECS, filter_stale};
 
@@ -887,6 +887,19 @@ impl App {
             }
         }
 
+        // Build daemon-status span (shown only when not Reachable).
+        let daemon_status_span: Option<Span> = match self.daemon_status {
+            DaemonStatus::Unreachable => Some(Span::styled(
+                "  \u{25cf} daemon unreachable",
+                Style::default().fg(theme.warning),
+            )),
+            DaemonStatus::Unknown => Some(Span::styled(
+                "  \u{25cf} daemon: connecting\u{2026}",
+                Style::default().fg(theme.dimmed),
+            )),
+            DaemonStatus::Reachable => None,
+        };
+
         // Build timestamp span.
         let timestamp_span = if self.refreshing {
             let throbber = throbber_widgets_tui::Throbber::default()
@@ -916,6 +929,9 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             )];
             spans.extend(host_spans);
+            if let Some(ds_span) = &daemon_status_span {
+                spans.push(ds_span.clone());
+            }
             spans.push(timestamp_span);
             if !self.refreshing {
                 spans.push(Span::styled(
@@ -967,6 +983,9 @@ impl App {
         ];
         if !host_line_spans.is_empty() {
             header_text.push(Line::from(host_line_spans).alignment(Alignment::Center));
+        }
+        if let Some(ds_span) = daemon_status_span {
+            header_text.push(Line::from(vec![ds_span]).alignment(Alignment::Center));
         }
         if self.has_probe_results() || self.refreshing {
             header_text.push(Line::from(vec![timestamp_span]).alignment(Alignment::Center));

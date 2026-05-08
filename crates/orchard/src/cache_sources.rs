@@ -1,8 +1,25 @@
-//! Imperative shell for populating Orchard's on-disk cache.
+//! Thin compatibility shim for non-TUI consumers of the on-disk cache.
 //!
-//! Fetches issues, PRs, worktrees, and tmux sessions from their respective
-//! sources (GitHub CLI, git, SSH remotes) and writes the results to the
-//! cache files consumed by `sources::*` and `derive`.
+//! Post-#429 (TUI dashboard sources local data from `daemon::Client::work_view`),
+//! this module is **not** the dashboard's primary refresh path. It is retained
+//! as a documented shim with the following named owners:
+//!
+//! | Surface | Owner / consumer | Removal phase |
+//! |---|---|---|
+//! | `refresh_remote_worktrees`, `refresh_remote_tmux_sessions` | `tui::App::start_full_refresh` (remote enrichment) | #429 Phase 3 — gated on daemon Workstream F |
+//! | `refresh_issues`, `refresh_prs` | `watch::daemon` (when `--keep-diagnostic-caches` is set) + `heal` subcommand | separate refactor |
+//! | `refresh_worktrees`, `refresh_tmux_sessions` | `watch::daemon` + `heal` + `--json` mode + cold-start cache fallback | separate refactor |
+//! | `TMUX_SESSION_FORMAT` (constant) | `remote_adapter` — pure-data string, NOT `Command::new` | rename follow-up |
+//! | `parse_tmux_sessions_from_panes` | `remote_adapter` — pure-data parser | rename follow-up |
+//! | `snapshot_fork_hosts_for_remote` | `tui::App::start_full_refresh` (pre-refresh snapshot for vanished-fork detection) | #429 Phase 3 — kept for symmetry with remote refresh |
+//!
+//! Every function in this module either:
+//! 1. Writes a cache file consumed by a non-TUI surface above, OR
+//! 2. Provides a pure-data primitive (constant, parser) referenced by other modules.
+//!
+//! New TUI dashboard refreshes MUST go through `daemon::Client::work_view` and
+//! `daemon::work_view_adapter::build_local_state`, not through this module.
+//! See `docs/architecture.md` for the rationale.
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -804,7 +821,11 @@ fn run_local(program: &str, args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<String> {
+/// Runs a local command in the given working directory and returns its stdout.
+///
+/// Used by the ahead/behind carve-out in `tui::App::start_full_refresh` to
+/// shell out to `git branch -vv` per project directory.
+pub fn run_local_in(program: &str, args: &[&str], cwd: &str) -> anyhow::Result<String> {
     let out = Command::new(program).args(args).current_dir(cwd).output()?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();

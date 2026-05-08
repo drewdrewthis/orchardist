@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;
+use crate::cache_sources;
 use crate::claude_state::ClaudeStateFile;
 use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
@@ -241,7 +242,7 @@ pub fn build_task_rows(config: &GlobalConfig) -> Vec<WorktreeRow> {
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
-    let mut claude_states = sources::claude::read_state_files();
+    let mut claude_states = crate::claude_state::read_local_state_files();
     claude_states.extend(remote_claude_states);
     crate::derive::derive_all_repos(&repo_caches, &claude_states, &[])
 }
@@ -257,7 +258,7 @@ pub fn build_state_with_hosts(
     let local_sessions =
         cache::read_cache::<cache::CachedTmuxSession>(&cache::tmux_cache_path(None)).entries;
     let (repo_caches, remote_claude_states) = collect_repo_caches(config, &local_sessions);
-    let mut claude_states = sources::claude::read_state_files();
+    let mut claude_states = crate::claude_state::read_local_state_files();
     claude_states.extend(remote_claude_states);
     let rows = crate::derive::derive_all_repos(&repo_caches, &claude_states, &[]);
 
@@ -342,11 +343,11 @@ pub fn refresh_and_build_with_walker_config(
     // Refresh local sources. Per-repo refreshes fan out concurrently so
     // GitHub API latency for one repo can't block another.
     crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
-        let _ = sources::worktrees::refresh_local(repo);
-        let _ = sources::github::refresh_issues(repo);
-        let _ = sources::github::refresh_prs(repo);
+        let _ = cache_sources::refresh_worktrees(repo);
+        let _ = cache_sources::refresh_issues(repo);
+        let _ = cache_sources::refresh_prs(repo);
     });
-    let _ = sources::tmux::refresh_local();
+    let _ = cache_sources::refresh_tmux_sessions(None);
 
     // Probe remote hosts concurrently so a dead VM can't block healthy ones.
     // Use the kind-aware variant: boxd-fork golden hosts reject `true` as a
@@ -387,14 +388,15 @@ pub fn refresh_and_build_with_walker_config(
                     .unwrap_or(false);
                 if reachable {
                     s.spawn(move || {
-                        let _ = sources::worktrees::refresh_remote(repo, remote);
+                        let _ = cache_sources::refresh_remote_worktrees(repo, remote);
                     });
                 }
             }
         }
         for (repo, remote) in &tmux_dispatch {
             s.spawn(move || {
-                let _ = sources::tmux::refresh_remote_adapter(repo, remote);
+                let old_hosts = cache_sources::snapshot_fork_hosts_for_remote(repo, remote);
+                let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote, &old_hosts);
             });
         }
     });
