@@ -22,6 +22,7 @@ use orchard::heal;
 use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
+use orchard::restore;
 use orchard::setup_remote;
 use orchard::shell;
 use orchard::tui;
@@ -109,6 +110,7 @@ fn main() {
         "webhook-serve" => handle_webhook_serve(&args),
         "list-remotes" => handle_list_remotes(json_flag),
         "sessions" => handle_sessions(json_flag),
+        "restore" => handle_restore(),
         _ => {
             if json_flag {
                 handle_json();
@@ -432,6 +434,65 @@ fn handle_sessions(json: bool) {
     }
 }
 
+/// Handles `orchard-tui restore` — explicitly reconstruct dead tmux sessions
+/// from the local manifest cache.
+///
+/// This is the **only** caller of [`restore::restore_all_local`] in production.
+/// Read paths (`refresh_and_build`, `App::new`, `--json`) deliberately do NOT
+/// invoke restore — killed sessions stay killed until the user runs this
+/// subcommand. See issue #460.
+///
+/// Prints one line per cached entry classifying it as Restored / Skipped(reason)
+/// / Failed(step). Exits 0 even on partial Failures (matching the historical
+/// best-effort semantics of `restore_all_local`); a non-zero exit is reserved
+/// for cases where the orchestration itself can't run.
+fn handle_restore() {
+    let report = restore::restore_all_local();
+
+    if report.sessions.is_empty() {
+        println!("restore: no cached sessions to restore");
+        return;
+    }
+
+    let mut restored = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    for (name, outcome) in &report.sessions {
+        match outcome {
+            restore::SessionRestoreOutcome::Restored { windows, panes } => {
+                restored += 1;
+                println!("  restored: {name} ({windows} windows, {panes} panes)");
+            }
+            restore::SessionRestoreOutcome::Skipped(reason) => {
+                skipped += 1;
+                println!("  skipped:  {name} ({})", skip_reason_str(reason));
+            }
+            restore::SessionRestoreOutcome::Failed { step, error } => {
+                failed += 1;
+                println!("  failed:   {name} ({}: {error})", restore_step_str(step));
+            }
+        }
+    }
+    println!("restore: {restored} restored, {skipped} skipped, {failed} failed");
+}
+
+/// Maps a [`restore::SkipReason`] to a short user-facing phrase.
+fn skip_reason_str(reason: &restore::SkipReason) -> &'static str {
+    match reason {
+        restore::SkipReason::AlreadyRunning => "already running",
+        restore::SkipReason::WorktreeGone => "worktree gone",
+        restore::SkipReason::RemoteNotSupported => "remote (not supported in v1)",
+    }
+}
+
+/// Maps a [`restore::RestoreStep`] to a short user-facing phrase.
+fn restore_step_str(step: &restore::RestoreStep) -> &'static str {
+    match step {
+        restore::RestoreStep::NewSession => "tmux new-session failed",
+        restore::RestoreStep::InputValidation => "cache input rejected",
+    }
+}
+
 /// Handles `orchard-tui refresh` — probes hosts, fetches remote data, writes
 /// caches and snapshots, then exits.
 ///
@@ -638,6 +699,9 @@ fn print_usage() {
   orchard-tui webhook-serve [--port <n>]
                                        Receive GitHub webhooks and append to events.jsonl
                                        Requires ORCHARD_WEBHOOK_SECRET env var
+  orchard-tui restore                Reconstruct dead tmux sessions from the local
+                                       cache. Read paths never resurrect killed
+                                       sessions — this is the only deliberate path.
 
 Options:
   --version, -V  Print version and exit

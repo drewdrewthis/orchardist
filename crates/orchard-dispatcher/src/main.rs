@@ -62,6 +62,7 @@ const TUI_VERBS: &[&str] = &[
     "list-remotes",
     "hook-enrich",
     "webhook-serve",
+    "restore",
 ];
 
 const HELP: &str = "\
@@ -89,6 +90,7 @@ Commands:
   list-remotes [--json]         List configured remotes.
   hook-enrich --transcript ...  Claude Code hook entry point.
   webhook-serve                 Run the GitHub webhook receiver.
+  restore                       Reconstruct dead tmux sessions from cache.
 
 Worktree shortcuts (the worktree is Orchard's primary unit):
   orchard new <issue>           ≡ orchard worktree new <issue>
@@ -319,6 +321,7 @@ mod tests {
                 "list-remotes",
                 "hook-enrich",
                 "webhook-serve",
+                "restore",
             ]
         );
     }

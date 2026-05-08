@@ -339,10 +339,6 @@ pub fn refresh_and_build_with_walker_config(
     use crate::transitive_walker::{WalkerConfig, walk};
     use std::sync::Arc;
 
-    // Best-effort restore of dead tmux sessions from cache before the first
-    // refresh, so the subsequent tmux listing already reflects them.
-    let _ = crate::restore::restore_all_local();
-
     // Refresh local sources. Per-repo refreshes fan out concurrently so
     // GitHub API latency for one repo can't block another.
     crate::refresh_parallel::for_each_repo_parallel(config, |repo| {

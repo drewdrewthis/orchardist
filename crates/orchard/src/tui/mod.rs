@@ -214,11 +214,6 @@ impl App {
         let mut global_cfg = global_config::load_global_config();
         global_config::register_cwd_repo_if_new(&mut global_cfg);
 
-        // Best-effort restore of dead tmux sessions from the cache before the
-        // first build_state, so the TUI's first paint already reflects any
-        // just-reconstructed sessions. Failures are logged, never block startup.
-        let _ = crate::restore::restore_all_local();
-
         let task_rows = crate::build_state::build_task_rows(&global_cfg);
         let hosts = crate::cache::read_host_reachability();
         let state = crate::merge_remote::build_state_with_cached_snapshots(&global_cfg, &hosts);

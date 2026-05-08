@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use crate::cache::CachedTmuxSession;
 use crate::logger::LOG;
@@ -175,53 +174,20 @@ pub fn live_local_session_names() -> Option<Vec<String>> {
     )
 }
 
-/// Minimum interval between two consecutive restore attempts across orchard
-/// processes. A cron-polling `orchard-tui --json` every minute would otherwise
-/// keep re-probing tmux and risk `kill-session` + recreate against sessions
-/// tmux just failed to list.
-const RESTORE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-
-/// Filename for the sentinel that records the last restore attempt. Lives in
-/// the cache dir so it shares the tmux cache's lifecycle (rotated, cleaned
-/// alongside it).
-const RESTORE_SENTINEL: &str = "restore_last_run";
-
-/// Guard that ensures [`restore_all_local`] runs at most once per process,
-/// backstopping the file-based cooldown for the double-call-within-one-binary
-/// case (TUI boot + manual `refresh_and_build`).
-///
-/// **Testing note:** this is a process-global `OnceLock`. Tests that want to
-/// exercise the restore orchestration must call [`run_restore`] directly —
-/// calling [`restore_all_local`] from a test leaks state across test cases in
-/// the same process (and racy-shares it across threads).
-static RESTORE_RAN: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-
 /// Reads the local tmux cache, partitions cached sessions by [`restore`], runs
 /// [`restore_session`] for each plan, and returns a combined [`RestoreReport`].
 ///
-/// Safe to call from every `orchard` entry point. Two guards prevent storms:
+/// Invoked exactly once per explicit `orchard restore` user action — never
+/// from a read path. The cooldown / OnceLock guards that used to defend against
+/// the read-path call storm were removed in #460 once the storm itself was
+/// fixed.
 ///
-/// 1. **In-process**: a [`OnceLock`] short-circuits repeated calls within the
-///    same binary (e.g. `App::new` + `refresh_and_build` both invoking restore).
-/// 2. **Cross-process**: a sentinel file in the cache dir records the last
-///    restore timestamp. If the previous run was within [`RESTORE_COOLDOWN`],
-///    this call is a no-op. That keeps `orchard-tui --json` in a cron loop from
-///    re-probing every minute.
-///
-/// Silently returns an empty report on any IO failure so startup is never
-/// blocked.
+/// Silently returns an empty report on any IO failure so the subcommand exits
+/// cleanly when the cache is missing.
 pub fn restore_all_local() -> RestoreReport {
-    if RESTORE_RAN.set(()).is_err() {
-        return RestoreReport::default();
-    }
-    if recently_attempted_restore_at(&sentinel_path(), RESTORE_COOLDOWN) {
-        return RestoreReport::default();
-    }
-
     let cached: Vec<CachedTmuxSession> =
         crate::cache::read_cache::<CachedTmuxSession>(&crate::cache::tmux_cache_path(None)).entries;
     if cached.is_empty() {
-        record_restore_attempt();
         return RestoreReport::default();
     }
 
@@ -231,42 +197,7 @@ pub fn restore_all_local() -> RestoreReport {
         );
         return RestoreReport::default();
     };
-    record_restore_attempt();
     run_restore(&live, &cached)
-}
-
-/// Returns true when the sentinel file at `path` exists and was modified less
-/// than `cooldown` ago. Missing or stale sentinels return false.
-///
-/// Path is injected so unit tests can point at a tempfile instead of the
-/// real per-user cache dir.
-fn recently_attempted_restore_at(path: &Path, cooldown: Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return false;
-    };
-    modified
-        .elapsed()
-        .map(|elapsed| elapsed < cooldown)
-        .unwrap_or(false)
-}
-
-/// Touches the restore sentinel file so the next process's
-/// [`recently_attempted_restore_at`] check can see the timestamp. Failure is
-/// non-fatal (restore proceeds regardless).
-fn record_restore_attempt() {
-    let path = sentinel_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    // Writing zero bytes is enough — only the mtime matters.
-    let _ = std::fs::write(&path, b"");
-}
-
-fn sentinel_path() -> std::path::PathBuf {
-    crate::cache::cache_dir().join(RESTORE_SENTINEL)
 }
 
 /// Folds the pure classifier and the imperative shell into a single
@@ -631,6 +562,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use std::time::Duration;
 
     fn make_cached(name: &str, path: &str, host: Option<&str>) -> CachedTmuxSession {
         CachedTmuxSession {
@@ -835,55 +767,6 @@ mod tests {
         assert!(!is_valid_pane_target("0."));
         assert!(!is_valid_pane_target("0.a"));
         assert!(!is_valid_pane_target("a.0"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Cooldown guard tests (no tmux required — sentinel path is injected)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn recently_attempted_restore_at_is_false_when_sentinel_missing() {
-        let missing = std::env::temp_dir().join(format!(
-            "orchard-test-missing-sentinel-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        assert!(!missing.exists(), "precondition: sentinel must not exist");
-        assert!(!recently_attempted_restore_at(
-            &missing,
-            Duration::from_secs(300)
-        ));
-    }
-
-    #[test]
-    fn recently_attempted_restore_at_is_true_when_sentinel_is_recent() {
-        let path = std::env::temp_dir().join(format!(
-            "orchard-test-recent-sentinel-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::write(&path, b"").unwrap();
-        let result = recently_attempted_restore_at(&path, Duration::from_secs(300));
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            result,
-            "a just-written sentinel must register as recent under a 5-min cooldown"
-        );
-    }
-
-    #[test]
-    fn recently_attempted_restore_at_is_false_when_cooldown_is_zero() {
-        // Zero cooldown ⇒ nothing is "recent" by definition — the elapsed
-        // time is always >= 0, so the `elapsed < cooldown` check fails.
-        let path = std::env::temp_dir().join(format!(
-            "orchard-test-zero-cooldown-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::write(&path, b"").unwrap();
-        let result = recently_attempted_restore_at(&path, Duration::from_secs(0));
-        let _ = std::fs::remove_file(&path);
-        assert!(!result, "zero cooldown must treat every sentinel as stale");
     }
 
     // -----------------------------------------------------------------------
