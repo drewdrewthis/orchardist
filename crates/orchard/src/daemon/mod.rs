@@ -18,6 +18,7 @@ pub mod client;
 pub mod federated;
 pub mod types;
 pub mod work_view_adapter;
+pub mod work_view_cache;
 
 pub use client::Client;
 pub use federated::{FederatedFanout, FederatedSession, PeerFetchResult, fan_out};

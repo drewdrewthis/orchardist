@@ -11,7 +11,7 @@
 //! - [`GraphQlResponse`] / [`GraphQlError`] — generic envelope wrapping every
 //!   query response.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Top-level GraphQL response envelope.
 #[derive(Debug, Deserialize)]
@@ -132,7 +132,7 @@ pub struct WorkViewPayload {
 ///
 /// All three top-level collections are always present (they may be empty
 /// vectors when there is nothing to report).
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewSnapshot {
     /// One entry per git project root the daemon knows about.
     pub projects: Vec<WorkViewProject>,
@@ -147,7 +147,7 @@ pub struct WorkViewSnapshot {
 }
 
 /// One git project (repository root) as exposed by `workView`.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewProject {
     /// Project name (usually the repository basename).
     pub name: String,
@@ -161,7 +161,7 @@ pub struct WorkViewProject {
 
 /// One git worktree as exposed by `workView`. PR and issue joins are
 /// performed **daemon-side** and delivered pre-enriched.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewWorktree {
     /// Absolute path to the worktree on disk.
     pub path: String,
@@ -193,7 +193,7 @@ pub struct WorkViewWorktree {
 
 /// Pull request fields carried in a `workView` worktree. Narrow projection —
 /// only the badges the TUI renders.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewPr {
     /// GitHub PR number.
     pub number: u64,
@@ -226,7 +226,7 @@ pub struct WorkViewPr {
 }
 
 /// Issue fields carried in a `workView` worktree. Narrow projection.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewIssue {
     /// GitHub issue number.
     pub number: u64,
@@ -240,7 +240,7 @@ pub struct WorkViewIssue {
 
 /// One tmux session as exposed by `workView.tmuxSessions`. Extends the
 /// existing [`TmuxSession`] with window metadata needed for session display.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewTmuxSession {
     /// Globally-unique node id (`TmuxSession:<host>:<sessionName>`).
     pub id: String,
@@ -285,7 +285,7 @@ pub struct WorkViewTmuxSession {
 /// The sessions↔claude join is performed **client-side** by walking
 /// `ClaudeInstance.pane → TmuxPane → TmuxSession`. No daemon-side join field
 /// is available for this relationship.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ClaudeInstance {
     /// Globally-unique node id.
     pub id: String,

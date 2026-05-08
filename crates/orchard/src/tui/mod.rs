@@ -77,7 +77,7 @@ pub(crate) enum Reachability {
 }
 
 use message::{Message, UpdateResult};
-use state::{AppMsg, CleanupState, InputPhase, Phase, ViewState};
+use state::{AppMsg, CleanupState, DaemonStatus, InputPhase, Phase, ViewState};
 use std::path::Path;
 use std::process::Command;
 
@@ -220,6 +220,14 @@ pub struct App {
     /// In tests, inject a fake that returns a canned snapshot without
     /// issuing any HTTP requests.
     work_view_source: std::sync::Arc<dyn crate::daemon::WorkViewSource>,
+
+    /// Daemon reachability as reported by the most recent refresh tick.
+    ///
+    /// Initialised to [`DaemonStatus::Unknown`] at startup. Updated by the
+    /// [`AppMsg::DaemonStatusChanged`] message sent from the refresh thread
+    /// before each `CacheRefreshed`/`LocalCacheRefreshed`. Drives the
+    /// "daemon unreachable" indicator in the TUI header.
+    pub(crate) daemon_status: DaemonStatus,
 }
 
 impl App {
@@ -304,7 +312,13 @@ impl App {
             window_expanded: HashSet::new(),
             seen_expandable_keys: HashSet::new(),
             seen_window_keys: HashSet::new(),
-            work_view_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            work_view_snapshot: {
+                // Cold-start fallback (AC#7): pre-populate the snapshot slot
+                // from disk so the first render shows stale data rather than
+                // an empty screen while waiting for the daemon.
+                let initial_snap = crate::daemon::work_view_cache::read_snapshot();
+                std::sync::Arc::new(std::sync::Mutex::new(initial_snap))
+            },
             work_view_source: {
                 // Build the daemon client; fall back to a no-op source if the
                 // client cannot be constructed (e.g. invalid URL env var).
@@ -318,6 +332,7 @@ impl App {
                     }
                 }
             },
+            daemon_status: DaemonStatus::Unknown,
         };
         // Default-expanded: issue #251 requires the hierarchy visible from
         // first paint without a data-refresh round-trip. `prune_expansion_state`
@@ -752,15 +767,18 @@ impl App {
             //           refresh_worktrees + refresh_tmux_sessions
             match work_view_source.work_view() {
                 Ok(snapshot) => {
+                    // Persist snapshot so cold-start fallback has fresh data.
+                    if let Err(e) = crate::daemon::work_view_cache::write_snapshot(&snapshot) {
+                        crate::logger::LOG.warn(&format!("work_view_cache write failed: {e}"));
+                    }
                     if let Ok(mut slot) = work_view_slot.lock() {
                         *slot = Some(snapshot);
                     }
+                    let _ = tx.send(AppMsg::DaemonStatusChanged(DaemonStatus::Reachable));
                 }
                 Err(err) => {
-                    // Phase 5 wires graceful fallback + status indicator.
-                    // For now: log a warning and let the handler fall back to
-                    // the last-known cache path.
                     crate::logger::LOG.warn(&format!("daemon work_view failed: {err}"));
+                    let _ = tx.send(AppMsg::DaemonStatusChanged(DaemonStatus::Unreachable));
                 }
             }
 
@@ -814,15 +832,18 @@ impl App {
         std::thread::spawn(move || {
             match work_view_source.work_view() {
                 Ok(snapshot) => {
+                    // Persist snapshot so cold-start fallback has fresh data.
+                    if let Err(e) = crate::daemon::work_view_cache::write_snapshot(&snapshot) {
+                        crate::logger::LOG.warn(&format!("work_view_cache write failed: {e}"));
+                    }
                     if let Ok(mut slot) = work_view_slot.lock() {
                         *slot = Some(snapshot);
                     }
+                    let _ = tx.send(AppMsg::DaemonStatusChanged(DaemonStatus::Reachable));
                 }
                 Err(err) => {
-                    // Phase 5 wires graceful fallback + status indicator.
-                    // For now: log a warning and let the handler fall back to
-                    // the last-known cache path.
                     crate::logger::LOG.warn(&format!("daemon work_view (local) failed: {err}"));
+                    let _ = tx.send(AppMsg::DaemonStatusChanged(DaemonStatus::Unreachable));
                 }
             }
             let _ = tx.send(AppMsg::LocalCacheRefreshed);
@@ -933,6 +954,9 @@ impl App {
                 }
                 AppMsg::HostReachability(host, reachable) => {
                     self.host_reachable.insert(host, reachable);
+                }
+                AppMsg::DaemonStatusChanged(status) => {
+                    self.daemon_status = status;
                 }
                 AppMsg::PaneContent(session_name, content) => {
                     // Accept pane content when session matches the current row (standalone or worktree).
@@ -2260,6 +2284,7 @@ impl App {
             seen_window_keys: HashSet::new(),
             work_view_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
             work_view_source: std::sync::Arc::new(crate::tui::refresh::NullWorkViewSource),
+            daemon_status: DaemonStatus::Unknown,
         };
         // Mirror production: auto-expand multi-child rows so tests see
         // hierarchy by default (issue #251).
@@ -6039,5 +6064,260 @@ mod tests {
 
         // No on-disk caches in the test environment — rows are empty but no panic.
         let _ = app.task_rows.len();
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 5 tests: daemon-down fallback + status indicator
+    // -----------------------------------------------------------------------
+
+    /// A [`WorkViewSource`] whose behavior can be toggled at runtime.
+    ///
+    /// When `should_fail` is `true`, `work_view()` returns
+    /// [`DaemonError::Unreachable`]. Otherwise it returns the stored snapshot.
+    struct ControllableSource {
+        snapshot: crate::daemon::WorkViewSnapshot,
+        should_fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl ControllableSource {
+        fn new(snapshot: crate::daemon::WorkViewSnapshot) -> Self {
+            Self {
+                snapshot,
+                should_fail: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        fn set_failing(&self, fail: bool) {
+            self.should_fail
+                .store(fail, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl crate::daemon::WorkViewSource for ControllableSource {
+        fn work_view(&self) -> Result<crate::daemon::WorkViewSnapshot, crate::daemon::DaemonError> {
+            if self
+                .should_fail
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                Err(crate::daemon::DaemonError::Unreachable {
+                    url: "http://127.0.0.1:7777/graphql".to_string(),
+                    cause: "test-injected failure".to_string(),
+                })
+            } else {
+                Ok(self.snapshot.clone())
+            }
+        }
+    }
+
+    fn make_single_worktree_snapshot(branch: &str) -> crate::daemon::WorkViewSnapshot {
+        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        WorkViewSnapshot {
+            projects: vec![WorkViewProject {
+                name: "repo".to_string(),
+                directory: "/repos/owner/repo".to_string(),
+                worktrees: vec![WorkViewWorktree {
+                    path: format!("/repos/owner/repo/.worktrees/{}", branch.replace('/', "-")),
+                    branch: branch.to_string(),
+                    head: "cafebabe".to_string(),
+                    bare: false,
+                    host: "local".to_string(),
+                    repo: "owner/repo".to_string(),
+                    pr: None,
+                    issue: None,
+                }],
+            }],
+            tmux_sessions: vec![],
+            claude_instances: vec![],
+        }
+    }
+
+    /// @integration "TUI startup with daemon unreachable falls back to last-known cached state"
+    ///
+    /// Simulates a cold start where the daemon is unreachable but a prior
+    /// snapshot exists in the `work_view_snapshot` slot (as would be loaded
+    /// from disk in production via `work_view_cache::read_snapshot`).
+    ///
+    /// After the first refresh tick (which fails), the task_rows must still
+    /// reflect the pre-existing snapshot, and `daemon_status` must be
+    /// `Unreachable`.
+    #[test]
+    fn startup_with_daemon_unreachable_falls_back_to_cached_state() {
+        use state::AppMsg;
+        use std::sync::Arc;
+
+        let snapshot = make_single_worktree_snapshot("issue429/cached-branch");
+
+        // Build App and pre-populate the snapshot slot (mirrors the cold-start
+        // disk-read path in production App::new).
+        let mut app = App::new_test(vec![]);
+        *app.work_view_snapshot.lock().unwrap() = Some(snapshot.clone());
+
+        // Inject a source that always fails.
+        let source = Arc::new(ControllableSource::new(snapshot.clone()));
+        source.set_failing(true);
+        app.work_view_source = source;
+
+        // Simulate a refresh tick: daemon unreachable → DaemonStatusChanged +
+        // CacheRefreshed (slot still has prior snapshot).
+        let _ = app
+            .tx
+            .send(AppMsg::DaemonStatusChanged(DaemonStatus::Unreachable));
+        let _ = app.tx.send(AppMsg::CacheRefreshed);
+        app.check_updates();
+
+        // Task rows must reflect the cached snapshot — no blank screen.
+        assert_eq!(
+            app.task_rows.len(),
+            1,
+            "task_rows must reflect the pre-existing cached snapshot"
+        );
+        assert_eq!(app.task_rows[0].branch, "issue429/cached-branch");
+
+        // Status indicator must be Unreachable.
+        assert_eq!(
+            app.daemon_status,
+            DaemonStatus::Unreachable,
+            "daemon_status must be Unreachable after a failed refresh"
+        );
+    }
+
+    /// @integration "TUI mid-session daemon outage retains last-known state"
+    ///
+    /// First tick succeeds (populates snapshot). Second tick fails. After the
+    /// second tick the rows still reflect the snapshot from tick 1.
+    #[test]
+    fn mid_session_daemon_outage_retains_last_known_state() {
+        use state::AppMsg;
+        use std::sync::Arc;
+
+        let snapshot = make_single_worktree_snapshot("issue429/mid-session");
+
+        let source = Arc::new(ControllableSource::new(snapshot.clone()));
+        let mut app = App::new_test(vec![]);
+        app.work_view_source = source.clone();
+
+        // --- First tick: daemon reachable ---
+        // Populate the slot (as start_full_refresh would do on success).
+        *app.work_view_snapshot.lock().unwrap() = Some(snapshot.clone());
+        let _ = app
+            .tx
+            .send(AppMsg::DaemonStatusChanged(DaemonStatus::Reachable));
+        let _ = app.tx.send(AppMsg::CacheRefreshed);
+        app.check_updates();
+
+        assert_eq!(app.task_rows.len(), 1, "first tick: rows from snapshot");
+        assert_eq!(app.task_rows[0].branch, "issue429/mid-session");
+        assert_eq!(app.daemon_status, DaemonStatus::Reachable);
+
+        // --- Second tick: daemon unreachable ---
+        // Slot is NOT cleared on failure — it retains the last-known snapshot.
+        source.set_failing(true);
+        let _ = app
+            .tx
+            .send(AppMsg::DaemonStatusChanged(DaemonStatus::Unreachable));
+        let _ = app.tx.send(AppMsg::CacheRefreshed);
+        app.check_updates();
+
+        // Rows must still reflect the first tick's snapshot (last-known state).
+        assert_eq!(
+            app.task_rows.len(),
+            1,
+            "task_rows must retain last-known state after daemon outage"
+        );
+        assert_eq!(
+            app.task_rows[0].branch,
+            "issue429/mid-session",
+            "branch must still be from last-known snapshot"
+        );
+        assert_eq!(
+            app.daemon_status,
+            DaemonStatus::Unreachable,
+            "daemon_status must be Unreachable after failed second tick"
+        );
+    }
+
+    /// @integration "TUI recovers automatically when the daemon comes back"
+    ///
+    /// First tick fails (no prior snapshot → empty rows). Second tick succeeds
+    /// with a new snapshot. After the second tick, rows reflect the new data
+    /// and `daemon_status` is `Reachable`.
+    #[test]
+    fn tui_recovers_automatically_when_daemon_comes_back() {
+        use state::AppMsg;
+        use std::sync::Arc;
+
+        let snapshot = make_single_worktree_snapshot("issue429/recovery");
+
+        let source = Arc::new(ControllableSource::new(snapshot.clone()));
+        source.set_failing(true); // start in failing state
+
+        let mut app = App::new_test(vec![]);
+        app.work_view_source = source.clone();
+
+        // --- First tick: daemon unreachable, no prior snapshot ---
+        let _ = app
+            .tx
+            .send(AppMsg::DaemonStatusChanged(DaemonStatus::Unreachable));
+        let _ = app.tx.send(AppMsg::CacheRefreshed);
+        app.check_updates();
+
+        // No panic, no prior state → empty rows.
+        let _ = app.task_rows.len(); // must not panic
+        assert_eq!(
+            app.daemon_status,
+            DaemonStatus::Unreachable,
+            "first tick: daemon_status must be Unreachable"
+        );
+
+        // --- Second tick: daemon recovers ---
+        source.set_failing(false);
+        // Simulate what start_full_refresh does on success: populate slot then send messages.
+        *app.work_view_snapshot.lock().unwrap() = Some(snapshot.clone());
+        let _ = app
+            .tx
+            .send(AppMsg::DaemonStatusChanged(DaemonStatus::Reachable));
+        let _ = app.tx.send(AppMsg::CacheRefreshed);
+        app.check_updates();
+
+        assert_eq!(
+            app.task_rows.len(),
+            1,
+            "second tick: task_rows must reflect the daemon-fresh snapshot"
+        );
+        assert_eq!(app.task_rows[0].branch, "issue429/recovery");
+        assert_eq!(
+            app.daemon_status,
+            DaemonStatus::Reachable,
+            "second tick: daemon_status must be Reachable after recovery"
+        );
+    }
+
+    /// @unit status indicator renders "daemon unreachable" in the header when
+    /// `daemon_status == DaemonStatus::Unreachable`.
+    #[test]
+    fn header_renders_daemon_unreachable_indicator() {
+        let mut app = App::new_test(vec![]);
+        app.daemon_status = DaemonStatus::Unreachable;
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(
+            output.contains("daemon unreachable"),
+            "header must contain 'daemon unreachable' when daemon_status is Unreachable"
+        );
+    }
+
+    /// @unit status indicator is absent when `daemon_status == DaemonStatus::Reachable`.
+    #[test]
+    fn header_no_daemon_indicator_when_reachable() {
+        let mut app = App::new_test(vec![]);
+        app.daemon_status = DaemonStatus::Reachable;
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(
+            !output.contains("daemon unreachable"),
+            "header must NOT contain 'daemon unreachable' when daemon is reachable"
+        );
+        assert!(
+            !output.contains("daemon: connecting"),
+            "header must NOT contain 'daemon: connecting' when daemon is reachable"
+        );
     }
 }

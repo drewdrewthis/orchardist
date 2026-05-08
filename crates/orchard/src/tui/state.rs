@@ -107,6 +107,26 @@ pub enum Phase {
 }
 
 // ---------------------------------------------------------------------------
+// Daemon status
+// ---------------------------------------------------------------------------
+
+/// Reflects the orchard daemon's reachability as seen by the most recent
+/// refresh tick.
+///
+/// The TUI renders an explicit status indicator when the daemon is
+/// [`DaemonStatus::Unreachable`], so users know they are seeing stale data
+/// rather than a blank screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonStatus {
+    /// Last refresh succeeded — daemon is healthy.
+    Reachable,
+    /// Daemon has not been polled yet this session (cold start).
+    Unknown,
+    /// Last refresh failed to reach the daemon.
+    Unreachable,
+}
+
+// ---------------------------------------------------------------------------
 // Messages from background threads
 // ---------------------------------------------------------------------------
 
@@ -120,6 +140,8 @@ pub enum AppMsg {
     LocalCacheRefreshed,
     /// SSH reachability result for a host; carries `(host, is_reachable)`.
     HostReachability(String, bool),
+    /// Daemon reachability changed; carries the new status.
+    DaemonStatusChanged(DaemonStatus),
     /// The delete operation finished successfully.
     DeleteDone,
     /// The delete operation failed with the given error message.
