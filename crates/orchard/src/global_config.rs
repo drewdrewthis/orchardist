@@ -340,6 +340,12 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<(), String> {
 /// by [`GlobalConfig`]) are preserved as-is. Writes atomically via a temporary
 /// file to avoid partial writes. Used directly in tests to avoid touching
 /// the real `~/.orchard/config.json`.
+///
+/// Not safe against concurrent writers. The read-then-write window can lose
+/// updates if another process writes between the read and the rename. The
+/// merge narrows the clobber window from "any save wipes unknown keys" to
+/// "concurrent saves race" — file a follow-up issue if multi-writer safety
+/// is needed (e.g. advisory `flock`).
 pub fn save_to_path(cfg: &GlobalConfig, path: &std::path::Path) -> Result<(), String> {
     let dir = path
         .parent()
