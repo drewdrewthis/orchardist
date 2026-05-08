@@ -8,7 +8,7 @@
 //! pruning decisions.
 //!
 //! This module is a pure function over the on-disk caches: callers refresh
-//! the local tmux cache inline (`sources::tmux::refresh_local`) and rely on
+//! the local tmux cache inline (`cache_sources::refresh_tmux_sessions(None)`) and rely on
 //! `orchard refresh` / `orchard watch` for remote freshness. No SSH, no
 //! `tmux` invocations, no network calls happen here.
 //!
@@ -121,7 +121,7 @@ pub enum SessionClassification {
 /// Builds the sessions index by reading on-disk caches.
 ///
 /// Pure function over caches: callers must refresh the local tmux cache
-/// inline (`sources::tmux::refresh_local()`) before calling this so the
+/// inline (`cache_sources::refresh_tmux_sessions(None)`) before calling this so the
 /// freshness contract from issue #374/#375 holds for the local host.
 pub fn build_sessions_index(config: &GlobalConfig) -> SessionsIndexOutput {
     // 1. Gather worktree paths from every configured repo (local + remote).
