@@ -41,11 +41,11 @@ fn orchard_version_succeeds_without_controlling_tty() {
 #[test]
 fn orchard_refresh_succeeds_without_controlling_tty() {
     let home = TempDir::new().expect("create temp home");
-    std::fs::create_dir_all(home.path().join(".config/orchard")).unwrap();
+    std::fs::create_dir_all(home.path().join(".orchard")).unwrap();
     // Empty config — no repos, no remotes. refresh becomes a no-op
     // that still must exit 0.
     std::fs::write(
-        home.path().join(".config/orchard/config.json"),
+        home.path().join(".orchard/config.json"),
         r#"{"repos": []}"#,
     )
     .unwrap();
@@ -70,9 +70,9 @@ fn orchard_refresh_succeeds_without_controlling_tty() {
 #[test]
 fn orchard_json_succeeds_without_controlling_tty() {
     let home = TempDir::new().expect("create temp home");
-    std::fs::create_dir_all(home.path().join(".config/orchard")).unwrap();
+    std::fs::create_dir_all(home.path().join(".orchard")).unwrap();
     std::fs::write(
-        home.path().join(".config/orchard/config.json"),
+        home.path().join(".orchard/config.json"),
         r#"{"repos": []}"#,
     )
     .unwrap();

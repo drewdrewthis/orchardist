@@ -73,7 +73,7 @@ fn json_mode_outputs_valid_json() {
     let home = tempfile::TempDir::new().unwrap();
 
     // Prevent the `gh` CLI from being used for auth-dependent operations by
-    // pointing HOME at a clean dir (no .config/orchard/config.json).
+    // pointing HOME at a clean dir (no .orchard/config.json).
     let output = Command::cargo_bin("orchard-tui")
         .unwrap()
         .arg("--json")
