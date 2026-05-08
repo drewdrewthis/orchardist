@@ -801,24 +801,67 @@ impl App {
         });
     }
 
-    /// Starts a local-only background refresh (worktrees + tmux sessions).
+    /// Starts a local-only background refresh via the daemon's WorkView.
     ///
-    /// Skips GitHub API calls, remote host probing, and remote worktree/session
-    /// refreshes. Sends `AppMsg::LocalCacheRefreshed` when done.
+    /// Replaces the old per-source `cache_sources::refresh_worktrees` +
+    /// `cache_sources::refresh_tmux_sessions` calls with a single round-trip
+    /// to the daemon. No remote host probing, no GitHub API calls.
+    /// Sends `AppMsg::LocalCacheRefreshed` when done.
     fn start_local_refresh(&self) {
-        let config = self.global_config.clone();
         let tx = self.tx.clone();
+        let work_view_slot = self.work_view_snapshot.clone();
+        let work_view_source = self.work_view_source.clone();
         std::thread::spawn(move || {
-            // Local-only refresh runs `git worktree list` per repo — no SSH,
-            // no GitHub API. Each call is single-digit milliseconds, so
-            // parallel dispatch would add thread-spawn overhead without a
-            // measurable win. Stay serial.
-            for repo in &config.repos {
-                let _ = cache_sources::refresh_worktrees(repo);
+            match work_view_source.work_view() {
+                Ok(snapshot) => {
+                    if let Ok(mut slot) = work_view_slot.lock() {
+                        *slot = Some(snapshot);
+                    }
+                }
+                Err(err) => {
+                    // Phase 5 wires graceful fallback + status indicator.
+                    // For now: log a warning and let the handler fall back to
+                    // the last-known cache path.
+                    crate::logger::LOG.warn(&format!("daemon work_view (local) failed: {err}"));
+                }
             }
-            let _ = cache_sources::refresh_tmux_sessions(None);
             let _ = tx.send(AppMsg::LocalCacheRefreshed);
         });
+    }
+
+    /// Builds an [`crate::orchard_state::OrchardState`] from the current
+    /// `work_view_snapshot` slot, merging in cached remote snapshots.
+    ///
+    /// When a daemon snapshot is available it drives the local state via
+    /// [`crate::daemon::work_view_adapter::build_local_state`]. When the slot
+    /// is empty (daemon unreachable) it falls back to the cache-driven path
+    /// [`crate::build_state::build_state_with_hosts`]. Either way, cached
+    /// remote snapshots written by `refresh_remote_*` this cycle are folded in
+    /// (AC#2 — remote path unchanged).
+    fn rebuild_state_from_snapshot(&self) -> crate::orchard_state::OrchardState {
+        let hosts = crate::cache::read_host_reachability();
+        let snapshot_opt = self
+            .work_view_snapshot
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+
+        let mut state = if let Some(snapshot) = snapshot_opt {
+            crate::daemon::work_view_adapter::build_local_state(
+                &snapshot,
+                &self.global_config,
+                &hosts,
+            )
+        } else {
+            crate::build_state::build_state_with_hosts(&self.global_config, &hosts)
+        };
+
+        let remote_snapshots =
+            crate::orchard_snapshot::load_cached_snapshots(&self.global_config);
+        for (host, snap) in remote_snapshots {
+            crate::merge_remote::merge_remote_snapshot(&mut state, snap, host);
+        }
+        state
     }
 
     // -------------------------------------------------------------------
@@ -829,34 +872,7 @@ impl App {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 AppMsg::CacheRefreshed => {
-                    let hosts = crate::cache::read_host_reachability();
-
-                    // Build LOCAL state from the daemon WorkView snapshot when
-                    // available; fall back to the cache-driven path otherwise
-                    // (daemon unreachable, Phase 5 wires the status indicator).
-                    let snapshot_opt = self
-                        .work_view_snapshot
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.clone());
-
-                    let mut state = if let Some(snapshot) = snapshot_opt {
-                        crate::daemon::work_view_adapter::build_local_state(
-                            &snapshot,
-                            &self.global_config,
-                            &hosts,
-                        )
-                    } else {
-                        crate::build_state::build_state_with_hosts(&self.global_config, &hosts)
-                    };
-
-                    // Fold in cached remote snapshots written by
-                    // `refresh_remote_*` this cycle (unchanged path — AC#2).
-                    let remote_snapshots =
-                        crate::orchard_snapshot::load_cached_snapshots(&self.global_config);
-                    for (host, snap) in remote_snapshots {
-                        crate::merge_remote::merge_remote_snapshot(&mut state, snap, host);
-                    }
+                    let state = self.rebuild_state_from_snapshot();
 
                     self.task_rows = crate::tui::refresh::state_to_task_rows(&state.repos);
                     self.standalone_sessions = state.standalone_sessions.clone();
@@ -941,12 +957,11 @@ impl App {
                     }
                 }
                 AppMsg::LocalCacheRefreshed => {
-                    self.task_rows = crate::build_state::build_task_rows(&self.global_config);
-                    let hosts = crate::cache::read_host_reachability();
-                    let state = crate::merge_remote::build_state_with_cached_snapshots(
-                        &self.global_config,
-                        &hosts,
-                    );
+                    // Mirror CacheRefreshed: use the daemon WorkView snapshot
+                    // when available, fall back to the cache-driven path otherwise.
+                    let state = self.rebuild_state_from_snapshot();
+
+                    self.task_rows = crate::tui::refresh::state_to_task_rows(&state.repos);
                     self.standalone_sessions = state.standalone_sessions.clone();
                     if let Err(e) =
                         check_standalone_collisions(&self.standalone_sessions, &self.task_rows)
@@ -5902,5 +5917,127 @@ mod tests {
             1,
             "start_full_refresh must call work_view exactly once"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4 tests: start_local_refresh + LocalCacheRefreshed use daemon WorkView
+    // -----------------------------------------------------------------------
+
+    /// @unit "start_local_refresh fetches local data via daemon::Client::work_view"
+    ///
+    /// Injects a `CountingSource` and calls `start_local_refresh`. The source
+    /// must be invoked exactly once; no `cache_sources::refresh_worktrees` or
+    /// `cache_sources::refresh_tmux_sessions` calls occur.
+    #[test]
+    fn start_local_refresh_calls_work_view_source_once() {
+        use crate::daemon::{DaemonError, WorkViewSnapshot, WorkViewSource};
+        use state::AppMsg;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct CountingSource {
+            call_count: Arc<AtomicUsize>,
+        }
+
+        impl WorkViewSource for CountingSource {
+            fn work_view(&self) -> Result<WorkViewSnapshot, DaemonError> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Ok(WorkViewSnapshot {
+                    projects: vec![],
+                    tmux_sessions: vec![],
+                    claude_instances: vec![],
+                })
+            }
+        }
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let source = Arc::new(CountingSource {
+            call_count: call_count.clone(),
+        });
+
+        let mut app = App::new_test(vec![]);
+        app.work_view_source = source;
+
+        // Invoke start_local_refresh — it spawns a background thread.
+        app.start_local_refresh();
+
+        // Wait briefly for the background thread to complete.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "start_local_refresh must call work_view exactly once"
+        );
+
+        // Drain the LocalCacheRefreshed message so there's no leftover state.
+        app.check_updates();
+        // Verify the message was received (handler ran without panic).
+        let _ = app.task_rows.len();
+    }
+
+    /// @unit "local_cache_refreshed_uses_daemon_snapshot"
+    ///
+    /// Populate the `work_view_snapshot` slot manually, simulate
+    /// `LocalCacheRefreshed`, and assert that `task_rows` reflects the snapshot.
+    #[test]
+    fn local_cache_refreshed_uses_daemon_snapshot() {
+        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        use state::AppMsg;
+
+        let snapshot = WorkViewSnapshot {
+            projects: vec![WorkViewProject {
+                name: "repo".to_string(),
+                directory: "/repos/owner/repo".to_string(),
+                worktrees: vec![WorkViewWorktree {
+                    path: "/repos/owner/repo/.worktrees/issue429".to_string(),
+                    branch: "issue429/local-refresh".to_string(),
+                    head: "cafebabe".to_string(),
+                    bare: false,
+                    host: "local".to_string(),
+                    repo: "owner/repo".to_string(),
+                    pr: None,
+                    issue: None,
+                }],
+            }],
+            tmux_sessions: vec![],
+            claude_instances: vec![],
+        };
+
+        let mut app = App::new_test(vec![]);
+        // Pre-populate the slot as start_local_refresh would do.
+        *app.work_view_snapshot.lock().unwrap() = Some(snapshot);
+
+        let _ = app.tx.send(AppMsg::LocalCacheRefreshed);
+        app.check_updates();
+
+        assert_eq!(
+            app.task_rows.len(),
+            1,
+            "LocalCacheRefreshed handler should build rows from the daemon snapshot"
+        );
+        assert_eq!(app.task_rows[0].branch, "issue429/local-refresh");
+        assert_eq!(app.task_rows[0].repo_slug, "owner/repo");
+    }
+
+    /// @unit "local_cache_refreshed_falls_back_when_no_snapshot"
+    ///
+    /// When the slot is empty (daemon unreachable), the handler must fall back
+    /// to `build_state_with_hosts` without panicking. In the test environment
+    /// there are no on-disk caches, so `task_rows` will be empty — the
+    /// important assertion is that no panic occurs.
+    #[test]
+    fn local_cache_refreshed_falls_back_when_no_snapshot() {
+        use state::AppMsg;
+
+        let mut app = App::new_test(vec![]);
+        // Slot remains None — daemon unreachable scenario.
+        assert!(app.work_view_snapshot.lock().unwrap().is_none());
+
+        let _ = app.tx.send(AppMsg::LocalCacheRefreshed);
+        app.check_updates();
+
+        // No on-disk caches in the test environment — rows are empty but no panic.
+        let _ = app.task_rows.len();
     }
 }
