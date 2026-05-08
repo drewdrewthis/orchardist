@@ -271,6 +271,13 @@ pub struct WorkViewTmuxSession {
     /// Name of the currently active window.
     #[serde(default, rename = "currentWindow")]
     pub current_window: Option<String>,
+
+    /// Working directory of the session's active pane. Used by the client-side
+    /// adapter to match sessions to worktrees via [`crate::paths::session_belongs_to_worktree`].
+    ///
+    /// Absent in older daemon versions; falls back to name-based matching when `None`.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// One Claude Code instance as exposed by `workView.claudeInstances`.
