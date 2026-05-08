@@ -15,7 +15,7 @@
 //	              and POSTs JSON for one-shot queries. HTTPS/WSS
 //	              enabled per-peer via `tls: true` in config.
 //	config.go   — loads peer addresses from
-//	              ~/.config/orchard/config.json. Read-only.
+//	              ~/.orchard/config.json. Read-only.
 //
 // Auth: peer authentication is delegated to the transport. For TLS-enabled
 // peers (e.g. boxd-fronted endpoints), the transport-level allowlist on

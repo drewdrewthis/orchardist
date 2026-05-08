@@ -13,7 +13,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// JSONFileAdapter reads ~/.config/orchard/config.json and watches it
+// JSONFileAdapter reads ~/.orchard/config.json and watches it
 // for changes. It implements adapter.Adapter[ProjectID, Project].
 //
 // fsnotify subtleties this adapter handles:

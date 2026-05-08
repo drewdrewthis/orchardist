@@ -39,7 +39,7 @@ pub const SESSIONS_INDEX_VERSION: u32 = 1;
 /// These are the orchardist-side daemon and oracle sessions whose loss would
 /// require manual recovery. The list is intentionally small and curated;
 /// users can extend protection by adding entries to `tmux_sessions` in
-/// `~/.config/orchard/config.json`, which feed into the same `protected`
+/// `~/.orchard/config.json`, which feed into the same `protected`
 /// flag here.
 ///
 /// Pinned by issue #375. Order is not significant — equality is by name.

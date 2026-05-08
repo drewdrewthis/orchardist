@@ -157,7 +157,7 @@ type Query {
   "All hosts known to this daemon. v1: only the local host. Workstream F adds federated peers."
   hosts: [Host!]!
 
-  "All projects declared in ~/.config/orchard/config.json. Read-only — projects are added with `orchard config add-repo`."
+  "All projects declared in ~/.orchard/config.json. Read-only — projects are added with `orchard config add-repo`."
   projects: [Project!]!
 
   "The tmux server running on the local host. Null when no tmux daemon is reachable."
@@ -473,7 +473,7 @@ type Host implements Node {
   "Processes visible to this host's `ps` adapter, optionally filtered."
   processes(filter: ProcessFilter): [Process!]!
 
-  "Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.config/orchard/config.json."
+  "Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json."
   hostServices: [HostService!]!
 }
 
@@ -904,7 +904,7 @@ type ClaudeAccount implements Node {
 A curated launchd (macOS) or systemd-user (Linux) unit on a host.
 
 Per ADR-011 §5.1 the watchlist is config-driven — `services` in
-`~/.config/orchard/config.json`. Defaults to platform-correct unit
+`~/.orchard/config.json`. Defaults to platform-correct unit
 labels (macOS: reverse-DNS launchd Labels such as
 `com.gitorchard.orchard`; Linux: `.service` unit names such as
 `orchard.service`). Watched services that don't exist on the host

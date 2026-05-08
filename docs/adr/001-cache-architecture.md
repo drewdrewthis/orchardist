@@ -78,7 +78,7 @@ Stale cache renders fine on startup (last-known state). Background refresh conve
 
 ### Multi-Repo Configuration
 
-A global config at `~/.config/orchard/config.json` declares all managed repos:
+A global config at `~/.orchard/config.json` declares all managed repos:
 
 ```json
 {

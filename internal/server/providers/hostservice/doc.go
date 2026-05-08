@@ -13,7 +13,7 @@
 //     a per-unit tail in the same shape).
 //
 // The watchlist (which unit names to surface) is read from
-// `~/.config/orchard/config.json` `services` array; defaults to
+// `~/.orchard/config.json` `services` array; defaults to
 // `["claude-remote", "orchard", "chezmoi"]` if the key is missing.
 // Watched units that don't exist on the host surface as
 // `state: unknown` rather than failing the resolver — ADR-011 contract.

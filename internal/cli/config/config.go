@@ -1,5 +1,5 @@
 // Package config hosts the `orchard config {init,add-repo}` cobra
-// subcommand group. These edit ~/.config/orchard/config.json directly;
+// subcommand group. These edit ~/.orchard/config.json directly;
 // the running daemon reflects changes via fsnotify (Workstream B).
 //
 // Workstream A scope: `init` writes a default config and creates the
@@ -29,7 +29,7 @@ func Command() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage orchard configuration files",
-		Long:  "Initialise and edit ~/.config/orchard/config.json. The running daemon reflects changes via fsnotify.",
+		Long:  "Initialise and edit ~/.orchard/config.json. The running daemon reflects changes via fsnotify.",
 	}
 	cmd.AddCommand(initCmd(), addRepoCmd(), addPeerCmd())
 	return cmd
@@ -56,7 +56,7 @@ func addRepoCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "add-repo PATH",
-		Short: "Append a project to ~/.config/orchard/config.json",
+		Short: "Append a project to ~/.orchard/config.json",
 		Long: "Validate PATH (must exist and, by default, contain a .git directory),\n" +
 			"append it to the config file's projects list, and rely on the running\n" +
 			"daemon's fsnotify watcher to reflect the change. No daemon mutation\n" +

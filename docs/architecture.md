@@ -134,7 +134,7 @@ src/
 ├── types.rs               # Shared type definitions (OrchardConfig, RemoteConfig)
 │
 ├── config.rs              # Per-repo config loader (.orchard.json + .git/orchard.json)
-├── global_config.rs       # Global config (~/.config/orchard/config.json)
+├── global_config.rs       # Global config (~/.orchard/config.json)
 ├── cache.rs               # Generic cache read/write helpers
 ├── cache_sources.rs       # Orchestrates multi-source cache refresh
 │
