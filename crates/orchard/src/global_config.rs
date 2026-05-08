@@ -233,6 +233,40 @@ pub fn global_config_write_path() -> Option<PathBuf> {
 // Loading
 // ---------------------------------------------------------------------------
 
+/// Returns `true` when the legacy config file at `<base>/.config/orchard/config.json`
+/// exists. Used exclusively at the config-load failure site to decide whether to
+/// emit a migration hint.
+///
+/// `base` is the user's home directory. Accepting it as a parameter makes this
+/// testable without touching the real home directory.
+pub(crate) fn legacy_config_exists_at(base: &std::path::Path) -> bool {
+    base.join(".config")
+        .join("orchard")
+        .join("config.json")
+        .exists()
+}
+
+/// Returns `true` when `~/.config/orchard/config.json` exists.
+///
+/// Performs a single `stat` call. Called at most once per process at the
+/// config-load failure site — never from `global_config_path()`,
+/// `global_config_write_path()`, or any other helper.
+fn legacy_config_exists() -> bool {
+    dirs::home_dir()
+        .map(|h| legacy_config_exists_at(&h))
+        .unwrap_or(false)
+}
+
+/// Builds the migration hint message text.
+///
+/// Separated from the LOG call so the text itself is unit-testable.
+pub(crate) fn migration_hint_message() -> String {
+    "Found legacy config at ~/.config/orchard/config.json — \
+     the canonical location is now ~/.orchard/config.json. \
+     To migrate: mv ~/.config/orchard ~/.orchard"
+        .to_string()
+}
+
 /// Loads the global Orchard configuration.
 ///
 /// Pure: reads from disk (or returns the CWD-based fallback) without any
@@ -244,11 +278,22 @@ pub fn global_config_write_path() -> Option<PathBuf> {
 ///    current repo slug, uses CWD as the path, and reads `.git/orchard.json`
 ///    for optional remote config.
 /// 3. Empty `GlobalConfig` if neither succeeds.
+///
+/// When `~/.orchard/config.json` does not exist but the legacy path
+/// `~/.config/orchard/config.json` does, a migration hint is logged to
+/// `stderr` via [`LOG`] to guide the user. The legacy file is **never**
+/// deserialized as a fallback — the hint is informational only.
 pub fn load_global_config() -> GlobalConfig {
     if let Some(path) = global_config_path()
         && path.exists()
     {
         return load_from_path(&path);
+    }
+
+    // Emit a migration hint (once, at the failure site) when the new path is
+    // absent but the legacy path still exists. The legacy file is never read.
+    if legacy_config_exists() {
+        LOG.warn(&migration_hint_message());
     }
 
     fallback_single_repo()
@@ -1527,6 +1572,55 @@ mod tests {
                 "path must not include the active XDG_CONFIG_HOME value {xdg_value}, got: {path_str}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration hint tests (issue #424, task 3 of 8)
+    // -----------------------------------------------------------------------
+
+    /// `legacy_config_exists_at` returns false when the legacy file is absent.
+    #[test]
+    fn legacy_config_exists_at_returns_false_when_absent() {
+        let dir = tempdir().unwrap();
+        assert!(
+            !legacy_config_exists_at(dir.path()),
+            "expected false when .config/orchard/config.json does not exist"
+        );
+    }
+
+    /// `legacy_config_exists_at` returns true when the legacy file is present.
+    #[test]
+    fn legacy_config_exists_at_returns_true_when_present() {
+        let dir = tempdir().unwrap();
+        let legacy = dir
+            .path()
+            .join(".config")
+            .join("orchard")
+            .join("config.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"{}").unwrap();
+        assert!(
+            legacy_config_exists_at(dir.path()),
+            "expected true when .config/orchard/config.json exists"
+        );
+    }
+
+    /// `migration_hint_message` contains all required hint substrings.
+    #[test]
+    fn migration_hint_message_contains_required_substrings() {
+        let msg = migration_hint_message();
+        assert!(
+            msg.contains("Found legacy config at ~/.config/orchard/config.json"),
+            "hint must name the legacy path, got: {msg}"
+        );
+        assert!(
+            msg.contains("mv ~/.config/orchard ~/.orchard"),
+            "hint must include the migration command, got: {msg}"
+        );
+        assert!(
+            msg.contains("~/.orchard/config.json"),
+            "hint must point at the new canonical path, got: {msg}"
+        );
     }
 
     /// Legacy path is never loaded as a fallback (issue #424, scenario line 165-169).

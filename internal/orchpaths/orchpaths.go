@@ -57,3 +57,40 @@ func PidFile() (string, error) {
 	}
 	return filepath.Join(dir, "orchard.pid"), nil
 }
+
+// LegacyConfigFile returns the absolute path to the legacy config location
+// (~/.config/orchard/config.json), whether that file currently exists, and
+// any error encountered while resolving the home directory.
+//
+// This function performs a single os.Stat call. It is intended to be called
+// at most once per process, exclusively at the config-load failure site,
+// to decide whether to emit a migration hint. It must never be called from
+// ConfigFile(), ConfigDir(), or any other path helper.
+func LegacyConfigFile() (path string, exists bool, err error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false, err
+	}
+	p := filepath.Join(home, ".config", "orchard", "config.json")
+	_, statErr := os.Stat(p)
+	if statErr == nil {
+		return p, true, nil
+	}
+	if os.IsNotExist(statErr) {
+		return p, false, nil
+	}
+	// Stat failed for a reason other than "not found" — return the path and
+	// treat as absent to avoid blocking startup.
+	return p, false, statErr
+}
+
+// MigrationHintMessage returns the user-facing hint text to emit when the
+// new config path is missing but the legacy path exists.
+//
+// The message is separated from the logging call so it can be unit-tested
+// independently of the logger.
+func MigrationHintMessage(legacyPath, newPath string) string {
+	return "Found legacy config at " + legacyPath +
+		" — the canonical location is now " + newPath +
+		". To migrate: mv ~/.config/orchard ~/.orchard"
+}

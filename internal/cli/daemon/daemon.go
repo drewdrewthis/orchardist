@@ -121,6 +121,17 @@ func runStart(parentCtx context.Context, addr string) error {
 		logger,
 	)
 	if err := configProvider.Start(ctx); err != nil {
+		// Emit a migration hint when the new config is absent but the legacy
+		// ~/.config/orchard/config.json still exists. The legacy file is never
+		// read — the hint is informational only. The stat happens once here,
+		// not in ConfigFile() or any other path helper.
+		legacyPath, legacyExists, _ := orchpaths.LegacyConfigFile()
+		if legacyExists {
+			fmt.Fprintf(os.Stderr, "orchard: %s\n",
+				orchpaths.MigrationHintMessage(legacyPath, cfgPath))
+		} else {
+			fmt.Fprintf(os.Stderr, "orchard: config not found at %s\n", cfgPath)
+		}
 		return fmt.Errorf("start config provider: %w", err)
 	}
 	defer func() { _ = configProvider.Stop() }()
