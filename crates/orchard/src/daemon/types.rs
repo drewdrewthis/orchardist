@@ -478,10 +478,7 @@ mod tests {
         assert_eq!(snapshot.projects.len(), 1);
         let project = &snapshot.projects[0];
         assert_eq!(project.name, "git-orchard-rs");
-        assert_eq!(
-            project.directory,
-            "/home/example/workspace/git-orchard-rs"
-        );
+        assert_eq!(project.directory, "/home/example/workspace/git-orchard-rs");
 
         // worktrees
         assert_eq!(project.worktrees.len(), 2);
@@ -561,10 +558,7 @@ mod tests {
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
         assert!(ci.rc_enabled);
-        assert_eq!(
-            ci.last_activity_at.as_deref(),
-            Some("2026-05-08T10:01:00Z")
-        );
+        assert_eq!(ci.last_activity_at.as_deref(), Some("2026-05-08T10:01:00Z"));
     }
 
     #[test]

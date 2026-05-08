@@ -39,6 +39,13 @@ use crate::session::{
     EnrichedSession, Host, SessionStatus, StandaloneConfig, StandaloneSessionRow, TmuxSessionInfo,
 };
 
+/// Two-level map of ahead/behind commit counts: `project_dir → branch → (ahead, behind)`.
+///
+/// Populated by `tui::App::start_full_refresh` via `git branch -vv` per project
+/// directory, until daemon issue #483 lands and the daemon's `Worktree` type
+/// exposes `ahead`/`behind` directly.
+pub type AheadBehindMap = HashMap<String, HashMap<String, (u32, u32)>>;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -68,7 +75,7 @@ pub fn build_local_state(
     snapshot: &WorkViewSnapshot,
     config: &GlobalConfig,
     hosts: &HashMap<String, HostState>,
-    ahead_behind: Option<&HashMap<String, HashMap<String, (u32, u32)>>>,
+    ahead_behind: Option<&AheadBehindMap>,
 ) -> OrchardState {
     // 1. Convert ClaudeInstances → ClaudeStateFiles (indexed by session name).
     let claude_states: Vec<ClaudeStateFile> = snapshot
@@ -85,9 +92,9 @@ pub fn build_local_state(
     for project in &snapshot.projects {
         for wt in &project.worktrees {
             let slug = wt.repo.clone();
-            let entry = repo_entries.entry(slug.clone()).or_insert_with(|| {
-                (slug, Vec::new(), Vec::new(), Vec::new(), Vec::new())
-            });
+            let entry = repo_entries
+                .entry(slug.clone())
+                .or_insert_with(|| (slug, Vec::new(), Vec::new(), Vec::new(), Vec::new()));
 
             // Issues: deduplicate by number.
             if let Some(ref issue) = wt.issue {
@@ -102,7 +109,9 @@ pub fn build_local_state(
                 let num = pr.number as u32;
                 if !entry.2.iter().any(|p: &CachedPr| p.number == num) {
                     let linked_issue_num = wt.issue.as_ref().map(|i| i.number as u32);
-                    entry.2.push(work_view_pr_to_cached(pr, &wt.branch, linked_issue_num));
+                    entry
+                        .2
+                        .push(work_view_pr_to_cached(pr, &wt.branch, linked_issue_num));
                 }
             }
 
@@ -122,7 +131,7 @@ pub fn build_local_state(
     let sessions: Vec<CachedTmuxSession> = snapshot
         .tmux_sessions
         .iter()
-        .map(|s| work_view_session_to_cached(s))
+        .map(work_view_session_to_cached)
         .collect();
 
     for entry in repo_entries.values_mut() {
@@ -409,9 +418,7 @@ fn work_view_issue_to_cached(issue: &crate::daemon::types::WorkViewIssue) -> Cac
 /// The `path` field is taken from the session's optional working-directory.
 /// When absent an empty string is used — sessions with no path will not
 /// be matched to any worktree by the path-based join logic.
-fn work_view_session_to_cached(
-    s: &crate::daemon::types::WorkViewTmuxSession,
-) -> CachedTmuxSession {
+fn work_view_session_to_cached(s: &crate::daemon::types::WorkViewTmuxSession) -> CachedTmuxSession {
     CachedTmuxSession {
         name: s.name.clone(),
         path: s.path.clone().unwrap_or_default(),
@@ -573,7 +580,11 @@ mod tests {
             pr: Option<WorkViewPr>,
             issue: Option<WorkViewIssue>,
         ) -> Self {
-            let project = self.snapshot.projects.last_mut().expect("add a project first");
+            let project = self
+                .snapshot
+                .projects
+                .last_mut()
+                .expect("add a project first");
             project.worktrees.push(WorkViewWorktree {
                 path: path.to_string(),
                 branch: branch.to_string(),
@@ -677,11 +688,8 @@ mod tests {
         let repo = &state.repos[0];
         assert_eq!(repo.slug, "owner/repo");
 
-        let wts: Vec<&crate::orchard_state::WorktreeState> = repo
-            .worktrees
-            .iter()
-            .filter(|w| !w.is_bare)
-            .collect();
+        let wts: Vec<&crate::orchard_state::WorktreeState> =
+            repo.worktrees.iter().filter(|w| !w.is_bare).collect();
         assert_eq!(wts.len(), 1);
         let wt = wts[0];
 
@@ -709,13 +717,7 @@ mod tests {
         let wt_path = "/repos/git-orchard-rs/.worktrees/issue429";
         let snapshot = WorkViewFixture::new()
             .project("git-orchard-rs", "/repos/git-orchard-rs")
-            .worktree(
-                wt_path,
-                "issue429/spec",
-                "owner/repo",
-                None,
-                None,
-            )
+            .worktree(wt_path, "issue429/spec", "owner/repo", None, None)
             .session("issue429", Some(wt_path))
             .build();
 
@@ -764,7 +766,10 @@ mod tests {
             .find(|w| w.path == wt_path)
             .expect("worktree not found");
 
-        assert!(!wt.sessions.is_empty(), "session should be joined to worktree");
+        assert!(
+            !wt.sessions.is_empty(),
+            "session should be joined to worktree"
+        );
         let session = &wt.sessions[0];
         assert!(
             session.claude.is_some(),
@@ -923,22 +928,34 @@ mod tests {
         // CONFLICTING → has_conflicts true
         let pr = make_pr(Some("CONFLICTING"), Some("BLOCKED"));
         let cached = work_view_pr_to_cached(&pr, "feat/x", None);
-        assert!(cached.has_conflicts, "CONFLICTING should yield has_conflicts true");
+        assert!(
+            cached.has_conflicts,
+            "CONFLICTING should yield has_conflicts true"
+        );
 
         // MERGEABLE → has_conflicts false
         let pr = make_pr(Some("MERGEABLE"), Some("CLEAN"));
         let cached = work_view_pr_to_cached(&pr, "feat/x", None);
-        assert!(!cached.has_conflicts, "MERGEABLE should yield has_conflicts false");
+        assert!(
+            !cached.has_conflicts,
+            "MERGEABLE should yield has_conflicts false"
+        );
 
         // UNKNOWN → has_conflicts false
         let pr = make_pr(Some("UNKNOWN"), None);
         let cached = work_view_pr_to_cached(&pr, "feat/x", None);
-        assert!(!cached.has_conflicts, "UNKNOWN should yield has_conflicts false");
+        assert!(
+            !cached.has_conflicts,
+            "UNKNOWN should yield has_conflicts false"
+        );
 
         // None → has_conflicts false
         let pr = make_pr(None, None);
         let cached = work_view_pr_to_cached(&pr, "feat/x", None);
-        assert!(!cached.has_conflicts, "None mergeable should yield has_conflicts false");
+        assert!(
+            !cached.has_conflicts,
+            "None mergeable should yield has_conflicts false"
+        );
 
         // Regression case: BLOCKED merge_state_status but MERGEABLE → has_conflicts false
         let pr = make_pr(Some("MERGEABLE"), Some("BLOCKED"));

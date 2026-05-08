@@ -235,7 +235,8 @@ pub struct App {
     /// render with stale (or zero) ahead/behind until the next full tick. This
     /// is acceptable because ahead/behind is a hint, not a contract — and
     /// tracked-for-removal in #483 (daemon to expose ahead/behind directly).
-    ahead_behind_snapshot: std::sync::Arc<std::sync::Mutex<Option<std::collections::HashMap<String, std::collections::HashMap<String, (u32, u32)>>>>>,
+    ahead_behind_snapshot:
+        std::sync::Arc<std::sync::Mutex<Option<crate::daemon::work_view_adapter::AheadBehindMap>>>,
 
     /// Injectable source for `workView` GraphQL queries.
     ///
@@ -904,11 +905,7 @@ impl App {
     /// (AC#2 — remote path unchanged).
     fn rebuild_state_from_snapshot(&self) -> crate::orchard_state::OrchardState {
         let hosts = crate::cache::read_host_reachability();
-        let snapshot_opt = self
-            .work_view_snapshot
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
+        let snapshot_opt = self.work_view_snapshot.lock().ok().and_then(|g| g.clone());
         let ahead_behind_opt = self
             .ahead_behind_snapshot
             .lock()
@@ -926,8 +923,7 @@ impl App {
             crate::build_state::build_state_with_hosts(&self.global_config, &hosts)
         };
 
-        let remote_snapshots =
-            crate::orchard_snapshot::load_cached_snapshots(&self.global_config);
+        let remote_snapshots = crate::orchard_snapshot::load_cached_snapshots(&self.global_config);
         for (host, snap) in remote_snapshots {
             crate::merge_remote::merge_remote_snapshot(&mut state, snap, host);
         }
@@ -2343,7 +2339,6 @@ impl App {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -2554,13 +2549,11 @@ fn dedup_key(remote: &crate::global_config::RemoteConfig) -> String {
 /// `(ahead, behind)`.
 fn fetch_ahead_behind_for_snapshot(
     config: &global_config::GlobalConfig,
-) -> HashMap<String, HashMap<String, (u32, u32)>> {
-    let result: std::sync::Mutex<HashMap<String, HashMap<String, (u32, u32)>>> =
+) -> crate::daemon::work_view_adapter::AheadBehindMap {
+    let result: std::sync::Mutex<crate::daemon::work_view_adapter::AheadBehindMap> =
         std::sync::Mutex::new(HashMap::new());
     crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
-        if let Ok(out) =
-            crate::cache_sources::run_local_in("git", &["branch", "-vv"], &repo.path)
-        {
+        if let Ok(out) = crate::cache_sources::run_local_in("git", &["branch", "-vv"], &repo.path) {
             let branch_map = crate::cache_sources::parse_git_ahead_behind(&out);
             if let Ok(mut acc) = result.lock() {
                 acc.insert(repo.path.clone(), branch_map);
@@ -5908,9 +5901,7 @@ mod tests {
     /// snapshot with one worktree.
     #[test]
     fn cache_refreshed_uses_daemon_snapshot_when_available() {
-        use crate::daemon::types::{
-            WorkViewProject, WorkViewSnapshot, WorkViewWorktree,
-        };
+        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
         use state::AppMsg;
 
         // Build an App with a pre-populated work_view_snapshot slot.
@@ -5981,8 +5972,8 @@ mod tests {
     #[test]
     fn app_has_injectable_work_view_source() {
         use crate::daemon::{DaemonError, WorkViewSnapshot, WorkViewSource};
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct CountingSource {
             call_count: Arc<AtomicUsize>,
@@ -6033,9 +6024,8 @@ mod tests {
     #[test]
     fn start_local_refresh_calls_work_view_source_once() {
         use crate::daemon::{DaemonError, WorkViewSnapshot, WorkViewSource};
-        use state::AppMsg;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct CountingSource {
             call_count: Arc<AtomicUsize>,
@@ -6172,10 +6162,7 @@ mod tests {
 
     impl crate::daemon::WorkViewSource for ControllableSource {
         fn work_view(&self) -> Result<crate::daemon::WorkViewSnapshot, crate::daemon::DaemonError> {
-            if self
-                .should_fail
-                .load(std::sync::atomic::Ordering::SeqCst)
-            {
+            if self.should_fail.load(std::sync::atomic::Ordering::SeqCst) {
                 Err(crate::daemon::DaemonError::Unreachable {
                     url: "http://127.0.0.1:7777/graphql".to_string(),
                     cause: "test-injected failure".to_string(),
@@ -6302,8 +6289,7 @@ mod tests {
             "task_rows must retain last-known state after daemon outage"
         );
         assert_eq!(
-            app.task_rows[0].branch,
-            "issue429/mid-session",
+            app.task_rows[0].branch, "issue429/mid-session",
             "branch must still be from last-known snapshot"
         );
         assert_eq!(

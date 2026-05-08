@@ -7,9 +7,7 @@
 
 use crate::daemon::{DaemonError, WorkViewSnapshot, WorkViewSource};
 use crate::derive::WorktreeRow;
-use crate::orchard_state::{
-    ClaudeEnrichment, PrState, RepoState, SessionState, WindowState,
-};
+use crate::orchard_state::{ClaudeEnrichment, PrState, RepoState, SessionState, WindowState};
 use crate::session::{
     ClaudeRateLimits, ClaudeSessionInfo, EnrichedSession, Host, PaneInfo, SessionStatus,
     TmuxSessionInfo, WindowInfo,
@@ -79,10 +77,7 @@ pub fn state_to_task_rows(repos: &[RepoState]) -> Vec<WorktreeRow> {
 /// All fields that are present in `WorktreeState` are forwarded directly.
 /// Fields that exist in `WorktreeRow` but not in `WorktreeState` (e.g. per-pane
 /// detail counts) are set to safe defaults.
-fn worktree_state_to_row(
-    repo_slug: &str,
-    wt: &crate::orchard_state::WorktreeState,
-) -> WorktreeRow {
+fn worktree_state_to_row(repo_slug: &str, wt: &crate::orchard_state::WorktreeState) -> WorktreeRow {
     let issue_number = wt.issue.as_ref().map(|i| i.number);
     let issue_title = wt.issue.as_ref().map(|i| i.title.clone());
     let issue_state = wt.issue.as_ref().map(|i| i.state.clone());
@@ -112,11 +107,8 @@ fn worktree_state_to_row(
 
     let pr = wt.pr.as_ref().map(pr_state_to_pr_info);
 
-    let sessions: Vec<EnrichedSession> = wt
-        .sessions
-        .iter()
-        .map(session_state_to_enriched)
-        .collect();
+    let sessions: Vec<EnrichedSession> =
+        wt.sessions.iter().map(session_state_to_enriched).collect();
 
     let (worktree_ahead, worktree_behind) = wt
         .ahead_behind
@@ -275,9 +267,7 @@ mod tests {
     use super::*;
     use crate::cache::WorktreeLayout;
     use crate::derive::DisplayGroup;
-    use crate::orchard_state::{
-        IssueInfo, OrchardState, PrState, RepoState, WorktreeState,
-    };
+    use crate::orchard_state::{IssueInfo, OrchardState, PrState, RepoState, WorktreeState};
 
     // -----------------------------------------------------------------------
     // Test 1 (Unit): state_to_task_rows round-trip
@@ -503,11 +493,11 @@ mod tests {
     /// state_to_task_rows output should contain all three rows.
     #[test]
     fn local_plus_remote_merge_produces_three_rows() {
+        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        use crate::daemon::work_view_adapter::build_local_state;
+        use crate::global_config::GlobalConfig;
         use crate::json_output::{JsonOutput, JsonRepo, JsonWorktree};
         use crate::merge_remote::merge_remote_snapshot;
-        use crate::daemon::work_view_adapter::build_local_state;
-        use crate::daemon::types::{WorkViewSnapshot, WorkViewProject, WorkViewWorktree};
-        use crate::global_config::GlobalConfig;
 
         // ---- Local data via daemon work_view_adapter -----------------------
 
@@ -542,12 +532,15 @@ mod tests {
             claude_instances: vec![],
         };
 
-        let mut state = build_local_state(&snapshot, &GlobalConfig::default(), &HashMap::new(), None);
+        let mut state =
+            build_local_state(&snapshot, &GlobalConfig::default(), &HashMap::new(), None);
 
         // ---- Remote data via merge_remote_snapshot -------------------------
 
         let remote_snapshot = JsonOutput {
-            version: *crate::json_output::SUPPORTED_JSON_OUTPUT_VERSIONS.last().unwrap(),
+            version: *crate::json_output::SUPPORTED_JSON_OUTPUT_VERSIONS
+                .last()
+                .unwrap(),
             tmux_sessions: vec![],
             repos: vec![JsonRepo {
                 slug: "owner/repo".to_string(),
@@ -582,13 +575,14 @@ mod tests {
         let rows = state_to_task_rows(&state.repos);
 
         // 2 local + 1 remote = 3 rows total (all non-bare)
-        assert_eq!(rows.len(), 3, "expected 3 worktree rows (2 local + 1 remote)");
+        assert_eq!(
+            rows.len(),
+            3,
+            "expected 3 worktree rows (2 local + 1 remote)"
+        );
 
         let local_rows: Vec<_> = rows.iter().filter(|r| r.worktree_host.is_none()).collect();
-        let remote_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.worktree_host.is_some())
-            .collect();
+        let remote_rows: Vec<_> = rows.iter().filter(|r| r.worktree_host.is_some()).collect();
 
         assert_eq!(local_rows.len(), 2, "exactly two local rows");
         assert_eq!(remote_rows.len(), 1, "exactly one remote row");

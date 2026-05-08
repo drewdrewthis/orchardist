@@ -413,10 +413,7 @@ mod tests {
     #[cfg(unix)]
     fn write_fake_gh(bin_dir: &std::path::Path, marker_path: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
-        let script = format!(
-            "#!/bin/sh\ntouch \"{}\"\nexit 1\n",
-            marker_path.display()
-        );
+        let script = format!("#!/bin/sh\ntouch \"{}\"\nexit 1\n", marker_path.display());
         let script_path = bin_dir.join("gh");
         std::fs::write(&script_path, script).unwrap();
         std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -452,10 +449,7 @@ mod tests {
             );
         }
 
-        let config = make_test_config(
-            "testwatch/diag-false",
-            home_dir.path().to_str().unwrap(),
-        );
+        let config = make_test_config("testwatch/diag-false", home_dir.path().to_str().unwrap());
 
         // Call with keep_diagnostic_caches: false — refresh_issues/refresh_prs
         // must not be invoked.
@@ -535,10 +529,7 @@ mod tests {
         let wt_json = r#"{"last_refreshed":"2099-01-01T00:00:00Z","entries":[{"branch":"issue42/my-feature","path":"/tmp/test-wt","is_bare":false,"is_locked":false}]}"#;
         std::fs::write(&wt_cache, wt_json).unwrap();
 
-        let config = make_test_config(
-            "testwatch/diag-true",
-            home_dir.path().to_str().unwrap(),
-        );
+        let config = make_test_config("testwatch/diag-true", home_dir.path().to_str().unwrap());
 
         // Call with keep_diagnostic_caches: true — refresh_issues/refresh_prs
         // must be invoked (even though they'll fail due to fake gh).

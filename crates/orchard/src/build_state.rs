@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache;
+use crate::cache_sources;
 use crate::claude_state::ClaudeStateFile;
 use crate::derive::WorktreeRow;
 use crate::global_config::GlobalConfig;
@@ -16,7 +17,6 @@ use crate::session::{
     TmuxSessionInfo, build_windows_and_panes,
 };
 use crate::sources;
-use crate::cache_sources;
 
 /// Maximum age in seconds before a remote Claude hook state is considered stale.
 ///

@@ -224,7 +224,10 @@ mod tests {
         write_snapshot_to(&sample_snapshot(), &path).unwrap();
 
         assert!(path.exists(), "final file must exist");
-        assert!(!tmp.exists(), ".tmp file must be removed after atomic rename");
+        assert!(
+            !tmp.exists(),
+            ".tmp file must be removed after atomic rename"
+        );
     }
 
     /// Content is valid JSON with version and snapshot keys.
