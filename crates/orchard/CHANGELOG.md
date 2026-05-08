@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### ⚠ BREAKING CHANGES
+
+* **config: global config moves to `~/.orchard/config.json`** (resolves [#424](https://github.com/drewdrewthis/git-orchard-rs/issues/424)).
+
+  Orchard's global config previously lived at `~/.config/orchard/config.json` (XDG-style). It now lives at **`~/.orchard/config.json`** — matching every other dotdir tool in the stack (`~/.aws`, `~/.kube`, `~/.ssh`, `~/.cargo`, `~/.claude`).
+
+  **Migrate your existing config:**
+
+  ```bash
+  mv ~/.config/orchard ~/.orchard
+  ```
+
+  The legacy path is no longer read. If you start the daemon or any orchard CLI command without migrating, you will get a config-not-found error pointing you at the new path with the migration command above. See [ADR-014](docs/adr/014-config-dotdir-location.md) for the rationale.
+
+  Out of scope for this release: the orchardist working directory at `~/.config/orchard/.orchardist/` and the state directory `~/.local/state/orchard` both stay where they are.
+
 ## [0.14.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.13.0...orchard-v0.14.0) (2026-05-07)
 
 
