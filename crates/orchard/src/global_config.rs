@@ -1748,28 +1748,44 @@ mod tests {
     #[test]
     fn save_to_path_preserves_multiple_unknown_top_level_keys() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{
+        let path = write_config(
+            dir.path(),
+            r#"{
             "repos": [],
             "terminal_app": "com.apple.Terminal",
             "peers": [{"name": "boxd-vm"}],
             "watch_observability": {"enabled": true},
             "federation_tls_pin": "sha256:abc123"
-        }"#);
-        let cfg = GlobalConfig { terminal_app: "com.googlecode.iterm2".to_string(), ..GlobalConfig::default() };
+        }"#,
+        );
+        let cfg = GlobalConfig {
+            terminal_app: "com.googlecode.iterm2".to_string(),
+            ..GlobalConfig::default()
+        };
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(v["peers"].is_array(), "peers must be preserved");
-        assert!(v["watch_observability"].is_object(), "watch_observability must be preserved");
-        assert_eq!(v["federation_tls_pin"].as_str(), Some("sha256:abc123"), "federation_tls_pin must be preserved");
+        assert!(
+            v["watch_observability"].is_object(),
+            "watch_observability must be preserved"
+        );
+        assert_eq!(
+            v["federation_tls_pin"].as_str(),
+            Some("sha256:abc123"),
+            "federation_tls_pin must be preserved"
+        );
     }
 
     #[test]
     fn save_to_path_preserves_nested_values_inside_unknown_top_level_key() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{
+        let path = write_config(
+            dir.path(),
+            r#"{
             "repos": [],
             "peers": [{"name": "boxd-vm", "address": "user@vm.example", "tls": true, "metadata": {"region": "us-east-1"}}]
-        }"#);
+        }"#,
+        );
         let cfg = GlobalConfig::default();
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1783,15 +1799,25 @@ mod tests {
     #[test]
     fn save_to_path_overwrites_known_keys_present_in_struct() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{
+        let path = write_config(
+            dir.path(),
+            r#"{
             "repos": [],
             "terminal_app": "old.app",
             "peers": [{"name": "boxd-vm"}]
-        }"#);
-        let cfg = GlobalConfig { terminal_app: "new.app".to_string(), ..GlobalConfig::default() };
+        }"#,
+        );
+        let cfg = GlobalConfig {
+            terminal_app: "new.app".to_string(),
+            ..GlobalConfig::default()
+        };
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(v["terminal_app"].as_str(), Some("new.app"), "struct must win for known keys");
+        assert_eq!(
+            v["terminal_app"].as_str(),
+            Some("new.app"),
+            "struct must win for known keys"
+        );
         assert!(v["peers"].is_array(), "unknown peers must still exist");
     }
 
@@ -1799,15 +1825,28 @@ mod tests {
     fn save_to_path_writes_struct_when_file_absent() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let cfg = GlobalConfig { terminal_app: "com.mitchellh.ghostty".to_string(), ..GlobalConfig::default() };
+        let cfg = GlobalConfig {
+            terminal_app: "com.mitchellh.ghostty".to_string(),
+            ..GlobalConfig::default()
+        };
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["terminal_app"].as_str(), Some("com.mitchellh.ghostty"));
         // No spurious keys beyond what GlobalConfig serializes.
-        let known_keys = ["repos", "terminal_app", "tmux_sessions", "chat_target", "watch", "ci_gate_patterns"];
+        let known_keys = [
+            "repos",
+            "terminal_app",
+            "tmux_sessions",
+            "chat_target",
+            "watch",
+            "ci_gate_patterns",
+        ];
         let obj = v.as_object().unwrap();
         for key in obj.keys() {
-            assert!(known_keys.contains(&key.as_str()), "unexpected key on disk: {key}");
+            assert!(
+                known_keys.contains(&key.as_str()),
+                "unexpected key on disk: {key}"
+            );
         }
     }
 
@@ -1817,54 +1856,91 @@ mod tests {
         let path = write_config(dir.path(), "not valid {");
         let cfg = GlobalConfig::default();
         let result = save_to_path(&cfg, &path);
-        assert!(result.is_ok(), "save must succeed even when existing file is malformed");
+        assert!(
+            result.is_ok(),
+            "save must succeed even when existing file is malformed"
+        );
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert!(v.is_object(), "file must contain valid JSON after fallback write");
+        assert!(
+            v.is_object(),
+            "file must contain valid JSON after fallback write"
+        );
     }
 
     #[test]
     fn save_to_path_preserves_unknown_keys_with_edge_case_values() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{
+        let path = write_config(
+            dir.path(),
+            r#"{
             "repos": [],
             "peers": [],
             "watch_observability": null,
             "feature_flag_x": false,
             "empty_object_field": {}
-        }"#);
+        }"#,
+        );
         let cfg = GlobalConfig::default();
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(v["peers"], serde_json::Value::Array(vec![]), "empty array must be preserved");
-        assert_eq!(v["watch_observability"], serde_json::Value::Null, "null must be preserved");
-        assert_eq!(v["feature_flag_x"], serde_json::Value::Bool(false), "false must be preserved");
-        assert_eq!(v["empty_object_field"], serde_json::json!({}), "empty object must be preserved");
+        assert_eq!(
+            v["peers"],
+            serde_json::Value::Array(vec![]),
+            "empty array must be preserved"
+        );
+        assert_eq!(
+            v["watch_observability"],
+            serde_json::Value::Null,
+            "null must be preserved"
+        );
+        assert_eq!(
+            v["feature_flag_x"],
+            serde_json::Value::Bool(false),
+            "false must be preserved"
+        );
+        assert_eq!(
+            v["empty_object_field"],
+            serde_json::json!({}),
+            "empty object must be preserved"
+        );
     }
 
     #[test]
     fn save_to_path_shallow_merge_drops_nested_unknown_under_known_key() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{
+        let path = write_config(
+            dir.path(),
+            r#"{
             "repos": [],
             "watch": {"local_poll_secs": 10, "full_poll_secs": 60, "threshold_cooldown_secs": 300, "notifications": true, "experimental_flag": true}
-        }"#);
+        }"#,
+        );
         let cfg = GlobalConfig::default();
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         // Shallow merge: `watch` is overwritten by the struct's serialization.
         // The unknown nested key `experimental_flag` is dropped — by design.
-        assert!(v["watch"]["experimental_flag"].is_null(), "nested unknown under known key must be dropped (shallow merge)");
+        assert!(
+            v["watch"]["experimental_flag"].is_null(),
+            "nested unknown under known key must be dropped (shallow merge)"
+        );
     }
 
     #[test]
     fn save_to_path_remains_atomic() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#);
+        let path = write_config(
+            dir.path(),
+            r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#,
+        );
         let tmp = path.with_extension("json.tmp");
         let cfg = GlobalConfig::default();
         save_to_path(&cfg, &path).unwrap();
         // After a successful save the .tmp staging file must not remain.
-        assert!(!tmp.exists(), ".tmp file must not remain after successful atomic save");
+        assert!(
+            !tmp.exists(),
+            ".tmp file must not remain after successful atomic save"
+        );
         // And the final file must be valid JSON.
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(v["peers"].is_array(), "peers must be present in final file");
@@ -1875,11 +1951,18 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
         let cfg = GlobalConfig {
-            repos: vec![RepoConfig { slug: "owner/repo".to_string(), path: "/ws/repo".to_string(), remotes: vec![] }],
+            repos: vec![RepoConfig {
+                slug: "owner/repo".to_string(),
+                path: "/ws/repo".to_string(),
+                remotes: vec![],
+            }],
             terminal_app: "org.alacritty".to_string(),
             tmux_sessions: vec![],
             chat_target: Some("orchardist".to_string()),
-            watch: WatchConfig { local_poll_secs: 7, ..WatchConfig::default() },
+            watch: WatchConfig {
+                local_poll_secs: 7,
+                ..WatchConfig::default()
+            },
             ci_gate_patterns: vec!["custom-gate".to_string()],
         };
         save_to_path(&cfg, &path).unwrap();
@@ -1891,22 +1974,43 @@ mod tests {
         assert_eq!(v["ci_gate_patterns"][0].as_str(), Some("custom-gate"));
         assert_eq!(v["repos"][0]["slug"].as_str(), Some("owner/repo"));
         // No extra keys beyond the struct fields.
-        let known_keys = ["repos", "terminal_app", "tmux_sessions", "chat_target", "watch", "ci_gate_patterns"];
+        let known_keys = [
+            "repos",
+            "terminal_app",
+            "tmux_sessions",
+            "chat_target",
+            "watch",
+            "ci_gate_patterns",
+        ];
         for key in v.as_object().unwrap().keys() {
-            assert!(known_keys.contains(&key.as_str()), "unexpected key after round-trip: {key}");
+            assert!(
+                known_keys.contains(&key.as_str()),
+                "unexpected key after round-trip: {key}"
+            );
         }
     }
 
     #[test]
     fn save_to_path_preserves_peers_across_back_to_back_saves() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#);
-        let cfg1 = GlobalConfig { terminal_app: "org.alacritty".to_string(), ..GlobalConfig::default() };
+        let path = write_config(
+            dir.path(),
+            r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#,
+        );
+        let cfg1 = GlobalConfig {
+            terminal_app: "org.alacritty".to_string(),
+            ..GlobalConfig::default()
+        };
         save_to_path(&cfg1, &path).unwrap();
-        let cfg2 = GlobalConfig { chat_target: Some("orchardist".to_string()), ..GlobalConfig::default() };
+        let cfg2 = GlobalConfig {
+            chat_target: Some("orchardist".to_string()),
+            ..GlobalConfig::default()
+        };
         save_to_path(&cfg2, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let peers = v["peers"].as_array().expect("peers must survive back-to-back saves");
+        let peers = v["peers"]
+            .as_array()
+            .expect("peers must survive back-to-back saves");
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0]["name"].as_str(), Some("boxd-vm"));
     }
@@ -1914,13 +2018,21 @@ mod tests {
     #[test]
     fn save_to_path_preserves_peers_when_auto_registering_new_repo() {
         let dir = tempdir().unwrap();
-        let path = write_config(dir.path(), r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#);
+        let path = write_config(
+            dir.path(),
+            r#"{"repos": [], "peers": [{"name": "boxd-vm"}]}"#,
+        );
         let mut cfg = GlobalConfig::default();
         append_repo_if_new(&mut cfg, "/workspace/my-project", "acme/my-project", vec![]);
         save_to_path(&cfg, &path).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert!(v["repos"].as_array().map(|a| a.len() == 1).unwrap_or(false), "new repo must be in repos[]");
-        let peers = v["peers"].as_array().expect("peers must survive append_repo_if_new + save");
+        assert!(
+            v["repos"].as_array().map(|a| a.len() == 1).unwrap_or(false),
+            "new repo must be in repos[]"
+        );
+        let peers = v["peers"]
+            .as_array()
+            .expect("peers must survive append_repo_if_new + save");
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0]["name"].as_str(), Some("boxd-vm"));
     }
