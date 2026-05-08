@@ -50,7 +50,7 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
     let mut tailer = Tailer::new(events_path());
 
     // Force a full refresh on startup.
-    refresh_all_sources(config);
+    refresh_all_sources(config, config.watch.keep_diagnostic_caches);
     let hosts = crate::cache::read_host_reachability();
     let initial = merge_remote::build_state_with_cached_snapshots(config, &hosts);
     let mut previous_state: Option<OrchardState> = Some(initial);
@@ -68,7 +68,7 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
         let do_local = now.duration_since(last_local).as_secs() >= config.watch.local_poll_secs;
 
         if do_full {
-            refresh_all_sources(config);
+            refresh_all_sources(config, config.watch.keep_diagnostic_caches);
             last_full = now;
             last_local = now;
         } else if do_local {
@@ -143,19 +143,26 @@ pub fn run(config: &GlobalConfig) -> anyhow::Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Refreshes all sources: issues, PRs, worktrees, tmux sessions, and runs
-/// the transitive federation walker so transitively-discovered host snapshots
-/// are written to cache before the next `build_state_with_cached_snapshots` call.
+/// Refreshes worktrees, tmux sessions, and the transitive federation walker.
+///
+/// **Diagnostic caches** (`*_issues.json` + `*_prs.json`) are gated behind
+/// `keep_diagnostic_caches`. Post-#429 the TUI dashboard reads issues + PRs
+/// from `daemon::Client::work_view`, so the cache files are orphans for the
+/// TUI consumer. Other consumers (`--json` mode, `heal`) still read
+/// `*_worktrees.json` + `tmux_sessions.json`, which is why those refresh
+/// calls remain unconditional.
 ///
 /// Per-repo refreshes fan out concurrently so one slow GitHub API response
 /// can't delay the next repo.
-fn refresh_all_sources(config: &GlobalConfig) {
+pub(crate) fn refresh_all_sources(config: &GlobalConfig, keep_diagnostic_caches: bool) {
     crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
-        if let Err(e) = cache_sources::refresh_issues(repo) {
-            crate::logger::LOG.warn(&format!("watch: refresh issues failed: {e}"));
-        }
-        if let Err(e) = cache_sources::refresh_prs(repo) {
-            crate::logger::LOG.warn(&format!("watch: refresh PRs failed: {e}"));
+        if keep_diagnostic_caches {
+            if let Err(e) = cache_sources::refresh_issues(repo) {
+                crate::logger::LOG.warn(&format!("watch: refresh issues failed: {e}"));
+            }
+            if let Err(e) = cache_sources::refresh_prs(repo) {
+                crate::logger::LOG.warn(&format!("watch: refresh PRs failed: {e}"));
+            }
         }
         if let Err(e) = cache_sources::refresh_worktrees(repo) {
             crate::logger::LOG.warn(&format!("watch: refresh worktrees failed: {e}"));
@@ -365,6 +372,197 @@ mod tests {
         assert!(
             !webhook_triggered_refresh(&mut tailer),
             "still false on repeat"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // AC8 — diagnostic cache gate
+    // -------------------------------------------------------------------------
+    //
+    // These tests use a fake `gh` binary injected via PATH and a redirected HOME
+    // (so cache_dir() resolves into a tempdir) to observe whether refresh_issues
+    // and refresh_prs are called by refresh_all_sources.
+    //
+    // A mutex serialises the environment-variable writes so parallel test
+    // threads don't clobber each other's HOME or PATH.
+
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Builds a minimal GlobalConfig with one test repo at `repo_path`.
+    fn make_test_config(slug: &str, repo_path: &str) -> GlobalConfig {
+        use crate::global_config::{RepoConfig, WatchConfig};
+        GlobalConfig {
+            repos: vec![RepoConfig {
+                slug: slug.to_owned(),
+                path: repo_path.to_owned(),
+                remotes: vec![],
+            }],
+            watch: WatchConfig {
+                keep_diagnostic_caches: false,
+                ..WatchConfig::default()
+            },
+            ..GlobalConfig::default()
+        }
+    }
+
+    /// Creates a fake `gh` shell script in `bin_dir` that writes a marker file
+    /// to `marker_path` each time it is invoked, then exits 1 (simulating an
+    /// API failure so cache_sources doesn't attempt to parse output).
+    #[cfg(unix)]
+    fn write_fake_gh(bin_dir: &std::path::Path, marker_path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\ntouch \"{}\"\nexit 1\n",
+            marker_path.display()
+        );
+        let script_path = bin_dir.join("gh");
+        std::fs::write(&script_path, script).unwrap();
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// AC8 (false branch): `refresh_all_sources` with `keep_diagnostic_caches: false`
+    /// must NOT invoke `refresh_issues` or `refresh_prs` — verified by confirming
+    /// the fake `gh` binary is never called.
+    #[test]
+    #[cfg(unix)]
+    fn watch_does_not_write_orphaned_issue_pr_caches_by_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let home_dir = tempfile::tempdir().unwrap();
+        let bin_dir = tempfile::tempdir().unwrap();
+        let gh_marker = home_dir.path().join("gh_was_called");
+
+        write_fake_gh(bin_dir.path(), &gh_marker);
+
+        // Override HOME so cache_dir() resolves into our tempdir.
+        // Override PATH so our fake `gh` is found before the real one.
+        let old_home = std::env::var("HOME").ok();
+        let old_path = std::env::var("PATH").ok();
+        unsafe {
+            std::env::set_var("HOME", home_dir.path());
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin_dir.path().display(),
+                    old_path.as_deref().unwrap_or("/usr/bin:/bin")
+                ),
+            );
+        }
+
+        let config = make_test_config(
+            "testwatch/diag-false",
+            home_dir.path().to_str().unwrap(),
+        );
+
+        // Call with keep_diagnostic_caches: false — refresh_issues/refresh_prs
+        // must not be invoked.
+        refresh_all_sources(&config, false);
+
+        // Restore environment before any assertion (so we don't leave a dirty
+        // state if the assertion panics).
+        unsafe {
+            match old_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match old_path {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        // The fake `gh` must NOT have been invoked — its marker file must not
+        // exist. If it does, the gate is broken.
+        assert!(
+            !gh_marker.exists(),
+            "refresh_all_sources(false) must not call `gh` — \
+             found marker written by the fake gh binary at {:?}",
+            gh_marker
+        );
+
+        // The orphaned cache files must not have been created.
+        let cache_base = home_dir.path().join(".cache/orchard");
+        let issues_path = cache_base.join("testwatch_diag-false_issues.json");
+        let prs_path = cache_base.join("testwatch_diag-false_prs.json");
+        assert!(
+            !issues_path.exists(),
+            "issues cache must not be written when keep_diagnostic_caches=false"
+        );
+        assert!(
+            !prs_path.exists(),
+            "prs cache must not be written when keep_diagnostic_caches=false"
+        );
+    }
+
+    /// AC8 (true branch): `refresh_all_sources` with `keep_diagnostic_caches: true`
+    /// DOES invoke `refresh_issues` and `refresh_prs` — verified by confirming
+    /// the fake `gh` binary is called (it exits 1 to simulate an API failure,
+    /// so no real cache write happens, but the call itself is observable).
+    #[test]
+    #[cfg(unix)]
+    fn keep_diagnostic_caches_flag_reenables_orphan_writes_for_debugging() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let home_dir = tempfile::tempdir().unwrap();
+        let bin_dir = tempfile::tempdir().unwrap();
+        let gh_marker = home_dir.path().join("gh_was_called");
+
+        write_fake_gh(bin_dir.path(), &gh_marker);
+
+        let old_home = std::env::var("HOME").ok();
+        let old_path = std::env::var("PATH").ok();
+        unsafe {
+            std::env::set_var("HOME", home_dir.path());
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin_dir.path().display(),
+                    old_path.as_deref().unwrap_or("/usr/bin:/bin")
+                ),
+            );
+        }
+
+        // Pre-write a Fresh worktrees cache containing a branch that has an issue
+        // number, so refresh_issues finds issue_numbers and actually calls `gh`.
+        let cache_dir = home_dir.path().join(".cache/orchard");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let wt_cache = cache_dir.join("testwatch_diag-true_worktrees.json");
+        // A minimal valid worktrees cache entry with an issue branch.
+        let wt_json = r#"{"last_refreshed":"2099-01-01T00:00:00Z","entries":[{"branch":"issue42/my-feature","path":"/tmp/test-wt","is_bare":false,"is_locked":false}]}"#;
+        std::fs::write(&wt_cache, wt_json).unwrap();
+
+        let config = make_test_config(
+            "testwatch/diag-true",
+            home_dir.path().to_str().unwrap(),
+        );
+
+        // Call with keep_diagnostic_caches: true — refresh_issues/refresh_prs
+        // must be invoked (even though they'll fail due to fake gh).
+        refresh_all_sources(&config, true);
+
+        unsafe {
+            match old_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match old_path {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        // The fake `gh` must have been invoked — its marker file must exist.
+        // This proves refresh_issues (and/or refresh_prs) reached the point
+        // of spawning the gh process.
+        assert!(
+            gh_marker.exists(),
+            "refresh_all_sources(true) must call `gh` for issue/PR refresh — \
+             marker written by fake gh was not found at {:?}",
+            gh_marker
         );
     }
 }

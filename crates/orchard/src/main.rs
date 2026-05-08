@@ -692,6 +692,10 @@ fn print_usage() {
                                        output. Use `orchard-tui watch` for a continuous
                                        background refresh.
   orchard-tui watch                  Run event-driven watch daemon (Ctrl-C to stop)
+  orchard-tui watch --keep-diagnostic-caches
+                                       Also write orphaned *_issues.json + *_prs.json
+                                       caches (debug only; not consumed by the TUI
+                                       post-#429, which reads from daemon WorkView).
   orchard-tui watch --subscribe --id <id> --session <session> [--pane <pane>]
                                        Register a tmux subscriber for watch events
   orchard-tui watch --unsubscribe --id <id>
@@ -734,7 +738,7 @@ Keybindings (after orchard-tui init --install):
 /// With `--subscribe`: registers a tmux subscriber.
 /// With `--unsubscribe`: removes a subscriber.
 fn handle_watch(args: &[String]) {
-    let config = global_config::load_global_config();
+    let mut config = global_config::load_global_config();
 
     let mut subscribe = false;
     let mut unsubscribe = false;
@@ -751,6 +755,7 @@ fn handle_watch(args: &[String]) {
         match arg.as_str() {
             "--subscribe" => subscribe = true,
             "--unsubscribe" => unsubscribe = true,
+            "--keep-diagnostic-caches" => config.watch.keep_diagnostic_caches = true,
             "--id" => {
                 id = args.get(i + 1).cloned().unwrap_or_default();
                 skip_next = true;
