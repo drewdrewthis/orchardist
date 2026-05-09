@@ -1,404 +1,157 @@
+<!--
+  App root. Daemon-only — every visible row of data is hydrated from the
+  local daemon (HTTP + WS) or the Tauri chat bridge. Mock data has been
+  retired; surfaces without a daemon source render empty state.
+-->
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+	import { onMount } from "svelte";
+	import { getStore } from "$lib/store.svelte";
+	import DesktopLayout from "$lib/components/DesktopLayout.svelte";
+	import MobileLayout from "$lib/components/MobileLayout.svelte";
+	import Palette from "$lib/components/Palette.svelte";
+	import NewConversation from "$lib/components/NewConversation.svelte";
+	import ContractModal from "$lib/components/ContractModal.svelte";
+	import type { Lens, PaletteEntry } from "$lib/data/types";
 
-  type SessionMeta = {
-    path: string;
-    cwd: string | null;
-    last_modified_unix: number;
-    session_id: string;
-  };
+	const store = getStore();
 
-  type ChatEvent = {
-    type?: string;
-    role?: string;
-    message?: any;
-    timestamp?: string;
-    [key: string]: any;
-  };
+	let viewportWidth = $state(typeof window !== "undefined" ? window.innerWidth : 1024);
 
-  let sessions = $state<SessionMeta[]>([]);
-  let selected = $state<SessionMeta | null>(null);
-  let events = $state<ChatEvent[]>([]);
-  let inputText = $state("");
-  let target = $state("orchardist");
-  let sendStatus = $state("");
-  let loading = $state(false);
+	onMount(() => {
+		const onResize = () => {
+			viewportWidth = window.innerWidth;
+			store.setSurface(viewportWidth < 768 ? "mobile" : "desktop");
+		};
+		onResize();
+		window.addEventListener("resize", onResize);
 
-  async function loadSessions() {
-    loading = true;
-    try {
-      sessions = await invoke<SessionMeta[]>("list_sessions");
-    } catch (e) {
-      console.error("list_sessions failed", e);
-    } finally {
-      loading = false;
-    }
-  }
+		const onKey = (e: KeyboardEvent) => {
+			const cmd = e.metaKey || e.ctrlKey;
+			const key = e.key.toLowerCase();
+			const inField =
+				document.activeElement?.tagName === "TEXTAREA" ||
+				document.activeElement?.tagName === "INPUT";
 
-  async function openSession(s: SessionMeta) {
-    selected = s;
-    events = [];
-    try {
-      events = await invoke<ChatEvent[]>("read_session", { path: s.path });
-    } catch (e) {
-      console.error("read_session failed", e);
-    }
-  }
+			if (cmd && key === "k") {
+				e.preventDefault();
+				store.paletteOpen ? store.closePalette() : store.openPalette();
+			} else if (e.key === "/" && !store.paletteOpen && !inField) {
+				e.preventDefault();
+				store.openPalette();
+			} else if (e.key === "Escape") {
+				store.closePalette();
+				store.closeNewConv();
+				store.openContract(null);
+			} else if (cmd && key === "n") {
+				e.preventDefault();
+				store.openNewConv();
+			} else if (cmd && key === "b" && store.surface === "desktop") {
+				e.preventDefault();
+				store.toggleSidebar();
+			} else if (cmd && key === "w" && store.surface === "desktop") {
+				e.preventDefault();
+				if (store.activeTabId) store.closeTab(store.activeTabId);
+			} else if (cmd && e.shiftKey && key === "f" && store.surface === "desktop") {
+				e.preventDefault();
+				store.toggleFullscreen();
+			} else if (cmd && key === "\\" && store.surface === "desktop") {
+				e.preventDefault();
+				store.toggleView();
+			} else if (cmd && (e.key === "]" || e.key === "[") && store.surface === "desktop") {
+				e.preventDefault();
+				store.cycleTab(e.key === "]" ? 1 : -1);
+			} else if (cmd && /^[1-9]$/.test(e.key) && store.surface === "desktop") {
+				const i = parseInt(e.key, 10) - 1;
+				if (store.tabs[i]) {
+					e.preventDefault();
+					store.jumpToTab(i);
+				}
+			}
+		};
+		window.addEventListener("keydown", onKey);
 
-  async function send(e: Event) {
-    e.preventDefault();
-    if (!inputText.trim()) return;
-    sendStatus = "sending...";
-    try {
-      await invoke("send_to_tmux", { target, text: inputText });
-      sendStatus = `sent → ${target}`;
-      inputText = "";
-    } catch (err) {
-      sendStatus = `error: ${err}`;
-    }
-  }
+		return () => {
+			window.removeEventListener("resize", onResize);
+			window.removeEventListener("keydown", onKey);
+		};
+	});
 
-  function extractText(ev: ChatEvent): string {
-    if (typeof ev.message === "string") return ev.message;
-    if (ev.message?.content) {
-      if (typeof ev.message.content === "string") return ev.message.content;
-      if (Array.isArray(ev.message.content)) {
-        return ev.message.content
-          .map((c: any) => (typeof c === "string" ? c : c?.text || ""))
-          .join("");
-      }
-    }
-    return JSON.stringify(ev).slice(0, 200);
-  }
+	function onPalettePick(entry: PaletteEntry) {
+		store.closePalette();
+		if (entry.kind === "action") {
+			if (entry.action === "new-conversation") store.openNewConv();
+			else if (entry.action?.startsWith("lens:")) store.setLens(entry.action.slice(5) as Lens);
+			else if (entry.action === "toggle-theme") store.toggleTheme();
+			else if (entry.action === "toggle-view") store.toggleView();
+			return;
+		}
+		if (entry.itemId) {
+			// Palette entries today carry legacy item ids — for channels
+			// the id is the room id; for worktrees we don't have a
+			// session keyed at the lens level here, so we surface a
+			// session-tab keyed by sessionUuid when present.
+			const channel = store.chatRooms.find((r) => r.id === entry.itemId);
+			if (channel) {
+				store.openChannel(channel.id);
+			}
+			// Worktree-keyed palette entries don't currently map to a
+			// session/pane identity — skip until palette emits row
+			// identity directly.
+		}
+	}
 
-  function role(ev: ChatEvent): "user" | "assistant" | "system" {
-    if (ev.message?.role) return ev.message.role as any;
-    if (ev.role) return ev.role as any;
-    return "system";
-  }
-
-  function shortId(s: string): string {
-    return s.slice(0, 8);
-  }
-
-  function fmtTime(unix: number): string {
-    return new Date(unix * 1000).toLocaleString();
-  }
-
-  onMount(loadSessions);
+	const contractItem = $derived(
+		store.contractItemId ? store.items.find((i) => i.id === store.contractItemId) || null : null,
+	);
 </script>
 
-<div class="app">
-  <aside class="sidebar">
-    <header>
-      <h1>Orchard</h1>
-      <button onclick={loadSessions} disabled={loading} class="refresh">
-        {loading ? "..." : "↻"}
-      </button>
-    </header>
-    <div class="session-list">
-      {#each sessions as s (s.path)}
-        <button
-          class="session-item"
-          class:active={selected?.path === s.path}
-          onclick={() => openSession(s)}
-        >
-          <div class="session-id">{shortId(s.session_id)}</div>
-          <div class="session-cwd">{s.cwd ?? "(no cwd)"}</div>
-          <div class="session-time">{fmtTime(s.last_modified_unix)}</div>
-        </button>
-      {:else}
-        <div class="empty">{loading ? "loading..." : "no sessions found"}</div>
-      {/each}
-    </div>
-  </aside>
+<svelte:head>
+	<title>Orchard</title>
+</svelte:head>
 
-  <main class="chat">
-    {#if selected}
-      <header class="chat-header">
-        <span class="chat-title">{shortId(selected.session_id)}</span>
-        <span class="chat-cwd">{selected.cwd ?? ""}</span>
-      </header>
-      <div class="messages">
-        {#each events as ev, i (i)}
-          <div class="bubble {role(ev)}">
-            <div class="bubble-role">{role(ev)}</div>
-            <div class="bubble-text">{extractText(ev)}</div>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <div class="placeholder">Pick a session from the sidebar →</div>
-    {/if}
-
-    <form class="input-bar" onsubmit={send}>
-      <input
-        class="target-input"
-        bind:value={target}
-        placeholder="tmux session name"
-        title="tmux target session"
-      />
-      <input
-        class="msg-input"
-        bind:value={inputText}
-        placeholder="Type a message to send via tmux send-keys..."
-      />
-      <button type="submit">Send</button>
-      {#if sendStatus}<span class="status">{sendStatus}</span>{/if}
-    </form>
-  </main>
+<div class="shell">
+	{#if store.surface === "desktop"}
+		<DesktopLayout {store} />
+	{:else}
+		<MobileLayout {store} />
+	{/if}
 </div>
 
-<style>
-  :global(html, body) {
-    margin: 0;
-    height: 100%;
-    background: #1a1a1f;
-    color: #e8e8ec;
-    font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Display",
-      sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
+<Palette
+	open={store.paletteOpen}
+	surface={store.surface}
+	entries={store.paletteEntries}
+	actions={store.paletteActions}
+	onClose={() => store.closePalette()}
+	onPick={onPalettePick}
+/>
 
-  .app {
-    display: grid;
-    grid-template-columns: 260px 1fr;
-    height: 100vh;
-    overflow: hidden;
-  }
+<NewConversation
+	open={store.newConvOpen}
+	surface={store.surface}
+	items={store.items}
+	hosts={store.hosts}
+	onClose={() => store.closeNewConv()}
+	onLaunch={async (spec) => {
+		store.closeNewConv();
+		const wt = store.items.find((i) => i.id === spec.worktreeId);
+		if (wt && wt.kind === "worktree" && spec.host === wt.host) {
+			try {
+				const { createWorktree } = await import("$lib/tauri");
+				const repoRoot = wt.path.split("/wt/")[0] || wt.path;
+				await createWorktree(repoRoot, wt.path, wt.branch);
+				store.hydrateFromDaemon();
+			} catch (err) {
+				console.warn("[orchard-gui] create_worktree failed:", err);
+			}
+		}
+		// Newly-created worktree: no session identity yet — the user can
+		// click its row in the sidebar once the daemon picks it up.
+	}}
+/>
 
-  .sidebar {
-    background: rgba(28, 28, 34, 0.85);
-    backdrop-filter: blur(40px) saturate(160%);
-    -webkit-backdrop-filter: blur(40px) saturate(160%);
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .sidebar header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  }
-
-  .sidebar h1 {
-    font-size: 14px;
-    font-weight: 600;
-    margin: 0;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.7);
-  }
-
-  .refresh {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.7);
-    width: 28px;
-    height: 24px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .refresh:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .session-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 6px;
-  }
-
-  .session-item {
-    display: block;
-    width: 100%;
-    background: transparent;
-    color: inherit;
-    border: none;
-    text-align: left;
-    padding: 10px 12px;
-    border-radius: 8px;
-    cursor: pointer;
-    margin-bottom: 2px;
-    font-family: inherit;
-  }
-
-  .session-item:hover {
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .session-item.active {
-    background: rgba(120, 130, 255, 0.18);
-  }
-
-  .session-id {
-    font-family: "SF Mono", "Menlo", monospace;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.85);
-  }
-
-  .session-cwd {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.6);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-top: 2px;
-  }
-
-  .session-time {
-    font-size: 10px;
-    color: rgba(255, 255, 255, 0.4);
-    margin-top: 2px;
-  }
-
-  .empty {
-    padding: 20px;
-    text-align: center;
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 12px;
-  }
-
-  .chat {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
-  }
-
-  .chat-header {
-    padding: 12px 20px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-  }
-
-  .chat-title {
-    font-family: "SF Mono", monospace;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.85);
-  }
-
-  .chat-cwd {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
-  }
-
-  .messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .bubble {
-    max-width: 78%;
-    padding: 10px 14px;
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.05);
-    font-size: 13px;
-    line-height: 1.45;
-    word-wrap: break-word;
-  }
-
-  .bubble.user {
-    align-self: flex-end;
-    background: rgba(120, 130, 255, 0.25);
-  }
-
-  .bubble.assistant {
-    align-self: flex-start;
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .bubble.system {
-    align-self: center;
-    background: rgba(255, 255, 255, 0.03);
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 11px;
-    font-family: "SF Mono", monospace;
-    max-width: 60%;
-  }
-
-  .bubble-role {
-    font-size: 10px;
-    color: rgba(255, 255, 255, 0.5);
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .bubble-text {
-    white-space: pre-wrap;
-  }
-
-  .placeholder {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(255, 255, 255, 0.3);
-    font-size: 14px;
-  }
-
-  .input-bar {
-    padding: 12px 16px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .target-input {
-    width: 140px;
-  }
-
-  .msg-input {
-    flex: 1;
-  }
-
-  input {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #e8e8ec;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-family: inherit;
-    font-size: 13px;
-    outline: none;
-  }
-
-  input:focus {
-    border-color: rgba(120, 130, 255, 0.6);
-  }
-
-  button[type="submit"] {
-    background: rgba(120, 130, 255, 0.35);
-    border: 1px solid rgba(120, 130, 255, 0.5);
-    color: #e8e8ec;
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-family: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  button[type="submit"]:hover {
-    background: rgba(120, 130, 255, 0.5);
-  }
-
-  .status {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.6);
-    font-family: "SF Mono", monospace;
-  }
-</style>
+<ContractModal
+	item={contractItem}
+	messages={[]}
+	onClose={() => store.openContract(null)}
+/>

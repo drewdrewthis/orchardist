@@ -1,0 +1,711 @@
+/*
+ * Orchard GUI — global design tokens + base utilities.
+ *
+ * Per-component styling lives in scoped `<style>` blocks in each .svelte file.
+ * This file owns: the token vars, base typography reset, and a few utility
+ * classes that are referenced by name across components (.mono, .pip, .chip,
+ * .glass, .row, .btn-*, .iconbtn, .seg, .scroll). Per-component styling lives
+ * in scoped `<style>` blocks.
+ */
+
+:root,
+[data-theme="light"] {
+	--bg: #fafafb;
+	--bg-elev: #f3f3f5;
+	--surface: #ffffff;
+	--surface-2: #f7f7f9;
+	--surface-glass: rgba(255, 255, 255, 0.72);
+	--surface-glass-strong: rgba(255, 255, 255, 0.86);
+
+	--line: rgba(15, 15, 22, 0.07);
+	--line-2: rgba(15, 15, 22, 0.10);
+	--line-strong: rgba(15, 15, 22, 0.14);
+
+	--fg: #0e0e10;
+	--fg-2: rgba(14, 14, 16, 0.66);
+	--fg-3: rgba(14, 14, 16, 0.42);
+	--fg-4: rgba(14, 14, 16, 0.24);
+
+	--accent-hue: 215;
+	--accent: oklch(0.58 0.16 var(--accent-hue));
+	--accent-fg: #ffffff;
+	--accent-soft: oklch(0.58 0.16 var(--accent-hue) / 0.10);
+	--accent-line: oklch(0.58 0.16 var(--accent-hue) / 0.30);
+
+	--attn: oklch(0.74 0.14 78);
+	--attn-soft: oklch(0.74 0.14 78 / 0.13);
+	--attn-fg: oklch(0.42 0.10 78);
+
+	--ok: oklch(0.66 0.13 158);
+	--ok-soft: oklch(0.66 0.13 158 / 0.12);
+	--ok-fg: oklch(0.42 0.10 158);
+
+	--bad: oklch(0.62 0.18 24);
+	--bad-soft: oklch(0.62 0.18 24 / 0.12);
+	--bad-fg: oklch(0.50 0.16 24);
+
+	--stale-fg: rgba(14, 14, 16, 0.32);
+
+	--shadow-1: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(15, 15, 22, 0.04),
+		0 4px 14px rgba(15, 15, 22, 0.06);
+	--shadow-2: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 12px 40px rgba(15, 15, 22, 0.18);
+	--glass-ring: inset 0 0.5px 0 rgba(255, 255, 255, 0.7),
+		inset 0 0 0 0.5px rgba(15, 15, 22, 0.06);
+
+	--radius-xs: 6px;
+	--radius-sm: 8px;
+	--radius: 10px;
+	--radius-lg: 14px;
+	--radius-xl: 20px;
+	--radius-2xl: 28px;
+}
+
+[data-theme="dark"] {
+	--bg: #0a0a0c;
+	--bg-elev: #131318;
+	--surface: #131318;
+	--surface-2: #1a1a20;
+	--surface-glass: rgba(22, 22, 28, 0.66);
+	--surface-glass-strong: rgba(22, 22, 28, 0.84);
+
+	--line: rgba(255, 255, 255, 0.07);
+	--line-2: rgba(255, 255, 255, 0.10);
+	--line-strong: rgba(255, 255, 255, 0.16);
+
+	--fg: #f4f4f7;
+	--fg-2: rgba(244, 244, 247, 0.68);
+	--fg-3: rgba(244, 244, 247, 0.42);
+	--fg-4: rgba(244, 244, 247, 0.22);
+
+	--accent: oklch(0.72 0.14 var(--accent-hue));
+	--accent-fg: #0a0a0c;
+	--accent-soft: oklch(0.72 0.14 var(--accent-hue) / 0.16);
+	--accent-line: oklch(0.72 0.14 var(--accent-hue) / 0.34);
+
+	--attn: oklch(0.82 0.13 78);
+	--attn-soft: oklch(0.82 0.13 78 / 0.14);
+	--attn-fg: oklch(0.86 0.13 78);
+
+	--ok: oklch(0.78 0.13 158);
+	--ok-soft: oklch(0.78 0.13 158 / 0.14);
+	--ok-fg: oklch(0.82 0.12 158);
+
+	--bad: oklch(0.72 0.17 24);
+	--bad-soft: oklch(0.72 0.17 24 / 0.16);
+	--bad-fg: oklch(0.78 0.16 24);
+
+	--stale-fg: rgba(244, 244, 247, 0.32);
+
+	--shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4),
+		0 12px 40px rgba(0, 0, 0, 0.44);
+	--shadow-2: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 60px rgba(0, 0, 0, 0.6);
+	--glass-ring: inset 0 0.5px 0 rgba(255, 255, 255, 0.06),
+		inset 0 0 0 0.5px rgba(255, 255, 255, 0.05);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	background: var(--bg);
+	color: var(--fg);
+	font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 14px;
+	line-height: 1.45;
+	letter-spacing: -0.005em;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+body {
+	overflow: hidden;
+}
+
+button {
+	font-family: inherit;
+	color: inherit;
+}
+
+input,
+textarea {
+	font-family: inherit;
+	color: inherit;
+}
+
+.mono {
+	font-family: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+	letter-spacing: 0;
+}
+
+.tnum {
+	font-variant-numeric: tabular-nums;
+}
+
+.dim {
+	color: var(--fg-2);
+}
+
+.dimer {
+	color: var(--fg-3);
+}
+
+.dimest {
+	color: var(--fg-4);
+}
+
+.kbd {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 5px;
+	font-family: "Geist Mono", ui-monospace, monospace;
+	font-size: 10.5px;
+	line-height: 1;
+	color: var(--fg-2);
+	background: var(--surface-2);
+	border: 0.5px solid var(--line-2);
+	border-radius: 4px;
+	box-shadow: 0 1px 0 var(--line);
+}
+
+.pip {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex: none;
+	display: inline-block;
+}
+
+.pip.attn {
+	background: var(--attn);
+	box-shadow: 0 0 0 3px var(--attn-soft);
+}
+
+.pip.ok {
+	background: var(--ok);
+	box-shadow: 0 0 0 3px var(--ok-soft);
+}
+
+.pip.bad {
+	background: var(--bad);
+	box-shadow: 0 0 0 3px var(--bad-soft);
+}
+
+.pip.idle {
+	background: var(--fg-4);
+}
+
+.pip.stale {
+	background: transparent;
+	outline: 1px dashed var(--fg-4);
+	outline-offset: -1px;
+}
+
+.pip.lg {
+	width: 8px;
+	height: 8px;
+}
+
+@keyframes orchardPulseSoft {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 var(--ok-soft);
+	}
+	50% {
+		box-shadow: 0 0 0 5px transparent;
+	}
+}
+
+.pip.live {
+	background: var(--ok);
+	animation: orchardPulseSoft 2.4s ease-in-out infinite;
+}
+
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 22px;
+	padding: 0 8px;
+	font-size: 11.5px;
+	font-weight: 500;
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--fg-2);
+	border: 0.5px solid var(--line-2);
+	white-space: nowrap;
+}
+
+.chip .pip {
+	width: 5px;
+	height: 5px;
+	box-shadow: none;
+}
+
+.chip.attn {
+	background: var(--attn-soft);
+	color: var(--attn-fg);
+	border-color: transparent;
+}
+
+.chip.ok {
+	background: var(--ok-soft);
+	color: var(--ok-fg);
+	border-color: transparent;
+}
+
+.chip.bad {
+	background: var(--bad-soft);
+	color: var(--bad-fg);
+	border-color: transparent;
+}
+
+.chip.accent {
+	background: var(--accent-soft);
+	color: var(--accent);
+	border-color: transparent;
+}
+
+.chip.ghost {
+	background: transparent;
+}
+
+.glass {
+	background: var(--surface-glass);
+	backdrop-filter: blur(24px) saturate(140%);
+	-webkit-backdrop-filter: blur(24px) saturate(140%);
+	box-shadow: var(--glass-ring), var(--shadow-2);
+}
+
+.glass-strong {
+	background: var(--surface-glass-strong);
+	backdrop-filter: blur(28px) saturate(160%);
+	-webkit-backdrop-filter: blur(28px) saturate(160%);
+	box-shadow: var(--glass-ring), var(--shadow-2);
+}
+
+.hr {
+	height: 1px;
+	background: var(--line);
+	border: 0;
+	margin: 0;
+}
+
+.scroll {
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--line-strong) transparent;
+}
+
+.scroll::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+.scroll::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.scroll::-webkit-scrollbar-thumb {
+	background: var(--line-2);
+	border: 3px solid transparent;
+	background-clip: content-box;
+	border-radius: 8px;
+}
+
+.scroll::-webkit-scrollbar-thumb:hover {
+	background: var(--line-strong);
+	background-clip: content-box;
+	border: 3px solid transparent;
+}
+
+.btn {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	cursor: default;
+	font: inherit;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.btn-tonal {
+	height: 28px;
+	padding: 0 12px;
+	border-radius: 8px;
+	background: var(--surface-2);
+	color: var(--fg);
+	border: 0.5px solid var(--line-2);
+	font-weight: 500;
+	font-size: 13px;
+	transition: background 0.12s, border-color 0.12s;
+	cursor: default;
+}
+
+.btn-tonal:hover {
+	background: var(--bg-elev);
+	border-color: var(--line-strong);
+}
+
+.btn-primary {
+	height: 28px;
+	padding: 0 12px;
+	border-radius: 8px;
+	background: var(--fg);
+	color: var(--bg);
+	font-weight: 500;
+	font-size: 13px;
+	border: 0;
+	cursor: default;
+}
+
+.btn-primary:hover {
+	opacity: 0.92;
+}
+
+.btn-ghost {
+	height: 28px;
+	padding: 0 10px;
+	border-radius: 8px;
+	color: var(--fg-2);
+	font-weight: 500;
+	font-size: 13px;
+	background: transparent;
+	border: 0;
+	cursor: default;
+}
+
+.btn-ghost:hover {
+	background: color-mix(in oklab, var(--fg) 5%, transparent);
+	color: var(--fg);
+}
+
+.iconbtn {
+	width: 28px;
+	height: 28px;
+	border-radius: 8px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--fg-2);
+	cursor: default;
+	transition: background 0.12s, color 0.12s;
+	background: transparent;
+	border: 0;
+	padding: 0;
+}
+
+.iconbtn:hover {
+	background: color-mix(in oklab, var(--fg) 6%, transparent);
+	color: var(--fg);
+}
+
+.iconbtn[data-active="true"] {
+	background: var(--surface-2);
+	color: var(--fg);
+}
+
+.iconbtn-primary {
+	width: 28px;
+	height: 28px;
+	border-radius: 8px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--fg);
+	color: var(--bg);
+	border: 0;
+	cursor: default;
+	transition: opacity 0.12s, transform 0.12s;
+}
+
+.iconbtn-primary:hover {
+	opacity: 0.92;
+}
+
+.iconbtn-primary:disabled {
+	opacity: 0.32;
+}
+
+.iconbtn-primary:active {
+	transform: scale(0.96);
+}
+
+.input {
+	width: 100%;
+	height: 32px;
+	padding: 0 12px;
+	background: var(--surface-2);
+	border: 0.5px solid var(--line-2);
+	border-radius: 8px;
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+	outline: none;
+	transition: border-color 0.12s, background 0.12s;
+}
+
+.input:focus {
+	border-color: var(--accent-line);
+	background: var(--surface);
+	box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.seg {
+	display: inline-flex;
+	padding: 2px;
+	background: var(--surface-2);
+	border-radius: 8px;
+	border: 0.5px solid var(--line);
+	position: relative;
+}
+
+.seg button {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	height: 24px;
+	padding: 0 10px;
+	font: inherit;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--fg-2);
+	border-radius: 6px;
+	cursor: default;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	transition: color 0.12s;
+	position: relative;
+	z-index: 1;
+}
+
+.seg button[data-on="true"] {
+	color: var(--fg);
+}
+
+.seg.seg-icon button {
+	padding: 0;
+	width: 32px;
+	height: 26px;
+	gap: 0;
+	justify-content: center;
+}
+
+.seg.seg-icon {
+	padding: 2px;
+}
+
+.seg.seg-icon button svg {
+	width: 15px;
+	height: 15px;
+}
+
+.seg .seg-thumb {
+	position: absolute;
+	top: 2px;
+	bottom: 2px;
+	background: var(--surface);
+	border-radius: 6px;
+	box-shadow: 0 0 0 0.5px var(--line-2), 0 1px 2px rgba(0, 0, 0, 0.06);
+	transition: left 0.18s cubic-bezier(0.3, 0.7, 0.3, 1), width 0.18s;
+}
+
+.tip {
+	position: absolute;
+	font-size: 11px;
+	line-height: 1;
+	padding: 5px 7px;
+	background: var(--fg);
+	color: var(--bg);
+	border-radius: 5px;
+	pointer-events: none;
+	white-space: nowrap;
+	opacity: 0;
+	transition: opacity 0.12s;
+	z-index: 50;
+}
+
+.hairline {
+	height: 2px;
+	width: 100%;
+	background: var(--line);
+	position: relative;
+	overflow: hidden;
+	border-radius: 999px;
+}
+
+.hairline > i {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	background: var(--accent);
+}
+
+@keyframes orchardFadeIn {
+	from {
+		transform: translateY(3px);
+	}
+	to {
+		transform: none;
+	}
+}
+
+.fadeIn {
+	animation: orchardFadeIn 0.2s ease-out both;
+}
+
+@keyframes orchardScaleIn {
+	from {
+		transform: scale(0.985);
+	}
+	to {
+		transform: none;
+	}
+}
+
+.scaleIn {
+	animation: orchardScaleIn 0.16s cubic-bezier(0.3, 0.7, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fadeIn,
+	.scaleIn {
+		animation: none !important;
+	}
+}
+
+@keyframes orchardBlinkCaret {
+	50% {
+		opacity: 0;
+	}
+}
+
+.caret {
+	display: inline-block;
+	width: 7px;
+	height: 14px;
+	background: var(--ok);
+	vertical-align: -2px;
+	animation: orchardBlinkCaret 1s step-end infinite;
+}
+
+.signal-row {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: auto;
+	padding-left: 8px;
+}
+
+.signal {
+	display: inline-flex;
+	align-items: center;
+	line-height: 1;
+	opacity: 0.92;
+}
+
+.signal:hover {
+	opacity: 1;
+}
+
+.unread-glyph {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	color: var(--accent);
+}
+
+.unread-glyph .unread-count {
+	position: absolute;
+	top: -4px;
+	right: -7px;
+	min-width: 11px;
+	height: 11px;
+	padding: 0 2px;
+	border-radius: 6px;
+	background: var(--accent);
+	color: var(--bg);
+	font-size: 8.5px;
+	line-height: 11px;
+	text-align: center;
+	font-weight: 600;
+}
+
+.ok-fg {
+	color: var(--ok);
+}
+
+.attn-fg {
+	color: var(--attn);
+}
+
+.bad-fg {
+	color: var(--bad);
+}
+
+.term {
+	font-family: "Geist Mono", ui-monospace, "SF Mono", monospace;
+	font-size: 12.5px;
+	line-height: 1.55;
+	background: #0b0b0e;
+	color: #e8e8ec;
+}
+
+[data-theme="light"] .term {
+	background: #14141a;
+	color: #e9e9ee;
+}
+
+.group-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 18px 16px 6px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	color: var(--fg-3);
+	text-transform: uppercase;
+}
+
+.group-header .count {
+	font-variant-numeric: tabular-nums;
+	color: var(--fg-4);
+	font-weight: 500;
+}
+
+.group-header.attn {
+	color: var(--attn-fg);
+}
+
+.offline-ribbon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	height: 28px;
+	font-size: 12px;
+	font-weight: 500;
+	background: var(--attn-soft);
+	color: var(--attn-fg);
+	border-bottom: 0.5px solid color-mix(in oklab, var(--attn) 30%, transparent);
+}
+
+::selection {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+
+.no-select {
+	user-select: none;
+}

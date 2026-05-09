@@ -1,159 +1,113 @@
-//! Tauri command implementations for the Orchard GUI session deep view.
+//! Tauri command bridges that delegate stateless system ops to `worktree-core`.
 //!
-//! Exposes three commands to the webview:
+//! This is Layer 1 of research/037 §"Two-layer write model": stateless system
+//! ops do **not** require the daemon. The CLI binaries call `worktree-core`
+//! directly; the GUI calls it via these Tauri command bridges. Same code path,
+//! different entry points.
 //!
-//! - [`list_sessions`] — enumerates Claude Code session JSONL files under
-//!   `~/.claude/projects/` sorted by most-recently-modified.
-//! - [`read_session`] — reads a session JSONL file and returns each line parsed
-//!   as a [`serde_json::Value`] so the frontend can filter and render blocks.
-//! - [`send_to_tmux`] — writes a literal string into a target tmux session via
-//!   `tmux send-keys -l`.
-//!
-//! The tmux command runs an external binary; to keep it testable it is
-//! parameterised by a [`Shell`] trait. Tests inject a `MockShell` that records
-//! invocations instead of spawning a real process.
+//! Stateful ops (chat send, contract update, cross-host transfer) flow through
+//! the daemon write protocol (per research/037 §1) — they are NOT here.
 
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-/// Metadata for a single Claude Code session JSONL file.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionMeta {
-    /// Absolute path to the `.jsonl` file on disk.
+use serde::{Deserialize, Serialize};
+use worktree_core as wc;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeRow {
     pub path: String,
-    /// File name without extension — Claude's internal session id.
-    pub session_id: String,
-    /// Claude projects sub-directory this session lives in (slug of the cwd).
-    pub project_slug: String,
-    /// File size in bytes.
-    pub size_bytes: u64,
-    /// Last-modified time as Unix seconds. `0` if unavailable.
-    pub modified_unix: i64,
+    pub branch: Option<String>,
+    pub head: String,
+    pub is_bare: bool,
+    pub is_main: bool,
+    pub has_conflicts: bool,
 }
 
-/// Abstraction over spawning a shell command. Real code uses [`RealShell`];
-/// tests use a mock that captures invocations without executing anything.
-pub trait Shell: Send + Sync {
-    /// Run `program` with `args`, returning the process exit status as an `i32`.
-    /// Non-zero exit codes are surfaced to the caller rather than turned into
-    /// errors — the tmux commands we issue are advisory.
-    fn run(&self, program: &str, args: &[&str]) -> anyhow::Result<i32>;
-}
-
-/// Default [`Shell`] implementation that actually spawns subprocesses.
-pub struct RealShell;
-
-impl Shell for RealShell {
-    fn run(&self, program: &str, args: &[&str]) -> anyhow::Result<i32> {
-        let status = Command::new(program).args(args).status()?;
-        Ok(status.code().unwrap_or(-1))
-    }
-}
-
-/// Returns the root directory containing Claude Code session JSONL files —
-/// `$HOME/.claude/projects` by default.
-fn claude_projects_root() -> anyhow::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
-    Ok(home.join(".claude").join("projects"))
-}
-
-/// Lists Claude Code session JSONL files discovered under `root`, sorted by
-/// most-recently-modified first. Pure function — takes the root path so tests
-/// can point it at a temp directory.
-pub fn list_sessions_in(root: &Path) -> anyhow::Result<Vec<SessionMeta>> {
-    let mut out = Vec::new();
-    if !root.exists() {
-        return Ok(out);
-    }
-    for project_entry in fs::read_dir(root)? {
-        let project_entry = project_entry?;
-        if !project_entry.file_type()?.is_dir() {
-            continue;
-        }
-        let project_slug = project_entry.file_name().to_string_lossy().into_owned();
-        for session_entry in fs::read_dir(project_entry.path())? {
-            let session_entry = session_entry?;
-            let path = session_entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let meta = session_entry.metadata()?;
-            let modified_unix = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let session_id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            out.push(SessionMeta {
-                path: path.to_string_lossy().into_owned(),
-                session_id,
-                project_slug: project_slug.clone(),
-                size_bytes: meta.len(),
-                modified_unix,
-            });
+impl From<wc::WorktreeEntry> for WorktreeRow {
+    fn from(e: wc::WorktreeEntry) -> Self {
+        Self {
+            path: e.path,
+            branch: e.branch,
+            head: e.head,
+            is_bare: e.is_bare,
+            is_main: e.is_main,
+            has_conflicts: e.has_conflicts,
         }
     }
-    out.sort_by(|a, b| b.modified_unix.cmp(&a.modified_unix));
-    Ok(out)
 }
 
-/// Tauri command: list Claude Code sessions under `~/.claude/projects/`.
 #[tauri::command]
-pub fn list_sessions() -> Result<Vec<SessionMeta>, String> {
-    let root = claude_projects_root().map_err(|e| e.to_string())?;
-    list_sessions_in(&root).map_err(|e| e.to_string())
+pub fn list_worktrees() -> Result<Vec<WorktreeRow>, String> {
+    wc::list_worktrees()
+        .map(|v| v.into_iter().map(Into::into).collect())
+        .map_err(|e| e.to_string())
 }
 
-/// Reads a Claude Code session JSONL file and returns one `serde_json::Value`
-/// per non-empty line. Lines that fail to parse are skipped — the v0 GUI is
-/// read-only so lenient parsing is preferable to hard-failing a whole session.
-pub fn read_session_file(path: &Path) -> anyhow::Result<Vec<serde_json::Value>> {
-    let raw = fs::read_to_string(path)?;
-    let mut out = Vec::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            out.push(value);
-        }
-    }
-    Ok(out)
-}
-
-/// Tauri command: read the JSONL file at `path` and return its parsed events.
 #[tauri::command]
-pub fn read_session(path: String) -> Result<Vec<serde_json::Value>, String> {
-    read_session_file(Path::new(&path)).map_err(|e| e.to_string())
+pub fn create_worktree(
+    repo_root: String,
+    worktree_path: String,
+    branch: String,
+) -> Result<String, String> {
+    let root = PathBuf::from(repo_root);
+    let outcome =
+        wc::create_worktree(&root, &branch, &worktree_path).map_err(|e| e.to_string())?;
+    Ok(match outcome {
+        wc::CreateOutcome::NewBranch => "new".into(),
+        wc::CreateOutcome::ExistingBranch => "existing".into(),
+    })
 }
 
-/// Sends `text` to the given tmux target using `tmux send-keys -l` via the
-/// provided [`Shell`]. The `-l` flag disables key-name lookup so the text is
-/// written literally. Multi-line strings are passed through as-is; handling
-/// the newline-vs-paste-buffer tradeoff is deferred to a later commit.
-pub fn send_to_tmux_with<S: Shell>(shell: &S, target: &str, text: &str) -> anyhow::Result<i32> {
-    shell.run("tmux", &["send-keys", "-t", target, "-l", text])
-}
-
-/// Tauri command: write `text` into the tmux session at `target`.
 #[tauri::command]
-pub fn send_to_tmux(target: String, text: String) -> Result<(), String> {
-    let code = send_to_tmux_with(&RealShell, &target, &text).map_err(|e| e.to_string())?;
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(format!("tmux send-keys exited with code {code}"))
-    }
+pub fn remove_worktree(worktree_path: String, force: bool) -> Result<(), String> {
+    wc::remove_worktree(&worktree_path, force).map_err(|e| e.to_string())
 }
 
-// Tests live in ../tests/commands.rs as integration tests because a Tauri lib
-// with cdylib+staticlib crate types does not generate inner #[cfg(test)] test
-// binaries reliably. See #161 follow-up.
+#[tauri::command]
+pub fn prune_worktrees(paths: Vec<String>, force: bool) -> Result<Vec<(String, String)>, String> {
+    let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+    let outcomes = wc::prune(&refs, force);
+    Ok(outcomes
+        .into_iter()
+        .map(|(p, r)| (p, r.map_or_else(|e| e.to_string(), |_| String::new())))
+        .collect())
+}
+
+/// Type a chat message into a live tmux pane (the Claude REPL).
+///
+/// We do it in two `send-keys` calls — `-l` (literal) for the text so
+/// tmux doesn't interpret backticks or magic strings, then a separate
+/// `Enter` press to submit. A single combined call races on long
+/// messages and the Enter can land before the text is fully written.
+///
+/// `pane_id` is the tmux pane id (e.g. `%66`) — the daemon already
+/// surfaces these via `tmuxPanes`. Trim the leading `%` is not
+/// required; tmux accepts both forms.
+#[tauri::command]
+pub fn tmux_send_text(pane_id: String, text: String) -> Result<(), String> {
+    if pane_id.is_empty() {
+        return Err("pane_id is empty".into());
+    }
+    if text.is_empty() {
+        return Err("text is empty".into());
+    }
+    let status = Command::new("tmux")
+        .args(["send-keys", "-t", &pane_id, "-l", &text])
+        .status()
+        .map_err(|e| format!("tmux send-keys (text) failed to spawn: {e}"))?;
+    if !status.success() {
+        return Err(format!("tmux send-keys (text) exited {status}"));
+    }
+    // Tiny delay so tmux fully processes the literal write before we
+    // press Enter. 50ms is invisible to the user and reliable.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let status = Command::new("tmux")
+        .args(["send-keys", "-t", &pane_id, "Enter"])
+        .status()
+        .map_err(|e| format!("tmux send-keys (Enter) failed to spawn: {e}"))?;
+    if !status.success() {
+        return Err(format!("tmux send-keys (Enter) exited {status}"));
+    }
+    Ok(())
+}
