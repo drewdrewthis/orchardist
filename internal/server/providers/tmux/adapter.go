@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -137,6 +138,16 @@ func (a *Adapter) Host() HostID { return a.host }
 
 // Socket exposes the configured socket path (empty = tmux default).
 func (a *Adapter) Socket() string { return a.socket }
+
+// SocketBasename returns the basename of the configured tmux socket.
+// When no -S flag is set, tmux uses a socket named "default" inside
+// the socket directory ($TMPDIR/tmux-<uid>/), so that is returned.
+func (a *Adapter) SocketBasename() string {
+	if a.socket != "" {
+		return filepath.Base(a.socket)
+	}
+	return "default"
+}
 
 // tmuxArgs returns the global flags every tmux invocation gets.
 // `-L`/`-S` come first per `man 1 tmux`.

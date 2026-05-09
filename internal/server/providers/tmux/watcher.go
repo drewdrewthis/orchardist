@@ -86,6 +86,8 @@ func StartWatcher(ctx context.Context, p *Provider, logger *slog.Logger) error {
 		return nil
 	}
 
+	expectedBasename := p.adapter.SocketBasename()
+
 	go func() {
 		defer func() { _ = watcher.Close() }()
 		for {
@@ -98,7 +100,7 @@ func StartWatcher(ctx context.Context, p *Provider, logger *slog.Logger) error {
 				}
 				// Only socket-relevant events should poke the poll loop.
 				// Filter out the noise from temporary files in the same dir.
-				if !relevantSocketEvent(ev) {
+				if !relevantSocketEvent(ev, expectedBasename) {
 					continue
 				}
 				p.PokeRefresh()
@@ -115,15 +117,22 @@ func StartWatcher(ctx context.Context, p *Provider, logger *slog.Logger) error {
 
 // relevantSocketEvent decides whether an fsnotify event should trigger
 // a refresh. Tmux writes its socket as a unix-domain file inside the
-// socket dir; create/remove/write events on a name starting with
-// "default" (or the adapter's chosen socket basename) are the ones that
-// matter. Everything else (temp files, lock files) we ignore.
-func relevantSocketEvent(ev fsnotify.Event) bool {
+// socket dir; only create/remove/write events on the configured socket
+// basename matter. Everything else (temp files, lock files, other sockets)
+// is ignored to prevent feedback loops where the watcher pokes a refresh
+// that causes tmux to write to its socket, firing another event.
+//
+// expectedBasename is the filename component of the adapter's socket path
+// (or "default" for the tmux-default socket).
+func relevantSocketEvent(ev fsnotify.Event, expectedBasename string) bool {
 	if ev.Op == 0 {
 		return false
 	}
 	base := filepath.Base(ev.Name)
 	if base == "" || strings.HasPrefix(base, ".") {
+		return false
+	}
+	if base != expectedBasename {
 		return false
 	}
 	return true
