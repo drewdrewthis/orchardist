@@ -78,6 +78,11 @@ func subcommandOf(args []string) string {
 // yields 3 execs/tick — a 50 % reduction from 6, still well below the
 // oomd-trip threshold.
 //
+// Scope: this test bounds FetchAll only. CapturePane / CapturePaneTail are
+// on-demand (not poll-driven) and intentionally excluded — calls to those
+// are user-initiated and do not contribute to the per-tick fork-storm
+// pressure that triggered #464.
+//
 // The test FAILS on unpatched code (count == 6) and PASSES after the fix.
 func TestRegression_FetchAllExecCount_Issue464(t *testing.T) {
 	runner := &countingRunner{}

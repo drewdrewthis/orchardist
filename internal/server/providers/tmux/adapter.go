@@ -128,6 +128,10 @@ func NewAdapter(host HostID) *Adapter {
 
 // WithSocket returns a copy of a addressing the given tmux socket via
 // `-S <path>`. Lets E2E tests run against a sandbox tmux server.
+//
+// Note: the returned copy SHARES the alive-cache pointer with the receiver.
+// Calling NewAdapter() returns a fresh cache; chained With* builders intentionally
+// keep one logical adapter behind one cache.
 func (a *Adapter) WithSocket(path string) *Adapter {
 	cp := *a
 	cp.socket = path
@@ -135,6 +139,8 @@ func (a *Adapter) WithSocket(path string) *Adapter {
 }
 
 // WithRunner returns a copy of a using the given runner — for tests.
+//
+// Note: shares the alive-cache pointer with the receiver. See WithSocket.
 func (a *Adapter) WithRunner(r CommandRunner) *Adapter {
 	cp := *a
 	cp.runner = r
@@ -143,6 +149,12 @@ func (a *Adapter) WithRunner(r CommandRunner) *Adapter {
 
 // WithAliveTTL returns a copy of a using d as the IsAlive cache TTL.
 // Useful in tests that want fine-grained control over when the cache expires.
+//
+// Passing 0 reverts to defaultAliveTTL (= DefaultPollInterval) — the cache
+// is always on by default. There is no "disable cache" knob; pass a small
+// positive duration (e.g. 1*time.Nanosecond) and rely on TTL expiry instead.
+//
+// Note: shares the alive-cache pointer with the receiver. See WithSocket.
 func (a *Adapter) WithAliveTTL(d time.Duration) *Adapter {
 	cp := *a
 	cp.aliveTTL = d
@@ -180,6 +192,12 @@ func (a *Adapter) tmuxArgs(rest ...string) []string {
 // server. Results are cached for aliveTTL (default = DefaultPollInterval) so
 // a single FetchAll cycle — which calls IsAlive before listAll — never pays
 // for two `tmux info` execs within the same tick.
+//
+// Stale-true window: between server death and the next TTL expiry (≤TTL),
+// IsAlive may return true even though the server is dead. The next FetchAll
+// then runs listAll/listClients against a dead server and gets an empty
+// snapshot; the alive-probe re-fires after TTL and corrects the cache. This
+// is acceptable because the worst-case staleness is one poll interval.
 func (a *Adapter) IsAlive(ctx context.Context) bool {
 	ttl := a.aliveTTL
 	if ttl <= 0 {
