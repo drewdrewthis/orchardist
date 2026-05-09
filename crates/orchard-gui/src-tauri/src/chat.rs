@@ -114,7 +114,8 @@ pub struct SendOutcomeView {
 pub enum FanoutOutcomeView {
     Delivered {
         recipient: String,
-        scrollback_verified_at: String,
+        verified_via: String,
+        verified_at: String,
     },
     ByteOnly {
         recipient: String,
@@ -152,13 +153,16 @@ pub fn chat_send(
     let message_id = append_message(&room, &sender_resolved, &text).map_err(|e| e.to_string())?;
 
     // Resolve recipients per target.
-    let recipients: Vec<String> = match &target_parsed {
+    let recipients: Vec<chat_core::Recipient> = match &target_parsed {
         Target::Room(_) => list_members(&room)
             .map_err(|e| e.to_string())?
             .into_iter()
-            .map(|m| m.handle)
+            .map(|m| chat_core::Recipient::new(m.handle.clone(), m.handle))
             .collect(),
-        Target::Direct(handle) => vec![format!("@{handle}")],
+        Target::Direct(handle) => vec![chat_core::Recipient::new(
+            format!("@{handle}"),
+            format!("@{handle}"),
+        )],
     };
 
     let fanout = tmux_fanout(&recipients, &sender_resolved, &text);
@@ -167,10 +171,12 @@ pub fn chat_send(
         .map(|fo| match fo {
             chat_core::FanoutOutcome::Delivered {
                 recipient,
-                scrollback_verified_at,
+                verified_via,
+                verified_at,
             } => FanoutOutcomeView::Delivered {
                 recipient,
-                scrollback_verified_at,
+                verified_via: format!("{verified_via:?}").to_lowercase(),
+                verified_at,
             },
             chat_core::FanoutOutcome::ByteOnly { recipient, reason } => {
                 FanoutOutcomeView::ByteOnly { recipient, reason }
