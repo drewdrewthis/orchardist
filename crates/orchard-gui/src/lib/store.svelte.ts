@@ -75,6 +75,8 @@ export class AppStore {
 	account: Account | null = $state(null);
 	conversations: ConversationSummary[] = $state([]);
 	tmuxSessions: TmuxSessionSummary[] = $state([]);
+	/** Server-joined Worktree → TmuxSession map (daemon #511). */
+	worktreeTmux: Record<string, TmuxSessionSummary> = $state({});
 	chatRooms: ChatRoomSummary[] = $state([]);
 	chatRoomCache: Record<string, Conversation> = $state({});
 	/** Tick used by the few components that render relative timestamps. */
@@ -401,6 +403,7 @@ export class AppStore {
 		this.account = snap.account;
 		this.conversations = snap.conversations;
 		this.tmuxSessions = snap.tmuxSessions;
+		this.worktreeTmux = snap.worktreeTmux;
 		return true;
 	};
 
@@ -417,17 +420,13 @@ export class AppStore {
 	 * either window name or session name. Fallback: empty.
 	 */
 	/**
-	 * The worktree's attached tmux session, as the daemon reports it.
-	 *
-	 * Today the daemon does NOT expose `Worktree.tmuxSession` or
-	 * `Worktree.tmuxPanes` — that requires `pane.process.cwd` (#463) plus
-	 * a join resolver, and is tracked as #506. Until that lands this
-	 * always returns null and the conversation pane shows the "no
-	 * session attached" state. **No client-side heuristic.** When the
-	 * daemon ships the field, this collapses to a single field read.
+	 * The worktree's attached tmux session, as the daemon reports it via
+	 * `Worktree.tmuxSession` (#511). Server-joined; no client-side
+	 * heuristic. Returns null when no pane sits in the worktree path.
 	 */
-	tmuxSessionFor = (_item: Item): TmuxSessionSummary | null => {
-		return null;
+	tmuxSessionFor = (item: Item): TmuxSessionSummary | null => {
+		if (item.kind !== "worktree") return null;
+		return this.worktreeTmux[item.id] || null;
 	};
 
 	/** Find the most-recent conversation summary for a worktree path. */

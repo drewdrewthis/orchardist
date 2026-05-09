@@ -69,6 +69,11 @@ const DASHBOARD = gql`
 						number
 						state
 					}
+					tmuxSession {
+						id
+						name
+						lastActivityAt
+					}
 				}
 			}
 		}
@@ -121,6 +126,7 @@ interface DashboardResponse {
 				repo: string | null;
 				pr: { number: number; state: string } | null;
 				issue: { number: number; state: string } | null;
+				tmuxSession: { id: string; name: string; lastActivityAt: string | null } | null;
 			}>;
 		}>;
 	};
@@ -180,6 +186,12 @@ export interface Snapshot {
 	account: Account | null;
 	conversations: ConversationSummary[];
 	tmuxSessions: TmuxSessionSummary[];
+	/**
+	 * Server-joined Worktree → TmuxSession map (per #511). Keyed by
+	 * worktree id; null when no pane sits in that worktree path. The
+	 * GUI uses this directly — no client-side join.
+	 */
+	worktreeTmux: Record<string, TmuxSessionSummary>;
 }
 
 export async function fetchSnapshot(): Promise<Snapshot | null> {
@@ -213,11 +225,23 @@ function mapSnapshot(d: DashboardResponse): Snapshot {
 		if (!existing || c.lastSeenAt > existing.lastSeenAt) byCwd.set(c.cwd, c);
 	}
 
+	const worktreeTmux: Record<string, TmuxSessionSummary> = {};
+
 	const items: Item[] = d.workView.projects.flatMap((p) =>
 		p.worktrees
 			.filter((w) => !w.bare)
 			.map((w): Item => {
 				const conv = byCwd.get(w.path) || null;
+				if (w.tmuxSession) {
+					worktreeTmux[w.id] = {
+						id: w.tmuxSession.id,
+						name: w.tmuxSession.name,
+						lastActivityAt: w.tmuxSession.lastActivityAt
+							? Date.parse(w.tmuxSession.lastActivityAt) || 0
+							: 0,
+						windowNames: [],
+					};
+				}
 				return {
 					id: w.id,
 					kind: "worktree",
@@ -284,7 +308,7 @@ function mapSnapshot(d: DashboardResponse): Snapshot {
 		windowNames: s.windows.map((w) => w.name),
 	}));
 
-	return { items, hosts, account, conversations, tmuxSessions };
+	return { items, hosts, account, conversations, tmuxSessions, worktreeTmux };
 }
 
 function deriveStatus(w: { pr: { state: string } | null }): ItemStatus {
