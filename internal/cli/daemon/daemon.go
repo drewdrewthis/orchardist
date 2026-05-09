@@ -191,6 +191,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
+		server.WithConversationsJSONL(claudeProjectsProvider, claudeProjectsRoot),
 		server.WithClaudeAccount(claudeAccountProvider),
 		server.WithClaudeInstance(claudeInstanceProvider),
 		server.WithContracts(contracts.New(logger)),

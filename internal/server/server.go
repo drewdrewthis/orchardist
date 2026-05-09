@@ -57,6 +57,14 @@ const DefaultAddr = "localhost:7777"
 // claudeProjectsRootEnv overrides the Claude transcripts root path.
 const claudeProjectsRootEnv = "CLAUDE_PROJECTS_ROOT"
 
+// convoJSONLConfig holds the two values needed to mount the conversations
+// jsonl handler: the PathLookup provider and the projects root used for
+// path-traversal validation.
+type convoJSONLConfig struct {
+	provider PathLookup
+	root     string
+}
+
 // Server wraps the http.Server plus the resolver root and provider set.
 type Server struct {
 	addr           string
@@ -76,6 +84,7 @@ type Server struct {
 	gh             *gh.Provider
 	peerProxy      *peerproxy.Provider
 	localEvents    *peerproxy.LocalInvalidator
+	convoJSONL     *convoJSONLConfig
 }
 
 // LocalEvents exposes the configured local-invalidation broker for
@@ -123,6 +132,18 @@ func WithClaudeProjects(p *claudeprojects.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.claudeProjects = p
 		r.WithClaudeProjects(p)
+	}
+}
+
+// WithConversationsJSONL mounts the conversations jsonl file-server
+// handler on the same listener as /graphql. The handler is registered
+// at /v1/conversations/ (trailing slash — ServeMux prefix match) and
+// serves GET /v1/conversations/:sessionUuid/jsonl. Requires a PathLookup
+// provider (typically *claudeprojects.Provider) for uuid-to-path lookup,
+// and the projectsRoot string used for path-traversal validation.
+func WithConversationsJSONL(p PathLookup, projectsRoot string) Option {
+	return func(s *Server, _ *resolvers.Resolver) {
+		s.convoJSONL = &convoJSONLConfig{provider: p, root: projectsRoot}
 	}
 }
 
@@ -220,6 +241,16 @@ func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	// The bundle is built from the resolver's provider set so the Pr resolver
 	// can batch ListPullRequests calls across all worktrees in one request.
 	mux.Handle("/graphql", loaders.Middleware(res.LoaderBundle(), graphqlHandlerFor(res)))
+
+	// Mount the conversations jsonl file-server on the same mux as /graphql
+	// so it inherits the daemon's loopback bind address. The trailing slash
+	// on the pattern makes ServeMux treat it as a prefix match, which the
+	// handler's parseSessionUUID already expects.
+	if srv.convoJSONL != nil {
+		mux.Handle("/v1/conversations/",
+			NewConversationsJSONLHandler(srv.convoJSONL.provider, srv.convoJSONL.root, logger),
+		)
+	}
 
 	srv.httpSrv = &http.Server{
 		Addr:              addr,
