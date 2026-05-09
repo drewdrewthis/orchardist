@@ -280,6 +280,7 @@ func (p *Provider) ToGraphQL(c Conversation) *graphql.Conversation {
 		MessageCount: c.MessageCount,
 		Open:         p.IsOpen(c),
 		Recap:        nil,
+		JsonlPath:    c.Path,
 	}
 }
 

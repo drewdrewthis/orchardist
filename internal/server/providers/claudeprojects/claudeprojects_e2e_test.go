@@ -214,6 +214,55 @@ func TestConversation_RecapAlwaysNull(t *testing.T) {
 	}
 }
 
+// TestConversation_JsonlPath_Integration is the AC1 integration test:
+//
+//	{ conversations { sessionUuid jsonlPath } } returns a non-empty
+//	absolute path for every conversation, and every path resolves to a
+//	readable regular file on the daemon's host.
+func TestConversation_JsonlPath_Integration(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "test-project")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+
+	const sessionUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	jsonlPath := filepath.Join(projectDir, sessionUUID+".jsonl")
+	writeRecords(t, jsonlPath, []recordFixture{
+		{ts: time.Now().UTC(), role: "user", body: "hello", cwd: projectDir},
+	})
+
+	_, srv := bootDaemon(t, root)
+	defer srv.Close()
+
+	resp := postQuery(t, srv.URL, `query { conversations { sessionUuid jsonlPath } }`)
+	if len(resp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp.Errors)
+	}
+	if len(resp.Data.Conversations) == 0 {
+		t.Fatal("no conversations returned; expected at least one")
+	}
+
+	for _, c := range resp.Data.Conversations {
+		if c.JsonlPath == "" {
+			t.Errorf("conversation %q: jsonlPath is empty", c.SessionUUID)
+			continue
+		}
+		if !filepath.IsAbs(c.JsonlPath) {
+			t.Errorf("conversation %q: jsonlPath %q is not absolute", c.SessionUUID, c.JsonlPath)
+			continue
+		}
+		fi, err := os.Stat(c.JsonlPath)
+		if err != nil {
+			t.Errorf("conversation %q: jsonlPath %q: stat failed: %v", c.SessionUUID, c.JsonlPath, err)
+			continue
+		}
+		if !fi.Mode().IsRegular() {
+			t.Errorf("conversation %q: jsonlPath %q is not a regular file (mode=%v)", c.SessionUUID, c.JsonlPath, fi.Mode())
+		}
+	}
+}
+
 // recordFixture is a tiny synthetic JSONL record. We intentionally do
 // not match the full Claude Code schema — the provider only reads
 // `timestamp` and `cwd`, so anything else is ignored. The body is
@@ -327,6 +376,7 @@ type conversationDTO struct {
 	MessageCount int64      `json:"messageCount"`
 	Open         bool       `json:"open"`
 	Recap        *string    `json:"recap"`
+	JsonlPath    string     `json:"jsonlPath"`
 }
 
 // queryConversations issues the canonical Conversations query and
