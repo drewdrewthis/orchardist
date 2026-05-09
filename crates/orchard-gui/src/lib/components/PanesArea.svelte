@@ -4,24 +4,21 @@
 -->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
-	import Pane from "./Pane.svelte";
+	import SessionPane from "./SessionPane.svelte";
+	import ChannelPane from "./ChannelPane.svelte";
 	import type { Tab } from "$lib/store.svelte";
 	import type {
 		Agent,
-		ChannelItem,
 		Conversation,
 		ConvView,
 		ForkPreview,
-		Item,
 		Message,
 		TerminalLine,
-		WorktreeItem,
 	} from "$lib/data/types";
 
 	type Props = {
 		tabs: Tab[];
 		activeTabId: string | null;
-		items: Item[];
 		paneSizes: number[];
 		fullscreen: boolean;
 		view: ConvView;
@@ -52,7 +49,6 @@
 	let {
 		tabs,
 		activeTabId,
-		items,
 		paneSizes,
 		fullscreen,
 		view,
@@ -145,48 +141,60 @@
 {:else}
 	<div bind:this={rowEl} class="panes-row" data-count={tabs.length}>
 		{#each tabs as tab, idx (tab.id)}
-			{@const item = items.find((i) => i.id === tab.itemId)}
-			{#if item && (item.kind === "worktree" || item.kind === "channel")}
-				{#if idx > 0}
-					<div
-						class="pane-resizer"
-						onmousedown={(e) => startResize(e, idx - 1)}
-						role="separator"
-						aria-orientation="vertical"
-						title="Drag to resize"
-					></div>
-				{/if}
-				<Pane
-					item={item as WorktreeItem | ChannelItem}
-					active={tab.id === activeTabId}
-					isLast={idx === tabs.length - 1}
-					flex={sizes[idx] || 1 / tabs.length}
-					paneCount={tabs.length}
-					view={tab.id === activeTabId ? view : tab.view}
-					fullscreen={idx === tabs.length - 1 ? fullscreen : null}
-					{conversation}
-					{terminalLines}
-					{agents}
-					{now}
-					surface="desktop"
-					{statusVariant}
-					{composeText}
-					{setComposeText}
-					sending={tab.id === activeTabId ? sending : null}
-					{forkPreview}
-					onActivate={() => onActivateTab(tab.id)}
-					onClose={() => onCloseTab(tab.id)}
-					{onView}
-					{onSend}
-					{onFork}
-					{onStartFork}
-					{onCommitFork}
-					{onCancelFork}
-					{onJumpToAgent}
-					{onOpenContract}
-					onToggleFullscreen={idx === tabs.length - 1 ? onToggleFullscreen : undefined}
-				/>
+			{#if idx > 0}
+				<div
+					class="pane-resizer"
+					onmousedown={(e) => startResize(e, idx - 1)}
+					role="separator"
+					aria-orientation="vertical"
+					title="Drag to resize"
+				></div>
 			{/if}
+			<div class="pane-flex" style:flex="{sizes[idx] || 1 / tabs.length} 1 0" style:min-width="0">
+				{#if tab.kind === "session"}
+					<SessionPane
+						paneId={tab.paneId}
+						sessionUuid={tab.sessionUuid}
+						active={tab.id === activeTabId}
+						paneCount={tabs.length}
+						isLast={idx === tabs.length - 1}
+						fullscreen={idx === tabs.length - 1 ? fullscreen : null}
+						{now}
+						surface="desktop"
+						onActivate={() => onActivateTab(tab.id)}
+						onClose={() => onCloseTab(tab.id)}
+						onToggleFullscreen={idx === tabs.length - 1 ? onToggleFullscreen : undefined}
+					/>
+				{:else}
+					<ChannelPane
+						roomId={tab.roomId}
+						active={tab.id === activeTabId}
+						paneCount={tabs.length}
+						isLast={idx === tabs.length - 1}
+						fullscreen={idx === tabs.length - 1 ? fullscreen : null}
+						{conversation}
+						{agents}
+						{now}
+						{statusVariant}
+						{composeText}
+						{setComposeText}
+						{onSend}
+						sending={tab.id === activeTabId ? sending : null}
+						forkPreview={tab.id === activeTabId ? forkPreview : null}
+						{onStartFork}
+						{onCommitFork}
+						{onCancelFork}
+						{onJumpToAgent}
+						onActivate={() => onActivateTab(tab.id)}
+						onClose={() => onCloseTab(tab.id)}
+						onToggleFullscreen={idx === tabs.length - 1 ? onToggleFullscreen : undefined}
+					/>
+				{/if}
+			</div>
 		{/each}
 	</div>
 {/if}
+
+<style>
+	.pane-flex { display: flex; flex-direction: column; height: 100%; }
+</style>

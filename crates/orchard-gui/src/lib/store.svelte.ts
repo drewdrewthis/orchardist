@@ -55,11 +55,23 @@ import type {
 
 export type { ForkPreview } from "./data/types";
 
-export interface Tab {
-	id: string;
-	itemId: string;
-	view: ConvView;
-}
+/**
+ * Tab identity. Two flavours:
+ *   - "channel": chat-room conversation (chat-core)
+ *   - "session": claude/tmux session — keyed by paneId and/or sessionUuid.
+ *     Either or both may be present. The panel runs its own query
+ *     against whatever is supplied; everything else (worktree, PR,
+ *     transcript) follows from the graph.
+ */
+export type Tab =
+	| { id: string; kind: "channel"; roomId: string; view: ConvView }
+	| {
+			id: string;
+			kind: "session";
+			paneId?: string;
+			sessionUuid?: string;
+			view: ConvView;
+	  };
 
 export interface Filter {
 	kind: "host" | "status" | "repo";
@@ -154,26 +166,32 @@ export class AppStore {
 		return this.tabs.find((t) => t.id === this.activeTabId) || null;
 	}
 
-	get selectedId() {
-		return this.activeTab?.itemId || null;
+	/**
+	 * Stable identifier for the active tab — used by the sidebar to flag
+	 * which row corresponds to the focused panel. For session tabs we
+	 * prefer paneId, falling back to sessionUuid; for channel tabs the
+	 * roomId.
+	 */
+	get selectedId(): string | null {
+		const t = this.activeTab;
+		if (!t) return null;
+		if (t.kind === "channel") return t.roomId;
+		return t.paneId || t.sessionUuid || null;
 	}
 
 	get view(): ConvView {
 		return this.activeTab?.view || "chat";
 	}
 
-	get activeItem(): Item | null {
-		const id = this.selectedId;
-		if (!id) return null;
-		return this.mergedItems.find((i) => i.id === id) || null;
+	get activeChannelRoomId(): string | null {
+		const t = this.activeTab;
+		return t && t.kind === "channel" ? t.roomId : null;
 	}
 
 	get visibleConversation(): Conversation | null {
-		const item = this.activeItem;
-		if (!item) return null;
-		const base =
-			item.kind === "channel" ? this.chatRoomCache[item.id] || emptyConversation(item.id, true) : null;
-		if (!base) return null;
+		const roomId = this.activeChannelRoomId;
+		if (!roomId) return null;
+		const base = this.chatRoomCache[roomId] || emptyConversation(roomId, true);
 		if (!this.sending) return base;
 		return {
 			...base,
@@ -278,110 +296,119 @@ export class AppStore {
 	};
 
 	/**
-	 * Resolve a lens-row click to a legacy worktree Item id, then call
-	 * openItem. Lenses anchor on different shapes (claudeInstance, pane,
-	 * worktree); the panel today only knows worktree+channel — bridge it
-	 * by mapping cwd → matching worktree until commit 3 generalises the
-	 * panel.
+	 * Open a Claude/tmux session row. Behavior:
+	 *   - split=false (default): replace the active tab's identity in
+	 *     place, or open a single tab when no tabs exist.
+	 *   - split=true: open a new tab alongside the existing ones (cap
+	 *     at MAX_PANES; oldest tab gets evicted if at cap).
 	 *
-	 * Falls back to the raw id (for legacy worktree rows still being
-	 * rendered, e.g. via mergedItems channels).
+	 * Either paneId or sessionUuid must be supplied; both is fine.
 	 */
-	openLensRow = (rawId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
-		const wtItemId = this.resolveLensRowToWorktree(rawId);
-		this.openItem(wtItemId ?? rawId, opts);
-	};
+	openSession = (
+		key: { paneId?: string; sessionUuid?: string },
+		opts: { split?: boolean } = {},
+	) => {
+		if (!key.paneId && !key.sessionUuid) return;
 
-	private resolveLensRowToWorktree = (rawId: string): string | null => {
-		// Channels: rawId is the room id; openItem already handles it.
-		if (this.mergedItems.some((it) => it.id === rawId)) return rawId;
-
-		// Find a cwd from the lens snapshots, then match against legacy
-		// worktree items (which carry path).
-		let cwd: string | null = null;
-
-		// Recent / attention / issue rows are keyed by ClaudeInstance id.
-		const fromRecent = this.lensSnapshots.recent.find((r) => r.session.id === rawId);
-		if (fromRecent?.session.process?.cwd) cwd = fromRecent.session.process.cwd;
-		const fromAttention = this.lensSnapshots.attention.find((r) => r.session.id === rawId);
-		if (fromAttention?.session.process?.cwd) cwd = fromAttention.session.process.cwd;
-		const fromIssue = this.lensSnapshots.issue.find((r) => r.worktree.id === rawId);
-		if (fromIssue?.session?.process?.cwd) cwd = fromIssue.session.process.cwd;
-		if (fromIssue && !cwd) cwd = fromIssue.worktree.path;
-
-		// Tmux pane rows are keyed by paneId; pull cwd from pane.process.
-		if (!cwd) {
-			for (const sess of this.lensSnapshots.tmux.sessions) {
-				for (const win of sess.windows) {
-					for (const p of win.panes) {
-						if (p.paneId === rawId && p.process?.cwd) {
-							cwd = p.process.cwd;
-							break;
-						}
-					}
-				}
-			}
-		}
-
-		if (!cwd) return null;
-
-		// Most-specific worktree wins (deepest path that contains cwd).
-		let best: { id: string; path: string } | null = null;
-		for (const it of this.items) {
-			if (it.kind !== "worktree") continue;
-			const wt = it as { id: string; path: string };
-			if (cwd === wt.path || cwd.startsWith(wt.path + "/")) {
-				if (!best || wt.path.length > best.path.length) best = wt;
-			}
-		}
-		return best?.id ?? null;
-	};
-
-	openItem = (itemId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
-		const { newPane = false, focus = true } = opts;
-		const existing = this.tabs.find((t) => t.itemId === itemId);
-		if (existing && !newPane) {
-			if (focus) this.activeTabId = existing.id;
-			if (this.surface === "mobile") this._switchMobileItem(itemId);
+		// Mobile: always single-tab.
+		if (this.surface === "mobile") {
+			this.tabs = [{ id: "m1", kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: "chat" }];
+			this.activeTabId = "m1";
+			this._resetPanelOnSwitch();
 			return;
 		}
+
+		const existing = this.tabs.find(
+			(t) =>
+				t.kind === "session" &&
+				((key.paneId && t.paneId === key.paneId) ||
+					(key.sessionUuid && t.sessionUuid === key.sessionUuid)),
+		);
+
+		if (existing && !opts.split) {
+			this.activeTabId = existing.id;
+			return;
+		}
+
+		if (!opts.split && this.activeTab) {
+			// Replace active tab in place.
+			this.tabs = this.tabs.map((t) =>
+				t.id === this.activeTabId
+					? {
+							id: t.id,
+							kind: "session",
+							paneId: key.paneId,
+							sessionUuid: key.sessionUuid,
+							view: "chat",
+						}
+					: t,
+			);
+			this._resetPanelOnSwitch();
+			return;
+		}
+
+		// New tab.
 		const id = "t" + this.nextTabSeq++;
-		const tab: Tab = { id, itemId, view: "chat" };
+		const tab: Tab = { id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: "chat" };
 		const next = [...this.tabs];
 		if (next.length >= MAX_PANES) {
-			const activeIdx = Math.max(
-				0,
-				next.findIndex((t) => t.id === this.activeTabId),
-			);
-			next.splice(activeIdx, 1, tab);
-		} else {
-			next.push(tab);
+			next.shift();
 		}
+		next.push(tab);
 		this.tabs = next;
-		if (focus) this.activeTabId = id;
+		this.activeTabId = id;
 		this._resetPaneSizes();
-		this._maybeLoadChatRoom(itemId);
-		this.composeText = "";
-		this.sending = null;
-		this.forkPreview = null;
+		this._resetPanelOnSwitch();
 	};
 
-	private _switchMobileItem = (itemId: string) => {
-		this.tabs = [{ id: "m1", itemId, view: "chat" }];
-		this.activeTabId = "m1";
-		this._maybeLoadChatRoom(itemId);
-		this.composeText = "";
-		this.sending = null;
-		this.forkPreview = null;
-	};
+	/**
+	 * Open a chat-room channel tab. Same split semantics as openSession.
+	 */
+	openChannel = (roomId: string, opts: { split?: boolean } = {}) => {
+		if (this.surface === "mobile") {
+			this.tabs = [{ id: "m1", kind: "channel", roomId, view: "chat" }];
+			this.activeTabId = "m1";
+			this._maybeLoadChatRoom(roomId);
+			this._resetPanelOnSwitch();
+			return;
+		}
 
-	mobileOpen = (itemId: string) => {
-		this._switchMobileItem(itemId);
+		const existing = this.tabs.find((t) => t.kind === "channel" && t.roomId === roomId);
+		if (existing && !opts.split) {
+			this.activeTabId = existing.id;
+			return;
+		}
+
+		if (!opts.split && this.activeTab) {
+			this.tabs = this.tabs.map((t) =>
+				t.id === this.activeTabId ? { id: t.id, kind: "channel", roomId, view: "chat" } : t,
+			);
+			this._maybeLoadChatRoom(roomId);
+			this._resetPanelOnSwitch();
+			return;
+		}
+
+		const id = "t" + this.nextTabSeq++;
+		const tab: Tab = { id, kind: "channel", roomId, view: "chat" };
+		const next = [...this.tabs];
+		if (next.length >= MAX_PANES) next.shift();
+		next.push(tab);
+		this.tabs = next;
+		this.activeTabId = id;
+		this._resetPaneSizes();
+		this._maybeLoadChatRoom(roomId);
+		this._resetPanelOnSwitch();
 	};
 
 	mobileBack = () => {
 		this.tabs = [];
 		this.activeTabId = null;
+	};
+
+	private _resetPanelOnSwitch = () => {
+		this.composeText = "";
+		this.sending = null;
+		this.forkPreview = null;
 	};
 
 	closeTab = (tabId: string) => {
@@ -487,15 +514,15 @@ export class AppStore {
 	send = () => {
 		const text = this.composeText.trim();
 		if (!text || this.sending) return;
-		const item = this.activeItem;
-		if (!item || item.kind !== "channel") return;
+		const roomId = this.activeChannelRoomId;
+		if (!roomId) return;
 
 		const tempId = "m.tmp." + Date.now();
 		const ts = Date.now();
 		this.composeText = "";
 		this.sending = { tempId, text, ts, status: "pending" };
 
-		const target = "#" + item.id.replace(/^#/, "");
+		const target = "#" + roomId.replace(/^#/, "");
 		const b = getChatBackend();
 		b.sendMessage(target, text)
 			.then(() => {
@@ -621,14 +648,13 @@ export class AppStore {
 		};
 	};
 
-	private _maybeLoadChatRoom = (itemId: string) => {
-		const item = this.mergedItems.find((i) => i.id === itemId);
-		if (item?.kind !== "channel") return;
-		if (this.chatRoomCache[itemId] || this._chatRoomLoading.has(itemId)) return;
-		this._chatRoomLoading.add(itemId);
-		this.loadChatRoom(itemId)
+	private _maybeLoadChatRoom = (roomId: string) => {
+		if (!this.chatRooms.some((r) => r.id === roomId)) return;
+		if (this.chatRoomCache[roomId] || this._chatRoomLoading.has(roomId)) return;
+		this._chatRoomLoading.add(roomId);
+		this.loadChatRoom(roomId)
 			.catch(() => {})
-			.finally(() => this._chatRoomLoading.delete(itemId));
+			.finally(() => this._chatRoomLoading.delete(roomId));
 	};
 
 	subscribeChat = async (): Promise<Unsub> => {

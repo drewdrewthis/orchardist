@@ -97,9 +97,13 @@
 						surface="desktop"
 						selectedId={store.selectedId}
 						agents={store.agents}
-						onSelect={(id, ev) => {
-							const force = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
-							store.openLensRow(id, { newPane: force });
+						onSelect={(target, ev) => {
+							const split = !!(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1));
+							if (target.kind === "channel") {
+								store.openChannel(target.roomId, { split });
+							} else {
+								store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid }, { split });
+							}
 						}}
 					/>
 					<div
@@ -113,29 +117,19 @@
 					<div class="rail-collapsed">
 						<div class="rail-list">
 							{#each store.tabs as tab (tab.id)}
-								{@const it = store.mergedItems.find((i) => i.id === tab.itemId)}
-								{#if it && it.kind === "worktree"}
-									<button
-										class="rail-conv"
-										class:on={tab.id === store.activeTabId}
-										onclick={() => (store.activeTabId = tab.id)}
-										title="{it.title} · {it.host}"
-									>
-										<span class="rail-active-bar"></span>
-										<HostGlyph host={it.host} size={18} />
-										<span class="pip {it.status} rail-pip"></span>
-									</button>
-								{:else if it && it.kind === "channel"}
-									<button
-										class="rail-conv"
-										class:on={tab.id === store.activeTabId}
-										onclick={() => (store.activeTabId = tab.id)}
-										title="#{it.title}"
-									>
-										<span class="rail-active-bar"></span>
+								<button
+									class="rail-conv"
+									class:on={tab.id === store.activeTabId}
+									onclick={() => (store.activeTabId = tab.id)}
+									title={tab.kind === "channel" ? "#" + tab.roomId : (tab.paneId || tab.sessionUuid?.slice(0, 8) || "session")}
+								>
+									<span class="rail-active-bar"></span>
+									{#if tab.kind === "channel"}
 										<span class="channel-hash">#</span>
-									</button>
-								{/if}
+									{:else}
+										<span class="pip ok rail-pip"></span>
+									{/if}
+								</button>
 							{/each}
 						</div>
 					</div>
@@ -147,7 +141,6 @@
 			<PanesArea
 				tabs={store.tabs}
 				activeTabId={store.activeTabId}
-				items={store.mergedItems}
 				paneSizes={store.paneSizes}
 				fullscreen={store.fullscreen}
 				view={store.view}
@@ -173,13 +166,8 @@
 				onStartFork={(i, m) => store.startFork(i, m)}
 				onCommitFork={() => store.commitFork()}
 				onCancelFork={() => store.cancelFork()}
-				onJumpToAgent={(agentId) => {
-					const agent = store.agents.find((a) => a.id === agentId);
-					if (!agent) return;
-					const target = store.items.find(
-						(it) => it.kind === "worktree" && it.host === agent.host,
-					);
-					if (target) store.openItem(target.id, { newPane: true });
+				onJumpToAgent={() => {
+					/* Agent jump removed pending lens-aware impl. */
 				}}
 				onOpenContract={(id) => store.openContract(id)}
 				onToggleFullscreen={() => store.toggleFullscreen()}

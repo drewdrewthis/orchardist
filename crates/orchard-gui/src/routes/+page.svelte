@@ -85,7 +85,19 @@
 			else if (entry.action === "toggle-view") store.toggleView();
 			return;
 		}
-		if (entry.itemId) store.openItem(entry.itemId);
+		if (entry.itemId) {
+			// Palette entries today carry legacy item ids — for channels
+			// the id is the room id; for worktrees we don't have a
+			// session keyed at the lens level here, so we surface a
+			// session-tab keyed by sessionUuid when present.
+			const channel = store.chatRooms.find((r) => r.id === entry.itemId);
+			if (channel) {
+				store.openChannel(channel.id);
+			}
+			// Worktree-keyed palette entries don't currently map to a
+			// session/pane identity — skip until palette emits row
+			// identity directly.
+		}
 	}
 
 	const contractItem = $derived(
@@ -133,7 +145,8 @@
 				console.warn("[orchard-gui] create_worktree failed:", err);
 			}
 		}
-		if (spec.worktreeId) store.openItem(spec.worktreeId, { newPane: true });
+		// Newly-created worktree: no session identity yet — the user can
+		// click its row in the sidebar once the daemon picks it up.
 	}}
 />
 

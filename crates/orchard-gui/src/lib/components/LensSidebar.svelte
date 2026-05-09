@@ -13,13 +13,22 @@
 	import { relTime } from "$lib/util/format";
 	import type { Agent } from "$lib/data/types";
 
+	/**
+	 * Click target — what the panel needs to render this row. Either a
+	 * channel roomId or a session keyed by paneId + sessionUuid. The
+	 * sidebar emits identity only; the panel runs its own query.
+	 */
+	export type SelectTarget =
+		| { kind: "channel"; roomId: string }
+		| { kind: "session"; paneId?: string; sessionUuid?: string };
+
 	type Props = {
 		now: number;
 		density: "comfortable" | "compact";
 		surface: "desktop" | "mobile";
 		selectedId: string | null;
 		agents: Agent[];
-		onSelect: (id: string, ev?: MouseEvent) => void;
+		onSelect: (target: SelectTarget, ev?: MouseEvent) => void;
 	};
 	let { now, density, surface, selectedId, agents, onSelect }: Props = $props();
 
@@ -51,7 +60,7 @@
 						{density}
 						{surface}
 						{agents}
-						{onSelect}
+						onSelect={(_id, ev) => onSelect({ kind: "channel", roomId: ch.id }, ev)}
 					/>
 				{/if}
 			{/each}
@@ -85,8 +94,12 @@
 							{now}
 							{density}
 							{surface}
-							selected={row.session.id === selectedId}
-							{onSelect}
+							selected={(row.session.pane?.paneId ?? row.session.sessionUuid) === selectedId}
+							onSelect={(_id, ev) => onSelect({
+								kind: "session",
+								paneId: row.session.pane?.paneId,
+								sessionUuid: row.session.sessionUuid,
+							}, ev)}
 						/>
 					{/each}
 				</div>
@@ -115,8 +128,12 @@
 					{now}
 					{density}
 					{surface}
-					selected={row.session.id === selectedId}
-					{onSelect}
+					selected={(row.session.pane?.paneId ?? row.session.sessionUuid) === selectedId}
+					onSelect={(_id, ev) => onSelect({
+						kind: "session",
+						paneId: row.session.pane?.paneId,
+						sessionUuid: row.session.sessionUuid,
+					}, ev)}
 				/>
 			{/each}
 		</div>
@@ -158,7 +175,11 @@
 									{density}
 									{surface}
 									selected={pane.paneId === selectedId}
-									{onSelect}
+									onSelect={(_id, ev) => onSelect({
+										kind: "session",
+										paneId: pane.paneId,
+										sessionUuid: pane.claudeInstance?.sessionUuid,
+									}, ev)}
 								/>
 							</div>
 						{/each}
@@ -196,8 +217,12 @@
 					{now}
 					{density}
 					{surface}
-					selected={row.worktree.id === selectedId}
-					{onSelect}
+					selected={(row.session?.pane?.paneId ?? row.session?.sessionUuid) === selectedId}
+					onSelect={(_id, ev) => onSelect({
+						kind: "session",
+						paneId: row.session?.pane?.paneId,
+						sessionUuid: row.session?.sessionUuid,
+					}, ev)}
 				/>
 			{/each}
 		</div>

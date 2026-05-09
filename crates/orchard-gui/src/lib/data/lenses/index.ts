@@ -19,6 +19,7 @@ export {
 	type AttentionTier,
 } from "./attention";
 export { fetchIssues, type IssueRow } from "./issue";
+export { fetchPanel, type PanelData } from "./panel";
 export type {
 	SessionCardT,
 	PaneCardT,
