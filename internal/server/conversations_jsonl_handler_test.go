@@ -24,24 +24,27 @@ func (s *stubPathLookup) PathForSessionUUID(_ context.Context, uuid string) (str
 	return p, ok
 }
 
-// makeFixture writes content to a temp file and returns its path plus a
-// stub lookup pointing uuid at it.
-func makeFixture(t *testing.T, uuid string, content []byte) (string, *stubPathLookup) {
+// makeFixture writes content to a temp file and returns its path, the root
+// directory, and a stub lookup pointing uuid at the file. The root is the
+// temp directory itself — callers that need path-traversal validation to pass
+// must use this root when constructing the handler.
+func makeFixture(t *testing.T, uuid string, content []byte) (path string, root string, lookup *stubPathLookup) {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, uuid+".jsonl")
-	if err := os.WriteFile(path, content, 0o600); err != nil {
+	p := filepath.Join(dir, uuid+".jsonl")
+	if err := os.WriteFile(p, content, 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	lookup := &stubPathLookup{m: map[string]string{uuid: path}}
-	return path, lookup
+	lk := &stubPathLookup{m: map[string]string{uuid: p}}
+	return p, dir, lk
 }
 
 // newTestServer spins up an httptest.Server with the handler mounted at
-// /v1/conversations/. It returns the server and its base URL.
-func newTestServer(t *testing.T, lookup PathLookup) (*httptest.Server, string) {
+// /v1/conversations/. root is the projects root passed to the handler for
+// path-traversal validation. It returns the server and its base URL.
+func newTestServer(t *testing.T, lookup PathLookup, root string) (*httptest.Server, string) {
 	t.Helper()
-	h := NewConversationsJSONLHandler(lookup, "/unused-root-for-this-task", slog.Default())
+	h := NewConversationsJSONLHandler(lookup, root, slog.Default())
 	mux := http.NewServeMux()
 	mux.Handle("/v1/conversations/", h)
 	srv := httptest.NewServer(mux)
@@ -63,8 +66,8 @@ func TestConversationsJSONL_FullGet(t *testing.T) {
 	const uuid = "9f8e-uuid-1"
 	// Build 4321-byte fixture (AC2 specifies exactly 4321 bytes on disk).
 	content := bytes.Repeat([]byte("x"), 4321)
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	url := fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid)
 	resp, err := http.Get(url) //nolint:noctx
@@ -111,8 +114,8 @@ func TestConversationsJSONL_ContentTypeNotSniffed(t *testing.T) {
 	const uuid = "ct-sniff-test"
 	// JSON-looking content that stdlib might sniff as application/json.
 	content := []byte(`{"type":"user","message":"hello"}` + "\n")
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	resp, err := http.Get(fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid)) //nolint:noctx
 	if err != nil {
@@ -137,9 +140,9 @@ func TestConversationsJSONL_ContentTypeNotSniffed(t *testing.T) {
 func TestConversationsJSONL_ETagStable(t *testing.T) {
 	const uuid = "etag-stable-uuid"
 	content := bytes.Repeat([]byte("line\n"), 100)
-	_, lookup := makeFixture(t, uuid, content)
+	_, root, lookup := makeFixture(t, uuid, content)
 
-	h := NewConversationsJSONLHandler(lookup, "/unused", slog.Default())
+	h := NewConversationsJSONLHandler(lookup, root, slog.Default())
 
 	firstETag := etagForRequest(t, h, uuid)
 	secondETag := etagForRequest(t, h, uuid)
@@ -159,9 +162,9 @@ func TestConversationsJSONL_ETagStable(t *testing.T) {
 func TestConversationsJSONL_ETagChanges(t *testing.T) {
 	const uuid = "etag-change-uuid"
 	content := bytes.Repeat([]byte("line\n"), 100)
-	path, lookup := makeFixture(t, uuid, content)
+	path, root, lookup := makeFixture(t, uuid, content)
 
-	h := NewConversationsJSONLHandler(lookup, "/unused", slog.Default())
+	h := NewConversationsJSONLHandler(lookup, root, slog.Default())
 
 	etagBefore := etagForRequest(t, h, uuid)
 	if etagBefore == "" {
@@ -221,8 +224,8 @@ func etagForRequest(t *testing.T, h http.Handler, uuid string) string {
 func TestConversationsJSONL_RangeFromN(t *testing.T) {
 	const uuid = "range-from-n"
 	content := makeCountedContent(4321)
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	req, _ := http.NewRequest(http.MethodGet, //nolint:noctx
 		fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid), nil)
@@ -268,8 +271,8 @@ func TestConversationsJSONL_RangeFromN(t *testing.T) {
 func TestConversationsJSONL_RangeAB(t *testing.T) {
 	const uuid = "range-a-b"
 	content := makeCountedContent(4321)
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	req, _ := http.NewRequest(http.MethodGet, //nolint:noctx
 		fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid), nil)
@@ -310,8 +313,8 @@ func TestConversationsJSONL_RangeAB(t *testing.T) {
 func TestConversationsJSONL_RangeOutOfRange(t *testing.T) {
 	const uuid = "range-oor"
 	content := makeCountedContent(4321)
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	req, _ := http.NewRequest(http.MethodGet, //nolint:noctx
 		fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid), nil)
@@ -347,8 +350,8 @@ func TestConversationsJSONL_RangeOutOfRange(t *testing.T) {
 func TestConversationsJSONL_IfNoneMatch_Match(t *testing.T) {
 	const uuid = "inm-match"
 	content := bytes.Repeat([]byte("line\n"), 200)
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	// First request — capture the ETag.
 	firstURL := fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid)
@@ -395,8 +398,8 @@ func TestConversationsJSONL_IfNoneMatch_Match(t *testing.T) {
 func TestConversationsJSONL_IfNoneMatch_NoMatch(t *testing.T) {
 	const uuid = "inm-no-match"
 	content := bytes.Repeat([]byte("line\n"), 200)
-	path, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	path, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	url := fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid)
 
@@ -459,8 +462,8 @@ func TestConversationsJSONL_IfNoneMatch_NoMatch(t *testing.T) {
 func TestConversationsJSONL_MethodNotAllowed(t *testing.T) {
 	const uuid = "method-test"
 	content := []byte("hello\n")
-	_, lookup := makeFixture(t, uuid, content)
-	_, baseURL := newTestServer(t, lookup)
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		method := method
@@ -485,7 +488,7 @@ func TestConversationsJSONL_MethodNotAllowed(t *testing.T) {
 
 func TestConversationsJSONL_UnknownUUID_404(t *testing.T) {
 	lookup := &stubPathLookup{m: map[string]string{}}
-	_, baseURL := newTestServer(t, lookup)
+	_, baseURL := newTestServer(t, lookup, t.TempDir())
 
 	resp, err := http.Get( //nolint:noctx
 		fmt.Sprintf("%s/v1/conversations/does-not-exist/jsonl", baseURL))
@@ -496,6 +499,207 @@ func TestConversationsJSONL_UnknownUUID_404(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// =============================================================================
+// AC5 — known UUID whose backing file was deleted returns 404 (not 500)
+// =============================================================================
+
+// TestConversationsJSONL_KnownUUID_FileDeleted_404 primes the provider cache
+// with a path, deletes the file from disk (simulating a race where the watcher
+// hasn't yet invalidated the entry), and asserts the response is 404, not 500.
+//
+// Feature: "GET for a known sessionUuid whose backing file disappeared returns 404"
+func TestConversationsJSONL_KnownUUID_FileDeleted_404(t *testing.T) {
+	const uuid = "deleted-file-uuid"
+	content := []byte(`{"type":"user"}` + "\n")
+	path, root, lookup := makeFixture(t, uuid, content)
+
+	// Delete the file from disk to simulate the race condition.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove fixture: %v", err)
+	}
+
+	_, baseURL := newTestServer(t, lookup, root)
+
+	resp, err := http.Get( //nolint:noctx
+		fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, uuid))
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 (file deleted, should not be 500)", resp.StatusCode)
+	}
+}
+
+// =============================================================================
+// AC6 — path-traversal in URL returns 404 without opening out-of-root files
+// =============================================================================
+
+// recordingPathLookup records every UUID key it receives, for audit in tests.
+type recordingPathLookup struct {
+	received []string        // keys passed to PathForSessionUUID
+	inner    *stubPathLookup // may be nil (returns ("", false) always)
+}
+
+func (r *recordingPathLookup) PathForSessionUUID(_ context.Context, uuid string) (string, bool) {
+	r.received = append(r.received, uuid)
+	if r.inner != nil {
+		return r.inner.PathForSessionUUID(context.Background(), uuid)
+	}
+	return "", false
+}
+
+// TestConversationsJSONL_PathTraversalURL_404 asserts that a URL with a
+// %-encoded path traversal in the sessionUuid segment returns 404.  Go's
+// net/http server URL-decodes the path before the handler sees it, so
+// r.URL.Path will contain the literal "../../etc/passwd" string. The handler
+// MUST NOT join this onto the filesystem — it passes it as an opaque key to
+// PathLookup, which returns ("", false), so the request 404s naturally.
+//
+// The recording lookup additionally verifies that the only key forwarded to
+// the provider is the URL-decoded string — never a filesystem path.
+//
+// Feature: "Encoded path-traversal segment in the sessionUuid does not escape the projects root"
+// Feature: "Handler does not accept filesystem paths in the URL — only sessionUuid lookup"
+func TestConversationsJSONL_PathTraversalURL_404(t *testing.T) {
+	root := t.TempDir()
+	rec := &recordingPathLookup{}
+	_, baseURL := newTestServer(t, rec, root)
+
+	// %-encoded traversal in the URL.  Go's http server will decode this to
+	// the literal path "/v1/conversations/../../etc/passwd/jsonl" before our
+	// handler sees r.URL.Path.
+	resp, err := http.Get( //nolint:noctx
+		baseURL+"/v1/conversations/..%2F..%2Fetc%2Fpasswd/jsonl")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for path-traversal URL", resp.StatusCode)
+	}
+
+	// The recording lookup must have been called with the opaque decoded string,
+	// NOT a filesystem path.  It must never have received anything that looks
+	// like it was joined onto the root.
+	for _, key := range rec.received {
+		if filepath.IsAbs(key) {
+			t.Errorf("lookup received an absolute path %q — must be opaque UUID only", key)
+		}
+		// The key may contain ".." (the URL-decoded form) but the handler must
+		// NOT have opened /etc/passwd or any path under /etc.
+		// Verify: no key is "/etc/passwd" or starts with "/".
+		if key == "/etc/passwd" {
+			t.Errorf("lookup received /etc/passwd as a key — path traversal not defended")
+		}
+	}
+}
+
+// TestConversationsJSONL_OpaqueSessionUUID asserts that the handler treats the
+// UUID segment as an opaque cache key and never joins it onto the filesystem.
+//
+// Feature: "Handler does not accept filesystem paths in the URL — only sessionUuid lookup"
+func TestConversationsJSONL_OpaqueSessionUUID(t *testing.T) {
+	root := t.TempDir()
+	rec := &recordingPathLookup{}
+	h := NewConversationsJSONLHandler(rec, root, slog.Default())
+
+	// A request whose sessionUuid segment contains a decoded path traversal.
+	// (This is what r.URL.Path contains after Go's URL decoding of ..%2F..%2F.)
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/conversations/../../etc/passwd/jsonl", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+
+	// The UUID key received by the lookup must be the raw string
+	// "../../etc/passwd" (the opaque segment), not any filesystem path.
+	if len(rec.received) != 1 {
+		t.Fatalf("lookup called %d times, want 1", len(rec.received))
+	}
+	if got := rec.received[0]; got != "../../etc/passwd" {
+		t.Errorf("lookup received key %q, want %q", got, "../../etc/passwd")
+	}
+}
+
+// TestConversationsJSONL_OutOfRoot_404 is the belt-and-braces test: even if
+// the PathLookup misbehaves and returns a path outside the projects root, the
+// handler must return 404 without opening the file.
+//
+// Feature: "Handler refuses any resolved path that is not a descendant of the projects root"
+func TestConversationsJSONL_OutOfRoot_404(t *testing.T) {
+	root := t.TempDir()
+
+	// Stub that returns /etc/passwd (or a system file that exists) for any key.
+	// We use /etc/passwd on Unix; fall back to a temp file in a sibling dir.
+	outsidePath := "/etc/passwd"
+	if _, err := os.Stat(outsidePath); err != nil {
+		// On systems where /etc/passwd doesn't exist, create a file outside root.
+		sibling := t.TempDir() // different dir from root
+		outsidePath = filepath.Join(sibling, "outside.txt")
+		if writeErr := os.WriteFile(outsidePath, []byte("secret\n"), 0o600); writeErr != nil {
+			t.Fatalf("write outside file: %v", writeErr)
+		}
+	}
+
+	lookup := &stubPathLookup{m: map[string]string{
+		"bad-uuid": outsidePath,
+	}}
+	h := NewConversationsJSONLHandler(lookup, root, slog.Default())
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/conversations/bad-uuid/jsonl", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 when lookup returns out-of-root path", rr.Code)
+	}
+}
+
+// TestConversationsJSONL_SymlinkOutsideRoot_404 creates a real file outside
+// the configured root, places a symlink to it inside the root, points the
+// provider at the symlink, and asserts the handler returns 404.
+//
+// Feature: "Handler refuses any resolved path that is not a descendant of the projects root"
+func TestConversationsJSONL_SymlinkOutsideRoot_404(t *testing.T) {
+	root := t.TempDir()   // the configured root
+	outside := t.TempDir() // a second temp dir, not under root
+
+	// Create a real file outside the root.
+	outsideFile := filepath.Join(outside, "secret.jsonl")
+	if err := os.WriteFile(outsideFile, []byte("secret content\n"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	// Create a symlink inside root pointing to the outside file.
+	symlinkPath := filepath.Join(root, "link.jsonl")
+	if err := os.Symlink(outsideFile, symlinkPath); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	// Provider returns the symlink path (which is inside root on the filesystem
+	// level, but resolves via EvalSymlinks to outside).
+	lookup := &stubPathLookup{m: map[string]string{
+		"symlink-uuid": symlinkPath,
+	}}
+	h := NewConversationsJSONLHandler(lookup, root, slog.Default())
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/conversations/symlink-uuid/jsonl", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for symlink pointing outside root", rr.Code)
 	}
 }
 

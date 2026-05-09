@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,30 +32,99 @@ type PathLookup interface {
 // and set before handing off to ServeContent so the stdlib conditional
 // logic applies it.
 //
-// root is the configured projects root (belt-and-braces path validation
-// is added in a later task; the parameter is part of the constructor
-// signature now so we do not need to change callers later).
+// root is the configured projects root. At construction time the handler
+// computes a canonical clean root via filepath.EvalSymlinks (falling back
+// to filepath.Clean(filepath.Abs) when the root does not yet exist). Per
+// request, any path returned by the PathLookup is validated to be a
+// descendant of cleanRoot using filepath.Rel — the classic HasPrefix-bypass
+// bug is avoided by design.
 //
 // Errors:
 //   - 405 for any method other than GET or HEAD.
 //   - 404 when the sessionUuid is unknown to lookup.
+//   - 404 when the resolved path is not a descendant of the projects root.
 //   - 404 when the file is not found on disk (fs.ErrNotExist).
 //   - 500 for any other OS error.
 func NewConversationsJSONLHandler(lookup PathLookup, root string, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	cleanRoot := computeCleanRoot(root, logger)
+
 	return &conversationsJSONLHandler{
-		lookup: lookup,
-		root:   root,
-		logger: logger,
+		lookup:    lookup,
+		root:      root,
+		cleanRoot: cleanRoot,
+		logger:    logger,
 	}
 }
 
 type conversationsJSONLHandler struct {
-	lookup PathLookup
-	root   string
-	logger *slog.Logger
+	lookup    PathLookup
+	root      string
+	cleanRoot string // canonical root for path-traversal validation
+	logger    *slog.Logger
+}
+
+// computeCleanRoot computes the canonical form of root for path-traversal
+// validation. EvalSymlinks is preferred; if the directory does not exist yet
+// (fresh install), we fall back to Clean(Abs). A warning is logged in the
+// fallback case but the daemon continues to start.
+func computeCleanRoot(root string, logger *slog.Logger) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		// filepath.Abs only fails when os.Getwd fails — extremely unusual.
+		logger.Warn("conversations jsonl: filepath.Abs failed for root, using raw value",
+			"root", root, "err", err)
+		return filepath.Clean(root)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// Root doesn't exist yet (fresh install) or is a broken symlink.
+		logger.Warn("conversations jsonl: EvalSymlinks failed for root, falling back to Clean(Abs)",
+			"root", root, "err", err)
+		return filepath.Clean(abs)
+	}
+	return resolved
+}
+
+// validatePath checks that candidate resolves to a path that is a descendant
+// of cleanRoot. It resolves symlinks on the candidate path (belt-and-braces:
+// a symlink inside the root pointing outside is still rejected) and uses
+// filepath.Rel to avoid the HasPrefix-bypass bug.
+//
+// Returns nil when candidate is safe to open, or a non-nil error (which the
+// caller maps to 404 — the exact reason is intentionally not exposed to HTTP
+// clients).
+func validatePath(cleanRoot, candidate string) error {
+	// Step 1: clean without symlink resolution first, so we can use the
+	// cleaned path as input to EvalSymlinks.
+	cleaned := filepath.Clean(candidate)
+
+	// Step 2: resolve symlinks so a symlink inside root that points outside
+	// is caught.
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		// File doesn't exist, is a dangling symlink, or permission denied.
+		// Treat as a validation failure (caller will surface as 404).
+		return fmt.Errorf("EvalSymlinks(%q): %w", cleaned, err)
+	}
+
+	// Step 3: use filepath.Rel — NOT strings.HasPrefix — to check descent.
+	// HasPrefix has the classic bypass bug: /foo/bar HasPrefix /foo is true,
+	// but /foobar HasPrefix /foo is also true if you use string prefix alone.
+	// filepath.Rel("/a/b", "/a/bc") → "../bc" (starts with ".."), which we reject.
+	rel, err := filepath.Rel(cleanRoot, resolved)
+	if err != nil {
+		return fmt.Errorf("filepath.Rel(%q, %q): %w", cleanRoot, resolved, err)
+	}
+	// rel starts with ".." when resolved is not under cleanRoot.
+	// rel == ".." is the exact-parent case, also rejected.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q is not under root %q (rel=%q)", resolved, cleanRoot, rel)
+	}
+	return nil
 }
 
 func (h *conversationsJSONLHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -80,8 +150,19 @@ func (h *conversationsJSONLHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Belt-and-braces: validate that the resolved path is a descendant of
+	// the configured root. This guards against a misbehaving provider and
+	// against symlinks that point outside the root. Uses filepath.Rel, not
+	// strings.HasPrefix, to avoid the classic prefix-bypass bug.
+	if err := validatePath(h.cleanRoot, path); err != nil {
+		h.logger.Warn("conversations jsonl: path validation rejected candidate",
+			"cleanRoot", h.cleanRoot, "candidate", path, "err", err)
+		http.NotFound(w, r)
+		return
+	}
+
 	// Open the file. Map fs.ErrNotExist → 404; everything else → 500.
-	f, err := os.Open(path) //nolint:gosec // path comes from the provider, not from user input
+	f, err := os.Open(path) //nolint:gosec // path is validated against cleanRoot above
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			http.NotFound(w, r)
