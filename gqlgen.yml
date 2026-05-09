@@ -49,6 +49,10 @@ models:
         resolver: true
       processes:
         resolver: true
+      tmuxPanes:
+        resolver: true
+      tmuxSession:
+        resolver: true
 
   # Host.processes accepts a filter argument, so route it through a custom
   # resolver instead of struct-field auto-binding. The resolver consults the

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -103,6 +104,11 @@ func firstNonFlagArg(args []string) string {
 // a TmuxSession invalidation. The TmuxServer subscription rides the
 // same fan-out (sessions firehose) because the briefing's mapping
 // proves the wiring exists.
+//
+// Per #464 the adapter coalesces session/window/pane discovery into a
+// single `list-panes -a -F <combined-format>` call; the stub returns
+// the combined-format line on list-panes (and only that) for the
+// one-session state.
 func stubTmuxRunner() *stubRunner {
 	const fieldSep = "\x01"
 	emptyState := func(name string, args ...string) ([]byte, error) {
@@ -110,23 +116,29 @@ func stubTmuxRunner() *stubRunner {
 		if firstNonFlagArg(args) == "info" {
 			return []byte("ok\n"), nil
 		}
-		// list-sessions / list-windows / list-panes / list-clients all
-		// return empty in this state.
+		// list-* all return empty in this state.
 		return []byte(""), nil
 	}
 	oneSession := func(name string, args ...string) ([]byte, error) {
 		switch firstNonFlagArg(args) {
 		case "info":
 			return []byte("ok\n"), nil
-		case "list-sessions":
-			// session_name, session_created, session_attached, session_activity, session_windows, session_window_index
-			line := "alpha" + fieldSep + "1700000000" + fieldSep + "0" + fieldSep + "1700000010" + fieldSep + "1" + fieldSep + "0\n"
-			return []byte(line), nil
-		case "list-windows":
-			// session_name, window_index, window_name, window_active, window_panes, current_pane
-			line := "alpha" + fieldSep + "0" + fieldSep + "main" + fieldSep + "1" + fieldSep + "1" + fieldSep + "%0\n"
-			return []byte(line), nil
-		case "list-panes", "list-clients":
+		case "list-panes":
+			// Combined format from adapter.go listAllFormat:
+			// session_name, session_created, session_attached, session_activity,
+			// session_windows, session_window_index, window_index, window_name,
+			// window_active, window_panes, window_active_pane, pane_id,
+			// pane_title, pane_current_command, pane_pid, pane_width,
+			// pane_height, pane_dead.
+			fields := []string{
+				"alpha", "1700000000", "0", "1700000010", "1", "0",
+				"0", "main", "1", "1", "%0",
+				"%0", "main", "bash", "1234", "80", "24", "0",
+			}
+			return []byte(strings.Join(fields, fieldSep) + "\n"), nil
+		case "list-sessions", "list-windows", "list-clients":
+			// Legacy paths — kept for any caller that still routes through
+			// these (e.g. parser unit tests). Hot path uses list-panes.
 			return []byte(""), nil
 		}
 		return []byte(""), nil

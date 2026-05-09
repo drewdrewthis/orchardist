@@ -2,12 +2,70 @@ package ps
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// fakeRunner is a test double for CommandRunner. It records every Run
+// invocation and returns canned (output, err) pairs indexed by call order.
+// If responses is exhausted it returns ("", nil) for any subsequent call.
+type fakeRunner struct {
+	mu        sync.Mutex
+	calls     []fakeCall
+	responses []fakeResponse
+}
+
+// fakeCall records a single Run invocation.
+type fakeCall struct {
+	Name string
+	Args []string
+}
+
+// fakeResponse is the canned reply for one Run call.
+type fakeResponse struct {
+	Out []byte
+	Err error
+}
+
+// Run records the call and returns the next canned response.
+func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	argsCopy := make([]string, len(args))
+	copy(argsCopy, args)
+	f.calls = append(f.calls, fakeCall{Name: name, Args: argsCopy})
+	if len(f.responses) == 0 {
+		return nil, nil
+	}
+	resp := f.responses[0]
+	f.responses = f.responses[1:]
+	return resp.Out, resp.Err
+}
+
+// Calls returns a snapshot of recorded invocations.
+func (f *fakeRunner) Calls() []fakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]fakeCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// buildLsofBlock builds the -F output block for one pid and path:
+//
+//	p<pid>
+//	fcwd
+//	n<path>
+func buildLsofBlock(pid int, path string) string {
+	return fmt.Sprintf("p%d\nfcwd\nn%s\n", pid, path)
+}
 
 // TestAdapter_FetchAll_RealPs invokes the actual `ps` binary on the host
 // and asserts the test process itself (os.Getpid) is in the result.
@@ -137,5 +195,194 @@ func drainBurst(t *testing.T, ch <-chan ProcessID, window time.Duration) {
 		case <-deadline:
 			return
 		}
+	}
+}
+
+// TestFetchCwdsDarwin_EmptyInput verifies that fetchCwdsDarwin with an
+// empty pid list returns an empty map without invoking lsof.
+func TestFetchCwdsDarwin_EmptyInput(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fetchCwdsDarwin is darwin-only")
+	}
+	fr := &fakeRunner{}
+	a := NewAdapter("local").WithRunner(fr)
+	ctx := context.Background()
+
+	got, err := a.fetchCwdsDarwin(ctx, []int{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+	if calls := fr.Calls(); len(calls) != 0 {
+		t.Errorf("expected 0 runner calls, got %d", len(calls))
+	}
+}
+
+// TestFetchCwdsDarwin_SinglePid verifies that a single-pid lsof output
+// block is parsed into a map with the correct cwd.
+func TestFetchCwdsDarwin_SinglePid(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fetchCwdsDarwin is darwin-only")
+	}
+	raw := []byte("p4242\nfcwd\nn/tmp/foo\n")
+	fr := &fakeRunner{responses: []fakeResponse{{Out: raw, Err: nil}}}
+	a := NewAdapter("local").WithRunner(fr)
+	ctx := context.Background()
+
+	got, err := a.fetchCwdsDarwin(ctx, []int{4242})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got[4242] != "/tmp/foo" {
+		t.Errorf("cwd for pid 4242 = %q, want %q", got[4242], "/tmp/foo")
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 entry, got %d", len(got))
+	}
+}
+
+// TestFetchCwdsDarwin_MultiPid verifies that a 50-pid output block is
+// fully parsed into a 50-entry map.
+func TestFetchCwdsDarwin_MultiPid(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fetchCwdsDarwin is darwin-only")
+	}
+	const n = 50
+	pids := make([]int, n)
+	want := make(map[int]string, n)
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		pid := 1000 + i
+		path := fmt.Sprintf("/workspace/repo%d", i)
+		pids[i] = pid
+		want[pid] = path
+		sb.WriteString(buildLsofBlock(pid, path))
+	}
+
+	fr := &fakeRunner{responses: []fakeResponse{{Out: []byte(sb.String()), Err: nil}}}
+	a := NewAdapter("local").WithRunner(fr)
+	ctx := context.Background()
+
+	got, err := a.fetchCwdsDarwin(ctx, pids)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != n {
+		t.Fatalf("expected %d entries, got %d", n, len(got))
+	}
+	for pid, wantPath := range want {
+		if got[pid] != wantPath {
+			t.Errorf("cwd[%d] = %q, want %q", pid, got[pid], wantPath)
+		}
+	}
+}
+
+// TestFetchCwdsDarwin_SingleShellout proves that N pids produce exactly
+// one lsof invocation with a comma-joined -p argument.
+func TestFetchCwdsDarwin_SingleShellout(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fetchCwdsDarwin is darwin-only")
+	}
+	const n = 50
+	pids := make([]int, n)
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		pids[i] = 2000 + i
+		sb.WriteString(buildLsofBlock(2000+i, fmt.Sprintf("/dir/%d", i)))
+	}
+
+	fr := &fakeRunner{responses: []fakeResponse{{Out: []byte(sb.String()), Err: nil}}}
+	a := NewAdapter("local").WithRunner(fr)
+	ctx := context.Background()
+
+	if _, err := a.fetchCwdsDarwin(ctx, pids); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	calls := fr.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 lsof invocation, got %d", len(calls))
+	}
+
+	// The -p flag must be present and its value must be a comma-separated
+	// list of all requested pids — not 50 separate invocations.
+	call := calls[0]
+	if call.Name != "lsof" {
+		t.Errorf("expected command 'lsof', got %q", call.Name)
+	}
+	pFlagIdx := -1
+	for i, arg := range call.Args {
+		if arg == "-p" && i+1 < len(call.Args) {
+			pFlagIdx = i + 1
+			break
+		}
+	}
+	if pFlagIdx == -1 {
+		t.Fatalf("no -p flag found in lsof args: %v", call.Args)
+	}
+	pidArg := call.Args[pFlagIdx]
+	parts := strings.Split(pidArg, ",")
+	if len(parts) != n {
+		t.Errorf("-p arg has %d parts (comma-separated), want %d; arg=%q", len(parts), n, pidArg)
+	}
+}
+
+// TestFetchCwdsDarwin_PartialOutput verifies that when lsof returns data
+// for only 2 of 3 requested pids, the map contains exactly those 2 entries.
+func TestFetchCwdsDarwin_PartialOutput(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fetchCwdsDarwin is darwin-only")
+	}
+	// lsof returns blocks for pids 100 and 200 but not 300.
+	raw := []byte(buildLsofBlock(100, "/a") + buildLsofBlock(200, "/b"))
+	fr := &fakeRunner{responses: []fakeResponse{{Out: raw, Err: nil}}}
+	a := NewAdapter("local").WithRunner(fr)
+	ctx := context.Background()
+
+	got, err := a.fetchCwdsDarwin(ctx, []int{100, 200, 300})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 entries, got %d: %v", len(got), got)
+	}
+	if got[100] != "/a" {
+		t.Errorf("cwd[100] = %q, want %q", got[100], "/a")
+	}
+	if got[200] != "/b" {
+		t.Errorf("cwd[200] = %q, want %q", got[200], "/b")
+	}
+	if _, present := got[300]; present {
+		t.Errorf("cwd[300] should be absent, got %q", got[300])
+	}
+}
+
+// TestFetchCwdsDarwin_NonZeroExitWithPartialOutput verifies that when lsof
+// exits non-zero but still emits partial stdout, the parser returns the
+// pids that were present and does not propagate the exit error.
+func TestFetchCwdsDarwin_NonZeroExitWithPartialOutput(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fetchCwdsDarwin is darwin-only")
+	}
+	partial := []byte(buildLsofBlock(10, "/x") + buildLsofBlock(20, "/y"))
+	stubErr := errors.New("lsof: exit status 1")
+	fr := &fakeRunner{responses: []fakeResponse{{Out: partial, Err: stubErr}}}
+	a := NewAdapter("local").WithRunner(fr)
+	ctx := context.Background()
+
+	got, err := a.fetchCwdsDarwin(ctx, []int{10, 20, 30})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 entries from partial output, got %d: %v", len(got), got)
+	}
+	if got[10] != "/x" {
+		t.Errorf("cwd[10] = %q, want %q", got[10], "/x")
+	}
+	if got[20] != "/y" {
+		t.Errorf("cwd[20] = %q, want %q", got[20], "/y")
 	}
 }

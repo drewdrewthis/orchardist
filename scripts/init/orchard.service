@@ -11,6 +11,17 @@
 # The daemon traps SIGTERM via signal.NotifyContext so `systemctl --user
 # stop orchard.service` shuts the GraphQL server down cleanly with the
 # default 5s grace.
+#
+# UPGRADING from a pre-#464 install: this unit previously enabled
+# PrivateTmp=yes and ProtectHome=read-only. Both are removed (see #464
+# for the post-mortem). After replacing the unit file you MUST do a
+# clean restart, not just `daemon-reload`, so the running daemon's
+# mount namespace re-binds to the host's /tmp:
+#   systemctl --user daemon-reload
+#   systemctl --user restart orchard.service
+# Without the restart, the running process keeps its old (private)
+# mount namespace and continues to be unable to see the user's tmux
+# socket at /tmp/tmux-<uid>/default.
 
 [Unit]
 Description=orchard daemon — read-only join layer over local developer state
@@ -26,10 +37,17 @@ KillSignal=SIGTERM
 TimeoutStopSec=10s
 
 # Security hygiene — orchard reads developer state, doesn't need much.
+# NOTE: PrivateTmp=yes and ProtectHome=read-only were intentionally
+# removed in #464. PrivateTmp would isolate /tmp from the user's
+# namespace, hiding the tmux socket at /tmp/tmux-<uid>/default and
+# forcing each daemon-side `tmux` invocation to spawn its own throwaway
+# server. ProtectHome would block reads under ~/ outside the explicit
+# ReadWritePaths, breaking provider access to the user's tmux state.
+# TMUX_TMPDIR is intentionally NOT set: the daemon's `tmux` client must
+# inherit the user's $TMPDIR (or the system default /tmp) so it talks
+# to the same socket the user's interactive sessions use.
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=yes
 
 # Allow writing to the orchard state directory.
 ReadWritePaths=%h/.local/state/orchard %h/.config/orchard

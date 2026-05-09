@@ -691,13 +691,65 @@ func (r *tmuxPaneResolver) WatchingClients(ctx context.Context, obj *graphql1.Tm
 	return out, nil
 }
 
-// Process is the resolver for tmuxPane.process.
+// Process returns the OS-level Process for the pane's foreground pid.
+// Returns nil when the pane has no current pid, or when the pid is absent
+// from the cached ps snapshot (process exited or not yet observed).
+// cwd resolution is delegated to processResolver.Cwd and only fires when the
+// client selects the cwd field (gqlgen selection-set lazy evaluation).
+//
+// Federation note: the host segment of the pane id is preserved on the
+// projected Process node (via splitTmuxPaneID) so a future federated lookup
+// will attribute the Process to the correct peer host. Today this is a
+// regression guard only — `lookupPane` itself only resolves panes from the
+// local tmux snapshot, so peer-host pane ids return nil before reaching the
+// projection step. End-to-end peer lookup lands with `Host.tmuxSessions`
+// federation (tracked separately).
 func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.Process, error) {
-	return nil, nil
+	if r.PS == nil {
+		return nil, nil
+	}
+	pane, ok := r.lookupPane(obj.ID)
+	if !ok || pane.CurrentPid == 0 {
+		return nil, nil
+	}
+	host, _, ok := splitTmuxPaneID(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	target := ps.ProcessID{Host: host, PID: pane.CurrentPid}
+	got, _, err := r.PS.GetMany(ctx, []ps.ProcessID{target})
+	if err != nil {
+		return nil, nil
+	}
+	proc, ok := got[target]
+	if !ok {
+		return nil, nil
+	}
+	return projectProcess(&proc, host), nil
 }
 
-// ClaudeInstance is the resolver for tmuxPane.claudeInstance.
+// ClaudeInstance resolves the ClaudeInstance that is running inside this
+// pane. The lookup walks all cached instances from the claudeinstance.Provider
+// and returns the first one whose Pane.ID matches obj.ID. This is O(N) in the
+// number of tracked claude processes (typically < 10 on any one host), so no
+// dataloader is needed here.
+//
+// Returns (nil, nil) when:
+//   - r.ClaudeInstance is not wired (provider not available)
+//   - no tracked instance has a pane matching this pane's ID
 func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
+	if r.Resolver.ClaudeInstance == nil {
+		return nil, nil
+	}
+	instances, err := r.Resolver.ClaudeInstance.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.Pane != nil && inst.Pane.ID == obj.ID {
+			return inst, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -1332,12 +1384,19 @@ func stripContractIDPrefix(id string) string {
 	return id
 }
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
+	// Host defaults to "local" so that sibling resolvers (TmuxPanes,
+	// TmuxSession) that compare obj.Host against pane.Key.Host see the
+	// correct value when the worktree is locally discovered.
+	// Workstream F will populate this from the remote host id once
+	// federated discovery lands; for now the host resolver also returns
+	// "local" unconditionally. (#511)
 	return &graphql1.Worktree{
 		ID:     string(w.ID),
 		Path:   w.Path,
 		Branch: w.Branch,
 		Head:   w.Head,
 		Bare:   w.Bare,
+		Host:   "local",
 	}
 }
 func projectProcess(p *ps.Process, hostID string) *graphql1.Process {

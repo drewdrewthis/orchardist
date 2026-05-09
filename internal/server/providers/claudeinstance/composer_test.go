@@ -266,6 +266,71 @@ func TestComposer_Compose_UnknownStateStaysNoClaude(t *testing.T) {
 	}
 }
 
+// TestComposer_ResolvePid_HeartbeatPidWins asserts that when hb.ClaudePid is
+// non-zero, resolvePid returns it regardless of any pane values (feature file
+// lines 174-179: "prefers heartbeat ClaudePid over pane.CurrentPid when ClaudePid
+// is non-zero").
+func TestComposer_ResolvePid_HeartbeatPidWins(t *testing.T) {
+	c := &Composer{}
+	panePid := int64(88631)
+	pane := &graphql.TmuxPane{
+		ID:         "TmuxPane:local:%59",
+		CurrentPid: &panePid,
+	}
+	hb := Heartbeat{ClaudePid: 12345}
+	got := c.resolvePid(hb, pane)
+	if got != 12345 {
+		t.Errorf("resolvePid = %d, want 12345 (heartbeat ClaudePid must win)", got)
+	}
+}
+
+// TestComposer_ResolvePid_FallsBackToPaneCurrentPid asserts that when
+// hb.ClaudePid is 0 and the matched pane has a non-nil, positive CurrentPid,
+// resolvePid returns int(*pane.CurrentPid) (feature file lines 181-186:
+// "falls back to pane.CurrentPid when heartbeat ClaudePid is zero and a pane
+// is matched").
+func TestComposer_ResolvePid_FallsBackToPaneCurrentPid(t *testing.T) {
+	c := &Composer{}
+	panePid := int64(88631)
+	pane := &graphql.TmuxPane{
+		ID:         "TmuxPane:local:%59",
+		CurrentPid: &panePid,
+	}
+	hb := Heartbeat{ClaudePid: 0}
+	got := c.resolvePid(hb, pane)
+	if got != 88631 {
+		t.Errorf("resolvePid = %d, want 88631 (pane.CurrentPid fallback)", got)
+	}
+}
+
+// TestComposer_ResolvePid_NilPaneReturnsZero asserts that when hb.ClaudePid is
+// 0 and pane is nil, resolvePid returns 0 (feature file lines 188-193: "returns 0
+// when heartbeat ClaudePid is zero and no pane is matched").
+func TestComposer_ResolvePid_NilPaneReturnsZero(t *testing.T) {
+	c := &Composer{}
+	hb := Heartbeat{ClaudePid: 0}
+	got := c.resolvePid(hb, nil)
+	if got != 0 {
+		t.Errorf("resolvePid = %d, want 0 (nil pane)", got)
+	}
+}
+
+// TestComposer_ResolvePid_NilCurrentPidReturnsZero asserts that when
+// hb.ClaudePid is 0 and pane.CurrentPid is nil, resolvePid returns 0
+// (second nil-CurrentPid case from feature file lines 188-193).
+func TestComposer_ResolvePid_NilCurrentPidReturnsZero(t *testing.T) {
+	c := &Composer{}
+	pane := &graphql.TmuxPane{
+		ID:         "TmuxPane:local:%59",
+		CurrentPid: nil, // explicitly nil — no pid recorded by tmux provider
+	}
+	hb := Heartbeat{ClaudePid: 0}
+	got := c.resolvePid(hb, pane)
+	if got != 0 {
+		t.Errorf("resolvePid = %d, want 0 (nil pane.CurrentPid)", got)
+	}
+}
+
 // TestParseInstanceID asserts the round-trip from buildID → parseInstanceID.
 func TestParseInstanceID(t *testing.T) {
 	id := buildID("local", 12345, "alpha")
