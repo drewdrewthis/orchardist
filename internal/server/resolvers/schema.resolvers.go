@@ -798,6 +798,50 @@ func (r *subscriptionResolver) WorktreeChanged(ctx context.Context, project stri
 	return out, nil
 }
 
+// ConversationChanged is the resolver for Subscription.conversationChanged (#525). Filters claudeprojects invalidations by sessionUUID and emits the freshly-loaded Conversation on each match. Emits nil when the fsnotify watcher reports the file was removed so callers can clear stale state.
+func (r *subscriptionResolver) ConversationChanged(ctx context.Context, sessionUUID string) (<-chan *graphql1.Conversation, error) {
+	if r.ClaudeProjects == nil {
+		return nil, fmt.Errorf("claudeprojects provider not configured")
+	}
+	gqlid := "Conversation:" + sessionUUID
+	src := r.ClaudeProjects.Subscribe(ctx)
+	out := make(chan *graphql1.Conversation, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-src:
+				if !ok {
+					return
+				}
+				if ev.Key.SessionUUID != sessionUUID {
+					continue
+				}
+				if ev.Reason == "watcher-remove" {
+					select {
+					case out <- nil:
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
+				conv, err := r.Resolver.Query().Conversation(ctx, gqlid)
+				if err != nil || conv == nil {
+					continue
+				}
+				select {
+				case out <- conv:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
 // Server is the resolver for tmuxClient.server.
 func (r *tmuxClientResolver) Server(ctx context.Context, obj *graphql1.TmuxClient) (*graphql1.TmuxServer, error) {
 	if r.Tmux == nil {
