@@ -207,12 +207,7 @@ export class AppStore {
 		}));
 		const seen = new Set(realChannels.map((c) => c.id));
 		const others = this.items.filter((i) => !seen.has(i.id));
-		// Synthesised lens-row items live alongside legacy worktrees so
-		// the panel renderer can find them via tab.itemId.
-		const lensExtras = Object.values(this.lensTabItems).filter(
-			(it) => !seen.has(it.id) && !this.items.some((x) => x.id === it.id),
-		);
-		return [...realChannels, ...others, ...lensExtras];
+		return [...realChannels, ...others];
 	}
 
 	get visibleItems(): Item[] {
@@ -283,38 +278,54 @@ export class AppStore {
 	};
 
 	/**
-	 * Synthesised lens-row tab items, keyed by row id. When the user
-	 * clicks a row in any lens, we materialise a worktree-shaped Item
-	 * for it and push it under its row id (sessionUuid / paneId /
-	 * worktree id) so each row gets its own tab even when multiple
-	 * rows resolve to the same worktree path.
-	 */
-	private lensTabItems: Record<string, Item> = $state({});
-
-	/**
-	 * Open a lens row in the panel. The row id (claude session id, tmux
-	 * pane id, worktree id) is treated as unique — each row gets its own
-	 * tab even when several rows happen to share a cwd. The synthesised
-	 * Item carries the worktree-shaped fields the panel needs to render.
+	 * Resolve a lens-row click to a legacy worktree Item id, then call
+	 * openItem. Lenses anchor on different shapes (claudeInstance, pane,
+	 * worktree); the panel today only knows worktree+channel — bridge it
+	 * by mapping cwd → matching worktree until commit 3 generalises the
+	 * panel.
 	 *
-	 * Falls back to plain openItem when the id is already a legacy
-	 * worktree/channel item (so cmd-clicking a Channel still works).
+	 * Falls back to the raw id (for legacy worktree rows still being
+	 * rendered, e.g. via mergedItems channels).
 	 */
 	openLensRow = (rawId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
-		if (this.mergedItems.some((it) => it.id === rawId)) {
-			this.openItem(rawId, opts);
-			return;
-		}
-		const synth = this.synthesiseLensItem(rawId);
-		if (!synth) return;
-		this.lensTabItems = { ...this.lensTabItems, [rawId]: synth };
-		this.openItem(rawId, opts);
+		const wtItemId = this.resolveLensRowToWorktree(rawId);
+		this.openItem(wtItemId ?? rawId, opts);
 	};
 
-	/** Worktree the row's cwd resolves to (deepest match), or null. */
 	private resolveLensRowToWorktree = (rawId: string): string | null => {
-		const cwd = this.cwdForLensRow(rawId);
+		// Channels: rawId is the room id; openItem already handles it.
+		if (this.mergedItems.some((it) => it.id === rawId)) return rawId;
+
+		// Find a cwd from the lens snapshots, then match against legacy
+		// worktree items (which carry path).
+		let cwd: string | null = null;
+
+		// Recent / attention / issue rows are keyed by ClaudeInstance id.
+		const fromRecent = this.lensSnapshots.recent.find((r) => r.session.id === rawId);
+		if (fromRecent?.session.process?.cwd) cwd = fromRecent.session.process.cwd;
+		const fromAttention = this.lensSnapshots.attention.find((r) => r.session.id === rawId);
+		if (fromAttention?.session.process?.cwd) cwd = fromAttention.session.process.cwd;
+		const fromIssue = this.lensSnapshots.issue.find((r) => r.worktree.id === rawId);
+		if (fromIssue?.session?.process?.cwd) cwd = fromIssue.session.process.cwd;
+		if (fromIssue && !cwd) cwd = fromIssue.worktree.path;
+
+		// Tmux pane rows are keyed by paneId; pull cwd from pane.process.
+		if (!cwd) {
+			for (const sess of this.lensSnapshots.tmux.sessions) {
+				for (const win of sess.windows) {
+					for (const p of win.panes) {
+						if (p.paneId === rawId && p.process?.cwd) {
+							cwd = p.process.cwd;
+							break;
+						}
+					}
+				}
+			}
+		}
+
 		if (!cwd) return null;
+
+		// Most-specific worktree wins (deepest path that contains cwd).
 		let best: { id: string; path: string } | null = null;
 		for (const it of this.items) {
 			if (it.kind !== "worktree") continue;
@@ -324,76 +335,6 @@ export class AppStore {
 			}
 		}
 		return best?.id ?? null;
-	};
-
-	private cwdForLensRow = (rawId: string): string | null => {
-		const fromRecent = this.lensSnapshots.recent.find((r) => r.session.id === rawId);
-		if (fromRecent?.session.process?.cwd) return fromRecent.session.process.cwd;
-		const fromAttention = this.lensSnapshots.attention.find((r) => r.session.id === rawId);
-		if (fromAttention?.session.process?.cwd) return fromAttention.session.process.cwd;
-		const fromIssue = this.lensSnapshots.issue.find((r) => r.worktree.id === rawId);
-		if (fromIssue?.session?.process?.cwd) return fromIssue.session.process.cwd;
-		if (fromIssue) return fromIssue.worktree.path;
-		for (const sess of this.lensSnapshots.tmux.sessions) {
-			for (const win of sess.windows) {
-				for (const p of win.panes) {
-					if (p.paneId === rawId && p.process?.cwd) return p.process.cwd;
-				}
-			}
-		}
-		return null;
-	};
-
-	/**
-	 * Build a worktree-shaped Item for a lens row. Worktree fields
-	 * (path, branch, host, repo, pr, issue) come from the matching
-	 * legacy worktree when one exists; otherwise the row gets minimal
-	 * fields so the panel can still render a chat/terminal view.
-	 */
-	private synthesiseLensItem = (rawId: string): Item | null => {
-		const wtId = this.resolveLensRowToWorktree(rawId);
-		const baseWt = wtId
-			? (this.items.find((it) => it.id === wtId && it.kind === "worktree") as
-				| (Item & { kind: "worktree" })
-				| undefined)
-			: undefined;
-
-		const cwd = this.cwdForLensRow(rawId);
-		// Pull session info from whichever lens has the row.
-		const recentRow = this.lensSnapshots.recent.find((r) => r.session.id === rawId);
-		const attentionRow = this.lensSnapshots.attention.find((r) => r.session.id === rawId);
-		const issueRow = this.lensSnapshots.issue.find((r) => r.worktree.id === rawId);
-		const session = recentRow?.session || attentionRow?.session || issueRow?.session || null;
-
-		// Minimal worktree-shaped synthetic. id = rawId so each row gets
-		// its own tab; `path` carries the cwd for terminal attach; pr /
-		// issue / repo / branch hang off the matching worktree if any.
-		return {
-			id: rawId,
-			kind: "worktree",
-			repo: baseWt?.repo || "",
-			branch: baseWt?.branch || (session ? session.sessionUuid.slice(0, 8) : rawId.slice(0, 12)),
-			path: baseWt?.path || cwd || "",
-			host: baseWt?.host || "local",
-			title: baseWt?.title || baseWt?.branch || (cwd ? cwd.split("/").slice(-2).join("/") : rawId),
-			status: baseWt?.status || "ok",
-			attentionReason: baseWt?.attentionReason ?? null,
-			lastActivity:
-				recentRow?.lastActivityMs ||
-				attentionRow?.lastActivityMs ||
-				issueRow?.lastActivityMs ||
-				baseWt?.lastActivity ||
-				0,
-			unread: 0,
-			bare: baseWt?.bare,
-			session: session
-				? { uuid: session.sessionUuid, live: session.state === "working", instance: null, model: "" }
-				: baseWt?.session ?? null,
-			pr: baseWt?.pr ?? null,
-			issue: baseWt?.issue ?? null,
-			contract: null,
-			sparkline: [],
-		};
 	};
 
 	openItem = (itemId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
