@@ -968,10 +968,14 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 }
 
 // Host is the resolver for the host field.
-// v1 sentinel: all locally-discovered worktrees report "local".
-// Workstream F populates per-peer hostnames in a later iteration.
+// Reads obj.Host — set by toGraphQLWorktree (single source of truth).
+// Falls back to "local" defensively when obj.Host is empty so the
+// v1 sentinel is preserved without encoding it in two places.
 func (r *worktreeResolver) Host(ctx context.Context, obj *graphql1.Worktree) (string, error) {
-	return "local", nil
+	if obj.Host == "" {
+		return "local", nil
+	}
+	return obj.Host, nil
 }
 
 // Repo is the resolver for the repo field.
@@ -1332,12 +1336,11 @@ func stripContractIDPrefix(id string) string {
 	return id
 }
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
-	// Host defaults to "local" so that sibling resolvers (TmuxPanes,
-	// TmuxSession) that compare obj.Host against pane.Key.Host see the
-	// correct value when the worktree is locally discovered.
-	// Workstream F will populate this from the remote host id once
-	// federated discovery lands; for now the host resolver also returns
-	// "local" unconditionally. (#511)
+	// Host is the single source of truth for the worktree's host sentinel.
+	// "local" is the v1 sentinel for locally-discovered worktrees.
+	// Workstream F will replace this with the actual remote host id once
+	// federated discovery lands. The worktreeResolver.Host field resolver
+	// reads obj.Host (set here) rather than hardcoding "local". (#511)
 	return &graphql1.Worktree{
 		ID:     string(w.ID),
 		Path:   w.Path,
