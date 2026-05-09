@@ -24,6 +24,8 @@
 			if (ok) {
 				stopSub = await store.subscribeDaemon();
 			}
+			await store.hydrateChatRooms();
+			await store.subscribeChatAppends();
 		})();
 
 		return () => {

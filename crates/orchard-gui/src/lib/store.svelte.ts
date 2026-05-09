@@ -178,6 +178,8 @@ export class AppStore {
 		this.lens = lens;
 	};
 
+	private _chatRoomLoading: Set<string> = new Set();
+
 	openItem = (itemId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
 		const { newPane = false, focus = true } = opts;
 		const existing = this.tabs.find((t) => t.itemId === itemId);
@@ -322,14 +324,25 @@ export class AppStore {
 	private _resetConversationFor = (itemId: string) => {
 		const item = this.items.find((i) => i.id === itemId);
 		if (item?.kind === "channel") {
-			this.conversation = structuredClone(
-				channelConversations[item.id] || {
-					itemId: item.id,
-					recap: "",
-					isChannel: true,
-					messages: [],
-				},
-			);
+			// Use real backend cache when available, fall back to mock until
+			// the load-room call completes.
+			const cached = this.chatRoomCache[item.id];
+			this.conversation = cached
+				? structuredClone(cached)
+				: structuredClone(
+						channelConversations[item.id] || {
+							itemId: item.id,
+							recap: "",
+							isChannel: true,
+							messages: [],
+						},
+					);
+			if (!cached && !this._chatRoomLoading.has(item.id)) {
+				this._chatRoomLoading.add(item.id);
+				this.loadChatRoom(item.id)
+					.catch(() => {})
+					.finally(() => this._chatRoomLoading.delete(item.id));
+			}
 		} else {
 			this.conversation = structuredClone(mockConversation);
 		}
@@ -345,6 +358,21 @@ export class AppStore {
 		const ts = Date.now();
 		this.composeText = "";
 		this.sending = { tempId, text, ts, status: "pending" };
+
+		// If the active item is a real chat room, post via the backend.
+		const item = this.activeItem;
+		if (item?.kind === "channel") {
+			const target = "#" + item.id.replace(/^#/, "");
+			this.sendChatMessage(target, text)
+				.then(() => {
+					this.sending = null;
+				})
+				.catch(() => {
+					// Backend unavailable (web/dev mode); fall through to mock fan-out.
+					this.sending = null;
+				});
+			return;
+		}
 
 		const stages: { delay: number; status: SendStatus }[] = [
 			{ delay: 350, status: "sent" },
@@ -408,6 +436,74 @@ export class AppStore {
 			this.now = Date.now();
 		}, 5000);
 		return () => clearInterval(id);
+	};
+
+	private _chatUnsub: (() => void) | null = null;
+	chatRooms: { id: string; messageCount: number; memberCount: number }[] = $state([]);
+	private chatRoomCache: Record<string, Conversation> = {};
+
+	hydrateChatRooms = async () => {
+		const { getChatBackend } = await import("./data/chat");
+		const b = getChatBackend();
+		try {
+			this.chatRooms = await b.listRooms();
+		} catch {
+			this.chatRooms = [];
+		}
+	};
+
+	loadChatRoom = async (roomId: string) => {
+		const { getChatBackend, chatCoreToGuiMessage } = await import("./data/chat");
+		const b = getChatBackend();
+		const full = await b.loadRoom(roomId);
+		this.chatRoomCache[roomId] = {
+			itemId: roomId,
+			recap: "",
+			isChannel: true,
+			messages: full.messages.map(chatCoreToGuiMessage),
+		};
+		// If this room is currently selected, swap in.
+		const item = this.activeItem;
+		if (item?.kind === "channel" && item.id === roomId) {
+			this.conversation = this.chatRoomCache[roomId];
+		}
+	};
+
+	sendChatMessage = async (target: string, text: string) => {
+		const { getChatBackend } = await import("./data/chat");
+		const b = getChatBackend();
+		try {
+			await b.sendMessage(target, text);
+		} catch (err) {
+			console.warn("[orchard-gui] chat send failed:", err);
+			throw err;
+		}
+	};
+
+	subscribeChatAppends = async () => {
+		if (this._chatUnsub) return;
+		const { getChatBackend, chatCoreToGuiMessage } = await import("./data/chat");
+		const b = getChatBackend();
+		this._chatUnsub = await b.subscribeAppends((p) => {
+			if (p.kind === "message") {
+				const room = p.room;
+				const cached = this.chatRoomCache[room];
+				const msg = chatCoreToGuiMessage(p.line);
+				if (cached) {
+					this.chatRoomCache[room] = {
+						...cached,
+						messages: [...cached.messages, msg],
+					};
+				}
+				const item = this.activeItem;
+				if (item?.kind === "channel" && item.id === room) {
+					this.conversation = this.chatRoomCache[room]!;
+				}
+				this.hydrateChatRooms();
+			} else if (p.kind === "member_joined" || p.kind === "member_left") {
+				this.hydrateChatRooms();
+			}
+		});
 	};
 
 	hydrateFromDaemon = async () => {

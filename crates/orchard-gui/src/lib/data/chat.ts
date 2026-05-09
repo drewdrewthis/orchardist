@@ -1,73 +1,163 @@
 /**
- * Chat plane client (research/038).
+ * Chat plane client — Tauri bridge to chat-core (research/038, #495).
  *
- * Per research/038, the chat substrate is `~/.orchard/chat/*.jsonl` files
- * written by `chat-core` (Rust) and read by the daemon's Go chat provider.
- * The GUI doesn't touch the JSONL directly — it goes through the daemon's
- * GraphQL surface:
+ * v1 path (this module): the GUI talks directly to chat-core via the
+ * Tauri commands wired in src-tauri/src/chat.rs. A background watcher
+ * in the Tauri shell tails ~/.orchard/chat/*.jsonl and fires a
+ * `chat-message-appended` Tauri event for every new line; we listen
+ * for those here and re-publish to subscribers.
  *
- *   query: chatRoom(id) { messages { id, ts, sender, text, ... } }
- *   subscription: chatMessageAppended(room) { ... }
- *
- * That schema is **not yet shipped on the daemon** (the Go chat provider is
- * being built in parallel by side-thread @61). This module ships the client
- * shape now so:
- *
- *   1. UI components can plumb against a real interface today.
- *   2. When the daemon provider lands, only `query`/`subscription` strings
- *      and the response mapping change — call sites are unchanged.
- *
- * Until then, every method returns mock data that mirrors the v1 protocol.
- *
- * Sending: chat send is a Layer 2 stateful op (per research/037 §"Two-layer
- * write model"). It flows through the daemon's write protocol — NOT through
- * the JSONL files directly, NOT through Tauri/worktree-core. When the write
- * protocol decision lands (HTTP queue or gRPC, research/037 §1), this file
- * is the single place to update.
+ * v2 path (deferred): daemon-mediated reads via GraphQL (#498). The
+ * `ChatBackend` interface is the seam — switching from local-file to
+ * daemon is a backend swap, not a call-site rewrite.
  */
 
-import type { Message } from "./types";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Message, SendStatus } from "./types";
 
-export interface ChatRoom {
+export interface ChatRoomSummary {
 	id: string;
-	title: string;
-	topic: string | null;
-	participants: string[];
+	messageCount: number;
+	memberCount: number;
+}
+
+export interface ChatRoomFull {
+	id: string;
+	messages: ChatCoreMessage[];
+	members: ChatCoreMember[];
+}
+
+/** Mirror of chat-core's `Message` struct. */
+export interface ChatCoreMessage {
+	id: string;
+	ts: string;
+	sender: string;
+	sender_machine: string;
+	text: string;
+	source: string;
+}
+
+/** Mirror of chat-core's `Member` struct. */
+export interface ChatCoreMember {
+	handle: string;
+	machine: string;
+	tmux_session: string;
+	joined_at: string;
+}
+
+export type AppendedPayload =
+	| { kind: "message"; room: string; line: ChatCoreMessage }
+	| { kind: "member_joined"; room: string; line: ChatCoreMember }
+	| { kind: "member_left"; room: string; handle: string };
+
+export interface FanoutOutcomeView {
+	kind: "delivered" | "byte_only" | "failed" | "skipped";
+	recipient: string;
+	scrollback_verified_at?: string;
+	reason?: string;
+	error?: string;
+}
+
+export interface SendOutcomeView {
+	message_id: string;
+	room: string;
+	fanout: FanoutOutcomeView[];
 }
 
 export interface ChatBackend {
-	/** Initial backfill of a room's messages. */
-	loadRoom(roomId: string): Promise<Message[]>;
-	/** Subscribe to new messages in a room. Returns an unsubscribe fn. */
-	subscribeRoom(roomId: string, onMessage: (m: Message) => void): () => void;
-	/** Submit a new message. Returns the assigned id once acked. */
-	sendMessage(roomId: string, text: string, sender: string): Promise<string>;
-	/** Whether the backend is currently reachable. */
+	listRooms(): Promise<ChatRoomSummary[]>;
+	loadRoom(roomId: string): Promise<ChatRoomFull>;
+	sendMessage(target: string, text: string, sender?: string): Promise<SendOutcomeView>;
+	subscribeAppends(onPayload: (p: AppendedPayload) => void): Promise<UnlistenFn>;
 	isReachable(): Promise<boolean>;
 }
 
+class TauriBackend implements ChatBackend {
+	async listRooms(): Promise<ChatRoomSummary[]> {
+		try {
+			const rs = await invoke<
+				Array<{ id: string; message_count: number; member_count: number }>
+			>("chat_list_rooms");
+			return rs.map((r) => ({
+				id: r.id,
+				messageCount: r.message_count,
+				memberCount: r.member_count,
+			}));
+		} catch {
+			return [];
+		}
+	}
+
+	async loadRoom(roomId: string): Promise<ChatRoomFull> {
+		return await invoke<ChatRoomFull>("chat_load_room", { room: roomId });
+	}
+
+	async sendMessage(
+		target: string,
+		text: string,
+		sender?: string,
+	): Promise<SendOutcomeView> {
+		return await invoke<SendOutcomeView>("chat_send", {
+			target,
+			text,
+			sender: sender ?? null,
+		});
+	}
+
+	async subscribeAppends(onPayload: (p: AppendedPayload) => void): Promise<UnlistenFn> {
+		return await listen<AppendedPayload>("chat-message-appended", (e) => onPayload(e.payload));
+	}
+
+	async isReachable(): Promise<boolean> {
+		try {
+			await invoke("chat_list_rooms");
+			return true;
+		} catch {
+			return false;
+		}
+	}
+}
+
 class StubBackend implements ChatBackend {
-	async loadRoom(_roomId: string): Promise<Message[]> {
+	async listRooms(): Promise<ChatRoomSummary[]> {
 		return [];
 	}
-	subscribeRoom(_roomId: string, _onMessage: (m: Message) => void): () => void {
-		return () => {};
+	async loadRoom(roomId: string): Promise<ChatRoomFull> {
+		return { id: roomId, messages: [], members: [] };
 	}
-	async sendMessage(_roomId: string, _text: string, _sender: string): Promise<string> {
-		throw new Error("chat-backend: send not yet wired (depends on research/038 daemon provider)");
+	async sendMessage(_target: string, _text: string): Promise<SendOutcomeView> {
+		throw new Error("chat-backend: not running in a Tauri shell");
+	}
+	async subscribeAppends(_onPayload: (p: AppendedPayload) => void): Promise<UnlistenFn> {
+		return async () => {};
 	}
 	async isReachable(): Promise<boolean> {
 		return false;
 	}
 }
 
-let _backend: ChatBackend = new StubBackend();
+let _backend: ChatBackend | null = null;
 
 export function getChatBackend(): ChatBackend {
+	if (_backend) return _backend;
+	const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+	_backend = inTauri ? new TauriBackend() : new StubBackend();
 	return _backend;
 }
 
-/** Test/dev hook to swap the backend. */
 export function setChatBackend(b: ChatBackend) {
 	_backend = b;
+}
+
+/** Convert a chat-core Message into the GUI's Message type. */
+export function chatCoreToGuiMessage(m: ChatCoreMessage): Message {
+	return {
+		id: m.id,
+		role: "agent",
+		agentId: m.sender,
+		status: "read" as SendStatus,
+		ts: Date.parse(m.ts) || Date.now(),
+		text: m.text,
+	};
 }

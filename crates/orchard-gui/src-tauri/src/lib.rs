@@ -2,17 +2,26 @@
 //! (GraphQL @ 127.0.0.1:7777) for reads and `worktree-core` (via the bridges
 //! in `commands`) for stateless system ops.
 
+pub mod chat;
 pub mod commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(chat::ChatState::default())
+        .setup(|app| {
+            chat::spawn_watcher(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_worktrees,
             commands::create_worktree,
             commands::remove_worktree,
             commands::prune_worktrees,
+            chat::chat_list_rooms,
+            chat::chat_load_room,
+            chat::chat_send,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
