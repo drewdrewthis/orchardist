@@ -691,8 +691,30 @@ func (r *tmuxPaneResolver) WatchingClients(ctx context.Context, obj *graphql1.Tm
 	return out, nil
 }
 
-// Process is the resolver for tmuxPane.process.
+// Process returns the OS-level Process for the pane's foreground pid.
+// Returns nil when the pane has no current pid, or when the pid is absent
+// from the cached ps snapshot (process exited or not yet observed).
+// cwd resolution is delegated to processResolver.Cwd and only fires when the
+// client selects the cwd field (gqlgen selection-set lazy evaluation).
+// splitTmuxPaneID is used so federated pane ids project onto the peer's host id.
 func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.Process, error) {
+	if r.PS == nil {
+		return nil, nil
+	}
+	pane, ok := r.lookupPane(obj.ID)
+	if !ok || pane.CurrentPid == 0 {
+		return nil, nil
+	}
+	host, _, ok := splitTmuxPaneID(obj.ID)
+	if !ok {
+		return nil, nil
+	}
+	target := ps.ProcessID{Host: host, PID: pane.CurrentPid}
+	for _, proc := range r.PS.List() {
+		if proc.ID == target {
+			return projectProcess(&proc, host), nil
+		}
+	}
 	return nil, nil
 }
 
