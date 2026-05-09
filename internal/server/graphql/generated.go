@@ -382,16 +382,18 @@ type ComplexityRoot struct {
 	}
 
 	Worktree struct {
-		Bare      func(childComplexity int) int
-		Branch    func(childComplexity int) int
-		Head      func(childComplexity int) int
-		Host      func(childComplexity int) int
-		ID        func(childComplexity int) int
-		Issue     func(childComplexity int) int
-		Path      func(childComplexity int) int
-		Pr        func(childComplexity int) int
-		Processes func(childComplexity int) int
-		Repo      func(childComplexity int) int
+		Bare        func(childComplexity int) int
+		Branch      func(childComplexity int) int
+		Head        func(childComplexity int) int
+		Host        func(childComplexity int) int
+		ID          func(childComplexity int) int
+		Issue       func(childComplexity int) int
+		Path        func(childComplexity int) int
+		Pr          func(childComplexity int) int
+		Processes   func(childComplexity int) int
+		Repo        func(childComplexity int) int
+		TmuxPanes   func(childComplexity int) int
+		TmuxSession func(childComplexity int) int
 	}
 }
 
@@ -514,6 +516,8 @@ type WorktreeResolver interface {
 	Pr(ctx context.Context, obj *Worktree) (*PullRequest, error)
 	Issue(ctx context.Context, obj *Worktree) (*Issue, error)
 	Processes(ctx context.Context, obj *Worktree) ([]*Process, error)
+	TmuxPanes(ctx context.Context, obj *Worktree) ([]*TmuxPane, error)
+	TmuxSession(ctx context.Context, obj *Worktree) (*TmuxSession, error)
 }
 
 type executableSchema struct {
@@ -2421,6 +2425,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Worktree.Repo(childComplexity), true
 
+	case "Worktree.tmuxPanes":
+		if e.complexity.Worktree.TmuxPanes == nil {
+			break
+		}
+
+		return e.complexity.Worktree.TmuxPanes(childComplexity), true
+
+	case "Worktree.tmuxSession":
+		if e.complexity.Worktree.TmuxSession == nil {
+			break
+		}
+
+		return e.complexity.Worktree.TmuxSession(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -3092,6 +3110,21 @@ type Worktree implements Node {
 
   "Processes whose cwd lies under ` + "`" + `path` + "`" + `. Resolved by the ps provider (ws-b-ps); returns ` + "`" + `[]` + "`" + ` until that provider lands."
   processes: [Process!]!
+
+  """
+  Tmux panes whose foreground-process cwd equals ` + "`" + `path` + "`" + ` exactly OR has ` + "`" + `path + '/'` + "`" + ` as a prefix (#511).
+  Returns the matching pane list for every worktree, derived from a server-side join of pane.process.cwd
+  against the worktree path. Ordered deterministically by paneId ascending.
+  Returns ` + "`" + `[]` + "`" + ` when no panes match or when the tmux / ps providers are not wired.
+  """
+  tmuxPanes: [TmuxPane!]!
+
+  """
+  The most-recently-active tmux session among the panes returned by ` + "`" + `tmuxPanes` + "`" + ` (#511).
+  When two sessions tie on lastActivityAt, the session with the lexicographically-first name wins.
+  Null when ` + "`" + `tmuxPanes` + "`" + ` is empty or when the tmux / ps providers are not wired.
+  """
+  tmuxSession: TmuxSession
 }
 
 # ---------------------------------------------------------------------
@@ -8907,6 +8940,10 @@ func (ec *executionContext) fieldContext_Process_worktree(ctx context.Context, f
 				return ec.fieldContext_Worktree_issue(ctx, field)
 			case "processes":
 				return ec.fieldContext_Worktree_processes(ctx, field)
+			case "tmuxPanes":
+				return ec.fieldContext_Worktree_tmuxPanes(ctx, field)
+			case "tmuxSession":
+				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -9168,6 +9205,10 @@ func (ec *executionContext) fieldContext_Project_worktrees(ctx context.Context, 
 				return ec.fieldContext_Worktree_issue(ctx, field)
 			case "processes":
 				return ec.fieldContext_Worktree_processes(ctx, field)
+			case "tmuxPanes":
+				return ec.fieldContext_Worktree_tmuxPanes(ctx, field)
+			case "tmuxSession":
+				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -13383,6 +13424,10 @@ func (ec *executionContext) fieldContext_Subscription_worktreeChanged(ctx contex
 				return ec.fieldContext_Worktree_issue(ctx, field)
 			case "processes":
 				return ec.fieldContext_Worktree_processes(ctx, field)
+			case "tmuxPanes":
+				return ec.fieldContext_Worktree_tmuxPanes(ctx, field)
+			case "tmuxSession":
+				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -17270,6 +17315,145 @@ func (ec *executionContext) fieldContext_Worktree_processes(ctx context.Context,
 				return ec.fieldContext_Process_claudeInstance(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Process", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_tmuxPanes(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_tmuxPanes(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Worktree().TmuxPanes(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*TmuxPane)
+	fc.Result = res
+	return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_tmuxPanes(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_TmuxPane_id(ctx, field)
+			case "window":
+				return ec.fieldContext_TmuxPane_window(ctx, field)
+			case "paneId":
+				return ec.fieldContext_TmuxPane_paneId(ctx, field)
+			case "title":
+				return ec.fieldContext_TmuxPane_title(ctx, field)
+			case "currentCommand":
+				return ec.fieldContext_TmuxPane_currentCommand(ctx, field)
+			case "currentPid":
+				return ec.fieldContext_TmuxPane_currentPid(ctx, field)
+			case "width":
+				return ec.fieldContext_TmuxPane_width(ctx, field)
+			case "height":
+				return ec.fieldContext_TmuxPane_height(ctx, field)
+			case "dead":
+				return ec.fieldContext_TmuxPane_dead(ctx, field)
+			case "watchingClients":
+				return ec.fieldContext_TmuxPane_watchingClients(ctx, field)
+			case "process":
+				return ec.fieldContext_TmuxPane_process(ctx, field)
+			case "claudeInstance":
+				return ec.fieldContext_TmuxPane_claudeInstance(ctx, field)
+			case "content":
+				return ec.fieldContext_TmuxPane_content(ctx, field)
+			case "contentRange":
+				return ec.fieldContext_TmuxPane_contentRange(ctx, field)
+			case "contentFull":
+				return ec.fieldContext_TmuxPane_contentFull(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TmuxPane", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_tmuxSession(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_tmuxSession(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Worktree().TmuxSession(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*TmuxSession)
+	fc.Result = res
+	return ec.marshalOTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_tmuxSession(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_TmuxSession_id(ctx, field)
+			case "server":
+				return ec.fieldContext_TmuxSession_server(ctx, field)
+			case "name":
+				return ec.fieldContext_TmuxSession_name(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_TmuxSession_createdAt(ctx, field)
+			case "attached":
+				return ec.fieldContext_TmuxSession_attached(ctx, field)
+			case "activeAttached":
+				return ec.fieldContext_TmuxSession_activeAttached(ctx, field)
+			case "attachedClients":
+				return ec.fieldContext_TmuxSession_attachedClients(ctx, field)
+			case "lastActivityAt":
+				return ec.fieldContext_TmuxSession_lastActivityAt(ctx, field)
+			case "windows":
+				return ec.fieldContext_TmuxSession_windows(ctx, field)
+			case "currentWindow":
+				return ec.fieldContext_TmuxSession_currentWindow(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TmuxSession", field.Name)
 		},
 	}
 	return fc, nil
@@ -23646,6 +23830,75 @@ func (ec *executionContext) _Worktree(ctx context.Context, sel ast.SelectionSet,
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "tmuxPanes":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Worktree_tmuxPanes(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "tmuxSession":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Worktree_tmuxSession(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -26049,6 +26302,13 @@ func (ec *executionContext) marshalOTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋ
 		return graphql.Null
 	}
 	return ec._TmuxServer(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._TmuxSession(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionFilter(ctx context.Context, v interface{}) (*TmuxSessionFilter, error) {

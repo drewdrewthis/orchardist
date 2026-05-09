@@ -557,6 +557,21 @@ type Worktree implements Node {
 
   "Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands."
   processes: [Process!]!
+
+  """
+  Tmux panes whose foreground-process cwd equals `path` exactly OR has `path + '/'` as a prefix (#511).
+  Returns the matching pane list for every worktree, derived from a server-side join of pane.process.cwd
+  against the worktree path. Ordered deterministically by paneId ascending.
+  Returns `[]` when no panes match or when the tmux / ps providers are not wired.
+  """
+  tmuxPanes: [TmuxPane!]!
+
+  """
+  The most-recently-active tmux session among the panes returned by `tmuxPanes` (#511).
+  When two sessions tie on lastActivityAt, the session with the lexicographically-first name wins.
+  Null when `tmuxPanes` is empty or when the tmux / ps providers are not wired.
+  """
+  tmuxSession: TmuxSession
 }
 
 # ---------------------------------------------------------------------
