@@ -10,6 +10,7 @@
 	import ConvHeader from "./ConvHeader.svelte";
 	import ChannelHeader from "./ChannelHeader.svelte";
 	import ChatView from "./ChatView.svelte";
+	import TerminalAttach from "./TerminalAttach.svelte";
 	import type { AppStore } from "$lib/store.svelte";
 	import type { ChannelItem, WorktreeItem } from "$lib/data/types";
 
@@ -77,7 +78,10 @@
 					surface="mobile"
 					agents={store.agents}
 					onView={(v) => store.setView(v)}
-					onFork={() => store.startFork(0, store.conversation.messages[0])}
+					onFork={() => {
+						const conv = store.visibleConversation;
+						if (conv && conv.messages.length > 0) store.startFork(0, conv.messages[0]);
+					}}
 					onClose={() => store.mobileBack()}
 					onJumpToAgent={() => {}}
 				/>
@@ -88,26 +92,43 @@
 					surface="mobile"
 					sessionLive={!!(selected as WorktreeItem).session?.live}
 					onView={(v) => store.setView(v)}
-					onFork={() => store.startFork(0, store.conversation.messages[0])}
+					onFork={() => {
+						const conv = store.visibleConversation;
+						if (conv && conv.messages.length > 0) store.startFork(0, conv.messages[0]);
+					}}
 					onClose={() => store.mobileBack()}
 					onOpenContract={(id) => store.openContract(id)}
 				/>
 			{/if}
-			<ChatView
-				item={selected}
-				conversation={store.visibleConversation}
-				agents={store.agents}
-				surface="mobile"
-				now={store.now}
-				composeText={store.composeText}
-				setComposeText={(s) => (store.composeText = s)}
-				onSend={() => store.send()}
-				sending={store.sending}
-				forkPreview={store.forkPreview}
-				onStartFork={(i, m) => store.startFork(i, m)}
-				onCommitFork={() => store.commitFork()}
-				onCancelFork={() => store.cancelFork()}
-			/>
+			{#if selected.kind === "channel"}
+				<ChatView
+					item={selected}
+					conversation={store.visibleConversation || { itemId: '', recap: '', isChannel: true, messages: [] }}
+					agents={store.agents}
+					surface="mobile"
+					now={store.now}
+					composeText={store.composeText}
+					setComposeText={(s) => (store.composeText = s)}
+					onSend={() => store.send()}
+					sending={store.sending}
+					forkPreview={store.forkPreview}
+					onStartFork={(i, m) => store.startFork(i, m)}
+					onCommitFork={() => store.commitFork()}
+					onCancelFork={() => store.cancelFork()}
+				/>
+			{:else}
+				{@const tmux = store.tmuxSessionFor(selected)}
+				{#if tmux}
+					<TerminalAttach
+						argv={["tmux", "attach-session", "-t", tmux.name]}
+						label={tmux.name}
+					/>
+				{:else}
+					<div class="conv-empty">
+						<div style="font-size: 13px; color: var(--fg-2);">No tmux session attached.</div>
+					</div>
+				{/if}
+			{/if}
 		</div>
 	{/if}
 </div>

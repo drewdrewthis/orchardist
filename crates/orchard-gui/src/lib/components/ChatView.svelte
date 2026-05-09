@@ -90,6 +90,11 @@
 	</div>
 
 	<div class="chat-scroll" bind:this={scrollEl}>
+		{#if conversation.messages.length === 0 && !sending}
+			<div class="chat-empty dimer" style="text-align: center; padding: 32px 16px; font-size: 13px;">
+				{item.kind === "channel" ? "No messages in this room yet." : "No messages yet."}
+			</div>
+		{/if}
 		{#each conversation.messages as msg, i (msg.id)}
 			{@const prev = conversation.messages[i - 1]}
 			{@const grouped = !!(prev && prev.role === msg.role && msg.ts - prev.ts < 60_000 * 5)}

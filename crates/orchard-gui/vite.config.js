@@ -28,5 +28,17 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    // Proxy daemon GraphQL through Vite during browser dev so the GUI can be
+    // smoke-tested in a regular browser without Tauri's CORS-bypass. In Tauri,
+    // `127.0.0.1:7777` is reached directly (and `csp: null` lets fetch through),
+    // so this proxy is only consulted in browser dev.
+    proxy: {
+      "/__daemon": {
+        target: "http://127.0.0.1:7777",
+        changeOrigin: true,
+        ws: true,
+        rewrite: (/** @type {string} */ p) => p.replace(/^\/__daemon/, ""),
+      },
+    },
   },
 }));

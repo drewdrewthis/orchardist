@@ -1,12 +1,11 @@
 <!--
-  App root. Picks desktop vs mobile based on window width (mobile-first), wires
-  the keyboard shortcut handler, mounts the palette / new-conversation /
-  contract overlays, and binds them to the store.
+  App root. Daemon-only — every visible row of data is hydrated from the
+  local daemon (HTTP + WS) or the Tauri chat bridge. Mock data has been
+  retired; surfaces without a daemon source render empty state.
 -->
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { getStore } from "$lib/store.svelte";
-	import { conversation as mockConversation } from "$lib/data/mock";
 	import DesktopLayout from "$lib/components/DesktopLayout.svelte";
 	import MobileLayout from "$lib/components/MobileLayout.svelte";
 	import Palette from "$lib/components/Palette.svelte";
@@ -84,10 +83,6 @@
 			else if (entry.action?.startsWith("lens:")) store.setLens(entry.action.slice(5) as Lens);
 			else if (entry.action === "toggle-theme") store.toggleTheme();
 			else if (entry.action === "toggle-view") store.toggleView();
-			else if (entry.action === "fork") {
-				const idx = store.conversation.messages.length - 1;
-				if (idx >= 0) store.startFork(idx, store.conversation.messages[idx]);
-			}
 			return;
 		}
 		if (entry.itemId) store.openItem(entry.itemId);
@@ -135,7 +130,7 @@
 				await createWorktree(repoRoot, wt.path, wt.branch);
 				store.hydrateFromDaemon();
 			} catch (err) {
-				console.warn("[orchard-gui] create_worktree failed (acceptable in dev):", err);
+				console.warn("[orchard-gui] create_worktree failed:", err);
 			}
 		}
 		if (spec.worktreeId) store.openItem(spec.worktreeId, { newPane: true });
@@ -144,6 +139,6 @@
 
 <ContractModal
 	item={contractItem}
-	messages={mockConversation.messages}
+	messages={[]}
 	onClose={() => store.openContract(null)}
 />

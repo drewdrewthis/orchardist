@@ -151,13 +151,31 @@ export function setChatBackend(b: ChatBackend) {
 }
 
 /** Convert a chat-core Message into the GUI's Message type. */
-export function chatCoreToGuiMessage(m: ChatCoreMessage): Message {
+export function chatCoreToGuiMessage(m: ChatCoreMessage, selfHandle?: string): Message {
+	const isSelf = selfHandle != null && m.sender === selfHandle;
 	return {
 		id: m.id,
-		role: "agent",
-		agentId: m.sender,
+		role: isSelf ? "user" : "agent",
+		agentId: isSelf ? undefined : m.sender,
 		status: "read" as SendStatus,
 		ts: Date.parse(m.ts) || Date.now(),
 		text: m.text,
 	};
+}
+
+/**
+ * Resolve the local user's chat handle. Cached for the session — derived
+ * once from the Tauri shell so we don't pay the IPC on every message.
+ */
+let _selfHandle: string | null = null;
+export async function getSelfHandle(): Promise<string | null> {
+	if (_selfHandle != null) return _selfHandle;
+	try {
+		const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+		if (!inTauri) return null;
+		_selfHandle = await invoke<string>("chat_self_handle");
+	} catch {
+		_selfHandle = null;
+	}
+	return _selfHandle;
 }

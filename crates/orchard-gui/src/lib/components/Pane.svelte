@@ -7,7 +7,8 @@
 	import ConvHeader from "./ConvHeader.svelte";
 	import ChannelHeader from "./ChannelHeader.svelte";
 	import ChatView from "./ChatView.svelte";
-	import TerminalView from "./TerminalView.svelte";
+	import TerminalAttach from "./TerminalAttach.svelte";
+	import { getStore } from "$lib/store.svelte";
 	import type {
 		Agent,
 		ChannelItem,
@@ -49,6 +50,8 @@
 		onOpenContract: (id: string) => void;
 		onToggleFullscreen?: () => void;
 	};
+
+	const store = getStore();
 	let {
 		item,
 		active,
@@ -140,7 +143,7 @@
 			/>
 		{/if}
 
-		{#if view === "chat"}
+		{#if item.kind === "channel"}
 			<ChatView
 				{item}
 				{conversation}
@@ -158,7 +161,22 @@
 				{onCancelFork}
 			/>
 		{:else}
-			<TerminalView lines={terminalLines} {item} />
+			{@const tmux = store.tmuxSessionFor(item)}
+			{#if tmux}
+				<TerminalAttach
+					argv={["tmux", "attach-session", "-t", tmux.name]}
+					label="{tmux.name}"
+				/>
+			{:else}
+				<div class="conv-empty">
+					<div style="font-size: 13px; font-weight: 500; color: var(--fg-2);">
+						No tmux session attached to this worktree.
+					</div>
+					<div class="dimer mono" style="font-size: 11.5px; margin-top: 4px;">
+						{item.path}
+					</div>
+				</div>
+			{/if}
 		{/if}
 	</div>
 </div>

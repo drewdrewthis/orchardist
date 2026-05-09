@@ -4,12 +4,14 @@
 
 pub mod chat;
 pub mod commands;
+pub mod pty;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(chat::ChatState::default())
+        .manage(pty::PtyState::default())
         .setup(|app| {
             chat::spawn_watcher(app.handle().clone());
             Ok(())
@@ -22,6 +24,11 @@ pub fn run() {
             chat::chat_list_rooms,
             chat::chat_load_room,
             chat::chat_send,
+            chat::chat_self_handle,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

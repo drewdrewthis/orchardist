@@ -25,6 +25,7 @@ worktree-core = { path = "../../worktree-core" }
 chat-core = { path = "../../chat-core" }
 notify = "6"
 gethostname = "0.4"
+portable-pty = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

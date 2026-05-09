@@ -133,7 +133,9 @@ export function groupItems(items: Item[], lens: Lens, now: number): ItemGroup[] 
 			const oa = STATUS_ORDER[a.status] ?? 9;
 			const ob = STATUS_ORDER[b.status] ?? 9;
 			if (oa !== ob) return oa - ob;
-			return b.lastActivity - a.lastActivity;
+			const da = b.lastActivity - a.lastActivity;
+			if (da !== 0) return da;
+			return a.id.localeCompare(b.id);
 		});
 	}
 

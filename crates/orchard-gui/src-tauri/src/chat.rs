@@ -191,6 +191,14 @@ pub fn chat_send(
     })
 }
 
+/// Tauri-callable wrapper around `default_sender_handle`. Lets the GUI
+/// learn its own handle (used to render its own messages as `role: user`
+/// in the chat history rather than as another agent).
+#[tauri::command]
+pub fn chat_self_handle() -> Option<String> {
+    default_sender_handle()
+}
+
 /// Resolve a default sender handle for outbound chat sends.
 ///
 /// Resolution order:

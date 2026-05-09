@@ -116,7 +116,7 @@
 					<div class="rail-collapsed">
 						<div class="rail-list">
 							{#each store.tabs as tab (tab.id)}
-								{@const it = store.items.find((i) => i.id === tab.itemId)}
+								{@const it = store.mergedItems.find((i) => i.id === tab.itemId)}
 								{#if it && it.kind === "worktree"}
 									<button
 										class="rail-conv"
@@ -150,11 +150,11 @@
 			<PanesArea
 				tabs={store.tabs}
 				activeTabId={store.activeTabId}
-				items={store.items}
+				items={store.mergedItems}
 				paneSizes={store.paneSizes}
 				fullscreen={store.fullscreen}
 				view={store.view}
-				conversation={store.visibleConversation}
+				conversation={store.visibleConversation || { itemId: '', recap: '', isChannel: false, messages: [] }}
 				terminalLines={store.terminalLines}
 				agents={store.agents}
 				now={store.now}
@@ -167,7 +167,12 @@
 				onResizePanes={(sizes) => store.setPaneSizes(sizes)}
 				onView={(v) => store.setView(v)}
 				onSend={() => store.send()}
-				onFork={() => store.startFork(store.conversation.messages.length - 1, store.conversation.messages[store.conversation.messages.length - 1])}
+				onFork={() => {
+					const conv = store.visibleConversation;
+					if (conv && conv.messages.length > 0) {
+						store.startFork(conv.messages.length - 1, conv.messages[conv.messages.length - 1]);
+					}
+				}}
 				onStartFork={(i, m) => store.startFork(i, m)}
 				onCommitFork={() => store.commitFork()}
 				onCancelFork={() => store.cancelFork()}

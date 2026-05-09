@@ -6,7 +6,7 @@
 
 	type Props = {
 		hosts: Host[];
-		account: Account;
+		account: Account | null;
 		theme: Theme;
 		surface: Surface;
 		now: number;
@@ -27,7 +27,10 @@
 		onToggleSidebar,
 	}: Props = $props();
 
-	const overQuota = $derived(account.quotaUsed / account.quotaCap > 0.8);
+	const quotaPct = $derived(
+		account && account.quotaCap > 0 ? account.quotaUsed / account.quotaCap : 0,
+	);
+	const overQuota = $derived(quotaPct > 0.8);
 </script>
 
 <div class="fleet-topbar">
@@ -57,22 +60,24 @@
 
 		<PeerCluster {hosts} {now} />
 
-		<div class="fleet-quota">
-			<span class="mono dimer" style:font-size="11px">{account.quotaUsed}/{account.quotaCap}</span>
-			<span
-				style="display: inline-block; width: 28px; height: 4px; border-radius: 2px; background: var(--line-2); position: relative; overflow: hidden;"
-			>
-				<i
-					style:position="absolute"
-					style:left="0"
-					style:top="0"
-					style:bottom="0"
-					style:width="{Math.min(100, (account.quotaUsed / account.quotaCap) * 100)}%"
-					style:background={overQuota ? "var(--attn)" : "var(--fg-3)"}
-					style:border-radius="2px"
-				></i>
-			</span>
-		</div>
+		{#if account && account.quotaCap > 0}
+			<div class="fleet-quota">
+				<span class="mono dimer" style:font-size="11px">{account.quotaUsed}/{account.quotaCap}</span>
+				<span
+					style="display: inline-block; width: 28px; height: 4px; border-radius: 2px; background: var(--line-2); position: relative; overflow: hidden;"
+				>
+					<i
+						style:position="absolute"
+						style:left="0"
+						style:top="0"
+						style:bottom="0"
+						style:width="{Math.min(100, quotaPct * 100)}%"
+						style:background={overQuota ? "var(--attn)" : "var(--fg-3)"}
+						style:border-radius="2px"
+					></i>
+				</span>
+			</div>
+		{/if}
 
 		<button class="iconbtn" onclick={onToggleTheme} aria-label="Toggle theme">
 			<Icon name={theme === "dark" ? "sun" : "moon"} size={15} />

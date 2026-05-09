@@ -1,5 +1,6 @@
 /** Relative-time formatter that breathes with the live tick. */
 export function relTime(ms: number, now: number): string {
+	if (!ms) return "—";
 	const d = (now - ms) / 1000;
 	if (d < 5) return "now";
 	if (d < 60) return `${Math.floor(d)}s ago`;

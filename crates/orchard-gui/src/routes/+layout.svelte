@@ -15,23 +15,16 @@
 	});
 
 	onMount(() => {
-		const stop1 = store.startNowTick();
-		const stop2 = store.startLiveTick();
-		let stopSub: (() => void) | null = null;
-
-		(async () => {
-			const ok = await store.hydrateFromDaemon();
-			if (ok) {
-				stopSub = await store.subscribeDaemon();
-			}
-			await store.hydrateChatRooms();
-			await store.subscribeChatAppends();
-		})();
+		const stopTick = store.startNowTick();
+		store.hydrateFromDaemon();
+		store.hydrateChatRooms();
+		store.subscribeDaemon();
+		const subPromise = store.subscribeChat();
 
 		return () => {
-			stop1();
-			stop2();
-			stopSub?.();
+			stopTick();
+			subPromise.then((u) => u()).catch(() => {});
+			store.teardown();
 		};
 	});
 </script>

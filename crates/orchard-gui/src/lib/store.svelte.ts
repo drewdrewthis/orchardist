@@ -1,26 +1,34 @@
 /**
- * Central app state. Svelte 5 runes-based class so reactivity follows the
- * `$state` rules everywhere it's read. Mock data is the v1 source; once the
- * GraphQL client lands, mock loaders here switch to subscription handlers
- * without changing component callers.
+ * Central app state — daemon-only, no mocks.
+ *
+ * All real-world data (worktrees, hosts, account, chat rooms) is hydrated
+ * from the daemon at 127.0.0.1:7777 (HTTP queries + WS subscriptions) and
+ * the chat-core watcher in the Tauri shell. There is no fallback dataset:
+ * if a source is offline the corresponding UI shows empty state.
+ *
+ * Reactivity follows the Svelte 5 runes contract — every mutable field on
+ * `AppStore` is a `$state` rune so component reads stay reactive.
  */
 
 import {
-	allItems,
-	conversation as mockConversation,
-	channelConversations,
-	hosts as mockHosts,
-	account as mockAccount,
-	terminalLines as mockTerminal,
-	agents as mockAgents,
-	paletteEntries,
-	paletteActions,
-} from "./data/mock";
+	fetchSnapshot,
+	subscribeAll,
+	type ConversationSummary,
+	type TmuxSessionSummary,
+	type Unsub,
+} from "./data/daemon";
+import { buildPaletteEntries, PALETTE_ACTIONS } from "./data/palette";
+import {
+	getChatBackend,
+	chatCoreToGuiMessage,
+	getSelfHandle,
+	type ChatBackend,
+} from "./data/chat";
 import type {
 	Account,
 	Agent,
-	ConvView,
 	Conversation,
+	ConvView,
 	ForkPreview,
 	Host,
 	Item,
@@ -53,18 +61,28 @@ export interface SendingState {
 	status: SendStatus;
 }
 
+export interface ChatRoomSummary {
+	id: string;
+	messageCount: number;
+	memberCount: number;
+}
+
 const MAX_PANES = 3;
 
 export class AppStore {
+	items: Item[] = $state([]);
+	hosts: Host[] = $state([]);
+	account: Account | null = $state(null);
+	conversations: ConversationSummary[] = $state([]);
+	tmuxSessions: TmuxSessionSummary[] = $state([]);
+	chatRooms: ChatRoomSummary[] = $state([]);
+	chatRoomCache: Record<string, Conversation> = $state({});
+	/** Tick used by the few components that render relative timestamps. */
 	now = $state(Date.now());
-
-	items: Item[] = $state(allItems);
-	hosts: Host[] = $state(mockHosts);
-	account: Account = $state(mockAccount);
-	terminalLines: TerminalLine[] = $state(mockTerminal);
-	agents: Agent[] = $state(mockAgents);
-	paletteEntries: PaletteEntry[] = $state(paletteEntries);
-	paletteActions: PaletteEntry[] = $state(paletteActions);
+	/** Agents currently have no daemon source — empty until wired. */
+	readonly agents: Agent[] = [];
+	/** Terminal scrollback has no daemon source yet — empty. */
+	readonly terminalLines: TerminalLine[] = [];
 
 	theme: Theme = $state("dark");
 	surface: Surface = $state("desktop");
@@ -75,11 +93,11 @@ export class AppStore {
 	sidebarCollapsed = $state(false);
 	sidebarWidth = $state(320);
 
-	tabs: Tab[] = $state([{ id: "t1", itemId: "w.orchard.api-pagination", view: "chat" }]);
-	activeTabId: string | null = $state("t1");
-	paneSizes: number[] = $state([1]);
+	tabs: Tab[] = $state([]);
+	activeTabId: string | null = $state(null);
+	paneSizes: number[] = $state([]);
 	fullscreen = $state(false);
-	private nextTabSeq = 2;
+	private nextTabSeq = 1;
 
 	filters: Filter[] = $state([]);
 
@@ -91,7 +109,11 @@ export class AppStore {
 	sending: SendingState | null = $state(null);
 	forkPreview: ForkPreview | null = $state(null);
 
-	conversation: Conversation = $state(structuredClone(mockConversation));
+	selfHandle: string | null = $state(null);
+
+	private _chatUnsub: Unsub | null = null;
+	private _daemonUnsub: Unsub | null = null;
+	private _chatRoomLoading: Set<string> = new Set();
 
 	get activeTab() {
 		return this.tabs.find((t) => t.id === this.activeTabId) || null;
@@ -108,28 +130,15 @@ export class AppStore {
 	get activeItem(): Item | null {
 		const id = this.selectedId;
 		if (!id) return null;
-		// Search the merged set so live chat rooms (not present in
-		// `items`) resolve correctly when active.
 		return this.mergedItems.find((i) => i.id === id) || null;
 	}
 
-	get visibleConversation(): Conversation {
+	get visibleConversation(): Conversation | null {
 		const item = this.activeItem;
-		if (!item) return this.conversation;
-		// For channels, prefer the live chat-backend cache. Fall back to
-		// mock channelConversations only if the backend hasn't loaded
-		// anything yet for this room — gives the UI immediate content
-		// instead of an empty pane during the round-trip.
+		if (!item) return null;
 		const base =
-			item.kind === "channel"
-				? this.chatRoomCache[item.id] ||
-					channelConversations[item.id] || {
-						itemId: item.id,
-						recap: "",
-						isChannel: true,
-						messages: [],
-					}
-				: this.conversation;
+			item.kind === "channel" ? this.chatRoomCache[item.id] || emptyConversation(item.id, true) : null;
+		if (!base) return null;
 		if (!this.sending) return base;
 		return {
 			...base,
@@ -146,11 +155,6 @@ export class AppStore {
 		};
 	}
 
-	/**
-	 * Items shown in the sidebar = mock/daemon worktrees + real chat rooms.
-	 * Real rooms are merged in as ChannelItem entries so users can click
-	 * them and the conversation pane wires up to the live backend.
-	 */
 	get mergedItems(): Item[] {
 		const realChannels: Item[] = this.chatRooms.map((r) => ({
 			id: r.id,
@@ -162,13 +166,10 @@ export class AppStore {
 			repo: "",
 			status: "ok",
 			attentionReason: null,
-			lastActivity: Date.now(),
+			lastActivity: 0,
 			unread: 0,
 			sparkline: [],
 		}));
-		// De-dupe: a real room with id `general` and a mock room with id
-		// `ch.general` shouldn't collide, but if a future mock id matches
-		// a real one, real wins.
 		const seen = new Set(realChannels.map((c) => c.id));
 		const others = this.items.filter((i) => !seen.has(i.id));
 		return [...realChannels, ...others];
@@ -177,8 +178,7 @@ export class AppStore {
 	get visibleItems(): Item[] {
 		const all = this.mergedItems;
 		if (this.filters.length === 0) return all;
-		const by = (k: Filter["kind"]) =>
-			this.filters.filter((f) => f.kind === k).map((f) => f.value);
+		const by = (k: Filter["kind"]) => this.filters.filter((f) => f.kind === k).map((f) => f.value);
 		const host = by("host");
 		const status = by("status");
 		const repo = by("repo");
@@ -189,6 +189,14 @@ export class AppStore {
 			if (repo.length && (!itRepo || !repo.includes(itRepo))) return false;
 			return true;
 		});
+	}
+
+	get paletteEntries(): PaletteEntry[] {
+		return buildPaletteEntries(this.items, this.hosts, this.chatRooms);
+	}
+
+	get paletteActions(): PaletteEntry[] {
+		return PALETTE_ACTIONS;
 	}
 
 	setTheme = (t: Theme) => {
@@ -204,18 +212,12 @@ export class AppStore {
 		if (s === "mobile") {
 			this.tabs = [];
 			this.activeTabId = null;
-		} else if (this.tabs.length === 0) {
-			const id = "t" + this.nextTabSeq++;
-			this.tabs = [{ id, itemId: "w.orchard.api-pagination", view: "chat" }];
-			this.activeTabId = id;
 		}
 	};
 
 	setLens = (lens: Lens) => {
 		this.lens = lens;
 	};
-
-	private _chatRoomLoading: Set<string> = new Set();
 
 	openItem = (itemId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
 		const { newPane = false, focus = true } = opts;
@@ -240,13 +242,19 @@ export class AppStore {
 		this.tabs = next;
 		if (focus) this.activeTabId = id;
 		this._resetPaneSizes();
-		this._resetConversationFor(itemId);
+		this._maybeLoadChatRoom(itemId);
+		this.composeText = "";
+		this.sending = null;
+		this.forkPreview = null;
 	};
 
 	private _switchMobileItem = (itemId: string) => {
 		this.tabs = [{ id: "m1", itemId, view: "chat" }];
 		this.activeTabId = "m1";
-		this._resetConversationFor(itemId);
+		this._maybeLoadChatRoom(itemId);
+		this.composeText = "";
+		this.sending = null;
+		this.forkPreview = null;
 	};
 
 	mobileOpen = (itemId: string) => {
@@ -358,129 +366,95 @@ export class AppStore {
 		this.forkPreview = null;
 	};
 
-	private _resetConversationFor = (itemId: string) => {
-		const item = this.mergedItems.find((i) => i.id === itemId);
-		if (item?.kind === "channel") {
-			// Use real backend cache when available, fall back to mock until
-			// the load-room call completes.
-			const cached = this.chatRoomCache[item.id];
-			this.conversation = cached
-				? structuredClone(cached)
-				: structuredClone(
-						channelConversations[item.id] || {
-							itemId: item.id,
-							recap: "",
-							isChannel: true,
-							messages: [],
-						},
-					);
-			if (!cached && !this._chatRoomLoading.has(item.id)) {
-				this._chatRoomLoading.add(item.id);
-				this.loadChatRoom(item.id)
-					.catch(() => {})
-					.finally(() => this._chatRoomLoading.delete(item.id));
-			}
-		} else {
-			this.conversation = structuredClone(mockConversation);
-		}
-		this.sending = null;
-		this.forkPreview = null;
-		this.composeText = "";
-	};
-
 	send = () => {
 		const text = this.composeText.trim();
 		if (!text || this.sending) return;
+		const item = this.activeItem;
+		if (!item || item.kind !== "channel") return;
+
 		const tempId = "m.tmp." + Date.now();
 		const ts = Date.now();
 		this.composeText = "";
 		this.sending = { tempId, text, ts, status: "pending" };
 
-		// If the active item is a real chat room, post via the backend.
-		const item = this.activeItem;
-		if (item?.kind === "channel") {
-			const target = "#" + item.id.replace(/^#/, "");
-			this.sendChatMessage(target, text)
-				.then(() => {
-					this.sending = null;
-				})
-				.catch(() => {
-					// Backend unavailable (web/dev mode); fall through to mock fan-out.
-					this.sending = null;
-				});
-			return;
+		const target = "#" + item.id.replace(/^#/, "");
+		const b = getChatBackend();
+		b.sendMessage(target, text)
+			.then(() => {
+				this.sending = null;
+			})
+			.catch((err) => {
+				console.warn("[orchard-gui] chat send failed:", err);
+				this.sending = null;
+			});
+	};
+
+	hydrateFromDaemon = async (): Promise<boolean> => {
+		const snap = await fetchSnapshot();
+		if (!snap) {
+			this.offline = true;
+			return false;
 		}
-
-		const stages: { delay: number; status: SendStatus }[] = [
-			{ delay: 350, status: "sent" },
-			{ delay: 800, status: "delivered" },
-			{ delay: 1700, status: "read" },
-		];
-		stages.forEach((s) => {
-			setTimeout(() => {
-				if (this.sending?.tempId === tempId) {
-					this.sending = { ...this.sending, status: s.status };
-				}
-				if (s.status === "read") {
-					setTimeout(() => {
-						this.conversation = {
-							...this.conversation,
-							messages: [
-								...this.conversation.messages,
-								{
-									id: tempId,
-									role: "user",
-									status: "read",
-									ts,
-									text,
-								},
-							],
-						};
-						this.sending = null;
-						setTimeout(() => {
-							const item = this.activeItem;
-							const isChannel = item?.kind === "channel";
-							const participants = isChannel
-								? this.agents.filter((a) => item.participants?.includes(a.id))
-								: [];
-							const responder =
-								isChannel && participants.length
-									? participants[Math.floor(Math.random() * participants.length)]
-									: null;
-							this.conversation = {
-								...this.conversation,
-								messages: [
-									...this.conversation.messages,
-									{
-										id: "m.agent." + Date.now(),
-										role: "agent",
-										agentId: responder?.id,
-										status: "read",
-										ts: Date.now(),
-										text: agentReplyFor(text, responder),
-									},
-								],
-							};
-						}, 1400);
-					}, 250);
-				}
-			}, s.delay);
-		});
+		this.offline = false;
+		this.items = snap.items;
+		this.hosts = snap.hosts;
+		this.account = snap.account;
+		this.conversations = snap.conversations;
+		this.tmuxSessions = snap.tmuxSessions;
+		return true;
 	};
 
-	startNowTick = () => {
-		const id = setInterval(() => {
-			this.now = Date.now();
-		}, 5000);
-		return () => clearInterval(id);
+	/**
+	 * Heuristic match between a worktree row and a live tmux session.
+	 *
+	 * The daemon doesn't yet wire `pane.process.cwd` (issue #463) or
+	 * `claudeInstance` pid joins (issue #468), so we can't ask "which pane
+	 * is in this worktree path?" at the daemon level. Instead, we lean on
+	 * the orchard naming convention: tmux windows for issue worktrees are
+	 * named after the branch's last segment (e.g. branch
+	 * `issue468/claudeinstances-pid-join-broken` → window
+	 * `issue468-claudeinstances-pid-join-broken`). Match by substring on
+	 * either window name or session name. Fallback: empty.
+	 */
+	/**
+	 * The worktree's attached tmux session, as the daemon reports it.
+	 *
+	 * Today the daemon does NOT expose `Worktree.tmuxSession` or
+	 * `Worktree.tmuxPanes` — that requires `pane.process.cwd` (#463) plus
+	 * a join resolver, and is tracked as #506. Until that lands this
+	 * always returns null and the conversation pane shows the "no
+	 * session attached" state. **No client-side heuristic.** When the
+	 * daemon ships the field, this collapses to a single field read.
+	 */
+	tmuxSessionFor = (_item: Item): TmuxSessionSummary | null => {
+		return null;
 	};
 
-	private _chatUnsub: (() => void) | null = null;
-	chatRooms: { id: string; messageCount: number; memberCount: number }[] = $state([]);
-	private chatRoomCache: Record<string, Conversation> = {};
+	/** Find the most-recent conversation summary for a worktree path. */
+	conversationFor = (path: string): ConversationSummary | null => {
+		let best: ConversationSummary | null = null;
+		for (const c of this.conversations) {
+			if (c.cwd !== path) continue;
+			if (!best || c.lastSeenAt > best.lastSeenAt) best = c;
+		}
+		return best;
+	};
+
+	subscribeDaemon = (): Unsub => {
+		if (this._daemonUnsub) return this._daemonUnsub;
+		this._daemonUnsub = subscribeAll(
+			() => {
+				this.hydrateFromDaemon();
+			},
+			(err) => {
+				console.warn("[orchard-gui] daemon subscription failed:", err);
+				this.offline = true;
+			},
+		);
+		return this._daemonUnsub;
+	};
 
 	hydrateChatRooms = async () => {
-		const { getChatBackend } = await import("./data/chat");
 		const b = getChatBackend();
 		try {
 			this.chatRooms = await b.listRooms();
@@ -490,130 +464,96 @@ export class AppStore {
 	};
 
 	loadChatRoom = async (roomId: string) => {
-		const { getChatBackend, chatCoreToGuiMessage } = await import("./data/chat");
 		const b = getChatBackend();
+		const self = this.selfHandle ?? (await getSelfHandle());
+		this.selfHandle = self;
 		const full = await b.loadRoom(roomId);
-		this.chatRoomCache[roomId] = {
-			itemId: roomId,
-			recap: "",
-			isChannel: true,
-			messages: full.messages.map(chatCoreToGuiMessage),
+		this.chatRoomCache = {
+			...this.chatRoomCache,
+			[roomId]: {
+				itemId: roomId,
+				recap: "",
+				isChannel: true,
+				messages: full.messages.map((m) => chatCoreToGuiMessage(m, self ?? undefined)),
+			},
 		};
-		// If this room is currently selected, swap in.
-		const item = this.activeItem;
-		if (item?.kind === "channel" && item.id === roomId) {
-			this.conversation = this.chatRoomCache[roomId];
-		}
 	};
 
-	sendChatMessage = async (target: string, text: string) => {
-		const { getChatBackend } = await import("./data/chat");
-		const b = getChatBackend();
-		try {
-			await b.sendMessage(target, text);
-		} catch (err) {
-			console.warn("[orchard-gui] chat send failed:", err);
-			throw err;
-		}
+	private _maybeLoadChatRoom = (itemId: string) => {
+		const item = this.mergedItems.find((i) => i.id === itemId);
+		if (item?.kind !== "channel") return;
+		if (this.chatRoomCache[itemId] || this._chatRoomLoading.has(itemId)) return;
+		this._chatRoomLoading.add(itemId);
+		this.loadChatRoom(itemId)
+			.catch(() => {})
+			.finally(() => this._chatRoomLoading.delete(itemId));
 	};
 
-	subscribeChatAppends = async () => {
-		if (this._chatUnsub) return;
-		const { getChatBackend, chatCoreToGuiMessage } = await import("./data/chat");
-		const b = getChatBackend();
-		this._chatUnsub = await b.subscribeAppends((p) => {
+	subscribeChat = async (): Promise<Unsub> => {
+		if (this._chatUnsub) return this._chatUnsub;
+		const b: ChatBackend = getChatBackend();
+		const self = this.selfHandle ?? (await getSelfHandle());
+		this.selfHandle = self;
+		const unsub = await b.subscribeAppends((p) => {
 			if (p.kind === "message") {
 				const room = p.room;
 				const cached = this.chatRoomCache[room];
-				const msg = chatCoreToGuiMessage(p.line);
-				if (cached) {
-					this.chatRoomCache[room] = {
-						...cached,
-						messages: [...cached.messages, msg],
-					};
-				}
-				const item = this.activeItem;
-				if (item?.kind === "channel" && item.id === room) {
-					this.conversation = this.chatRoomCache[room]!;
-				}
-				this.hydrateChatRooms();
-			} else if (p.kind === "member_joined" || p.kind === "member_left") {
-				this.hydrateChatRooms();
+				const msg = chatCoreToGuiMessage(p.line, self ?? undefined);
+				const next = cached
+					? { ...cached, messages: [...cached.messages, msg] }
+					: { itemId: room, recap: "", isChannel: true, messages: [msg] };
+				this.chatRoomCache = { ...this.chatRoomCache, [room]: next };
+				this._patchRoomCount(room, +1);
+			} else if (p.kind === "member_joined") {
+				this._patchMemberCount(p.room, +1);
+			} else if (p.kind === "member_left") {
+				this._patchMemberCount(p.room, -1);
 			}
 		});
+		this._chatUnsub = unsub;
+		return unsub;
 	};
 
-	hydrateFromDaemon = async () => {
-		const { fetchWorkView, mapDaemonToGui } = await import("./data/graphql");
-		const data = await fetchWorkView();
-		if (!data) {
-			this.offline = true;
-			return false;
+	private _patchRoomCount = (roomId: string, delta: number) => {
+		const idx = this.chatRooms.findIndex((r) => r.id === roomId);
+		if (idx < 0) {
+			this.chatRooms = [...this.chatRooms, { id: roomId, messageCount: Math.max(0, delta), memberCount: 0 }];
+			return;
 		}
-		this.offline = false;
-		const { items: liveWorktrees, hosts: liveHosts } = mapDaemonToGui(data);
-		const channels = this.items.filter((i) => i.kind === "channel");
-		this.items = [...channels, ...(liveWorktrees as Item[])];
-		if (liveHosts.length) this.hosts = liveHosts as Host[];
-		return true;
+		const next = [...this.chatRooms];
+		next[idx] = { ...next[idx], messageCount: Math.max(0, next[idx].messageCount + delta) };
+		this.chatRooms = next;
 	};
 
-	subscribeDaemon = async () => {
-		const { subscribeWorktreeChanged, subscribeTmuxChanged } = await import("./data/graphql");
-		const stops: Array<() => void> = [];
-		stops.push(
-			subscribeWorktreeChanged(
-				() => {
-					this.hydrateFromDaemon();
-				},
-				(err) => {
-					console.warn("[orchard-gui] worktree subscription failed:", err);
-					this.offline = true;
-				},
-			),
-		);
-		stops.push(
-			subscribeTmuxChanged(
-				() => {
-					this.hydrateFromDaemon();
-				},
-				(err) => {
-					console.warn("[orchard-gui] tmux subscription failed:", err);
-				},
-			),
-		);
-		return () => {
-			for (const stop of stops) stop();
-		};
+	private _patchMemberCount = (roomId: string, delta: number) => {
+		const idx = this.chatRooms.findIndex((r) => r.id === roomId);
+		if (idx < 0) return;
+		const next = [...this.chatRooms];
+		next[idx] = { ...next[idx], memberCount: Math.max(0, next[idx].memberCount + delta) };
+		this.chatRooms = next;
 	};
 
-	startLiveTick = () => {
+	startNowTick = (): Unsub => {
 		const id = setInterval(() => {
-			const idx = Math.floor(Math.random() * this.items.length);
-			const next = [...this.items];
-			next[idx] = {
-				...next[idx],
-				lastActivity: Date.now() - Math.floor(Math.random() * 30000),
-			} as Item;
-			this.items = next;
-		}, 12_000);
+			this.now = Date.now();
+		}, 60_000);
 		return () => clearInterval(id);
+	};
+
+	teardown = () => {
+		if (this._daemonUnsub) {
+			this._daemonUnsub();
+			this._daemonUnsub = null;
+		}
+		if (this._chatUnsub) {
+			this._chatUnsub();
+			this._chatUnsub = null;
+		}
 	};
 }
 
-function agentReplyFor(text: string, agent: Agent | null): string {
-	const lower = text.toLowerCase();
-	if (agent?.role === "Reviewer") return "Reading the diff now — I'll flag anything I'd block on before approving.";
-	if (agent?.role === "Tester") return "Kicking off the relevant tests on my host. Will post counts when they settle.";
-	if (agent?.role === "Patcher") return "On it — drafting the change against the worktree. Patch + tests incoming.";
-	if (agent?.role === "Planner") return "Let me lay out the moves before we commit anyone's hands to a keyboard. Two options I see…";
-	if (agent?.role === "Researcher") return "Pulling references — I'll cross-check against the existing pattern in `list_runs.rs` and report back.";
-	if (agent?.role === "Writer") return "I can capture the decision in ADR form once you all settle on the shape.";
-	if (lower.includes("test")) return "Running the test suite — give me 30s. I'll report counts and any failures.";
-	if (lower.includes("push") || lower.includes("pr"))
-		return "I'll stage the change, run pre-push hooks, and push to the worktree's branch. Want me to open the PR after?";
-	if (lower.includes("?")) return "Good question. Let me check the current state and come back with specifics rather than guess.";
-	return "Got it — picking that up next. I'll keep you posted as I make progress.";
+function emptyConversation(itemId: string, isChannel: boolean): Conversation {
+	return { itemId, recap: "", isChannel, messages: [] };
 }
 
 let _store: AppStore | null = null;

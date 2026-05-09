@@ -5,9 +5,9 @@
  * The CLI binaries call `worktree-core` directly; the GUI calls it through
  * these Tauri-invoke proxies.
  *
- * Stateful ops (chat send, contract update, cross-host transfer) go through
- * `$lib/data/graphql.ts` once the daemon write protocol lands per research/037
- * §1 (HTTP queue or gRPC, pending decision).
+ * Stateful ops (chat send, contract update, cross-host transfer) live in
+ * `$lib/data/chat.ts` (chat-core via Tauri) or `$lib/data/daemon.ts`
+ * (daemon GraphQL) — not here.
  */
 
 import { invoke } from "@tauri-apps/api/core";
