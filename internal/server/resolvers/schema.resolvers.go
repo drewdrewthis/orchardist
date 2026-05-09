@@ -1332,12 +1332,19 @@ func stripContractIDPrefix(id string) string {
 	return id
 }
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
+	// Host defaults to "local" so that sibling resolvers (TmuxPanes,
+	// TmuxSession) that compare obj.Host against pane.Key.Host see the
+	// correct value when the worktree is locally discovered.
+	// Workstream F will populate this from the remote host id once
+	// federated discovery lands; for now the host resolver also returns
+	// "local" unconditionally. (#511)
 	return &graphql1.Worktree{
 		ID:     string(w.ID),
 		Path:   w.Path,
 		Branch: w.Branch,
 		Head:   w.Head,
 		Bare:   w.Bare,
+		Host:   "local",
 	}
 }
 func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
