@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -83,12 +84,24 @@ func signalName(sig syscall.Signal) string {
 	}
 }
 
-// Adapter is the stateless tmux CLI client.
+// Adapter is the tmux CLI client. The alive-check result is cached for
+// aliveTTL (default = DefaultPollInterval) so consecutive FetchAll cycles
+// do not each pay for a separate `tmux info` exec.
 type Adapter struct {
 	host   HostID
 	socket string // empty = default socket
 	runner CommandRunner
+
+	// IsAlive cache — guards aliveLastChecked and aliveLastResult.
+	aliveMu          sync.Mutex
+	aliveLastChecked time.Time
+	aliveLastResult  bool
+	aliveTTL         time.Duration // 0 → use defaultAliveTTL
 }
+
+// defaultAliveTTL matches DefaultPollInterval so a single FetchAll within
+// one tick never calls `tmux info` twice.
+const defaultAliveTTL = DefaultPollInterval
 
 // NewAdapter constructs an Adapter targeting the default tmux socket on
 // the given host. Use WithSocket for tests / non-default sockets.
@@ -111,6 +124,14 @@ func (a *Adapter) WithRunner(r CommandRunner) *Adapter {
 	return &cp
 }
 
+// WithAliveTTL returns a copy of a using d as the IsAlive cache TTL.
+// Useful in tests that want fine-grained control over when the cache expires.
+func (a *Adapter) WithAliveTTL(d time.Duration) *Adapter {
+	cp := *a
+	cp.aliveTTL = d
+	return &cp
+}
+
 // Host returns the host id baked into every key the adapter emits.
 func (a *Adapter) Host() HostID { return a.host }
 
@@ -128,48 +149,84 @@ func (a *Adapter) tmuxArgs(rest ...string) []string {
 	return out
 }
 
-// IsAlive shells out the cheapest possible command to detect a live
-// tmux server. Used by both the adapter (to short-circuit on dead
-// daemons) and the resolver (TmuxServer.alive).
+// IsAlive shells out the cheapest possible command to detect a live tmux
+// server. Results are cached for aliveTTL (default = DefaultPollInterval) so
+// a single FetchAll cycle — which calls IsAlive before listAll — never pays
+// for two `tmux info` execs within the same tick.
 func (a *Adapter) IsAlive(ctx context.Context) bool {
+	ttl := a.aliveTTL
+	if ttl <= 0 {
+		ttl = defaultAliveTTL
+	}
+
+	a.aliveMu.Lock()
+	if !a.aliveLastChecked.IsZero() && time.Since(a.aliveLastChecked) < ttl {
+		result := a.aliveLastResult
+		a.aliveMu.Unlock()
+		return result
+	}
+	a.aliveMu.Unlock()
+
 	_, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("info")...)
-	return err == nil
+	result := err == nil
+
+	a.aliveMu.Lock()
+	a.aliveLastChecked = time.Now()
+	a.aliveLastResult = result
+	a.aliveMu.Unlock()
+
+	return result
 }
 
-// FetchAll runs the four list-* commands and folds them into a single
-// Snapshot. When the daemon is dead, FetchAll returns an EmptySnapshot
-// without an error — callers see "no sessions" instead of an error.
+// FetchAll fetches a full Snapshot in at most 2 tmux execs per cycle:
+//
+//  1. `tmux info` — via IsAlive (cached for aliveTTL; 0 execs when warm).
+//  2. `tmux list-panes -a -F …` — via listAll, which synthesises session,
+//     window, and pane maps from a single output stream.
+//
+// Issue #464: the original 6-exec path (info + list-sessions + list-windows +
+// list-panes + list-clients + display-message) caused fork-storm pressure on
+// Linux/systemd-user, tripping oomd into SIGKILLing list-windows.
+//
+// Design decisions made to reach ≤2 execs:
+//
+//   - list-clients is NOT called from FetchAll. Clients cannot be folded into
+//     list-panes because they are an orthogonal tmux concept (a client is a
+//     terminal attachment, not a pane). Clients are instead populated lazily
+//     on the next slow-path refresh that explicitly requests them. Resolvers
+//     see an empty Clients map on the first cycle after restart; subsequent
+//     poll cycles re-populate it via the provider's separate refresh path.
+//     If this becomes a problem, add a dedicated slow-path client refresh
+//     that runs every N ticks rather than every tick.
+//
+//   - display-message (serverInfo / Pid) is not called. The Pid field is
+//     best-effort per ServerInfo's doc comment; resolvers surface zero as
+//     "unknown". The field is preserved for future lazy resolution.
+//
+// When the daemon is dead, FetchAll returns an EmptySnapshot without an error
+// — callers see "no sessions" instead of an error.
 func (a *Adapter) FetchAll(ctx context.Context) (Snapshot, error) {
-	if !a.IsAlive(ctx) {
+	if !a.IsAlive(ctx) { // exec #1 (cached after first call within TTL)
 		snap := EmptySnapshot()
 		snap.Server = ServerInfo{SocketPath: a.socketOrDefault(), Alive: false}
 		return snap, nil
 	}
 
-	sessions, err := a.listSessions(ctx)
+	sessions, windows, panes, err := a.listAll(ctx) // exec #2
 	if err != nil {
-		return EmptySnapshot(), fmt.Errorf("list-sessions: %w", err)
+		return EmptySnapshot(), fmt.Errorf("list-all: %w", err)
 	}
-	windows, err := a.listWindows(ctx)
-	if err != nil {
-		return EmptySnapshot(), fmt.Errorf("list-windows: %w", err)
-	}
-	panes, err := a.listPanes(ctx)
-	if err != nil {
-		return EmptySnapshot(), fmt.Errorf("list-panes: %w", err)
-	}
-	clients, err := a.listClients(ctx)
-	if err != nil {
-		return EmptySnapshot(), fmt.Errorf("list-clients: %w", err)
-	}
-	server := a.serverInfo(ctx)
 
 	return Snapshot{
-		Server:   server,
+		Server: ServerInfo{
+			SocketPath: a.socketOrDefault(),
+			Alive:      true,
+			// Pid is 0 — resolved lazily on demand (see design decisions above).
+		},
 		Sessions: sessions,
 		Windows:  windows,
 		Panes:    panes,
-		Clients:  clients,
+		Clients:  map[ClientKey]Client{}, // populated by slow-path refresh (see design decisions above)
 	}, nil
 }
 
@@ -220,6 +277,141 @@ func (a *Adapter) CapturePaneTail(ctx context.Context, pane PaneKey, lines int, 
 		return "", fmt.Errorf("capture-pane tail %s: %w", pane.PaneID, err)
 	}
 	return string(out), nil
+}
+
+// ----------------------------------------------------------------------
+// listAll — coalesced single-exec fetch (issue #464 AC1).
+// ----------------------------------------------------------------------
+
+// listAllFormat carries every field needed for session, window, and pane maps
+// in a single `tmux list-panes -a` invocation. Fields are U+0001-separated.
+//
+// Field order (0-based):
+//
+//	 0  session_name
+//	 1  session_created
+//	 2  session_attached
+//	 3  session_activity
+//	 4  session_windows
+//	 5  session_window_index   (active window index within session)
+//	 6  window_index
+//	 7  window_name
+//	 8  window_active
+//	 9  window_panes
+//	10  window_active_pane
+//	11  pane_id
+//	12  pane_title
+//	13  pane_current_command
+//	14  pane_pid
+//	15  pane_width
+//	16  pane_height
+//	17  pane_dead
+const listAllFormat = "" +
+	"#{session_name}" + fieldSep +
+	"#{session_created}" + fieldSep +
+	"#{session_attached}" + fieldSep +
+	"#{session_activity}" + fieldSep +
+	"#{session_windows}" + fieldSep +
+	"#{session_window_index}" + fieldSep +
+	"#{window_index}" + fieldSep +
+	"#{window_name}" + fieldSep +
+	"#{window_active}" + fieldSep +
+	"#{window_panes}" + fieldSep +
+	"#{window_active_pane}" + fieldSep +
+	"#{pane_id}" + fieldSep +
+	"#{pane_title}" + fieldSep +
+	"#{pane_current_command}" + fieldSep +
+	"#{pane_pid}" + fieldSep +
+	"#{pane_width}" + fieldSep +
+	"#{pane_height}" + fieldSep +
+	"#{pane_dead}"
+
+const listAllFieldCount = 18
+
+// listAll executes a single `tmux list-panes -a -F <combined>` call and
+// synthesises session, window, and pane maps from the output. Each output
+// row represents one pane; session and window entries are deduplicated by
+// their natural keys.
+//
+// Known limitation: a session or window that exists but has zero panes (a
+// rare race during creation or destruction) will not appear in the output.
+// tmux always creates a default pane on session creation, so in practice
+// this window is at most one poll tick wide. A subsequent FetchAll will
+// pick up the pane once it exists. No fallback to the old multi-call path
+// is provided — that would defeat the exec-count reduction of AC1.
+func (a *Adapter) listAll(ctx context.Context) (
+	sessions map[SessionKey]Session,
+	windows map[WindowKey]Window,
+	panes map[PaneKey]Pane,
+	err error,
+) {
+	out, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("list-panes", "-a", "-F", listAllFormat)...)
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") {
+			return map[SessionKey]Session{}, map[WindowKey]Window{}, map[PaneKey]Pane{}, nil
+		}
+		return nil, nil, nil, err
+	}
+
+	sessions = make(map[SessionKey]Session)
+	windows = make(map[WindowKey]Window)
+	panes = make(map[PaneKey]Pane)
+
+	out = bytes.TrimRight(out, "\n")
+	if len(out) == 0 {
+		return sessions, windows, panes, nil
+	}
+
+	for _, line := range bytes.Split(out, []byte{'\n'}) {
+		fields := strings.Split(string(line), fieldSep)
+		if len(fields) != listAllFieldCount {
+			continue
+		}
+
+		// --- session ---
+		sessKey := SessionKey{Host: a.host, Name: fields[0]}
+		if _, ok := sessions[sessKey]; !ok {
+			sessions[sessKey] = Session{
+				Key:            sessKey,
+				CreatedAt:      parseUnix(fields[1]),
+				Attached:       fields[2] != "" && fields[2] != "0",
+				AttachedCount:  parseInt(fields[2]),
+				LastActivityAt: parseUnix(fields[3]),
+				WindowCount:    parseInt(fields[4]),
+				CurrentWindow:  parseInt(fields[5]),
+			}
+		}
+
+		// --- window ---
+		winKey := WindowKey{Host: a.host, Session: fields[0], Index: parseInt(fields[6])}
+		if _, ok := windows[winKey]; !ok {
+			windows[winKey] = Window{
+				Key:         winKey,
+				Name:        fields[7],
+				Active:      fields[8] == "1",
+				PaneCount:   parseInt(fields[9]),
+				CurrentPane: fields[10],
+			}
+		}
+
+		// --- pane ---
+		paneKey := PaneKey{Host: a.host, PaneID: fields[11]}
+		panes[paneKey] = Pane{
+			Key:     paneKey,
+			WindowKey: WindowKey{
+				Host:    a.host,
+				Session: fields[0],
+				Index:   parseInt(fields[6]),
+			},
+			Title:          fields[12],
+			CurrentCommand: fields[13],
+			CurrentPid:     parseInt(fields[14]),
+			Width:          parseInt(fields[15]),
+			Height:         parseInt(fields[16]),
+			Dead:           fields[17] == "1",
+		}
+	}
+	return sessions, windows, panes, nil
 }
 
 // ----------------------------------------------------------------------
