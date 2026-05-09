@@ -18,6 +18,24 @@
 
   Out of scope for this release: the orchardist working directory at `~/.config/orchard/.orchardist/` and the state directory `~/.local/state/orchard` both stay where they are.
 
+## [1.0.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.14.0...orchard-v1.0.0) (2026-05-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** orchard's global config now lives at ~/.orchard/config.json instead of ~/.config/orchard/config.json. Migrate with: mv ~/.config/orchard ~/.orchard
+
+### Features
+
+* **config:** move global config to ~/.orchard/ ([#424](https://github.com/drewdrewthis/git-orchard-rs/issues/424)) ([#477](https://github.com/drewdrewthis/git-orchard-rs/issues/477)) ([3e736ff](https://github.com/drewdrewthis/git-orchard-rs/commit/3e736ffc5296a9425cdd106eefdea8ecefb0a286))
+* **tui:** rip cache_sources from dashboard refresh path ([#426](https://github.com/drewdrewthis/git-orchard-rs/issues/426) phase 5) ([#482](https://github.com/drewdrewthis/git-orchard-rs/issues/482)) ([19e0413](https://github.com/drewdrewthis/git-orchard-rs/commit/19e0413491c72d2625a5d64a92dc9829521e8f0c))
+
+
+### Bug Fixes
+
+* **global_config:** preserve unknown top-level keys on save ([#432](https://github.com/drewdrewthis/git-orchard-rs/issues/432)) ([#479](https://github.com/drewdrewthis/git-orchard-rs/issues/479)) ([d2ef6c9](https://github.com/drewdrewthis/git-orchard-rs/commit/d2ef6c9d6c3d2bc3460967e1cf0bbc836f439554))
+* **restore:** stop resurrecting killed tmux sessions on every read ([#460](https://github.com/drewdrewthis/git-orchard-rs/issues/460)) ([#480](https://github.com/drewdrewthis/git-orchard-rs/issues/480)) ([2394cf8](https://github.com/drewdrewthis/git-orchard-rs/commit/2394cf829f3e79548679d341f5ce2571112eb896))
+
 ## [0.14.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.13.0...orchard-v0.14.0) (2026-05-07)
 
 
