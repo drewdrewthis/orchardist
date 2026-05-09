@@ -39,11 +39,11 @@
 	const store = getStore();
 	const conv = $derived(store.conversationFor(item.path));
 
-	const tmuxName = $derived(
-		item.session?.instance ||
-			(item.session?.uuid ? `claude-${item.session.uuid.slice(0, 4)}` : null),
-	);
-	const attachCmd = $derived(tmuxName ? `tmux -L orchard attach -t ${tmuxName}` : null);
+	// Pane is the unit. Window/session = breadcrumb context. Attach copy
+	// preselects the pane so paste-attach lands the user where the work is.
+	const panes = $derived(store.tmuxPanesFor(item));
+	const attachCmdFor = (paneId: string, sessionName: string) =>
+		`tmux select-pane -t ${paneId} \\; attach -t ${sessionName}`;
 
 	async function copy(kind: string, text: string) {
 		try {
@@ -113,17 +113,25 @@
 						<span>#{item.issue.number}</span>
 					</a>
 				{/if}
-				{#if tmuxName && attachCmd}
+				{#each panes as pane (pane.paneId)}
+					{@const live = pane.window.active && pane.session.activeAttached}
+					{@const cmd = attachCmdFor(pane.paneId, pane.session.name)}
 					<button
 						class="conv-chip"
-						title="Click to copy: {attachCmd}"
-						onclick={() => copy("tmux", attachCmd)}
+						class:live
+						title="{pane.session.name} → {pane.window.name} · {pane.paneId} ({pane.command}). Click to copy: {cmd}"
+						onclick={() => copy(`pane-${pane.paneId}`, cmd)}
 					>
 						<Icon name="terminal" size={10} />
-						<span class="mono">{tmuxName}</span>
-						<Icon name={copied === "tmux" ? "check" : "copy"} size={10} />
+						<span class="mono">{pane.paneId}</span>
+						<span class="dimer">·</span>
+						<span class="mono">{pane.window.name}</span>
+						{#if live}
+							<span class="pip live" title="Active pane in an attached session"></span>
+						{/if}
+						<Icon name={copied === `pane-${pane.paneId}` ? "check" : "copy"} size={10} />
 					</button>
-				{/if}
+				{/each}
 				{#if item.session?.uuid}
 					<button
 						class="conv-chip"

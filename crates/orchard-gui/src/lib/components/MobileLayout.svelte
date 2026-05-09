@@ -117,15 +117,19 @@
 					onCancelFork={() => store.cancelFork()}
 				/>
 			{:else}
-				{@const tmux = store.tmuxSessionFor(selected)}
-				{#if tmux}
+				{@const pane = store.primaryPaneFor(selected)}
+				{#if pane}
 					<TerminalAttach
-						argv={["tmux", "attach-session", "-t", tmux.name]}
-						label={tmux.name}
+						argv={[
+							"sh",
+							"-c",
+							`tmux select-pane -t ${pane.paneId} 2>/dev/null; exec tmux attach-session -t ${pane.session.name}`,
+						]}
+						label={`${pane.session.name} → ${pane.window.name} · ${pane.paneId}`}
 					/>
 				{:else}
 					<div class="conv-empty">
-						<div style="font-size: 13px; color: var(--fg-2);">No tmux session attached.</div>
+						<div style="font-size: 13px; color: var(--fg-2);">No tmux pane in this worktree.</div>
 					</div>
 				{/if}
 			{/if}

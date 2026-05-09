@@ -16,6 +16,7 @@ import {
 	type ConversationSummary,
 	type TmuxSessionSummary,
 	type Unsub,
+	type WorktreePaneSummary,
 } from "./data/daemon";
 import { buildPaletteEntries, PALETTE_ACTIONS } from "./data/palette";
 import {
@@ -75,8 +76,8 @@ export class AppStore {
 	account: Account | null = $state(null);
 	conversations: ConversationSummary[] = $state([]);
 	tmuxSessions: TmuxSessionSummary[] = $state([]);
-	/** Server-joined Worktree → TmuxSession map (daemon #511). */
-	worktreeTmux: Record<string, TmuxSessionSummary> = $state({});
+	/** Server-joined Worktree → tmux panes (daemon #511). Keyed by worktree id. */
+	worktreePanes: Record<string, WorktreePaneSummary[]> = $state({});
 	chatRooms: ChatRoomSummary[] = $state([]);
 	chatRoomCache: Record<string, Conversation> = $state({});
 	/** Tick used by the few components that render relative timestamps. */
@@ -403,30 +404,37 @@ export class AppStore {
 		this.account = snap.account;
 		this.conversations = snap.conversations;
 		this.tmuxSessions = snap.tmuxSessions;
-		this.worktreeTmux = snap.worktreeTmux;
+		this.worktreePanes = snap.worktreePanes;
 		return true;
 	};
 
 	/**
-	 * Heuristic match between a worktree row and a live tmux session.
-	 *
-	 * The daemon doesn't yet wire `pane.process.cwd` (issue #463) or
-	 * `claudeInstance` pid joins (issue #468), so we can't ask "which pane
-	 * is in this worktree path?" at the daemon level. Instead, we lean on
-	 * the orchard naming convention: tmux windows for issue worktrees are
-	 * named after the branch's last segment (e.g. branch
-	 * `issue468/claudeinstances-pid-join-broken` → window
-	 * `issue468-claudeinstances-pid-join-broken`). Match by substring on
-	 * either window name or session name. Fallback: empty.
+	 * The tmux panes whose foreground-process cwd sits in the worktree
+	 * path, as the daemon reports it via `Worktree.tmuxPanes` (#511).
+	 * A pane is the unit; window + session are context.
 	 */
+	tmuxPanesFor = (item: Item): WorktreePaneSummary[] => {
+		if (item.kind !== "worktree") return [];
+		return this.worktreePanes[item.id] || [];
+	};
+
 	/**
-	 * The worktree's attached tmux session, as the daemon reports it via
-	 * `Worktree.tmuxSession` (#511). Server-joined; no client-side
-	 * heuristic. Returns null when no pane sits in the worktree path.
+	 * Pick the "primary" pane for a worktree — the one we'd attach a
+	 * terminal to by default. Preference order:
+	 *   1. The pane that's currently the active pane in an active window
+	 *      of an actively-attached session (i.e. what a human is looking at).
+	 *   2. The pane in an active window (whether or not anyone's watching).
+	 *   3. The first pane in the list (deterministic fallback).
+	 * Returns null when no panes match.
 	 */
-	tmuxSessionFor = (item: Item): TmuxSessionSummary | null => {
-		if (item.kind !== "worktree") return null;
-		return this.worktreeTmux[item.id] || null;
+	primaryPaneFor = (item: Item): WorktreePaneSummary | null => {
+		const panes = this.tmuxPanesFor(item);
+		if (panes.length === 0) return null;
+		const live = panes.find((p) => p.window.active && p.session.activeAttached);
+		if (live) return live;
+		const active = panes.find((p) => p.window.active);
+		if (active) return active;
+		return panes[0];
 	};
 
 	/** Find the most-recent conversation summary for a worktree path. */

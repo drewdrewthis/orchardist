@@ -69,10 +69,24 @@ const DASHBOARD = gql`
 						number
 						state
 					}
-					tmuxSession {
-						id
-						name
-						lastActivityAt
+					tmuxPanes {
+						paneId
+						title
+						currentCommand
+						currentPid
+						window {
+							id
+							index
+							name
+							active
+							session {
+								id
+								name
+								attached
+								activeAttached
+								lastActivityAt
+							}
+						}
 					}
 				}
 			}
@@ -126,7 +140,25 @@ interface DashboardResponse {
 				repo: string | null;
 				pr: { number: number; state: string } | null;
 				issue: { number: number; state: string } | null;
-				tmuxSession: { id: string; name: string; lastActivityAt: string | null } | null;
+				tmuxPanes: Array<{
+					paneId: string;
+					title: string;
+					currentCommand: string;
+					currentPid: number | null;
+					window: {
+						id: string;
+						index: number;
+						name: string;
+						active: boolean;
+						session: {
+							id: string;
+							name: string;
+							attached: boolean;
+							activeAttached: boolean;
+							lastActivityAt: string | null;
+						};
+					};
+				}>;
 			}>;
 		}>;
 	};
@@ -169,6 +201,30 @@ export interface TmuxSessionSummary {
 	windowNames: string[];
 }
 
+/**
+ * One tmux pane that the daemon's CWD-join attached to a worktree (#511).
+ * The pane is the unit — window/session are breadcrumb context.
+ */
+export interface WorktreePaneSummary {
+	paneId: string;            // "%104"
+	title: string;             // pane_title (often the foreground command's title)
+	command: string;           // current_command (may be a Claude version string)
+	pid: number | null;
+	window: {
+		id: string;            // "TmuxWindow:host:session:idx"
+		index: number;
+		name: string;
+		active: boolean;       // current window in its session
+	};
+	session: {
+		id: string;
+		name: string;
+		attached: boolean;             // any client attached anywhere
+		activeAttached: boolean;       // a client is currently watching this session
+		lastActivityAt: number;        // session-level (best signal until pane-level lands)
+	};
+}
+
 export interface ConversationSummary {
 	id: string;
 	sessionUuid: string;
@@ -187,11 +243,13 @@ export interface Snapshot {
 	conversations: ConversationSummary[];
 	tmuxSessions: TmuxSessionSummary[];
 	/**
-	 * Server-joined Worktree → TmuxSession map (per #511). Keyed by
-	 * worktree id; null when no pane sits in that worktree path. The
-	 * GUI uses this directly — no client-side join.
+	 * Server-joined Worktree → tmux panes (#511). Keyed by worktree id;
+	 * each entry is the list of panes whose foreground-process cwd sits
+	 * inside the worktree path. A pane is the unit (touch point); window
+	 * + session are breadcrumb context. The GUI uses this directly — no
+	 * client-side join.
 	 */
-	worktreeTmux: Record<string, TmuxSessionSummary>;
+	worktreePanes: Record<string, WorktreePaneSummary[]>;
 }
 
 export async function fetchSnapshot(): Promise<Snapshot | null> {
@@ -225,22 +283,35 @@ function mapSnapshot(d: DashboardResponse): Snapshot {
 		if (!existing || c.lastSeenAt > existing.lastSeenAt) byCwd.set(c.cwd, c);
 	}
 
-	const worktreeTmux: Record<string, TmuxSessionSummary> = {};
+	const worktreePanes: Record<string, WorktreePaneSummary[]> = {};
 
 	const items: Item[] = d.workView.projects.flatMap((p) =>
 		p.worktrees
 			.filter((w) => !w.bare)
 			.map((w): Item => {
 				const conv = byCwd.get(w.path) || null;
-				if (w.tmuxSession) {
-					worktreeTmux[w.id] = {
-						id: w.tmuxSession.id,
-						name: w.tmuxSession.name,
-						lastActivityAt: w.tmuxSession.lastActivityAt
-							? Date.parse(w.tmuxSession.lastActivityAt) || 0
-							: 0,
-						windowNames: [],
-					};
+				if (w.tmuxPanes && w.tmuxPanes.length > 0) {
+					worktreePanes[w.id] = w.tmuxPanes.map((tp) => ({
+						paneId: tp.paneId,
+						title: tp.title,
+						command: tp.currentCommand,
+						pid: tp.currentPid,
+						window: {
+							id: tp.window.id,
+							index: tp.window.index,
+							name: tp.window.name,
+							active: tp.window.active,
+						},
+						session: {
+							id: tp.window.session.id,
+							name: tp.window.session.name,
+							attached: tp.window.session.attached,
+							activeAttached: tp.window.session.activeAttached,
+							lastActivityAt: tp.window.session.lastActivityAt
+								? Date.parse(tp.window.session.lastActivityAt) || 0
+								: 0,
+						},
+					}));
 				}
 				return {
 					id: w.id,
@@ -308,7 +379,7 @@ function mapSnapshot(d: DashboardResponse): Snapshot {
 		windowNames: s.windows.map((w) => w.name),
 	}));
 
-	return { items, hosts, account, conversations, tmuxSessions, worktreeTmux };
+	return { items, hosts, account, conversations, tmuxSessions, worktreePanes };
 }
 
 function deriveStatus(w: { pr: { state: string } | null }): ItemStatus {

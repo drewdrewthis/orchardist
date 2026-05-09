@@ -161,16 +161,20 @@
 				{onCancelFork}
 			/>
 		{:else}
-			{@const tmux = store.tmuxSessionFor(item)}
-			{#if tmux}
+			{@const pane = store.primaryPaneFor(item)}
+			{#if pane}
 				<TerminalAttach
-					argv={["tmux", "attach-session", "-t", tmux.name]}
-					label="{tmux.name}"
+					argv={[
+						"sh",
+						"-c",
+						`tmux select-pane -t ${pane.paneId} 2>/dev/null; exec tmux attach-session -t ${pane.session.name}`,
+					]}
+					label={`${pane.session.name} → ${pane.window.name} · ${pane.paneId}`}
 				/>
 			{:else}
 				<div class="conv-empty">
 					<div style="font-size: 13px; font-weight: 500; color: var(--fg-2);">
-						No tmux session attached to this worktree.
+						No tmux pane in this worktree.
 					</div>
 					<div class="dimer mono" style="font-size: 11.5px; margin-top: 4px;">
 						{item.path}
