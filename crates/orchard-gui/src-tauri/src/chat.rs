@@ -191,23 +191,48 @@ pub fn chat_send(
     })
 }
 
+/// Resolve a default sender handle for outbound chat sends.
+///
+/// Resolution order:
+///   1. `$TMUX` set + a tmux session name → `@<derived-handle>`
+///      (matches what the chat-core CLI uses inside a tmux pane).
+///   2. `$ORCHARD_CHAT_SENDER` env var (allows ops + tests to pin
+///      identity from outside tmux).
+///   3. Fallback to `@<hostname>` so the GUI — which always runs
+///      outside tmux — can still send. The user can override via
+///      explicit `sender` arg on the `chat_send` command.
 fn default_sender_handle() -> Option<String> {
-    let tmux = std::env::var("TMUX").ok()?;
-    if tmux.is_empty() {
-        return None;
+    if let Ok(tmux) = std::env::var("TMUX") {
+        if !tmux.is_empty() {
+            if let Ok(session) = std::process::Command::new("tmux")
+                .args(["display-message", "-p", "#{session_name}"])
+                .output()
+            {
+                if session.status.success() {
+                    let name = String::from_utf8_lossy(&session.stdout).trim().to_string();
+                    if !name.is_empty() {
+                        return Some(format!("@{}", derive_handle(&name, None)));
+                    }
+                }
+            }
+        }
     }
-    let session = std::process::Command::new("tmux")
-        .args(["display-message", "-p", "#{session_name}"])
-        .output()
-        .ok()?;
-    if !session.status.success() {
-        return None;
+    if let Ok(explicit) = std::env::var("ORCHARD_CHAT_SENDER") {
+        if !explicit.is_empty() {
+            return Some(if explicit.starts_with('@') {
+                explicit
+            } else {
+                format!("@{explicit}")
+            });
+        }
     }
-    let name = String::from_utf8_lossy(&session.stdout).trim().to_string();
-    if name.is_empty() {
+    let host = gethostname::gethostname();
+    let host_str = host.to_string_lossy();
+    let host_str = host_str.split('.').next().unwrap_or(&host_str);
+    if host_str.is_empty() {
         None
     } else {
-        Some(format!("@{}", derive_handle(&name, None)))
+        Some(format!("@{}", derive_handle(host_str, None)))
     }
 }
 
@@ -319,31 +344,57 @@ fn emit_new_lines(app: &AppHandle, path: &Path) {
     if (bytes.len() as u64) < size {
         return;
     }
+    let room = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let (payloads, consumed_to) = parse_new_lines(&bytes, last, &room);
+    for payload in payloads {
+        let _ = app.emit("chat-message-appended", payload);
+    }
+    offsets.insert(path.to_path_buf(), consumed_to);
+}
+
+/// Pure parser: given the full file `bytes`, the previously-committed
+/// byte offset `last`, and the file's `room` id, return:
+///   - the `AppendedPayload` values for each newly-appended `\n`-
+///     terminated line that was missing from the previous read, AND
+///   - the new committed byte offset (one past the last `\n` we saw).
+///
+/// Partial trailing data — a line missing its terminating newline —
+/// stays uncommitted; the next watcher tick re-reads it after chat-core
+/// finishes the write.
+///
+/// Extracted from [`emit_new_lines`] so the offset bookkeeping is unit
+/// testable without booting the Tauri runtime. An earlier version used
+/// `Vec::split(|b| *b == b'\n')` and double-counted the newline byte:
+/// after each non-empty line, the empty trailing slice after the `\n`
+/// triggered the "advance offset by 1" branch a second time, leaking
+/// one byte per line into the next read window. Walking the chunk
+/// with `position()` keeps the offset arithmetic honest.
+pub fn parse_new_lines(bytes: &[u8], last: u64, room: &str) -> (Vec<AppendedPayload>, u64) {
+    if (bytes.len() as u64) < last {
+        return (Vec::new(), last);
+    }
     let new_chunk = &bytes[last as usize..];
+    let mut cursor: usize = 0;
     let mut consumed_to: u64 = last;
-    for line in new_chunk.split(|b| *b == b'\n') {
+    let mut payloads = Vec::new();
+    while let Some(rel) = new_chunk[cursor..].iter().position(|&b| b == b'\n') {
+        let line = &new_chunk[cursor..cursor + rel];
+        cursor += rel + 1;
+        consumed_to = last + cursor as u64;
         if line.is_empty() {
-            consumed_to += 1; // newline byte
             continue;
         }
-        let line_len = line.len() as u64;
-        let line_end = consumed_to + line_len;
-        if line_end + 1 > size {
-            break;
-        }
-        consumed_to = line_end + 1;
-        let room = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
         if let Ok(ev) = serde_json::from_slice::<Event>(line) {
-            if let Some(payload) = event_to_payload(&room, ev) {
-                let _ = app.emit("chat-message-appended", payload);
+            if let Some(payload) = event_to_payload(room, ev) {
+                payloads.push(payload);
             }
         }
     }
-    offsets.insert(path.to_path_buf(), consumed_to);
+    (payloads, consumed_to)
 }
 
 fn event_to_payload(room: &str, ev: Event) -> Option<AppendedPayload> {

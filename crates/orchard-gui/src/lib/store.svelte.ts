@@ -107,15 +107,23 @@ export class AppStore {
 
 	get activeItem(): Item | null {
 		const id = this.selectedId;
-		return id ? this.items.find((i) => i.id === id) || null : null;
+		if (!id) return null;
+		// Search the merged set so live chat rooms (not present in
+		// `items`) resolve correctly when active.
+		return this.mergedItems.find((i) => i.id === id) || null;
 	}
 
 	get visibleConversation(): Conversation {
 		const item = this.activeItem;
 		if (!item) return this.conversation;
+		// For channels, prefer the live chat-backend cache. Fall back to
+		// mock channelConversations only if the backend hasn't loaded
+		// anything yet for this room — gives the UI immediate content
+		// instead of an empty pane during the round-trip.
 		const base =
 			item.kind === "channel"
-				? channelConversations[item.id] || {
+				? this.chatRoomCache[item.id] ||
+					channelConversations[item.id] || {
 						itemId: item.id,
 						recap: "",
 						isChannel: true,
@@ -138,14 +146,43 @@ export class AppStore {
 		};
 	}
 
+	/**
+	 * Items shown in the sidebar = mock/daemon worktrees + real chat rooms.
+	 * Real rooms are merged in as ChannelItem entries so users can click
+	 * them and the conversation pane wires up to the live backend.
+	 */
+	get mergedItems(): Item[] {
+		const realChannels: Item[] = this.chatRooms.map((r) => ({
+			id: r.id,
+			kind: "channel",
+			title: r.id.startsWith("@") ? r.id : `#${r.id}`,
+			topic: "",
+			participants: [],
+			host: "multi",
+			repo: "",
+			status: "ok",
+			attentionReason: null,
+			lastActivity: Date.now(),
+			unread: 0,
+			sparkline: [],
+		}));
+		// De-dupe: a real room with id `general` and a mock room with id
+		// `ch.general` shouldn't collide, but if a future mock id matches
+		// a real one, real wins.
+		const seen = new Set(realChannels.map((c) => c.id));
+		const others = this.items.filter((i) => !seen.has(i.id));
+		return [...realChannels, ...others];
+	}
+
 	get visibleItems(): Item[] {
-		if (this.filters.length === 0) return this.items;
+		const all = this.mergedItems;
+		if (this.filters.length === 0) return all;
 		const by = (k: Filter["kind"]) =>
 			this.filters.filter((f) => f.kind === k).map((f) => f.value);
 		const host = by("host");
 		const status = by("status");
 		const repo = by("repo");
-		return this.items.filter((it) => {
+		return all.filter((it) => {
 			if (host.length && !host.includes((it as { host?: string }).host || "")) return false;
 			if (status.length && !status.includes(it.status)) return false;
 			const itRepo = "repo" in it ? it.repo : undefined;
@@ -322,7 +359,7 @@ export class AppStore {
 	};
 
 	private _resetConversationFor = (itemId: string) => {
-		const item = this.items.find((i) => i.id === itemId);
+		const item = this.mergedItems.find((i) => i.id === itemId);
 		if (item?.kind === "channel") {
 			// Use real backend cache when available, fall back to mock until
 			// the load-room call completes.

@@ -33,6 +33,18 @@
 	const agent = $derived(
 		isChannel && msg.agentId ? agents.find((a) => a.id === msg.agentId) || null : null,
 	);
+	/**
+	 * Display name shown above each message:
+	 *   - user → "Drew"
+	 *   - mock-agent (matched in `agents`) → that agent's `name`
+	 *   - real chat-core message → the raw `agentId`, which is the
+	 *     sender handle (e.g. `@parent-tester`). chatCoreToGuiMessage
+	 *     stuffs the handle into `agentId`; without this fallback the
+	 *     UI defaulted to a generic "Agent" label, hiding the speaker.
+	 */
+	const displayName = $derived(
+		isUser ? "Drew" : agent ? agent.name : msg.agentId || "Agent",
+	);
 
 	const showActions = $derived(!msg.typing);
 
@@ -96,7 +108,7 @@
 						class="chat-msg-name"
 						style:color={agent ? `oklch(0.78 0.13 ${agent.hue})` : undefined}
 					>
-						{isUser ? "Drew" : agent ? agent.name : "Agent"}
+						{displayName}
 					</span>
 					{#if agent}
 						<span class="dimest mono" style:font-size="10.5px">{agent.model}</span>
