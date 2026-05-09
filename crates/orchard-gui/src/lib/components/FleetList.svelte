@@ -7,6 +7,7 @@
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import { groupItems } from "$lib/util/groupItems";
+	import { getStore } from "$lib/store.svelte";
 	import type { Agent, Host, Item, Lens } from "$lib/data/types";
 
 	type Props = {
@@ -22,7 +23,8 @@
 	};
 	let { items, hosts, lens, now, density, surface, selectedId, agents, onSelect }: Props = $props();
 
-	const groups = $derived(groupItems(items, lens, now));
+	const store = getStore();
+	const groups = $derived(groupItems(items, lens, now, store.worktreePanes));
 	const downHosts = $derived(new Set(hosts.filter((h) => !h.reachable).map((h) => h.hostname)));
 
 	function isPeerDown(it: Item): boolean {
@@ -44,7 +46,7 @@
 					{:else if g.kind === "tmux-session" && g.host}
 						<HostGlyph host={g.host} size={11} />
 						<Icon name="terminal" size={11} />
-					{:else if g.kind === "detached" || g.kind === "none"}
+					{:else if g.kind === "none"}
 						<Icon name="terminal" size={11} />
 					{:else if g.key.startsWith("repo:")}
 						<Icon name="git-branch" size={11} />

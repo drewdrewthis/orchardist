@@ -1,4 +1,5 @@
 import type { Item, Lens } from "$lib/data/types";
+import type { WorktreePaneSummary } from "$lib/data/daemon";
 
 export interface ItemGroup {
 	key: string;
@@ -6,7 +7,7 @@ export interface ItemGroup {
 	sortKey: number;
 	items: Item[];
 	subgroups?: SubGroup[];
-	kind?: "tmux-session" | "detached" | "none" | "channels";
+	kind?: "tmux-session" | "none" | "channels";
 	host?: string;
 	sessionName?: string;
 }
@@ -26,7 +27,12 @@ const STATUS_ORDER: Record<string, number> = {
 	stale: 4,
 };
 
-export function groupItems(items: Item[], lens: Lens, now: number): ItemGroup[] {
+export function groupItems(
+	items: Item[],
+	lens: Lens,
+	now: number,
+	worktreePanes: Record<string, WorktreePaneSummary[]> = {},
+): ItemGroup[] {
 	const groups = new Map<string, ItemGroup>();
 	const subgroupMaps = new Map<string, Map<string, SubGroup>>();
 	const push = (key: string, label: string, item: Item, sortKey = 0) => {
@@ -61,45 +67,52 @@ export function groupItems(items: Item[], lens: Lens, now: number): ItemGroup[] 
 			push("host:" + it.host, it.host, it, 0);
 		}
 	} else if (lens === "tmux") {
+		// Group by the daemon-joined panes (#511). A worktree groups under
+		// every session that hosts a pane in its path; window subgroups
+		// nest panes whose foreground pid sits inside the worktree.
 		for (const it of rest) {
 			if (it.kind !== "worktree") continue;
-			if (it.tmux) {
-				const gKey = `tmux:${it.host}/${it.tmux.session}`;
-				const gLabel = `${it.host} · ${it.tmux.session}`;
-				if (!groups.has(gKey)) {
-					groups.set(gKey, {
-						key: gKey,
-						label: gLabel,
-						sortKey: 0,
-						items: [],
-						kind: "tmux-session",
-						host: it.host,
-						sessionName: it.tmux.session,
-					});
-					subgroupMaps.set(gKey, new Map());
-				}
-				const g = groups.get(gKey)!;
-				const subs = subgroupMaps.get(gKey)!;
-				const wKey = `w:${it.tmux.window.idx}`;
-				if (!subs.has(wKey)) {
-					subs.set(wKey, {
-						key: wKey,
-						label: `window ${it.tmux.window.idx} · ${it.tmux.window.name}`,
-						idx: it.tmux.window.idx,
-						items: [],
-					});
-				}
-				subs.get(wKey)!.items.push(it);
-				g.items.push(it);
-			} else if (it.session && !it.session.live) {
-				push("tmux:detached", "Detached sessions", it, 8);
-				const g = groups.get("tmux:detached");
-				if (g) g.kind = "detached";
-			} else {
+			const panes = worktreePanes[it.id] || [];
+			if (panes.length === 0) {
 				push("tmux:none", "No tmux", it, 9);
 				const g = groups.get("tmux:none");
 				if (g) g.kind = "none";
+				continue;
 			}
+			// One worktree may have panes in multiple sessions; bucket by
+			// the *primary* (live first, then active-window, then first) so
+			// each row appears under exactly one tmux session in the lens.
+			const primary =
+				panes.find((p) => p.window.active && p.session.activeAttached) ||
+				panes.find((p) => p.window.active) ||
+				panes[0];
+			const gKey = `tmux:${it.host}/${primary.session.name}`;
+			const gLabel = `${it.host} · ${primary.session.name}`;
+			if (!groups.has(gKey)) {
+				groups.set(gKey, {
+					key: gKey,
+					label: gLabel,
+					sortKey: primary.session.activeAttached ? 0 : 1,
+					items: [],
+					kind: "tmux-session",
+					host: it.host,
+					sessionName: primary.session.name,
+				});
+				subgroupMaps.set(gKey, new Map());
+			}
+			const g = groups.get(gKey)!;
+			const subs = subgroupMaps.get(gKey)!;
+			const wKey = `w:${primary.window.index}`;
+			if (!subs.has(wKey)) {
+				subs.set(wKey, {
+					key: wKey,
+					label: `window ${primary.window.index} · ${primary.window.name}`,
+					idx: primary.window.index,
+					items: [],
+				});
+			}
+			subs.get(wKey)!.items.push(it);
+			g.items.push(it);
 		}
 		for (const [key, subs] of subgroupMaps) {
 			const g = groups.get(key);
