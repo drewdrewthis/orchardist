@@ -47,8 +47,73 @@ func (r *worktreeResolver) TmuxPanes(ctx context.Context, obj *graphql1.Worktree
 // sessions tie on lastActivityAt the one with the lexicographically-first
 // name wins.  Returns nil when tmuxPanes is empty.
 func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *graphql1.Worktree) (*graphql1.TmuxSession, error) {
-	// Implemented in a later commit — wired once tmuxPanes is validated.
-	return nil, nil
+	if r.Tmux == nil {
+		return nil, nil
+	}
+
+	snap := r.Tmux.Snapshot()
+	matching, err := matchPanesForWorktree(ctx, r, snap, obj)
+	if err != nil || len(matching) == 0 {
+		return nil, nil
+	}
+
+	// Collect the unique sessions that the matching panes belong to.
+	// Use SessionKey (host+name) for dedup; store the raw Session value
+	// so we can order by LastActivityAt.
+	seen := make(map[tmux.SessionKey]tmux.Session)
+	for _, pane := range matching {
+		// Reconstruct the raw Pane to access WindowKey.Session — we need
+		// the provider's internal Session value (which carries LastActivityAt
+		// as a time.Time). The matching []*graphql1.TmuxPane only has the
+		// projected PaneID; we look the full Pane back up from the snapshot.
+		paneKey := tmux.PaneKey{Host: tmux.HostID(obj.Host), PaneID: pane.PaneID}
+		rawPane, ok := snap.Panes[paneKey]
+		if !ok {
+			continue
+		}
+		sessionKey := tmux.SessionKey{Host: rawPane.Key.Host, Name: rawPane.WindowKey.Session}
+		if _, already := seen[sessionKey]; already {
+			continue
+		}
+		// Look up the Session to get its LastActivityAt.
+		if s, ok := snap.Sessions[sessionKey]; ok {
+			seen[sessionKey] = s
+		} else {
+			// Session row missing from snapshot — still include it so we
+			// don't silently drop a pane that genuinely sits in this session;
+			// synthesise a zero-activity Session.
+			seen[sessionKey] = tmux.Session{Key: sessionKey}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil, nil
+	}
+
+	// Flatten and sort: most-recently-active first; lex-lower name breaks ties.
+	sessions := make([]tmux.Session, 0, len(seen))
+	for _, s := range seen {
+		sessions = append(sessions, s)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		a, b := sessions[i], sessions[j]
+		// Zero LastActivityAt is treated as the lowest possible time, so
+		// sessions with a real activity time always rank before those without.
+		aZero := a.LastActivityAt.IsZero()
+		bZero := b.LastActivityAt.IsZero()
+		if aZero != bZero {
+			// whichever has a real time goes first (i is "less" in sort order
+			// = appears earlier = "wins").
+			return !aZero // a has real time, b does not → a wins
+		}
+		if !a.LastActivityAt.Equal(b.LastActivityAt) {
+			return a.LastActivityAt.After(b.LastActivityAt) // later = higher priority
+		}
+		// Deterministic tie-break: lex-lower name wins.
+		return a.Key.Name < b.Key.Name
+	})
+
+	return projectSession(sessions[0]), nil
 }
 
 // matchPanesForWorktree enumerates every pane in snap that:

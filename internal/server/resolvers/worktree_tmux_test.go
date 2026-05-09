@@ -367,6 +367,492 @@ func TestWorktreeTmuxPanes_SchemaIsNonNullable(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
+// AC2 — tmuxSession unique session (feature scenario @ line 63)
+// @integration @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxSessionResolver_SinglePane verifies that when exactly one pane
+// matches, TmuxSession returns that pane's session (AC2: single-pane case).
+// Also validates that lastActivityAt is correctly surfaced through the
+// sub-resolver.
+func TestTmuxSessionResolver_SinglePane(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo/.worktrees/feat-x"
+	const sessionName = "feat-x"
+	const fakePID = 20001
+	// 2026-05-09T10:00:00Z as unix seconds.
+	const activityUnix = int64(1746784800)
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{sessionRow(sessionName, activityUnix)},
+		windowRows:  []string{windowRow(sessionName)},
+		paneRows:    []string{paneRow(sessionName, "%1", fakePID)},
+	}
+	r := buildResolver(t, tr, map[int]string{
+		fakePID: worktreePath,
+	})
+
+	wt := &graphql1.Worktree{
+		ID:   "proj:feat-x",
+		Path: worktreePath,
+		Host: "local",
+	}
+
+	sess, err := r.TmuxSession(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("TmuxSession = nil, want non-nil")
+	}
+	if sess.Name != sessionName {
+		t.Errorf("TmuxSession.Name = %q, want %q", sess.Name, sessionName)
+	}
+
+	// Verify lastActivityAt via the sub-resolver.
+	sessResolver := &tmuxSessionResolver{r.Resolver}
+	lastAt, err := sessResolver.LastActivityAt(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("LastActivityAt: %v", err)
+	}
+	if lastAt == nil {
+		t.Fatal("LastActivityAt = nil, want non-nil")
+	}
+	// The feature spec says "2026-05-09T10:00:00Z"; round-trip through
+	// RFC3339 parsing so we compare canonical form, not literal bytes.
+	wantUnix := time.Unix(activityUnix, 0).UTC().Format(time.RFC3339)
+	if *lastAt != wantUnix {
+		t.Errorf("LastActivityAt = %q, want %q", *lastAt, wantUnix)
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC2 — tmuxSession is nullable in the schema (feature scenario @ line 71)
+// @integration @issue-511 (cross-platform)
+// ----------------------------------------------------------------------
+
+// TestWorktreeTmuxSession_SchemaIsNullable verifies that the
+// Worktree.tmuxSession field is declared as nullable (TmuxSession, no "!")
+// in the embedded schema SDL.
+func TestWorktreeTmuxSession_SchemaIsNullable(t *testing.T) {
+	sdl := SchemaSDL()
+	// The field must be present without a trailing "!".
+	needle := "tmuxSession: TmuxSession"
+	if !strings.Contains(sdl, needle) {
+		t.Errorf("schema SDL does not contain %q — Worktree.tmuxSession must be nullable", needle)
+	}
+	// Double-check: it must NOT be declared non-nullable.
+	nonNullNeedle := "tmuxSession: TmuxSession!"
+	if strings.Contains(sdl, nonNullNeedle) {
+		t.Errorf("schema SDL contains %q — Worktree.tmuxSession must be nullable (no '!')", nonNullNeedle)
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC3 — higher lastActivityAt wins (feature scenario @ line 81)
+// @unit @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxSessionResolver_HigherActivityWins verifies that when two sessions
+// both have matching panes, TmuxSession returns the one with the higher
+// lastActivityAt (AC3).
+func TestTmuxSessionResolver_HigherActivityWins(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo/.worktrees/feat-x"
+	const pidAlpha = 30001
+	const pidBeta = 30002
+	// alpha: 2026-05-09T09:00:00Z; beta: 2026-05-09T11:00:00Z
+	const alphaActivity = int64(1746781200)
+	const betaActivity = int64(1746788400)
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{
+			sessionRow("alpha", alphaActivity),
+			sessionRow("beta", betaActivity),
+		},
+		windowRows: []string{
+			windowRow("alpha"),
+			windowRow("beta"),
+		},
+		paneRows: []string{
+			paneRow("alpha", "%10", pidAlpha),
+			paneRow("beta", "%11", pidBeta),
+		},
+	}
+	r := buildResolver(t, tr, map[int]string{
+		pidAlpha: worktreePath,
+		pidBeta:  worktreePath,
+	})
+
+	wt := &graphql1.Worktree{
+		ID:   "proj:feat-x",
+		Path: worktreePath,
+		Host: "local",
+	}
+
+	sess, err := r.TmuxSession(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("TmuxSession = nil, want non-nil")
+	}
+	if sess.Name != "beta" {
+		t.Errorf("TmuxSession.Name = %q, want %q (higher lastActivityAt should win)", sess.Name, "beta")
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC3 — name tie-break (feature scenario @ line 89)
+// @unit @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxSessionResolver_NameTieBreak verifies that when two sessions have
+// identical lastActivityAt, the session with the lex-lower name wins (AC3).
+func TestTmuxSessionResolver_NameTieBreak(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo/.worktrees/feat-x"
+	const pidZebra = 40001
+	const pidAlpha = 40002
+	// Both sessions have the same lastActivityAt.
+	const sameActivity = int64(1746788400)
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{
+			sessionRow("zebra", sameActivity),
+			sessionRow("alpha", sameActivity),
+		},
+		windowRows: []string{
+			windowRow("zebra"),
+			windowRow("alpha"),
+		},
+		paneRows: []string{
+			paneRow("zebra", "%20", pidZebra),
+			paneRow("alpha", "%21", pidAlpha),
+		},
+	}
+	r := buildResolver(t, tr, map[int]string{
+		pidZebra: worktreePath,
+		pidAlpha: worktreePath,
+	})
+
+	wt := &graphql1.Worktree{
+		ID:   "proj:feat-x",
+		Path: worktreePath,
+		Host: "local",
+	}
+
+	sess, err := r.TmuxSession(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("TmuxSession = nil, want non-nil")
+	}
+	if sess.Name != "alpha" {
+		t.Errorf("TmuxSession.Name = %q, want %q (lex-lower name must win on tie)", sess.Name, "alpha")
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC4 — no matches (feature scenario @ line 101)
+// @unit @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxPanesAndSession_NoMatch verifies that a worktree with no matching
+// panes returns tmuxPanes=[] and tmuxSession=nil (AC4).
+func TestTmuxPanesAndSession_NoMatch(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo/.worktrees/lonely"
+	const fakePID = 50001
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{sessionRow("other", 1700000000)},
+		windowRows:  []string{windowRow("other")},
+		paneRows:    []string{paneRow("other", "%30", fakePID)},
+	}
+	// The pane's cwd is somewhere else entirely.
+	r := buildResolver(t, tr, map[int]string{
+		fakePID: "/some/other/path",
+	})
+
+	wt := &graphql1.Worktree{
+		ID:   "proj:lonely",
+		Path: worktreePath,
+		Host: "local",
+	}
+
+	panes, err := r.TmuxPanes(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxPanes: %v", err)
+	}
+	if len(panes) != 0 {
+		t.Errorf("TmuxPanes = %v, want []", paneIDsOf(panes))
+	}
+
+	sess, err := r.TmuxSession(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxSession: %v", err)
+	}
+	if sess != nil {
+		t.Errorf("TmuxSession = %v, want nil", sess)
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC5 — null cwd silently skipped (feature scenario @ line 113)
+// @unit @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxPanesResolver_NullCwdSkipped verifies that a pane whose lsof
+// returns an empty cwd is NOT treated as matching everything (AC5).
+// The empty-cwd pane must be silently dropped; no error surfaced.
+func TestTmuxPanesResolver_NullCwdSkipped(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo/.worktrees/feat-x"
+	const fakePID = 60001
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{sessionRow("main", 1700000000)},
+		windowRows:  []string{windowRow("main")},
+		paneRows:    []string{paneRow("main", "%40", fakePID)},
+	}
+	// Map the pane pid to an empty cwd — simulates null/unresolvable cwd.
+	r := buildResolver(t, tr, map[int]string{
+		fakePID: "", // empty cwd — should NOT match the worktree
+	})
+
+	wt := &graphql1.Worktree{
+		ID:   "proj:feat-x",
+		Path: worktreePath,
+		Host: "local",
+	}
+
+	got, err := r.TmuxPanes(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxPanes returned error %v, want nil (empty cwd must be silently skipped)", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("TmuxPanes = %v, want [] (pane with empty cwd must NOT match)", paneIDsOf(got))
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC5 — PS error silently skipped (feature scenario @ line 121)
+// @unit @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxPanesResolver_PSErrorSkipped verifies that a pane whose foreground
+// pid is unresolvable by the ps provider is silently skipped (AC5).
+func TestTmuxPanesResolver_PSErrorSkipped(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo/.worktrees/feat-x"
+	const badPID = 70001  // lsof will return an error for this pid
+	const goodPID = 70002 // this one resolves fine
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{sessionRow("main", 1700000000)},
+		windowRows:  []string{windowRow("main")},
+		paneRows: []string{
+			paneRow("main", "%50", badPID),
+			paneRow("main", "%51", goodPID),
+		},
+	}
+	// Only map the good pid; bad pid will cause lsof to return an error.
+	r := buildResolver(t, tr, map[int]string{
+		goodPID: worktreePath,
+		// badPID is intentionally absent — psTestRunner.Run returns an error
+	})
+
+	wt := &graphql1.Worktree{
+		ID:   "proj:feat-x",
+		Path: worktreePath,
+		Host: "local",
+	}
+
+	got, err := r.TmuxPanes(context.Background(), wt)
+	if err != nil {
+		t.Fatalf("TmuxPanes returned error %v, want nil (PS errors must be silently skipped)", err)
+	}
+	// Only the good pane should be returned.
+	if len(got) != 1 {
+		t.Fatalf("TmuxPanes = %v (len %d), want [%%51] (only good pane)", paneIDsOf(got), len(got))
+	}
+	if got[0].PaneID != "%51" {
+		t.Errorf("TmuxPanes[0].PaneID = %q, want %%51", got[0].PaneID)
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC6 — host attribution via pane.Key.Host (feature scenario @ line 132)
+// @integration @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxPanesResolver_HostAttribution verifies that pane attribution uses
+// pane.Key.Host (pane.window.session.host), not the local daemon's host id.
+// A pane on host "B" matches a worktree on host "B" even when the local
+// daemon is host "A" (AC6).
+func TestTmuxPanesResolver_HostAttribution(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	// Build a resolver whose tmux adapter is tagged as host "B".
+	const worktreePath = "/home/me/repo"
+	const fakePID = 80001
+
+	tr := &tmuxTestRunner{
+		sessionRows: []string{sessionRow("main", 1700000000)},
+		windowRows:  []string{windowRow("main")},
+		paneRows:    []string{paneRow("main", "%60", fakePID)},
+	}
+
+	// Build the resolver with a non-"local" hostID to simulate host "B".
+	hostID := "B"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tmuxAdapter := tmuxprovider.NewAdapter(tmuxprovider.HostID(hostID)).
+		WithRunner(tr).
+		WithSocket("/tmp/orchard-test-host-b.sock")
+	tmuxProv := tmuxprovider.New(tmuxAdapter, nil)
+	if err := tmuxProv.Refresh(ctx); err != nil {
+		t.Fatalf("tmux Refresh: %v", err)
+	}
+
+	psRunner := &psTestRunner{cwdByPid: map[int]string{fakePID: worktreePath}}
+	psAdapter := psprovider.NewAdapter(hostID).WithRunner(psRunner)
+	psProv := psprovider.New(psAdapter, nil)
+	if err := psProv.Start(ctx); err != nil {
+		t.Fatalf("ps Start: %v", err)
+	}
+
+	r := &worktreeResolver{&Resolver{Tmux: tmuxProv, PS: psProv}}
+
+	// Worktree on host "B" — attribution must use pane.Key.Host.
+	wt := &graphql1.Worktree{
+		ID:   "proj:repo",
+		Path: worktreePath,
+		Host: "B", // AC6: resolver reads pane.Key.Host, not local daemon host
+	}
+
+	got, err := r.TmuxPanes(ctx, wt)
+	if err != nil {
+		t.Fatalf("TmuxPanes: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("TmuxPanes = %v (len %d), want [%%60]", paneIDsOf(got), len(got))
+	}
+	if got[0].PaneID != "%60" {
+		t.Errorf("TmuxPanes[0].PaneID = %q, want %%60 (attribution via pane.Key.Host)", got[0].PaneID)
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC6 — cross-host non-match (feature scenario @ line 141)
+// @integration @issue-511
+// ----------------------------------------------------------------------
+
+// TestTmuxPanesResolver_CrossHostNoMatch verifies that a pane on host "B"
+// does NOT match a worktree on host "A", even when the path matches (AC6).
+func TestTmuxPanesResolver_CrossHostNoMatch(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	const worktreePath = "/Users/me/repo"
+	const fakePID = 90001
+
+	// Pane is on host "B" (the tmux adapter is tagged as "B").
+	tr := &tmuxTestRunner{
+		sessionRows: []string{sessionRow("main", 1700000000)},
+		windowRows:  []string{windowRow("main")},
+		paneRows:    []string{paneRow("main", "%70", fakePID)},
+	}
+
+	hostB := "B"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tmuxAdapter := tmuxprovider.NewAdapter(tmuxprovider.HostID(hostB)).
+		WithRunner(tr).
+		WithSocket("/tmp/orchard-test-cross-host.sock")
+	tmuxProv := tmuxprovider.New(tmuxAdapter, nil)
+	if err := tmuxProv.Refresh(ctx); err != nil {
+		t.Fatalf("tmux Refresh: %v", err)
+	}
+
+	psRunner := &psTestRunner{cwdByPid: map[int]string{fakePID: worktreePath}}
+	psAdapter := psprovider.NewAdapter(hostB).WithRunner(psRunner)
+	psProv := psprovider.New(psAdapter, nil)
+	if err := psProv.Start(ctx); err != nil {
+		t.Fatalf("ps Start: %v", err)
+	}
+
+	r := &worktreeResolver{&Resolver{Tmux: tmuxProv, PS: psProv}}
+
+	// Worktree is on host "A" — the pane on host "B" must NOT match.
+	wt := &graphql1.Worktree{
+		ID:   "proj:repo",
+		Path: worktreePath,
+		Host: "A", // different from the pane's host "B"
+	}
+
+	got, err := r.TmuxPanes(ctx, wt)
+	if err != nil {
+		t.Fatalf("TmuxPanes: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("TmuxPanes = %v, want [] (cross-host pane must NOT match a host-A worktree)", paneIDsOf(got))
+	}
+}
+
+// ----------------------------------------------------------------------
+// AC8 — tmuxSession schema doc (feature scenario @ line 185)
+// @unit @issue-511
+// ----------------------------------------------------------------------
+
+// TestWorktreeTmuxSession_SchemaDoc verifies that the Worktree.tmuxSession
+// field doc string describes the most-recently-active selection and
+// references issue #511 (AC8).
+func TestWorktreeTmuxSession_SchemaDoc(t *testing.T) {
+	sdl := SchemaSDL()
+
+	// The field must be present in the SDL.
+	if !strings.Contains(sdl, "tmuxSession: TmuxSession") {
+		t.Errorf("schema SDL does not contain 'tmuxSession: TmuxSession'")
+	}
+
+	// The description must reference issue #511.
+	if !strings.Contains(sdl, "#511") {
+		t.Errorf("schema SDL does not reference '#511' near tmuxSession")
+	}
+
+	// The description must mention the most-recently-active semantics.
+	if !strings.Contains(sdl, "most-recently-active") {
+		t.Errorf("schema SDL does not describe most-recently-active semantics for tmuxSession")
+	}
+}
+
+// ----------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------
 
