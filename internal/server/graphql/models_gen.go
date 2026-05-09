@@ -345,7 +345,15 @@ type Process struct {
 	Command string `json:"command"`
 	// Full argv. Slow path — opt-in (separate `ps -wwax -o pid,args` lookup).
 	Args []string `json:"args,omitempty"`
-	// Current working directory. Slow path — opt-in (lsof on macOS, /proc on Linux).
+	// Current working directory.
+	//
+	// Slow path — `lsof` on macOS, `/proc/<pid>/cwd` on Linux (Linux fallback
+	// not yet implemented; returns null silently). Resolution only fires when
+	// this field is in the selection set; the `cwdLoader` coalesces concurrent
+	// calls into a single batched `lsof -p <pids> -F n` shellout per request.
+	//
+	// The de-facto opt-in path from a tmux pane is `pane.process.cwd` — there
+	// is no separate flag or argument; selecting `cwd` IS the opt-in.
 	Cwd *string `json:"cwd,omitempty"`
 	// Process start time (RFC3339 if parseable, otherwise the raw `lstart` field).
 	StartedAt string `json:"startedAt"`
@@ -548,7 +556,16 @@ type TmuxPane struct {
 	Dead bool `json:"dead"`
 	// Clients with their cursor on this pane.
 	WatchingClients []*TmuxClient `json:"watchingClients"`
-	// OS-level Process for the foreground pid. Null until ws-b-ps wires it.
+	// OS-level Process for the pane's foreground pid (`pane_current_pid`).
+	//
+	// Null when tmux reports no foreground pid (`currentPid == 0`) or when the
+	// pid is no longer in the cached ps snapshot (process exited or just
+	// spawned). Cache-only — never triggers a fresh `ps` shellout under a
+	// request goroutine.
+	//
+	// Selecting nested fields (e.g. `process { cwd }`) chains through the
+	// standard Process resolvers; cwd resolution is the slow path described on
+	// `Process.cwd` and only fires when the client selects it.
 	Process *Process `json:"process,omitempty"`
 	// Claude instance running in this pane, if the foreground command is claude. Null until ws-b-claudeinstance wires it.
 	ClaudeInstance *ClaudeInstance `json:"claudeInstance,omitempty"`
