@@ -114,13 +114,15 @@ Feature: tmux provider works under systemd-user on Linux (#464)
     And any `ProtectHome=` directive present does not restrict reads to the user's tmux socket directory
 
   @structural @issue-464
-  Scenario: Shipped unit sets TMUX_TMPDIR so the daemon can reach the user's socket regardless of namespace
+  Scenario: Shipped unit handles TMUX_TMPDIR explicitly so the daemon can reach the user's socket regardless of namespace
     Given the file `scripts/init/orchard.service`
     When the unit is parsed
-    Then it contains an `Environment=TMUX_TMPDIR=...` directive
-    And the value is one that survives container/namespace edge cases (e.g. `%t/orchard-tmux` resolving to `XDG_RUNTIME_DIR/orchard-tmux`, or an equivalent that the implementer documents)
-    # Open question from /plan: TMUX_TMPDIR may need to point at the user's existing
-    # socket dir rather than a daemon-private one. Implementer must close this before shipping.
+    Then either:
+      - the unit contains an `Environment=TMUX_TMPDIR=...` directive whose value points at the user's tmux socket dir (matching the user's interactive `$TMPDIR`), or
+      - the unit intentionally does NOT set TMUX_TMPDIR and the leading comment block documents (1) that TMUX_TMPDIR is intentionally absent and (2) why (so the daemon inherits the user's $TMPDIR and connects to the same socket the user's interactive sessions use)
+    # Open question from /plan resolved 2026-05-09: setting TMUX_TMPDIR=%t/orchard-tmux
+    # would isolate the daemon from the user's tmux socket (the opposite of the fix).
+    # The implementer chose intentionally-NOT-set with documented rationale.
 
   @structural @issue-464
   Scenario: README/docs call out the install rename + clean-restart requirement for users on the old unit
