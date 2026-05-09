@@ -88,16 +88,28 @@ func signalName(sig syscall.Signal) string {
 // Adapter is the tmux CLI client. The alive-check result is cached for
 // aliveTTL (default = DefaultPollInterval) so consecutive FetchAll cycles
 // do not each pay for a separate `tmux info` exec.
+//
+// The cache lives behind a pointer so the With*-builder methods can do a
+// shallow value-copy of Adapter without copying the embedded mutex —
+// `go vet` flags lock-by-value, and copies of an Adapter share the same
+// cache state, which is the right semantics for builder chains
+// (NewAdapter(...).WithSocket(...).WithAliveTTL(...) returns one logical
+// adapter).
 type Adapter struct {
-	host   HostID
-	socket string // empty = default socket
-	runner CommandRunner
+	host     HostID
+	socket   string // empty = default socket
+	runner   CommandRunner
+	aliveTTL time.Duration // 0 → use defaultAliveTTL
+	alive    *aliveCache
+}
 
-	// IsAlive cache — guards aliveLastChecked and aliveLastResult.
-	aliveMu          sync.Mutex
-	aliveLastChecked time.Time
-	aliveLastResult  bool
-	aliveTTL         time.Duration // 0 → use defaultAliveTTL
+// aliveCache memoises the result of `tmux info` for one TTL window. It
+// is heap-allocated and shared across With*-derived Adapter copies so the
+// mutex inside is not copied by value.
+type aliveCache struct {
+	mu          sync.Mutex
+	lastChecked time.Time
+	lastResult  bool
 }
 
 // defaultAliveTTL matches DefaultPollInterval so a single FetchAll within
@@ -107,7 +119,11 @@ const defaultAliveTTL = DefaultPollInterval
 // NewAdapter constructs an Adapter targeting the default tmux socket on
 // the given host. Use WithSocket for tests / non-default sockets.
 func NewAdapter(host HostID) *Adapter {
-	return &Adapter{host: host, runner: execRunner{}}
+	return &Adapter{
+		host:   host,
+		runner: execRunner{},
+		alive:  &aliveCache{},
+	}
 }
 
 // WithSocket returns a copy of a addressing the given tmux socket via
@@ -170,21 +186,21 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 		ttl = defaultAliveTTL
 	}
 
-	a.aliveMu.Lock()
-	if !a.aliveLastChecked.IsZero() && time.Since(a.aliveLastChecked) < ttl {
-		result := a.aliveLastResult
-		a.aliveMu.Unlock()
+	a.alive.mu.Lock()
+	if !a.alive.lastChecked.IsZero() && time.Since(a.alive.lastChecked) < ttl {
+		result := a.alive.lastResult
+		a.alive.mu.Unlock()
 		return result
 	}
-	a.aliveMu.Unlock()
+	a.alive.mu.Unlock()
 
 	_, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("info")...)
 	result := err == nil
 
-	a.aliveMu.Lock()
-	a.aliveLastChecked = time.Now()
-	a.aliveLastResult = result
-	a.aliveMu.Unlock()
+	a.alive.mu.Lock()
+	a.alive.lastChecked = time.Now()
+	a.alive.lastResult = result
+	a.alive.mu.Unlock()
 
 	return result
 }

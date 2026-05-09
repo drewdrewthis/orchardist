@@ -247,9 +247,9 @@ func TestIsAlive_CacheMissAfterTTL(t *testing.T) {
 	_ = a.IsAlive(ctx) // populates cache
 
 	// Force expiry by writing a past timestamp directly.
-	a.aliveMu.Lock()
-	a.aliveLastChecked = time.Now().Add(-2 * time.Second) // clearly past the nanosecond TTL
-	a.aliveMu.Unlock()
+	a.alive.mu.Lock()
+	a.alive.lastChecked = time.Now().Add(-2 * time.Second) // clearly past the nanosecond TTL
+	a.alive.mu.Unlock()
 
 	_ = a.IsAlive(ctx) // should trigger a second exec
 
