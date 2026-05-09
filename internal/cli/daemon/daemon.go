@@ -146,9 +146,20 @@ func runStart(parentCtx context.Context, addr string) error {
 		return fmt.Errorf("build git provider: %w", err)
 	}
 
+	claudeAccountProvider := claudeaccount.New("local", logger)
+
+	psAdapter := &psInputAdapter{p: psProvider}
 	claudeInstanceProvider := claudeinstance.New(
 		"local",
-		claudeinstance.NewComposer("local", nil, nil, nil),
+		claudeinstance.NewComposer(
+			"local",
+			claudeinstance.NewPaneFinder(
+				&tmuxInputAdapter{p: tmuxProvider},
+				psAdapter,
+			),
+			claudeinstance.NewProcessFinder(psAdapter),
+			claudeinstance.NewAccountFinder(&acctInputAdapter{p: claudeAccountProvider}),
+		),
 	)
 
 	hsvc, hsvcErr := buildHostServiceProvider(ctx)
@@ -181,7 +192,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
-		server.WithClaudeAccount(claudeaccount.New("local", logger)),
+		server.WithClaudeAccount(claudeAccountProvider),
 		server.WithClaudeInstance(claudeInstanceProvider),
 		server.WithContracts(contracts.New(logger)),
 		server.WithGh(ghProvider),
