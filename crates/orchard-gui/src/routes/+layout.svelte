@@ -17,9 +17,19 @@
 	onMount(() => {
 		const stop1 = store.startNowTick();
 		const stop2 = store.startLiveTick();
+		let stopSub: (() => void) | null = null;
+
+		(async () => {
+			const ok = await store.hydrateFromDaemon();
+			if (ok) {
+				stopSub = await store.subscribeDaemon();
+			}
+		})();
+
 		return () => {
 			stop1();
 			stop2();
+			stopSub?.();
 		};
 	});
 </script>

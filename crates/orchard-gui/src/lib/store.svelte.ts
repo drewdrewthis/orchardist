@@ -410,6 +410,50 @@ export class AppStore {
 		return () => clearInterval(id);
 	};
 
+	hydrateFromDaemon = async () => {
+		const { fetchWorkView, mapDaemonToGui } = await import("./data/graphql");
+		const data = await fetchWorkView();
+		if (!data) {
+			this.offline = true;
+			return false;
+		}
+		this.offline = false;
+		const { items: liveWorktrees, hosts: liveHosts } = mapDaemonToGui(data);
+		const channels = this.items.filter((i) => i.kind === "channel");
+		this.items = [...channels, ...(liveWorktrees as Item[])];
+		if (liveHosts.length) this.hosts = liveHosts as Host[];
+		return true;
+	};
+
+	subscribeDaemon = async () => {
+		const { subscribeWorktreeChanged, subscribeTmuxChanged } = await import("./data/graphql");
+		const stops: Array<() => void> = [];
+		stops.push(
+			subscribeWorktreeChanged(
+				() => {
+					this.hydrateFromDaemon();
+				},
+				(err) => {
+					console.warn("[orchard-gui] worktree subscription failed:", err);
+					this.offline = true;
+				},
+			),
+		);
+		stops.push(
+			subscribeTmuxChanged(
+				() => {
+					this.hydrateFromDaemon();
+				},
+				(err) => {
+					console.warn("[orchard-gui] tmux subscription failed:", err);
+				},
+			),
+		);
+		return () => {
+			for (const stop of stops) stop();
+		};
+	};
+
 	startLiveTick = () => {
 		const id = setInterval(() => {
 			const idx = Math.floor(Math.random() * this.items.length);

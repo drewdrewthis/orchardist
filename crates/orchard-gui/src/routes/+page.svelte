@@ -125,8 +125,19 @@
 	items={store.items}
 	hosts={store.hosts}
 	onClose={() => store.closeNewConv()}
-	onLaunch={(spec) => {
+	onLaunch={async (spec) => {
 		store.closeNewConv();
+		const wt = store.items.find((i) => i.id === spec.worktreeId);
+		if (wt && wt.kind === "worktree" && spec.host === wt.host) {
+			try {
+				const { createWorktree } = await import("$lib/tauri");
+				const repoRoot = wt.path.split("/wt/")[0] || wt.path;
+				await createWorktree(repoRoot, wt.path, wt.branch);
+				store.hydrateFromDaemon();
+			} catch (err) {
+				console.warn("[orchard-gui] create_worktree failed (acceptable in dev):", err);
+			}
+		}
 		if (spec.worktreeId) store.openItem(spec.worktreeId, { newPane: true });
 	}}
 />

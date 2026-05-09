@@ -3050,6 +3050,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tempfile",
+ "worktree-core",
 ]
 
 [[package]]
