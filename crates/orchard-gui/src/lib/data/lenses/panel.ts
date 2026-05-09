@@ -38,6 +38,7 @@ const PANEL_QUERY = gql`
 			open
 			recap
 			cwd
+			jsonlPath
 		}
 		workView {
 			projects {
@@ -62,6 +63,7 @@ export interface PanelData {
 		open: boolean;
 		recap: string | null;
 		cwd: string | null;
+		jsonlPath: string | null;
 	} | null;
 	worktree: WorktreeEnrichment | null;
 }
@@ -77,6 +79,7 @@ interface PanelResponse {
 		open: boolean;
 		recap: string | null;
 		cwd: string | null;
+		jsonlPath: string | null;
 	}>;
 	workView: {
 		projects: Array<{ id: string; name: string; worktrees: WorktreeEnrichment[] }>;
@@ -130,6 +133,7 @@ export async function fetchPanel(args: {
 					open: convRaw.open,
 					recap: convRaw.recap,
 					cwd: convRaw.cwd,
+					jsonlPath: convRaw.jsonlPath,
 				}
 			: null;
 

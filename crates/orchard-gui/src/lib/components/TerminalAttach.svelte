@@ -1,7 +1,13 @@
 <!--
-  Live attached terminal — xterm.js front, Tauri PTY back. Mounts the PTY
-  on first render, ferries bytes both ways, resizes on container resize,
-  cleans up on unmount.
+  Live attached terminal — xterm.js front, Tauri PTY back. The xterm
+  instance is created once on mount and reused across pane swaps; only
+  the PTY child is replaced.
+
+  When the parent supplies a new `argv` (i.e. the user clicked a
+  different sidebar row), the existing PTY is killed and a fresh one
+  spawned in its place — but the xterm canvas, scrollback, and
+  ResizeObserver stay live. This avoids the ~200ms full-remount flash
+  and keeps the terminal feeling instant.
 
   Browser-only context renders a "desktop app required" placeholder so
   Vite dev sessions don't show a broken canvas.
@@ -36,18 +42,80 @@
 	let exitCode = $state<number | null>(null);
 	let errMsg = $state<string | null>(null);
 
+	// Mutable runtime — owned by onMount, mutated by $effect below.
+	let term: import("xterm").Terminal | null = null;
+	let fitAddon: import("xterm-addon-fit").FitAddon | null = null;
+	let ptyId: number | null = null;
+	let unsubData: UnlistenFn | null = null;
+	let unsubExit: UnlistenFn | null = null;
+	let cancelled = false;
+	let lastArgvKey = "";
+	let mounted = false;
+
+	function argvKey(a: string[]): string {
+		return JSON.stringify(a);
+	}
+
+	async function killCurrentPty() {
+		try {
+			unsubData?.();
+		} catch {}
+		try {
+			unsubExit?.();
+		} catch {}
+		unsubData = null;
+		unsubExit = null;
+		if (ptyId != null) {
+			const old = ptyId;
+			ptyId = null;
+			killPty(old).catch(() => {});
+		}
+	}
+
+	async function startPty(currentArgv: string[]) {
+		if (!term || !fitAddon) return;
+		await killCurrentPty();
+		// Wipe the visible buffer between attach cycles so the new pane
+		// paints from a clean slate. Scrollback is the prior session;
+		// keeping it would be confusing for a row swap.
+		term.reset();
+		try {
+			fitAddon.fit();
+		} catch {
+			// host may be 0-sized (off-screen); tmux will redraw on resize.
+		}
+		const cols = term.cols;
+		const rows = term.rows;
+		status = "connecting";
+		try {
+			const handle = await spawnPty(currentArgv, { cwd, cols, rows });
+			if (cancelled || lastArgvKey !== argvKey(currentArgv)) {
+				killPty(handle.id).catch(() => {});
+				return;
+			}
+			ptyId = handle.id;
+			status = "live";
+			unsubData = await listenData(handle.dataEvent, (bytes) => {
+				term?.write(bytes);
+			});
+			unsubExit = await listenExit(handle.exitEvent, (code) => {
+				exitCode = code;
+				status = "ended";
+			});
+		} catch (err) {
+			if ((err as Error)?.message === PTY_UNSUPPORTED) {
+				status = "unsupported";
+			} else {
+				errMsg = (err as Error)?.message ?? String(err);
+				status = "error";
+			}
+		}
+	}
+
 	onMount(() => {
 		if (!inTauri) return;
-		let id: number | null = null;
-		let unsubData: UnlistenFn | null = null;
-		let unsubExit: UnlistenFn | null = null;
-		let term: import("xterm").Terminal | null = null;
-		let fitAddon: import("xterm-addon-fit").FitAddon | null = null;
 		let resizeObserver: ResizeObserver | null = null;
-		let cancelled = false;
-
 		(async () => {
-			status = "connecting";
 			try {
 				const xterm = await import("xterm");
 				const fit = await import("xterm-addon-fit");
@@ -75,57 +143,47 @@
 				term.open(host);
 				fitAddon.fit();
 
-				const cols = term.cols;
-				const rows = term.rows;
-				const handle = await spawnPty(argv, { cwd, cols, rows });
-				if (cancelled) {
-					killPty(handle.id);
-					return;
-				}
-				id = handle.id;
-				status = "live";
-
-				unsubData = await listenData(handle.dataEvent, (bytes) => {
-					term?.write(bytes);
-				});
-				unsubExit = await listenExit(handle.exitEvent, (code) => {
-					exitCode = code;
-					status = "ended";
-				});
-
 				const enc = new TextEncoder();
 				term.onData((data) => {
-					if (id != null) writePty(id, enc.encode(data)).catch(() => {});
+					if (ptyId != null) writePty(ptyId, enc.encode(data)).catch(() => {});
 				});
 
 				resizeObserver = new ResizeObserver(() => {
 					try {
 						fitAddon?.fit();
-						if (id != null && term) resizePty(id, term.cols, term.rows).catch(() => {});
+						if (ptyId != null && term) resizePty(ptyId, term.cols, term.rows).catch(() => {});
 					} catch {
 						// Window not visible / 0-sized — skip silently.
 					}
 				});
 				resizeObserver.observe(host);
 				term.focus();
+				mounted = true;
+				lastArgvKey = argvKey(argv);
+				await startPty(argv);
 			} catch (err) {
-				if ((err as Error)?.message === PTY_UNSUPPORTED) {
-					status = "unsupported";
-				} else {
-					errMsg = (err as Error)?.message ?? String(err);
-					status = "error";
-				}
+				errMsg = (err as Error)?.message ?? String(err);
+				status = "error";
 			}
 		})();
 
 		return () => {
 			cancelled = true;
 			resizeObserver?.disconnect();
-			unsubData?.();
-			unsubExit?.();
-			if (id != null) killPty(id).catch(() => {});
+			killCurrentPty();
 			term?.dispose();
+			term = null;
+			fitAddon = null;
 		};
+	});
+
+	// Re-attach when argv changes after mount (the user clicked a
+	// different row, or the panel resolved a different pane).
+	$effect(() => {
+		const key = argvKey(argv);
+		if (!mounted || key === lastArgvKey) return;
+		lastArgvKey = key;
+		startPty(argv);
 	});
 </script>
 

@@ -79,6 +79,8 @@
 					fullscreen={null}
 					now={store.now}
 					surface="mobile"
+					view={tab.view}
+					onSetView={(v) => store.setTabView(tab.id, v)}
 					onActivate={() => {}}
 					onClose={() => store.mobileBack()}
 				/>

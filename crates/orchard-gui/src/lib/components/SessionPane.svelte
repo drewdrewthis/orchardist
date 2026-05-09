@@ -10,13 +10,14 @@
   from the graph.
 -->
 <script lang="ts">
-	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import TerminalAttach from "./TerminalAttach.svelte";
+	import TranscriptView from "./TranscriptView.svelte";
 	import { fetchPanel, type PanelData } from "$lib/data/lenses";
 	import { relTime } from "$lib/util/format";
 	import { getStore } from "$lib/store.svelte";
+	import type { ConvView } from "$lib/data/types";
 
 	type Props = {
 		paneId?: string;
@@ -27,6 +28,8 @@
 		fullscreen: boolean | null;
 		now: number;
 		surface: "desktop" | "mobile";
+		view: ConvView;
+		onSetView: (v: ConvView) => void;
 		onActivate: () => void;
 		onClose: () => void;
 		onToggleFullscreen?: () => void;
@@ -40,6 +43,8 @@
 		fullscreen,
 		now,
 		surface,
+		view,
+		onSetView,
 		onActivate,
 		onClose,
 		onToggleFullscreen,
@@ -87,12 +92,20 @@
 	const isHere = $derived(
 		!!pane && store.lensSnapshots.tmux.activePaneIds.has(pane.paneId),
 	);
+	const hasTranscript = $derived(!!conversation?.jsonlPath);
 
-	function attachArgv(): string[] | null {
+	const attachArgv = $derived.by((): string[] | null => {
 		if (!pane) return null;
 		const sessName = pane.window.session.name;
-		return ["sh", "-c", `tmux select-pane -t ${pane.paneId} 2>/dev/null; exec tmux attach-session -t ${sessName}`];
-	}
+		// `select-pane` repoints the *current* tmux client to the right
+		// pane (in case the user had something else focused), and the
+		// `attach-session` is what the local PTY runs to mirror it.
+		return [
+			"sh",
+			"-c",
+			`tmux select-pane -t ${pane.paneId} 2>/dev/null; exec tmux attach-session -t ${sessName}`,
+		];
+	});
 </script>
 
 <div
@@ -194,21 +207,50 @@
 			</div>
 		</div>
 
+		{#if (pane || hasTranscript) && !(loading && !data)}
+			<div class="view-toggle mono">
+				<button
+					class="view-tab"
+					class:on={view === "terminal"}
+					disabled={!pane}
+					onclick={(e) => { e.stopPropagation(); onSetView("terminal"); }}
+				>
+					<Icon name="terminal" size={11} /> Terminal
+				</button>
+				<button
+					class="view-tab"
+					class:on={view === "chat"}
+					disabled={!hasTranscript}
+					onclick={(e) => { e.stopPropagation(); onSetView("chat"); }}
+				>
+					<Icon name="message" size={11} /> Chat
+					{#if conversation && conversation.messageCount > 0}
+						<span class="dimer tnum">· {conversation.messageCount}</span>
+					{/if}
+				</button>
+			</div>
+		{/if}
+
 		{#if loading && !data}
 			<div class="conv-empty"><span class="dimer">Loading…</span></div>
-		{:else if pane}
-			{@const argv = attachArgv()}
-			{#if argv}
-				<!--
-					Key on paneId so a click that swaps the row identity
-					tears down the old PTY and spawns a fresh one. Without
-					this the TerminalAttach instance lives across props
-					changes and keeps the original tmux client.
-				-->
-				{#key pane.paneId}
-					<TerminalAttach {argv} label={`${pane.window.session.name} → ${pane.window.name} · ${pane.paneId}`} />
-				{/key}
-			{/if}
+		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
+			<TranscriptView path={conversation.jsonlPath} sessionUuid={conversation.sessionUuid} />
+		{:else if view === "terminal" && pane && attachArgv}
+			<!--
+				TerminalAttach reuses the xterm canvas across argv changes
+				and respawns just the PTY child — see TerminalAttach.svelte.
+				No keyed remount needed.
+			-->
+			<TerminalAttach
+				argv={attachArgv}
+				label={`${pane.window.session.name} → ${pane.window.name} · ${pane.paneId}`}
+			/>
+		{:else if pane && attachArgv}
+			<!-- View=chat fallback when there's no transcript yet. -->
+			<TerminalAttach
+				argv={attachArgv}
+				label={`${pane.window.session.name} → ${pane.window.name} · ${pane.paneId}`}
+			/>
 		{:else}
 			<div class="conv-empty">
 				<div style="font-size: 13px; font-weight: 500; color: var(--fg-2);">
@@ -237,5 +279,34 @@
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
+	}
+	.view-toggle {
+		display: flex;
+		gap: 2px;
+		padding: 4px 8px 0 8px;
+		font-size: 11px;
+	}
+	.view-tab {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 9px;
+		border: 0;
+		background: transparent;
+		color: var(--fg-2);
+		border-radius: 6px;
+		cursor: pointer;
+	}
+	.view-tab:hover:not(:disabled) {
+		background: color-mix(in oklab, var(--fg) 6%, transparent);
+		color: var(--fg);
+	}
+	.view-tab.on {
+		background: var(--surface-2);
+		color: var(--fg);
+	}
+	.view-tab:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
 	}
 </style>

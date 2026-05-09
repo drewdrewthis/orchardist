@@ -5,6 +5,7 @@
 pub mod chat;
 pub mod commands;
 pub mod pty;
+pub mod transcript;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -29,6 +30,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            transcript::read_transcript_jsonl,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

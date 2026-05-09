@@ -310,9 +310,14 @@ export class AppStore {
 	) => {
 		if (!key.paneId && !key.sessionUuid) return;
 
+		// Default view: when the row has a Claude session attached (sessionUuid),
+		// the chat transcript is what the user wants first; raw tmux panes
+		// without a session default to the terminal.
+		const defaultView: ConvView = key.sessionUuid ? "chat" : "terminal";
+
 		// Mobile: always single-tab.
 		if (this.surface === "mobile") {
-			this.tabs = [{ id: "m1", kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: "chat" }];
+			this.tabs = [{ id: "m1", kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView }];
 			this.activeTabId = "m1";
 			this._resetPanelOnSwitch();
 			return;
@@ -339,7 +344,7 @@ export class AppStore {
 							kind: "session",
 							paneId: key.paneId,
 							sessionUuid: key.sessionUuid,
-							view: "chat",
+							view: defaultView,
 						}
 					: t,
 			);
@@ -349,7 +354,7 @@ export class AppStore {
 
 		// New tab.
 		const id = "t" + this.nextTabSeq++;
-		const tab: Tab = { id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: "chat" };
+		const tab: Tab = { id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView };
 		const next = [...this.tabs];
 		if (next.length >= MAX_PANES) {
 			next.shift();
@@ -447,6 +452,10 @@ export class AppStore {
 
 	setView = (v: ConvView) => {
 		this.tabs = this.tabs.map((t) => (t.id === this.activeTabId ? { ...t, view: v } : t));
+	};
+
+	setTabView = (tabId: string, v: ConvView) => {
+		this.tabs = this.tabs.map((t) => (t.id === tabId ? { ...t, view: v } : t));
 	};
 
 	toggleView = () => {

@@ -156,6 +156,7 @@
 				onCloseTab={(id) => store.closeTab(id)}
 				onResizePanes={(sizes) => store.setPaneSizes(sizes)}
 				onView={(v) => store.setView(v)}
+				onSetTabView={(id, v) => store.setTabView(id, v)}
 				onSend={() => store.send()}
 				onFork={() => {
 					const conv = store.visibleConversation;

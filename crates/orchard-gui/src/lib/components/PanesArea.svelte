@@ -35,6 +35,7 @@
 		onCloseTab: (id: string) => void;
 		onResizePanes: (sizes: number[]) => void;
 		onView: (v: ConvView) => void;
+		onSetTabView: (tabId: string, v: ConvView) => void;
 		onSend: () => void;
 		onFork: () => void;
 		onStartFork: (idx: number, m: Message) => void;
@@ -65,6 +66,7 @@
 		onCloseTab,
 		onResizePanes,
 		onView,
+		onSetTabView,
 		onSend,
 		onFork,
 		onStartFork,
@@ -161,6 +163,8 @@
 						fullscreen={idx === tabs.length - 1 ? fullscreen : null}
 						{now}
 						surface="desktop"
+						view={tab.view}
+						onSetView={(v) => onSetTabView(tab.id, v)}
 						onActivate={() => onActivateTab(tab.id)}
 						onClose={() => onCloseTab(tab.id)}
 						onToggleFullscreen={idx === tabs.length - 1 ? onToggleFullscreen : undefined}
