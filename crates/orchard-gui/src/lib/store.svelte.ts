@@ -109,7 +109,7 @@ export class AppStore {
 	} = $state({
 		attention: [],
 		recent: [],
-		tmux: { sessions: [], activePaneIds: new Set(), alive: false },
+		tmux: { sessions: [], activePaneIds: new Set(), alive: false, lastSeenByUuid: {} },
 		issue: [],
 	});
 	/** Whether the active lens is currently mid-fetch. */
@@ -275,6 +275,66 @@ export class AppStore {
 		} finally {
 			this.lensLoading = false;
 		}
+	};
+
+	/**
+	 * Resolve a lens-row click to a legacy worktree Item id, then call
+	 * openItem. Lenses anchor on different shapes (claudeInstance, pane,
+	 * worktree); the panel today only knows worktree+channel — bridge it
+	 * by mapping cwd → matching worktree until commit 3 generalises the
+	 * panel.
+	 *
+	 * Falls back to the raw id (for legacy worktree rows still being
+	 * rendered, e.g. via mergedItems channels).
+	 */
+	openLensRow = (rawId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
+		const wtItemId = this.resolveLensRowToWorktree(rawId);
+		this.openItem(wtItemId ?? rawId, opts);
+	};
+
+	private resolveLensRowToWorktree = (rawId: string): string | null => {
+		// Channels: rawId is the room id; openItem already handles it.
+		if (this.mergedItems.some((it) => it.id === rawId)) return rawId;
+
+		// Find a cwd from the lens snapshots, then match against legacy
+		// worktree items (which carry path).
+		let cwd: string | null = null;
+
+		// Recent / attention / issue rows are keyed by ClaudeInstance id.
+		const fromRecent = this.lensSnapshots.recent.find((r) => r.session.id === rawId);
+		if (fromRecent?.session.process?.cwd) cwd = fromRecent.session.process.cwd;
+		const fromAttention = this.lensSnapshots.attention.find((r) => r.session.id === rawId);
+		if (fromAttention?.session.process?.cwd) cwd = fromAttention.session.process.cwd;
+		const fromIssue = this.lensSnapshots.issue.find((r) => r.worktree.id === rawId);
+		if (fromIssue?.session?.process?.cwd) cwd = fromIssue.session.process.cwd;
+		if (fromIssue && !cwd) cwd = fromIssue.worktree.path;
+
+		// Tmux pane rows are keyed by paneId; pull cwd from pane.process.
+		if (!cwd) {
+			for (const sess of this.lensSnapshots.tmux.sessions) {
+				for (const win of sess.windows) {
+					for (const p of win.panes) {
+						if (p.paneId === rawId && p.process?.cwd) {
+							cwd = p.process.cwd;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		if (!cwd) return null;
+
+		// Most-specific worktree wins (deepest path that contains cwd).
+		let best: { id: string; path: string } | null = null;
+		for (const it of this.items) {
+			if (it.kind !== "worktree") continue;
+			const wt = it as { id: string; path: string };
+			if (cwd === wt.path || cwd.startsWith(wt.path + "/")) {
+				if (!best || wt.path.length > best.path.length) best = wt;
+			}
+		}
+		return best?.id ?? null;
 	};
 
 	openItem = (itemId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {

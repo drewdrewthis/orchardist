@@ -37,6 +37,10 @@ const TMUX_QUERY = gql`
 				}
 			}
 		}
+		conversations {
+			sessionUuid
+			lastSeenAt
+		}
 	}
 `;
 
@@ -63,6 +67,8 @@ export interface TmuxLensSnapshot {
 	activePaneIds: Set<string>;
 	/** Whether the tmux server is reachable. */
 	alive: boolean;
+	/** sessionUuid → ms-since-epoch from the conversations transcript. */
+	lastSeenByUuid: Record<string, number>;
 }
 
 interface TmuxLensResponse {
@@ -72,20 +78,26 @@ interface TmuxLensResponse {
 		sessions: TmuxSessionNode[];
 		clients: Array<{ tty: string; currentPane: { paneId: string } | null }>;
 	} | null;
+	conversations: Array<{ sessionUuid: string; lastSeenAt: string | null }>;
 }
 
 export async function fetchTmux(): Promise<TmuxLensSnapshot> {
 	try {
 		const data = await http().request<TmuxLensResponse>(TMUX_QUERY);
 		const ts = data.tmuxServer;
-		if (!ts) return { sessions: [], activePaneIds: new Set(), alive: false };
+		const lastSeenByUuid: Record<string, number> = {};
+		for (const c of data.conversations || []) {
+			const t = c.lastSeenAt ? Date.parse(c.lastSeenAt) || 0 : 0;
+			if (t > 0) lastSeenByUuid[c.sessionUuid] = t;
+		}
+		if (!ts) return { sessions: [], activePaneIds: new Set(), alive: false, lastSeenByUuid };
 		const activePaneIds = new Set<string>();
 		for (const c of ts.clients) {
 			if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
 		}
-		return { sessions: ts.sessions, activePaneIds, alive: ts.alive };
+		return { sessions: ts.sessions, activePaneIds, alive: ts.alive, lastSeenByUuid };
 	} catch (err) {
 		console.warn("[orchard-gui] tmux lens fetch failed:", err);
-		return { sessions: [], activePaneIds: new Set(), alive: false };
+		return { sessions: [], activePaneIds: new Set(), alive: false, lastSeenByUuid: {} };
 	}
 }

@@ -60,7 +60,10 @@
 			surface="mobile"
 			selectedId={null}
 			agents={store.agents}
-			onSelect={(id) => store.mobileOpen(id)}
+			onSelect={(id) => {
+				const wtId = store["resolveLensRowToWorktree"](id) ?? id;
+				store.mobileOpen(wtId);
+			}}
 		/>
 
 		<button class="mobile-fab" onclick={() => store.openNewConv()} aria-label="New conversation">

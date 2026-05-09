@@ -99,7 +99,7 @@
 						agents={store.agents}
 						onSelect={(id, ev) => {
 							const force = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
-							store.openItem(id, { newPane: force });
+							store.openLensRow(id, { newPane: force });
 						}}
 					/>
 					<div

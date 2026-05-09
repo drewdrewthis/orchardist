@@ -6,6 +6,7 @@
 -->
 <script lang="ts">
 	import { relTime } from "$lib/util/format";
+	import { getStore } from "$lib/store.svelte";
 	import type { PaneCardT } from "$lib/data/lenses";
 
 	type Props = {
@@ -19,12 +20,20 @@
 	};
 	let { pane, here, now, density, surface, selected, onSelect }: Props = $props();
 
+	const store = getStore();
 	const claudeState = $derived(pane.claudeInstance?.state);
-	const lastMs = $derived(
-		pane.claudeInstance?.lastActivityAt
+	// Prefer the JSONL-derived timestamp (conversations.lastSeenAt) over
+	// claudeInstance.lastActivityAt, which the daemon currently leaves null.
+	const lastMs = $derived(() => {
+		const uuid = pane.claudeInstance?.sessionUuid;
+		if (uuid) {
+			const v = store.lensSnapshots.tmux.lastSeenByUuid[uuid];
+			if (v) return v;
+		}
+		return pane.claudeInstance?.lastActivityAt
 			? Date.parse(pane.claudeInstance.lastActivityAt) || 0
-			: 0,
-	);
+			: 0;
+	});
 	const cwdSuffix = $derived(() => {
 		const cwd = pane.process?.cwd;
 		if (!cwd) return "";
@@ -69,9 +78,9 @@
 					<span class="mono dimer" style:font-size="11px">
 						{pane.claudeInstance.state}
 					</span>
-					{#if lastMs > 0}
+					{#if lastMs() > 0}
 						<span class="dimest">·</span>
-						<span class="mono dimer" style:font-size="11px">{relTime(lastMs, now)}</span>
+						<span class="mono dimer" style:font-size="11px">{relTime(lastMs(), now)}</span>
 					{/if}
 				{/if}
 				{#if pane.process?.cwd && surface !== "mobile"}

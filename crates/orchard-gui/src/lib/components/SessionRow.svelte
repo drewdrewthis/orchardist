@@ -19,19 +19,33 @@
 		session: SessionCardT;
 		worktree: WorktreeEnrichment | null;
 		reasons: string[];
+		/** ms since epoch — lens-derived (jsonl > daemon > 0). 0 means no signal. */
+		lastActivityMs?: number;
 		now: number;
 		density: "comfortable" | "compact";
 		surface: "desktop" | "mobile";
 		selected: boolean;
 		onSelect: (id: string, ev?: MouseEvent) => void;
 	};
-	let { session, worktree, reasons, now, density, surface, selected, onSelect }: Props = $props();
+	let {
+		session,
+		worktree,
+		reasons,
+		lastActivityMs = 0,
+		now,
+		density,
+		surface,
+		selected,
+		onSelect,
+	}: Props = $props();
 
 	const store = getStore();
 	const isHere = $derived(
 		!!session.pane && store.lensSnapshots.tmux.activePaneIds.has(session.pane.paneId),
 	);
-	const lastMs = $derived(session.lastActivityAt ? Date.parse(session.lastActivityAt) || 0 : 0);
+	const lastMs = $derived(
+		lastActivityMs || (session.lastActivityAt ? Date.parse(session.lastActivityAt) || 0 : 0),
+	);
 	const title = $derived(worktree?.branch || session.process?.cwd || session.sessionUuid.slice(0, 8));
 	const stateLabel = $derived(session.state === "no_claude" ? "no claude" : session.state);
 </script>

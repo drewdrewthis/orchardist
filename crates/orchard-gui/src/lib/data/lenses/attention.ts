@@ -27,6 +27,10 @@ const ATTENTION_QUERY = gql`
 		claudeInstances {
 			...SessionCard
 		}
+		conversations {
+			sessionUuid
+			lastSeenAt
+		}
 		workView {
 			projects {
 				id
@@ -51,6 +55,7 @@ export interface AttentionRow {
 
 interface AttentionResponse {
 	claudeInstances: SessionCardT[];
+	conversations: Array<{ sessionUuid: string; lastSeenAt: string | null }>;
 	workView: {
 		projects: Array<{ id: string; name: string; worktrees: WorktreeEnrichment[] }>;
 	};
@@ -76,7 +81,12 @@ function matchWorktree(session: SessionCardT, worktrees: WorktreeEnrichment[]): 
 	return best;
 }
 
-function classify(session: SessionCardT, worktree: WorktreeEnrichment | null, now: number): {
+function classify(
+	session: SessionCardT,
+	worktree: WorktreeEnrichment | null,
+	lastActivityMs: number,
+	now: number,
+): {
 	tier: AttentionTier;
 	reasons: string[];
 } {
@@ -94,12 +104,11 @@ function classify(session: SessionCardT, worktree: WorktreeEnrichment | null, no
 		if (reasons.length > 0) return { tier: "blocked", reasons };
 	}
 
-	// Tier 2 — waiting. Only flag idle for sessions that the daemon
-	// reported any activity for at all; brand-new sessions with
-	// lastActivityAt == null shouldn't count as idle.
-	const last = parseTime(session.lastActivityAt);
-	if (session.state !== "no_claude" && last > 0 && now - last > FIVE_MIN_MS) {
-		const minutes = Math.floor((now - last) / 60_000);
+	// Tier 2 — waiting. Use the resolved lastActivityMs (jsonl-derived
+	// when available); brand-new sessions with no activity yet shouldn't
+	// count as idle.
+	if (session.state !== "no_claude" && lastActivityMs > 0 && now - lastActivityMs > FIVE_MIN_MS) {
+		const minutes = Math.floor((now - lastActivityMs) / 60_000);
 		reasons.push(`idle ${minutes}m`);
 		return { tier: "waiting", reasons };
 	}
@@ -112,15 +121,22 @@ export async function fetchAttention(now: number = Date.now()): Promise<Attentio
 	try {
 		const data = await http().request<AttentionResponse>(ATTENTION_QUERY);
 		const allWorktrees: WorktreeEnrichment[] = data.workView.projects.flatMap((p) => p.worktrees);
+		const lastByUuid = new Map<string, number>();
+		for (const c of data.conversations) {
+			const t = parseTime(c.lastSeenAt);
+			if (t > 0) lastByUuid.set(c.sessionUuid, t);
+		}
 		const rows = data.claudeInstances.map((session): AttentionRow => {
 			const worktree = matchWorktree(session, allWorktrees);
-			const { tier, reasons } = classify(session, worktree, now);
+			const lastActivityMs =
+				lastByUuid.get(session.sessionUuid) ?? parseTime(session.lastActivityAt);
+			const { tier, reasons } = classify(session, worktree, lastActivityMs, now);
 			return {
 				session,
 				worktree,
 				tier,
 				reasons,
-				lastActivityMs: parseTime(session.lastActivityAt),
+				lastActivityMs,
 			};
 		});
 		// Sort: blocked > waiting > active, then most-recent activity first.

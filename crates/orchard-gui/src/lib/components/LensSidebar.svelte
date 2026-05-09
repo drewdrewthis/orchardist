@@ -81,6 +81,7 @@
 							session={row.session}
 							worktree={row.worktree}
 							reasons={row.reasons}
+							lastActivityMs={row.lastActivityMs}
 							{now}
 							{density}
 							{surface}
@@ -109,7 +110,8 @@
 				<SessionRow
 					session={row.session}
 					worktree={null}
-					reasons={[row.lastActivityMs > 0 ? relTime(row.lastActivityMs, now) : "—"]}
+					reasons={row.messageCount > 0 ? [`${row.messageCount} msgs`] : []}
+					lastActivityMs={row.lastActivityMs}
 					{now}
 					{density}
 					{surface}
