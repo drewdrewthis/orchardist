@@ -37,18 +37,36 @@ impl Recipient {
     }
 }
 
+/// How a `Delivered` outcome was verified.
+///
+/// - `Transcript` — strongest. Found the prefix as a `type:"user"` entry in
+///   the recipient's Claude transcript JSONL. Means the REPL ingested it.
+/// - `Scrollback` — weaker. Found the prefix in `tmux capture-pane -p`
+///   output. Bytes hit the pane but we don't know if a Claude REPL accepted
+///   it (vs e.g. a bash prompt that just echoed it).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifiedVia {
+    Transcript,
+    Scrollback,
+}
+
 /// Per-recipient outcome of a fanout.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FanoutOutcome {
-    /// `send-keys` succeeded AND `capture-pane` confirmed the prefixed text
-    /// landed in the recipient's scrollback by `scrollback_verified_at`.
+    /// `send-keys` succeeded AND a verifier (transcript or scrollback)
+    /// confirmed the prefixed text landed at `verified_at`. `verified_via`
+    /// records which mechanism succeeded — transcript is the stronger
+    /// proof (recipient REPL ingested it); scrollback is the fallback.
     Delivered {
         recipient: String,
-        scrollback_verified_at: String,
+        verified_via: VerifiedVia,
+        verified_at: String,
     },
-    /// `send-keys` succeeded but scrollback verify timed out — bytes are in
-    /// the input buffer but the recipient hasn't visibly processed them.
+    /// `send-keys` succeeded but every verifier timed out — bytes are in
+    /// the input buffer but neither transcript nor scrollback confirmed
+    /// the recipient processed them.
     ByteOnly { recipient: String, reason: String },
     /// `send-keys` itself errored (e.g. no such session). The message has
     /// NOT reached the recipient's input buffer.
@@ -137,17 +155,36 @@ pub fn tmux_fanout(
                 continue;
             }
         }
-        // Step 2: scrollback verify.
-        match verify_scrollback(target_session, &paste) {
-            Ok(verified_at) => out.push(FanoutOutcome::Delivered {
+        // Step 2: verify ladder.
+        //
+        // Try the transcript first — strongest proof, robust against the
+        // active-Claude-REPL redraw that breaks scrollback verify. If the
+        // recipient isn't a Claude REPL (or its transcript can't be located
+        // within the budget), fall back to scrollback verify. If both
+        // fail, ByteOnly.
+        let outcome = match crate::transcript::verify_via_transcript(
+            target_session,
+            &paste,
+            std::time::Duration::from_millis(2_000),
+        ) {
+            Ok(verified_at) => FanoutOutcome::Delivered {
                 recipient: r.handle.clone(),
-                scrollback_verified_at: verified_at,
-            }),
-            Err(reason) => out.push(FanoutOutcome::ByteOnly {
-                recipient: r.handle.clone(),
-                reason,
-            }),
-        }
+                verified_via: VerifiedVia::Transcript,
+                verified_at,
+            },
+            Err(_) => match verify_scrollback(target_session, &paste) {
+                Ok(verified_at) => FanoutOutcome::Delivered {
+                    recipient: r.handle.clone(),
+                    verified_via: VerifiedVia::Scrollback,
+                    verified_at,
+                },
+                Err(reason) => FanoutOutcome::ByteOnly {
+                    recipient: r.handle.clone(),
+                    reason,
+                },
+            },
+        };
+        out.push(outcome);
     }
     out
 }

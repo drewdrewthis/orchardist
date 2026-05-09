@@ -285,11 +285,19 @@ fn two_session_chat_end_to_end() {
         "bob outcome should be delivered: {bob_outcome}"
     );
     assert!(
-        bob_outcome["scrollback_verified_at"]
+        bob_outcome["verified_at"]
             .as_str()
             .map(|s| !s.is_empty())
             .unwrap_or(false),
-        "bob outcome should have scrollback_verified_at: {bob_outcome}"
+        "bob outcome should have verified_at: {bob_outcome}"
+    );
+    // bob is a bash session in this test, so transcript-verify won't find a
+    // Claude transcript dir and will fall back to scrollback. The
+    // verified_via field discriminates the proof.
+    assert!(
+        bob_outcome["verified_via"] == "transcript"
+            || bob_outcome["verified_via"] == "scrollback",
+        "verified_via should be transcript or scrollback: {bob_outcome}"
     );
 }
 

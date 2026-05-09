@@ -47,9 +47,10 @@ pub mod handle;
 pub mod identity;
 pub mod paths;
 pub mod store;
+pub mod transcript;
 pub mod types;
 
-pub use fanout::{FanoutOutcome, Recipient, tmux_fanout};
+pub use fanout::{FanoutOutcome, Recipient, VerifiedVia, tmux_fanout};
 pub use handle::{derive_handle, derive_handle_with_collisions};
 pub use identity::current_machine;
 pub use paths::{chat_dir, room_path};
