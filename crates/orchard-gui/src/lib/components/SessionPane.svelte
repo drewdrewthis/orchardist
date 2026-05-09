@@ -14,6 +14,7 @@
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import TerminalAttach from "./TerminalAttach.svelte";
 	import TranscriptView from "./TranscriptView.svelte";
+	import ViewSwitcher from "./ViewSwitcher.svelte";
 	import { fetchPanel, type PanelData } from "$lib/data/lenses";
 	import { relTime } from "$lib/util/format";
 	import { getStore } from "$lib/store.svelte";
@@ -143,6 +144,15 @@
 						{#if isHere}
 							<span class="here-badge mono">here</span>
 						{/if}
+						{#if pane || hasTranscript}
+							<span style="margin-left: auto;">
+								<ViewSwitcher
+									value={view}
+									onChange={(v) => onSetView(v)}
+									variant="segmented"
+								/>
+							</span>
+						{/if}
 					</div>
 					<div class="conv-sub mono dimer">
 						{#if worktree}
@@ -207,30 +217,6 @@
 			</div>
 		</div>
 
-		{#if (pane || hasTranscript) && !(loading && !data)}
-			<div class="view-toggle mono">
-				<button
-					class="view-tab"
-					class:on={view === "terminal"}
-					disabled={!pane}
-					onclick={(e) => { e.stopPropagation(); onSetView("terminal"); }}
-				>
-					<Icon name="terminal" size={11} /> Terminal
-				</button>
-				<button
-					class="view-tab"
-					class:on={view === "chat"}
-					disabled={!hasTranscript}
-					onclick={(e) => { e.stopPropagation(); onSetView("chat"); }}
-				>
-					<Icon name="message" size={11} /> Chat
-					{#if conversation && conversation.messageCount > 0}
-						<span class="dimer tnum">· {conversation.messageCount}</span>
-					{/if}
-				</button>
-			</div>
-		{/if}
-
 		{#if loading && !data}
 			<div class="conv-empty"><span class="dimer">Loading…</span></div>
 		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
@@ -279,34 +265,5 @@
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
-	}
-	.view-toggle {
-		display: flex;
-		gap: 2px;
-		padding: 4px 8px 0 8px;
-		font-size: 11px;
-	}
-	.view-tab {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 4px 9px;
-		border: 0;
-		background: transparent;
-		color: var(--fg-2);
-		border-radius: 6px;
-		cursor: pointer;
-	}
-	.view-tab:hover:not(:disabled) {
-		background: color-mix(in oklab, var(--fg) 6%, transparent);
-		color: var(--fg);
-	}
-	.view-tab.on {
-		background: var(--surface-2);
-		color: var(--fg);
-	}
-	.view-tab:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
 	}
 </style>
