@@ -2,9 +2,12 @@ package ps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -36,6 +39,14 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.Output()
 	if err != nil {
+		// For commands like lsof that exit non-zero on partial results
+		// (e.g. some requested pids no longer exist), the stdout bytes
+		// are still meaningful. Return them alongside the error so
+		// callers can choose whether to use partial output.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(out) > 0 {
+			return out, fmt.Errorf("%s %v: %w", name, args, err)
+		}
 		return nil, fmt.Errorf("%s %v: %w", name, args, err)
 	}
 	return out, nil
@@ -154,46 +165,56 @@ func (a *PsAdapter) FetchCwds(ctx context.Context, pids []int) (map[int]string, 
 	return a.fetchCwdsDarwin(ctx, pids)
 }
 
-// fetchCwdsDarwin calls lsof once per pid (cheap on macOS, no
-// privileged access required for self-owned processes). lsof returns
-// non-zero when the pid no longer exists; we treat that as "no cwd"
-// rather than an error.
+// fetchCwdsDarwin issues a single `lsof -a -d cwd -p <pids>` shellout for
+// all requested pids and parses the multi-pid -F output. macOS lsof
+// accepts comma-separated pids via a single -p flag; combining the calls
+// avoids N serial fork+exec on the request goroutine.
+//
+// pids that have exited or have no cwd entry produce no `n` line in the
+// output and are simply absent from the returned map. lsof's exit code is
+// non-zero when any pid is missing, but that's expected — we still parse
+// what came through.
 func (a *PsAdapter) fetchCwdsDarwin(ctx context.Context, pids []int) (map[int]string, error) {
 	out := make(map[int]string, len(pids))
-	for _, pid := range pids {
-		cwd, err := a.lsofCwd(ctx, pid)
-		if err != nil {
-			// Log and continue — one missing cwd shouldn't kill the
-			// rest of the batch. Resolvers see nil for that pid.
+	if len(pids) == 0 {
+		return out, nil
+	}
+
+	// Build comma-separated pid list: "123,456,789"
+	parts := make([]string, len(pids))
+	for i, pid := range pids {
+		parts[i] = strconv.Itoa(pid)
+	}
+	pidArg := strings.Join(parts, ",")
+
+	raw, err := a.runner.Run(ctx, "lsof", "-a", "-d", "cwd", "-p", pidArg, "-F", "n")
+	// lsof exits non-zero when any pid is missing — treat as "partial result"
+	// and parse whatever was emitted. Return (out, nil) so the resolver sees
+	// nulls for missing pids rather than failing the whole batch.
+	if err != nil && len(raw) == 0 {
+		return out, nil
+	}
+
+	var current int
+	for _, line := range splitLines(raw) {
+		if len(line) == 0 {
 			continue
 		}
-		if cwd != "" {
-			out[pid] = cwd
+		switch line[0] {
+		case 'p':
+			v, perr := strconv.Atoi(line[1:])
+			if perr != nil {
+				current = 0 // unknown pid header, skip until the next valid p<pid>
+				continue
+			}
+			current = v
+		case 'n':
+			if current != 0 && len(line) > 1 {
+				out[current] = line[1:]
+			}
 		}
 	}
 	return out, nil
-}
-
-// lsofCwd parses `lsof -a -d cwd -p <pid> -F n` output. Using the -F
-// (field) format gives us a stable machine-parseable shape:
-//
-//	p<pid>
-//	n<cwd>
-//
-// We pluck the `n` line. Empty result means lsof had nothing (pid gone,
-// or no cwd entry) and is returned as ("", nil).
-func (a *PsAdapter) lsofCwd(ctx context.Context, pid int) (string, error) {
-	out, err := a.runner.Run(ctx, "lsof", "-a", "-d", "cwd", "-p", fmt.Sprintf("%d", pid), "-F", "n")
-	if err != nil {
-		return "", err
-	}
-	for _, line := range splitLines(out) {
-		if len(line) == 0 || line[0] != 'n' {
-			continue
-		}
-		return line[1:], nil
-	}
-	return "", nil
 }
 
 // Watch polls FetchAll on a.pollInterval and emits every key whose value
