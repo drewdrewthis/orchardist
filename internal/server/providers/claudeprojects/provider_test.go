@@ -1,8 +1,11 @@
 package claudeprojects
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
 )
 
 // TestToGraphQL_JsonlPath asserts that ToGraphQL maps the in-memory
@@ -50,5 +53,41 @@ func TestToGraphQL_JsonlPath_Empty(t *testing.T) {
 	}
 	if got.JsonlPath != "" {
 		t.Errorf("JsonlPath = %q, want empty string for empty Path", got.JsonlPath)
+	}
+}
+
+// TestPathForSessionUUID_Hit asserts that PathForSessionUUID finds a
+// conversation by its session UUID in the provider's in-memory cache.
+func TestPathForSessionUUID_Hit(t *testing.T) {
+	const uuid = "test-uuid-001"
+	const path = "/tmp/test.jsonl"
+
+	p := NewWith(nil, nil, time.Now, HeartbeatThreshold)
+
+	// Seed the cache directly (bypassing the adapter) so the test
+	// does not need a real filesystem.
+	id := ConversationID{HostID: "test-host", SessionUUID: uuid}
+	p.cachePut(id, Conversation{ID: id, Path: path}, adapter.Freshness{})
+
+	got, ok := p.PathForSessionUUID(context.Background(), uuid)
+	if !ok {
+		t.Fatalf("PathForSessionUUID returned ok=false, want true")
+	}
+	if got != path {
+		t.Errorf("PathForSessionUUID = %q, want %q", got, path)
+	}
+}
+
+// TestPathForSessionUUID_Miss asserts that PathForSessionUUID returns
+// ("", false) when the session UUID is not in the cache.
+func TestPathForSessionUUID_Miss(t *testing.T) {
+	p := NewWith(nil, nil, time.Now, HeartbeatThreshold)
+
+	got, ok := p.PathForSessionUUID(context.Background(), "nonexistent-uuid")
+	if ok {
+		t.Fatalf("PathForSessionUUID returned ok=true for unknown uuid, path=%q", got)
+	}
+	if got != "" {
+		t.Errorf("PathForSessionUUID = %q, want empty string on miss", got)
 	}
 }
