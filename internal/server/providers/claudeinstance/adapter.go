@@ -132,6 +132,9 @@ type rawHeartbeat struct {
 	// script style while camelCase matches the ADR-011 forward-compatible shape.
 	LastActivity      string `json:"last_activity,omitempty"`
 	LastActivityCamel string `json:"lastActivity,omitempty"`
+	// cwd — working directory the Claude process was launched from. Used
+	// together with session_id to locate the session's transcript jsonl.
+	Cwd string `json:"cwd,omitempty"`
 }
 
 // parseFile reads and decodes one heartbeat file. Returns (Heartbeat,
@@ -153,6 +156,7 @@ func parseFile(path string) (Heartbeat, bool) {
 		State:       raw.State,
 		ClaudePid:   firstNonZero(raw.ClaudePid, raw.ClaudePidSnake),
 		RcURL:       firstNonEmpty(raw.RcURL, raw.RcURLSnake),
+		Cwd:         raw.Cwd,
 	}
 	if raw.RcEnabled != nil {
 		hb.RcEnabled = *raw.RcEnabled

@@ -114,8 +114,7 @@ fn bare_verb_ls_dispatches_to_orchard_worktree_ls() {
 #[test]
 fn bare_verb_send_dispatches_to_orchard_chat_send() {
     let dir = with_helpers(&[("chat", 0)]);
-    let (stdout, _stderr, code) =
-        run_dispatcher(dir.path(), &["send", "#general", "hello"]);
+    let (stdout, _stderr, code) = run_dispatcher(dir.path(), &["send", "#general", "hello"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("[helper:chat] argv=send #general hello"),

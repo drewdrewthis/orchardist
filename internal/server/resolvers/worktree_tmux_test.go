@@ -78,9 +78,12 @@ func firstNonFlagTmuxArg(args []string) string {
 	return ""
 }
 
-// paneRow builds a list-panes row in the adapter's field-separated format.
-// Fields: session, windowIdx, paneId, title, command, pid, width, height, dead
-func paneRow(session, paneID string, pid int) string {
+// buildPaneRow builds a list-panes row in the adapter's field-separated format.
+// Fields: session, windowIdx, paneId, title, command, pid, width, height, dead.
+//
+// Renamed from paneRow to avoid a redeclaration with the paneRow helper in
+// tmux_pane_process_test.go (#521 — sibling-PR collision between #508 and #516).
+func buildPaneRow(session, paneID string, pid int) string {
 	return strings.Join([]string{
 		session, "0", paneID, "title", "zsh",
 		fmt.Sprintf("%d", pid),
@@ -201,7 +204,7 @@ func TestTmuxPanesResolver_ExactCwdMatch(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
-		paneRows:    []string{paneRow("main", paneID, fakePID)},
+		paneRows:    []string{buildPaneRow("main", paneID, fakePID)},
 	}
 	r := buildResolver(t, tr, map[int]string{
 		fakePID: worktreePath, // cwd == worktree path exactly
@@ -245,7 +248,7 @@ func TestTmuxPanesResolver_CwdUnderPath(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
-		paneRows:    []string{paneRow("main", paneID, fakePID)},
+		paneRows:    []string{buildPaneRow("main", paneID, fakePID)},
 	}
 	r := buildResolver(t, tr, map[int]string{
 		fakePID: paneCwd,
@@ -317,9 +320,9 @@ func TestTmuxPanesResolver_SortedByPaneId(t *testing.T) {
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
 		paneRows: []string{
-			paneRow("main", "%5", fakePID5),
-			paneRow("main", "%2", fakePID2),
-			paneRow("main", "%9", fakePID9),
+			buildPaneRow("main", "%5", fakePID5),
+			buildPaneRow("main", "%2", fakePID2),
+			buildPaneRow("main", "%9", fakePID9),
 		},
 	}
 	r := buildResolver(t, tr, map[int]string{
@@ -389,7 +392,7 @@ func TestTmuxSessionResolver_SinglePane(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow(sessionName, activityUnix)},
 		windowRows:  []string{windowRow(sessionName)},
-		paneRows:    []string{paneRow(sessionName, "%1", fakePID)},
+		paneRows:    []string{buildPaneRow(sessionName, "%1", fakePID)},
 	}
 	r := buildResolver(t, tr, map[int]string{
 		fakePID: worktreePath,
@@ -481,8 +484,8 @@ func TestTmuxSessionResolver_HigherActivityWins(t *testing.T) {
 			windowRow("beta"),
 		},
 		paneRows: []string{
-			paneRow("alpha", "%10", pidAlpha),
-			paneRow("beta", "%11", pidBeta),
+			buildPaneRow("alpha", "%10", pidAlpha),
+			buildPaneRow("beta", "%11", pidBeta),
 		},
 	}
 	r := buildResolver(t, tr, map[int]string{
@@ -536,8 +539,8 @@ func TestTmuxSessionResolver_NameTieBreak(t *testing.T) {
 			windowRow("alpha"),
 		},
 		paneRows: []string{
-			paneRow("zebra", "%20", pidZebra),
-			paneRow("alpha", "%21", pidAlpha),
+			buildPaneRow("zebra", "%20", pidZebra),
+			buildPaneRow("alpha", "%21", pidAlpha),
 		},
 	}
 	r := buildResolver(t, tr, map[int]string{
@@ -581,7 +584,7 @@ func TestTmuxPanesAndSession_NoMatch(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow("other", 1700000000)},
 		windowRows:  []string{windowRow("other")},
-		paneRows:    []string{paneRow("other", "%30", fakePID)},
+		paneRows:    []string{buildPaneRow("other", "%30", fakePID)},
 	}
 	// The pane's cwd is somewhere else entirely.
 	r := buildResolver(t, tr, map[int]string{
@@ -630,7 +633,7 @@ func TestTmuxPanesResolver_NullCwdSkipped(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
-		paneRows:    []string{paneRow("main", "%40", fakePID)},
+		paneRows:    []string{buildPaneRow("main", "%40", fakePID)},
 	}
 	// Map the pane pid to an empty cwd — simulates null/unresolvable cwd.
 	r := buildResolver(t, tr, map[int]string{
@@ -672,8 +675,8 @@ func TestTmuxPanesResolver_PSErrorSkipped(t *testing.T) {
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
 		paneRows: []string{
-			paneRow("main", "%50", badPID),
-			paneRow("main", "%51", goodPID),
+			buildPaneRow("main", "%50", badPID),
+			buildPaneRow("main", "%51", goodPID),
 		},
 	}
 	// Only map the good pid; bad pid will cause lsof to return an error.
@@ -722,7 +725,7 @@ func TestTmuxPanesResolver_HostAttribution(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
-		paneRows:    []string{paneRow("main", "%60", fakePID)},
+		paneRows:    []string{buildPaneRow("main", "%60", fakePID)},
 	}
 
 	// Build the resolver with a non-"local" hostID to simulate host "B".
@@ -785,7 +788,7 @@ func TestTmuxPanesResolver_CrossHostNoMatch(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow("main", 1700000000)},
 		windowRows:  []string{windowRow("main")},
-		paneRows:    []string{paneRow("main", "%70", fakePID)},
+		paneRows:    []string{buildPaneRow("main", "%70", fakePID)},
 	}
 
 	hostB := "B"
@@ -924,12 +927,12 @@ func TestWorktreeTmuxJoin_Integration_AC7(t *testing.T) {
 			windowRow("sess-other"),
 		},
 		paneRows: []string{
-			paneRow("sess-p1", "%101", pidP1),   // p1
-			paneRow("sess-p2", "%102", pidP2),   // p2
-			paneRow("sess-p3", "%103", pidP3),   // p3
-			paneRow("sess-other", "%104", pidP4), // p4
-			paneRow("sess-other", "%105", pidP5), // p5
-			paneRow("sess-other", "%106", pidP6), // p6
+			buildPaneRow("sess-p1", "%101", pidP1),   // p1
+			buildPaneRow("sess-p2", "%102", pidP2),   // p2
+			buildPaneRow("sess-p3", "%103", pidP3),   // p3
+			buildPaneRow("sess-other", "%104", pidP4), // p4
+			buildPaneRow("sess-other", "%105", pidP5), // p5
+			buildPaneRow("sess-other", "%106", pidP6), // p6
 		},
 	}
 

@@ -96,6 +96,7 @@ func newComposerForTest(pane *graphql.TmuxPane) *Composer {
 		&fakeProcessFinder{},
 		&fakeAccountFinder{},
 		fakeLiveness{alive: map[int]bool{}},
+		nil,
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)

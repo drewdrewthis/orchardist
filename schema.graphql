@@ -434,6 +434,15 @@ type Subscription {
   belonging to the named project. The argument is the Project id.
   """
   worktreeChanged(project: ID!): [Worktree!]!
+
+  """
+  Push-on-change for one Claude Code conversation, keyed by sessionUuid.
+  Emits the freshly-loaded Conversation every time the claudeprojects
+  provider's fsnotify watcher fires for the matching JSONL. Use this
+  to rerender a transcript view without polling. Returns null when the
+  watcher reports the file was removed.
+  """
+  conversationChanged(sessionUuid: String!): Conversation
 }
 
 type Health {
@@ -893,6 +902,12 @@ type Conversation implements Node {
 
   "Plugin-populated short summary. Always null in v1."
   recap: String
+
+  """
+  Absolute path to the JSONL transcript on the daemon's host.
+  Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
+  """
+  jsonlPath: String!
 }
 
 """

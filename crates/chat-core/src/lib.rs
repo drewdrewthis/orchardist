@@ -47,13 +47,12 @@ pub mod handle;
 pub mod identity;
 pub mod paths;
 pub mod store;
+pub mod transcript;
 pub mod types;
 
-pub use fanout::{FanoutOutcome, tmux_fanout};
+pub use fanout::{FanoutOutcome, Recipient, VerifiedVia, tmux_fanout};
 pub use handle::{derive_handle, derive_handle_with_collisions};
 pub use identity::current_machine;
 pub use paths::{chat_dir, room_path};
-pub use store::{
-    append_message, join, leave, list_members, list_rooms, read_history, send,
-};
+pub use store::{append_message, join, leave, list_members, list_rooms, read_history, send};
 pub use types::{Event, Member, Message, MessageId, SendOutcome, Target};

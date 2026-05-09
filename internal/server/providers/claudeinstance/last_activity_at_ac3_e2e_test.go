@@ -163,7 +163,7 @@ func TestClaudeInstance_E2E_QueryLastActivityAt(t *testing.T) {
 	liveness := fakeLiveness{alive: map[int]bool{20042: true, 20099: true}}
 
 	composer := claudeinstance.NewComposerWith(
-		"local", panes, procs, &fakeAccountFinder{}, liveness,
+		"local", panes, procs, &fakeAccountFinder{}, liveness, nil,
 		func() time.Time { return now }, claudeinstance.HeartbeatStaleAfter,
 	)
 	reader := claudeinstance.NewFileReader(heartbeatDir)
@@ -254,6 +254,7 @@ func TestClaudeInstance_E2E_SubscriptionOnLastActivityChange(t *testing.T) {
 		&fakeProcessFinder{},
 		&fakeAccountFinder{},
 		liveness,
+		nil,
 		func() time.Time { return now },
 		claudeinstance.HeartbeatStaleAfter,
 	)

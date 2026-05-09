@@ -109,10 +109,25 @@ event type can be appended without breaking forward-compat readers.
 
 | Variant | Meaning |
 |---|---|
-| `delivered` | `send-keys` succeeded AND `capture-pane -p` confirmed the prefixed message text appears in the recipient's scrollback. Includes `scrollback_verified_at`. |
-| `byte_only` | `send-keys` succeeded but scrollback verify timed out (~500ms). Bytes are in the input buffer; the recipient hasn't visibly processed them. |
+| `delivered` | `send-keys` succeeded AND a verifier confirmed the prefixed message landed at `verified_at`. `verified_via` records which verifier won — `transcript` (strongest: recipient's Claude transcript JSONL ingested it) or `scrollback` (`tmux capture-pane -p` saw it). |
+| `byte_only` | `send-keys` succeeded but every verifier timed out. Bytes are in the input buffer; we don't know if the recipient processed them. Common when the recipient is a non-Claude pane that's actively redrawing. |
 | `failed` | `send-keys` itself errored — for example, no such tmux session. |
 | `skipped` | Sender's own pane, empty handle, or other pre-flight skip. |
+
+### Verify ladder
+
+Within `delivered`, the substrate tries the strongest receipt first:
+
+1. **Transcript verify (Level 3).** Resolve the recipient's working directory via `tmux display-message -p '#{pane_current_path}'`, slugify it (replace `/` and `.` with `-`), open the freshest `.jsonl` in `~/.claude/projects/<slug>/`, and look for a `type: "user"` row whose `message.content` contains our prefix. If found within ~2s, the recipient REPL ingested the message — strongest possible same-machine proof.
+2. **Scrollback verify (Level 2).** If no Claude transcript is locatable, or transcript-verify times out, fall back to `tmux capture-pane -p` looking for the prefix in the recipient's pane scrollback (~500ms budget).
+3. **ByteOnly (Level 1).** Both above failed; `send-keys` returned 0 but we have no proof the recipient processed it.
+
+The transcript path solves a known failure mode against active Claude REPLs:
+the pane is constantly redrawing, so `capture-pane` can miss the prefix
+even though the bytes landed. The transcript file is append-only — once
+the entry's there, the REPL has it.
+
+### Determinism
 
 The JSONL line is appended **before** fanout starts. A fanout failure does
 not roll back the append — the message is in history. Callers MUST NOT

@@ -280,6 +280,7 @@ func (p *Provider) ToGraphQL(c Conversation) *graphql.Conversation {
 		MessageCount: c.MessageCount,
 		Open:         p.IsOpen(c),
 		Recap:        nil,
+		JsonlPath:    c.Path,
 	}
 }
 
@@ -451,6 +452,24 @@ func (p *Provider) broadcast(keys []ConversationID, reason string, at time.Time)
 			}
 		}
 	}
+}
+
+// PathForSessionUUID returns the on-disk path for the conversation
+// whose session UUID matches uuid, scanning the current in-memory
+// cache. Returns ("", false) when no match is found. The caller should
+// not infer anything from a false return beyond "not currently known";
+// the watcher may populate the cache later.
+//
+// Locking mirrors cacheGet — RLock is sufficient because we only read.
+func (p *Provider) PathForSessionUUID(_ context.Context, uuid string) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for id, c := range p.cache {
+		if id.SessionUUID == uuid {
+			return c.Path, true
+		}
+	}
+	return "", false
 }
 
 func (p *Provider) cacheGet(k ConversationID) (Conversation, adapter.Freshness, bool) {

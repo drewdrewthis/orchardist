@@ -53,13 +53,7 @@ func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphq
 	return out, nil
 }
 
-// Processes is the resolver for the host.processes field.
-//
-// For the local host the resolver consults the in-process `ps` provider.
-// For a peer Host (returned via `host.peers`) the resolver federates the
-// query to the peer's daemon over the peerproxy transport — without
-// federation, the local `ps` snapshot would be returned for every peer
-// (#465: confidently-wrong is the worst error mode).
+// Processes is the resolver for the host.processes field. Local host: in-process ps. Peer Host: federate via peerproxy (#465 — never return local ps for a peer).
 func (r *hostResolver) Processes(ctx context.Context, obj *graphql1.Host, filter *graphql1.ProcessFilter) ([]*graphql1.Process, error) {
 	if isLocalHostNode(r, obj) {
 		if r.PS == nil {
@@ -135,6 +129,74 @@ func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) 
 		out = append(out, toGraphQLWorktree(w))
 	}
 	return out, nil
+}
+
+// Mergeable is the resolver for the pullRequest.mergeable field. Calls EnrichPullRequest (cached, single GraphQL round-trip shared across the five enrichment fields).
+func (r *pullRequestResolver) Mergeable(ctx context.Context, obj *graphql1.PullRequest) (graphql1.MergeableState, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return graphql1.MergeableStateUnknown, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return graphql1.MergeableStateUnknown, err
+	}
+	return mapMergeableState(pr.Mergeable), nil
+}
+
+// MergeStateStatus is the resolver for the pullRequest.mergeStateStatus field.
+func (r *pullRequestResolver) MergeStateStatus(ctx context.Context, obj *graphql1.PullRequest) (string, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return "", nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return pr.MergeStateStatus, nil
+}
+
+// ReviewDecision is the resolver for the pullRequest.reviewDecision field.
+func (r *pullRequestResolver) ReviewDecision(ctx context.Context, obj *graphql1.PullRequest) (*graphql1.ReviewDecisionEnum, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return nil, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return mapReviewDecision(pr.ReviewDecision), nil
+}
+
+// StatusCheckRollup is the resolver for the pullRequest.statusCheckRollup field.
+func (r *pullRequestResolver) StatusCheckRollup(ctx context.Context, obj *graphql1.PullRequest) (graphql1.CiStatus, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return graphql1.CiStatusUnknown, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return graphql1.CiStatusUnknown, err
+	}
+	return mapCiStatus(pr.StatusCheckRollup), nil
+}
+
+// Labels is the resolver for the pullRequest.labels field. Returns user-assigned labels with orchard phase labels excluded.
+func (r *pullRequestResolver) Labels(ctx context.Context, obj *graphql1.PullRequest) ([]string, error) {
+	key, ok := prKeyFromGraphQL(r.Resolver, obj)
+	if !ok {
+		return []string{}, nil
+	}
+	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if pr.Labels == nil {
+		return []string{}, nil
+	}
+	return append([]string(nil), pr.Labels...), nil
 }
 
 // Health is the resolver for the health field.
@@ -449,6 +511,87 @@ func (r *queryResolver) Node(ctx context.Context, id string) (graphql1.Node, err
 	return nil, err
 }
 
+// SchemaSdl is the resolver for Query.schemaSDL (#469 F10). Returns the daemon's embedded schema.graphql contents so agents can self-describe even without introspection or a source tree on disk.
+func (r *queryResolver) SchemaSdl(ctx context.Context) (string, error) {
+	return SchemaSDL(), nil
+}
+
+// WorkView is the resolver for Query.workView (#469 F6). Walks the local projects-to-worktrees graph and joins each worktree to its open PR, linked issue, processes, and tmux sessions in a single round trip. Uses existing per-type resolvers so semantics match per-type queries.
+func (r *queryResolver) WorkView(ctx context.Context) (*graphql1.WorkView, error) {
+	q := r.Resolver.Query()
+
+	projects, projectsErr := q.Projects(ctx)
+	sessions, sessionsErr := q.TmuxSessions(ctx, nil)
+	instances, instancesErr := q.ClaudeInstances(ctx)
+
+	view := &graphql1.WorkView{
+		Projects:        projects,
+		TmuxSessions:    sessions,
+		ClaudeInstances: instances,
+		Meta: &graphql1.Meta{
+			Provider:              metaProviderWorkView,
+			LastSuccessfulFetchAt: nowRFC3339(),
+		},
+	}
+
+	// Fold non-fatal sub-errors into the Meta envelope so callers can
+	// distinguish "valid empty" from "data unavailable" (#469 F1)
+	// without the whole composite failing.
+	reasons := make([]string, 0, 3)
+	if projectsErr != nil {
+		reasons = append(reasons, "projects: "+projectsErr.Error())
+	}
+	if sessionsErr != nil {
+		reasons = append(reasons, "tmuxSessions: "+sessionsErr.Error())
+	}
+	if instancesErr != nil {
+		reasons = append(reasons, "claudeInstances: "+instancesErr.Error())
+	}
+	if len(reasons) > 0 {
+		joined := strings.Join(reasons, "; ")
+		view.Meta.FailureReason = &joined
+		view.Meta.LastSuccessfulFetchAt = nil
+	}
+
+	if view.Projects == nil {
+		view.Projects = []*graphql1.Project{}
+	}
+	if view.TmuxSessions == nil {
+		view.TmuxSessions = []*graphql1.TmuxSession{}
+	}
+	if view.ClaudeInstances == nil {
+		view.ClaudeInstances = []*graphql1.ClaudeInstance{}
+	}
+
+	return view, nil
+}
+
+// DaemonState is the resolver for Query.daemonState (#469 F9). Reports per-provider configuration plus daemon-wide startedAt/uptime. Per-provider counters (refreshCount/failureCount) are reserved for follow-up wiring; v1 returns 0/nil best-effort.
+func (r *queryResolver) DaemonState(ctx context.Context) (*graphql1.DaemonState, error) {
+	startedAt := r.StartedAt.UTC().Format(time.RFC3339)
+	uptime := int64(time.Since(r.StartedAt).Round(time.Second).Seconds())
+
+	providers := []*graphql1.ProviderHealth{
+		{Name: "host", Configured: r.HostProvider != nil},
+		{Name: "git", Configured: r.Git != nil},
+		{Name: "ps", Configured: r.PS != nil},
+		{Name: "tmux", Configured: r.Tmux != nil},
+		{Name: "claudeProjects", Configured: r.ClaudeProjects != nil},
+		{Name: "claudeAccount", Configured: r.ClaudeAccount != nil},
+		{Name: "claudeInstance", Configured: r.ClaudeInstance != nil},
+		{Name: "hostService", Configured: r.HostServiceProvider != nil},
+		{Name: "contracts", Configured: r.ContractsProvider != nil},
+		{Name: "gh", Configured: r.GH != nil},
+		{Name: "peerProxy", Configured: r.PeerProxy != nil},
+	}
+
+	return &graphql1.DaemonState{
+		StartedAt: startedAt,
+		UptimeS:   uptime,
+		Providers: providers,
+	}, nil
+}
+
 // NodeChanged is the resolver for the nodeChanged field.
 func (r *subscriptionResolver) NodeChanged(ctx context.Context, id string) (<-chan graphql1.Node, error) {
 	return subscribeNodeChanged(ctx, r.Resolver, id)
@@ -490,6 +633,209 @@ func (r *subscriptionResolver) Peer(ctx context.Context, host string) (<-chan gr
 			case out <- projected:
 			case <-ctx.Done():
 				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// TmuxSessionsChanged is the resolver for Subscription.tmuxSessionsChanged (#469 F7). Emits a fresh snapshot of cached tmux sessions whenever the tmux provider invalidates.
+func (r *subscriptionResolver) TmuxSessionsChanged(ctx context.Context) (<-chan []*graphql1.TmuxSession, error) {
+	if r.Tmux == nil {
+		return nil, fmt.Errorf("tmux provider not configured")
+	}
+	src := r.Tmux.Sessions().Subscribe(ctx)
+	out := make(chan []*graphql1.TmuxSession, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-src:
+				if !ok {
+					return
+				}
+				snap := r.Tmux.Snapshot()
+				sessions := make([]*graphql1.TmuxSession, 0, len(snap.Sessions))
+				for _, s := range snap.Sessions {
+					sessions = append(sessions, projectSession(s))
+				}
+				select {
+				case out <- sessions:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// PullRequestChanged is the resolver for Subscription.pullRequestChanged (#469 F7). Emits the freshly-loaded PullRequest each time the gh provider invalidates an id matching repo+number.
+func (r *subscriptionResolver) PullRequestChanged(ctx context.Context, repo string, number int64) (<-chan *graphql1.PullRequest, error) {
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+	if _, _, ok := splitRepo(repo); !ok {
+		return nil, fmt.Errorf("pullRequestChanged: malformed repo %q (want owner/name)", repo)
+	}
+	// gh provider keys PullRequest events as `PullRequest:<owner>/<repo>#<number>`.
+	wantKey := fmt.Sprintf("PullRequest:%s#%d", repo, number)
+	src := r.GH.Subscribe(ctx)
+	out := make(chan *graphql1.PullRequest, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-src:
+				if !ok {
+					return
+				}
+				if ev.Key != wantKey {
+					continue
+				}
+				pr, err := r.Resolver.Query().PullRequest(ctx, repo, number)
+				if err != nil || pr == nil {
+					continue
+				}
+				select {
+				case out <- pr:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// RunChanged is the resolver for Subscription.runChanged (#469 F7). Emits matching WorkflowRun snapshots when the gh provider invalidates.
+func (r *subscriptionResolver) RunChanged(ctx context.Context, repo string, branch string) (<-chan *graphql1.WorkflowRun, error) {
+	if r.GH == nil {
+		return nil, errGHNotConfigured
+	}
+	if _, _, ok := splitRepo(repo); !ok {
+		return nil, fmt.Errorf("runChanged: malformed repo %q (want owner/name)", repo)
+	}
+	src := r.GH.Subscribe(ctx)
+	out := make(chan *graphql1.WorkflowRun, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-src:
+				if !ok {
+					return
+				}
+				if !strings.HasPrefix(ev.Key, "WorkflowRun:"+repo+"#") {
+					continue
+				}
+				runs, err := r.Resolver.Query().WorkflowRuns(ctx, repo)
+				if err != nil {
+					continue
+				}
+				for _, run := range runs {
+					if run == nil || run.HeadBranch != branch {
+						continue
+					}
+					if ev.Key != fmt.Sprintf("WorkflowRun:%s#%d", repo, run.RunID) {
+						continue
+					}
+					select {
+					case out <- run:
+					case <-ctx.Done():
+						return
+					}
+					break
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// WorktreeChanged is the resolver for Subscription.worktreeChanged (#469 F7). Emits the project's full worktree list whenever the git provider invalidates any worktree belonging to the named project.
+func (r *subscriptionResolver) WorktreeChanged(ctx context.Context, project string) (<-chan []*graphql1.Worktree, error) {
+	if r.Git == nil {
+		return nil, fmt.Errorf("git provider not configured")
+	}
+	src := r.Git.Subscribe(ctx)
+	out := make(chan []*graphql1.Worktree, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-src:
+				if !ok {
+					return
+				}
+				if !worktreeEventMatchesProject(ev, project) {
+					continue
+				}
+				worktrees, err := r.Git.ListByProject(ctx, project)
+				if err != nil {
+					continue
+				}
+				out2 := make([]*graphql1.Worktree, 0, len(worktrees))
+				for _, w := range worktrees {
+					out2 = append(out2, toGraphQLWorktree(w))
+				}
+				select {
+				case out <- out2:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// ConversationChanged is the resolver for Subscription.conversationChanged (#525). Filters claudeprojects invalidations by sessionUUID and emits the freshly-loaded Conversation on each match. Emits nil when the fsnotify watcher reports the file was removed so callers can clear stale state.
+func (r *subscriptionResolver) ConversationChanged(ctx context.Context, sessionUUID string) (<-chan *graphql1.Conversation, error) {
+	if r.ClaudeProjects == nil {
+		return nil, fmt.Errorf("claudeprojects provider not configured")
+	}
+	gqlid := "Conversation:" + sessionUUID
+	src := r.ClaudeProjects.Subscribe(ctx)
+	out := make(chan *graphql1.Conversation, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-src:
+				if !ok {
+					return
+				}
+				if ev.Key.SessionUUID != sessionUUID {
+					continue
+				}
+				if ev.Reason == "watcher-remove" {
+					select {
+					case out <- nil:
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
+				conv, err := r.Resolver.Query().Conversation(ctx, gqlid)
+				if err != nil || conv == nil {
+					continue
+				}
+				select {
+				case out <- conv:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -691,19 +1037,7 @@ func (r *tmuxPaneResolver) WatchingClients(ctx context.Context, obj *graphql1.Tm
 	return out, nil
 }
 
-// Process returns the OS-level Process for the pane's foreground pid.
-// Returns nil when the pane has no current pid, or when the pid is absent
-// from the cached ps snapshot (process exited or not yet observed).
-// cwd resolution is delegated to processResolver.Cwd and only fires when the
-// client selects the cwd field (gqlgen selection-set lazy evaluation).
-//
-// Federation note: the host segment of the pane id is preserved on the
-// projected Process node (via splitTmuxPaneID) so a future federated lookup
-// will attribute the Process to the correct peer host. Today this is a
-// regression guard only — `lookupPane` itself only resolves panes from the
-// local tmux snapshot, so peer-host pane ids return nil before reaching the
-// projection step. End-to-end peer lookup lands with `Host.tmuxSessions`
-// federation (tracked separately).
+// Process returns the OS-level Process for the pane's foreground pid (nil when the pid is missing or absent from the cached ps snapshot). cwd resolution is delegated to processResolver.Cwd and fires only when the client selects cwd. Host segment of the pane id is preserved on the projected Process node so future federated lookup attributes it to the correct peer host; today lookupPane only resolves local-tmux panes.
 func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.Process, error) {
 	if r.PS == nil {
 		return nil, nil
@@ -728,15 +1062,7 @@ func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) 
 	return projectProcess(&proc, host), nil
 }
 
-// ClaudeInstance resolves the ClaudeInstance that is running inside this
-// pane. The lookup walks all cached instances from the claudeinstance.Provider
-// and returns the first one whose Pane.ID matches obj.ID. This is O(N) in the
-// number of tracked claude processes (typically < 10 on any one host), so no
-// dataloader is needed here.
-//
-// Returns (nil, nil) when:
-//   - r.ClaudeInstance is not wired (provider not available)
-//   - no tracked instance has a pane matching this pane's ID
+// ClaudeInstance resolves the ClaudeInstance running inside this pane (nil when the provider is unwired or no tracked instance matches obj.ID). O(N) walk over cached instances; typically <10 per host so no dataloader.
 func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
 	if r.Resolver.ClaudeInstance == nil {
 		return nil, nil
@@ -1019,16 +1345,15 @@ func (r *tmuxWindowResolver) CurrentPane(ctx context.Context, obj *graphql1.Tmux
 	return projectPane(p), nil
 }
 
-// Host is the resolver for the host field.
-// v1 sentinel: all locally-discovered worktrees report "local".
-// Workstream F populates per-peer hostnames in a later iteration.
+// Host is the resolver for the worktree.host field. Reads obj.Host (set by toGraphQLWorktree); defensively falls back to "local" when empty so the v1 sentinel lives in one place.
 func (r *worktreeResolver) Host(ctx context.Context, obj *graphql1.Worktree) (string, error) {
-	return "local", nil
+	if obj.Host == "" {
+		return "local", nil
+	}
+	return obj.Host, nil
 }
 
-// Repo is the resolver for the repo field.
-// Derives owner/repo from the worktree's origin remote URL.
-// Returns nil (null in GraphQL) when origin is absent, or not a GitHub URL.
+// Repo is the resolver for the worktree.repo field. Derives owner/repo from the worktree's origin remote URL; returns nil when origin is absent or not a GitHub URL.
 func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*string, error) {
 	if obj == nil || obj.Path == "" {
 		return nil, nil
@@ -1045,24 +1370,7 @@ func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*s
 	return &slug, nil
 }
 
-// Pr is the resolver for the pr field.
-//
-// Looks up the open PR whose headRef matches the worktree's branch.
-// Uses the PullRequestsForRepo DataLoader so concurrent resolver calls
-// for multiple worktrees in the same repo collapse into one underlying
-// gh.Provider.ListPullRequests call.
-//
-// Returns nil (null in GraphQL) when:
-//   - obj is nil.
-//   - Branch is empty (detached HEAD).
-//   - Branch is the project's default branch (skip the lookup — the
-//     default branch never has an open PR targeting itself).
-//   - Origin is absent or not a GitHub URL.
-//   - No open PR has a headRef matching the branch.
-//
-// Returns an error only when the DataLoader is missing from context
-// (daemon misconfiguration) or when the gh provider returns a hard
-// error.
+// Pr is the resolver for the worktree.pr field. Looks up the open PR whose headRef matches the worktree's branch via the PullRequestsForRepo DataLoader (concurrent resolver calls for the same repo collapse into one ListPullRequests call). Returns nil for missing obj, empty branch, default branch, non-GitHub origin, or no headRef match. Errors only when the DataLoader is missing from context or the gh provider fails hard.
 func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*graphql1.PullRequest, error) {
 	if obj == nil || obj.Branch == "" {
 		return nil, nil
@@ -1098,18 +1406,7 @@ func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*gra
 	return nil, nil
 }
 
-// Issue is the resolver for the issue field.
-//
-// Derives the GitHub issue number from the worktree's branch name using the
-// branch-parse rules ported from crates/orchard/src/github.rs, then fetches
-// the issue via the gh provider.
-//
-// Returns nil (null in GraphQL) when:
-//   - The branch is empty (detached HEAD).
-//   - No issue number can be parsed from the branch.
-//   - The origin remote is absent or not a GitHub URL.
-//   - The gh provider is not wired (returns errGHNotConfigured).
-//   - The issue is not found on GitHub (404).
+// Issue is the resolver for the worktree.issue field. Parses the issue number from the worktree branch (rules ported from crates/orchard/src/github.rs) then fetches via the gh provider. Returns nil for empty branch, unparseable branch, missing/non-GitHub origin, unwired gh provider, or 404.
 func (r *worktreeResolver) Issue(ctx context.Context, obj *graphql1.Worktree) (*graphql1.Issue, error) {
 	if obj == nil || obj.Branch == "" {
 		return nil, nil
@@ -1148,88 +1445,89 @@ func (r *worktreeResolver) Processes(ctx context.Context, obj *graphql1.Worktree
 	return []*graphql1.Process{}, nil
 }
 
-// prKeyFromGraphQL extracts the gh.PullRequestKey from a graphql1.PullRequest
-// by parsing the stable node ID ("PullRequest:owner/repo#number"). Returns ok=false
-// when the ID is malformed or the gh provider is not wired.
-func prKeyFromGraphQL(r *Resolver, obj *graphql1.PullRequest) (gh.PullRequestKey, bool) {
-	if r.GH == nil || obj == nil {
-		return gh.PullRequestKey{}, false
+// TmuxPanes resolves Worktree.tmuxPanes (#511): returns every tmux pane on the worktree's host whose foreground-process cwd equals obj.Path exactly OR has obj.Path+"/" as a prefix. Panes are sorted by paneId ascending (lex sort: "%2" < "%5" < "%9"). Returns [] (never nil) when no panes match or when the tmux or ps provider is unwired.
+func (r *worktreeResolver) TmuxPanes(ctx context.Context, obj *graphql1.Worktree) ([]*graphql1.TmuxPane, error) {
+	if r.Tmux == nil {
+		return []*graphql1.TmuxPane{}, nil
 	}
-	owner, name, number, ok := splitGHNodeID(obj.ID, "PullRequest:")
-	if !ok {
-		return gh.PullRequestKey{}, false
+
+	snap := r.Tmux.Snapshot()
+	rawPanes := matchPanesForWorktree(ctx, r, snap, obj)
+
+	// Map raw provider panes to GraphQL projection.
+	out := make([]*graphql1.TmuxPane, len(rawPanes))
+	for i, p := range rawPanes {
+		out[i] = projectPane(p)
 	}
-	return gh.PullRequestKey{Owner: owner, Name: name, Number: number}, true
+
+	// Sort by paneId ascending so output is deterministic.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].PaneID < out[j].PaneID
+	})
+
+	return out, nil
 }
 
-// Mergeable is the resolver for the pullRequest.mergeable field.
-// Calls EnrichPullRequest which fetches (or returns cached) GraphQL enrichment.
-func (r *pullRequestResolver) Mergeable(ctx context.Context, obj *graphql1.PullRequest) (graphql1.MergeableState, error) {
-	key, ok := prKeyFromGraphQL(r.Resolver, obj)
-	if !ok {
-		return graphql1.MergeableStateUnknown, nil
-	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
-	if err != nil {
-		return graphql1.MergeableStateUnknown, err
-	}
-	return mapMergeableState(pr.Mergeable), nil
-}
-
-// MergeStateStatus is the resolver for the pullRequest.mergeStateStatus field.
-func (r *pullRequestResolver) MergeStateStatus(ctx context.Context, obj *graphql1.PullRequest) (string, error) {
-	key, ok := prKeyFromGraphQL(r.Resolver, obj)
-	if !ok {
-		return "", nil
-	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
-	if err != nil {
-		return "", err
-	}
-	return pr.MergeStateStatus, nil
-}
-
-// ReviewDecision is the resolver for the pullRequest.reviewDecision field.
-func (r *pullRequestResolver) ReviewDecision(ctx context.Context, obj *graphql1.PullRequest) (*graphql1.ReviewDecisionEnum, error) {
-	key, ok := prKeyFromGraphQL(r.Resolver, obj)
-	if !ok {
+// TmuxSession resolves Worktree.tmuxSession (#511): returns the most-recently-active TmuxSession among the matching panes; ties on lastActivityAt break to the lexicographically-first name. Returns nil when tmuxPanes is empty.
+func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *graphql1.Worktree) (*graphql1.TmuxSession, error) {
+	if r.Tmux == nil {
 		return nil, nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-	return mapReviewDecision(pr.ReviewDecision), nil
-}
 
-// StatusCheckRollup is the resolver for the pullRequest.statusCheckRollup field.
-func (r *pullRequestResolver) StatusCheckRollup(ctx context.Context, obj *graphql1.PullRequest) (graphql1.CiStatus, error) {
-	key, ok := prKeyFromGraphQL(r.Resolver, obj)
-	if !ok {
-		return graphql1.CiStatusUnknown, nil
+	snap := r.Tmux.Snapshot()
+	matching := matchPanesForWorktree(ctx, r, snap, obj)
+	if len(matching) == 0 {
+		return nil, nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
-	if err != nil {
-		return graphql1.CiStatusUnknown, err
-	}
-	return mapCiStatus(pr.StatusCheckRollup), nil
-}
 
-// Labels is the resolver for the pullRequest.labels field.
-// Returns user-assigned labels with orchard phase labels excluded.
-func (r *pullRequestResolver) Labels(ctx context.Context, obj *graphql1.PullRequest) ([]string, error) {
-	key, ok := prKeyFromGraphQL(r.Resolver, obj)
-	if !ok {
-		return []string{}, nil
+	// Collect the unique sessions that the matching panes belong to.
+	// Raw panes carry WindowKey.Session directly — no need to re-key
+	// into snap.Panes, eliminating snapshot-drift and silent-drop risk.
+	seen := make(map[tmux.SessionKey]tmux.Session)
+	for _, pane := range matching {
+		sessionKey := tmux.SessionKey{Host: pane.Key.Host, Name: pane.WindowKey.Session}
+		if _, already := seen[sessionKey]; already {
+			continue
+		}
+		// Look up the Session to get its LastActivityAt.
+		s, ok := snap.Sessions[sessionKey]
+		if !ok {
+			// Snapshot inconsistency: pane references a session that is absent
+			// from snap.Sessions. Skip rather than synthesise a zero-activity
+			// placeholder — the missing session is not a valid candidate.
+			continue
+		}
+		seen[sessionKey] = s
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
-	if err != nil {
-		return nil, err
+
+	if len(seen) == 0 {
+		return nil, nil
 	}
-	if pr.Labels == nil {
-		return []string{}, nil
+
+	// Flatten and sort: most-recently-active first; lex-lower name breaks ties.
+	sessions := make([]tmux.Session, 0, len(seen))
+	for _, s := range seen {
+		sessions = append(sessions, s)
 	}
-	return append([]string(nil), pr.Labels...), nil
+	sort.Slice(sessions, func(i, j int) bool {
+		a, b := sessions[i], sessions[j]
+		// Zero LastActivityAt is treated as the lowest possible time, so
+		// sessions with a real activity time always rank before those without.
+		aZero := a.LastActivityAt.IsZero()
+		bZero := b.LastActivityAt.IsZero()
+		if aZero != bZero {
+			// whichever has a real time goes first (i is "less" in sort order
+			// = appears earlier = "wins").
+			return !aZero // a has real time, b does not → a wins
+		}
+		if !a.LastActivityAt.Equal(b.LastActivityAt) {
+			return a.LastActivityAt.After(b.LastActivityAt) // later = higher priority
+		}
+		// Deterministic tie-break: lex-lower name wins.
+		return a.Key.Name < b.Key.Name
+	})
+
+	return projectSession(sessions[0]), nil
 }
 
 // Host returns graphql1.HostResolver implementation.
@@ -1238,11 +1536,11 @@ func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
 // Process returns graphql1.ProcessResolver implementation.
 func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
 
-// PullRequest returns graphql1.PullRequestResolver implementation.
-func (r *Resolver) PullRequest() graphql1.PullRequestResolver { return &pullRequestResolver{r} }
-
 // Project returns graphql1.ProjectResolver implementation.
 func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
+
+// PullRequest returns graphql1.PullRequestResolver implementation.
+func (r *Resolver) PullRequest() graphql1.PullRequestResolver { return &pullRequestResolver{r} }
 
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
@@ -1287,6 +1585,16 @@ type worktreeResolver struct{ *Resolver }
 //   - When renaming or deleting a resolver the old code will be put in here. You can safely delete
 //     it when you're done.
 //   - You have helper methods in this file. Move them out to keep these resolver files clean.
+func prKeyFromGraphQL(r *Resolver, obj *graphql1.PullRequest) (gh.PullRequestKey, bool) {
+	if r.GH == nil || obj == nil {
+		return gh.PullRequestKey{}, false
+	}
+	owner, name, number, ok := splitGHNodeID(obj.ID, "PullRequest:")
+	if !ok {
+		return gh.PullRequestKey{}, false
+	}
+	return gh.PullRequestKey{Owner: owner, Name: name, Number: number}, true
+}
 func (r *subscriptionResolver) streamLocalEvents(ctx context.Context) (<-chan graphql1.Node, error) {
 	if r.LocalEvents == nil {
 		out := make(chan graphql1.Node)
@@ -1384,12 +1692,11 @@ func stripContractIDPrefix(id string) string {
 	return id
 }
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
-	// Host defaults to "local" so that sibling resolvers (TmuxPanes,
-	// TmuxSession) that compare obj.Host against pane.Key.Host see the
-	// correct value when the worktree is locally discovered.
-	// Workstream F will populate this from the remote host id once
-	// federated discovery lands; for now the host resolver also returns
-	// "local" unconditionally. (#511)
+	// Host is the single source of truth for the worktree's host sentinel.
+	// "local" is the v1 sentinel for locally-discovered worktrees.
+	// Workstream F will replace this with the actual remote host id once
+	// federated discovery lands. The worktreeResolver.Host field resolver
+	// reads obj.Host (set here) rather than hardcoding "local". (#511)
 	return &graphql1.Worktree{
 		ID:     string(w.ID),
 		Path:   w.Path,

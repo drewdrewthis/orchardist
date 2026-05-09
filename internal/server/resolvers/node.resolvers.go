@@ -531,16 +531,11 @@ func splitGHNodeID(id, prefix string) (owner, name string, number int, ok bool) 
 	return repo[:slashIdx], repo[slashIdx+1:], n, true
 }
 
-// worktreeNodeValue mirrors `toGraphQLWorktree` in schema.resolvers.go.
-// Kept here so node.resolvers.go is self-contained.
+// worktreeNodeValue delegates to `toGraphQLWorktree` so all Worktree
+// projection happens in one place. Federation work (Workstream F) only
+// needs to update toGraphQLWorktree to populate Host from a real source.
 func worktreeNodeValue(w gitprovider.Worktree) *graphql1.Worktree {
-	return &graphql1.Worktree{
-		ID:     string(w.ID),
-		Path:   w.Path,
-		Branch: w.Branch,
-		Head:   w.Head,
-		Bare:   w.Bare,
-	}
+	return toGraphQLWorktree(w)
 }
 
 // _ keeps imports stable when not all helpers are referenced (build-time

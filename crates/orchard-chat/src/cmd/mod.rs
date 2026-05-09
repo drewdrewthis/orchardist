@@ -8,5 +8,5 @@ pub mod leave;
 pub mod list;
 pub mod members;
 pub mod send;
-pub mod tail;
 pub mod sender;
+pub mod tail;

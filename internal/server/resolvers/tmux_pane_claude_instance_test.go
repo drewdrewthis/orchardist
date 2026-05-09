@@ -93,6 +93,7 @@ func buildProviderWithPane(t *testing.T, paneID string) *claudeinstance.Provider
 		nil, // no process finder needed for these tests
 		nil, // no account finder needed
 		alwaysAlive{},
+		nil, // no jsonl reader needed
 		clock,
 		claudeinstance.HeartbeatStaleAfter,
 	)
