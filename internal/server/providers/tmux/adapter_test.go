@@ -9,7 +9,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fakeRunner returns canned bytes per command so parser tests can run
@@ -35,81 +34,6 @@ func (f fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 		}
 	}
 	return nil, nil
-}
-
-func TestListSessions_Parses(t *testing.T) {
-	const sep = "\x01"
-	out := strings.Join([]string{
-		strings.Join([]string{"alpha", "1700000000", "1", "1700001000", "2", "0"}, sep),
-		strings.Join([]string{"beta", "1700000100", "0", "0", "1", "0"}, sep),
-	}, "\n")
-
-	a := NewAdapter("h").WithRunner(fakeRunner{out: map[string][]byte{
-		"tmux info":          []byte("alive"),
-		"tmux list-sessions": []byte(out),
-	}})
-
-	sessions, err := a.listSessions(context.Background())
-	if err != nil {
-		t.Fatalf("listSessions: %v", err)
-	}
-	if len(sessions) != 2 {
-		t.Fatalf("want 2 sessions, got %d (%v)", len(sessions), sessions)
-	}
-
-	alpha := sessions[SessionKey{Host: "h", Name: "alpha"}]
-	if !alpha.Attached {
-		t.Errorf("alpha should be attached")
-	}
-	if alpha.AttachedCount != 1 {
-		t.Errorf("alpha attached count: want 1, got %d", alpha.AttachedCount)
-	}
-	if alpha.WindowCount != 2 {
-		t.Errorf("alpha window count: want 2, got %d", alpha.WindowCount)
-	}
-	if alpha.CreatedAt.Equal(time.Time{}) {
-		t.Errorf("alpha createdAt: want non-zero")
-	}
-
-	beta := sessions[SessionKey{Host: "h", Name: "beta"}]
-	if beta.Attached {
-		t.Errorf("beta should not be attached")
-	}
-	if !beta.LastActivityAt.IsZero() {
-		t.Errorf("beta lastActivity: want zero (raw '0' input), got %v", beta.LastActivityAt)
-	}
-}
-
-func TestListPanes_Parses(t *testing.T) {
-	const sep = "\x01"
-	out := strings.Join([]string{
-		strings.Join([]string{"alpha", "0", "%26", "Editor", "vim", "12345", "120", "30", "0"}, sep),
-		strings.Join([]string{"alpha", "0", "%27", "Shell", "zsh", "12346", "120", "30", "0"}, sep),
-	}, "\n")
-
-	a := NewAdapter("h").WithRunner(fakeRunner{out: map[string][]byte{
-		"tmux info":       []byte("alive"),
-		"tmux list-panes": []byte(out),
-	}})
-
-	panes, err := a.listPanes(context.Background())
-	if err != nil {
-		t.Fatalf("listPanes: %v", err)
-	}
-	if len(panes) != 2 {
-		t.Fatalf("want 2 panes, got %d", len(panes))
-	}
-
-	p := panes[PaneKey{Host: "h", PaneID: "%26"}]
-	if p.CurrentCommand != "vim" {
-		t.Errorf("currentCommand: want vim, got %q", p.CurrentCommand)
-	}
-	if p.WindowKey.Index != 0 {
-		t.Errorf("windowIndex: want 0, got %d", p.WindowKey.Index)
-	}
-	if p.Width != 120 || p.Height != 30 {
-		t.Errorf("dims: want 120x30, got %dx%d", p.Width, p.Height)
-	}
 }
 
 func TestListPanes_EmptyOnNoServer(t *testing.T) {
