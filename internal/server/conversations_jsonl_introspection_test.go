@@ -83,9 +83,19 @@ func TestConversationJsonlPath_DocMentionsHTTPEndpoint(t *testing.T) {
 		t.Errorf("jsonlPath description must mention the HTTP endpoint path pattern '/v1/conversations/';\ngot description: %q", desc)
 	}
 
-	// AC9 assertion 2: description notes the endpoint shares the same listener as /graphql.
-	if !strings.Contains(desc, "/graphql") && !strings.Contains(desc, "same listener") {
-		t.Errorf("jsonlPath description must note that the endpoint is on the same listener as /graphql;\ngot description: %q", desc)
+	// AC9 assertion 2: description names /graphql so clients know which
+	// endpoint the new route co-locates with.
+	if !strings.Contains(desc, "/graphql") {
+		t.Errorf("jsonlPath description must mention /graphql;\ngot description: %q", desc)
+	}
+
+	// AC9 assertion 3: description states the co-location explicitly. Both
+	// signals must be present — naming /graphql alone could just be a "see
+	// also" reference, and "same listener" alone leaves the named endpoint
+	// implicit. AC9 requires clients to derive the full contract from
+	// __schema introspection.
+	if !strings.Contains(desc, "same listener") {
+		t.Errorf("jsonlPath description must state co-location on the same listener;\ngot description: %q", desc)
 	}
 }
 
@@ -131,8 +141,15 @@ func TestSchemaGraphQL_JsonlPathDocText(t *testing.T) {
 		t.Errorf("schema.graphql jsonlPath doc block must mention '/v1/conversations/';\ngot block: %q", docBlock)
 	}
 
-	// AC9 assertion 2: doc block notes co-location with /graphql listener.
-	if !strings.Contains(docBlock, "/graphql") && !strings.Contains(docBlock, "same listener") {
-		t.Errorf("schema.graphql jsonlPath doc block must mention /graphql or same listener;\ngot block: %q", docBlock)
+	// AC9 assertion 2: doc block names /graphql so the runtime introspection
+	// test sees the same signal in both places.
+	if !strings.Contains(docBlock, "/graphql") {
+		t.Errorf("schema.graphql jsonlPath doc block must mention /graphql;\ngot block: %q", docBlock)
+	}
+
+	// AC9 assertion 3: doc block states co-location explicitly. Both signals
+	// must be present, mirroring the introspection assertion above.
+	if !strings.Contains(docBlock, "same listener") {
+		t.Errorf("schema.graphql jsonlPath doc block must state co-location on the same listener;\ngot block: %q", docBlock)
 	}
 }

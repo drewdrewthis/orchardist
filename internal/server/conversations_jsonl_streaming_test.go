@@ -259,6 +259,13 @@ func TestACCoverage(t *testing.T) {
 		"AC8": {
 			"TestConversationsJSONL_LargeFile_StreamsRangeWithoutFullSlurp",
 		},
+
+		// AC9 "Schema doc on Conversation.jsonlPath mentions HTTP endpoint;
+		// surfaces in __schema introspection"
+		"AC9": {
+			"TestConversationJsonlPath_DocMentionsHTTPEndpoint",
+			"TestSchemaGraphQL_JsonlPathDocText",
+		},
 	}
 
 	for ac, names := range acTests {

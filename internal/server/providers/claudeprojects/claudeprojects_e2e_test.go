@@ -261,7 +261,17 @@ func TestConversation_JsonlPath_Integration(t *testing.T) {
 		}
 		if !fi.Mode().IsRegular() {
 			t.Errorf("conversation %q: jsonlPath %q is not a regular file (mode=%v)", c.SessionUUID, c.JsonlPath, fi.Mode())
+			continue
 		}
+		// AC1 says "readable file". Stat alone proves existence + regular,
+		// not readability — a permission regression would slip through.
+		// Open read-only to cover the readability half of the contract.
+		f, err := os.Open(c.JsonlPath)
+		if err != nil {
+			t.Errorf("conversation %q: jsonlPath %q is not readable: %v", c.SessionUUID, c.JsonlPath, err)
+			continue
+		}
+		_ = f.Close()
 	}
 }
 
