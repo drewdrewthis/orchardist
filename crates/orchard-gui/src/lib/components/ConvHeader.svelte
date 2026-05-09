@@ -7,6 +7,8 @@
 	import Icon from "$lib/icons/Icon.svelte";
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import ViewSwitcher from "./ViewSwitcher.svelte";
+	import { getStore } from "$lib/store.svelte";
+	import { relTime } from "$lib/util/format";
 	import type { ConvView, Surface, WorktreeItem } from "$lib/data/types";
 
 	type Props = {
@@ -33,6 +35,9 @@
 	}: Props = $props();
 
 	let copied = $state<string | null>(null);
+
+	const store = getStore();
+	const conv = $derived(store.conversationFor(item.path));
 
 	const tmuxName = $derived(
 		item.session?.instance ||
@@ -130,7 +135,28 @@
 						<Icon name={copied === "uuid" ? "check" : "copy"} size={10} />
 					</button>
 				{/if}
+				{#if conv}
+					<span class="conv-chip" title="{conv.messageCount} messages in transcript">
+						<Icon name="message" size={10} />
+						<span class="tnum">{conv.messageCount}</span>
+					</span>
+					{#if conv.lastSeenAt > 0}
+						<span class="conv-chip" title="Last activity: {new Date(conv.lastSeenAt).toLocaleString()}">
+							<Icon name="clock" size={10} />
+							<span>{relTime(conv.lastSeenAt, store.now)}</span>
+						</span>
+					{/if}
+					{#if conv.open}
+						<span class="conv-chip" title="Session is currently open">
+							<span class="pip live"></span>
+							<span>open</span>
+						</span>
+					{/if}
+				{/if}
 			</div>
+			{#if conv?.recap}
+				<div class="conv-recap mono dimer" title={conv.recap}>{conv.recap}</div>
+			{/if}
 		</div>
 
 		<div class="conv-header-actions">
@@ -161,3 +187,17 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	.conv-recap {
+		margin-top: 4px;
+		font-size: 11.5px;
+		line-height: 1.4;
+		max-height: 2.8em;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+	}
+</style>
