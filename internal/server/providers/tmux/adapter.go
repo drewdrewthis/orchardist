@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -30,6 +31,14 @@ type CommandRunner interface {
 
 type execRunner struct{}
 
+// Run executes name with args and returns combined stdout. Errors are wrapped
+// with enough context to diagnose failures in production logs.
+//
+// Issue #464: systemd-oomd kills the daemon with SIGKILL when the tmux exec
+// storm causes excessive fork pressure. Previously the error string said only
+// "signal: killed", which is indistinguishable from a ctx-cancel race in
+// logs. Now signal-terminated exits surface the SIGxxx name so operators can
+// confirm the oomd hypothesis without attaching a debugger.
 func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
@@ -38,11 +47,40 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			// Inspect WaitStatus to distinguish signal-terminated from
+			// non-zero-exit — the two require different remediation paths.
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				sig := ws.Signal()
+				return stdout.Bytes(), fmt.Errorf("%s %v: signal: %s (stderr: %q)", name, args, signalName(sig), strings.TrimSpace(stderr.String()))
+			}
 			return stdout.Bytes(), fmt.Errorf("%s %v: %w (stderr: %q)", name, args, err, strings.TrimSpace(stderr.String()))
 		}
 		return stdout.Bytes(), fmt.Errorf("%s %v: %w", name, args, err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// signalName returns the canonical SIGxxx name for common signals.
+// For unrecognised signals it falls back to syscall.Signal.String(), which
+// returns e.g. "signal 31". The SIGxxx form is preferred because it matches
+// what operators grep for in logs and is unambiguous across platforms.
+func signalName(sig syscall.Signal) string {
+	switch sig {
+	case syscall.SIGKILL:
+		return "SIGKILL"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case syscall.SIGINT:
+		return "SIGINT"
+	case syscall.SIGSEGV:
+		return "SIGSEGV"
+	case syscall.SIGPIPE:
+		return "SIGPIPE"
+	case syscall.SIGABRT:
+		return "SIGABRT"
+	default:
+		return sig.String()
+	}
 }
 
 // Adapter is the stateless tmux CLI client.
