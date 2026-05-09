@@ -7,7 +7,7 @@
 // separate file.
 //
 // AC being exercised:
-//   AC1 — A single FetchAll cycle issues at most 2 tmux subprocess calls.
+//   AC1 — A single FetchAll cycle issues at most 3 tmux subprocess calls.
 
 package tmux
 
@@ -67,11 +67,18 @@ func subcommandOf(args []string) string {
 }
 
 // TestRegression_FetchAllExecCount_Issue464 asserts that a single FetchAll
-// cycle calls the tmux binary at most 2 times. Today it calls it 6 times
-// (info + list-sessions + list-windows + list-panes + list-clients +
-// display-message), which is the bug described in #464.
+// cycle calls the tmux binary at most 3 times. The original unpatched code
+// called it 6 times (info + list-sessions + list-windows + list-panes +
+// list-clients + display-message), which is the bug described in #464.
 //
-// The test FAILS on unpatched code (count == 6) and PASSES after AC1.
+// The patched path uses 3 execs: info (IsAlive), list-panes -a (listAll),
+// and list-clients (listClients). list-clients was briefly dropped to hit a
+// ≤2 target but silently broke five GraphQL fields (clients, attachedClients,
+// activeAttached, watchingClients, subscribeTmuxClientChanged). Restoring it
+// yields 3 execs/tick — a 50 % reduction from 6, still well below the
+// oomd-trip threshold.
+//
+// The test FAILS on unpatched code (count == 6) and PASSES after the fix.
 func TestRegression_FetchAllExecCount_Issue464(t *testing.T) {
 	runner := &countingRunner{}
 	adapter := NewAdapter("test").WithRunner(runner)
@@ -83,12 +90,12 @@ func TestRegression_FetchAllExecCount_Issue464(t *testing.T) {
 	}
 
 	got := int(runner.count.Load())
-	const maxExecs = 2
+	const maxExecs = 3
 	if got > maxExecs {
 		t.Errorf(
 			"issue #464 regression: FetchAll issued %d tmux execs, want ≤ %d\n"+
 				"  subcommands called: %v\n"+
-				"  Patching note: coalesce list-* calls and cache IsAlive inside FetchAll.",
+				"  Patching note: FetchAll must use ≤3 execs (info + list-panes + list-clients).",
 			got, maxExecs, runner.calls,
 		)
 	}

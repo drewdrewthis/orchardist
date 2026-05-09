@@ -258,9 +258,9 @@ func TestIsAlive_CacheMissAfterTTL(t *testing.T) {
 	}
 }
 
-// TestFetchAll_TotalExecCount asserts FetchAll uses ≤2 execs with the
-// coalesced path. This mirrors TestRegression_FetchAllExecCount_Issue464
-// but from the unit-test perspective.
+// TestFetchAll_TotalExecCount asserts FetchAll uses ≤3 execs with the
+// coalesced path (info + list-panes + list-clients). This mirrors
+// TestRegression_FetchAllExecCount_Issue464 but from the unit-test perspective.
 func TestFetchAll_TotalExecCount(t *testing.T) {
 	// Use a long alive TTL so the IsAlive result from the info call
 	// won't re-fire within FetchAll.
@@ -271,7 +271,7 @@ func TestFetchAll_TotalExecCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAll: %v", err)
 	}
-	if got := int(r.count.Load()); got > 2 {
-		t.Errorf("FetchAll exec count: want ≤2, got %d (calls: %v)", got, r.calls)
+	if got := int(r.count.Load()); got > 3 {
+		t.Errorf("FetchAll exec count: want ≤3, got %d (calls: %v)", got, r.calls)
 	}
 }

@@ -205,30 +205,35 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 	return result
 }
 
-// FetchAll fetches a full Snapshot in at most 2 tmux execs per cycle:
+// FetchAll fetches a full Snapshot in at most 3 tmux execs per cycle:
 //
 //  1. `tmux info` — via IsAlive (cached for aliveTTL; 0 execs when warm).
 //  2. `tmux list-panes -a -F …` — via listAll, which synthesises session,
 //     window, and pane maps from a single output stream.
+//  3. `tmux list-clients -F …` — via listClients, which populates the Clients
+//     map so the client subgraph (tmuxServer.clients, tmuxSession.activeAttached,
+//     tmuxPane.attachedClients, tmuxWindow.watchingClients, and the
+//     subscribeTmuxClientChanged subscription) returns live data.
 //
 // Issue #464: the original 6-exec path (info + list-sessions + list-windows +
 // list-panes + list-clients + display-message) caused fork-storm pressure on
 // Linux/systemd-user, tripping oomd into SIGKILLing list-windows.
 //
-// Design decisions made to reach ≤2 execs:
+// Design decisions made to reach ≤3 execs:
 //
-//   - list-clients is NOT called from FetchAll. Clients cannot be folded into
-//     list-panes because they are an orthogonal tmux concept (a client is a
-//     terminal attachment, not a pane). Clients are instead populated lazily
-//     on the next slow-path refresh that explicitly requests them. Resolvers
-//     see an empty Clients map on the first cycle after restart; subsequent
-//     poll cycles re-populate it via the provider's separate refresh path.
-//     If this becomes a problem, add a dedicated slow-path client refresh
-//     that runs every N ticks rather than every tick.
+//   - list-sessions, list-windows, and display-message are eliminated.
+//     list-panes -a already implies the full session/window hierarchy, so a
+//     single listAll call replaces three separate execs. display-message
+//     (serverInfo / Pid) is not called — the Pid field is best-effort per
+//     ServerInfo's doc comment; resolvers surface zero as "unknown".
 //
-//   - display-message (serverInfo / Pid) is not called. The Pid field is
-//     best-effort per ServerInfo's doc comment; resolvers surface zero as
-//     "unknown". The field is preserved for future lazy resolution.
+//   - list-clients cannot be folded into list-panes because clients are an
+//     orthogonal tmux concept (a terminal attachment, not a pane). It is kept
+//     as a separate exec (#3) to avoid breaking the client subgraph. Dropping
+//     it was tried in an earlier commit but silently broke five GraphQL fields
+//     (clients, attachedClients, activeAttached, watchingClients, and the
+//     subscribeTmuxClientChanged subscription). 3 execs/tick is a 50 % reduction
+//     from the original 6 — still well below the oomd-trip threshold.
 //
 // When the daemon is dead, FetchAll returns an EmptySnapshot without an error
 // — callers see "no sessions" instead of an error.
@@ -244,6 +249,11 @@ func (a *Adapter) FetchAll(ctx context.Context) (Snapshot, error) {
 		return EmptySnapshot(), fmt.Errorf("list-all: %w", err)
 	}
 
+	clients, err := a.listClients(ctx) // exec #3
+	if err != nil {
+		return EmptySnapshot(), fmt.Errorf("list-clients: %w", err)
+	}
+
 	return Snapshot{
 		Server: ServerInfo{
 			SocketPath: a.socketOrDefault(),
@@ -253,7 +263,7 @@ func (a *Adapter) FetchAll(ctx context.Context) (Snapshot, error) {
 		Sessions: sessions,
 		Windows:  windows,
 		Panes:    panes,
-		Clients:  map[ClientKey]Client{}, // populated by slow-path refresh (see design decisions above)
+		Clients:  clients,
 	}, nil
 }
 
