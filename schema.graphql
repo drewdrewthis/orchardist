@@ -434,6 +434,15 @@ type Subscription {
   belonging to the named project. The argument is the Project id.
   """
   worktreeChanged(project: ID!): [Worktree!]!
+
+  """
+  Push-on-change for one Claude Code conversation, keyed by sessionUuid.
+  Emits the freshly-loaded Conversation every time the claudeprojects
+  provider's fsnotify watcher fires for the matching JSONL. Use this
+  to rerender a transcript view without polling. Returns null when the
+  watcher reports the file was removed.
+  """
+  conversationChanged(sessionUuid: String!): Conversation
 }
 
 type Health {

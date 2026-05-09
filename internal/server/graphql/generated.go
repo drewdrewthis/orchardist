@@ -286,6 +286,7 @@ type ComplexityRoot struct {
 	}
 
 	Subscription struct {
+		ConversationChanged func(childComplexity int, sessionUUID string) int
 		NodeChanged         func(childComplexity int, id string) int
 		Peer                func(childComplexity int, host string) int
 		Processes           func(childComplexity int) int
@@ -457,6 +458,7 @@ type SubscriptionResolver interface {
 	PullRequestChanged(ctx context.Context, repo string, number int64) (<-chan *PullRequest, error)
 	RunChanged(ctx context.Context, repo string, branch string) (<-chan *WorkflowRun, error)
 	WorktreeChanged(ctx context.Context, project string) (<-chan []*Worktree, error)
+	ConversationChanged(ctx context.Context, sessionUUID string) (<-chan *Conversation, error)
 }
 type TmuxClientResolver interface {
 	Server(ctx context.Context, obj *TmuxClient) (*TmuxServer, error)
@@ -1812,6 +1814,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ResourceLoad.MemPercent(childComplexity), true
 
+	case "Subscription.conversationChanged":
+		if e.complexity.Subscription.ConversationChanged == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_conversationChanged_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Subscription.ConversationChanged(childComplexity, args["sessionUuid"].(string)), true
+
 	case "Subscription.nodeChanged":
 		if e.complexity.Subscription.NodeChanged == nil {
 			break
@@ -2995,6 +3009,15 @@ type Subscription {
   belonging to the named project. The argument is the Project id.
   """
   worktreeChanged(project: ID!): [Worktree!]!
+
+  """
+  Push-on-change for one Claude Code conversation, keyed by sessionUuid.
+  Emits the freshly-loaded Conversation every time the claudeprojects
+  provider's fsnotify watcher fires for the matching JSONL. Use this
+  to rerender a transcript view without polling. Returns null when the
+  watcher reports the file was removed.
+  """
+  conversationChanged(sessionUuid: String!): Conversation
 }
 
 type Health {
@@ -4066,6 +4089,21 @@ func (ec *executionContext) field_Query_workflowRuns_args(ctx context.Context, r
 		}
 	}
 	args["repo"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_conversationChanged_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["sessionUuid"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sessionUuid"))
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["sessionUuid"] = arg0
 	return args, nil
 }
 
@@ -13508,6 +13546,92 @@ func (ec *executionContext) fieldContext_Subscription_worktreeChanged(ctx contex
 	return fc, nil
 }
 
+func (ec *executionContext) _Subscription_conversationChanged(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	fc, err := ec.fieldContext_Subscription_conversationChanged(ctx, field)
+	if err != nil {
+		return nil
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = nil
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Subscription().ConversationChanged(rctx, fc.Args["sessionUuid"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return nil
+	}
+	if resTmp == nil {
+		return nil
+	}
+	return func(ctx context.Context) graphql.Marshaler {
+		select {
+		case res, ok := <-resTmp.(<-chan *Conversation):
+			if !ok {
+				return nil
+			}
+			return graphql.WriterFunc(func(w io.Writer) {
+				w.Write([]byte{'{'})
+				graphql.MarshalString(field.Alias).MarshalGQL(w)
+				w.Write([]byte{':'})
+				ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, field.Selections, res).MarshalGQL(w)
+				w.Write([]byte{'}'})
+			})
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func (ec *executionContext) fieldContext_Subscription_conversationChanged(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Conversation_id(ctx, field)
+			case "sessionUuid":
+				return ec.fieldContext_Conversation_sessionUuid(ctx, field)
+			case "cwd":
+				return ec.fieldContext_Conversation_cwd(ctx, field)
+			case "firstSeenAt":
+				return ec.fieldContext_Conversation_firstSeenAt(ctx, field)
+			case "lastSeenAt":
+				return ec.fieldContext_Conversation_lastSeenAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Conversation_messageCount(ctx, field)
+			case "open":
+				return ec.fieldContext_Conversation_open(ctx, field)
+			case "recap":
+				return ec.fieldContext_Conversation_recap(ctx, field)
+			case "jsonlPath":
+				return ec.fieldContext_Conversation_jsonlPath(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Conversation", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_conversationChanged_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TmuxClient_id(ctx context.Context, field graphql.CollectedField, obj *TmuxClient) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TmuxClient_id(ctx, field)
 	if err != nil {
@@ -21907,6 +22031,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_runChanged(ctx, fields[0])
 	case "worktreeChanged":
 		return ec._Subscription_worktreeChanged(ctx, fields[0])
+	case "conversationChanged":
+		return ec._Subscription_conversationChanged(ctx, fields[0])
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}
