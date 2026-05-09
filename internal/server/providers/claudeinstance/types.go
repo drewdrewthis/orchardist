@@ -82,8 +82,14 @@ type Heartbeat struct {
 	// Claude activity as recorded by the hook script in the last_activity /
 	// lastActivity field. Zero when the heartbeat file does not include the
 	// field (e.g. older hook versions). Used as the primary source for
-	// ClaudeInstance.lastActivityAt; zero means "fall back to pane".
+	// ClaudeInstance.lastActivityAt; zero means "fall back to jsonl tail".
 	LastActivity time.Time
+	// Cwd is the working directory the Claude process was launched from,
+	// as recorded by the hook script. Used together with SessionID to
+	// resolve the session's transcript jsonl under
+	// ~/.claude/projects/<encoded-cwd>/<session_uuid>.jsonl. Empty when the
+	// heartbeat predates cwd recording.
+	Cwd string
 }
 
 // HostID returns the host id this provider was constructed with. Useful

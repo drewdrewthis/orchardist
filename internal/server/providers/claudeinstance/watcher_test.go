@@ -23,7 +23,7 @@ func TestWatcher_FSNotify_TriggersRefresh(t *testing.T) {
 	clock := func() time.Time { return now }
 
 	reader := NewFileReader(dir)
-	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{42100: true}}, clock, HeartbeatStaleAfter)
+	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{42100: true}}, nil, clock, HeartbeatStaleAfter)
 	p := NewWith("local", reader, c, clock)
 
 	w := NewWatcherWith(p, silentLogger(), 50*time.Millisecond)

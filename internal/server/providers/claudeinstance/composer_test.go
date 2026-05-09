@@ -88,6 +88,7 @@ func TestComposer_Compose_Working(t *testing.T) {
 		&fakeProcessFinder{byPid: map[int]*graphql.Process{42100: proc}},
 		&fakeAccountFinder{account: acct},
 		fakeLiveness{alive: map[int]bool{42100: true}},
+		nil,
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)
@@ -143,6 +144,7 @@ func TestComposer_Compose_StaleHeartbeat(t *testing.T) {
 		nil,
 		nil,
 		fakeLiveness{alive: map[int]bool{11: true}},
+		nil,
 		func() time.Time { return now },
 		30*time.Second,
 	)
@@ -172,6 +174,7 @@ func TestComposer_Compose_DeadPid(t *testing.T) {
 		nil,
 		nil,
 		fakeLiveness{alive: map[int]bool{99: false}},
+		nil,
 		func() time.Time { return now },
 		30*time.Second,
 	)
@@ -200,6 +203,7 @@ func TestComposer_Compose_NoPaneStillEmits(t *testing.T) {
 		&fakeProcessFinder{},
 		&fakeAccountFinder{},
 		fakeLiveness{alive: map[int]bool{55: true}},
+		nil,
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)
@@ -234,6 +238,7 @@ func TestComposer_Compose_FallbackToSession(t *testing.T) {
 		nil,
 		nil,
 		fakeLiveness{},
+		nil,
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)
@@ -259,7 +264,7 @@ func TestComposer_Compose_UnknownStateStaysNoClaude(t *testing.T) {
 		Timestamp:       now,
 		LastHeartbeatAt: now,
 	}
-	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{7: true}}, func() time.Time { return now }, HeartbeatStaleAfter)
+	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{7: true}}, nil, func() time.Time { return now }, HeartbeatStaleAfter)
 	out := c.Compose(context.Background(), []Heartbeat{hb})
 	if out[0].State != graphql.InstanceStateNoClaude {
 		t.Errorf("state = %s, want no_claude for unknown state string", out[0].State)

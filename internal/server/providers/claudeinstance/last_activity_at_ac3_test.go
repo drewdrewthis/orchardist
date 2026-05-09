@@ -93,6 +93,7 @@ func TestProvider_Subscribe_FiresOnLastActivityChange(t *testing.T) {
 	}
 	c := NewComposerWith("local", nil, nil, nil,
 		fakeLiveness{alive: map[int]bool{pid: true}},
+		nil,
 		clock,
 		HeartbeatStaleAfter,
 	)
@@ -188,6 +189,7 @@ func TestProvider_Subscribe_SilentOnLastActivityUnchanged(t *testing.T) {
 	r := &staticReader{heartbeats: []Heartbeat{hb}}
 	c := NewComposerWith("local", nil, nil, nil,
 		fakeLiveness{alive: map[int]bool{pid: true}},
+		nil,
 		clock,
 		HeartbeatStaleAfter,
 	)

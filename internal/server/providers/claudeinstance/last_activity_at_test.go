@@ -80,6 +80,7 @@ func TestLastActivityAt_RFC3339FromHeartbeat(t *testing.T) {
 		&fakeProcessFinder{},
 		&fakeAccountFinder{},
 		fakeLiveness{alive: map[int]bool{}},
+		nil,
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)
@@ -147,6 +148,7 @@ func TestLastActivityAt_RFC3339NanoSubSecond(t *testing.T) {
 		&fakeProcessFinder{},
 		&fakeAccountFinder{},
 		fakeLiveness{alive: map[int]bool{}},
+		nil,
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)

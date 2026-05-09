@@ -115,7 +115,7 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 	}
 	liveness := fakeLiveness{alive: map[int]bool{10042: true, 10099: true}}
 
-	composer := claudeinstance.NewComposerWith("local", panes, procs, accts, liveness, clock, claudeinstance.HeartbeatStaleAfter)
+	composer := claudeinstance.NewComposerWith("local", panes, procs, accts, liveness, nil, clock, claudeinstance.HeartbeatStaleAfter)
 	reader := claudeinstance.NewFileReader(heartbeatDir)
 	provider := claudeinstance.NewWith("local", reader, composer, clock)
 
