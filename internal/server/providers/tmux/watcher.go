@@ -118,14 +118,21 @@ func StartWatcher(ctx context.Context, p *Provider, logger *slog.Logger) error {
 // relevantSocketEvent decides whether an fsnotify event should trigger
 // a refresh. Tmux writes its socket as a unix-domain file inside the
 // socket dir; only create/remove/write events on the configured socket
-// basename matter. Everything else (temp files, lock files, other sockets)
-// is ignored to prevent feedback loops where the watcher pokes a refresh
-// that causes tmux to write to its socket, firing another event.
+// basename matter. Everything else (temp files, lock files, other sockets,
+// chmod/rename noise) is ignored to prevent feedback loops where the watcher
+// pokes a refresh that causes tmux to write to its socket, firing another
+// event.
+//
+// CodeRabbit follow-up on PR #507: explicitly mask Op to Create|Write|Remove
+// so Chmod/Rename events on the socket directory (e.g. inotify IN_ATTRIB
+// for socket permission changes, IN_MOVE_SELF for renames during atomic
+// replace) do not poke the refresh loop.
 //
 // expectedBasename is the filename component of the adapter's socket path
 // (or "default" for the tmux-default socket).
 func relevantSocketEvent(ev fsnotify.Event, expectedBasename string) bool {
-	if ev.Op == 0 {
+	const relevantOps = fsnotify.Create | fsnotify.Write | fsnotify.Remove
+	if ev.Op&relevantOps == 0 {
 		return false
 	}
 	base := filepath.Base(ev.Name)

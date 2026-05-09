@@ -41,12 +41,25 @@ type execRunner struct{}
 // "signal: killed", which is indistinguishable from a ctx-cancel race in
 // logs. Now signal-terminated exits surface the SIGxxx name so operators can
 // confirm the oomd hypothesis without attaching a debugger.
+//
+// CodeRabbit follow-up (PR #507): exec.CommandContext kills the child with
+// SIGKILL when the context is cancelled — which would surface as "signal:
+// SIGKILL" and be conflated with an external (oomd / kernel-OOM) kill. Check
+// ctx.Err() first so a ctx-cancel produces a "context cancelled" error
+// rather than a misleading SIGKILL diagnostic.
 func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// If the context was cancelled or expired, exec.CommandContext will
+		// have killed the child with SIGKILL. Surface ctx.Err() (DeadlineExceeded
+		// / Canceled) so logs distinguish "we killed it" from "something else
+		// killed it".
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stdout.Bytes(), fmt.Errorf("%s %v: %w (stderr: %q)", name, args, ctxErr, strings.TrimSpace(stderr.String()))
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			// Inspect WaitStatus to distinguish signal-terminated from
@@ -255,6 +268,13 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 //
 // When the daemon is dead, FetchAll returns an EmptySnapshot without an error
 // — callers see "no sessions" instead of an error.
+//
+// Stale-alive recovery: within the IsAlive TTL window, tmux can die between
+// the cached IsAlive check and the actual list-* calls. listAll/listClients
+// surface that as errNoServer (sentinel). FetchAll invalidates the alive cache
+// and ships a snapshot with Server.Alive=false rather than the contradictory
+// snapshot the previous code produced (Alive=true + empty session/window/pane
+// /client maps). See CodeRabbit follow-up on PR #507.
 func (a *Adapter) FetchAll(ctx context.Context) (Snapshot, error) {
 	if !a.IsAlive(ctx) { // exec #1 (cached after first call within TTL)
 		snap := EmptySnapshot()
@@ -264,11 +284,23 @@ func (a *Adapter) FetchAll(ctx context.Context) (Snapshot, error) {
 
 	sessions, windows, panes, err := a.listAll(ctx) // exec #2
 	if err != nil {
+		if errors.Is(err, errNoServer) {
+			a.invalidateAlive()
+			snap := EmptySnapshot()
+			snap.Server = ServerInfo{SocketPath: a.socketOrDefault(), Alive: false}
+			return snap, nil
+		}
 		return EmptySnapshot(), fmt.Errorf("list-all: %w", err)
 	}
 
 	clients, err := a.listClients(ctx) // exec #3
 	if err != nil {
+		if errors.Is(err, errNoServer) {
+			a.invalidateAlive()
+			snap := EmptySnapshot()
+			snap.Server = ServerInfo{SocketPath: a.socketOrDefault(), Alive: false}
+			return snap, nil
+		}
 		return EmptySnapshot(), fmt.Errorf("list-clients: %w", err)
 	}
 
@@ -283,6 +315,16 @@ func (a *Adapter) FetchAll(ctx context.Context) (Snapshot, error) {
 		Panes:    panes,
 		Clients:  clients,
 	}, nil
+}
+
+// invalidateAlive resets the IsAlive cache so the next call re-probes the
+// server. Used by FetchAll when listAll/listClients observe a dead server
+// after IsAlive cached true — bringing the cache back in sync with reality.
+func (a *Adapter) invalidateAlive() {
+	a.alive.mu.Lock()
+	a.alive.lastChecked = time.Time{}
+	a.alive.lastResult = false
+	a.alive.mu.Unlock()
 }
 
 // CapturePane runs `tmux capture-pane -p` against a single pane. start
@@ -383,6 +425,14 @@ const listAllFormat = "" +
 
 const listAllFieldCount = 18
 
+// errNoServer is the sentinel returned by list-* helpers when tmux reports
+// "no server running" between the IsAlive cache check and the actual list call.
+// FetchAll uses this to invalidate the alive cache and ship a snapshot with
+// Server.Alive=false rather than the contradictory mix of Alive=true + empty
+// session/window/pane/client maps that the previous code produced. See the
+// CodeRabbit follow-up on PR #507 for the contradictory-snapshot scenario.
+var errNoServer = errors.New("tmux: no server running")
+
 // listAll executes a single `tmux list-panes -a -F <combined>` call and
 // synthesises session, window, and pane maps from the output. Each output
 // row represents one pane; session and window entries are deduplicated by
@@ -394,6 +444,11 @@ const listAllFieldCount = 18
 // this window is at most one poll tick wide. A subsequent FetchAll will
 // pick up the pane once it exists. No fallback to the old multi-call path
 // is provided — that would defeat the exec-count reduction of AC1.
+//
+// If tmux has died between the parent's IsAlive check and this call, returns
+// errNoServer (sentinel) rather than an empty result set. The caller decides
+// how to surface this — FetchAll invalidates the alive cache and ships
+// Server.Alive=false instead of a contradictory snapshot.
 func (a *Adapter) listAll(ctx context.Context) (
 	sessions map[SessionKey]Session,
 	windows map[WindowKey]Window,
@@ -403,7 +458,7 @@ func (a *Adapter) listAll(ctx context.Context) (
 	out, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("list-panes", "-a", "-F", listAllFormat)...)
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") {
-			return map[SessionKey]Session{}, map[WindowKey]Window{}, map[PaneKey]Pane{}, nil
+			return nil, nil, nil, errNoServer
 		}
 		return nil, nil, nil, err
 	}
@@ -484,7 +539,7 @@ func (a *Adapter) listClients(ctx context.Context) (map[ClientKey]Client, error)
 	out, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("list-clients", "-F", clientFormat)...)
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") {
-			return map[ClientKey]Client{}, nil
+			return nil, errNoServer
 		}
 		return nil, err
 	}

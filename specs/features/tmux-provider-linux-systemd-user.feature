@@ -22,17 +22,22 @@ Feature: tmux provider works under systemd-user on Linux (#464)
     And the shipped systemd-user unit lives at `scripts/init/orchard.service`
 
   # =======================================================================
-  # AC1 — Coalesce the per-tick exec storm: at most 2 `tmux` execs per cycle
+  # AC1 — Coalesce the per-tick exec storm: at most 3 `tmux` execs per cycle
+  # (Amended 2026-05-09 from "≤2" → "≤3" after /review found that dropping
+  # `list-clients` silently broke five GraphQL fields. See issue body AC1.)
   # =======================================================================
 
   @unit @issue-464
-  Scenario: FetchAll issues at most 2 `tmux` execs per poll cycle on a steady-state server
+  Scenario: FetchAll issues at most 3 `tmux` execs per poll cycle on a steady-state server
     Given a counting `CommandRunner` test seam wired into the adapter
-    And `IsAlive` has been resolved at least once in the current poll interval (cache hit)
+    And `IsAlive` is permitted to fire once per cycle (cache hit means 0 execs)
     When `Adapter.FetchAll(ctx)` runs one full cycle against a healthy tmux server
-    Then the counting runner records at most 2 `tmux` invocations for that cycle
-    And one of those invocations is a single `list-panes -a -F` call carrying session+window+pane fields
-    And no separate `tmux list-sessions`, `tmux list-windows`, `tmux info`, or `tmux display-message` call is issued in the same cycle
+    Then the counting runner records at most 3 `tmux` invocations for that cycle:
+      `tmux info` (cached liveness probe), `tmux list-panes -a -F <combined>` (sessions+windows+panes),
+      and `tmux list-clients -F <client-format>` (preserves the client subgraph: tmuxServer.clients,
+      tmuxSession.activeAttached, tmuxPane.attachedClients, tmuxWindow.watchingClients,
+      subscribeTmuxClientChanged)
+    And no separate `tmux list-sessions`, `tmux list-windows`, or `tmux display-message` call is issued in the same cycle
 
   @unit @issue-464
   Scenario: IsAlive is cached for the poll interval and skipped on the next tick
@@ -50,19 +55,22 @@ Feature: tmux provider works under systemd-user on Linux (#464)
     And subsequent cycles within the new TTL again skip the probe
 
   @integration @issue-464
-  Scenario: serverInfo is derived from the same single source as session/window/pane data
+  Scenario: ServerInfo is populated without a separate display-message exec
     Given a sandbox tmux server with N sessions, M windows, P panes
     When `Adapter.FetchAll(ctx)` returns its snapshot
-    Then `Snapshot.ServerInfo` is populated from the coalesced source (no extra `display-message` call)
+    Then `Snapshot.Server` carries `SocketPath` and `Alive=true` directly
+    And `Snapshot.Server.Pid` is 0 (resolved lazily on demand by resolvers, not eagerly)
     And the session/window/pane counts in the snapshot match the live server (no rows lost vs. the legacy multi-call shape)
 
   @integration @issue-464
   Scenario: Coalesced parser handles a session with windows but zero panes (race during creation)
     Given a tmux server where one session has a window currently in a zero-panes transient state
     When the coalesced `list-panes -a` output is parsed into a snapshot
-    Then either the session/window appears with an empty panes list,
-      OR the parser falls back to the legacy multi-call path for that cycle
-    And the snapshot does not silently drop the session
+    Then the session/window with zero panes does not appear in the snapshot for THAT cycle
+      (no fallback to the legacy multi-call path is provided — see adapter.go listAll)
+    And the next poll cycle (≤1s later) picks up the session once a pane exists
+    # Documented limitation: tmux always creates a default pane on session
+    # creation, so the worst-case staleness window is one poll tick.
 
   # =======================================================================
   # AC2 — fsnotify socket-event filter only fires on the configured socket basename
@@ -96,7 +104,8 @@ Feature: tmux provider works under systemd-user on Linux (#464)
     Then `relevantSocketEvent` returns false
 
   # =======================================================================
-  # AC3 — Shipped systemd-user unit: drop hardening + set TMUX_TMPDIR
+  # AC3 — Shipped systemd-user unit: drop hardening; TMUX_TMPDIR handled
+  # explicitly (intentionally NOT set + documented per /plan resolution)
   # =======================================================================
 
   @structural @issue-464
@@ -136,32 +145,45 @@ Feature: tmux provider works under systemd-user on Linux (#464)
   # =======================================================================
 
   @unit @issue-464
-  Scenario: execRunner.Run logs the signal name when the child terminates by signal
-    Given an `execRunner` configured to run a fake command that exits via `SIGKILL`
+  Scenario: execRunner.Run names the signal in its returned error when the child terminates by signal
+    Given an `execRunner` running a fake command that exits via `SIGKILL`
     When `Run` returns
-    Then the structured log entry includes a field whose value names the signal (e.g. `SIGKILL`)
-    And the log entry is emitted on a path distinct from the generic `exit error` branch
+    Then the returned error string contains the canonical signal name (e.g. `signal: SIGKILL`)
+    And the signal-naming branch is distinct from the generic `exit error` branch
+    And the diagnostic is the returned error itself, not a separately-emitted log entry
+      (callers — `pollLoop`, resolvers — surface this via `logger.Warn(... "err", err)`)
 
   @unit @issue-464
-  Scenario: execRunner.Run logs the signal name for SIGTERM as well
-    Given an `execRunner` configured to run a fake command that exits via `SIGTERM`
+  Scenario: execRunner.Run names the signal as SIGTERM when the child receives SIGTERM
+    Given an `execRunner` running a fake command that exits via `SIGTERM`
     When `Run` returns
-    Then the structured log entry names the signal as `SIGTERM`
+    Then the returned error string contains `signal: SIGTERM`
 
   @unit @issue-464
   Scenario: execRunner.Run preserves existing behaviour for non-zero exit (no signal)
-    Given an `execRunner` configured to run a command that exits with code 1 and writes to stderr
+    Given an `execRunner` running a command that exits with code 1 and writes to stderr
     When `Run` returns
-    Then the structured log entry uses the existing `exit error` path
+    Then the returned error wraps the original `exec.ExitError` (so callers can `errors.Is` / `errors.As` it)
+    And the error string contains `exit status 1`
     And does not claim a signal terminated the process
-    And stderr content is preserved in the log
+    And the stderr content is preserved in the error string
 
   @unit @issue-464
   Scenario: execRunner.Run preserves existing behaviour for clean exit (code 0)
-    Given an `execRunner` configured to run a command that exits cleanly
+    Given an `execRunner` running a command that exits cleanly
     When `Run` returns
-    Then no signal/wait-status diagnostic is emitted
+    Then it returns `(stdout, nil)` — no signal/wait-status diagnostic is added
     And the existing success path is unchanged
+
+  @unit @issue-464
+  Scenario: execRunner.Run distinguishes ctx-cancel kills from external SIGKILL
+    Given an `execRunner` whose context is cancelled while the child is running
+    When `Run` returns
+    Then the returned error wraps `ctx.Err()` (e.g. `context.Canceled`, `context.DeadlineExceeded`)
+    And the returned error string does NOT contain `signal: SIGKILL`
+      (otherwise ctx-cancel kills would be conflated with the oomd kills the diagnostic exists to flag)
+    # CodeRabbit follow-up on PR #507: exec.CommandContext invokes Process.Kill
+    # (SIGKILL) on context cancellation; ctx.Err() check disambiguates.
 
   # =======================================================================
   # AC5 — Linux-only regression test: no SIGKILL across N ticks at fast poll
@@ -181,8 +203,12 @@ Feature: tmux provider works under systemd-user on Linux (#464)
     Given the same fast-poll Linux harness
     And a counting `CommandRunner` wrapping the real exec
     When 20 `FetchAll` cycles complete
-    Then the recorded `tmux` exec count is consistent with AC1 (≤ 2 per cycle)
+    Then the recorded `tmux` exec count is consistent with AC1 (≤ 3 per cycle)
     And a regression that re-introduces the 6-exec storm causes the test to fail
+    # Note: the ≤3-execs guarantee is also asserted cross-platform by
+    # TestRegression_FetchAllExecCount_Issue464 in exec_count_test.go using
+    # a fake CommandRunner — this Linux test exercises the same invariant
+    # against a real tmux server.
 
   @integration @linux-only @issue-464
   Scenario: Regression test skips with a clear message when cgroup setup is unavailable
@@ -247,30 +273,35 @@ Feature: tmux provider works under systemd-user on Linux (#464)
     And the structural fix relies on AC1 (exec coalesce) plus AC2 (filter tighten) instead
 
   # --- AC Coverage Map ---
-  # AC1: "≤2 tmux execs per tick via list-panes -a coalesce + IsAlive cache + single-source serverInfo"
-  #   -> Scenario: FetchAll issues at most 2 `tmux` execs per poll cycle on a steady-state server
+  # AC1 (amended ≤2→≤3): "≤3 tmux execs per tick — info + list-panes -a + list-clients;
+  #                       IsAlive cached; single-source ServerInfo without display-message"
+  #   -> Scenario: FetchAll issues at most 3 `tmux` execs per poll cycle on a steady-state server
   #   -> Scenario: IsAlive is cached for the poll interval and skipped on the next tick
   #   -> Scenario: IsAlive cache expires and is re-probed once per interval
-  #   -> Scenario: serverInfo is derived from the same single source as session/window/pane data
+  #   -> Scenario: ServerInfo is populated without a separate display-message exec
   #   -> Scenario: Coalesced parser handles a session with windows but zero panes (race during creation)
   #
-  # AC2: "fsnotify filter only fires on configured socket basename"
+  # AC2: "fsnotify filter only fires on configured socket basename + relevant Op bits"
   #   -> Scenario: relevantSocketEvent matches the default socket basename
   #   -> Scenario: relevantSocketEvent ignores other non-hidden files in the socket directory
   #   -> Scenario: relevantSocketEvent honours a custom `-S` socket path
   #   -> Scenario: relevantSocketEvent continues to ignore hidden files (existing behaviour preserved)
+  #   (Plus Go-level coverage of Chmod/Rename masking — see watcher_test.go::TestRelevantSocketEvent_IgnoresChmodAndRename)
   #
-  # AC3: "shipped unit drops PrivateTmp/ProtectHome and sets TMUX_TMPDIR; docs updated"
+  # AC3 (amended): "shipped unit drops PrivateTmp/ProtectHome; TMUX_TMPDIR handled explicitly
+  #                 (intentionally NOT set with documented rationale); upgrade docs updated"
   #   -> Scenario: Shipped unit no longer sets PrivateTmp=yes
   #   -> Scenario: Shipped unit no longer sets ProtectHome=read-only
-  #   -> Scenario: Shipped unit sets TMUX_TMPDIR so the daemon can reach the user's socket regardless of namespace
+  #   -> Scenario: Shipped unit handles TMUX_TMPDIR explicitly so the daemon can reach the user's socket regardless of namespace
   #   -> Scenario: README/docs call out the install rename + clean-restart requirement for users on the old unit
   #
-  # AC4: "execRunner.Run logs signal name + WaitStatus on signal exits, distinct from exit-error path"
-  #   -> Scenario: execRunner.Run logs the signal name when the child terminates by signal
-  #   -> Scenario: execRunner.Run logs the signal name for SIGTERM as well
+  # AC4: "execRunner.Run names signal in returned error on signal exits, distinct from exit-error path,
+  #       and ctx-cancel kills surface ctx.Err() not signal: SIGKILL"
+  #   -> Scenario: execRunner.Run names the signal in its returned error when the child terminates by signal
+  #   -> Scenario: execRunner.Run names the signal as SIGTERM when the child receives SIGTERM
   #   -> Scenario: execRunner.Run preserves existing behaviour for non-zero exit (no signal)
   #   -> Scenario: execRunner.Run preserves existing behaviour for clean exit (code 0)
+  #   -> Scenario: execRunner.Run distinguishes ctx-cancel kills from external SIGKILL
   #
   # AC5: "Linux-only integration test: FetchAll across N ticks at fast poll, asserts no SIGKILL; fails on fork-storm regression"
   #   -> Scenario: FetchAll survives N fast ticks against a sandbox tmux without SIGKILL

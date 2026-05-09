@@ -275,3 +275,65 @@ func TestFetchAll_TotalExecCount(t *testing.T) {
 		t.Errorf("FetchAll exec count: want ≤3, got %d (calls: %v)", got, r.calls)
 	}
 }
+
+// staleAliveRunner returns success for `info` but "no server running" for
+// list-* — simulating tmux dying between the IsAlive cache hit and the
+// list call. Used by TestFetchAll_StaleAliveCache_RecoversToDeadServer.
+type staleAliveRunner struct {
+	infoCalls       int
+	listPanesCalls  int
+	listClientCalls int
+}
+
+func (r *staleAliveRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for _, arg := range args {
+		switch arg {
+		case "info":
+			r.infoCalls++
+			return []byte("ok"), nil
+		case "list-panes":
+			r.listPanesCalls++
+			return nil, errFake("no server running")
+		case "list-clients":
+			r.listClientCalls++
+			return nil, errFake("no server running")
+		}
+	}
+	return nil, nil
+}
+
+// TestFetchAll_StaleAliveCache_RecoversToDeadServer is the CodeRabbit follow-up
+// regression for PR #507: within the IsAlive TTL window, tmux can die between
+// the cached IsAlive check and the actual list-* calls. Previously FetchAll
+// shipped Server.Alive=true with empty session/window/pane/client maps — a
+// contradictory snapshot. Now it must invalidate the cache and ship Alive=false.
+func TestFetchAll_StaleAliveCache_RecoversToDeadServer(t *testing.T) {
+	r := &staleAliveRunner{}
+	a := NewAdapter("h").WithRunner(r).WithAliveTTL(10 * time.Second)
+	ctx := context.Background()
+
+	// Warm the alive cache: info succeeds, IsAlive returns true.
+	if !a.IsAlive(ctx) {
+		t.Fatalf("warm-up: IsAlive should be true with succeeding info call")
+	}
+
+	// FetchAll: IsAlive uses the cache (no info call), list-panes returns
+	// errNoServer → adapter should invalidate the cache and ship Alive=false.
+	snap, err := a.FetchAll(ctx)
+	if err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+	if snap.Server.Alive {
+		t.Errorf("Server.Alive must be false after listAll observes dead server, got true (snap: %+v)", snap)
+	}
+	if len(snap.Sessions) != 0 || len(snap.Windows) != 0 || len(snap.Panes) != 0 || len(snap.Clients) != 0 {
+		t.Errorf("dead-server snapshot must be empty; got s=%d w=%d p=%d c=%d",
+			len(snap.Sessions), len(snap.Windows), len(snap.Panes), len(snap.Clients))
+	}
+
+	// Cache should now be invalidated — next IsAlive should re-probe.
+	_ = a.IsAlive(ctx)
+	if r.infoCalls != 2 {
+		t.Errorf("after invalidation, IsAlive should re-probe; want 2 info calls, got %d", r.infoCalls)
+	}
+}

@@ -108,3 +108,47 @@ func TestRelevantSocketEvent_ZeroOpIsIgnored(t *testing.T) {
 		t.Error("expected relevantSocketEvent to return false for Op==0 event")
 	}
 }
+
+// TestRelevantSocketEvent_IgnoresChmodAndRename verifies the CodeRabbit
+// follow-up on PR #507: only Create/Write/Remove should poke the refresh
+// loop. Chmod (e.g. socket permission change) and Rename (atomic replace)
+// would otherwise create unnecessary refresh noise.
+func TestRelevantSocketEvent_IgnoresChmodAndRename(t *testing.T) {
+	cases := []struct {
+		name string
+		op   fsnotify.Op
+	}{
+		{"chmod", fsnotify.Chmod},
+		{"rename", fsnotify.Rename},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := fsnotify.Event{Name: "/tmp/tmux-1000/default", Op: tc.op}
+			if relevantSocketEvent(ev, "default") {
+				t.Errorf("relevantSocketEvent must ignore Op=%s on the socket basename", tc.name)
+			}
+		})
+	}
+}
+
+// TestRelevantSocketEvent_AcceptsRelevantOps verifies the positive cases for
+// the Op-mask filter: Create, Write, and Remove on the configured basename
+// should all return true.
+func TestRelevantSocketEvent_AcceptsRelevantOps(t *testing.T) {
+	cases := []struct {
+		name string
+		op   fsnotify.Op
+	}{
+		{"create", fsnotify.Create},
+		{"write", fsnotify.Write},
+		{"remove", fsnotify.Remove},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := fsnotify.Event{Name: "/tmp/tmux-1000/default", Op: tc.op}
+			if !relevantSocketEvent(ev, "default") {
+				t.Errorf("relevantSocketEvent must accept Op=%s on the socket basename", tc.name)
+			}
+		})
+	}
+}

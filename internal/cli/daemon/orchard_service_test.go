@@ -40,9 +40,12 @@ func serviceUnitPath(t *testing.T) string {
 // in the [Service] block and its line does NOT start with '#'.
 //
 // The returned map is keyed by the directive name (e.g. "PrivateTmp") and
-// holds the value (e.g. "yes").
-func parseServiceSection(content string) map[string]string {
-	directives := make(map[string]string)
+// holds ALL values for that key as a slice — systemd allows directives like
+// `Environment=` to appear multiple times, and a `map[string]string` would
+// silently drop earlier values. Single-value directives can use values[key][0]
+// once they confirm the key exists.
+func parseServiceSection(content string) map[string][]string {
+	directives := make(map[string][]string)
 	inService := false
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -58,11 +61,11 @@ func parseServiceSection(content string) map[string]string {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		// Parse KEY=VALUE.
+		// Parse KEY=VALUE. Preserve repeats by appending to the slice.
 		if idx := strings.IndexByte(trimmed, '='); idx > 0 {
 			key := strings.TrimSpace(trimmed[:idx])
 			val := strings.TrimSpace(trimmed[idx+1:])
-			directives[key] = val
+			directives[key] = append(directives[key], val)
 		}
 	}
 	return directives
@@ -91,18 +94,20 @@ func TestShippedSystemdUnit_NoPrivateTmp_Yes(t *testing.T) {
 	content := readUnitFile(t)
 	directives := parseServiceSection(content)
 
-	val, found := directives["PrivateTmp"]
+	vals, found := directives["PrivateTmp"]
 	if !found {
 		// Absent entirely — correct.
 		return
 	}
-	if strings.EqualFold(val, "yes") || strings.EqualFold(val, "true") || val == "1" {
-		t.Errorf(
-			"scripts/init/orchard.service: [Service] contains active PrivateTmp=%s\n"+
-				"This directive isolates /tmp and hides the tmux socket at /tmp/tmux-<uid>/default.\n"+
-				"It was removed in #464 — do not re-add it without updating the issue post-mortem.",
-			val,
-		)
+	for _, val := range vals {
+		if strings.EqualFold(val, "yes") || strings.EqualFold(val, "true") || val == "1" {
+			t.Errorf(
+				"scripts/init/orchard.service: [Service] contains active PrivateTmp=%s\n"+
+					"This directive isolates /tmp and hides the tmux socket at /tmp/tmux-<uid>/default.\n"+
+					"It was removed in #464 — do not re-add it without updating the issue post-mortem.",
+				val,
+			)
+		}
 	}
 }
 
@@ -118,16 +123,18 @@ func TestShippedSystemdUnit_NoProtectHome_ReadOnly(t *testing.T) {
 	content := readUnitFile(t)
 	directives := parseServiceSection(content)
 
-	val, found := directives["ProtectHome"]
+	vals, found := directives["ProtectHome"]
 	if !found {
 		return
 	}
-	if strings.EqualFold(val, "read-only") {
-		t.Errorf(
-			"scripts/init/orchard.service: [Service] contains active ProtectHome=read-only\n"+
-				"This directive breaks provider access to the user's home directory.\n"+
-				"It was removed in #464 — do not re-add it without updating the issue post-mortem.",
-		)
+	for _, val := range vals {
+		if strings.EqualFold(val, "read-only") {
+			t.Errorf(
+				"scripts/init/orchard.service: [Service] contains active ProtectHome=read-only\n"+
+					"This directive breaks provider access to the user's home directory.\n"+
+					"It was removed in #464 — do not re-add it without updating the issue post-mortem.",
+			)
+		}
 	}
 }
 
@@ -151,11 +158,13 @@ func TestShippedSystemdUnit_TMUX_TMPDIR_Documented(t *testing.T) {
 	t.Parallel()
 	content := readUnitFile(t)
 
-	// Check whether any active Environment= line sets TMUX_TMPDIR.
+	// Check whether any active Environment= line sets TMUX_TMPDIR. systemd
+	// allows multiple Environment= directives, so we scan all values for the
+	// "Environment" key — not just the first.
 	directives := parseServiceSection(content)
 	tmuxTmpdirSet := false
-	for k, v := range directives {
-		if k == "Environment" && strings.Contains(v, "TMUX_TMPDIR") {
+	for _, v := range directives["Environment"] {
+		if strings.Contains(v, "TMUX_TMPDIR") {
 			tmuxTmpdirSet = true
 			break
 		}

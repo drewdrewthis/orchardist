@@ -79,6 +79,12 @@ type sigkillDetectingRunner struct {
 // Run executes name with args using os/exec and returns combined stdout.
 // If the process is killed by SIGKILL the error is recorded in records and
 // returned to the caller so the provider's error-handling path is unchanged.
+//
+// CodeRabbit follow-up on PR #507: exec.CommandContext sends SIGKILL to the
+// child when the context is cancelled, so the test's teardown `cancel()`
+// would otherwise be recorded as a regression. Skip the record (but still
+// return the wrapped error so the provider's error-handling path is
+// exercised normally) when ctx.Err() != nil at observation time.
 func (r *sigkillDetectingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
@@ -103,12 +109,18 @@ func (r *sigkillDetectingRunner) Run(ctx context.Context, name string, args ...s
 			if strings.Contains(errStr, "killed") {
 				// Normalize to "signal: SIGKILL" (AC4 format).
 				wrapped = fmt.Errorf("%s %v: signal: SIGKILL (stderr: %q)", name, args, strings.TrimSpace(stderr.String()))
-				r.mu.Lock()
-				r.records = append(r.records, sigkillRecord{
-					args:   append([]string{name}, args...),
-					signal: "SIGKILL",
-				})
-				r.mu.Unlock()
+				// Only record SIGKILLs that happened during the hot path —
+				// not the teardown kills exec.CommandContext sends when ctx
+				// is cancelled. ctx.Err() != nil means the parent already
+				// asked us to stop; the kill is OUR doing, not the bug's.
+				if ctx.Err() == nil {
+					r.mu.Lock()
+					r.records = append(r.records, sigkillRecord{
+						args:   append([]string{name}, args...),
+						signal: "SIGKILL",
+					})
+					r.mu.Unlock()
+				}
 				return stdout.Bytes(), wrapped
 			}
 			return stdout.Bytes(), fmt.Errorf("%s %v: %w (stderr: %q)", name, args, err, strings.TrimSpace(stderr.String()))

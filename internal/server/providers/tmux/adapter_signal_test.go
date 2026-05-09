@@ -89,3 +89,39 @@ func TestExecRunner_PreservesCleanExit(t *testing.T) {
 		t.Errorf("want stdout to contain %q, got: %q", "hello", string(out))
 	}
 }
+
+// TestExecRunner_ContextCancel_NotConfusedWithSIGKILL verifies that a child
+// killed because the parent cancelled its context surfaces ctx.Err()
+// (context.Canceled / DeadlineExceeded) rather than the misleading
+// "signal: SIGKILL" diagnostic.
+//
+// CodeRabbit follow-up on PR #507: exec.CommandContext invokes Process.Kill
+// (SIGKILL) on context cancellation; without checking ctx.Err() first, ctx-cancel
+// kills are indistinguishable from external (oomd) SIGKILLs in logs, defeating
+// the AC4 diagnostic.
+func TestExecRunner_ContextCancel_NotConfusedWithSIGKILL(t *testing.T) {
+	skipIfNoSh(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the slept child gets SIGKILLed via ctx-cancel.
+	go func() {
+		// Small delay so the child actually starts before cancel arrives.
+		// 50ms is plenty for fork+exec on any reasonable host.
+		_ = ctx
+		cancel()
+	}()
+
+	_, err := runner.Run(ctx, "/bin/sh", "-c", "sleep 5")
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	errStr := err.Error()
+	// The new branch surfaces ctx.Err() — context.Canceled wraps as "context canceled".
+	if !strings.Contains(errStr, "context canceled") && !strings.Contains(errStr, "context deadline exceeded") {
+		t.Errorf("want ctx.Err() in message (e.g. %q), got: %s", "context canceled", errStr)
+	}
+	// MUST NOT report this as an external SIGKILL — that would defeat the diagnostic.
+	if strings.Contains(errStr, "signal: SIGKILL") {
+		t.Errorf("ctx-cancel kill must not surface as SIGKILL diagnostic; got: %s", errStr)
+	}
+}
