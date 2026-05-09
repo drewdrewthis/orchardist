@@ -27,7 +27,7 @@ func (s *staticReader) Dir() string { return s.dir }
 func TestProvider_List_Empty(t *testing.T) {
 	now := time.Now()
 	r := &staticReader{}
-	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{}, func() time.Time { return now }, HeartbeatStaleAfter)
+	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{}, nil, func() time.Time { return now }, HeartbeatStaleAfter)
 	p := NewWith("local", r, c, func() time.Time { return now })
 
 	got, err := p.List(context.Background())
@@ -52,7 +52,7 @@ func TestProvider_Refresh_PopulatesCache(t *testing.T) {
 		LastHeartbeatAt: now.Add(-2 * time.Second),
 	}}
 	r := &staticReader{heartbeats: hbs}
-	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{42100: true}}, func() time.Time { return now }, HeartbeatStaleAfter)
+	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{42100: true}}, nil, func() time.Time { return now }, HeartbeatStaleAfter)
 	p := NewWith("local", r, c, func() time.Time { return now })
 
 	if err := p.Refresh(context.Background(), "test"); err != nil {
@@ -87,7 +87,7 @@ func TestProvider_Subscribe_FiresOnChange(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	r := &staticReader{}
-	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{42100: true}}, clock, HeartbeatStaleAfter)
+	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{42100: true}}, nil, clock, HeartbeatStaleAfter)
 	p := NewWith("local", r, c, clock)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -140,7 +140,7 @@ func TestProvider_Subscribe_FiresOnChange(t *testing.T) {
 func TestProvider_Get_Unknown(t *testing.T) {
 	r := &staticReader{}
 	now := time.Now()
-	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{}, func() time.Time { return now }, HeartbeatStaleAfter)
+	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{}, nil, func() time.Time { return now }, HeartbeatStaleAfter)
 	p := NewWith("local", r, c, func() time.Time { return now })
 	_, _, err := p.Get(context.Background(), InstanceID{HostID: "local", ClaudePid: 99999})
 	if err == nil {

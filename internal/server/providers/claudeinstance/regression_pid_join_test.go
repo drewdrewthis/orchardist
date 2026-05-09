@@ -177,6 +177,7 @@ func TestRegression_PidJoin_ProductionAdapters_Issue468(t *testing.T) {
 		processFinder,
 		accountFinder,
 		liveness,
+		nil,
 		clock,
 		claudeinstance.HeartbeatStaleAfter,
 	)

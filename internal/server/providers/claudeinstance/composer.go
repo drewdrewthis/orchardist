@@ -86,28 +86,35 @@ type Composer struct {
 	procs     ProcessFinder
 	accounts  AccountFinder
 	liveness  LivenessChecker
+	jsonl     JsonlReader
 	clock     func() time.Time
 	staleAfter time.Duration
 }
 
 // NewComposer constructs a Composer with the production
-// LivenessChecker and wall clock. Pass nil for any sibling that has not
-// yet shipped a real provider — v1 leaves those edges null and the
-// composer behaves as if no match was found.
+// LivenessChecker, JsonlReader, and wall clock. Pass nil for any sibling
+// that has not yet shipped a real provider — v1 leaves those edges null
+// and the composer behaves as if no match was found.
 func NewComposer(hostID string, panes PaneFinder, procs ProcessFinder, accounts AccountFinder) *Composer {
-	return NewComposerWith(hostID, panes, procs, accounts, OSLivenessChecker{}, time.Now, HeartbeatStaleAfter)
+	return NewComposerWith(hostID, panes, procs, accounts, OSLivenessChecker{}, NewFsJsonlReader(""), time.Now, HeartbeatStaleAfter)
 }
 
 // NewComposerWith is the test-friendly constructor — accepts injected
-// liveness checker, clock, and stale-after duration. Production wires
-// time.Now and HeartbeatStaleAfter; tests can shrink the window so
-// staleness assertions converge in milliseconds.
+// liveness checker, jsonl reader, clock, and stale-after duration.
+// Production wires OSLivenessChecker, FsJsonlReader, time.Now, and
+// HeartbeatStaleAfter; tests can shrink the window so staleness assertions
+// converge in milliseconds and pass a fixture jsonl reader.
+//
+// The jsonl reader may be nil — the composer falls back to the
+// heartbeat's last_activity field (and from there to the pane's
+// session-level lastActivityAt) when no reader is wired.
 func NewComposerWith(
 	hostID string,
 	panes PaneFinder,
 	procs ProcessFinder,
 	accounts AccountFinder,
 	liveness LivenessChecker,
+	jsonl JsonlReader,
 	clock func() time.Time,
 	staleAfter time.Duration,
 ) *Composer {
@@ -126,6 +133,7 @@ func NewComposerWith(
 		procs:      procs,
 		accounts:   accounts,
 		liveness:   liveness,
+		jsonl:      jsonl,
 		clock:      clock,
 		staleAfter: staleAfter,
 	}
@@ -178,27 +186,34 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 		v := hb.Timestamp.UTC().Format(time.RFC3339Nano)
 		inst.StartedAt = &v
 	}
-	if !hb.LastActivity.IsZero() {
-		// Primary source: heartbeat's last_activity field.
-		// Preserve sub-second precision from the original value by using
-		// RFC3339Nano. When the source had no nanoseconds, RFC3339Nano
-		// still produces a valid RFC3339 string (trailing zeros are
-		// stripped by Go's time formatter).
-		v := hb.LastActivity.UTC().Format(time.RFC3339Nano)
-		inst.LastActivityAt = &v
-	} else {
-		// Fallback (option a): read pane.Window.Session.LastActivityAt.
-		// TmuxPane has no lastActivityAt field of its own; the session-level
-		// timestamp is the same conceptual recency for the user's purposes
-		// ("when was this claude instance last touched"). Option (b) — adding
-		// TmuxPane.lastActivityAt as a new schema field — can be layered on
-		// top later when pane-level granularity is needed, without breaking
-		// this fallback.
-		if pane != nil && pane.Window != nil && pane.Window.Session != nil &&
-			pane.Window.Session.LastActivityAt != nil {
-			v := *pane.Window.Session.LastActivityAt
+	// Resolve LastActivityAt in priority order:
+	//
+	//  1. Jsonl tail — the timestamp on the last line of the session's
+	//     transcript. Authoritative because claude appends on every step,
+	//     unlike the hook which only fires on lifecycle events. Used when
+	//     both the cwd and session uuid are known.
+	//  2. Heartbeat last_activity — the hook's recorded activity timestamp.
+	//     Today's hook does not write this field, so this branch only
+	//     fires for forward-compatible heartbeats; preserved as a layer in
+	//     case the hook starts emitting it.
+	//  3. Pane session fallback — the tmux session's lastActivityAt, used
+	//     when nothing more specific is available. Coarse but better than
+	//     null for the GUI's "needs attention" lens.
+	if c.jsonl != nil && hb.Cwd != "" && hb.SessionID != "" {
+		if t, ok := c.jsonl.LastActivityAt(ctx, hb.Cwd, hb.SessionID); ok {
+			v := t.UTC().Format(time.RFC3339Nano)
 			inst.LastActivityAt = &v
 		}
+	}
+	if inst.LastActivityAt == nil && !hb.LastActivity.IsZero() {
+		v := hb.LastActivity.UTC().Format(time.RFC3339Nano)
+		inst.LastActivityAt = &v
+	}
+	if inst.LastActivityAt == nil &&
+		pane != nil && pane.Window != nil && pane.Window.Session != nil &&
+		pane.Window.Session.LastActivityAt != nil {
+		v := *pane.Window.Session.LastActivityAt
+		inst.LastActivityAt = &v
 	}
 	return inst
 }
