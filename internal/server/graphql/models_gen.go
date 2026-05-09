@@ -730,6 +730,15 @@ type Worktree struct {
 	Issue *Issue `json:"issue,omitempty"`
 	// Processes whose cwd lies under `path`. Resolved by the ps provider (ws-b-ps); returns `[]` until that provider lands.
 	Processes []*Process `json:"processes"`
+	// Tmux panes whose foreground-process cwd equals `path` exactly OR has `path + '/'` as a prefix (#511).
+	// Returns the matching pane list for every worktree, derived from a server-side join of pane.process.cwd
+	// against the worktree path. Ordered deterministically by paneId ascending.
+	// Returns `[]` when no panes match or when the tmux / ps providers are not wired.
+	TmuxPanes []*TmuxPane `json:"tmuxPanes"`
+	// The most-recently-active tmux session among the panes returned by `tmuxPanes` (#511).
+	// When two sessions tie on lastActivityAt, the session with the lexicographically-first name wins.
+	// Null when `tmuxPanes` is empty or when the tmux / ps providers are not wired.
+	TmuxSession *TmuxSession `json:"tmuxSession,omitempty"`
 }
 
 func (Worktree) IsNode() {}
