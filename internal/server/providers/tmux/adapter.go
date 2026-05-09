@@ -524,6 +524,14 @@ func (a *Adapter) listAll(ctx context.Context) (
 	return sessions, windows, panes, nil
 }
 
+// In `list-clients -F` context, the per-client format vars
+// `#{client_window_index}` and `#{client_active_pane}` are silently
+// empty in current tmux releases. The format engine instead resolves
+// the *unprefixed* `#{window_index}` and `#{pane_id}` against the
+// client's currently-attached pane — which is exactly what we want.
+// Verified empirically against tmux 3.5+ on macOS: a client attached
+// to a different window/pane shows that window/pane via the
+// unprefixed vars, while the client_* vars stay empty.
 const clientFormat = "" +
 	"#{client_name}" + fieldSep +
 	"#{client_session}" + fieldSep +
@@ -532,8 +540,8 @@ const clientFormat = "" +
 	"#{client_created}" + fieldSep +
 	"#{client_activity}" + fieldSep +
 	"#{client_readonly}" + fieldSep +
-	"#{client_window_index}" + fieldSep +
-	"#{client_active_pane}"
+	"#{window_index}" + fieldSep +
+	"#{pane_id}"
 
 func (a *Adapter) listClients(ctx context.Context) (map[ClientKey]Client, error) {
 	out, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("list-clients", "-F", clientFormat)...)
