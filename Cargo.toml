@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/chat-core",
     "crates/orchard",
+    "crates/orchard-chat",
     "crates/orchard-dispatcher",
     "crates/orchard-gui/src-tauri",
     "crates/orchard-worktree",
