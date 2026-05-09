@@ -90,11 +90,7 @@ fn is_ok_outcome(o: &FanoutOutcome) -> bool {
 }
 
 fn report_human(outcome: &SendOutcome) {
-    let delivered = outcome
-        .fanout
-        .iter()
-        .filter(|o| o.is_delivered())
-        .count();
+    let delivered = outcome.fanout.iter().filter(|o| o.is_delivered()).count();
     let total = outcome.fanout.len();
     println!(
         "sent message {} to {} ({}/{} delivered)",

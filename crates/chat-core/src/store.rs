@@ -29,11 +29,7 @@ use crate::types::{Event, Member, Message, MessageId, SendOutcome, Target};
 /// (e.g. from `$TMUX` or `--as`). For room broadcasts, the recipient list
 /// is derived from current membership minus the sender. For direct sends,
 /// the recipient is the single tmux session matching the handle.
-pub fn send(
-    target: &Target,
-    sender: &str,
-    text: &str,
-) -> Result<SendOutcome> {
+pub fn send(target: &Target, sender: &str, text: &str) -> Result<SendOutcome> {
     let room = target.room_name();
     let id = append_message(&room, sender, text)?;
 
@@ -79,12 +75,7 @@ pub fn append_message(room: &str, sender: &str, text: &str) -> Result<MessageId>
 }
 
 /// Append a `member.joined` event.
-pub fn join(
-    room: &str,
-    handle: &str,
-    machine: &str,
-    tmux_session: &str,
-) -> Result<()> {
+pub fn join(room: &str, handle: &str, machine: &str, tmux_session: &str) -> Result<()> {
     let event = Event::MemberJoined {
         ts: now_rfc3339(),
         handle: handle.to_string(),
@@ -111,8 +102,7 @@ pub fn read_history(room: &str, limit: usize) -> Result<Vec<Message>> {
         return Ok(Vec::new());
     }
     let mut messages = Vec::new();
-    let f = std::fs::File::open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let f = std::fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?;
     for line in BufReader::new(f).lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -156,8 +146,7 @@ pub fn list_members(room: &str) -> Result<Vec<Member>> {
     }
     use std::collections::HashMap;
     let mut state: HashMap<String, Option<Member>> = HashMap::new();
-    let f = std::fs::File::open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let f = std::fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?;
     for line in BufReader::new(f).lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -218,8 +207,7 @@ fn append_event(room: &str, event: &Event) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let line = serde_json::to_string(event)
-        .context("serializing event to JSON")?;
+    let line = serde_json::to_string(event).context("serializing event to JSON")?;
     append_line(&path, &line)
 }
 
@@ -240,8 +228,8 @@ fn append_line(path: &Path, line: &str) -> Result<()> {
 }
 
 fn now_rfc3339() -> String {
-    use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())

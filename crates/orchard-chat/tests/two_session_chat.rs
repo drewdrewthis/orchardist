@@ -149,7 +149,9 @@ fn which_tmux() -> String {
 }
 
 fn shell_escape(s: &str) -> String {
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || "/_.-".contains(c)) {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/_.-".contains(c))
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
@@ -203,12 +205,10 @@ fn two_session_chat_end_to_end() {
     let mut alice_joined = false;
     let mut bob_joined = false;
     for line in raw.lines() {
-        let v: serde_json::Value =
-            serde_json::from_str(line).expect("parse jsonl line");
+        let v: serde_json::Value = serde_json::from_str(line).expect("parse jsonl line");
         match v["type"].as_str() {
             Some("message") => {
-                if v["text"].as_str() == Some("hello-bob")
-                    && v["sender"].as_str() == Some("@alice")
+                if v["text"].as_str() == Some("hello-bob") && v["sender"].as_str() == Some("@alice")
                 {
                     found_msg = true;
                 }
@@ -270,11 +270,17 @@ fn two_session_chat_end_to_end() {
         &cli,
         chat_dir,
         &server.socket,
-        &["send", "#test", "second-message", "--as", "@alice", "--json"],
+        &[
+            "send",
+            "#test",
+            "second-message",
+            "--as",
+            "@alice",
+            "--json",
+        ],
     );
     assert_eq!(code, 0, "second send (stderr: {stderr})");
-    let v: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("parse SendOutcome json");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse SendOutcome json");
     let fanout = v["fanout"].as_array().expect("fanout array");
     let bob_outcome = fanout
         .iter()
@@ -295,8 +301,7 @@ fn two_session_chat_end_to_end() {
     // Claude transcript dir and will fall back to scrollback. The
     // verified_via field discriminates the proof.
     assert!(
-        bob_outcome["verified_via"] == "transcript"
-            || bob_outcome["verified_via"] == "scrollback",
+        bob_outcome["verified_via"] == "transcript" || bob_outcome["verified_via"] == "scrollback",
         "verified_via should be transcript or scrollback: {bob_outcome}"
     );
 }
@@ -371,8 +376,7 @@ fn unknown_handle_fails_gracefully() {
     assert_eq!(code, 1, "expected partial-failure exit, got {code}");
 
     // The JSONL has the message, but the fanout outcome is Failed.
-    let v: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("parse outcome json");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse outcome json");
     let fanout = v["fanout"].as_array().expect("fanout array");
     assert_eq!(fanout.len(), 1);
     assert_eq!(fanout[0]["kind"], "failed");

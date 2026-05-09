@@ -31,7 +31,10 @@ fn isolated_chat_dir() -> ChatDirGuard {
     unsafe {
         std::env::set_var("ORCHARD_CHAT_DIR", td.path());
     }
-    ChatDirGuard { _td: td, _guard: guard }
+    ChatDirGuard {
+        _td: td,
+        _guard: guard,
+    }
 }
 
 #[test]

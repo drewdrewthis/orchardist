@@ -16,8 +16,8 @@ pub fn chat_dir() -> Result<PathBuf> {
     let dir = if let Ok(custom) = std::env::var("ORCHARD_CHAT_DIR") {
         PathBuf::from(custom)
     } else {
-        let home = std::env::var("HOME")
-            .context("HOME not set; cannot resolve default chat dir")?;
+        let home =
+            std::env::var("HOME").context("HOME not set; cannot resolve default chat dir")?;
         PathBuf::from(home).join(".orchard").join("chat")
     };
     std::fs::create_dir_all(&dir)

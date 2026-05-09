@@ -76,8 +76,8 @@ pub fn verify_via_transcript(
             && let Ok(verified) = scan_for_user_message(&path, needle)
             && verified
         {
-            use time::format_description::well_known::Rfc3339;
             use time::OffsetDateTime;
+            use time::format_description::well_known::Rfc3339;
             let ts = OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
@@ -153,10 +153,7 @@ fn newest_jsonl(dir: &std::path::Path) -> Option<PathBuf> {
 ///
 /// Returns `Ok(true)` if a match is found. `Ok(false)` if no match. `Err`
 /// on read errors that prevent any progress.
-fn scan_for_user_message(
-    path: &std::path::Path,
-    needle: &str,
-) -> std::io::Result<bool> {
+fn scan_for_user_message(path: &std::path::Path, needle: &str) -> std::io::Result<bool> {
     use std::io::{BufRead, BufReader};
     let f = std::fs::File::open(path)?;
     for line in BufReader::new(f).lines() {
@@ -176,9 +173,7 @@ fn scan_for_user_message(
         if v.get("type").and_then(|t| t.as_str()) != Some("user") {
             continue;
         }
-        let content = v
-            .get("message")
-            .and_then(|m| m.get("content"));
+        let content = v.get("message").and_then(|m| m.get("content"));
         if content_contains(content, needle) {
             return Ok(true);
         }

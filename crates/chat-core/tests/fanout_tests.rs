@@ -8,11 +8,7 @@ use chat_core::{FanoutOutcome, Recipient, tmux_fanout};
 
 #[test]
 fn skips_sender_self() {
-    let outcomes = tmux_fanout(
-        &[Recipient::new("@alice", "alice")],
-        "@alice",
-        "hello",
-    );
+    let outcomes = tmux_fanout(&[Recipient::new("@alice", "alice")], "@alice", "hello");
     assert_eq!(outcomes.len(), 1);
     match &outcomes[0] {
         FanoutOutcome::Skipped { recipient, reason } => {
@@ -26,22 +22,14 @@ fn skips_sender_self() {
 #[test]
 fn skips_sender_when_at_prefix_matches() {
     // `@alice` and `alice` are the same handle — sigil is decoration.
-    let outcomes = tmux_fanout(
-        &[Recipient::new("@alice", "alice")],
-        "alice",
-        "hello",
-    );
+    let outcomes = tmux_fanout(&[Recipient::new("@alice", "alice")], "alice", "hello");
     assert_eq!(outcomes.len(), 1);
     assert!(matches!(&outcomes[0], FanoutOutcome::Skipped { reason, .. } if reason == "sender"));
 }
 
 #[test]
 fn skips_empty_tmux_session() {
-    let outcomes = tmux_fanout(
-        &[Recipient::new("@bob", "")],
-        "@alice",
-        "hello",
-    );
+    let outcomes = tmux_fanout(&[Recipient::new("@bob", "")], "@alice", "hello");
     assert_eq!(outcomes.len(), 1);
     match &outcomes[0] {
         FanoutOutcome::Skipped { reason, .. } => assert_eq!(reason, "empty tmux session"),

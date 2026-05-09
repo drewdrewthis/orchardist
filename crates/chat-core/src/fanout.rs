@@ -108,11 +108,7 @@ pub fn format_paste(sender: &str, text: &str) -> String {
 /// Each [`Recipient`] carries both the logical handle (used for receipts /
 /// JSONL) and the literal tmux session to deliver to. The sender's own
 /// handle is always skipped.
-pub fn tmux_fanout(
-    recipients: &[Recipient],
-    sender: &str,
-    text: &str,
-) -> Vec<FanoutOutcome> {
+pub fn tmux_fanout(recipients: &[Recipient], sender: &str, text: &str) -> Vec<FanoutOutcome> {
     let paste = format_paste(sender, text);
     let sender_handle = sender.trim_start_matches('@');
     let mut out = Vec::with_capacity(recipients.len());
@@ -234,8 +230,8 @@ fn verify_scrollback(session: &str, paste: &str) -> Result<String, String> {
         if out.status.success() {
             let captured = String::from_utf8_lossy(&out.stdout);
             if captured.contains(paste) {
-                use time::format_description::well_known::Rfc3339;
                 use time::OffsetDateTime;
+                use time::format_description::well_known::Rfc3339;
                 let ts = OffsetDateTime::now_utc()
                     .format(&Rfc3339)
                     .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
@@ -252,9 +248,9 @@ fn verify_scrollback(session: &str, paste: &str) -> Result<String, String> {
 
 fn short_ts() -> String {
     // HH:MM:SS for human-readable scrollback. Full RFC3339 lives in JSONL.
+    use time::OffsetDateTime;
     use time::format_description::FormatItem;
     use time::macros::format_description;
-    use time::OffsetDateTime;
     const FMT: &[FormatItem<'_>] = format_description!("[hour]:[minute]:[second]");
     OffsetDateTime::now_utc()
         .format(&FMT)
