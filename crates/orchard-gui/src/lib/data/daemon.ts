@@ -450,6 +450,42 @@ export type Unsub = () => void;
 
 const REFRESH_INTERVAL_MS = 60_000;
 
+/**
+ * Push subscription for a single Claude conversation, keyed by sessionUuid.
+ * Backed by `Subscription.conversationChanged(sessionUuid:)` on the daemon,
+ * which fires every time the claudeprojects fsnotify watcher invalidates
+ * the matching JSONL. The handler receives no payload — call back into
+ * the file reader to pick up the new tail.
+ *
+ * Errors (including "unknown subscription" if the daemon hasn't shipped
+ * conversationChanged yet) are forwarded to onErr; the caller decides
+ * whether to fall back to a slow poll.
+ */
+const CONVERSATION_CHANGED = gql`
+	subscription ConversationChanged($sessionUuid: String!) {
+		conversationChanged(sessionUuid: $sessionUuid) {
+			sessionUuid
+			lastSeenAt
+			messageCount
+		}
+	}
+`;
+
+export function subscribeConversation(
+	sessionUuid: string,
+	onChange: () => void,
+	onErr?: (e: unknown) => void,
+): Unsub {
+	return ws().subscribe(
+		{ query: CONVERSATION_CHANGED, variables: { sessionUuid } },
+		{
+			next: () => onChange(),
+			error: (e) => onErr?.(e),
+			complete: () => {},
+		},
+	);
+}
+
 export function subscribeAll(onChange: () => void, onErr?: (e: unknown) => void): Unsub {
 	const stops: Unsub[] = [];
 	for (const query of [TMUX_CHANGED, PROCESSES]) {

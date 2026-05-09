@@ -19,6 +19,7 @@
 		type TranscriptTurn,
 		type TranscriptBlock,
 	} from "$lib/data/transcript";
+	import { subscribeConversation } from "$lib/data/daemon";
 
 	type Props = {
 		path: string;
@@ -71,9 +72,16 @@
 	});
 
 	$effect(() => {
-		// Poll while the panel is alive. 4s feels live without spamming.
-		const id = setInterval(load, 4000);
-		return () => clearInterval(id);
+		// Subscribe to conversationChanged for this session — the daemon
+		// fsnotify watcher already debounces fs events, so each push
+		// corresponds to a real JSONL append. No polling.
+		if (!sessionUuid) return;
+		const unsub = subscribeConversation(
+			sessionUuid,
+			() => load(),
+			(err) => console.warn("[transcript] subscription error:", err),
+		);
+		return () => unsub();
 	});
 
 	$effect(() => {
