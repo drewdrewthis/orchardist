@@ -206,39 +206,22 @@ func TestPaneFinder_FindBySession_EmptySession_ReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestPaneFinder_FindBySession_WithPsCrossCheck_ClaudeProcess(t *testing.T) {
-	// When ps is wired and the pane's foreground pid resolves to a process
-	// whose Command contains "claude", the pane should be returned.
-	pid := int64(42)
-	pane := &gql.TmuxPane{ID: "TmuxPane:local:%1", CurrentPid: &pid}
-	tmuxStub := &finderTmuxStub{bySession: map[string]*gql.TmuxPane{"alpha": pane}}
-	psStub := &finderPsStub{byPid: map[int]*gql.Process{42: {Command: "claude"}}}
+// TestPaneFinder_FindBySession_PassThrough verifies that paneFinder.FindBySession
+// is a pure pass-through to the tmuxInput adapter. The cmd-basename cross-check
+// has moved into tmuxInputAdapter.PaneBySession (daemon/claudeinstance_wiring.go);
+// the finder trusts whatever the adapter returns.
+func TestPaneFinder_FindBySession_PassThrough(t *testing.T) {
+	pid := int64(2000)
+	claudePane := &gql.TmuxPane{ID: "TmuxPane:local:%11", PaneID: "%11", CurrentPid: &pid}
+	stub := &finderTmuxStub{bySession: map[string]*gql.TmuxPane{"issue468": claudePane}}
 
-	f := NewPaneFinder(tmuxStub, psStub)
-	got, ok := f.FindBySession(context.Background(), "local", "alpha")
+	f := NewPaneFinder(stub)
+	got, ok := f.FindBySession(context.Background(), "local", "issue468")
 	if !ok {
-		t.Fatal("FindBySession with claude ps: expected ok=true")
+		t.Fatal("FindBySession pass-through: expected ok=true")
 	}
-	if got != pane {
-		t.Errorf("FindBySession: got %v, want %v", got, pane)
-	}
-}
-
-func TestPaneFinder_FindBySession_WithPsCrossCheck_NonClaudeProcess(t *testing.T) {
-	// When ps is wired and the pane's foreground pid resolves to a non-claude
-	// process, the pane should NOT be returned.
-	pid := int64(42)
-	pane := &gql.TmuxPane{ID: "TmuxPane:local:%1", CurrentPid: &pid}
-	tmuxStub := &finderTmuxStub{bySession: map[string]*gql.TmuxPane{"alpha": pane}}
-	psStub := &finderPsStub{byPid: map[int]*gql.Process{42: {Command: "zsh"}}}
-
-	f := NewPaneFinder(tmuxStub, psStub)
-	got, ok := f.FindBySession(context.Background(), "local", "alpha")
-	if ok {
-		t.Error("FindBySession with non-claude ps: expected ok=false")
-	}
-	if got != nil {
-		t.Errorf("FindBySession with non-claude ps: expected nil, got %v", got)
+	if got != claudePane {
+		t.Errorf("FindBySession: got %v, want %v", got, claudePane)
 	}
 }
 

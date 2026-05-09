@@ -154,8 +154,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		claudeinstance.NewComposer(
 			"local",
 			claudeinstance.NewPaneFinder(
-				&tmuxInputAdapter{p: tmuxProvider},
-				psAdapter,
+				newTmuxInputAdapter(tmuxProvider, psProvider),
 			),
 			claudeinstance.NewProcessFinder(psAdapter),
 			claudeinstance.NewAccountFinder(&acctInputAdapter{p: claudeAccountProvider}),

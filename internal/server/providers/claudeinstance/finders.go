@@ -16,8 +16,6 @@ package claudeinstance
 
 import (
 	"context"
-	"path/filepath"
-	"strings"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
@@ -88,34 +86,29 @@ func (f *processFinder) FindByPid(ctx context.Context, hostID string, pid int) (
 // paneFinder
 // ---------------------------------------------------------------------------
 
-// paneFinder implements PaneFinder via the tmuxInput (and optional psInput)
-// narrow interfaces.
+// paneFinder implements PaneFinder via the tmuxInput narrow interface.
+//
+// The cmd-basename cross-check (only return panes whose foreground process is
+// "claude") has been moved into the tmuxInput adapter layer
+// (tmuxInputAdapter.PaneBySession in daemon/claudeinstance_wiring.go).
+// paneFinder is now a pure pass-through: it delegates to the tmuxInput and
+// returns whatever the adapter says. This lets the adapter iterate ALL panes
+// in a session, rather than the caller rejecting the single pane the adapter
+// returns — fixing the [vim, claude] multi-pane bug (issue #468).
 type paneFinder struct {
 	tmux tmuxInput
-	ps   psInput // optional: when non-nil, FindBySession cross-checks cmd contains "claude"
 }
 
-// NewPaneFinder wraps a tmuxInput provider as a PaneFinder. The optional ps
-// parameter enables cmd-basename cross-checking in FindBySession: when wired,
-// only panes whose currentPid resolves to a process whose Command basename
-// contains "claude" are returned.
-//
-// When ps is nil the cmd check is skipped and the first pane with a non-zero
-// currentPid is returned (v1 behaviour sufficient for AC #5 and AC #6).
-//
-// NOTE: feature file scenario line 64 expects cmd cross-checking. Wire ps when
-// available to honour that scenario.
+// NewPaneFinder wraps a tmuxInput provider as a PaneFinder. The adapter is
+// expected to already own the cmd-basename cross-check when ps is available
+// (see tmuxInputAdapter.PaneBySession in daemon/claudeinstance_wiring.go).
 //
 // When p is nil, a nil PaneFinder interface is returned.
-func NewPaneFinder(p tmuxInput, ps ...psInput) PaneFinder {
+func NewPaneFinder(p tmuxInput) PaneFinder {
 	if p == nil {
 		return nil
 	}
-	pf := &paneFinder{tmux: p}
-	if len(ps) > 0 {
-		pf.ps = ps[0]
-	}
-	return pf
+	return &paneFinder{tmux: p}
 }
 
 // FindByPid satisfies PaneFinder. Returns (nil, false) when claudePid <= 0.
@@ -126,31 +119,14 @@ func (f *paneFinder) FindByPid(ctx context.Context, hostID string, claudePid int
 	return f.tmux.PaneByPid(ctx, hostID, claudePid)
 }
 
-// FindBySession satisfies PaneFinder. Returns the first pane in the named tmux
-// session. When the paneFinder was constructed with a psInput, only panes whose
-// foreground process has a Command basename containing "claude" are eligible.
+// FindBySession satisfies PaneFinder. Delegates to the tmuxInput adapter,
+// which is expected to own the cmd-basename cross-check when ps is available.
 // Returns (nil, false) when tmuxSession is empty.
 func (f *paneFinder) FindBySession(ctx context.Context, hostID, tmuxSession string) (*gql.TmuxPane, bool) {
 	if tmuxSession == "" {
 		return nil, false
 	}
-	pane, ok := f.tmux.PaneBySession(ctx, hostID, tmuxSession)
-	if !ok || pane == nil {
-		return nil, false
-	}
-	if f.ps == nil || pane.CurrentPid == nil || *pane.CurrentPid <= 0 {
-		return pane, true
-	}
-	// ps cross-check: only return the pane if its foreground process looks
-	// like a claude process (Command basename contains "claude").
-	proc, found := f.ps.GetByPid(ctx, hostID, int(*pane.CurrentPid))
-	if !found || proc == nil {
-		return nil, false
-	}
-	if !strings.Contains(strings.ToLower(filepath.Base(proc.Command)), "claude") {
-		return nil, false
-	}
-	return pane, true
+	return f.tmux.PaneBySession(ctx, hostID, tmuxSession)
 }
 
 // ---------------------------------------------------------------------------

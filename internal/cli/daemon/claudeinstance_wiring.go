@@ -18,6 +18,8 @@ package daemon
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"time"
 
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
@@ -77,13 +79,52 @@ func projectProcess(p *psprovider.Process, hostID string) *gql.Process {
 }
 
 // ---------------------------------------------------------------------------
+// Internal narrow interfaces for testability.
+// ---------------------------------------------------------------------------
+
+// tmuxSnapshotter is the narrow surface tmuxInputAdapter reads from the tmux
+// provider. *tmuxprovider.Provider satisfies this via its Snapshot() method.
+// Test stubs implement it inline.
+type tmuxSnapshotter interface {
+	Snapshot() tmuxprovider.RuntimeSnapshot
+}
+
+// psGetter is the narrow surface tmuxInputAdapter needs from the ps provider:
+// just the command string for a given pid. Test stubs implement it inline.
+type psGetter interface {
+	// CommandForPid returns the command basename for the given pid on hostID, or
+	// ("", false) when the pid is not in cache.
+	CommandForPid(ctx context.Context, hostID string, pid int) (string, bool)
+}
+
+// ---------------------------------------------------------------------------
 // tmuxInputAdapter — bridges *tmuxprovider.Provider to tmuxInput.
 // ---------------------------------------------------------------------------
 
 // tmuxInputAdapter wraps the tmux provider to implement the narrow tmuxInput
 // interface that claudeinstance.NewPaneFinder consumes.
+//
+// When ps is non-nil, PaneBySession iterates ALL panes in the session and
+// returns the first one whose foreground process has a Command basename
+// containing "claude". This prevents the bug where a vim pane is returned
+// first (because it has a non-zero pid) and the caller never sees the claude
+// pane in the same session.
+//
+// When ps is nil (tests, no-ps mode), PaneBySession falls back to returning
+// the first pane with a non-zero currentPid — v1 behaviour.
 type tmuxInputAdapter struct {
-	p *tmuxprovider.Provider
+	p  tmuxSnapshotter
+	ps psGetter
+}
+
+// newTmuxInputAdapter constructs a tmuxInputAdapter with an optional ps
+// provider for command-basename cross-checking in PaneBySession.
+func newTmuxInputAdapter(p *tmuxprovider.Provider, ps *psprovider.Provider) *tmuxInputAdapter {
+	a := &tmuxInputAdapter{p: p}
+	if ps != nil {
+		a.ps = &psGetterAdapter{p: ps}
+	}
+	return a
 }
 
 // PaneByPid walks the tmux pane snapshot and returns the first pane whose
@@ -101,19 +142,62 @@ func (a *tmuxInputAdapter) PaneByPid(ctx context.Context, hostID string, pid int
 }
 
 // PaneBySession walks the tmux pane snapshot and returns the first pane in the
-// named session that has a non-zero foreground pid, or (nil, false).
+// named session that is owned by a claude process.
+//
+// When a.ps is non-nil, every candidate pane's foreground pid is looked up in
+// the ps snapshot; only panes whose process Command basename contains "claude"
+// are eligible. This ensures that a session containing [vim, claude] returns
+// the claude pane even when vim is iterated first.
+//
+// When a.ps is nil (tests, no-ps mode), the first pane with a non-zero
+// currentPid is returned — v1 behaviour sufficient when ps data is unavailable.
 func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session string) (*gql.TmuxPane, bool) {
 	if a.p == nil || session == "" {
 		return nil, false
 	}
 	for _, pn := range a.p.Snapshot().Panes {
-		if string(pn.Key.Host) == hostID && pn.WindowKey.Session == session {
-			if pn.CurrentPid > 0 {
-				return projectPane(pn), true
-			}
+		if string(pn.Key.Host) != hostID || pn.WindowKey.Session != session {
+			continue
+		}
+		if pn.CurrentPid <= 0 {
+			continue
+		}
+		if a.ps == nil {
+			// No ps provider: return first pane with a non-zero pid (v1 behaviour).
+			return projectPane(pn), true
+		}
+		// ps cross-check: only return the pane if its foreground process Command
+		// basename contains "claude".
+		cmd, ok := a.ps.CommandForPid(ctx, hostID, pn.CurrentPid)
+		if !ok {
+			continue
+		}
+		if strings.Contains(strings.ToLower(filepath.Base(cmd)), "claude") {
+			return projectPane(pn), true
 		}
 	}
 	return nil, false
+}
+
+// psGetterAdapter wraps *psprovider.Provider to satisfy the psGetter interface,
+// bridging the concrete provider type to the narrow interface tmuxInputAdapter
+// needs for testability.
+type psGetterAdapter struct {
+	p *psprovider.Provider
+}
+
+// CommandForPid returns the command basename for the given pid on hostID. It
+// wraps ps.Provider.Get and projects only the Command field. Returns ("", false)
+// when the pid is not in cache or the provider errors.
+func (a *psGetterAdapter) CommandForPid(ctx context.Context, hostID string, pid int) (string, bool) {
+	if a.p == nil || pid <= 0 {
+		return "", false
+	}
+	proc, _, err := a.p.Get(ctx, psprovider.ProcessID{Host: hostID, PID: pid})
+	if err != nil {
+		return "", false
+	}
+	return proc.Command, true
 }
 
 // projectPane projects a tmuxprovider.Pane onto *gql.TmuxPane.
