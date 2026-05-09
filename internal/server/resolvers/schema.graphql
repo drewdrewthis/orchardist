@@ -893,6 +893,12 @@ type Conversation implements Node {
 
   "Plugin-populated short summary. Always null in v1."
   recap: String
+
+  """
+  Absolute path to the JSONL transcript on the daemon's host.
+  Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
+  """
+  jsonlPath: String!
 }
 
 """
