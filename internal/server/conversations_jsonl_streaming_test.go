@@ -205,6 +205,12 @@ func firstDiffIdx(a, b []byte) int {
 //
 // Feature: "Each AC of the issue maps to at least one test in the daemon's test suite"
 func TestACCoverage(t *testing.T) {
+	// expectedACs is the contract: every AC in #505 must have at least one
+	// covering test. Held separately from the map so dropping a key from
+	// acTests entirely (e.g. accidentally removing AC6) fails the test
+	// rather than silently passing.
+	expectedACs := []string{"AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7", "AC8", "AC9"}
+
 	// acTests maps each acceptance criterion to the test function names that
 	// exercise it. At least one entry per AC is required; more is welcome.
 	acTests := map[string][]string{
@@ -266,6 +272,15 @@ func TestACCoverage(t *testing.T) {
 			"TestConversationJsonlPath_DocMentionsHTTPEndpoint",
 			"TestSchemaGraphQL_JsonlPathDocText",
 		},
+	}
+
+	// Every AC in the issue must appear in the map. This catches
+	// accidental drops (the `len(names) == 0` check below only fires if
+	// the key is present with an empty slice).
+	for _, ac := range expectedACs {
+		if _, ok := acTests[ac]; !ok {
+			t.Errorf("%s is missing from the coverage map — every AC of #505 must have at least one test", ac)
+		}
 	}
 
 	for ac, names := range acTests {

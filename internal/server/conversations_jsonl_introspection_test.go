@@ -110,9 +110,16 @@ func TestConversationJsonlPath_DocMentionsHTTPEndpoint(t *testing.T) {
 // contract.
 func TestSchemaGraphQL_JsonlPathDocText(t *testing.T) {
 	// schema.graphql lives at the repo root; this test is in internal/server/.
+	// Skip only when the file is genuinely absent (e.g. tests running outside
+	// the checked-out repo). Any other read error fails fast — silent skip on
+	// a permission error or transient I/O failure would let AC9's source-of-
+	// truth guardrail rot undetected in CI.
 	raw, err := os.ReadFile("../../schema.graphql")
 	if err != nil {
-		t.Skipf("repo-root schema.graphql not readable (%v) — skipping source-of-truth check", err)
+		if os.IsNotExist(err) {
+			t.Skipf("repo-root schema.graphql not present (%v) — skipping source-of-truth check", err)
+		}
+		t.Fatalf("read repo-root schema.graphql: %v", err)
 	}
 	schema := string(raw)
 
