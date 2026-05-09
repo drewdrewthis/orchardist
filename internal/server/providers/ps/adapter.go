@@ -195,7 +195,10 @@ func (a *PsAdapter) fetchCwdsDarwin(ctx context.Context, pids []int) (map[int]st
 		return out, nil
 	}
 
-	var current int
+	var (
+		current int
+		havePid bool
+	)
 	for _, line := range splitLines(raw) {
 		if len(line) == 0 {
 			continue
@@ -204,12 +207,13 @@ func (a *PsAdapter) fetchCwdsDarwin(ctx context.Context, pids []int) (map[int]st
 		case 'p':
 			v, perr := strconv.Atoi(line[1:])
 			if perr != nil {
-				current = 0 // unknown pid header, skip until the next valid p<pid>
+				havePid = false // malformed pid header, skip until the next valid p<pid>
 				continue
 			}
 			current = v
+			havePid = true
 		case 'n':
-			if current != 0 && len(line) > 1 {
+			if havePid && len(line) > 1 {
 				out[current] = line[1:]
 			}
 		}

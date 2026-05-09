@@ -253,13 +253,19 @@ func TestPaneProcessTraversal_PopulatesProcessAndCwd(t *testing.T) {
 		t.Errorf("pane.process.command = %q, want %q", proc.Command, "claude")
 	}
 
-	// cwd is macOS-only (lsof path). On other platforms the adapter
-	// returns an empty map, so we skip the cwd assertion there.
+	// cwd is macOS-only (lsof path). AC7 in issue #463 requires Linux to
+	// expose a populated process node but null cwd until /proc/<pid>/cwd
+	// support lands; assert both directions so a regression on either
+	// platform shows up here.
 	if runtime.GOOS == "darwin" {
 		if proc.Cwd == nil {
 			t.Errorf("pane.process.cwd is nil on darwin, want %q", paneProcessTestCwd)
 		} else if !strings.EqualFold(*proc.Cwd, paneProcessTestCwd) {
 			t.Errorf("pane.process.cwd = %q, want %q", *proc.Cwd, paneProcessTestCwd)
+		}
+	} else {
+		if proc.Cwd != nil {
+			t.Errorf("pane.process.cwd = %q on %s, want nil (Linux fallback unimplemented)", *proc.Cwd, runtime.GOOS)
 		}
 	}
 }

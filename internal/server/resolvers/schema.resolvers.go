@@ -696,7 +696,14 @@ func (r *tmuxPaneResolver) WatchingClients(ctx context.Context, obj *graphql1.Tm
 // from the cached ps snapshot (process exited or not yet observed).
 // cwd resolution is delegated to processResolver.Cwd and only fires when the
 // client selects the cwd field (gqlgen selection-set lazy evaluation).
-// splitTmuxPaneID is used so federated pane ids project onto the peer's host id.
+//
+// Federation note: the host segment of the pane id is preserved on the
+// projected Process node (via splitTmuxPaneID) so a future federated lookup
+// will attribute the Process to the correct peer host. Today this is a
+// regression guard only — `lookupPane` itself only resolves panes from the
+// local tmux snapshot, so peer-host pane ids return nil before reaching the
+// projection step. End-to-end peer lookup lands with `Host.tmuxSessions`
+// federation (tracked separately).
 func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.Process, error) {
 	if r.PS == nil {
 		return nil, nil
@@ -710,12 +717,15 @@ func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) 
 		return nil, nil
 	}
 	target := ps.ProcessID{Host: host, PID: pane.CurrentPid}
-	for _, proc := range r.PS.List() {
-		if proc.ID == target {
-			return projectProcess(&proc, host), nil
-		}
+	got, _, err := r.PS.GetMany(ctx, []ps.ProcessID{target})
+	if err != nil {
+		return nil, nil
 	}
-	return nil, nil
+	proc, ok := got[target]
+	if !ok {
+		return nil, nil
+	}
+	return projectProcess(&proc, host), nil
 }
 
 // ClaudeInstance is the resolver for tmuxPane.claudeInstance.
