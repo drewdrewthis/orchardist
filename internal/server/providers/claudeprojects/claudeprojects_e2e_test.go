@@ -1,6 +1,7 @@
 package claudeprojects_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
+	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
@@ -411,6 +413,202 @@ func queryConversation(t *testing.T, baseURL, id string) *conversationDTO {
 		t.Fatalf("graphql errors: %+v", resp.Errors)
 	}
 	return resp.Data.Conversation
+}
+
+// bootDaemonWithJSONL is like bootDaemon but additionally mounts the
+// /v1/conversations/ file-server endpoint on the same mux as /graphql.
+// It uses server.New so both routes share one *http.ServeMux, exactly
+// as the production daemon does via WithClaudeProjects + WithConversationsJSONL.
+func bootDaemonWithJSONL(t *testing.T, root string) (*claudeprojects.Provider, *httptest.Server) {
+	t.Helper()
+
+	provider := claudeprojects.New(root, "test-host", nil)
+	if err := provider.Start(context.Background()); err != nil {
+		t.Fatalf("start provider: %v", err)
+	}
+	t.Cleanup(func() { _ = provider.Stop() })
+
+	srv := server.New("", nil,
+		server.WithClaudeProjects(provider),
+		server.WithConversationsJSONL(provider, root),
+	)
+	ts := httptest.NewServer(srv.HTTPHandler())
+	t.Cleanup(ts.Close)
+	return provider, ts
+}
+
+// TestConversation_JsonlEndToEnd_DiscoverThenTail is the @e2e scenario:
+// "Client discovers conversations via GraphQL, then tails one via HTTP Range".
+//
+// Steps:
+//  1. Boot daemon with WithClaudeProjects + WithConversationsJSONL.
+//  2. Query GraphQL for conversations + jsonlPath.
+//  3. GET /v1/conversations/<uuid>/jsonl (no Range) → 200 + full body.
+//  4. GET with Range: bytes=<full-size>- → 206 empty body or 416.
+//  5. Append bytes to the file.
+//  6. GET with Range: bytes=<previous-size>- → 206 with only the new bytes.
+func TestConversation_JsonlEndToEnd_DiscoverThenTail(t *testing.T) {
+	// 1. Build a temp projects root with a single synthetic JSONL file.
+	tempRoot := t.TempDir()
+	projectDir := filepath.Join(tempRoot, "test-project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+
+	const sessionUUID = "e2e-session-uuid-1"
+	jsonlPath := filepath.Join(projectDir, sessionUUID+".jsonl")
+
+	now := time.Now().UTC().Round(time.Millisecond)
+	initialRecords := []recordFixture{
+		{ts: now.Add(-2 * time.Second), role: "user", body: "hello", cwd: projectDir},
+		{ts: now.Add(-time.Second), role: "assistant", body: "ack"},
+		{ts: now, role: "user", body: "next"},
+	}
+	writeRecords(t, jsonlPath, initialRecords)
+
+	// Capture the initial file size for Range construction.
+	fi, err := os.Stat(jsonlPath)
+	if err != nil {
+		t.Fatalf("stat initial file: %v", err)
+	}
+	initialSize := fi.Size()
+
+	// Boot daemon with both options wired.
+	_, ts := bootDaemonWithJSONL(t, tempRoot)
+	baseURL := ts.URL
+
+	// 2. Query GraphQL for conversations + jsonlPath.
+	gqlResp := postQuery(t, baseURL, `query { conversations { sessionUuid jsonlPath } }`)
+	if len(gqlResp.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", gqlResp.Errors)
+	}
+	if len(gqlResp.Data.Conversations) == 0 {
+		t.Fatal("no conversations returned from GraphQL; expected at least one")
+	}
+
+	// Find our test conversation.
+	var found *conversationDTO
+	for _, c := range gqlResp.Data.Conversations {
+		if c.SessionUUID == sessionUUID {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("conversation %q not found in GraphQL response; got %v", sessionUUID, gqlResp.Data.Conversations)
+	}
+	if found.JsonlPath == "" {
+		t.Errorf("conversation %q: jsonlPath is empty", sessionUUID)
+	}
+	if found.JsonlPath != jsonlPath {
+		t.Errorf("jsonlPath = %q, want %q", found.JsonlPath, jsonlPath)
+	}
+
+	// 3. GET /v1/conversations/<uuid>/jsonl with no Range → 200 + full body.
+	jsonlURL := fmt.Sprintf("%s/v1/conversations/%s/jsonl", baseURL, sessionUUID)
+
+	resp200, err := http.Get(jsonlURL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET (no Range): %v", err)
+	}
+	body200, _ := io.ReadAll(resp200.Body)
+	_ = resp200.Body.Close()
+
+	if resp200.StatusCode != http.StatusOK {
+		t.Errorf("GET (no Range) status = %d, want 200", resp200.StatusCode)
+	}
+	if ct := resp200.Header.Get("Content-Type"); ct != "application/x-ndjson" {
+		t.Errorf("Content-Type = %q, want application/x-ndjson", ct)
+	}
+
+	// Body must be byte-identical to the file we wrote.
+	diskContents, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatalf("read fixture from disk: %v", err)
+	}
+	if !bytes.Equal(body200, diskContents) {
+		t.Errorf("full-GET body (%d bytes) != disk contents (%d bytes)", len(body200), len(diskContents))
+	}
+
+	// 4. GET with Range: bytes=<full-size>- → 206 with empty body OR 416.
+	//    The Go stdlib returns 416 when start == size (offset equals size),
+	//    and 206 with an empty body when start < size but nothing remains.
+	//    Both are acceptable per the feature scenario.
+	reqAtEOF, _ := http.NewRequest(http.MethodGet, jsonlURL, nil) //nolint:noctx
+	reqAtEOF.Header.Set("Range", fmt.Sprintf("bytes=%d-", initialSize))
+
+	respAtEOF, err := http.DefaultClient.Do(reqAtEOF)
+	if err != nil {
+		t.Fatalf("GET (Range at EOF): %v", err)
+	}
+	bodyAtEOF, _ := io.ReadAll(respAtEOF.Body)
+	_ = respAtEOF.Body.Close()
+
+	switch respAtEOF.StatusCode {
+	case http.StatusPartialContent:
+		// 206 — stdlib served zero bytes from the EOF offset; body must be empty.
+		if len(bodyAtEOF) != 0 {
+			t.Errorf("Range at EOF: 206 body should be empty, got %d bytes", len(bodyAtEOF))
+		}
+	case http.StatusRequestedRangeNotSatisfiable:
+		// 416 — stdlib rejects an offset that equals the file size; also acceptable.
+	default:
+		t.Errorf("Range at EOF: status = %d, want 206 or 416", respAtEOF.StatusCode)
+	}
+
+	// 5. Append new bytes to the JSONL file.
+	appendedRecord := recordFixture{
+		ts:   time.Now().UTC(),
+		role: "assistant",
+		body: "appended",
+	}
+	appendRecord(t, jsonlPath, appendedRecord)
+
+	// Verify the file grew.
+	fi2, err := os.Stat(jsonlPath)
+	if err != nil {
+		t.Fatalf("stat after append: %v", err)
+	}
+	newSize := fi2.Size()
+	if newSize <= initialSize {
+		t.Fatalf("file did not grow after append: size was %d, still %d", initialSize, newSize)
+	}
+	appendedBytes := newSize - initialSize
+
+	// 6. GET with Range: bytes=<previous-size>- → 206 with only the appended bytes.
+	//
+	// No provider refresh needed: the handler calls os.Open + f.Stat() on every
+	// request, reading the current file state directly. PathForSessionUUID still
+	// returns the same path (the path didn't change), so the provider cache
+	// remains accurate without an explicit Refresh call.
+	reqNewBytes, _ := http.NewRequest(http.MethodGet, jsonlURL, nil) //nolint:noctx
+	reqNewBytes.Header.Set("Range", fmt.Sprintf("bytes=%d-", initialSize))
+
+	respNewBytes, err := http.DefaultClient.Do(reqNewBytes)
+	if err != nil {
+		t.Fatalf("GET (Range for appended bytes): %v", err)
+	}
+	bodyNewBytes, _ := io.ReadAll(respNewBytes.Body)
+	_ = respNewBytes.Body.Close()
+
+	if respNewBytes.StatusCode != http.StatusPartialContent {
+		t.Errorf("GET (Range for appended bytes) status = %d, want 206", respNewBytes.StatusCode)
+	}
+	if int64(len(bodyNewBytes)) != appendedBytes {
+		t.Errorf("appended range body = %d bytes, want %d (the appended portion only)",
+			len(bodyNewBytes), appendedBytes)
+	}
+
+	// The body must match the appended portion of the on-disk file exactly.
+	// Re-read the current file to get the full updated contents.
+	currentContents, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatalf("read fixture after append: %v", err)
+	}
+	wantNewBytes := currentContents[initialSize:]
+	if !bytes.Equal(bodyNewBytes, wantNewBytes) {
+		t.Errorf("appended range body content mismatch: got %q, want %q", bodyNewBytes, wantNewBytes)
+	}
 }
 
 // postQuery is the GraphQL transport for tests. Identical shape to the
