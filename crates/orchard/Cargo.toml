@@ -1,6 +1,6 @@
 [package]
 name = "orchard"
-version = "0.14.0"
+version = "1.0.0"
 edition = "2024"
 description = "Interactive TUI for managing git worktrees, PR status, and tmux sessions"
 license = "MIT"
