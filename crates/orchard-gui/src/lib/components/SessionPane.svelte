@@ -63,19 +63,15 @@
 		loading = false;
 	}
 
-	// Re-fetch when the row identity changes.
+	// Re-fetch when the row identity changes OR when the store sees a
+	// daemon push event (worktreeChanged / tmuxSessionsChanged / etc).
+	// No polling — `store.hydrationTick` increments on every successful
+	// hydrate, so this $effect re-runs and pulls fresh panel data.
 	$effect(() => {
-		// Tracking variables so $effect re-runs.
 		void paneId;
 		void sessionUuid;
+		void store.hydrationTick;
 		refresh();
-	});
-
-	// 60s safety refresh on the active pane.
-	$effect(() => {
-		if (!active) return;
-		const id = setInterval(refresh, 60_000);
-		return () => clearInterval(id);
 	});
 
 	const pane = $derived(data?.pane ?? null);

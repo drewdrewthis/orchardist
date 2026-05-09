@@ -423,12 +423,14 @@ function normalisePrState(s: string): "open" | "draft" | "merged" | "closed" {
 }
 
 /**
- * The daemon's "global watch" subscriptions — the only ones that take no
+ * The daemon's "global watch" subscriptions — the ones that take no
  * arguments and so can be subscribed to once for the whole dashboard.
- * Per-key subscriptions (`worktreeChanged(project:)`, `pullRequestChanged(repo:,
- * number:)`) require IDs the GUI doesn't statically know; instead we layer
- * a slow `setInterval` refresh on top to catch PR/worktree drift without
- * fanning out to a sub per row.
+ * Per-key subscriptions (`worktreeChanged(project:)`) are fanned out
+ * across the configured projects when `subscribeAll` is called — see
+ * the `WORKTREE_CHANGED` block below.
+ *
+ * No polling. The daemon's filesystem watchers + GitHub webhook hooks
+ * are the source of "something changed"; the GUI just listens.
  */
 const TMUX_CHANGED = gql`
 	subscription TmuxChanged {
@@ -446,9 +448,30 @@ const PROCESSES = gql`
 	}
 `;
 
-export type Unsub = () => void;
+/**
+ * Per-project worktree change feed. Fires when any worktree under the
+ * project is created, removed, branch-changed, or has its PR/issue link
+ * updated. Backed by the daemon's git fsnotify watcher + the GitHub
+ * webhook bridge, so this catches both local `git worktree` mutations
+ * and remote PR/review activity.
+ */
+const WORKTREE_CHANGED = gql`
+	subscription WorktreeChanged($project: ID!) {
+		worktreeChanged(project: $project) {
+			id
+		}
+	}
+`;
 
-const REFRESH_INTERVAL_MS = 60_000;
+const PROJECTS_QUERY = gql`
+	query SubscribableProjects {
+		projects {
+			id
+		}
+	}
+`;
+
+export type Unsub = () => void;
 
 /**
  * Push subscription for a single Claude conversation, keyed by sessionUuid.
@@ -486,11 +509,23 @@ export function subscribeConversation(
 	);
 }
 
+/**
+ * Subscribe to every push channel that affects the dashboard.
+ *
+ * - `tmuxSessionsChanged` — tmux server snapshot (sessions / windows / panes)
+ * - `processes` — OS process snapshot (claude pids, cwds)
+ * - `worktreeChanged($project)` — fanned out across every configured project,
+ *   so worktree create/remove and PR/issue link drift push immediately
+ *
+ * No polling. The daemon's fsnotify watchers + GitHub webhook bridge
+ * cover everything that can change. If we discover a hole, we fix the
+ * push side, not bolt back a setInterval.
+ */
 export function subscribeAll(onChange: () => void, onErr?: (e: unknown) => void): Unsub {
 	const stops: Unsub[] = [];
-	for (const query of [TMUX_CHANGED, PROCESSES]) {
+	const subscribeQuery = (query: ReturnType<typeof gql>, variables?: Record<string, unknown>) => {
 		const dispose = ws().subscribe(
-			{ query },
+			{ query, variables },
 			{
 				next: () => onChange(),
 				error: (e) => onErr?.(e),
@@ -498,9 +533,26 @@ export function subscribeAll(onChange: () => void, onErr?: (e: unknown) => void)
 			},
 		);
 		stops.push(dispose);
-	}
-	const id = setInterval(onChange, REFRESH_INTERVAL_MS);
-	stops.push(() => clearInterval(id));
+	};
+
+	subscribeQuery(TMUX_CHANGED);
+	subscribeQuery(PROCESSES);
+
+	// Fan out worktreeChanged across every configured project. We do this
+	// once on mount; if the user adds a repo via `orchard config add-repo`
+	// while the GUI is running, they'll need to reload — that's a tiny
+	// fraction of the polling cost we just removed.
+	(async () => {
+		try {
+			const data = await http().request<{ projects: Array<{ id: string }> }>(PROJECTS_QUERY);
+			for (const p of data.projects ?? []) {
+				subscribeQuery(WORKTREE_CHANGED, { project: p.id });
+			}
+		} catch (e) {
+			onErr?.(e);
+		}
+	})();
+
 	return () => {
 		for (const s of stops) s();
 	};

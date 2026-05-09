@@ -4,8 +4,9 @@
   the GUI doesn't touch the file system except via the Tauri bridge.
 
   Tail-loaded: the Rust reader returns the last ~512KB, so very long
-  conversations don't stall the renderer. Auto-refresh every 4s while
-  the panel is mounted so live conversations stay current.
+  conversations don't stall the renderer. The view subscribes to
+  `Subscription.conversationChanged(sessionUuid:)` on the daemon and
+  re-loads when the fsnotify watcher fires. No polling.
 
   Browser dev preview shows a placeholder.
 -->

@@ -109,6 +109,15 @@ export class AppStore {
 	now = $state(Date.now());
 
 	/**
+	 * Monotonic counter incremented on every successful daemon hydrate.
+	 * Components that own their own queries (e.g. SessionPane's panel
+	 * fetch) `void store.hydrationTick` inside their $effect so they
+	 * re-run when the store sees a push event from the daemon. Beats
+	 * setInterval polling.
+	 */
+	hydrationTick = $state(0);
+
+	/**
 	 * Per-lens snapshots — each lens fetches against its own anchor and
 	 * stores its own rows. Only the active lens is fetched on lens switch;
 	 * other lenses keep their last snapshot until next refresh.
@@ -578,6 +587,7 @@ export class AppStore {
 		// Refresh the active lens alongside the legacy hydration; cheap
 		// while the lens query targets the same daemon.
 		this.refreshActiveLens();
+		this.hydrationTick += 1;
 		return true;
 	};
 

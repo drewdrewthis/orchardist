@@ -3,9 +3,10 @@
   the message into the pane via `tmux send-keys -t <paneId> -l <text>`
   followed by `Enter` (Tauri command `tmux_send_text` in commands.rs).
 
-  No optimistic UI — the transcript view picks the new turn up on its
-  next 4s poll. Keeping it that way avoids divergence between what we
-  show and what the JSONL says actually landed.
+  No optimistic UI — the transcript view subscribes to
+  `Subscription.conversationChanged(sessionUuid:)` and re-loads the
+  JSONL when the daemon's fsnotify watcher fires. The new turn shows
+  up the moment Claude writes it, no client-side polling.
 -->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
