@@ -13,7 +13,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ulid::Ulid;
 
-use crate::fanout::tmux_fanout;
+use crate::fanout::{Recipient, tmux_fanout};
 use crate::identity::current_machine;
 use crate::paths::{chat_dir, room_path};
 use crate::types::{Event, Member, Message, MessageId, SendOutcome, Target};
@@ -37,13 +37,18 @@ pub fn send(
     let room = target.room_name();
     let id = append_message(&room, sender, text)?;
 
-    let recipients: Vec<String> = match target {
+    let recipients: Vec<Recipient> = match target {
         Target::Room(r) => list_members(r)?
             .into_iter()
-            .map(|m| m.handle)
-            .filter(|h| h != sender)
+            .filter(|m| m.handle != sender)
+            .map(|m| Recipient::new(m.handle, m.tmux_session))
             .collect(),
-        Target::Direct(handle) => vec![handle.clone()],
+        // Direct send: handle == tmux session name (no slugify); the sigil
+        // is decoration. `@bob` → tmux session `bob`.
+        Target::Direct(handle) => {
+            let session = handle.trim_start_matches('@').to_string();
+            vec![Recipient::new(format!("@{session}"), session)]
+        }
     };
 
     let outcomes = tmux_fanout(&recipients, sender, text);

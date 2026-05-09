@@ -368,7 +368,13 @@ fn unknown_handle_fails_gracefully() {
     let fanout = v["fanout"].as_array().expect("fanout array");
     assert_eq!(fanout.len(), 1);
     assert_eq!(fanout[0]["kind"], "failed");
-    assert_eq!(fanout[0]["error"], "no such tmux session");
+    let err = fanout[0]["error"]
+        .as_str()
+        .expect("error should be a string");
+    assert!(
+        err.starts_with("no such tmux session"),
+        "expected 'no such tmux session…', got: {err}"
+    );
 }
 
 #[test]

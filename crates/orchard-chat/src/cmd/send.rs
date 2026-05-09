@@ -107,14 +107,27 @@ fn report_partial_to_stderr(outcome: &SendOutcome) {
         match o {
             FanoutOutcome::Delivered { .. } => {}
             FanoutOutcome::ByteOnly { recipient, reason } => {
-                eprintln!("  byte-only @{recipient}: {reason}");
+                eprintln!("  byte-only {}: {reason}", with_at(recipient));
             }
             FanoutOutcome::Failed { recipient, error } => {
-                eprintln!("  failed @{recipient}: {error}");
+                eprintln!("  failed {}: {error}", with_at(recipient));
             }
             FanoutOutcome::Skipped { recipient, reason } => {
-                eprintln!("  skipped @{recipient}: {reason}");
+                eprintln!("  skipped {}: {reason}", with_at(recipient));
             }
         }
+    }
+}
+
+/// Recipients can come in either with or without the leading `@` sigil
+/// (depending on whether the target was `Target::Direct(handle)` whose
+/// `handle` may not include the sigil or via membership where `Member.handle`
+/// always does). This helper makes the formatted output uniform without
+/// double-printing the sigil.
+fn with_at(recipient: &str) -> String {
+    if recipient.starts_with('@') {
+        recipient.to_string()
+    } else {
+        format!("@{recipient}")
     }
 }

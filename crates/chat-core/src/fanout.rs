@@ -14,6 +14,29 @@ use serde::Serialize;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+/// One target of a fanout: a logical handle plus the tmux session to deliver to.
+///
+/// `handle` is what shows up in receipts and JSONL (`@alice`, `@drudrukungfu_2`).
+/// `tmux_session` is the literal session name that `tmux send-keys -t` accepts —
+/// dashes preserved, not slugified. The two diverge whenever a session has
+/// characters `derive_handle` slugifies (dashes, dots, etc.), so the caller MUST
+/// supply both. For room broadcasts, look these up via `chat_core::list_members`;
+/// for direct `@handle` sends, the handle and session are the same string.
+#[derive(Debug, Clone)]
+pub struct Recipient {
+    pub handle: String,
+    pub tmux_session: String,
+}
+
+impl Recipient {
+    pub fn new(handle: impl Into<String>, tmux_session: impl Into<String>) -> Self {
+        Self {
+            handle: handle.into(),
+            tmux_session: tmux_session.into(),
+        }
+    }
+}
+
 /// Per-recipient outcome of a fanout.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -64,47 +87,52 @@ pub fn format_paste(sender: &str, text: &str) -> String {
 /// Send `text` to every recipient via tmux send-keys, with Level 2 receipt
 /// verification.
 ///
-/// `recipients` is a list of handles. Each handle maps directly to a tmux
-/// session of the same name (without the `@` sigil). The sender's own handle
-/// is always skipped.
+/// Each [`Recipient`] carries both the logical handle (used for receipts /
+/// JSONL) and the literal tmux session to deliver to. The sender's own
+/// handle is always skipped.
 pub fn tmux_fanout(
-    recipients: &[String],
+    recipients: &[Recipient],
     sender: &str,
     text: &str,
 ) -> Vec<FanoutOutcome> {
     let paste = format_paste(sender, text);
-    let sender_session = sender.trim_start_matches('@');
+    let sender_handle = sender.trim_start_matches('@');
     let mut out = Vec::with_capacity(recipients.len());
     for r in recipients {
-        let target_session = r.trim_start_matches('@');
+        let recipient_handle = r.handle.trim_start_matches('@');
+        let target_session = r.tmux_session.as_str();
         if target_session.is_empty() {
             out.push(FanoutOutcome::Skipped {
-                recipient: r.clone(),
-                reason: "empty handle".to_string(),
+                recipient: r.handle.clone(),
+                reason: "empty tmux session".to_string(),
             });
             continue;
         }
-        if target_session == sender_session {
+        if recipient_handle == sender_handle {
             out.push(FanoutOutcome::Skipped {
-                recipient: r.clone(),
+                recipient: r.handle.clone(),
                 reason: "sender".to_string(),
             });
             continue;
         }
-        if !tmux_session_exists(target_session) {
-            out.push(FanoutOutcome::Failed {
-                recipient: r.clone(),
-                error: "no such tmux session".to_string(),
-            });
-            continue;
-        }
-        // Step 1: send-keys.
+        // Step 1: send-keys. We don't pre-flight with `has-session` because
+        // tmux's `-t <name>` resolution accepts session, window, or pane
+        // targets, but `has-session` only matches sessions. If the target
+        // doesn't resolve, `send-keys` itself returns a non-zero exit with a
+        // clear error message — we propagate that.
         match send_keys(target_session, &paste) {
             Ok(()) => {}
             Err(e) => {
+                // Normalize the most common case so callers can pattern-match
+                // on it without parsing tmux's localized strings.
+                let normalized = if e.contains("can't find") || e.contains("no current target") {
+                    format!("no such tmux session: {target_session}")
+                } else {
+                    e
+                };
                 out.push(FanoutOutcome::Failed {
-                    recipient: r.clone(),
-                    error: e,
+                    recipient: r.handle.clone(),
+                    error: normalized,
                 });
                 continue;
             }
@@ -112,24 +140,16 @@ pub fn tmux_fanout(
         // Step 2: scrollback verify.
         match verify_scrollback(target_session, &paste) {
             Ok(verified_at) => out.push(FanoutOutcome::Delivered {
-                recipient: r.clone(),
+                recipient: r.handle.clone(),
                 scrollback_verified_at: verified_at,
             }),
             Err(reason) => out.push(FanoutOutcome::ByteOnly {
-                recipient: r.clone(),
+                recipient: r.handle.clone(),
                 reason,
             }),
         }
     }
     out
-}
-
-fn tmux_session_exists(session: &str) -> bool {
-    Command::new("tmux")
-        .args(["has-session", "-t", session])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 /// Send a literal line + Enter via `tmux send-keys`.
