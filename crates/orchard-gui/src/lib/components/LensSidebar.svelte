@@ -35,6 +35,21 @@
 	const store = getStore();
 	const lens = $derived(store.lens);
 
+	/**
+	 * A sidebar row matches the active tab if EITHER its paneId or its
+	 * sessionUuid is in the active tab's selection keys. Different lens
+	 * snapshots populate different handles for the same conversation.
+	 */
+	const sel = $derived(store.selection);
+	function rowSelected(keys: { paneId?: string | null; sessionUuid?: string | null; channelId?: string | null }) {
+		if (!sel) return false;
+		if (sel.kind === "channel") return !!keys.channelId && keys.channelId === sel.roomId;
+		const sessionKeyMatch =
+			(!!keys.paneId && !!sel.paneId && keys.paneId === sel.paneId) ||
+			(!!keys.sessionUuid && !!sel.sessionUuid && keys.sessionUuid === sel.sessionUuid);
+		return sessionKeyMatch;
+	}
+
 	// Channels (chat rooms) are shown across all lenses at the top —
 	// their relevance is independent of the lens filter.
 	const channelItems = $derived(
@@ -56,7 +71,7 @@
 				{#if ch.kind === "channel"}
 					<ChannelRow
 						item={ch}
-						selected={ch.id === selectedId}
+						selected={rowSelected({ channelId: ch.id })}
 						{density}
 						{surface}
 						{agents}
@@ -94,7 +109,10 @@
 							{now}
 							{density}
 							{surface}
-							selected={(row.session.pane?.paneId ?? row.session.sessionUuid) === selectedId}
+							selected={rowSelected({
+								paneId: row.session.pane?.paneId,
+								sessionUuid: row.session.sessionUuid,
+							})}
 							onSelect={(_id, ev) => onSelect({
 								kind: "session",
 								paneId: row.session.pane?.paneId,
@@ -128,7 +146,10 @@
 					{now}
 					{density}
 					{surface}
-					selected={(row.session.pane?.paneId ?? row.session.sessionUuid) === selectedId}
+					selected={rowSelected({
+						paneId: row.session.pane?.paneId,
+						sessionUuid: row.session.sessionUuid,
+					})}
 					onSelect={(_id, ev) => onSelect({
 						kind: "session",
 						paneId: row.session.pane?.paneId,
@@ -174,7 +195,10 @@
 									{now}
 									{density}
 									{surface}
-									selected={pane.paneId === selectedId}
+									selected={rowSelected({
+										paneId: pane.paneId,
+										sessionUuid: pane.claudeInstance?.sessionUuid,
+									})}
 									onSelect={(_id, ev) => onSelect({
 										kind: "session",
 										paneId: pane.paneId,
@@ -217,7 +241,10 @@
 					{now}
 					{density}
 					{surface}
-					selected={(row.session?.pane?.paneId ?? row.session?.sessionUuid) === selectedId}
+					selected={rowSelected({
+						paneId: row.session?.pane?.paneId,
+						sessionUuid: row.session?.sessionUuid,
+					})}
 					onSelect={(_id, ev) => onSelect({
 						kind: "session",
 						paneId: row.session?.pane?.paneId,

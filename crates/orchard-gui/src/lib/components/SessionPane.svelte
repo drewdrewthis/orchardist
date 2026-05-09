@@ -14,6 +14,7 @@
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import TerminalAttach from "./TerminalAttach.svelte";
 	import TranscriptView from "./TranscriptView.svelte";
+	import SessionComposer from "./SessionComposer.svelte";
 	import ViewSwitcher from "./ViewSwitcher.svelte";
 	import { fetchPanel, type PanelData } from "$lib/data/lenses";
 	import { relTime } from "$lib/util/format";
@@ -220,7 +221,16 @@
 		{#if loading && !data}
 			<div class="conv-empty"><span class="dimer">Loading…</span></div>
 		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
-			<TranscriptView path={conversation.jsonlPath} sessionUuid={conversation.sessionUuid} />
+			<div class="chat-stack">
+				<TranscriptView path={conversation.jsonlPath} sessionUuid={conversation.sessionUuid} />
+				{#if pane?.paneId}
+					<SessionComposer paneId={pane.paneId} sessionLabel={pane.window.session.name} />
+				{:else}
+					<div class="composer-disabled mono dimer">
+						No live tmux pane — open Terminal view to attach a fresh client.
+					</div>
+				{/if}
+			</div>
 		{:else if view === "terminal" && pane && attachArgv}
 			<!--
 				TerminalAttach reuses the xterm canvas across argv changes
@@ -255,6 +265,19 @@
 </div>
 
 <style>
+	.chat-stack {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.composer-disabled {
+		padding: 10px 14px;
+		border-top: 0.5px solid var(--line);
+		background: var(--surface-1);
+		font-size: 11.5px;
+		text-align: center;
+	}
 	.conv-recap {
 		margin-top: 4px;
 		font-size: 11.5px;

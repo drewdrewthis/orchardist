@@ -44,3 +44,11 @@ export async function removeWorktree(repoRoot: string, worktreePath: string): Pr
 export async function pruneWorktrees(repoRoot: string): Promise<void> {
 	await invoke("prune_worktrees", { repoRoot });
 }
+
+/**
+ * Type a chat message into a live tmux pane (the Claude REPL).
+ * The pane id is what the daemon reports as `TmuxPane.paneId` (e.g. `%66`).
+ */
+export async function tmuxSendText(paneId: string, text: string): Promise<void> {
+	await invoke("tmux_send_text", { paneId, text });
+}

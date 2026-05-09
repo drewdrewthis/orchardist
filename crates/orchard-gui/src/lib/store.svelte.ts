@@ -179,6 +179,24 @@ export class AppStore {
 		return t.paneId || t.sessionUuid || null;
 	}
 
+	/**
+	 * Full selection keys for the active tab. The sidebar matches a row
+	 * if EITHER its paneId or its sessionUuid is in this set — both are
+	 * valid handles for the same conversation, and lens snapshots differ
+	 * on which one is populated (a tmux row only has paneId; a recent
+	 * row keyed off a dead pane only has sessionUuid).
+	 */
+	get selection(): { kind: "channel"; roomId: string } | { kind: "session"; paneId: string | null; sessionUuid: string | null } | null {
+		const t = this.activeTab;
+		if (!t) return null;
+		if (t.kind === "channel") return { kind: "channel", roomId: t.roomId };
+		return {
+			kind: "session",
+			paneId: t.paneId ?? null,
+			sessionUuid: t.sessionUuid ?? null,
+		};
+	}
+
 	get view(): ConvView {
 		return this.activeTab?.view || "chat";
 	}

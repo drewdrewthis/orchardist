@@ -22,6 +22,7 @@ pub fn run() {
             commands::create_worktree,
             commands::remove_worktree,
             commands::prune_worktrees,
+            commands::tmux_send_text,
             chat::chat_list_rooms,
             chat::chat_load_room,
             chat::chat_send,
