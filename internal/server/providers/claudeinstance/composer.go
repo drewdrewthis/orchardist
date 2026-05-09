@@ -223,14 +223,22 @@ func (c *Composer) findPane(ctx context.Context, hb Heartbeat) *graphql.TmuxPane
 	return nil
 }
 
-// resolvePid prefers the heartbeat's ClaudePid (ADR-011 shape). Falls
-// back to the matched pane's currentPid when the heartbeat predates the
-// pid-recording shape. Returns 0 when neither is available; the
-// composer surfaces such instances as `no_claude` because liveness
-// cannot be checked without a pid.
+// resolvePid returns the best available pid for the Claude process, in
+// priority order:
+//
+//  1. Heartbeat ClaudePid — authoritative when the hook script records it.
+//  2. pane.CurrentPid — primary fallback; the tmux provider reads the
+//     foreground pid of the pane directly, so this is accurate even when
+//     the heartbeat predates the pid-recording shape.
+//  3. pidFromPaneID — legacy stub (always returns 0/false today; reserved
+//     for a future PaneFinder extension).
+//  4. 0 — no pid available; the composer surfaces these as `no_claude`.
 func (c *Composer) resolvePid(hb Heartbeat, pane *graphql.TmuxPane) int {
 	if hb.ClaudePid > 0 {
 		return hb.ClaudePid
+	}
+	if pane != nil && pane.CurrentPid != nil && *pane.CurrentPid > 0 {
+		return int(*pane.CurrentPid)
 	}
 	if pane != nil && pane.ID != "" {
 		if pid, ok := pidFromPaneID(pane.ID); ok {

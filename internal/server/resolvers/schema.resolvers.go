@@ -728,8 +728,28 @@ func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) 
 	return projectProcess(&proc, host), nil
 }
 
-// ClaudeInstance is the resolver for tmuxPane.claudeInstance.
+// ClaudeInstance resolves the ClaudeInstance that is running inside this
+// pane. The lookup walks all cached instances from the claudeinstance.Provider
+// and returns the first one whose Pane.ID matches obj.ID. This is O(N) in the
+// number of tracked claude processes (typically < 10 on any one host), so no
+// dataloader is needed here.
+//
+// Returns (nil, nil) when:
+//   - r.ClaudeInstance is not wired (provider not available)
+//   - no tracked instance has a pane matching this pane's ID
 func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
+	if r.Resolver.ClaudeInstance == nil {
+		return nil, nil
+	}
+	instances, err := r.Resolver.ClaudeInstance.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.Pane != nil && inst.Pane.ID == obj.ID {
+			return inst, nil
+		}
+	}
 	return nil, nil
 }
 
