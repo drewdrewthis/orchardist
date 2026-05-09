@@ -143,7 +143,8 @@ func startPaneProcessDaemon(t *testing.T) string {
 		server.WithPS(psProv),
 	)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	if err := srv.StartHostProvider(ctx); err != nil {
 		t.Fatalf("start host provider: %v", err)
 	}
