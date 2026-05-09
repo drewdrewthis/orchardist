@@ -29,17 +29,20 @@ func (r *worktreeResolver) TmuxPanes(ctx context.Context, obj *graphql1.Worktree
 	}
 
 	snap := r.Tmux.Snapshot()
-	matching, err := matchPanesForWorktree(ctx, r, snap, obj)
-	if err != nil {
-		return []*graphql1.TmuxPane{}, nil
+	rawPanes := matchPanesForWorktree(ctx, r, snap, obj)
+
+	// Map raw provider panes to GraphQL projection.
+	out := make([]*graphql1.TmuxPane, len(rawPanes))
+	for i, p := range rawPanes {
+		out[i] = projectPane(p)
 	}
 
 	// Sort by paneId ascending so output is deterministic.
-	sort.Slice(matching, func(i, j int) bool {
-		return matching[i].PaneID < matching[j].PaneID
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].PaneID < out[j].PaneID
 	})
 
-	return matching, nil
+	return out, nil
 }
 
 // TmuxSession resolves Worktree.tmuxSession (#511): returns the
@@ -52,38 +55,29 @@ func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *graphql1.Worktr
 	}
 
 	snap := r.Tmux.Snapshot()
-	matching, err := matchPanesForWorktree(ctx, r, snap, obj)
-	if err != nil || len(matching) == 0 {
+	matching := matchPanesForWorktree(ctx, r, snap, obj)
+	if len(matching) == 0 {
 		return nil, nil
 	}
 
 	// Collect the unique sessions that the matching panes belong to.
-	// Use SessionKey (host+name) for dedup; store the raw Session value
-	// so we can order by LastActivityAt.
+	// Raw panes carry WindowKey.Session directly — no need to re-key
+	// into snap.Panes, eliminating snapshot-drift and silent-drop risk.
 	seen := make(map[tmux.SessionKey]tmux.Session)
 	for _, pane := range matching {
-		// Reconstruct the raw Pane to access WindowKey.Session — we need
-		// the provider's internal Session value (which carries LastActivityAt
-		// as a time.Time). The matching []*graphql1.TmuxPane only has the
-		// projected PaneID; we look the full Pane back up from the snapshot.
-		paneKey := tmux.PaneKey{Host: tmux.HostID(obj.Host), PaneID: pane.PaneID}
-		rawPane, ok := snap.Panes[paneKey]
-		if !ok {
-			continue
-		}
-		sessionKey := tmux.SessionKey{Host: rawPane.Key.Host, Name: rawPane.WindowKey.Session}
+		sessionKey := tmux.SessionKey{Host: pane.Key.Host, Name: pane.WindowKey.Session}
 		if _, already := seen[sessionKey]; already {
 			continue
 		}
 		// Look up the Session to get its LastActivityAt.
-		if s, ok := snap.Sessions[sessionKey]; ok {
-			seen[sessionKey] = s
-		} else {
-			// Session row missing from snapshot — still include it so we
-			// don't silently drop a pane that genuinely sits in this session;
-			// synthesise a zero-activity Session.
-			seen[sessionKey] = tmux.Session{Key: sessionKey}
+		s, ok := snap.Sessions[sessionKey]
+		if !ok {
+			// Snapshot inconsistency: pane references a session that is absent
+			// from snap.Sessions. Skip rather than synthesise a zero-activity
+			// placeholder — the missing session is not a valid candidate.
+			continue
 		}
+		seen[sessionKey] = s
 	}
 
 	if len(seen) == 0 {
@@ -121,10 +115,12 @@ func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *graphql1.Worktr
 //  2. Has a CurrentPid that the ps provider can resolve to a cwd.
 //  3. Has a cwd that equals obj.Path exactly OR starts with obj.Path+"/".
 //
-// Panes whose cwd cannot be resolved are silently skipped. The returned
-// slice is unsorted; callers sort by paneId.
-func matchPanesForWorktree(ctx context.Context, r *worktreeResolver, snap tmux.RuntimeSnapshot, obj *graphql1.Worktree) ([]*graphql1.TmuxPane, error) {
-	var matching []*graphql1.TmuxPane
+// Returns raw tmux.Pane values so callers can read provider-level fields
+// (e.g. WindowKey.Session for session lookup) without re-keying into the
+// snapshot. Panes whose cwd cannot be resolved are silently skipped. The
+// returned slice is unsorted; callers sort by paneId. Never returns nil.
+func matchPanesForWorktree(ctx context.Context, r *worktreeResolver, snap tmux.RuntimeSnapshot, obj *graphql1.Worktree) []tmux.Pane {
+	var matching []tmux.Pane
 
 	for _, pane := range snap.Panes {
 		// Federation attribution: use pane.Key.Host (which tracks through
@@ -156,13 +152,13 @@ func matchPanesForWorktree(ctx context.Context, r *worktreeResolver, snap tmux.R
 			continue
 		}
 
-		matching = append(matching, projectPane(pane))
+		matching = append(matching, pane)
 	}
 
 	if matching == nil {
-		return []*graphql1.TmuxPane{}, nil
+		return []tmux.Pane{}
 	}
-	return matching, nil
+	return matching
 }
 
 // cwdMatchesWorktree returns true when cwd equals path exactly or is
