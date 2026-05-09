@@ -853,6 +853,174 @@ func TestWorktreeTmuxSession_SchemaDoc(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
+// AC7 — Integration test: 4 worktrees × 6 panes (feature scenario @ line 152)
+// @integration @issue-511
+// ----------------------------------------------------------------------
+
+// TestWorktreeTmuxJoin_Integration_AC7 is the definitive end-to-end join test:
+// 4 worktrees and 6 panes are fed through the real resolver (same fake-provider
+// harness used by other tests), and every assignment is checked.
+//
+// Pane assignments:
+//
+//	p1 (%101) — cwd "/repo/.worktrees/A"        → wt-A (exact match)
+//	p2 (%102) — cwd "/repo/.worktrees/A/sub"    → wt-A (prefix match)
+//	p3 (%103) — cwd "/repo/.worktrees/B"        → wt-B (exact match)
+//	p4 (%104) — cwd "/elsewhere"                → no match
+//	p5 (%105) — cwd "/repo"                     → no match (parent, not prefix)
+//	p6 (%106) — cwd "" (null)                   → silently skipped (AC5)
+//
+// Session assignment (distinct activities so tmuxSession tie-break is exercised):
+//
+//	p1 lives in session "sess-p1" (lastActivityAt = T+100s — earlier)
+//	p2 lives in session "sess-p2" (lastActivityAt = T+200s — later, wins)
+//	p3 lives in session "sess-p3"
+//	p4/p5/p6 live in session "sess-other"
+//
+// Placeholder-resolver failure contract: a stub returning (nil, nil) from both
+// TmuxPanes and TmuxSession would fail the wt-A pane-count assertion,
+// the wt-B pane assertion, and the wt-A tmuxSession non-nil assertion — at
+// least three of the six assertions below.
+//
+// Darwin-only: cwd resolution via lsof is not wired on Linux yet.
+func TestWorktreeTmuxJoin_Integration_AC7(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("cwd resolution via lsof is darwin-only (Linux /proc path not yet wired)")
+	}
+
+	// ── paths ────────────────────────────────────────────────────────────
+	const (
+		pathA = "/repo/.worktrees/A"
+		pathB = "/repo/.worktrees/B"
+		pathC = "/repo/.worktrees/C"
+		pathD = "/repo/.worktrees/D"
+
+		// p1 and p2 are in separate sessions with distinct activities so
+		// wt-A.tmuxSession = sess-p2 (the more-recently-active one).
+		activityP1 = int64(1746784800 + 100) // T+100s — earlier
+		activityP2 = int64(1746784800 + 200) // T+200s — later, should win
+
+		// Fake pids — distinct for every pane.
+		pidP1 = 110001
+		pidP2 = 110002
+		pidP3 = 110003
+		pidP4 = 110004
+		pidP5 = 110005
+		pidP6 = 110006
+	)
+
+	// ── fake tmux harness ────────────────────────────────────────────────
+	tr := &tmuxTestRunner{
+		sessionRows: []string{
+			sessionRow("sess-p1", activityP1),
+			sessionRow("sess-p2", activityP2),
+			sessionRow("sess-p3", 1746784800),
+			sessionRow("sess-other", 1700000000),
+		},
+		windowRows: []string{
+			windowRow("sess-p1"),
+			windowRow("sess-p2"),
+			windowRow("sess-p3"),
+			windowRow("sess-other"),
+		},
+		paneRows: []string{
+			paneRow("sess-p1", "%101", pidP1),   // p1
+			paneRow("sess-p2", "%102", pidP2),   // p2
+			paneRow("sess-p3", "%103", pidP3),   // p3
+			paneRow("sess-other", "%104", pidP4), // p4
+			paneRow("sess-other", "%105", pidP5), // p5
+			paneRow("sess-other", "%106", pidP6), // p6
+		},
+	}
+
+	// ── fake cwd map ──────────────────────────────────────────────────────
+	// p6 maps to "" to simulate a null/unresolvable cwd (AC5 contract).
+	r := buildResolver(t, tr, map[int]string{
+		pidP1: pathA,
+		pidP2: pathA + "/sub",
+		pidP3: pathB,
+		pidP4: "/elsewhere",
+		pidP5: "/repo",
+		pidP6: "", // null cwd — silently skipped
+	})
+
+	ctx := context.Background()
+
+	// ── wt-A: expects [%101, %102] sorted by paneId, tmuxSession = sess-p2 ──
+	wtA := &graphql1.Worktree{ID: "proj:wt-A", Path: pathA, Host: "local"}
+
+	panesA, err := r.TmuxPanes(ctx, wtA)
+	if err != nil {
+		t.Fatalf("wt-A TmuxPanes: %v", err)
+	}
+	if len(panesA) != 2 {
+		t.Fatalf("wt-A TmuxPanes = %v (len %d), want [%%101 %%102]", paneIDsOf(panesA), len(panesA))
+	}
+	if panesA[0].PaneID != "%101" {
+		t.Errorf("wt-A TmuxPanes[0].PaneID = %q, want %%101 (sorted by paneId asc)", panesA[0].PaneID)
+	}
+	if panesA[1].PaneID != "%102" {
+		t.Errorf("wt-A TmuxPanes[1].PaneID = %q, want %%102 (sorted by paneId asc)", panesA[1].PaneID)
+	}
+
+	sessA, err := r.TmuxSession(ctx, wtA)
+	if err != nil {
+		t.Fatalf("wt-A TmuxSession: %v", err)
+	}
+	if sessA == nil {
+		t.Fatal("wt-A TmuxSession = nil, want non-nil (p2 in sess-p2 has higher lastActivityAt)")
+	}
+	// sess-p2 has activityP2 > activityP1, so it must win.
+	if sessA.Name != "sess-p2" {
+		t.Errorf("wt-A TmuxSession.Name = %q, want %q (most-recently-active session of p1/p2)", sessA.Name, "sess-p2")
+	}
+
+	// ── wt-B: expects [%103] ────────────────────────────────────────────
+	wtB := &graphql1.Worktree{ID: "proj:wt-B", Path: pathB, Host: "local"}
+
+	panesB, err := r.TmuxPanes(ctx, wtB)
+	if err != nil {
+		t.Fatalf("wt-B TmuxPanes: %v", err)
+	}
+	if len(panesB) != 1 {
+		t.Fatalf("wt-B TmuxPanes = %v (len %d), want [%%103]", paneIDsOf(panesB), len(panesB))
+	}
+	if panesB[0].PaneID != "%103" {
+		t.Errorf("wt-B TmuxPanes[0].PaneID = %q, want %%103", panesB[0].PaneID)
+	}
+
+	// ── wt-C: expects [] and nil session ────────────────────────────────
+	wtC := &graphql1.Worktree{ID: "proj:wt-C", Path: pathC, Host: "local"}
+
+	panesC, err := r.TmuxPanes(ctx, wtC)
+	if err != nil {
+		t.Fatalf("wt-C TmuxPanes: %v", err)
+	}
+	if len(panesC) != 0 {
+		t.Errorf("wt-C TmuxPanes = %v, want [] (no panes match /repo/.worktrees/C)", paneIDsOf(panesC))
+	}
+
+	sessC, err := r.TmuxSession(ctx, wtC)
+	if err != nil {
+		t.Fatalf("wt-C TmuxSession: %v", err)
+	}
+	if sessC != nil {
+		t.Errorf("wt-C TmuxSession = %v, want nil", sessC)
+	}
+
+	// ── wt-D: expects [] (empty, not nil) ───────────────────────────────
+	wtD := &graphql1.Worktree{ID: "proj:wt-D", Path: pathD, Host: "local"}
+
+	panesD, err := r.TmuxPanes(ctx, wtD)
+	if err != nil {
+		t.Fatalf("wt-D TmuxPanes: %v", err)
+	}
+	if len(panesD) != 0 {
+		t.Errorf("wt-D TmuxPanes = %v, want [] (no panes match /repo/.worktrees/D)", paneIDsOf(panesD))
+	}
+}
+
+// ----------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------
 
