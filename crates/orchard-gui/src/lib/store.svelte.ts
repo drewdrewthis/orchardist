@@ -18,6 +18,17 @@ import {
 	type Unsub,
 	type WorktreePaneSummary,
 } from "./data/daemon";
+import {
+	fetchAttention,
+	fetchRecent,
+	fetchTmux,
+	fetchIssues,
+	type AttentionRow,
+	type IssueRow,
+	type LensId,
+	type RecentRow,
+	type TmuxLensSnapshot,
+} from "./data/lenses";
 import { buildPaletteEntries, PALETTE_ACTIONS } from "./data/palette";
 import {
 	getChatBackend,
@@ -84,6 +95,25 @@ export class AppStore {
 	chatRoomCache: Record<string, Conversation> = $state({});
 	/** Tick used by the few components that render relative timestamps. */
 	now = $state(Date.now());
+
+	/**
+	 * Per-lens snapshots — each lens fetches against its own anchor and
+	 * stores its own rows. Only the active lens is fetched on lens switch;
+	 * other lenses keep their last snapshot until next refresh.
+	 */
+	lensSnapshots: {
+		attention: AttentionRow[];
+		recent: RecentRow[];
+		tmux: TmuxLensSnapshot;
+		issue: IssueRow[];
+	} = $state({
+		attention: [],
+		recent: [],
+		tmux: { sessions: [], activePaneIds: new Set(), alive: false },
+		issue: [],
+	});
+	/** Whether the active lens is currently mid-fetch. */
+	lensLoading = $state(false);
 	/** Agents currently have no daemon source — empty until wired. */
 	readonly agents: Agent[] = [];
 	/** Terminal scrollback has no daemon source yet — empty. */
@@ -222,6 +252,29 @@ export class AppStore {
 
 	setLens = (lens: Lens) => {
 		this.lens = lens;
+		this.refreshActiveLens();
+	};
+
+	/**
+	 * Re-fetch the active lens. Idempotent. Called on lens switch, on
+	 * any daemon subscription event, and on the 60s safety tick.
+	 */
+	refreshActiveLens = async (): Promise<void> => {
+		const lens: LensId = this.lens as LensId;
+		this.lensLoading = true;
+		try {
+			if (lens === "attention") {
+				this.lensSnapshots.attention = await fetchAttention(this.now);
+			} else if (lens === "recent") {
+				this.lensSnapshots.recent = await fetchRecent();
+			} else if (lens === "tmux") {
+				this.lensSnapshots.tmux = await fetchTmux();
+			} else if (lens === "issue") {
+				this.lensSnapshots.issue = await fetchIssues();
+			}
+		} finally {
+			this.lensLoading = false;
+		}
 	};
 
 	openItem = (itemId: string, opts: { newPane?: boolean; focus?: boolean } = {}) => {
@@ -408,6 +461,9 @@ export class AppStore {
 		this.tmuxSessions = snap.tmuxSessions;
 		this.worktreePanes = snap.worktreePanes;
 		this.activePaneIds = snap.activePaneIds;
+		// Refresh the active lens alongside the legacy hydration; cheap
+		// while the lens query targets the same daemon.
+		this.refreshActiveLens();
 		return true;
 	};
 

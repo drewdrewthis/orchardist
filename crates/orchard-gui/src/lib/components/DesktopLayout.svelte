@@ -6,7 +6,7 @@
 	import { onMount } from "svelte";
 	import FleetTopBar from "./FleetTopBar.svelte";
 	import LensSelector from "./LensSelector.svelte";
-	import FleetList from "./FleetList.svelte";
+	import LensSidebar from "./LensSidebar.svelte";
 	import PanesArea from "./PanesArea.svelte";
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import Icon from "$lib/icons/Icon.svelte";
@@ -91,10 +91,7 @@
 					<div class="sidebar-controls">
 						<LensSelector value={store.lens} onChange={(l) => store.setLens(l)} />
 					</div>
-					<FleetList
-						items={store.visibleItems}
-						hosts={store.hosts}
-						lens={store.lens}
+					<LensSidebar
 						now={store.now}
 						density={store.density}
 						surface="desktop"

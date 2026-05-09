@@ -5,7 +5,7 @@
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
 	import LensSelector from "./LensSelector.svelte";
-	import FleetList from "./FleetList.svelte";
+	import LensSidebar from "./LensSidebar.svelte";
 	import PeerCluster from "./PeerCluster.svelte";
 	import ConvHeader from "./ConvHeader.svelte";
 	import ChannelHeader from "./ChannelHeader.svelte";
@@ -54,10 +54,7 @@
 			</div>
 		</div>
 
-		<FleetList
-			items={store.visibleItems}
-			hosts={store.hosts}
-			lens={store.lens}
+		<LensSidebar
 			now={store.now}
 			density="comfortable"
 			surface="mobile"

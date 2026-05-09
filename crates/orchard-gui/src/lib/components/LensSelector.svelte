@@ -5,12 +5,10 @@
 
 	type LensDef = { id: Lens; label: string; hint: string; icon: string };
 	const LENSES: LensDef[] = [
-		{ id: "attention", label: "Attention", hint: "What needs eyes", icon: "bell" },
-		{ id: "host", label: "Host", hint: "By machine", icon: "host" },
-		{ id: "tmux", label: "Tmux", hint: "By tmux session · window · pane", icon: "terminal" },
-		{ id: "activity", label: "Activity", hint: "Recent first", icon: "clock" },
-		{ id: "repo", label: "Repo", hint: "By project", icon: "git-branch" },
-		{ id: "issue", label: "Issue", hint: "By GitHub issue", icon: "issue" },
+		{ id: "attention", label: "Attention", hint: "Blocked / waiting / active", icon: "bell" },
+		{ id: "recent", label: "Recent", hint: "All Claude sessions, freshest first", icon: "clock" },
+		{ id: "tmux", label: "Tmux", hint: "Sessions · windows · panes", icon: "terminal" },
+		{ id: "issue", label: "Issue", hint: "Open work — PRs linked to issues", icon: "issue" },
 	];
 
 	type Props = { value: Lens; onChange: (l: Lens) => void };

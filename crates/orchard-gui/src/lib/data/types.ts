@@ -10,7 +10,16 @@
 export type ItemKind = "worktree" | "channel";
 export type ItemStatus = "attn" | "ok" | "bad" | "idle" | "stale";
 export type ConvView = "chat" | "terminal";
-export type Lens = "attention" | "host" | "activity" | "repo" | "issue" | "tmux";
+/**
+ * The four lenses. Each is a separate query against its own anchor,
+ * not a reshuffling of a unified item list.
+ *
+ *   attention — claudeInstances + worktree enrichment, derive blocked/waiting/active tiers
+ *   recent    — claudeInstances sorted by lastActivityAt desc
+ *   tmux      — tmuxServer.sessions[].windows[].panes[] tree
+ *   issue     — worktree.issue rows where worktree.pr is OPEN/DRAFT
+ */
+export type Lens = "attention" | "recent" | "tmux" | "issue";
 export type Theme = "dark" | "light";
 export type Surface = "desktop" | "mobile";
 export type SendStatus = "pending" | "sent" | "delivered" | "read";
