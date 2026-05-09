@@ -94,10 +94,12 @@ func computeCleanRoot(root string, logger *slog.Logger) string {
 // a symlink inside the root pointing outside is still rejected) and uses
 // filepath.Rel to avoid the HasPrefix-bypass bug.
 //
-// Returns nil when candidate is safe to open, or a non-nil error (which the
+// Returns the symlink-resolved path on success, or a non-nil error (which the
 // caller maps to 404 — the exact reason is intentionally not exposed to HTTP
-// clients).
-func validatePath(cleanRoot, candidate string) error {
+// clients). The caller MUST open the returned resolved path, not the input
+// candidate, to avoid a TOCTOU window where a symlink is rewritten between
+// EvalSymlinks and os.Open.
+func validatePath(cleanRoot, candidate string) (string, error) {
 	// Step 1: clean without symlink resolution first, so we can use the
 	// cleaned path as input to EvalSymlinks.
 	cleaned := filepath.Clean(candidate)
@@ -108,7 +110,7 @@ func validatePath(cleanRoot, candidate string) error {
 	if err != nil {
 		// File doesn't exist, is a dangling symlink, or permission denied.
 		// Treat as a validation failure (caller will surface as 404).
-		return fmt.Errorf("EvalSymlinks(%q): %w", cleaned, err)
+		return "", fmt.Errorf("EvalSymlinks(%q): %w", cleaned, err)
 	}
 
 	// Step 3: use filepath.Rel — NOT strings.HasPrefix — to check descent.
@@ -117,14 +119,14 @@ func validatePath(cleanRoot, candidate string) error {
 	// filepath.Rel("/a/b", "/a/bc") → "../bc" (starts with ".."), which we reject.
 	rel, err := filepath.Rel(cleanRoot, resolved)
 	if err != nil {
-		return fmt.Errorf("filepath.Rel(%q, %q): %w", cleanRoot, resolved, err)
+		return "", fmt.Errorf("filepath.Rel(%q, %q): %w", cleanRoot, resolved, err)
 	}
 	// rel starts with ".." when resolved is not under cleanRoot.
 	// rel == ".." is the exact-parent case, also rejected.
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path %q is not under root %q (rel=%q)", resolved, cleanRoot, rel)
+		return "", fmt.Errorf("path %q is not under root %q (rel=%q)", resolved, cleanRoot, rel)
 	}
-	return nil
+	return resolved, nil
 }
 
 func (h *conversationsJSONLHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -153,16 +155,20 @@ func (h *conversationsJSONLHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	// Belt-and-braces: validate that the resolved path is a descendant of
 	// the configured root. This guards against a misbehaving provider and
 	// against symlinks that point outside the root. Uses filepath.Rel, not
-	// strings.HasPrefix, to avoid the classic prefix-bypass bug.
-	if err := validatePath(h.cleanRoot, path); err != nil {
+	// strings.HasPrefix, to avoid the classic prefix-bypass bug. Returns
+	// the symlink-resolved path so we open exactly what we validated —
+	// closes the TOCTOU window where a symlink could be rewritten between
+	// EvalSymlinks and os.Open.
+	resolved, err := validatePath(h.cleanRoot, path)
+	if err != nil {
 		h.logger.Warn("conversations jsonl: path validation rejected candidate",
 			"cleanRoot", h.cleanRoot, "candidate", path, "err", err)
 		http.NotFound(w, r)
 		return
 	}
 
-	// Open the file. Map fs.ErrNotExist → 404; everything else → 500.
-	f, err := os.Open(path) //nolint:gosec // path is validated against cleanRoot above
+	// Open the symlink-resolved path. Map fs.ErrNotExist → 404; everything else → 500.
+	f, err := os.Open(resolved) //nolint:gosec // resolved is validated against cleanRoot above
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			http.NotFound(w, r)

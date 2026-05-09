@@ -141,6 +141,12 @@ func WithClaudeProjects(p *claudeprojects.Provider) Option {
 // serves GET /v1/conversations/:sessionUuid/jsonl. Requires a PathLookup
 // provider (typically *claudeprojects.Provider) for uuid-to-path lookup,
 // and the projectsRoot string used for path-traversal validation.
+//
+// Asymmetric vs other With* options: this option stashes a config rather
+// than handing the dependency to the resolver, because the handler
+// attaches to the daemon's HTTP mux (built later in New) rather than to
+// the GraphQL resolver tree. New() reads s.convoJSONL after option
+// application and registers the route on the same mux as /graphql.
 func WithConversationsJSONL(p PathLookup, projectsRoot string) Option {
 	return func(s *Server, _ *resolvers.Resolver) {
 		s.convoJSONL = &convoJSONLConfig{provider: p, root: projectsRoot}

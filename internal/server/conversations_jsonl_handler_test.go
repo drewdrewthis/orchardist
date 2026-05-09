@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -540,17 +541,31 @@ func TestConversationsJSONL_KnownUUID_FileDeleted_404(t *testing.T) {
 // =============================================================================
 
 // recordingPathLookup records every UUID key it receives, for audit in tests.
+// Goroutine-safe: httptest.Server runs each request on its own goroutine, and
+// future tests may issue parallel bursts.
 type recordingPathLookup struct {
+	mu       sync.Mutex
 	received []string        // keys passed to PathForSessionUUID
 	inner    *stubPathLookup // may be nil (returns ("", false) always)
 }
 
 func (r *recordingPathLookup) PathForSessionUUID(_ context.Context, uuid string) (string, bool) {
+	r.mu.Lock()
 	r.received = append(r.received, uuid)
+	r.mu.Unlock()
 	if r.inner != nil {
 		return r.inner.PathForSessionUUID(context.Background(), uuid)
 	}
 	return "", false
+}
+
+// receivedKeys returns a copy of the recorded keys, safe for assertion.
+func (r *recordingPathLookup) receivedKeys() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.received))
+	copy(out, r.received)
+	return out
 }
 
 // TestConversationsJSONL_PathTraversalURL_404 asserts that a URL with a
@@ -587,7 +602,7 @@ func TestConversationsJSONL_PathTraversalURL_404(t *testing.T) {
 	// The recording lookup must have been called with the opaque decoded string,
 	// NOT a filesystem path.  It must never have received anything that looks
 	// like it was joined onto the root.
-	for _, key := range rec.received {
+	for _, key := range rec.receivedKeys() {
 		if filepath.IsAbs(key) {
 			t.Errorf("lookup received an absolute path %q — must be opaque UUID only", key)
 		}
@@ -622,10 +637,11 @@ func TestConversationsJSONL_OpaqueSessionUUID(t *testing.T) {
 
 	// The UUID key received by the lookup must be the raw string
 	// "../../etc/passwd" (the opaque segment), not any filesystem path.
-	if len(rec.received) != 1 {
-		t.Fatalf("lookup called %d times, want 1", len(rec.received))
+	keys := rec.receivedKeys()
+	if len(keys) != 1 {
+		t.Fatalf("lookup called %d times, want 1", len(keys))
 	}
-	if got := rec.received[0]; got != "../../etc/passwd" {
+	if got := keys[0]; got != "../../etc/passwd" {
 		t.Errorf("lookup received key %q, want %q", got, "../../etc/passwd")
 	}
 }

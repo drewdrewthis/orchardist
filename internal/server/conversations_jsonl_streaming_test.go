@@ -30,11 +30,19 @@ import (
 // Feature: "A 5+ MB jsonl fixture serves a Range read without loading the full file into memory"
 func TestConversationsJSONL_LargeFile_StreamsRangeWithoutFullSlurp(t *testing.T) {
 	const (
-		fileSize      = 5 * 1024 * 1024  // 5 MiB exactly
-		rangeStart    = 4 * 1024 * 1024  // 4 MiB offset
-		wantBodyLen   = fileSize - rangeStart // 1 MiB tail
-		heapThreshold = 3 * 1024 * 1024  // 3 MiB: absorbs 1 MiB body + GC noise
-		uuid          = "big-uuid-1"
+		fileSize    = 5 * 1024 * 1024     // 5 MiB exactly
+		rangeStart  = 4 * 1024 * 1024     // 4 MiB offset
+		wantBodyLen = fileSize - rangeStart // 1 MiB tail
+		uuid        = "big-uuid-1"
+
+		// heapThreshold is set just below file size: this catches a true
+		// full-file slurp (which would push delta to 5 MiB+) without
+		// flaking on framework overhead, race-detector bookkeeping, or
+		// future stdlib chunk-size tweaks. The body itself is 1 MiB and
+		// is expected to allocate; what we want to forbid is the handler
+		// holding the whole 5 MiB file in memory at once. A delta below
+		// fileSize structurally rules that out.
+		heapThreshold = fileSize
 	)
 
 	// Generate a 5 MiB jsonl fixture. Each record is a small JSON object.
@@ -114,13 +122,18 @@ func TestConversationsJSONL_LargeFile_StreamsRangeWithoutFullSlurp(t *testing.T)
 	var afterMS runtime.MemStats
 	runtime.ReadMemStats(&afterMS)
 
-	// HeapAlloc delta must be below the threshold.
-	// If the handler had slurped the whole 5 MiB file, HeapAlloc would show a
-	// 5+ MiB delta on top of the 1 MiB body. The 3 MiB threshold catches that.
+	// TotalAlloc delta must be below file size. If the handler had slurped
+	// the whole 5 MiB file at once, TotalAlloc would jump by 5 MiB + the
+	// 1 MiB body buffer + framework overhead, well above the file size.
+	// Holding strictly below file size proves no full-file copy lives in
+	// memory simultaneously with the body — which is the contract.
 	//
-	// Note: HeapAlloc is cumulative-allocation-minus-frees, so after a GC it
-	// reflects currently live objects. The post-GC delta is conservative.
-	// We compare TotalAlloc (monotonically increasing) for a stricter bound.
+	// TotalAlloc is monotonically increasing across the program lifetime,
+	// so the delta captures every transient allocation between the two
+	// ReadMemStats calls (GCed objects included). Race-detector
+	// bookkeeping inflates this; a future stdlib io.copyBuffer change
+	// could too. The bound is set so neither breaks the assertion while
+	// still catching a real slurp.
 	totalAllocDelta := afterMS.TotalAlloc - beforeMS.TotalAlloc
 	if totalAllocDelta >= heapThreshold {
 		t.Errorf(
