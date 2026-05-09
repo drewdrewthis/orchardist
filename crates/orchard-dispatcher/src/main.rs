@@ -37,6 +37,14 @@ use std::process::{Command, ExitCode};
 /// second primary unit (e.g. remotes becoming first-class) requires a new ADR.
 const WORKTREE_BARE_VERBS: &[&str] = &["new", "rm", "prune", "mv", "ls", "path"];
 
+/// Bare-verb shortcuts that resolve to the chat unit (per #495).
+///
+/// `orchard send #general "hi"` ≡ `orchard chat send #general "hi"`. Chat
+/// isn't a "primary unit" in the ADR-013 sense, but `send` reads natural
+/// at the top level and stays unambiguous because room/handle targets carry
+/// their own sigil.
+const CHAT_BARE_VERBS: &[&str] = &["send"];
+
 /// Verbs that map directly to a helper binary `orchard-<verb>`.
 const NAMESPACE_VERBS: &[&str] = &["tui", "daemon", "worktree", "chat"];
 
@@ -100,6 +108,9 @@ Worktree shortcuts (the worktree is Orchard's primary unit):
   orchard ls [--json]           ≡ orchard worktree ls [--json]
   orchard path <id>             ≡ orchard worktree path <id>
 
+Chat shortcuts:
+  orchard send <target> <text>  ≡ orchard chat send <target> <text>
+
 Discovery:
   Helper binaries are looked up first in the directory containing this
   `orchard` executable, then on $PATH. See ADR-013 for details.
@@ -127,6 +138,12 @@ fn main() -> ExitCode {
             let mut forwarded = vec![verb.to_string()];
             forwarded.extend(args.iter().skip(1).cloned());
             exec("worktree", &forwarded)
+        }
+        Some(verb) if CHAT_BARE_VERBS.contains(&verb) => {
+            // `orchard send #general "hi"` → `orchard-chat send #general "hi"`
+            let mut forwarded = vec![verb.to_string()];
+            forwarded.extend(args.iter().skip(1).cloned());
+            exec("chat", &forwarded)
         }
         Some(verb) if NAMESPACE_VERBS.contains(&verb) => {
             let forwarded: Vec<String> = args.iter().skip(1).cloned().collect();
@@ -255,6 +272,31 @@ mod tests {
     }
 
     #[test]
+    fn chat_bare_verbs_do_not_collide_with_other_verb_sets() {
+        for v in CHAT_BARE_VERBS {
+            assert!(
+                !NAMESPACE_VERBS.contains(v),
+                "chat bare verb '{v}' must not also be a namespace verb"
+            );
+            assert!(
+                !WORKTREE_BARE_VERBS.contains(v),
+                "chat bare verb '{v}' must not also be a worktree bare verb"
+            );
+            assert!(
+                !TUI_VERBS.contains(v),
+                "chat bare verb '{v}' must not also be a TUI verb"
+            );
+        }
+    }
+
+    #[test]
+    fn chat_bare_verbs_match_issue_495() {
+        // Locked to the #495 contract. Adding a chat verb (e.g. `broadcast`)
+        // is a deliberate ADR-style decision — bump this test along with it.
+        assert_eq!(CHAT_BARE_VERBS, &["send"]);
+    }
+
+    #[test]
     fn worktree_bare_verbs_match_adr() {
         // ADR-013 §3 specifies the exact set; if this list changes, update the ADR too.
         assert_eq!(
@@ -285,6 +327,12 @@ mod tests {
             assert!(
                 HELP.contains(&format!("orchard {v} ")) || HELP.contains(&format!("orchard {v}\n")),
                 "HELP must document the bare verb '{v}'"
+            );
+        }
+        for v in CHAT_BARE_VERBS {
+            assert!(
+                HELP.contains(&format!("orchard {v} ")) || HELP.contains(&format!("orchard {v}\n")),
+                "HELP must document the chat bare verb '{v}'"
             );
         }
     }
