@@ -199,7 +199,15 @@
 		{:else if pane}
 			{@const argv = attachArgv()}
 			{#if argv}
-				<TerminalAttach {argv} label={`${pane.window.session.name} → ${pane.window.name} · ${pane.paneId}`} />
+				<!--
+					Key on paneId so a click that swaps the row identity
+					tears down the old PTY and spawns a fresh one. Without
+					this the TerminalAttach instance lives across props
+					changes and keeps the original tmux client.
+				-->
+				{#key pane.paneId}
+					<TerminalAttach {argv} label={`${pane.window.session.name} → ${pane.window.name} · ${pane.paneId}`} />
+				{/key}
 			{/if}
 		{:else}
 			<div class="conv-empty">
