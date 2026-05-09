@@ -179,6 +179,9 @@ type Conversation struct {
 	Open bool `json:"open"`
 	// Plugin-populated short summary. Always null in v1.
 	Recap *string `json:"recap,omitempty"`
+	// Absolute path to the JSONL transcript on the daemon's host.
+	// Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
+	JsonlPath string `json:"jsonlPath"`
 }
 
 func (Conversation) IsNode() {}
