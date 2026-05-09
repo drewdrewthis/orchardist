@@ -78,6 +78,8 @@ export class AppStore {
 	tmuxSessions: TmuxSessionSummary[] = $state([]);
 	/** Server-joined Worktree → tmux panes (daemon #511). Keyed by worktree id. */
 	worktreePanes: Record<string, WorktreePaneSummary[]> = $state({});
+	/** Pane ids currently being watched by some attached tmux client. */
+	activePaneIds: Set<string> = $state(new Set());
 	chatRooms: ChatRoomSummary[] = $state([]);
 	chatRoomCache: Record<string, Conversation> = $state({});
 	/** Tick used by the few components that render relative timestamps. */
@@ -405,6 +407,7 @@ export class AppStore {
 		this.conversations = snap.conversations;
 		this.tmuxSessions = snap.tmuxSessions;
 		this.worktreePanes = snap.worktreePanes;
+		this.activePaneIds = snap.activePaneIds;
 		return true;
 	};
 
@@ -421,20 +424,36 @@ export class AppStore {
 	/**
 	 * Pick the "primary" pane for a worktree — the one we'd attach a
 	 * terminal to by default. Preference order:
-	 *   1. The pane that's currently the active pane in an active window
-	 *      of an actively-attached session (i.e. what a human is looking at).
-	 *   2. The pane in an active window (whether or not anyone's watching).
-	 *   3. The first pane in the list (deterministic fallback).
+	 *   1. A pane that some live tmux client is currently watching
+	 *      ("you are here").
+	 *   2. The pane that's the active pane in an active window of an
+	 *      attached session.
+	 *   3. The pane in an active window (whether or not anyone's watching).
+	 *   4. The first pane in the list (deterministic fallback).
 	 * Returns null when no panes match.
 	 */
 	primaryPaneFor = (item: Item): WorktreePaneSummary | null => {
 		const panes = this.tmuxPanesFor(item);
 		if (panes.length === 0) return null;
+		const here = panes.find((p) => this.activePaneIds.has(p.paneId));
+		if (here) return here;
 		const live = panes.find((p) => p.window.active && p.session.activeAttached);
 		if (live) return live;
 		const active = panes.find((p) => p.window.active);
 		if (active) return active;
 		return panes[0];
+	};
+
+	/**
+	 * True when a tmux client is currently watching one of this worktree's
+	 * matched panes — i.e. the user is actively in this worktree.
+	 */
+	isHere = (item: Item): boolean => {
+		const panes = this.tmuxPanesFor(item);
+		for (const p of panes) {
+			if (this.activePaneIds.has(p.paneId)) return true;
+		}
+		return false;
 	};
 
 	/** Find the most-recent conversation summary for a worktree path. */

@@ -523,6 +523,22 @@
 	min-width: 0;
 }
 
+.here-badge {
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	padding: 1px 5px;
+	border-radius: 3px;
+	background: var(--ok-bg, rgba(64, 160, 96, 0.18));
+	color: var(--ok-fg, #6fd391);
+	border: 0.5px solid var(--ok-fg, rgba(111, 211, 145, 0.4));
+	flex: 0 0 auto;
+}
+
+.fleet-item[data-here="true"] {
+	box-shadow: inset 2px 0 0 0 var(--ok-fg, rgba(111, 211, 145, 0.55));
+}
+
 .fleet-item-sub {
 	display: flex;
 	align-items: center;

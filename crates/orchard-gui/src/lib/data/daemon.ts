@@ -123,6 +123,14 @@ const DASHBOARD = gql`
 				name
 			}
 		}
+		tmuxServer {
+			clients {
+				tty
+				currentPane {
+					paneId
+				}
+			}
+		}
 	}
 `;
 
@@ -192,6 +200,12 @@ interface DashboardResponse {
 		lastActivityAt: string | null;
 		windows: Array<{ name: string }>;
 	}>;
+	tmuxServer: {
+		clients: Array<{
+			tty: string;
+			currentPane: { paneId: string } | null;
+		}>;
+	} | null;
 }
 
 export interface TmuxSessionSummary {
@@ -250,6 +264,12 @@ export interface Snapshot {
 	 * client-side join.
 	 */
 	worktreePanes: Record<string, WorktreePaneSummary[]>;
+	/**
+	 * Set of pane ids that some live tmux client is currently watching.
+	 * Used to flag "you are here" on a worktree row whose pane is the
+	 * active pane of an attached client.
+	 */
+	activePaneIds: Set<string>;
 }
 
 export async function fetchSnapshot(): Promise<Snapshot | null> {
@@ -379,7 +399,12 @@ function mapSnapshot(d: DashboardResponse): Snapshot {
 		windowNames: s.windows.map((w) => w.name),
 	}));
 
-	return { items, hosts, account, conversations, tmuxSessions, worktreePanes };
+	const activePaneIds = new Set<string>();
+	for (const c of d.tmuxServer?.clients ?? []) {
+		if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
+	}
+
+	return { items, hosts, account, conversations, tmuxSessions, worktreePanes, activePaneIds };
 }
 
 function deriveStatus(w: { pr: { state: string } | null }): ItemStatus {

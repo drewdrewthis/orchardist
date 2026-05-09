@@ -9,6 +9,7 @@
 	import SignalRow from "./SignalRow.svelte";
 	import AgentStack from "./AgentStack.svelte";
 	import { relTime } from "$lib/util/format";
+	import { getStore } from "$lib/store.svelte";
 	import type { Agent, Item } from "$lib/data/types";
 
 	type Props = {
@@ -32,9 +33,11 @@
 		onSelect,
 	}: Props = $props();
 
+	const store = getStore();
 	const isStale = $derived(item.status === "stale" || peerDown);
 	const liveDot = $derived(item.kind === "worktree" && item.session?.live);
 	const isChannel = $derived(item.kind === "channel");
+	const isHere = $derived(item.kind === "worktree" && store.isHere(item));
 	const channelAgents = $derived(
 		isChannel && item.kind === "channel"
 			? agents.filter((a) => item.participants.includes(a.id))
@@ -48,6 +51,7 @@
 	data-selected={selected}
 	data-density={density}
 	data-stale={isStale}
+	data-here={isHere}
 	onclick={(e) => onSelect(item.id, e)}
 	onkeydown={(e) => {
 		if (e.key === "Enter" || e.key === " ") {
@@ -67,6 +71,9 @@
 		<div class="fleet-item-body">
 			<div class="fleet-item-title-row">
 				<span class="fleet-item-title" style:opacity={isStale ? 0.5 : 1}>{item.title}</span>
+				{#if isHere}
+					<span class="here-badge mono" title="A tmux client is currently watching this worktree's pane">here</span>
+				{/if}
 				<SignalRow {item} />
 			</div>
 			<div class="fleet-item-sub">

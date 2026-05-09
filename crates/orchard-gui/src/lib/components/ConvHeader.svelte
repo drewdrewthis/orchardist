@@ -114,19 +114,23 @@
 					</a>
 				{/if}
 				{#each panes as pane (pane.paneId)}
+					{@const here = store.activePaneIds.has(pane.paneId)}
 					{@const live = pane.window.active && pane.session.activeAttached}
 					{@const cmd = attachCmdFor(pane.paneId, pane.session.name)}
 					<button
 						class="conv-chip"
 						class:live
-						title="{pane.session.name} → {pane.window.name} · {pane.paneId} ({pane.command}). Click to copy: {cmd}"
+						class:here
+						title="{pane.session.name} → {pane.window.name} · {pane.paneId} ({pane.command}){here ? ' — you are here' : ''}. Click to copy: {cmd}"
 						onclick={() => copy(`pane-${pane.paneId}`, cmd)}
 					>
 						<Icon name="terminal" size={10} />
 						<span class="mono">{pane.paneId}</span>
 						<span class="dimer">·</span>
 						<span class="mono">{pane.window.name}</span>
-						{#if live}
+						{#if here}
+							<span class="here-pip" title="A tmux client is currently watching this pane"></span>
+						{:else if live}
 							<span class="pip live" title="Active pane in an attached session"></span>
 						{/if}
 						<Icon name={copied === `pane-${pane.paneId}` ? "check" : "copy"} size={10} />
@@ -207,5 +211,18 @@
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
+	}
+	.conv-chip.here {
+		background: var(--ok-bg, rgba(64, 160, 96, 0.18));
+		border-color: var(--ok-fg, rgba(111, 211, 145, 0.4));
+		color: var(--ok-fg, #6fd391);
+	}
+	.here-pip {
+		display: inline-block;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--ok-fg, #6fd391);
+		box-shadow: 0 0 6px var(--ok-fg, rgba(111, 211, 145, 0.6));
 	}
 </style>
