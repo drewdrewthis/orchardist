@@ -218,6 +218,37 @@ func TestReadJSONLMeta_HeadMarkers_EmptyStringDropped(t *testing.T) {
 	}
 }
 
+// TestReadJSONLMeta_LatestMarkersWins covers the case Drew hit:
+// title/agentName are rewritten MID-SESSION (e.g. /title, /agent-name,
+// /btw RULE: ...) — the LATEST values must win, not the first ones.
+// The head-only scan we previously used missed every rewrite.
+func TestReadJSONLMeta_LatestMarkersWins(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail-markers.jsonl")
+	// Head sets one pair; many turns later the user re-titles. The tail
+	// values must win.
+	body := `{"type":"custom-title","customTitle":"original-title","sessionId":"s1"}` + "\n" +
+		`{"type":"agent-name","agentName":"original-agent","sessionId":"s1"}` + "\n"
+	for i := 0; i < 50; i++ {
+		body += `{"timestamp":"2026-05-04T12:00:00Z","type":"user","uuid":"u` + string(rune('a'+i%26)) + `"}` + "\n"
+	}
+	body += `{"type":"custom-title","customTitle":"renamed-title","sessionId":"s1"}` + "\n" +
+		`{"type":"agent-name","agentName":"renamed-agent","sessionId":"s1"}` + "\n" +
+		`{"timestamp":"2026-05-04T12:30:00Z","type":"user","uuid":"final"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	meta, err := readJSONLMeta(path)
+	if err != nil {
+		t.Fatalf("readJSONLMeta: %v", err)
+	}
+	if meta.CustomTitle == nil || *meta.CustomTitle != "renamed-title" {
+		t.Errorf("customTitle = %v, want %q (latest record must win)", meta.CustomTitle, "renamed-title")
+	}
+	if meta.AgentName == nil || *meta.AgentName != "renamed-agent" {
+		t.Errorf("agentName = %v, want %q (latest record must win)", meta.AgentName, "renamed-agent")
+	}
+}
+
 // TestSessionUUIDFromPath asserts the filename → uuid extraction
 // peels only the .jsonl suffix and respects directory components.
 func TestSessionUUIDFromPath(t *testing.T) {

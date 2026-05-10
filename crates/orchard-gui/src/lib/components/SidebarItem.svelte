@@ -58,6 +58,16 @@
 	const issueClosed = $derived(
 		item.worktree?.issue?.state?.toUpperCase() === "CLOSED",
 	);
+
+	// Directory chip: prefer worktree.path (canonical), fall back to the
+	// session's recorded cwd. Render only the basename to keep the row
+	// short — full path is in the title attribute.
+	const cwdFull = $derived(
+		item.worktree?.path ?? item.session?.process?.cwd ?? null,
+	);
+	const cwdBase = $derived(
+		cwdFull ? cwdFull.split("/").filter(Boolean).pop() || cwdFull : null,
+	);
 </script>
 
 <div
@@ -101,6 +111,10 @@
 						<span class="mono dimer">{item.worktree.host}</span>
 						<span class="dimest">·</span>
 					{/if}
+				{/if}
+				{#if cwdBase && cwdBase !== item.title}
+					<span class="mono dimer" title={cwdFull}>{cwdBase}</span>
+					<span class="dimest">·</span>
 				{/if}
 				{#if item.worktree?.branch && item.worktree.branch !== item.title}
 					<span class="mono dimer" title="Branch">{item.worktree.branch}</span>

@@ -103,10 +103,19 @@ export interface ConversationTitleHints {
 }
 
 /**
+ * Default branch names that aren't useful as a title — every repo has
+ * one and they look identical across rows. When the branch is one of
+ * these, fall through to the cwd basename so the user sees what
+ * directory the session is in instead of a sea of "main" / "master".
+ */
+const GENERIC_BRANCHES = new Set(["main", "master", "trunk", "HEAD", "develop", "dev"]);
+
+/**
  * Title derivation per B2. Order:
  *   1. agentName (when the session sets a non-empty one)
  *   2. customTitle (jsonl-defined)
- *   3. worktree branch
+ *   3. worktree branch — UNLESS the branch is generic (main/master/etc),
+ *      in which case the cwd basename wins (more identifying)
  *   4. cwd basename
  *   5. uuid prefix (last 8 chars)
  *
@@ -124,12 +133,13 @@ export function deriveItemTitle(
 ): string {
 	if (hints?.agentName) return hints.agentName;
 	if (hints?.customTitle) return hints.customTitle;
-	if (worktree?.branch) return worktree.branch;
+	const branch = worktree?.branch;
 	const cwd = session.process?.cwd;
-	if (cwd) {
-		const basename = cwd.split("/").filter(Boolean).pop();
-		if (basename) return basename;
-	}
+	const cwdBase = cwd ? cwd.split("/").filter(Boolean).pop() : null;
+	// Branch wins UNLESS it's a generic name like "main" — then prefer cwd.
+	if (branch && !GENERIC_BRANCHES.has(branch)) return branch;
+	if (cwdBase) return cwdBase;
+	if (branch) return branch;
 	return session.sessionUuid.slice(0, 8);
 }
 
@@ -173,5 +183,47 @@ export function buildSidebarItem(
 		state: session.state,
 		lastActivityMs,
 		reasons,
+	};
+}
+
+/**
+ * Build a sidebar row for a worktree with NO running Claude session.
+ * Drew (2026-05-10): "if there is a live worktree, that means it should
+ * be visible in the worktrees [lens]." A dormant row still shows host /
+ * branch / PR / issue chips so the user can act on it (open a session,
+ * destroy, etc.) — `state="no_claude"` drives the renderer.
+ */
+export function buildDormantWorktreeItem(
+	worktree: WorktreeEnrichment,
+): SidebarItem {
+	const branch = worktree.branch;
+	const cwdBase = worktree.path
+		? worktree.path.split("/").filter(Boolean).pop()
+		: null;
+	const title =
+		branch && !GENERIC_BRANCHES.has(branch)
+			? branch
+			: cwdBase || branch || worktree.path || "(worktree)";
+	return {
+		id: `wt:${worktree.host}:${worktree.path}`,
+		// No live Claude session — render with a synthetic placeholder so
+		// the existing SidebarItem component (which expects `session`) can
+		// still render the row uniformly.
+		session: {
+			id: `wt:${worktree.host}:${worktree.path}`,
+			sessionUuid: "",
+			state: "no_claude",
+			process: null,
+			pane: null,
+			conversation: null,
+			lastActivityAt: null,
+		} as unknown as SessionCardT,
+		title,
+		worktree,
+		tmuxAddress: null,
+		pid: null,
+		state: "no_claude",
+		lastActivityMs: 0,
+		reasons: [],
 	};
 }

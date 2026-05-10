@@ -108,9 +108,9 @@ func readJSONLMeta(path string) (jsonlMeta, error) {
 		}
 	}
 
-	customTitle, agentName, err := readHeadMarkers(path)
+	customTitle, agentName, err := readLatestMarkers(path, info.Size())
 	if err != nil {
-		return jsonlMeta{}, fmt.Errorf("read head markers of %s: %w", path, err)
+		return jsonlMeta{}, fmt.Errorf("read latest markers of %s: %w", path, err)
 	}
 	meta.CustomTitle = customTitle
 	meta.AgentName = agentName
@@ -183,47 +183,115 @@ func readFirstRecord(path string) (*jsonlRecord, error) {
 	return decodeRecord(line)
 }
 
-// readHeadMarkers scans the first N records of path for the JSONL marker types `custom-title` and `agent-name`. Both are written by Claude Code at session start (typically lines 2-3) and stay stable for the life of the session, so a small bounded scan is sufficient — we never load the whole file.
+// readLatestMarkers scans path from the END backwards looking for the
+// most recent `custom-title` and `agent-name` records. Claude Code may
+// rewrite these mid-session (e.g. `/title`, `/agent-name`, an
+// orchestrator setting a per-task name), so the LATEST value wins, not
+// the first.
 //
-// Returns nil pointers when the markers are absent, malformed, or carry empty strings. Bounded by `maxHeadRecords`; once both markers are seen the scan returns early.
-func readHeadMarkers(path string) (customTitle, agentName *string, err error) {
+// Implementation: tail-window scan. Read the tail in expanding chunks
+// (capped at `maxLatestMarkersWindow`), split on newlines, walk records
+// in reverse order. Take the first occurrence of each marker type
+// (which is the latest in file order). Returns early once both are
+// found.
+//
+// Falls back to a head scan when the tail window is exhausted without
+// finding both markers — this preserves correctness for the common case
+// where Claude Code writes the title once at line 2-3 and never again.
+//
+// Returns nil pointers when the markers are absent, malformed, or carry
+// empty strings.
+func readLatestMarkers(path string, size int64) (customTitle, agentName *string, err error) {
+	if size == 0 {
+		return nil, nil, nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = f.Close() }()
 
-	r := bufio.NewReaderSize(f, 64*1024)
-	for i := 0; i < maxHeadRecords; i++ {
-		line, lineErr := readBoundedLine(r, maxLineBytes)
-		if lineErr != nil {
-			if errors.Is(lineErr, io.EOF) {
-				// Partial trailing line is fine — let the loop exit; it's
-				// not a head marker we expect to be unterminated anyway.
-				break
-			}
-			if errors.Is(lineErr, errLineTooLong) {
+	chunk := int64(initialTailWindow)
+	var sawHead bool
+	for {
+		if chunk > size {
+			chunk = size
+			sawHead = true
+		}
+		off := size - chunk
+		if _, err := f.Seek(off, io.SeekStart); err != nil {
+			return nil, nil, err
+		}
+		buf := make([]byte, chunk)
+		if _, err := io.ReadFull(f, buf); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, nil, err
+		}
+
+		// If we didn't read from BOF, the leading bytes are likely a
+		// partial record fragment — skip up to the first newline.
+		start := 0
+		if off > 0 {
+			if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+				start = i + 1
+			} else {
+				// No newline in this window at all — expand or give up.
+				if chunk >= maxLatestMarkersWindow || sawHead {
+					break
+				}
+				chunk *= 2
 				continue
 			}
-			return customTitle, agentName, lineErr
 		}
-		rec, decErr := decodeRecord(line)
-		if decErr != nil || rec == nil {
-			continue
-		}
-		switch rec.Type {
-		case "custom-title":
-			if customTitle == nil && rec.CustomTitle != nil && *rec.CustomTitle != "" {
-				customTitle = rec.CustomTitle
+
+		// Walk records from END to START to honor "latest wins."
+		end := len(buf)
+		for end > start {
+			// Skip trailing newline if present.
+			if buf[end-1] == '\n' {
+				end--
 			}
-		case "agent-name":
-			if agentName == nil && rec.AgentName != nil && *rec.AgentName != "" {
-				agentName = rec.AgentName
+			lineStart := bytes.LastIndexByte(buf[:end], '\n')
+			if lineStart < start-1 {
+				lineStart = start - 1
+			}
+			line := buf[lineStart+1 : end]
+			end = lineStart + 1
+			if len(line) == 0 {
+				if end <= start {
+					break
+				}
+				continue
+			}
+			rec, decErr := decodeRecord(line)
+			if decErr != nil || rec == nil {
+				if end <= start {
+					break
+				}
+				continue
+			}
+			switch rec.Type {
+			case "custom-title":
+				if customTitle == nil && rec.CustomTitle != nil && *rec.CustomTitle != "" {
+					customTitle = rec.CustomTitle
+				}
+			case "agent-name":
+				if agentName == nil && rec.AgentName != nil && *rec.AgentName != "" {
+					agentName = rec.AgentName
+				}
+			}
+			if customTitle != nil && agentName != nil {
+				return customTitle, agentName, nil
+			}
+			if end <= start {
+				break
 			}
 		}
-		if customTitle != nil && agentName != nil {
+
+		// Both not yet found — either expand the window or stop.
+		if sawHead || chunk >= maxLatestMarkersWindow {
 			break
 		}
+		chunk *= 2
 	}
 	return customTitle, agentName, nil
 }
@@ -341,11 +409,13 @@ const (
 	// degrades to "unknown firstSeenAt/lastSeenAt" on the node.
 	maxLineBytes = 1024 * 1024
 
-	// maxHeadRecords bounds readHeadMarkers. Claude Code writes the
-	// custom-title and agent-name markers at the very top of the JSONL
-	// (typically lines 2-3); 16 records is generous and never reads
-	// past the prologue.
-	maxHeadRecords = 16
+	// maxLatestMarkersWindow caps how far back we read when searching
+	// for the most recent custom-title/agent-name records. Drew's
+	// 26 MB transcripts have ~300+ marker rewrites scattered throughout
+	// — but anything past a few MB tail is unlikely to surface useful
+	// metadata, and we don't want to thrash on huge files. 4 MB matches
+	// readLastRecord's hard cap so the two scans share a budget.
+	maxLatestMarkersWindow int64 = 4 * 1024 * 1024
 )
 
 // errLineTooLong is the sentinel error returned by readBoundedLine

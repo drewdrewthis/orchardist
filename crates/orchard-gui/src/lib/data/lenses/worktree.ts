@@ -11,7 +11,7 @@ import { WorktreeLensStore, type WorktreeLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT, WorktreeEnrichment } from "./fragments";
 import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
-import { buildSidebarItem } from "$lib/data/sidebar-item";
+import { buildSidebarItem, buildDormantWorktreeItem } from "$lib/data/sidebar-item";
 
 /** Singleton store for the worktree lens. */
 export const worktreeStore = new WorktreeLensStore();
@@ -33,6 +33,15 @@ export function buildWorktreeSections(
 			WorktreeEnrichment & { claudeInstances?: SessionCardT[] | null }
 		>) {
 			const sessions = (w.claudeInstances ?? []) as SessionCardT[];
+			if (sessions.length === 0) {
+				// Dormant worktree — no live Claude session. Drew (2026-05-10):
+				// "if there is a live worktree, that means it should be visible."
+				// Render a row anyway so the user can see + act on it (open a
+				// session, destroy, etc.). Branch / PR / issue chips still
+				// surface from the worktree enrichment.
+				items.push(buildDormantWorktreeItem(w));
+				continue;
+			}
 			for (const s of sessions) {
 				const conv = s.conversation;
 				const lastActivityMs = parseTime(conv?.lastSeenAt) || parseTime(s.lastActivityAt);
@@ -42,6 +51,8 @@ export function buildWorktreeSections(
 				items.push(buildSidebarItem(s, w, lastActivityMs, [], hints));
 			}
 		}
+		// Dormant rows have lastActivityMs=0 and naturally sink to the bottom
+		// of the activity-desc sort.
 		items.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 		sections.push({
 			id: `repo-${repo.id}`,

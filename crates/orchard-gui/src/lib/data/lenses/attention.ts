@@ -28,9 +28,11 @@ function classify(
 	worktree: WorktreeEnrichment | null,
 	lastActivityMs: number,
 	now: number,
-): { tier: AttentionTier; reasons: string[] } {
+): { tier: AttentionTier; reasons: string[] } | null {
 	const reasons: string[] = [];
 
+	// Blocked: PR signals trump everything — even dormant rows count if
+	// the PR needs work.
 	if (worktree?.pr) {
 		const pr = worktree.pr;
 		if (pr.statusCheckRollup === "FAILURE") reasons.push("CI failing");
@@ -40,7 +42,13 @@ function classify(
 		if (reasons.length > 0) return { tier: "blocked", reasons };
 	}
 
-	if (session.state !== "no_claude" && lastActivityMs > 0 && now - lastActivityMs > FIVE_MIN_MS) {
+	// Dormant sessions (Claude REPL exited) are NOT active. They go to
+	// the Worktree lens. Filtering them out here keeps the Attention
+	// counts honest. Drew (2026-05-10): "it says 26 active, but that's
+	// not true."
+	if (session.state === "no_claude") return null;
+
+	if (lastActivityMs > 0 && now - lastActivityMs > FIVE_MIN_MS) {
 		const minutes = Math.floor((now - lastActivityMs) / 60_000);
 		reasons.push(`idle ${minutes}m`);
 		return { tier: "waiting", reasons };
@@ -65,13 +73,14 @@ export function buildAttentionSections(
 	if (!data) return [sections.blocked, sections.waiting, sections.active];
 
 	const sessions = (data.claudeInstances as unknown as SessionCardT[]).slice();
-	const rows = sessions.map((session) => {
+	const rows = sessions.flatMap((session) => {
 		const worktree = (session.worktree ?? null) as WorktreeEnrichment | null;
 		const conv = session.conversation;
 		const lastActivityMs = parseTime(conv?.lastSeenAt) || parseTime(session.lastActivityAt);
-		const { tier, reasons } = classify(session, worktree, lastActivityMs, now);
+		const cls = classify(session, worktree, lastActivityMs, now);
+		if (!cls) return [];
 		const hints = conv ? { agentName: conv.agentName ?? null, customTitle: conv.customTitle ?? null } : null;
-		return { session, worktree, lastActivityMs, tier, reasons, hints };
+		return [{ session, worktree, lastActivityMs, tier: cls.tier, reasons: cls.reasons, hints }];
 	});
 	rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 	for (const r of rows) {
