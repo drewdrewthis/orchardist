@@ -214,6 +214,16 @@ returns null unconditionally.
 """
 type Conversation implements Node {
   """
+  Sub-agent name from the JSONL `type: "agent-name"` record. Null when the session has not yet recorded one.
+  """
+  agentName: String
+
+  """
+  User-set title from the JSONL `type: "custom-title"` record. Null when the session has not yet recorded one.
+  """
+  customTitle: String
+
+  """
   Working directory recorded in the JSONL when the session was created. Null when not yet observed.
   """
   cwd: String
@@ -1114,8 +1124,12 @@ type TmuxServer implements Node {
   """Pid of the tmux daemon process. Null if not currently determinable."""
   pid: Int
 
-  """Sessions hosted on this server."""
-  sessions: [TmuxSession!]!
+  """
+  Sessions hosted on this server. Defaults to LAST_ACTIVITY which orders
+  most-recently-active first (lex name break ties), matching the sidebar's
+  "what should I look at next" intent. Pass NAME for stable lex order.
+  """
+  sessions(sort: TmuxSessionSort = LAST_ACTIVITY): [TmuxSession!]!
 
   """Filesystem path of the tmux socket the daemon is listening on."""
   socketPath: String!
@@ -1173,6 +1187,17 @@ input TmuxSessionFilter {
 
   """Session names to include."""
   nameIn: [String!]
+}
+
+"""Sort key for `TmuxServer.sessions`."""
+enum TmuxSessionSort {
+  """
+  Most-recently-active first (lastActivityAt DESC). Lex-lower name breaks ties; sessions with no activity rank below those with one.
+  """
+  LAST_ACTIVITY
+
+  """Stable lex order by session name."""
+  NAME
 }
 
 """
