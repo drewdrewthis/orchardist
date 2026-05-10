@@ -148,7 +148,7 @@ impl Client {
 
     /// Fetches a complete local-data snapshot via `Query.workView`.
     ///
-    /// Returns a [`WorkViewSnapshot`] containing all projects (with their
+    /// Returns a [`WorkViewSnapshot`] containing all repos (with their
     /// worktrees, pre-joined with open PR and issue data), all local tmux
     /// sessions, and all local Claude instances. This is the primary read path
     /// for TUI dashboard refresh (Phase 1: local data only).
@@ -168,9 +168,9 @@ impl Client {
         const Q: &str = r#"
             {
               workView {
-                projects {
-                  name
-                  directory
+                repos {
+                  slug
+                  path
                   worktrees {
                     path
                     branch

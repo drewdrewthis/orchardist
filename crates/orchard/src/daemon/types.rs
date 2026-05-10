@@ -134,8 +134,8 @@ pub struct WorkViewPayload {
 /// vectors when there is nothing to report).
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkViewSnapshot {
-    /// One entry per git project root the daemon knows about.
-    pub projects: Vec<WorkViewProject>,
+    /// One entry per repo the daemon knows about.
+    pub repos: Vec<WorkViewRepo>,
 
     /// All tmux sessions on the local host.
     #[serde(rename = "tmuxSessions")]
@@ -146,16 +146,16 @@ pub struct WorkViewSnapshot {
     pub claude_instances: Vec<ClaudeInstance>,
 }
 
-/// One git project (repository root) as exposed by `workView`.
+/// One repo as exposed by `workView` (ADR-015 shape).
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct WorkViewProject {
-    /// Project name (usually the repository basename).
-    pub name: String,
+pub struct WorkViewRepo {
+    /// GitHub-style `owner/repo` slug — the repo's identity.
+    pub slug: String,
 
-    /// Absolute path to the project root / bare repository.
-    pub directory: String,
+    /// Absolute path to the working tree.
+    pub path: String,
 
-    /// Worktrees belonging to this project.
+    /// Worktrees belonging to this repo.
     pub worktrees: Vec<WorkViewWorktree>,
 }
 
@@ -400,10 +400,10 @@ mod tests {
     const WORK_VIEW_FIXTURE: &str = r#"{
         "data": {
             "workView": {
-                "projects": [
+                "repos": [
                     {
-                        "name": "git-orchard-rs",
-                        "directory": "/home/example/workspace/git-orchard-rs",
+                        "slug": "git-orchard-rs",
+                        "path": "/home/example/workspace/git-orchard-rs",
                         "worktrees": [
                             {
                                 "path": "/home/example/workspace/git-orchard-rs/.worktrees/issue429/rip-cache",
@@ -474,15 +474,15 @@ mod tests {
             serde_json::from_str(WORK_VIEW_FIXTURE).unwrap();
         let snapshot = env.data.unwrap().work_view;
 
-        // projects
-        assert_eq!(snapshot.projects.len(), 1);
-        let project = &snapshot.projects[0];
-        assert_eq!(project.name, "git-orchard-rs");
-        assert_eq!(project.directory, "/home/example/workspace/git-orchard-rs");
+        // repos
+        assert_eq!(snapshot.repos.len(), 1);
+        let repo = &snapshot.repos[0];
+        assert_eq!(repo.slug, "git-orchard-rs");
+        assert_eq!(repo.path, "/home/example/workspace/git-orchard-rs");
 
         // worktrees
-        assert_eq!(project.worktrees.len(), 2);
-        let wt = &project.worktrees[0];
+        assert_eq!(repo.worktrees.len(), 2);
+        let wt = &repo.worktrees[0];
         assert_eq!(wt.branch, "issue429/rip-cache-sources");
         assert_eq!(wt.head, "abc1234def5678");
         assert!(!wt.bare);
@@ -490,15 +490,15 @@ mod tests {
         assert_eq!(wt.repo, "drewdrewthis/git-orchard-rs");
 
         // worktree without PR/issue
-        assert!(project.worktrees[1].pr.is_none());
-        assert!(project.worktrees[1].issue.is_none());
+        assert!(repo.worktrees[1].pr.is_none());
+        assert!(repo.worktrees[1].issue.is_none());
     }
 
     #[test]
     fn parses_work_view_pr_fields() {
         let env: GraphQlResponse<WorkViewPayload> =
             serde_json::from_str(WORK_VIEW_FIXTURE).unwrap();
-        let wt = &env.data.unwrap().work_view.projects[0].worktrees[0];
+        let wt = &env.data.unwrap().work_view.repos[0].worktrees[0];
         let pr = wt.pr.as_ref().unwrap();
 
         assert_eq!(pr.number, 429);
@@ -515,7 +515,7 @@ mod tests {
     fn parses_work_view_issue_fields() {
         let env: GraphQlResponse<WorkViewPayload> =
             serde_json::from_str(WORK_VIEW_FIXTURE).unwrap();
-        let wt = &env.data.unwrap().work_view.projects[0].worktrees[0];
+        let wt = &env.data.unwrap().work_view.repos[0].worktrees[0];
         let issue = wt.issue.as_ref().unwrap();
 
         assert_eq!(issue.number, 429);
@@ -567,7 +567,7 @@ mod tests {
         let raw = r#"{
             "data": {
                 "workView": {
-                    "projects": [],
+                    "repos": [],
                     "tmuxSessions": [],
                     "claudeInstances": []
                 }
@@ -575,7 +575,7 @@ mod tests {
         }"#;
         let env: GraphQlResponse<WorkViewPayload> = serde_json::from_str(raw).unwrap();
         let snapshot = env.data.unwrap().work_view;
-        assert!(snapshot.projects.is_empty());
+        assert!(snapshot.repos.is_empty());
         assert!(snapshot.tmux_sessions.is_empty());
         assert!(snapshot.claude_instances.is_empty());
     }
@@ -586,9 +586,9 @@ mod tests {
         let raw = r#"{
             "data": {
                 "workView": {
-                    "projects": [{
-                        "name": "repo",
-                        "directory": "/repo",
+                    "repos": [{
+                        "slug": "repo",
+                        "path": "/repo",
                         "worktrees": [{
                             "path": "/repo/wt",
                             "branch": "feat/x",
@@ -610,7 +610,7 @@ mod tests {
             }
         }"#;
         let env: GraphQlResponse<WorkViewPayload> = serde_json::from_str(raw).unwrap();
-        let wt = &env.data.unwrap().work_view.projects[0].worktrees[0];
+        let wt = &env.data.unwrap().work_view.repos[0].worktrees[0];
         let pr = wt.pr.as_ref().unwrap();
         assert!(pr.status_check_rollup.is_none());
         assert!(pr.review_decision.is_none());

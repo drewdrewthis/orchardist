@@ -3,7 +3,7 @@
 //!
 //! # Responsibilities
 //!
-//! - Converts [`WorkViewProject`] / [`WorkViewWorktree`] into cache-shaped tuples
+//! - Converts [`WorkViewRepo`] / [`WorkViewWorktree`] into cache-shaped tuples
 //!   that [`crate::join::derive_all_repos`] can consume, reusing its full join
 //!   pipeline (PR/issue linking, display group derivation, session enrichment).
 //! - Performs the **client-side** sessions↔claude join by extracting the tmux
@@ -84,13 +84,14 @@ pub fn build_local_state(
         .filter_map(claude_instance_to_state_file)
         .collect();
 
-    // 2. Build RepoCacheEntry tuples from WorkViewProjects.
-    //    Each project may contain worktrees from multiple repos (when the project
-    //    root hosts multiple git remotes — uncommon but handled). Group by repo slug.
+    // 2. Build RepoCacheEntry tuples from WorkViewRepos.
+    //    Each repo may contain worktrees from multiple GitHub repos (when the
+    //    working tree hosts multiple remotes — uncommon but handled). Group
+    //    by GitHub slug derived from the worktree's `repo` field.
     let mut repo_entries: HashMap<String, RepoCacheEntry> = HashMap::new();
 
-    for project in &snapshot.projects {
-        for wt in &project.worktrees {
+    for repo in &snapshot.repos {
+        for wt in &repo.worktrees {
             let slug = wt.repo.clone();
             let entry = repo_entries
                 .entry(slug.clone())
@@ -117,7 +118,7 @@ pub fn build_local_state(
 
             // Worktree entry (with ahead/behind from git branch -vv carve-out).
             let wt_ab = ahead_behind
-                .and_then(|ab| ab.get(&project.directory))
+                .and_then(|ab| ab.get(&repo.path))
                 .and_then(|branch_map| branch_map.get(&wt.branch))
                 .copied();
             entry.3.push(work_view_worktree_to_cached(wt, wt_ab));
@@ -125,7 +126,7 @@ pub fn build_local_state(
     }
 
     // 3. Populate sessions across all repo entries.
-    //    Sessions are not per-project; they live globally on the host.
+    //    Sessions are not per-repo; they live globally on the host.
     //    Inject all local sessions into every repo entry so `derive_worktree_rows`
     //    can match each session to its worktree.
     let sessions: Vec<CachedTmuxSession> = snapshot
@@ -532,7 +533,7 @@ fn parse_rfc3339_to_epoch(ts: Option<&str>) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::daemon::types::{
-        ClaudeInstance, WorkViewIssue, WorkViewPr, WorkViewProject, WorkViewSnapshot,
+        ClaudeInstance, WorkViewIssue, WorkViewPr, WorkViewRepo, WorkViewSnapshot,
         WorkViewTmuxSession, WorkViewWorktree,
     };
     use crate::global_config::GlobalConfig;
@@ -554,7 +555,7 @@ mod tests {
         pub fn new() -> Self {
             Self {
                 snapshot: WorkViewSnapshot {
-                    projects: Vec::new(),
+                    repos: Vec::new(),
                     tmux_sessions: Vec::new(),
                     claude_instances: Vec::new(),
                 },
@@ -563,9 +564,9 @@ mod tests {
 
         /// Adds a project with the given slug and directory.
         pub fn project(mut self, name: &str, directory: &str) -> Self {
-            self.snapshot.projects.push(WorkViewProject {
-                name: name.to_string(),
-                directory: directory.to_string(),
+            self.snapshot.repos.push(WorkViewRepo {
+                slug: name.to_string(),
+                path: directory.to_string(),
                 worktrees: Vec::new(),
             });
             self
@@ -582,7 +583,7 @@ mod tests {
         ) -> Self {
             let project = self
                 .snapshot
-                .projects
+                .repos
                 .last_mut()
                 .expect("add a project first");
             project.worktrees.push(WorkViewWorktree {
@@ -835,7 +836,7 @@ mod tests {
     #[test]
     fn empty_snapshot_yields_empty_state_with_passthrough_hosts() {
         let snapshot = WorkViewSnapshot {
-            projects: Vec::new(),
+            repos: Vec::new(),
             tmux_sessions: Vec::new(),
             claude_instances: Vec::new(),
         };

@@ -5905,14 +5905,14 @@ mod tests {
     /// snapshot with one worktree.
     #[test]
     fn cache_refreshed_uses_daemon_snapshot_when_available() {
-        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        use crate::daemon::types::{WorkViewRepo, WorkViewSnapshot, WorkViewWorktree};
         use state::AppMsg;
 
         // Build an App with a pre-populated work_view_snapshot slot.
         let snapshot = WorkViewSnapshot {
-            projects: vec![WorkViewProject {
-                name: "repo".to_string(),
-                directory: "/repos/owner/repo".to_string(),
+            repos: vec![WorkViewRepo {
+                slug: "repo".to_string(),
+                path: "/repos/owner/repo".to_string(),
                 worktrees: vec![WorkViewWorktree {
                     path: "/repos/owner/repo/.worktrees/issue429".to_string(),
                     branch: "issue429/spec".to_string(),
@@ -5987,7 +5987,7 @@ mod tests {
             fn work_view(&self) -> Result<WorkViewSnapshot, DaemonError> {
                 self.call_count.fetch_add(1, Ordering::SeqCst);
                 Ok(WorkViewSnapshot {
-                    projects: vec![],
+                    repos: vec![],
                     tmux_sessions: vec![],
                     claude_instances: vec![],
                 })
@@ -6039,7 +6039,7 @@ mod tests {
             fn work_view(&self) -> Result<WorkViewSnapshot, DaemonError> {
                 self.call_count.fetch_add(1, Ordering::SeqCst);
                 Ok(WorkViewSnapshot {
-                    projects: vec![],
+                    repos: vec![],
                     tmux_sessions: vec![],
                     claude_instances: vec![],
                 })
@@ -6078,13 +6078,13 @@ mod tests {
     /// `LocalCacheRefreshed`, and assert that `task_rows` reflects the snapshot.
     #[test]
     fn local_cache_refreshed_uses_daemon_snapshot() {
-        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        use crate::daemon::types::{WorkViewRepo, WorkViewSnapshot, WorkViewWorktree};
         use state::AppMsg;
 
         let snapshot = WorkViewSnapshot {
-            projects: vec![WorkViewProject {
-                name: "repo".to_string(),
-                directory: "/repos/owner/repo".to_string(),
+            repos: vec![WorkViewRepo {
+                slug: "repo".to_string(),
+                path: "/repos/owner/repo".to_string(),
                 worktrees: vec![WorkViewWorktree {
                     path: "/repos/owner/repo/.worktrees/issue429".to_string(),
                     branch: "issue429/local-refresh".to_string(),
@@ -6178,11 +6178,11 @@ mod tests {
     }
 
     fn make_single_worktree_snapshot(branch: &str) -> crate::daemon::WorkViewSnapshot {
-        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        use crate::daemon::types::{WorkViewRepo, WorkViewSnapshot, WorkViewWorktree};
         WorkViewSnapshot {
-            projects: vec![WorkViewProject {
-                name: "repo".to_string(),
-                directory: "/repos/owner/repo".to_string(),
+            repos: vec![WorkViewRepo {
+                slug: "repo".to_string(),
+                path: "/repos/owner/repo".to_string(),
                 worktrees: vec![WorkViewWorktree {
                     path: format!("/repos/owner/repo/.worktrees/{}", branch.replace('/', "-")),
                     branch: branch.to_string(),

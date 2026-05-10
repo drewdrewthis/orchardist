@@ -493,7 +493,7 @@ mod tests {
     /// state_to_task_rows output should contain all three rows.
     #[test]
     fn local_plus_remote_merge_produces_three_rows() {
-        use crate::daemon::types::{WorkViewProject, WorkViewSnapshot, WorkViewWorktree};
+        use crate::daemon::types::{WorkViewRepo, WorkViewSnapshot, WorkViewWorktree};
         use crate::daemon::work_view_adapter::build_local_state;
         use crate::global_config::GlobalConfig;
         use crate::json_output::{JsonOutput, JsonRepo, JsonWorktree};
@@ -502,9 +502,9 @@ mod tests {
         // ---- Local data via daemon work_view_adapter -----------------------
 
         let snapshot = WorkViewSnapshot {
-            projects: vec![WorkViewProject {
-                name: "repo".to_string(),
-                directory: "/repos/owner/repo".to_string(),
+            repos: vec![WorkViewRepo {
+                slug: "repo".to_string(),
+                path: "/repos/owner/repo".to_string(),
                 worktrees: vec![
                     WorkViewWorktree {
                         path: "/repos/owner/repo/.worktrees/issue1".to_string(),
