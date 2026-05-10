@@ -186,7 +186,7 @@ func runStart(parentCtx context.Context, addr string) error {
 	localEvents := peerproxy.NewLocalInvalidator()
 
 	opts := []server.Option{
-		server.WithProjects(configProvider),
+		server.WithRepos(configProvider),
 		server.WithGit(gitProvider),
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
@@ -221,16 +221,16 @@ func localHostID() tmux.HostID {
 // installed) are logged and skipped so the daemon still boots — the
 // affected project simply won't surface live worktree updates until it
 // is reconfigured.
-func buildGitProvider(ctx context.Context, projects *configprovider.Provider, logger *slog.Logger) (*gitprovider.Provider, error) {
+func buildGitProvider(ctx context.Context, repos *configprovider.Provider, logger *slog.Logger) (*gitprovider.Provider, error) {
 	gp := gitprovider.NewProvider(logger)
-	configured, err := projects.List(ctx)
+	configured, err := repos.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list configured projects: %w", err)
+		return nil, fmt.Errorf("list configured repos: %w", err)
 	}
 	for _, p := range configured {
-		if err := gp.AddProject(gitprovider.Project{ID: string(p.ID), Dir: p.Directory}); err != nil {
-			logger.Warn("git: skipping project, watcher unavailable",
-				"project", p.ID, "dir", p.Directory, "err", err)
+		if err := gp.AddProject(gitprovider.Project{ID: string(p.ID), Dir: p.Path}); err != nil {
+			logger.Warn("git: skipping repo, watcher unavailable",
+				"repo", p.ID, "path", p.Path, "err", err)
 		}
 	}
 	return gp, nil

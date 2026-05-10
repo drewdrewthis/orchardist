@@ -21,16 +21,16 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
-// ProjectsLister is the narrow read-side contract the project resolver depends on.
-type ProjectsLister interface {
-	List(ctx context.Context) ([]configprovider.Project, error)
+// ReposLister is the narrow read-side contract the repo resolver depends on.
+type ReposLister interface {
+	List(ctx context.Context) ([]configprovider.Repo, error)
 }
 
 // Resolver is the dependency-injection root for GraphQL resolvers.
 type Resolver struct {
 	StartedAt           time.Time
 	HostProvider        *host.Provider
-	ProjectsProvider    ProjectsLister
+	ReposProvider       ReposLister
 	Git                 *gitprovider.Provider
 	PS                  *ps.Provider
 	Tmux                *tmux.Provider
@@ -55,9 +55,9 @@ func (r *Resolver) WithHost(h *host.Provider) *Resolver {
 	return r
 }
 
-// WithProjects wires the projects-listing dependency.
-func (r *Resolver) WithProjects(p ProjectsLister) *Resolver {
-	r.ProjectsProvider = p
+// WithRepos wires the repos-listing dependency.
+func (r *Resolver) WithRepos(p ReposLister) *Resolver {
+	r.ReposProvider = p
 	return r
 }
 
@@ -136,10 +136,10 @@ func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 // Loaders is on the context (e.g. internal subscription emissions).
 func (r *Resolver) LoaderBundle() *loaders.ProvidersBundle {
 	return &loaders.ProvidersBundle{
-		Host:     r.HostProvider,
-		Git:      r.Git,
-		Ps:       r.PS,
-		Projects: r.ProjectsProvider,
-		GH:       r.GH,
+		Host:  r.HostProvider,
+		Git:   r.Git,
+		Ps:    r.PS,
+		Repos: r.ReposProvider,
+		GH:    r.GH,
 	}
 }

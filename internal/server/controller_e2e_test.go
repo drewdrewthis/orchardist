@@ -3,7 +3,7 @@ package server_test
 // Workstream C end-to-end test — boots the full daemon (HTTP + GraphQL
 // + WebSocket) over a real httptest.Server and exercises:
 //
-//  1. Query.node(id) over four different node types (Host, Project,
+//  1. Query.node(id) over four different node types (Host, Repo,
 //     Worktree, Process).
 //  2. Subscription.processes pushes data when the ps provider's cache
 //     invalidates (websocket transport + provider channel + emit
@@ -41,14 +41,14 @@ import (
 
 const probeTimeout = 5 * time.Second
 
-// fixedProjectsLister is a tiny in-memory ProjectsLister so the
-// controller test stays focused on the controller — the config
-// provider has its own e2e elsewhere.
-type fixedProjectsLister struct {
-	rows []config.Project
+// fixedReposLister is a tiny in-memory ReposLister so the controller
+// test stays focused on the controller — the config provider has its
+// own e2e elsewhere.
+type fixedReposLister struct {
+	rows []config.Repo
 }
 
-func (f *fixedProjectsLister) List(_ context.Context) ([]config.Project, error) {
+func (f *fixedReposLister) List(_ context.Context) ([]config.Repo, error) {
 	return f.rows, nil
 }
 
@@ -61,11 +61,11 @@ func TestController_E2E(t *testing.T) {
 	gitProvider, projectID, worktreePath := setupGitProvider(t)
 	defer gitProvider.Stop()
 
-	projects := &fixedProjectsLister{
-		rows: []config.Project{{
-			ID:        config.ProjectID(projectID),
-			Directory: worktreePath,
-			Name:      "ctrl-e2e",
+	repos := &fixedReposLister{
+		rows: []config.Repo{{
+			ID:   config.RepoID(projectID),
+			Slug: projectID,
+			Path: worktreePath,
 		}},
 	}
 
@@ -82,7 +82,7 @@ func TestController_E2E(t *testing.T) {
 	}
 
 	srv := server.New("", slog.Default(),
-		server.WithProjects(projects),
+		server.WithRepos(repos),
 		server.WithGit(gitProvider),
 		server.WithPS(psProvider),
 	)
@@ -102,7 +102,7 @@ func TestController_E2E(t *testing.T) {
 			typeKey string
 		}{
 			{hostNodeID, "Host"},
-			{projectNodeID, "Project"},
+			{projectNodeID, "Repo"},
 			{worktreeNodeID, "Worktree"},
 			{processNodeID, "Process"},
 		}

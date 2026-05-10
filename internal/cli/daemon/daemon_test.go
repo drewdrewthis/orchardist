@@ -53,9 +53,9 @@ func TestDaemonWiring_Worktrees(t *testing.T) {
 	repoOne := initRepo(t, "alpha")
 	repoTwo := initRepo(t, "beta")
 
-	writeDaemonConfig(t, cfgPath, []configprovider.ProjectRow{
-		{ID: "alpha", Directory: repoOne, Name: "Alpha"},
-		{ID: "beta", Directory: repoTwo, Name: "Beta"},
+	writeDaemonConfig(t, cfgPath, []configprovider.RepoRow{
+		{Slug: "team/alpha", Path: repoOne},
+		{Slug: "team/beta", Path: repoTwo},
 	})
 
 	configProvider := configprovider.NewProvider(
@@ -74,38 +74,38 @@ func TestDaemonWiring_Worktrees(t *testing.T) {
 	t.Cleanup(gitProvider.Stop)
 
 	srv := server.New("", logger,
-		server.WithProjects(configProvider),
+		server.WithRepos(configProvider),
 		server.WithGit(gitProvider),
 	)
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
 
-	resp := postQuery(t, ts.URL, `{ projects { id worktrees { path branch head bare } } }`)
+	resp := postQuery(t, ts.URL, `{ repos { id worktrees { path branch head bare } } }`)
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors: %+v", resp.Errors)
 	}
-	projects, _ := resp.Data["projects"].([]any)
-	if len(projects) != 2 {
-		t.Fatalf("want 2 projects, got %d (%+v)", len(projects), projects)
+	repos, _ := resp.Data["repos"].([]any)
+	if len(repos) != 2 {
+		t.Fatalf("want 2 repos, got %d (%+v)", len(repos), repos)
 	}
-	for _, raw := range projects {
+	for _, raw := range repos {
 		p, ok := raw.(map[string]any)
 		if !ok {
-			t.Fatalf("project payload not a map: %T", raw)
+			t.Fatalf("repo payload not a map: %T", raw)
 		}
 		wts, _ := p["worktrees"].([]any)
 		if len(wts) == 0 {
-			t.Errorf("project %v: expected ≥1 worktree, got %v", p["id"], p["worktrees"])
+			t.Errorf("repo %v: expected ≥1 worktree, got %v", p["id"], p["worktrees"])
 		}
 		first, ok := wts[0].(map[string]any)
 		if !ok {
 			t.Fatalf("worktree payload not a map: %T", wts[0])
 		}
 		if first["path"] == "" {
-			t.Errorf("project %v: worktree path empty", p["id"])
+			t.Errorf("repo %v: worktree path empty", p["id"])
 		}
 		if first["bare"] != false {
-			t.Errorf("project %v: bare = %v, want false", p["id"], first["bare"])
+			t.Errorf("repo %v: bare = %v, want false", p["id"], first["bare"])
 		}
 	}
 }
@@ -166,8 +166,8 @@ func TestDaemonWiring_AllProvidersBoot(t *testing.T) {
 	cfgDir := t.TempDir()
 	cfgPath := filepath.Join(cfgDir, "config.json")
 	repoOne := initRepo(t, "alpha")
-	writeDaemonConfig(t, cfgPath, []configprovider.ProjectRow{
-		{ID: "alpha", Directory: repoOne, Name: "Alpha"},
+	writeDaemonConfig(t, cfgPath, []configprovider.RepoRow{
+		{Slug: "team/alpha", Path: repoOne},
 	})
 
 	configProvider := configprovider.NewProvider(
@@ -209,7 +209,7 @@ func TestDaemonWiring_AllProvidersBoot(t *testing.T) {
 	localEvents := peerproxy.NewLocalInvalidator()
 
 	srv := server.New("", logger,
-		server.WithProjects(configProvider),
+		server.WithRepos(configProvider),
 		server.WithGit(gitProvider),
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
@@ -224,7 +224,7 @@ func TestDaemonWiring_AllProvidersBoot(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	const doc = `{
-		projects { id worktrees { path bare } }
+		repos { id worktrees { path bare } }
 		claudeInstances { id state }
 	}`
 	resp := postQuery(t, ts.URL, doc)
@@ -262,9 +262,9 @@ func initRepo(t *testing.T, label string) string {
 
 // writeDaemonConfig drops a v1 config.json into path so the config
 // provider's JSONFileAdapter can read it on Start.
-func writeDaemonConfig(t *testing.T, path string, projects []configprovider.ProjectRow) {
+func writeDaemonConfig(t *testing.T, path string, repos []configprovider.RepoRow) {
 	t.Helper()
-	f := configprovider.File{Version: 1, Projects: projects}
+	f := configprovider.File{Version: 1, Repos: repos}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)

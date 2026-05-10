@@ -56,8 +56,10 @@ func projectPeerNode(pn *peerproxy.PeerNode) (graphql1.Node, error) {
 	switch pn.TypeName {
 	case "Host":
 		return &graphql1.Host{ID: id, Peers: []*graphql1.Host{}}, nil
-	case "Project":
-		return &graphql1.Project{ID: id}, nil
+	case "Repo", "Project":
+		// Accept legacy "Project" typename for backwards-compatibility
+		// with peers that haven't redeployed post-ADR-015.
+		return &graphql1.Repo{ID: id}, nil
 	case "Worktree":
 		return &graphql1.Worktree{ID: id}, nil
 	case "Process":
@@ -118,7 +120,7 @@ func resolveLocalNode(r *queryResolver, id string) (graphql1.Node, error) {
 			return nil, nil
 		}
 		return &graphql1.Host{ID: id, MachineID: hostID, Peers: []*graphql1.Host{}}, nil
-	case "Project", "Worktree", "Process",
+	case "Repo", "Project", "Worktree", "Process",
 		"TmuxServer", "TmuxSession", "TmuxWindow", "TmuxPane", "TmuxClient":
 		// Construct a stub node carrying the id; the resolver layer's
 		// field-by-field methods will populate the rest on demand.

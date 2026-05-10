@@ -14,7 +14,7 @@ import (
 )
 
 // JSONFileAdapter reads ~/.orchard/config.json and watches it
-// for changes. It implements adapter.Adapter[ProjectID, Project].
+// for changes. It implements adapter.Adapter[RepoID, Repo].
 //
 // fsnotify subtleties this adapter handles:
 //
@@ -36,7 +36,7 @@ type JSONFileAdapter struct {
 // allKey is the sentinel emitted on Watch — config.json is a single
 // document, so per-key invalidation isn't meaningful. The provider
 // listens for this key and reloads the entire cache.
-const allKey ProjectID = "*"
+const allKey RepoID = "*"
 
 // NewJSONFileAdapter constructs an adapter rooted at path. The parent
 // directory is created if missing (best effort; permission errors fall
@@ -58,47 +58,47 @@ func NewJSONFileAdapter(path string, logger *slog.Logger) *JSONFileAdapter {
 // and tests.
 func (a *JSONFileAdapter) Path() string { return a.path }
 
-// Fetch returns one project by ID. The full file is loaded each call —
+// Fetch returns one repo by ID. The full file is loaded each call —
 // this is fine for the config provider because the cache layer above
 // caches the result; Fetch is only called on cache miss for that ID.
-func (a *JSONFileAdapter) Fetch(ctx context.Context, id ProjectID) (Project, error) {
+func (a *JSONFileAdapter) Fetch(ctx context.Context, id RepoID) (Repo, error) {
 	all, err := a.FetchAll(ctx)
 	if err != nil {
-		return Project{}, err
+		return Repo{}, err
 	}
 	p, ok := all[id]
 	if !ok {
-		return Project{}, fmt.Errorf("project %q not found in %s", id, a.path)
+		return Repo{}, fmt.Errorf("repo %q not found in %s", id, a.path)
 	}
 	return p, nil
 }
 
-// FetchAll loads and normalises every project in the config file. A
+// FetchAll loads and normalises every repo in the config file. A
 // missing file returns an empty map (not an error) so the daemon can
 // boot before `orchard config init` has run.
-func (a *JSONFileAdapter) FetchAll(ctx context.Context) (map[ProjectID]Project, error) {
+func (a *JSONFileAdapter) FetchAll(ctx context.Context) (map[RepoID]Repo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(a.path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return map[ProjectID]Project{}, nil
+			return map[RepoID]Repo{}, nil
 		}
 		return nil, fmt.Errorf("read %s: %w", a.path, err)
 	}
 	if len(data) == 0 {
-		return map[ProjectID]Project{}, nil
+		return map[RepoID]Repo{}, nil
 	}
 	var f File
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", a.path, err)
 	}
-	out := make(map[ProjectID]Project, len(f.Projects))
-	for _, row := range f.Projects {
-		p := row.ToProject()
-		if p.Directory == "" {
-			a.logger.Warn("config: skipping project with empty directory", "id", p.ID)
+	out := make(map[RepoID]Repo, len(f.Repos))
+	for _, row := range f.Repos {
+		p := row.ToRepo()
+		if p.Path == "" {
+			a.logger.Warn("config: skipping repo with empty path", "id", string(p.ID))
 			continue
 		}
 		out[p.ID] = p
@@ -110,7 +110,7 @@ func (a *JSONFileAdapter) FetchAll(ctx context.Context) (map[ProjectID]Project, 
 // and emits allKey whenever an event matching the config file is
 // observed. The channel is closed when ctx is cancelled or Close is
 // called.
-func (a *JSONFileAdapter) Watch(ctx context.Context) (<-chan ProjectID, error) {
+func (a *JSONFileAdapter) Watch(ctx context.Context) (<-chan RepoID, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("fsnotify new: %w", err)
@@ -127,7 +127,7 @@ func (a *JSONFileAdapter) Watch(ctx context.Context) (<-chan ProjectID, error) {
 		return nil, fmt.Errorf("watch %s: %w", dir, err)
 	}
 
-	out := make(chan ProjectID, 8)
+	out := make(chan RepoID, 8)
 	go a.run(ctx, out)
 	return out, nil
 }
@@ -135,7 +135,7 @@ func (a *JSONFileAdapter) Watch(ctx context.Context) (<-chan ProjectID, error) {
 // run drains fsnotify events, filters them to our basename, and emits
 // allKey on the output channel. It exits when ctx is done or the
 // watcher is closed.
-func (a *JSONFileAdapter) run(ctx context.Context, out chan<- ProjectID) {
+func (a *JSONFileAdapter) run(ctx context.Context, out chan<- RepoID) {
 	defer close(out)
 	defer close(a.closedCh)
 

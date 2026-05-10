@@ -95,9 +95,9 @@ func (s *Server) LocalEvents() *peerproxy.LocalInvalidator { return s.localEvent
 // Option mutates a Server during construction.
 type Option func(*Server, *resolvers.Resolver)
 
-// WithProjects wires a projects provider.
-func WithProjects(p resolvers.ProjectsLister) Option {
-	return func(_ *Server, r *resolvers.Resolver) { r.WithProjects(p) }
+// WithRepos wires a repos provider.
+func WithRepos(p resolvers.ReposLister) Option {
+	return func(_ *Server, r *resolvers.Resolver) { r.WithRepos(p) }
 }
 
 // WithGit wires a git provider. Run() owns the provider's lifecycle —

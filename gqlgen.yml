@@ -33,7 +33,7 @@ models:
   Int:
     model:
       - github.com/99designs/gqlgen/graphql.Int64
-  Project:
+  Repo:
     fields:
       worktrees:
         resolver: true

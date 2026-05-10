@@ -115,22 +115,6 @@ func (r *processResolver) ClaudeInstance(ctx context.Context, obj *graphql1.Proc
 	return nil, nil
 }
 
-// Worktrees is the resolver for the project.worktrees field.
-func (r *projectResolver) Worktrees(ctx context.Context, obj *graphql1.Project) ([]*graphql1.Worktree, error) {
-	if r.Git == nil {
-		return nil, fmt.Errorf("git provider not configured")
-	}
-	worktrees, err := r.Git.ListByProject(ctx, obj.ID)
-	if err != nil {
-		return nil, fmt.Errorf("list worktrees for project %q: %w", obj.ID, err)
-	}
-	out := make([]*graphql1.Worktree, 0, len(worktrees))
-	for _, w := range worktrees {
-		out = append(out, toGraphQLWorktree(w))
-	}
-	return out, nil
-}
-
 // Mergeable is the resolver for the pullRequest.mergeable field. Calls EnrichPullRequest (cached, single GraphQL round-trip shared across the five enrichment fields).
 func (r *pullRequestResolver) Mergeable(ctx context.Context, obj *graphql1.PullRequest) (graphql1.MergeableState, error) {
 	key, ok := prKeyFromGraphQL(r.Resolver, obj)
@@ -241,21 +225,21 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 	return []*graphql1.Host{h}, nil
 }
 
-// Projects is the resolver for the projects field.
-func (r *queryResolver) Projects(ctx context.Context) ([]*graphql1.Project, error) {
-	if r.ProjectsProvider == nil {
-		return nil, fmt.Errorf("projects provider not wired: daemon misconfigured")
+// Repos is the resolver for the repos field.
+func (r *queryResolver) Repos(ctx context.Context) ([]*graphql1.Repo, error) {
+	if r.ReposProvider == nil {
+		return nil, fmt.Errorf("repos provider not wired: daemon misconfigured")
 	}
-	rows, err := r.ProjectsProvider.List(ctx)
+	rows, err := r.ReposProvider.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
+		return nil, fmt.Errorf("list repos: %w", err)
 	}
-	out := make([]*graphql1.Project, 0, len(rows))
+	out := make([]*graphql1.Repo, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &graphql1.Project{
-			ID:        string(row.ID),
-			Directory: row.Directory,
-			Name:      row.Name,
+		out = append(out, &graphql1.Repo{
+			ID:   string(row.ID),
+			Slug: row.Slug,
+			Path: row.Path,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -516,16 +500,16 @@ func (r *queryResolver) SchemaSdl(ctx context.Context) (string, error) {
 	return SchemaSDL(), nil
 }
 
-// WorkView is the resolver for Query.workView (#469 F6). Walks the local projects-to-worktrees graph and joins each worktree to its open PR, linked issue, processes, and tmux sessions in a single round trip. Uses existing per-type resolvers so semantics match per-type queries.
+// WorkView is the resolver for Query.workView (#469 F6). Walks the local repos-to-worktrees graph and joins each worktree to its open PR, linked issue, processes, and tmux sessions in a single round trip. Uses existing per-type resolvers so semantics match per-type queries.
 func (r *queryResolver) WorkView(ctx context.Context) (*graphql1.WorkView, error) {
 	q := r.Resolver.Query()
 
-	projects, projectsErr := q.Projects(ctx)
+	repos, reposErr := q.Repos(ctx)
 	sessions, sessionsErr := q.TmuxSessions(ctx, nil)
 	instances, instancesErr := q.ClaudeInstances(ctx)
 
 	view := &graphql1.WorkView{
-		Projects:        projects,
+		Repos:           repos,
 		TmuxSessions:    sessions,
 		ClaudeInstances: instances,
 		Meta: &graphql1.Meta{
@@ -538,8 +522,8 @@ func (r *queryResolver) WorkView(ctx context.Context) (*graphql1.WorkView, error
 	// distinguish "valid empty" from "data unavailable" (#469 F1)
 	// without the whole composite failing.
 	reasons := make([]string, 0, 3)
-	if projectsErr != nil {
-		reasons = append(reasons, "projects: "+projectsErr.Error())
+	if reposErr != nil {
+		reasons = append(reasons, "repos: "+reposErr.Error())
 	}
 	if sessionsErr != nil {
 		reasons = append(reasons, "tmuxSessions: "+sessionsErr.Error())
@@ -553,8 +537,8 @@ func (r *queryResolver) WorkView(ctx context.Context) (*graphql1.WorkView, error
 		view.Meta.LastSuccessfulFetchAt = nil
 	}
 
-	if view.Projects == nil {
-		view.Projects = []*graphql1.Project{}
+	if view.Repos == nil {
+		view.Repos = []*graphql1.Repo{}
 	}
 	if view.TmuxSessions == nil {
 		view.TmuxSessions = []*graphql1.TmuxSession{}
@@ -590,6 +574,22 @@ func (r *queryResolver) DaemonState(ctx context.Context) (*graphql1.DaemonState,
 		UptimeS:   uptime,
 		Providers: providers,
 	}, nil
+}
+
+// Worktrees is the resolver for the repo.worktrees field.
+func (r *repoResolver) Worktrees(ctx context.Context, obj *graphql1.Repo) ([]*graphql1.Worktree, error) {
+	if r.Git == nil {
+		return nil, fmt.Errorf("git provider not configured")
+	}
+	worktrees, err := r.Git.ListByProject(ctx, obj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list worktrees for repo %q: %w", obj.ID, err)
+	}
+	out := make([]*graphql1.Worktree, 0, len(worktrees))
+	for _, w := range worktrees {
+		out = append(out, toGraphQLWorktree(w))
+	}
+	return out, nil
 }
 
 // NodeChanged is the resolver for the nodeChanged field.
@@ -759,8 +759,8 @@ func (r *subscriptionResolver) RunChanged(ctx context.Context, repo string, bran
 	return out, nil
 }
 
-// WorktreeChanged is the resolver for Subscription.worktreeChanged (#469 F7). Emits the project's full worktree list whenever the git provider invalidates any worktree belonging to the named project.
-func (r *subscriptionResolver) WorktreeChanged(ctx context.Context, project string) (<-chan []*graphql1.Worktree, error) {
+// WorktreeChanged is the resolver for Subscription.worktreeChanged (#469 F7). Emits the repo's full worktree list whenever the git provider invalidates any worktree belonging to the named repo.
+func (r *subscriptionResolver) WorktreeChanged(ctx context.Context, repo string) (<-chan []*graphql1.Worktree, error) {
 	if r.Git == nil {
 		return nil, fmt.Errorf("git provider not configured")
 	}
@@ -776,10 +776,10 @@ func (r *subscriptionResolver) WorktreeChanged(ctx context.Context, project stri
 				if !ok {
 					return
 				}
-				if !worktreeEventMatchesProject(ev, project) {
+				if !worktreeEventMatchesProject(ev, repo) {
 					continue
 				}
-				worktrees, err := r.Git.ListByProject(ctx, project)
+				worktrees, err := r.Git.ListByProject(ctx, repo)
 				if err != nil {
 					continue
 				}
@@ -1565,14 +1565,14 @@ func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
 // Process returns graphql1.ProcessResolver implementation.
 func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
 
-// Project returns graphql1.ProjectResolver implementation.
-func (r *Resolver) Project() graphql1.ProjectResolver { return &projectResolver{r} }
-
 // PullRequest returns graphql1.PullRequestResolver implementation.
 func (r *Resolver) PullRequest() graphql1.PullRequestResolver { return &pullRequestResolver{r} }
 
 // Query returns graphql1.QueryResolver implementation.
 func (r *Resolver) Query() graphql1.QueryResolver { return &queryResolver{r} }
+
+// Repo returns graphql1.RepoResolver implementation.
+func (r *Resolver) Repo() graphql1.RepoResolver { return &repoResolver{r} }
 
 // Subscription returns graphql1.SubscriptionResolver implementation.
 func (r *Resolver) Subscription() graphql1.SubscriptionResolver { return &subscriptionResolver{r} }
@@ -1597,9 +1597,9 @@ func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolv
 
 type hostResolver struct{ *Resolver }
 type processResolver struct{ *Resolver }
-type projectResolver struct{ *Resolver }
 type pullRequestResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type repoResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 type tmuxClientResolver struct{ *Resolver }
 type tmuxPaneResolver struct{ *Resolver }

@@ -15,9 +15,9 @@ import (
 // than enough on every platform we run on without making failures slow.
 const fsnotifySettleTimeout = 2 * time.Second
 
-func writeConfig(t *testing.T, path string, projects []ProjectRow) {
+func writeConfig(t *testing.T, path string, repos []RepoRow) {
 	t.Helper()
-	f := File{Version: 1, Projects: projects}
+	f := File{Version: 1, Repos: repos}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -51,13 +51,15 @@ func TestProvider_ColdBoot_EmptyFile(t *testing.T) {
 	}
 }
 
+// TestProvider_FetchAll_NormalisesRows verifies that ToRepo() yields
+// the canonical {ID derived from Slug, Path verbatim} shape per ADR-015.
 func TestProvider_FetchAll_NormalisesRows(t *testing.T) {
 	dir := t.TempDir()
 	p, cfgPath := newProviderForTest(t, dir)
-	writeConfig(t, cfgPath, []ProjectRow{
-		{Directory: "/abs/path/to/orchard"},                     // id+name from directory
-		{Directory: "/abs/foo", Name: "Foo Project"},            // id from name slug
-		{ID: "explicit", Directory: "/abs/bar", Name: "Custom"}, // all explicit
+	writeConfig(t, cfgPath, []RepoRow{
+		{Slug: "drewdrewthis/git-orchard-rs", Path: "/abs/path/to/orchard"},
+		{Slug: "langwatch/scenario", Path: "/abs/scenario"},
+		{Slug: "", Path: "/abs/no-slug"}, // slug derived from path basename
 	})
 	if err := p.Start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
@@ -70,32 +72,32 @@ func TestProvider_FetchAll_NormalisesRows(t *testing.T) {
 		t.Fatalf("want 3, got %d (%v)", len(got), got)
 	}
 
-	byID := map[ProjectID]Project{}
-	for _, p := range got {
-		byID[p.ID] = p
+	byID := map[RepoID]Repo{}
+	for _, r := range got {
+		byID[r.ID] = r
 	}
-	if p, ok := byID["orchard"]; !ok || p.Name != "orchard" {
-		t.Errorf("expected slug 'orchard' with name 'orchard', got %+v", p)
+	if r, ok := byID["drewdrewthis/git-orchard-rs"]; !ok || r.Path != "/abs/path/to/orchard" {
+		t.Errorf("expected slug 'drewdrewthis/git-orchard-rs' with /abs/path/to/orchard, got %+v", r)
 	}
-	if p, ok := byID["foo-project"]; !ok || p.Directory != "/abs/foo" {
-		t.Errorf("expected slug 'foo-project' for /abs/foo, got %+v", byID)
+	if r, ok := byID["langwatch/scenario"]; !ok || r.Path != "/abs/scenario" {
+		t.Errorf("expected slug 'langwatch/scenario', got %+v", r)
 	}
-	if p, ok := byID["explicit"]; !ok || p.Name != "Custom" {
-		t.Errorf("expected explicit id 'explicit' with name 'Custom', got %+v", p)
+	if r, ok := byID["no-slug"]; !ok || r.Path != "/abs/no-slug" {
+		t.Errorf("expected slug 'no-slug' derived from path basename, got %+v in %+v", r, byID)
 	}
 }
 
 func TestProvider_GetMany_CoalescesDuplicateKeys(t *testing.T) {
 	dir := t.TempDir()
 	p, cfgPath := newProviderForTest(t, dir)
-	writeConfig(t, cfgPath, []ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
-		{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
+	writeConfig(t, cfgPath, []RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
+		{Slug: "team/beta", Path: "/abs/beta"},
 	})
 	if err := p.Start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	keys := []ProjectID{"alpha", "alpha", "beta", "alpha"}
+	keys := []RepoID{"team/alpha", "team/alpha", "team/beta", "team/alpha"}
 	out, fresh, err := p.GetMany(context.Background(), keys)
 	if err != nil {
 		t.Fatalf("getmany: %v", err)
@@ -103,19 +105,19 @@ func TestProvider_GetMany_CoalescesDuplicateKeys(t *testing.T) {
 	if len(out) != 2 || len(fresh) != 2 {
 		t.Fatalf("expected coalesced 2 entries, got %d/%d", len(out), len(fresh))
 	}
-	if out["alpha"].Directory != "/abs/alpha" {
-		t.Errorf("alpha dir wrong: %+v", out["alpha"])
+	if out["team/alpha"].Path != "/abs/alpha" {
+		t.Errorf("alpha path wrong: %+v", out["team/alpha"])
 	}
-	if out["beta"].Name != "Beta" {
-		t.Errorf("beta name wrong: %+v", out["beta"])
+	if out["team/beta"].DisplayName() != "beta" {
+		t.Errorf("beta display name wrong: %+v", out["team/beta"])
 	}
 }
 
 func TestProvider_FsnotifyReload(t *testing.T) {
 	dir := t.TempDir()
 	p, cfgPath := newProviderForTest(t, dir)
-	writeConfig(t, cfgPath, []ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
+	writeConfig(t, cfgPath, []RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -130,10 +132,10 @@ func TestProvider_FsnotifyReload(t *testing.T) {
 		t.Fatalf("expected 1 cold-load key, got %v", keys)
 	}
 
-	// Modify the file with a second project; fsnotify should reload.
-	writeConfig(t, cfgPath, []ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
-		{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
+	// Modify the file with a second repo; fsnotify should reload.
+	writeConfig(t, cfgPath, []RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
+		{Slug: "team/beta", Path: "/abs/beta"},
 	})
 
 	deadline := time.After(fsnotifySettleTimeout)
@@ -145,19 +147,19 @@ func TestProvider_FsnotifyReload(t *testing.T) {
 			t.Logf("invalidation: %s reason=%s", ev.Key, ev.Reason)
 			ks, _ := p.Keys(ctx)
 			sort.Slice(ks, func(i, j int) bool { return ks[i] < ks[j] })
-			if len(ks) == 2 && ks[0] == "alpha" && ks[1] == "beta" {
+			if len(ks) == 2 && ks[0] == "team/alpha" && ks[1] == "team/beta" {
 				return
 			}
 		}
 	}
 }
 
-func TestProvider_FsnotifyRemoveProject(t *testing.T) {
+func TestProvider_FsnotifyRemoveRepo(t *testing.T) {
 	dir := t.TempDir()
 	p, cfgPath := newProviderForTest(t, dir)
-	writeConfig(t, cfgPath, []ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
-		{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
+	writeConfig(t, cfgPath, []RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
+		{Slug: "team/beta", Path: "/abs/beta"},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -167,8 +169,8 @@ func TestProvider_FsnotifyRemoveProject(t *testing.T) {
 	sub := p.Subscribe(ctx)
 
 	// Drop beta from disk.
-	writeConfig(t, cfgPath, []ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
+	writeConfig(t, cfgPath, []RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
 	})
 
 	deadline := time.After(fsnotifySettleTimeout)
@@ -178,7 +180,7 @@ func TestProvider_FsnotifyRemoveProject(t *testing.T) {
 			t.Fatalf("expected beta removal; cache=%v", mustList(t, p))
 		case <-sub:
 			ks, _ := p.Keys(ctx)
-			if len(ks) == 1 && ks[0] == "alpha" {
+			if len(ks) == 1 && ks[0] == "team/alpha" {
 				return
 			}
 		}
@@ -210,7 +212,24 @@ func TestSlugOrHash_FallsBackOnNonAscii(t *testing.T) {
 	}
 }
 
-func mustList(t *testing.T, p *Provider) []Project {
+// TestRepo_DisplayName covers the basename + slug-suffix derivation.
+func TestRepo_DisplayName(t *testing.T) {
+	cases := []struct {
+		in   Repo
+		want string
+	}{
+		{Repo{Slug: "drewdrewthis/git-orchard-rs", Path: "/Users/x/git-orchard-rs"}, "git-orchard-rs"},
+		{Repo{Slug: "langwatch/scenario", Path: ""}, "scenario"},
+		{Repo{Slug: "lone", Path: "/"}, "lone"},
+	}
+	for _, c := range cases {
+		if got := c.in.DisplayName(); got != c.want {
+			t.Errorf("(%+v).DisplayName() = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func mustList(t *testing.T, p *Provider) []Repo {
 	t.Helper()
 	got, err := p.List(context.Background())
 	if err != nil {

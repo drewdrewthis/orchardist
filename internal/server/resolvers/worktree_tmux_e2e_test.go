@@ -187,10 +187,10 @@ func buildMinimalGitLayout(t *testing.T, dir string) {
 // ----------------------------------------------------------------------
 // Static projects lister (re-declared here; resolvers_test cannot share
 // the one in worktree_dashboard_e2e_test.go because both are in the same
-// package — they are the same type, so we reuse staticProjectsListerE2E
+// package — they are the same type, so we reuse staticReposListerE2E
 // already declared in that file).
 // ----------------------------------------------------------------------
-// NOTE: staticProjectsListerE2E is already declared in
+// NOTE: staticReposListerE2E is already declared in
 // worktree_dashboard_e2e_test.go (same package). We reuse it directly.
 
 // ----------------------------------------------------------------------
@@ -231,11 +231,11 @@ func TestWorktreeTmuxJoin_E2E_LiveQuery(t *testing.T) {
 		t.Fatalf("AddProject empty: %v", err)
 	}
 
-	// ── 3. Static projects lister ─────────────────────────────────────────
-	projects := &staticProjectsListerE2E{
-		records: []configprovider.Project{
-			{ID: configprovider.ProjectID(liveProjectID), Directory: livePath, Name: "wt-live"},
-			{ID: configprovider.ProjectID(emptyProjectID), Directory: emptyPath, Name: "wt-empty"},
+	// ── 3. Static repos lister ────────────────────────────────────────────
+	repos := &staticReposListerE2E{
+		records: []configprovider.Repo{
+			{ID: configprovider.RepoID(liveProjectID), Slug: liveProjectID, Path: livePath},
+			{ID: configprovider.RepoID(emptyProjectID), Slug: emptyProjectID, Path: emptyPath},
 		},
 	}
 
@@ -301,7 +301,7 @@ func TestWorktreeTmuxJoin_E2E_LiveQuery(t *testing.T) {
 		WithGit(gitProv).
 		WithTmux(tmuxProv).
 		WithPS(psProv).
-		WithProjects(projects)
+		WithRepos(repos)
 
 	gqlSrv := handler.New(gqlgen.NewExecutableSchema(gqlgen.Config{Resolvers: r}))
 	gqlSrv.AddTransport(transport.POST{})
@@ -311,7 +311,7 @@ func TestWorktreeTmuxJoin_E2E_LiveQuery(t *testing.T) {
 
 	// ── 7. Fire the query ─────────────────────────────────────────────────
 	const q = `{
-		projects {
+		repos {
 			worktrees {
 				id
 				path
@@ -373,7 +373,7 @@ func TestWorktreeTmuxJoin_E2E_LiveQuery(t *testing.T) {
 	}
 	var out struct {
 		Data struct {
-			Projects []projectShape `json:"projects"`
+			Repos []projectShape `json:"repos"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
@@ -388,7 +388,7 @@ func TestWorktreeTmuxJoin_E2E_LiveQuery(t *testing.T) {
 
 	// ── 11. Collect all worktrees from both projects ───────────────────────
 	var allWorktrees []worktreeShape
-	for _, proj := range out.Data.Projects {
+	for _, proj := range out.Data.Repos {
 		allWorktrees = append(allWorktrees, proj.Worktrees...)
 	}
 

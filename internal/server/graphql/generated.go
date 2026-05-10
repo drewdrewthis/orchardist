@@ -41,9 +41,9 @@ type Config struct {
 type ResolverRoot interface {
 	Host() HostResolver
 	Process() ProcessResolver
-	Project() ProjectResolver
 	PullRequest() PullRequestResolver
 	Query() QueryResolver
+	Repo() RepoResolver
 	Subscription() SubscriptionResolver
 	TmuxClient() TmuxClientResolver
 	TmuxPane() TmuxPaneResolver
@@ -201,13 +201,6 @@ type ComplexityRoot struct {
 		Worktree       func(childComplexity int) int
 	}
 
-	Project struct {
-		Directory func(childComplexity int) int
-		ID        func(childComplexity int) int
-		Name      func(childComplexity int) int
-		Worktrees func(childComplexity int) int
-	}
-
 	ProviderHealth struct {
 		Configured            func(childComplexity int) int
 		FailureCount          func(childComplexity int) int
@@ -267,15 +260,22 @@ type ComplexityRoot struct {
 		Node             func(childComplexity int, id string) int
 		OpenPullRequests func(childComplexity int, repo string, author *string) int
 		Peers            func(childComplexity int) int
-		Projects         func(childComplexity int) int
 		PullRequest      func(childComplexity int, repo string, number int64) int
 		PullRequests     func(childComplexity int, repo string, state *PullRequestState) int
+		Repos            func(childComplexity int) int
 		SchemaSdl        func(childComplexity int) int
 		TmuxPanes        func(childComplexity int, filter *TmuxPaneFilter) int
 		TmuxServer       func(childComplexity int) int
 		TmuxSessions     func(childComplexity int, filter *TmuxSessionFilter) int
 		WorkView         func(childComplexity int) int
 		WorkflowRuns     func(childComplexity int, repo string) int
+	}
+
+	Repo struct {
+		ID        func(childComplexity int) int
+		Path      func(childComplexity int) int
+		Slug      func(childComplexity int) int
+		Worktrees func(childComplexity int) int
 	}
 
 	ResourceLoad struct {
@@ -295,7 +295,7 @@ type ComplexityRoot struct {
 		PullRequestChanged  func(childComplexity int, repo string, number int64) int
 		RunChanged          func(childComplexity int, repo string, branch string) int
 		TmuxSessionsChanged func(childComplexity int) int
-		WorktreeChanged     func(childComplexity int, project string) int
+		WorktreeChanged     func(childComplexity int, repo string) int
 	}
 
 	TmuxClient struct {
@@ -365,7 +365,7 @@ type ComplexityRoot struct {
 	WorkView struct {
 		ClaudeInstances func(childComplexity int) int
 		Meta            func(childComplexity int) int
-		Projects        func(childComplexity int) int
+		Repos           func(childComplexity int) int
 		TmuxSessions    func(childComplexity int) int
 	}
 
@@ -414,9 +414,6 @@ type ProcessResolver interface {
 	Worktree(ctx context.Context, obj *Process) (*Worktree, error)
 	ClaudeInstance(ctx context.Context, obj *Process) (*ClaudeInstance, error)
 }
-type ProjectResolver interface {
-	Worktrees(ctx context.Context, obj *Project) ([]*Worktree, error)
-}
 type PullRequestResolver interface {
 	Mergeable(ctx context.Context, obj *PullRequest) (MergeableState, error)
 	MergeStateStatus(ctx context.Context, obj *PullRequest) (string, error)
@@ -428,7 +425,7 @@ type QueryResolver interface {
 	Health(ctx context.Context) (*Health, error)
 	Host(ctx context.Context) (*Host, error)
 	Hosts(ctx context.Context) ([]*Host, error)
-	Projects(ctx context.Context) ([]*Project, error)
+	Repos(ctx context.Context) ([]*Repo, error)
 	TmuxServer(ctx context.Context) (*TmuxServer, error)
 	TmuxSessions(ctx context.Context, filter *TmuxSessionFilter) ([]*TmuxSession, error)
 	TmuxPanes(ctx context.Context, filter *TmuxPaneFilter) ([]*TmuxPane, error)
@@ -452,6 +449,9 @@ type QueryResolver interface {
 	WorkView(ctx context.Context) (*WorkView, error)
 	DaemonState(ctx context.Context) (*DaemonState, error)
 }
+type RepoResolver interface {
+	Worktrees(ctx context.Context, obj *Repo) ([]*Worktree, error)
+}
 type SubscriptionResolver interface {
 	NodeChanged(ctx context.Context, id string) (<-chan Node, error)
 	Processes(ctx context.Context) (<-chan []*Process, error)
@@ -459,7 +459,7 @@ type SubscriptionResolver interface {
 	TmuxSessionsChanged(ctx context.Context) (<-chan []*TmuxSession, error)
 	PullRequestChanged(ctx context.Context, repo string, number int64) (<-chan *PullRequest, error)
 	RunChanged(ctx context.Context, repo string, branch string) (<-chan *WorkflowRun, error)
-	WorktreeChanged(ctx context.Context, project string) (<-chan []*Worktree, error)
+	WorktreeChanged(ctx context.Context, repo string) (<-chan []*Worktree, error)
 	ConversationChanged(ctx context.Context, sessionUUID string) (<-chan *Conversation, error)
 }
 type TmuxClientResolver interface {
@@ -1284,34 +1284,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Process.Worktree(childComplexity), true
 
-	case "Project.directory":
-		if e.complexity.Project.Directory == nil {
-			break
-		}
-
-		return e.complexity.Project.Directory(childComplexity), true
-
-	case "Project.id":
-		if e.complexity.Project.ID == nil {
-			break
-		}
-
-		return e.complexity.Project.ID(childComplexity), true
-
-	case "Project.name":
-		if e.complexity.Project.Name == nil {
-			break
-		}
-
-		return e.complexity.Project.Name(childComplexity), true
-
-	case "Project.worktrees":
-		if e.complexity.Project.Worktrees == nil {
-			break
-		}
-
-		return e.complexity.Project.Worktrees(childComplexity), true
-
 	case "ProviderHealth.configured":
 		if e.complexity.ProviderHealth.Configured == nil {
 			break
@@ -1700,13 +1672,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.Peers(childComplexity), true
 
-	case "Query.projects":
-		if e.complexity.Query.Projects == nil {
-			break
-		}
-
-		return e.complexity.Query.Projects(childComplexity), true
-
 	case "Query.pullRequest":
 		if e.complexity.Query.PullRequest == nil {
 			break
@@ -1730,6 +1695,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Query.PullRequests(childComplexity, args["repo"].(string), args["state"].(*PullRequestState)), true
+
+	case "Query.repos":
+		if e.complexity.Query.Repos == nil {
+			break
+		}
+
+		return e.complexity.Query.Repos(childComplexity), true
 
 	case "Query.schemaSDL":
 		if e.complexity.Query.SchemaSdl == nil {
@@ -1787,6 +1759,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Query.WorkflowRuns(childComplexity, args["repo"].(string)), true
+
+	case "Repo.id":
+		if e.complexity.Repo.ID == nil {
+			break
+		}
+
+		return e.complexity.Repo.ID(childComplexity), true
+
+	case "Repo.path":
+		if e.complexity.Repo.Path == nil {
+			break
+		}
+
+		return e.complexity.Repo.Path(childComplexity), true
+
+	case "Repo.slug":
+		if e.complexity.Repo.Slug == nil {
+			break
+		}
+
+		return e.complexity.Repo.Slug(childComplexity), true
+
+	case "Repo.worktrees":
+		if e.complexity.Repo.Worktrees == nil {
+			break
+		}
+
+		return e.complexity.Repo.Worktrees(childComplexity), true
 
 	case "ResourceLoad.cpuPercent":
 		if e.complexity.ResourceLoad.CPUPercent == nil {
@@ -1914,7 +1914,7 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 			return 0, false
 		}
 
-		return e.complexity.Subscription.WorktreeChanged(childComplexity, args["project"].(string)), true
+		return e.complexity.Subscription.WorktreeChanged(childComplexity, args["repo"].(string)), true
 
 	case "TmuxClient.attachedAt":
 		if e.complexity.TmuxClient.AttachedAt == nil {
@@ -2293,12 +2293,12 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.WorkView.Meta(childComplexity), true
 
-	case "WorkView.projects":
-		if e.complexity.WorkView.Projects == nil {
+	case "WorkView.repos":
+		if e.complexity.WorkView.Repos == nil {
 			break
 		}
 
-		return e.complexity.WorkView.Projects(childComplexity), true
+		return e.complexity.WorkView.Repos(childComplexity), true
 
 	case "WorkView.tmuxSessions":
 		if e.complexity.WorkView.TmuxSessions == nil {
@@ -2602,8 +2602,8 @@ var sources = []*ast.Source{
 #
 # Workstream A: only the ` + "`" + `health` + "`" + ` field.
 # Workstream B-host: Host node + ResourceLoad.
-# Workstream B-config: Project node — projects declared in orchard config.
-# Workstream B-git: Worktree node + Project.worktrees back-edge.
+# Workstream B-config: Repo node — repos declared in orchard config.
+# Workstream B-git: Worktree node + Repo.worktrees back-edge.
 # Workstream B-ps: full Process node + Host.processes(filter).
 # Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
 # Workstream B-claudeprojects: Conversation node + Time scalar; backed by
@@ -2763,8 +2763,8 @@ type Query {
   "All hosts known to this daemon. v1: only the local host. Workstream F adds federated peers."
   hosts: [Host!]!
 
-  "All projects declared in ~/.orchard/config.json. Read-only — projects are added with ` + "`" + `orchard config add-repo` + "`" + `."
-  projects: [Project!]!
+  "All repos declared in ~/.orchard/config.json. Read-only — repos are added with ` + "`" + `orchard config add-repo` + "`" + `."
+  repos: [Repo!]!
 
   "The tmux server running on the local host. Null when no tmux daemon is reachable."
   tmuxServer: TmuxServer
@@ -2775,7 +2775,7 @@ type Query {
   "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
   tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
 
-  "Every Claude Code conversation discovered under the projects root. Latest-first by lastSeenAt."
+  "Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt."
   conversations: [Conversation!]!
 
   "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
@@ -2819,7 +2819,7 @@ type Query {
 
   """
   All open pull requests on a GitHub repository, optionally filtered by
-  author login. Unlike ` + "`" + `Project.pullRequests` + "`" + ` (which only sees PRs whose
+  author login. Unlike ` + "`" + `Repo.pullRequests` + "`" + ` (which only sees PRs whose
   branch is locally checked out), this returns every open PR on the
   repo. Used by /standup-style "give me all my open PRs" gathers.
   Resolves issue #435.
@@ -2884,7 +2884,7 @@ type Query {
 
   """
   Composite "what's running, where, on what branch?" view (#469 F6).
-  Walks the local projects → worktrees graph and joins each worktree
+  Walks the local repos → worktrees graph and joins each worktree
   to its open PR, linked issue, processes, and tmux sessions in a
   single round trip. The fields underneath reuse existing resolvers,
   so semantics match per-field queries.
@@ -2905,8 +2905,8 @@ Returns the same data the per-type resolvers return, joined into a
 single tree to save round trips.
 """
 type WorkView {
-  "Projects in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
-  projects: [Project!]!
+  "Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
+  repos: [Repo!]!
 
   "Tmux sessions on the local host — same as Query.tmuxSessions with no filter."
   tmuxSessions: [TmuxSession!]!
@@ -3025,11 +3025,11 @@ type Subscription {
   runChanged(repo: String!, branch: String!): WorkflowRun!
 
   """
-  Per-project worktree firehose (#469 F7). Emits the project's full
+  Per-repo worktree firehose (#469 F7). Emits the repo's full
   worktree list whenever the git provider invalidates any worktree
-  belonging to the named project. The argument is the Project id.
+  belonging to the named repo. The argument is the Repo id.
   """
-  worktreeChanged(project: ID!): [Worktree!]!
+  worktreeChanged(repo: ID!): [Worktree!]!
 
   """
   Push-on-change for one Claude Code conversation, keyed by sessionUuid.
@@ -3116,18 +3116,18 @@ type ResourceLoad {
   loadAvg15m: Float!
 }
 
-"A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
-type Project implements Node {
-  "Stable identifier — slug of ` + "`" + `name` + "`" + `, falling back to a short hash of ` + "`" + `directory` + "`" + `. Survives re-registration."
+"A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Repo implements Node {
+  "Stable identifier derived from ` + "`" + `slug` + "`" + `. Survives re-registration."
   id: ID!
 
-  "Absolute filesystem path to the project's working tree."
-  directory: String!
+  "GitHub-style ` + "`" + `owner/repo` + "`" + ` slug. The repo's identity."
+  slug: String!
 
-  "Human-readable label. Defaults to the basename of ` + "`" + `directory` + "`" + ` when not specified in the config."
-  name: String!
+  "Absolute filesystem path to the repo's working tree."
+  path: String!
 
-  "Worktrees discovered for this project — the project's main checkout plus everything under ` + "`" + `.git/worktrees/` + "`" + `."
+  "Worktrees discovered for this repo — the main checkout plus everything under ` + "`" + `.git/worktrees/` + "`" + `."
   worktrees: [Worktree!]!
 }
 
@@ -4228,14 +4228,14 @@ func (ec *executionContext) field_Subscription_worktreeChanged_args(ctx context.
 	var err error
 	args := map[string]interface{}{}
 	var arg0 string
-	if tmp, ok := rawArgs["project"]; ok {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("project"))
+	if tmp, ok := rawArgs["repo"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repo"))
 		arg0, err = ec.unmarshalNID2string(ctx, tmp)
 		if err != nil {
 			return nil, err
 		}
 	}
-	args["project"] = arg0
+	args["repo"] = arg0
 	return args, nil
 }
 
@@ -9246,208 +9246,6 @@ func (ec *executionContext) fieldContext_Process_claudeInstance(ctx context.Cont
 	return fc, nil
 }
 
-func (ec *executionContext) _Project_id(ctx context.Context, field graphql.CollectedField, obj *Project) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Project_id(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.ID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Project_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Project",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Project_directory(ctx context.Context, field graphql.CollectedField, obj *Project) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Project_directory(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Directory, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Project_directory(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Project",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Project_name(ctx context.Context, field graphql.CollectedField, obj *Project) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Project_name(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Name, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Project_name(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Project",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Project_worktrees(ctx context.Context, field graphql.CollectedField, obj *Project) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Project_worktrees(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Project().Worktrees(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*Worktree)
-	fc.Result = res
-	return ec.marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Project_worktrees(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Project",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Worktree_id(ctx, field)
-			case "path":
-				return ec.fieldContext_Worktree_path(ctx, field)
-			case "branch":
-				return ec.fieldContext_Worktree_branch(ctx, field)
-			case "head":
-				return ec.fieldContext_Worktree_head(ctx, field)
-			case "bare":
-				return ec.fieldContext_Worktree_bare(ctx, field)
-			case "host":
-				return ec.fieldContext_Worktree_host(ctx, field)
-			case "repo":
-				return ec.fieldContext_Worktree_repo(ctx, field)
-			case "pr":
-				return ec.fieldContext_Worktree_pr(ctx, field)
-			case "issue":
-				return ec.fieldContext_Worktree_issue(ctx, field)
-			case "processes":
-				return ec.fieldContext_Worktree_processes(ctx, field)
-			case "tmuxPanes":
-				return ec.fieldContext_Worktree_tmuxPanes(ctx, field)
-			case "tmuxSession":
-				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _ProviderHealth_name(ctx context.Context, field graphql.CollectedField, obj *ProviderHealth) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ProviderHealth_name(ctx, field)
 	if err != nil {
@@ -11055,8 +10853,8 @@ func (ec *executionContext) fieldContext_Query_hosts(ctx context.Context, field 
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_projects(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_projects(ctx, field)
+func (ec *executionContext) _Query_repos(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_repos(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -11069,7 +10867,7 @@ func (ec *executionContext) _Query_projects(ctx context.Context, field graphql.C
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().Projects(rctx)
+		return ec.resolvers.Query().Repos(rctx)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -11081,12 +10879,12 @@ func (ec *executionContext) _Query_projects(ctx context.Context, field graphql.C
 		}
 		return graphql.Null
 	}
-	res := resTmp.([]*Project)
+	res := resTmp.([]*Repo)
 	fc.Result = res
-	return ec.marshalNProject2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProjectᚄ(ctx, field.Selections, res)
+	return ec.marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_Query_projects(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Query_repos(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Query",
 		Field:      field,
@@ -11095,15 +10893,15 @@ func (ec *executionContext) fieldContext_Query_projects(ctx context.Context, fie
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "id":
-				return ec.fieldContext_Project_id(ctx, field)
-			case "directory":
-				return ec.fieldContext_Project_directory(ctx, field)
-			case "name":
-				return ec.fieldContext_Project_name(ctx, field)
+				return ec.fieldContext_Repo_id(ctx, field)
+			case "slug":
+				return ec.fieldContext_Repo_slug(ctx, field)
+			case "path":
+				return ec.fieldContext_Repo_path(ctx, field)
 			case "worktrees":
-				return ec.fieldContext_Project_worktrees(ctx, field)
+				return ec.fieldContext_Repo_worktrees(ctx, field)
 			}
-			return nil, fmt.Errorf("no field named %q was found under type Project", field.Name)
+			return nil, fmt.Errorf("no field named %q was found under type Repo", field.Name)
 		},
 	}
 	return fc, nil
@@ -12624,8 +12422,8 @@ func (ec *executionContext) fieldContext_Query_workView(ctx context.Context, fie
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "projects":
-				return ec.fieldContext_WorkView_projects(ctx, field)
+			case "repos":
+				return ec.fieldContext_WorkView_repos(ctx, field)
 			case "tmuxSessions":
 				return ec.fieldContext_WorkView_tmuxSessions(ctx, field)
 			case "claudeInstances":
@@ -12815,6 +12613,208 @@ func (ec *executionContext) fieldContext_Query___schema(ctx context.Context, fie
 				return ec.fieldContext___Schema_directives(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type __Schema", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Repo_id(ctx context.Context, field graphql.CollectedField, obj *Repo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Repo_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Repo_id(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Repo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Repo_slug(ctx context.Context, field graphql.CollectedField, obj *Repo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Repo_slug(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Slug, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Repo_slug(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Repo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Repo_path(ctx context.Context, field graphql.CollectedField, obj *Repo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Repo_path(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Path, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Repo_path(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Repo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Repo_worktrees(ctx context.Context, field graphql.CollectedField, obj *Repo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Repo_worktrees(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Repo().Worktrees(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*Worktree)
+	fc.Result = res
+	return ec.marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Repo_worktrees(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Repo",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Worktree_id(ctx, field)
+			case "path":
+				return ec.fieldContext_Worktree_path(ctx, field)
+			case "branch":
+				return ec.fieldContext_Worktree_branch(ctx, field)
+			case "head":
+				return ec.fieldContext_Worktree_head(ctx, field)
+			case "bare":
+				return ec.fieldContext_Worktree_bare(ctx, field)
+			case "host":
+				return ec.fieldContext_Worktree_host(ctx, field)
+			case "repo":
+				return ec.fieldContext_Worktree_repo(ctx, field)
+			case "pr":
+				return ec.fieldContext_Worktree_pr(ctx, field)
+			case "issue":
+				return ec.fieldContext_Worktree_issue(ctx, field)
+			case "processes":
+				return ec.fieldContext_Worktree_processes(ctx, field)
+			case "tmuxPanes":
+				return ec.fieldContext_Worktree_tmuxPanes(ctx, field)
+			case "tmuxSession":
+				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
 	}
 	return fc, nil
@@ -13609,7 +13609,7 @@ func (ec *executionContext) _Subscription_worktreeChanged(ctx context.Context, f
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Subscription().WorktreeChanged(rctx, fc.Args["project"].(string))
+		return ec.resolvers.Subscription().WorktreeChanged(rctx, fc.Args["repo"].(string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -16326,8 +16326,8 @@ func (ec *executionContext) fieldContext_TmuxWindow_currentPane(ctx context.Cont
 	return fc, nil
 }
 
-func (ec *executionContext) _WorkView_projects(ctx context.Context, field graphql.CollectedField, obj *WorkView) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_WorkView_projects(ctx, field)
+func (ec *executionContext) _WorkView_repos(ctx context.Context, field graphql.CollectedField, obj *WorkView) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_WorkView_repos(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -16340,7 +16340,7 @@ func (ec *executionContext) _WorkView_projects(ctx context.Context, field graphq
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.Projects, nil
+		return obj.Repos, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -16352,12 +16352,12 @@ func (ec *executionContext) _WorkView_projects(ctx context.Context, field graphq
 		}
 		return graphql.Null
 	}
-	res := resTmp.([]*Project)
+	res := resTmp.([]*Repo)
 	fc.Result = res
-	return ec.marshalNProject2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProjectᚄ(ctx, field.Selections, res)
+	return ec.marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_WorkView_projects(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_WorkView_repos(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "WorkView",
 		Field:      field,
@@ -16366,15 +16366,15 @@ func (ec *executionContext) fieldContext_WorkView_projects(ctx context.Context, 
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "id":
-				return ec.fieldContext_Project_id(ctx, field)
-			case "directory":
-				return ec.fieldContext_Project_directory(ctx, field)
-			case "name":
-				return ec.fieldContext_Project_name(ctx, field)
+				return ec.fieldContext_Repo_id(ctx, field)
+			case "slug":
+				return ec.fieldContext_Repo_slug(ctx, field)
+			case "path":
+				return ec.fieldContext_Repo_path(ctx, field)
 			case "worktrees":
-				return ec.fieldContext_Project_worktrees(ctx, field)
+				return ec.fieldContext_Repo_worktrees(ctx, field)
 			}
-			return nil, fmt.Errorf("no field named %q was found under type Project", field.Name)
+			return nil, fmt.Errorf("no field named %q was found under type Repo", field.Name)
 		},
 	}
 	return fc, nil
@@ -19832,13 +19832,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Host(ctx, sel, obj)
-	case Project:
-		return ec._Project(ctx, sel, &obj)
-	case *Project:
+	case Repo:
+		return ec._Repo(ctx, sel, &obj)
+	case *Repo:
 		if obj == nil {
 			return graphql.Null
 		}
-		return ec._Project(ctx, sel, obj)
+		return ec._Repo(ctx, sel, obj)
 	case Worktree:
 		return ec._Worktree(ctx, sel, &obj)
 	case *Worktree:
@@ -21024,91 +21024,6 @@ func (ec *executionContext) _Process(ctx context.Context, sel ast.SelectionSet, 
 	return out
 }
 
-var projectImplementors = []string{"Project", "Node"}
-
-func (ec *executionContext) _Project(ctx context.Context, sel ast.SelectionSet, obj *Project) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, projectImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("Project")
-		case "id":
-			out.Values[i] = ec._Project_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "directory":
-			out.Values[i] = ec._Project_directory(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "name":
-			out.Values[i] = ec._Project_name(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "worktrees":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Project_worktrees(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var providerHealthImplementors = []string{"ProviderHealth"}
 
 func (ec *executionContext) _ProviderHealth(ctx context.Context, sel ast.SelectionSet, obj *ProviderHealth) graphql.Marshaler {
@@ -21596,7 +21511,7 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "projects":
+		case "repos":
 			field := field
 
 			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
@@ -21605,7 +21520,7 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 						ec.Error(ctx, ec.Recover(ctx, r))
 					}
 				}()
-				res = ec._Query_projects(ctx, field)
+				res = ec._Query_repos(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -22080,6 +21995,91 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___schema(ctx, field)
 			})
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var repoImplementors = []string{"Repo", "Node"}
+
+func (ec *executionContext) _Repo(ctx context.Context, sel ast.SelectionSet, obj *Repo) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, repoImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Repo")
+		case "id":
+			out.Values[i] = ec._Repo_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "slug":
+			out.Values[i] = ec._Repo_slug(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "path":
+			out.Values[i] = ec._Repo_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "worktrees":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Repo_worktrees(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -23837,8 +23837,8 @@ func (ec *executionContext) _WorkView(ctx context.Context, sel ast.SelectionSet,
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("WorkView")
-		case "projects":
-			out.Values[i] = ec._WorkView_projects(ctx, field, obj)
+		case "repos":
+			out.Values[i] = ec._WorkView_repos(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -25228,60 +25228,6 @@ func (ec *executionContext) marshalNProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgit
 	return ec._Process(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProject2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProjectᚄ(ctx context.Context, sel ast.SelectionSet, v []*Project) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNProject2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProject(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNProject2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProject(ctx context.Context, sel ast.SelectionSet, v *Project) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._Project(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNProviderHealth2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProviderHealthᚄ(ctx context.Context, sel ast.SelectionSet, v []*ProviderHealth) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
@@ -25412,6 +25358,60 @@ func (ec *executionContext) unmarshalNPullRequestState2githubᚗcomᚋdrewdrewth
 
 func (ec *executionContext) marshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, sel ast.SelectionSet, v PullRequestState) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx context.Context, sel ast.SelectionSet, v []*Repo) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNRepo2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepo(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNRepo2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepo(ctx context.Context, sel ast.SelectionSet, v *Repo) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Repo(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v interface{}) (string, error) {

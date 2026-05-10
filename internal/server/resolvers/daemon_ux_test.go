@@ -99,7 +99,7 @@ func TestWorkView_EmptyResolverReturnsEmptyLists(t *testing.T) {
 	if view == nil {
 		t.Fatal("WorkView returned nil")
 	}
-	if view.Projects == nil || view.TmuxSessions == nil || view.ClaudeInstances == nil {
+	if view.Repos == nil || view.TmuxSessions == nil || view.ClaudeInstances == nil {
 		t.Errorf("WorkView returned nil slices; expected empty: %+v", view)
 	}
 	if view.Meta == nil {

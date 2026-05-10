@@ -6,8 +6,8 @@
 #
 # Workstream A: only the `health` field.
 # Workstream B-host: Host node + ResourceLoad.
-# Workstream B-config: Project node — projects declared in orchard config.
-# Workstream B-git: Worktree node + Project.worktrees back-edge.
+# Workstream B-config: Repo node — repos declared in orchard config.
+# Workstream B-git: Worktree node + Repo.worktrees back-edge.
 # Workstream B-ps: full Process node + Host.processes(filter).
 # Workstream B-tmux: TmuxServer/Session/Window/Pane/Client + filtered queries.
 # Workstream B-claudeprojects: Conversation node + Time scalar; backed by
@@ -167,8 +167,8 @@ type Query {
   "All hosts known to this daemon. v1: only the local host. Workstream F adds federated peers."
   hosts: [Host!]!
 
-  "All projects declared in ~/.orchard/config.json. Read-only — projects are added with `orchard config add-repo`."
-  projects: [Project!]!
+  "All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`."
+  repos: [Repo!]!
 
   "The tmux server running on the local host. Null when no tmux daemon is reachable."
   tmuxServer: TmuxServer
@@ -179,7 +179,7 @@ type Query {
   "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
   tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
 
-  "Every Claude Code conversation discovered under the projects root. Latest-first by lastSeenAt."
+  "Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt."
   conversations: [Conversation!]!
 
   "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
@@ -223,7 +223,7 @@ type Query {
 
   """
   All open pull requests on a GitHub repository, optionally filtered by
-  author login. Unlike `Project.pullRequests` (which only sees PRs whose
+  author login. Unlike `Repo.pullRequests` (which only sees PRs whose
   branch is locally checked out), this returns every open PR on the
   repo. Used by /standup-style "give me all my open PRs" gathers.
   Resolves issue #435.
@@ -288,7 +288,7 @@ type Query {
 
   """
   Composite "what's running, where, on what branch?" view (#469 F6).
-  Walks the local projects → worktrees graph and joins each worktree
+  Walks the local repos → worktrees graph and joins each worktree
   to its open PR, linked issue, processes, and tmux sessions in a
   single round trip. The fields underneath reuse existing resolvers,
   so semantics match per-field queries.
@@ -309,8 +309,8 @@ Returns the same data the per-type resolvers return, joined into a
 single tree to save round trips.
 """
 type WorkView {
-  "Projects in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
-  projects: [Project!]!
+  "Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
+  repos: [Repo!]!
 
   "Tmux sessions on the local host — same as Query.tmuxSessions with no filter."
   tmuxSessions: [TmuxSession!]!
@@ -429,11 +429,11 @@ type Subscription {
   runChanged(repo: String!, branch: String!): WorkflowRun!
 
   """
-  Per-project worktree firehose (#469 F7). Emits the project's full
+  Per-repo worktree firehose (#469 F7). Emits the repo's full
   worktree list whenever the git provider invalidates any worktree
-  belonging to the named project. The argument is the Project id.
+  belonging to the named repo. The argument is the Repo id.
   """
-  worktreeChanged(project: ID!): [Worktree!]!
+  worktreeChanged(repo: ID!): [Worktree!]!
 
   """
   Push-on-change for one Claude Code conversation, keyed by sessionUuid.
@@ -520,18 +520,18 @@ type ResourceLoad {
   loadAvg15m: Float!
 }
 
-"A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
-type Project implements Node {
-  "Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration."
+"A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Repo implements Node {
+  "Stable identifier derived from `slug`. Survives re-registration."
   id: ID!
 
-  "Absolute filesystem path to the project's working tree."
-  directory: String!
+  "GitHub-style `owner/repo` slug. The repo's identity."
+  slug: String!
 
-  "Human-readable label. Defaults to the basename of `directory` when not specified in the config."
-  name: String!
+  "Absolute filesystem path to the repo's working tree."
+  path: String!
 
-  "Worktrees discovered for this project — the project's main checkout plus everything under `.git/worktrees/`."
+  "Worktrees discovered for this repo — the main checkout plus everything under `.git/worktrees/`."
   worktrees: [Worktree!]!
 }
 

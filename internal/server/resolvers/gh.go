@@ -15,6 +15,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
@@ -220,51 +221,6 @@ func coerceGhVariables(v interface{}) (map[string]any, error) {
 	return nil, fmt.Errorf("gh: variables must be a JSON object or null, got %T", v)
 }
 
-// projectPullRequestsResolver implements `Project.pullRequests(state)`.
-//
-// Resolves the project's `origin` remote → `owner/repo` and delegates
-// to the gh provider. Projects whose origin is not a GitHub URL get an
-// empty list — that is not an error; the project simply has no GitHub
-// surface. An ErrNotAuthenticated from the provider does propagate.
-func (r *projectResolver) projectPullRequestsResolver(ctx context.Context, obj *graphql1.Project, state *graphql1.PullRequestState) ([]*graphql1.PullRequest, error) {
-	if r.GH == nil {
-		return nil, errGHNotConfigured
-	}
-	owner, name, ok := projectGitHubRepo(obj)
-	if !ok {
-		return []*graphql1.PullRequest{}, nil
-	}
-	prs, err := r.GH.ListPullRequests(ctx, owner, name, mapPRState(state))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*graphql1.PullRequest, 0, len(prs))
-	for _, p := range prs {
-		out = append(out, toGraphQLPullRequest(p))
-	}
-	return out, nil
-}
-
-// projectIssuesResolver implements `Project.issues(state)`.
-func (r *projectResolver) projectIssuesResolver(ctx context.Context, obj *graphql1.Project, state *graphql1.IssueState) ([]*graphql1.Issue, error) {
-	if r.GH == nil {
-		return nil, errGHNotConfigured
-	}
-	owner, name, ok := projectGitHubRepo(obj)
-	if !ok {
-		return []*graphql1.Issue{}, nil
-	}
-	issues, err := r.GH.ListIssues(ctx, owner, name, mapIssueState(state))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*graphql1.Issue, 0, len(issues))
-	for _, i := range issues {
-		out = append(out, toGraphQLIssue(i))
-	}
-	return out, nil
-}
-
 // Per-PR/Issue review and comment edges are auto-bound to struct fields;
 // the gh provider populates them eagerly inside ListPullRequests / ListIssues.
 // If lazy fetching is desired in a future workstream, register Reviews
@@ -338,15 +294,24 @@ func mapIssueStateBack(s gh.IssueState) graphql1.IssueState {
 	}
 }
 
-// projectGitHubRepo derives owner / repo for a Project by reading its
-// `.git/config` file directly. Returns ok=false when the directory is
-// not a git repo, has no origin remote, or the origin is not a GitHub
-// URL — the resolver then surfaces an empty list rather than an error.
-func projectGitHubRepo(obj *graphql1.Project) (owner, name string, ok bool) {
+// repoGitHubRepo derives owner / repo for a Repo. Per ADR-015 the slug
+// IS the GitHub identity, so the slug short-circuits the lookup. The
+// fallback (read the origin URL from `.git/config`) covers Repo nodes
+// constructed without a slug — e.g. legacy peer-proxy stubs.
+// Returns ok=false when neither path produces a valid owner/name pair.
+func repoGitHubRepo(obj *graphql1.Repo) (owner, name string, ok bool) {
 	if obj == nil {
 		return "", "", false
 	}
-	url, err := gh.ReadOriginURL(obj.Directory)
+	if obj.Slug != "" {
+		if i := strings.IndexByte(obj.Slug, '/'); i > 0 && i+1 < len(obj.Slug) {
+			return obj.Slug[:i], obj.Slug[i+1:], true
+		}
+	}
+	if obj.Path == "" {
+		return "", "", false
+	}
+	url, err := gh.ReadOriginURL(obj.Path)
 	if err != nil {
 		return "", "", false
 	}

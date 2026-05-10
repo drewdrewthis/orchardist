@@ -1,10 +1,14 @@
-// Package config implements the orchard `Project` provider.
+// Package config implements the orchard `Repo` provider.
 //
-// Per ADR-011 §5.1 a Project is declared in ~/.orchard/config.json
-// and is read-only from orchard's POV. Mutations are CLI-driven edits to
-// the config file; the running daemon reflects them via fsnotify. This
+// Per ADR-015 a Repo is declared in ~/.orchard/config.json and is
+// read-only from orchard's POV. Mutations are CLI-driven edits to the
+// config file; the running daemon reflects them via fsnotify. This
 // package owns the file format, the JSON adapter, and the provider that
-// surfaces Projects to the GraphQL resolver.
+// surfaces Repos to the GraphQL resolver.
+//
+// Schema: per ADR-015 the file has exactly three top-level keys —
+// `version`, `repos`, and `peers`. Older shapes (`projects[]`) are not
+// supported on read or write.
 package config
 
 import (
@@ -19,66 +23,102 @@ import (
 // request-scoped DataLoader depend on. Defined here (consumer-side) so
 // callers don't reach into the full Provider surface.
 type Lister interface {
-	List(ctx context.Context) ([]Project, error)
+	List(ctx context.Context) ([]Repo, error)
 }
 
-// ProjectID is the stable identifier for a project across config edits
-// and daemon restarts.
-type ProjectID string
+// RepoID is the stable identifier for a repo across config edits and
+// daemon restarts. Derived from the slug.
+type RepoID string
 
-// Project is the in-memory representation of a configured project.
-// The wire-level GraphQL type lives in internal/server/graphql; this
-// type is what the provider stores and what the resolver maps from.
-type Project struct {
-	ID        ProjectID `json:"id"`
-	Directory string    `json:"directory"`
-	Name      string    `json:"name"`
+// Repo is the in-memory representation of a configured repo. The
+// wire-level GraphQL type lives in internal/server/graphql; this type
+// is what the provider stores and what the resolver maps from.
+type Repo struct {
+	ID   RepoID `json:"id"`
+	Slug string `json:"slug"`
+	Path string `json:"path"`
 }
 
-// File is the on-disk shape of ~/.orchard/config.json.
+// File is the on-disk shape of ~/.orchard/config.json (ADR-015).
 //
-// Versioning is explicit so future schema bumps can be detected. v1
-// carries only `projects`; later workstreams may add fields. Unknown
-// fields are tolerated (json.Unmarshal default behaviour) so older
-// daemons can read newer configs without crashing.
+// Three top-level keys: `version`, `repos`, `peers`. Unknown fields are
+// tolerated on read (json.Unmarshal default behaviour) so older daemons
+// can read newer configs without crashing. On write, only these three
+// keys are emitted.
 type File struct {
-	Version  int          `json:"version"`
-	Projects []ProjectRow `json:"projects"`
+	Version int        `json:"version"`
+	Repos   []RepoRow  `json:"repos"`
+	Peers   []PeerRow  `json:"peers,omitempty"`
 }
 
-// ProjectRow is one entry in `projects`. All three fields are emitted by
-// `orchard config add-repo`; `id` is normalised to a slug if blank, and
-// `name` defaults to the basename of `directory` if blank.
-type ProjectRow struct {
-	ID        ProjectID `json:"id"`
-	Directory string    `json:"directory"`
-	Name      string    `json:"name"`
+// RepoRow is one entry in `repos`. Identity is `slug`; display name is
+// derived from `path`. The `Remotes` array is preserved verbatim from
+// disk for callers that need cross-machine SSH worktree config; the
+// daemon itself does not use it.
+type RepoRow struct {
+	Slug    string        `json:"slug"`
+	Path    string        `json:"path"`
+	Remotes []RemoteEntry `json:"remotes,omitempty"`
 }
 
-// Normalise fills in missing fields per the documented conventions.
+// RemoteEntry mirrors the per-repo remote SSH host config used by the
+// Rust orchard-tui binary's federation layer. The daemon stores it
+// verbatim so writes round-trip; only the Rust side interprets it.
+type RemoteEntry struct {
+	Name            string `json:"name"`
+	Host            string `json:"host"`
+	Path            string `json:"path"`
+	Shell           string `json:"shell,omitempty"`
+	Type            string `json:"type"`
+	AllowTransitive bool   `json:"allow_transitive,omitempty"`
+}
+
+// PeerRow mirrors a peer entry. The peerproxy provider owns the rich
+// type; this struct exists so File can round-trip the array on write.
+type PeerRow struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	TLS     bool   `json:"tls"`
+}
+
+// Normalise fills in missing fields per ADR-015's identity rules.
 //
-//   - If Name is blank, take the basename of Directory.
-//   - If ID is blank, slugify Name; fall back to a short hash of
-//     Directory when slugification yields the empty string.
+//   - If Slug is blank, derive a fallback identity from Path.
+//   - The ID always derives from Slug; the file may carry an empty ID
+//     and Normalise will fill it.
 //
 // The function is pure and idempotent — calling it on an already-
 // normalised row leaves the row unchanged.
-func (r ProjectRow) Normalise() ProjectRow {
+func (r RepoRow) Normalise() RepoRow {
 	out := r
-	if out.Name == "" {
-		out.Name = filepath.Base(out.Directory)
-	}
-	if out.ID == "" {
-		out.ID = ProjectID(slugOrHash(out.Name, out.Directory))
+	if out.Slug == "" {
+		out.Slug = slugOrHash(filepath.Base(out.Path), out.Path)
 	}
 	return out
 }
 
-// ToProject lifts a ProjectRow into the in-memory Project type after
-// normalisation. The provider calls this on every cache load. ProjectRow
-// and Project share the same layout so a struct conversion is sufficient.
-func (r ProjectRow) ToProject() Project {
-	return Project(r.Normalise())
+// ToRepo lifts a RepoRow into the in-memory Repo type after
+// normalisation.
+func (r RepoRow) ToRepo() Repo {
+	n := r.Normalise()
+	return Repo{
+		ID:   RepoID(n.Slug),
+		Slug: n.Slug,
+		Path: n.Path,
+	}
+}
+
+// DisplayName returns the human-readable label for a repo. Computed
+// rather than stored: it's the basename of Path, falling back to the
+// repo portion of Slug.
+func (r Repo) DisplayName() string {
+	if base := filepath.Base(r.Path); base != "" && base != "." && base != "/" {
+		return base
+	}
+	if i := strings.LastIndex(r.Slug, "/"); i >= 0 && i+1 < len(r.Slug) {
+		return r.Slug[i+1:]
+	}
+	return r.Slug
 }
 
 // slugOrHash returns a lowercase slug of name, or the first 12 hex chars

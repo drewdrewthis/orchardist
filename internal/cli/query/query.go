@@ -1,7 +1,7 @@
 // Package query hosts the `orchard query` cobra subcommand group, which
 // dispatches GraphQL queries against the running daemon.
 //
-// Named verbs land per workstream — host, projects, processes, panes,
+// Named verbs land per workstream — host, repos, processes, panes,
 // conversations, claude-account, host-services. The `--raw <gql>` escape hatch always works.
 //
 // The cobra alias `q` mirrors the impl guide's "permitted alias for
@@ -52,10 +52,10 @@ func Command() *cobra.Command {
 		Aliases: []string{"q"},
 		Short:   "Query the running orchard daemon via GraphQL",
 		Long: "Dispatch GraphQL queries against the running daemon at " + server.DefaultAddr + ".\n\n" +
-			"Use a named verb (e.g. `host`, `projects`, `processes`, `panes`, `conversations`, `claude-account`, `host-services`) for high-level reads,\n" +
+			"Use a named verb (e.g. `host`, `repos`, `processes`, `panes`, `conversations`, `claude-account`, `host-services`) for high-level reads,\n" +
 			"or `--raw '<gql>'` as the escape hatch when you need a custom GraphQL query.",
 		Example: "  orchard query host\n" +
-			"  orchard query projects\n" +
+			"  orchard query repos\n" +
 			"  orchard query processes\n" +
 			"  orchard query panes\n" +
 			"  orchard query conversations\n" +
@@ -67,12 +67,12 @@ func Command() *cobra.Command {
 	cmd.Flags().StringVar(&raw, "raw", "", "raw GraphQL query string")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		if raw == "" {
-			return fmt.Errorf("provide a verb (e.g. `host`, `projects`, `processes`, `panes`, `conversations`, `claude-account`, `host-services`) or --raw '<graphql>'")
+			return fmt.Errorf("provide a verb (e.g. `host`, `repos`, `processes`, `panes`, `conversations`, `claude-account`, `host-services`) or --raw '<graphql>'")
 		}
 		return runRaw(cmd.Context(), cmd.OutOrStdout(), raw)
 	}
 	cmd.AddCommand(hostCmd())
-	cmd.AddCommand(projectsCmd())
+	cmd.AddCommand(reposCmd())
 	cmd.AddCommand(processesCmd())
 	cmd.AddCommand(panesCmd())
 	cmd.AddCommand(conversationsCmd())
@@ -83,34 +83,34 @@ func Command() *cobra.Command {
 	return cmd
 }
 
-// projectsQuery is the GraphQL document fetched by `query projects`.
-const projectsQuery = `{ projects { id directory name } }`
+// reposQuery is the GraphQL document fetched by `query repos`.
+const reposQuery = `{ repos { id slug path } }`
 
-func projectsCmd() *cobra.Command {
+func reposCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "projects",
-		Short: "List configured projects (Project nodes)",
-		Long: "Calls the running daemon's GraphQL `projects` query and prints the\n" +
-			"result as a JSON array. Returns the empty array when no projects are\n" +
+		Use:   "repos",
+		Short: "List configured repos (Repo nodes)",
+		Long: "Calls the running daemon's GraphQL `repos` query and prints the\n" +
+			"result as a JSON array. Returns the empty array when no repos are\n" +
 			"configured. Use `orchard config add-repo PATH` to register a new one.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runProjects(cmd.Context(), cmd.OutOrStdout())
+			return runRepos(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
 }
 
-// runProjects POSTs the projects query, extracts the `data.projects`
-// array, and prints it as pretty JSON. The shape is intentionally a
-// plain `[]Project` (not the GraphQL envelope) so shell consumers can
-// `jq` straight in without learning the envelope.
-func runProjects(ctx context.Context, w io.Writer) error {
-	raw, err := postGraphQL(ctx, projectsQuery)
+// runRepos POSTs the repos query, extracts the `data.repos` array, and
+// prints it as pretty JSON. The shape is intentionally a plain
+// `[]Repo` (not the GraphQL envelope) so shell consumers can `jq`
+// straight in without learning the envelope.
+func runRepos(ctx context.Context, w io.Writer) error {
+	raw, err := postGraphQL(ctx, reposQuery)
 	if err != nil {
 		return err
 	}
 	var env struct {
 		Data struct {
-			Projects []map[string]any `json:"projects"`
+			Repos []map[string]any `json:"repos"`
 		} `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
@@ -122,10 +122,10 @@ func runProjects(ctx context.Context, w io.Writer) error {
 	if len(env.Errors) > 0 {
 		return fmt.Errorf("graphql error: %s", env.Errors[0].Message)
 	}
-	if env.Data.Projects == nil {
-		env.Data.Projects = []map[string]any{}
+	if env.Data.Repos == nil {
+		env.Data.Repos = []map[string]any{}
 	}
-	out, err := json.MarshalIndent(env.Data.Projects, "", "  ")
+	out, err := json.MarshalIndent(env.Data.Repos, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode output: %w", err)
 	}
