@@ -26,6 +26,7 @@ export interface IssueRow {
 	worktree: WorktreeEnrichment;
 	session: SessionCardT | null;
 	lastActivityMs: number;
+	hints: { agentName: string | null; customTitle: string | null } | null;
 }
 
 function findSessionFor(
@@ -60,9 +61,14 @@ export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 	);
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
 	const lastByUuid = new Map<string, number>();
+	const hintsByUuid = new Map<string, { agentName: string | null; customTitle: string | null }>();
 	for (const c of data.conversations) {
 		const t = parseTime(c.lastSeenAt);
 		if (t > 0) lastByUuid.set(c.sessionUuid, t);
+		hintsByUuid.set(c.sessionUuid, {
+			agentName: c.agentName ?? null,
+			customTitle: c.customTitle ?? null,
+		});
 	}
 	const rows: IssueRow[] = [];
 	for (const w of allWorktrees) {
@@ -71,7 +77,8 @@ export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 		const prState = w.pr.state.toUpperCase();
 		if (prState !== "OPEN" && prState !== "DRAFT") continue;
 		const { session, lastActivityMs } = findSessionFor(w, sessions, lastByUuid);
-		rows.push({ issue: w.issue, worktree: w, session, lastActivityMs });
+		const hints = session ? hintsByUuid.get(session.sessionUuid) ?? null : null;
+		rows.push({ issue: w.issue, worktree: w, session, lastActivityMs, hints });
 	}
 	rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 	return rows;
@@ -100,7 +107,7 @@ export function buildIssueSections(
 			sections.set(r.issue.number, sec);
 		}
 		sec.items.push(
-			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, []),
+			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, [], r.hints),
 		);
 	}
 	return Array.from(sections.values());

@@ -5,6 +5,8 @@ query AttentionLens {
 	conversations {
 		sessionUuid
 		lastSeenAt
+		agentName
+		customTitle
 	}
 	workView {
 		repos {

@@ -41,6 +41,7 @@ export interface AttentionRow {
 	tier: AttentionTier;
 	reasons: string[];
 	lastActivityMs: number;
+	hints: { agentName: string | null; customTitle: string | null } | null;
 }
 
 const FIVE_MIN_MS = 5 * 60_000;
@@ -117,16 +118,21 @@ export function buildAttentionRows(
 		(r) => r.worktrees as unknown as WorktreeEnrichment[],
 	);
 	const lastByUuid = new Map<string, number>();
+	const hintsByUuid = new Map<string, { agentName: string | null; customTitle: string | null }>();
 	for (const c of data.conversations) {
 		const t = parseTime(c.lastSeenAt);
 		if (t > 0) lastByUuid.set(c.sessionUuid, t);
+		hintsByUuid.set(c.sessionUuid, {
+			agentName: c.agentName ?? null,
+			customTitle: c.customTitle ?? null,
+		});
 	}
 	const rows = (data.claudeInstances as unknown as SessionCardT[]).map((session): AttentionRow => {
 		const worktree = matchWorktree(session, allWorktrees);
 		const lastActivityMs =
 			lastByUuid.get(session.sessionUuid) ?? parseTime(session.lastActivityAt);
 		const { tier, reasons } = classify(session, worktree, lastActivityMs, now);
-		return { session, worktree, tier, reasons, lastActivityMs };
+		return { session, worktree, tier, reasons, lastActivityMs, hints: hintsByUuid.get(session.sessionUuid) ?? null };
 	});
 	// Sort: blocked > waiting > active, then most-recent activity first.
 	const order: Record<AttentionTier, number> = { blocked: 0, waiting: 1, active: 2 };
@@ -158,7 +164,7 @@ export function buildAttentionSections(
 	};
 	for (const r of rows) {
 		sections[r.tier].items.push(
-			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, r.reasons),
+			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, r.reasons, r.hints),
 		);
 	}
 	return [sections.blocked, sections.waiting, sections.active];

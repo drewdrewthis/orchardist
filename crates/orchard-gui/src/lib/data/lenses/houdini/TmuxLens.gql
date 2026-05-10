@@ -28,5 +28,16 @@ query TmuxLens {
 	conversations {
 		sessionUuid
 		lastSeenAt
+		agentName
+		customTitle
+	}
+	workView {
+		repos {
+			id
+			slug
+			worktrees {
+				...WorktreeEnrichment
+			}
+		}
 	}
 }

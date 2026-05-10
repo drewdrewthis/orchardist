@@ -92,6 +92,17 @@ export interface SidebarItem {
 }
 
 /**
+ * Conversation-derived title overrides. Both fields come from the
+ * Conversation node in the daemon (jsonl-derived `agent-name` and
+ * `custom-title` records). Either may be null until the session
+ * records one.
+ */
+export interface ConversationTitleHints {
+	agentName: string | null;
+	customTitle: string | null;
+}
+
+/**
  * Title derivation per B2. Order:
  *   1. agentName (when the session sets a non-empty one)
  *   2. customTitle (jsonl-defined)
@@ -104,16 +115,15 @@ export interface SidebarItem {
  *
  * @param session - the Claude session anchoring the row
  * @param worktree - resolved worktree, when the cwd matched
+ * @param hints - agentName/customTitle pulled from the matching Conversation
  */
 export function deriveItemTitle(
 	session: SessionCardT,
 	worktree: WorktreeEnrichment | null,
+	hints: ConversationTitleHints | null = null,
 ): string {
-	// agentName / customTitle are exposed via the conversations stream;
-	// at the SessionCardT level they're not yet wired into the fragment.
-	// Stage 1: branch > cwd basename > uuid. The agentName/customTitle
-	// merge happens once the daemon's Conversation.{agentName, customTitle}
-	// fields land in the SessionCard fragment.
+	if (hints?.agentName) return hints.agentName;
+	if (hints?.customTitle) return hints.customTitle;
 	if (worktree?.branch) return worktree.branch;
 	const cwd = session.process?.cwd;
 	if (cwd) {
@@ -144,17 +154,19 @@ export function deriveTmuxAddress(session: SessionCardT): string | null {
  * @param worktree - resolved worktree (null when cwd didn't match)
  * @param lastActivityMs - lens-derived ms since epoch (jsonl > daemon > 0)
  * @param reasons - lens-supplied reason chips
+ * @param hints - agentName/customTitle from the matching Conversation node
  */
 export function buildSidebarItem(
 	session: SessionCardT,
 	worktree: WorktreeEnrichment | null,
 	lastActivityMs: number,
 	reasons: string[] = [],
+	hints: ConversationTitleHints | null = null,
 ): SidebarItem {
 	return {
 		id: session.id,
 		session,
-		title: deriveItemTitle(session, worktree),
+		title: deriveItemTitle(session, worktree, hints),
 		worktree,
 		tmuxAddress: deriveTmuxAddress(session),
 		pid: session.process?.pid ?? null,

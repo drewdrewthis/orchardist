@@ -29,6 +29,8 @@ export interface PanelData {
 		recap: string | null;
 		cwd: string | null;
 		jsonlPath: string | null;
+		agentName: string | null;
+		customTitle: string | null;
 	} | null;
 	worktree: WorktreeEnrichment | null;
 }
@@ -90,6 +92,8 @@ export function buildPanelData(
 				recap: convRaw.recap,
 				cwd: convRaw.cwd,
 				jsonlPath: convRaw.jsonlPath,
+				agentName: convRaw.agentName ?? null,
+				customTitle: convRaw.customTitle ?? null,
 			}
 		: null;
 

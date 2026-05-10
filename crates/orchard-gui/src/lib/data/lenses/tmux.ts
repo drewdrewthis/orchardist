@@ -44,6 +44,10 @@ export interface TmuxLensSnapshot {
 	alive: boolean;
 	/** sessionUuid → ms-since-epoch from the conversations transcript. */
 	lastSeenByUuid: Record<string, number>;
+	/** sessionUuid → conversation title hints (agentName/customTitle). */
+	hintsByUuid: Record<string, { agentName: string | null; customTitle: string | null }>;
+	/** All worktrees across all repos, used for cwd → worktree resolution. */
+	worktrees: WorktreeEnrichment[];
 }
 
 const EMPTY: TmuxLensSnapshot = {
@@ -51,6 +55,8 @@ const EMPTY: TmuxLensSnapshot = {
 	activePaneIds: new Set(),
 	alive: false,
 	lastSeenByUuid: {},
+	hintsByUuid: {},
+	worktrees: [],
 };
 
 /**
@@ -61,11 +67,19 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 	if (!data) return EMPTY;
 	const ts = data.tmuxServer;
 	const lastSeenByUuid: Record<string, number> = {};
+	const hintsByUuid: Record<string, { agentName: string | null; customTitle: string | null }> = {};
 	for (const c of data.conversations || []) {
 		const t = c.lastSeenAt ? Date.parse(c.lastSeenAt) || 0 : 0;
 		if (t > 0) lastSeenByUuid[c.sessionUuid] = t;
+		hintsByUuid[c.sessionUuid] = {
+			agentName: c.agentName ?? null,
+			customTitle: c.customTitle ?? null,
+		};
 	}
-	if (!ts) return { ...EMPTY, lastSeenByUuid };
+	const worktrees = (data.workView?.repos ?? []).flatMap(
+		(r) => r.worktrees as unknown as WorktreeEnrichment[],
+	);
+	if (!ts) return { ...EMPTY, lastSeenByUuid, hintsByUuid, worktrees };
 	const activePaneIds = new Set<string>();
 	for (const c of ts.clients) {
 		if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
@@ -75,6 +89,8 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 		activePaneIds,
 		alive: ts.alive,
 		lastSeenByUuid,
+		hintsByUuid,
+		worktrees,
 	};
 }
 
@@ -133,8 +149,20 @@ export function buildTmuxSections(
 				const lastMs = ci.sessionUuid
 					? snap.lastSeenByUuid[ci.sessionUuid] ?? 0
 					: 0;
+				// Match worktree by the pane's cwd (most-specific path wins).
+				const cwd = pane.process?.cwd ?? null;
+				let matchedWorktree: WorktreeEnrichment | null = null;
+				if (cwd) {
+					for (const w of snap.worktrees) {
+						if (cwd === w.path || cwd.startsWith(w.path + "/")) {
+							if (!matchedWorktree || w.path.length > matchedWorktree.path.length)
+								matchedWorktree = w;
+						}
+					}
+				}
+				const hints = ci.sessionUuid ? snap.hintsByUuid[ci.sessionUuid] ?? null : null;
 				items.push(
-					buildSidebarItem(synthetic, /* worktree */ null, lastMs, []),
+					buildSidebarItem(synthetic, matchedWorktree, lastMs, [], hints),
 				);
 			}
 		}

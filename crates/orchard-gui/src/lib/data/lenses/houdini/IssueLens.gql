@@ -5,6 +5,8 @@ query IssueLens {
 	conversations {
 		sessionUuid
 		lastSeenAt
+		agentName
+		customTitle
 	}
 	workView {
 		repos {
