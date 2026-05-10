@@ -17,13 +17,13 @@ fragment PaneCard on TmuxPane {
 		}
 	}
 	claudeInstance {
-		id
-		sessionUuid
-		state
-		lastActivityAt
+		...SessionCard
 	}
 	process {
 		pid
 		cwd
+		worktree {
+			...WorktreeEnrichment
+		}
 	}
 }

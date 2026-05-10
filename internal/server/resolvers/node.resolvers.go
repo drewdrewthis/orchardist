@@ -273,15 +273,15 @@ func resolveClaudeAccountNode(ctx context.Context, r *Resolver, id string) (grap
 }
 
 func resolveClaudeInstanceNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {
-	if r.ClaudeInstance == nil {
+	if r.ClaudeInstanceProvider == nil {
 		return nil, fmt.Errorf("claudeinstance provider not configured")
 	}
 	host, pid, ok := parseClaudeInstanceID(id)
 	if !ok {
 		// Session-keyed id — fall through to a List+match.
-		return findClaudeInstanceByID(ctx, r.ClaudeInstance, id)
+		return findClaudeInstanceByID(ctx, r.ClaudeInstanceProvider, id)
 	}
-	inst, _, err := r.ClaudeInstance.Get(ctx, claudeinstanceprovider.InstanceID{HostID: host, ClaudePid: pid})
+	inst, _, err := r.ClaudeInstanceProvider.Get(ctx, claudeinstanceprovider.InstanceID{HostID: host, ClaudePid: pid})
 	if err != nil || inst == nil {
 		return nil, nil
 	}

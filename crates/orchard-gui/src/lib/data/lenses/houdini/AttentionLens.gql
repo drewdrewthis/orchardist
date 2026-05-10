@@ -2,19 +2,4 @@ query AttentionLens {
 	claudeInstances {
 		...SessionCard
 	}
-	conversations {
-		sessionUuid
-		lastSeenAt
-		agentName
-		customTitle
-	}
-	workView {
-		repos {
-			id
-			slug
-			worktrees {
-				...WorktreeEnrichment
-			}
-		}
-	}
 }

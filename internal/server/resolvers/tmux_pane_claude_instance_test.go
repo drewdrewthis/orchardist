@@ -117,7 +117,7 @@ func TestTmuxPaneClaudeInstance_MatchingPane(t *testing.T) {
 	const paneID = "TmuxPane:local:%59"
 
 	provider := buildProviderWithPane(t, paneID)
-	r := &tmuxPaneResolver{&Resolver{ClaudeInstance: provider}}
+	r := &tmuxPaneResolver{&Resolver{ClaudeInstanceProvider: provider}}
 	obj := &graphql1.TmuxPane{ID: paneID}
 
 	got, err := r.ClaudeInstance(context.Background(), obj)
@@ -137,7 +137,7 @@ func TestTmuxPaneClaudeInstance_MatchingPane(t *testing.T) {
 func TestTmuxPaneClaudeInstance_NoMatchingPane(t *testing.T) {
 	// Provider is seeded with a pane whose ID does NOT match the query object.
 	provider := buildProviderWithPane(t, "TmuxPane:local:%59")
-	r := &tmuxPaneResolver{&Resolver{ClaudeInstance: provider}}
+	r := &tmuxPaneResolver{&Resolver{ClaudeInstanceProvider: provider}}
 	// Ask for a different pane — %99, which no instance is associated with.
 	obj := &graphql1.TmuxPane{ID: "TmuxPane:local:%99"}
 
@@ -154,7 +154,7 @@ func TestTmuxPaneClaudeInstance_NoMatchingPane(t *testing.T) {
 // is nil (provider not wired), the resolver returns (nil, nil) without
 // panicking.
 func TestTmuxPaneClaudeInstance_NilProvider(t *testing.T) {
-	r := &tmuxPaneResolver{&Resolver{ClaudeInstance: nil}}
+	r := &tmuxPaneResolver{&Resolver{ClaudeInstanceProvider: nil}}
 	obj := &graphql1.TmuxPane{ID: "TmuxPane:local:%42"}
 
 	got, err := r.ClaudeInstance(context.Background(), obj)

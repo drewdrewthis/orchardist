@@ -36,10 +36,10 @@ type Resolver struct {
 	Tmux                *tmux.Provider
 	ClaudeProjects      *claudeprojects.Provider
 	ClaudeAccount       *claudeaccount.Provider
-	HostServiceProvider *hostservice.Provider
-	ContractsProvider   *contracts.Provider
-	ClaudeInstance      *claudeinstance.Provider
-	GH                  *gh.Provider
+	HostServiceProvider    *hostservice.Provider
+	ContractsProvider      *contracts.Provider
+	ClaudeInstanceProvider *claudeinstance.Provider
+	GH                     *gh.Provider
 	PeerProxy           *peerproxy.Provider
 	LocalEvents         *peerproxy.LocalInvalidator
 }
@@ -109,9 +109,11 @@ func (r *Resolver) WithGH(p *gh.Provider) *Resolver {
 	return r
 }
 
-// WithClaudeInstance wires the claudeinstance provider.
+// WithClaudeInstance wires the claudeinstance provider. The field is named
+// ClaudeInstanceProvider to disambiguate from gqlgen's auto-generated
+// ClaudeInstance() resolver-getter method.
 func (r *Resolver) WithClaudeInstance(p *claudeinstance.Provider) *Resolver {
-	r.ClaudeInstance = p
+	r.ClaudeInstanceProvider = p
 	return r
 }
 

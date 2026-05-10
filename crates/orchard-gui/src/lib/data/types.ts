@@ -12,14 +12,15 @@
 export type ConvView = "chat" | "terminal";
 
 /**
- * The four lenses. Each is a separate Houdini query against its own anchor.
+ * The five lenses. Each is a separate Houdini query against its own anchor.
  *
  *   attention — claudeInstances + worktree enrichment, blocked/waiting/active
  *   recent    — claudeInstances sorted by lastActivityAt desc
  *   tmux      — tmuxServer.sessions[].windows[].panes[] tree
  *   issue     — worktree.issue rows where worktree.pr is OPEN/DRAFT
+ *   worktree  — workView.repos[].worktrees[] grouped per repo
  */
-export type Lens = "attention" | "recent" | "tmux" | "issue";
+export type Lens = "attention" | "recent" | "tmux" | "issue" | "worktree";
 export type Theme = "dark" | "light";
 export type Surface = "desktop" | "mobile";
 export type SendStatus = "pending" | "sent" | "delivered" | "read";

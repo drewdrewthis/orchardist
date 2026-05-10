@@ -53,6 +53,8 @@ models:
         resolver: true
       tmuxSession:
         resolver: true
+      claudeInstances:
+        resolver: true
 
   # Host.processes accepts a filter argument, so route it through a custom
   # resolver instead of struct-field auto-binding. The resolver consults the
@@ -79,6 +81,18 @@ models:
       worktree:
         resolver: true
       claudeInstance:
+        resolver: true
+
+  # ClaudeInstance graph joins — daemon-side cwd→worktree match and
+  # sessionUuid→Conversation lookup so clients don't repeat the work.
+  # Field name on Resolver was renamed `ClaudeInstance` →
+  # `ClaudeInstanceProvider` so gqlgen's auto-generated `ClaudeInstance()`
+  # resolver-getter method does not collide with the provider field.
+  ClaudeInstance:
+    fields:
+      worktree:
+        resolver: true
+      conversation:
         resolver: true
 
   # Tmux fields that require provider lookups (relationship traversals,

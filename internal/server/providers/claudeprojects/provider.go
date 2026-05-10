@@ -474,6 +474,24 @@ func (p *Provider) PathForSessionUUID(_ context.Context, uuid string) (string, b
 	return "", false
 }
 
+// GetBySessionUUID returns the cached Conversation whose JSONL filename
+// matches uuid (Claude Code names files by sessionId so this is the
+// natural lookup key). Returns (zero, false) when not in cache. Used by
+// the ClaudeInstance.conversation resolver to expose Conversation
+// metadata without forcing a separate `conversations` query.
+//
+// Locking mirrors PathForSessionUUID — RLock only.
+func (p *Provider) GetBySessionUUID(_ context.Context, uuid string) (Conversation, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for id, c := range p.cache {
+		if id.SessionUUID == uuid {
+			return c, true
+		}
+	}
+	return Conversation{}, false
+}
+
 func (p *Provider) cacheGet(k ConversationID) (Conversation, adapter.Freshness, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

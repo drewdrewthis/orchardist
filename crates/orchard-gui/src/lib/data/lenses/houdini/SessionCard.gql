@@ -29,4 +29,13 @@ fragment SessionCard on ClaudeInstance {
 		pid
 		cwd
 	}
+	worktree {
+		...WorktreeEnrichment
+	}
+	conversation {
+		sessionUuid
+		lastSeenAt
+		agentName
+		customTitle
+	}
 }

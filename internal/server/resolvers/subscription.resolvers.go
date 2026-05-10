@@ -156,11 +156,11 @@ func subscribeClaudeAccountChanged(ctx context.Context, r *Resolver, id string) 
 }
 
 func subscribeClaudeInstanceChanged(ctx context.Context, r *Resolver, id string) (<-chan graphql1.Node, error) {
-	if r.ClaudeInstance == nil {
+	if r.ClaudeInstanceProvider == nil {
 		return nil, fmt.Errorf("claudeinstance provider not configured")
 	}
 	host, pid, isPidKeyed := parseClaudeInstanceID(id)
-	src := r.ClaudeInstance.Subscribe(ctx)
+	src := r.ClaudeInstanceProvider.Subscribe(ctx)
 	matcher := func(ev adapter.InvalidationEvent[claudeinstanceprovider.InstanceID]) bool {
 		if isPidKeyed {
 			return ev.Key.HostID == host && ev.Key.ClaudePid == pid

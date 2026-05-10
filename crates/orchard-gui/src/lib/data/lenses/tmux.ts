@@ -1,20 +1,20 @@
 /**
  * Tmux lens — anchor: tmuxServer, structure: server → sessions → windows → panes.
  *
- * The pane is the unit. Each pane carries its own claude / process /
- * cwd enrichment. The sidebar renders a tree, not a flat list.
+ * The pane is the unit. Each pane carries its claude instance + process
+ * + cwd enrichment, all daemon-joined (PaneCard.claudeInstance is now
+ * the full SessionCard, including worktree + conversation).
  *
  * Houdini operation lives at `lenses/houdini/TmuxLens.gql`. This file
- * exposes the singleton store + the `buildTmuxSnapshot` projection
- * (which folds `clients` into a Set<paneId> for fast lookup and
- * `conversations` into a uuid→lastSeenAt map).
+ * exposes the singleton store + the `buildTmuxSnapshot` projection.
  */
 import { TmuxLensStore, type TmuxLens$result } from "$houdini";
+import { parseTime } from "./client";
 import type { PaneCardT, SessionCardT, WorktreeEnrichment } from "./fragments";
 import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
 import { buildSidebarItem } from "$lib/data/sidebar-item";
 
-/** Singleton Houdini store for the tmux lens. */
+/** Singleton store for the tmux lens. */
 export const tmuxStore = new TmuxLensStore();
 
 type Data = NonNullable<TmuxLens$result>;
@@ -42,21 +42,12 @@ export interface TmuxLensSnapshot {
 	activePaneIds: Set<string>;
 	/** Whether the tmux server is reachable. */
 	alive: boolean;
-	/** sessionUuid → ms-since-epoch from the conversations transcript. */
-	lastSeenByUuid: Record<string, number>;
-	/** sessionUuid → conversation title hints (agentName/customTitle). */
-	hintsByUuid: Record<string, { agentName: string | null; customTitle: string | null }>;
-	/** All worktrees across all repos, used for cwd → worktree resolution. */
-	worktrees: WorktreeEnrichment[];
 }
 
 const EMPTY: TmuxLensSnapshot = {
 	sessions: [],
 	activePaneIds: new Set(),
 	alive: false,
-	lastSeenByUuid: {},
-	hintsByUuid: {},
-	worktrees: [],
 };
 
 /**
@@ -66,20 +57,7 @@ const EMPTY: TmuxLensSnapshot = {
 export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapshot {
 	if (!data) return EMPTY;
 	const ts = data.tmuxServer;
-	const lastSeenByUuid: Record<string, number> = {};
-	const hintsByUuid: Record<string, { agentName: string | null; customTitle: string | null }> = {};
-	for (const c of data.conversations || []) {
-		const t = c.lastSeenAt ? Date.parse(c.lastSeenAt) || 0 : 0;
-		if (t > 0) lastSeenByUuid[c.sessionUuid] = t;
-		hintsByUuid[c.sessionUuid] = {
-			agentName: c.agentName ?? null,
-			customTitle: c.customTitle ?? null,
-		};
-	}
-	const worktrees = (data.workView?.repos ?? []).flatMap(
-		(r) => r.worktrees as unknown as WorktreeEnrichment[],
-	);
-	if (!ts) return { ...EMPTY, lastSeenByUuid, hintsByUuid, worktrees };
+	if (!ts) return EMPTY;
 	const activePaneIds = new Set<string>();
 	for (const c of ts.clients) {
 		if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
@@ -88,19 +66,14 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 		sessions: ts.sessions as unknown as TmuxSessionNode[],
 		activePaneIds,
 		alive: ts.alive,
-		lastSeenByUuid,
-		hintsByUuid,
-		worktrees,
 	};
 }
 
 /**
  * Projection into sectioned `SidebarItem[]` per #540 B0/B1/B3.
  * The tmux lens groups by tmux session — one section per session.
- * Each item is the Claude session living on a pane in that tmux
- * session; panes without a Claude session are dropped from the item
- * list (the unified item model requires a session). Empty sections
- * still surface so the user sees their tmux topology.
+ * Items are the Claude sessions living on a pane in that tmux session.
+ * Panes without a Claude session are dropped from the item list.
  */
 export function buildTmuxSections(
 	data: Data | null | undefined,
@@ -113,57 +86,15 @@ export function buildTmuxSections(
 		for (const win of session.windows) {
 			for (const pane of win.panes) {
 				if (!pane.claudeInstance) continue;
-				// Build a synthetic SessionCardT from the pane's claude
-				// instance + pane chain. We can't query the full SessionCard
-				// fragment from a TmuxPane, so rebuild the bits we need.
-				const ci = pane.claudeInstance;
-				const synthetic = {
-					id: ci.id,
-					sessionUuid: ci.sessionUuid,
-					state: ci.state,
-					startedAt: null,
-					lastActivityAt: ci.lastActivityAt ?? null,
-					rcEnabled: false,
-					account: null,
-					pane: {
-						paneId: pane.paneId,
-						title: pane.title,
-						currentCommand: pane.currentCommand,
-						window: {
-							id: win.id,
-							index: win.index,
-							name: win.name,
-							active: win.active,
-							session: {
-								id: session.id,
-								name: session.name,
-								attached: session.attached,
-								activeAttached: session.activeAttached,
-							},
-						},
-					},
-					process: pane.currentPid
-						? { pid: pane.currentPid, cwd: pane.process?.cwd ?? null }
-						: null,
-				} as unknown as SessionCardT;
-				const lastMs = ci.sessionUuid
-					? snap.lastSeenByUuid[ci.sessionUuid] ?? 0
-					: 0;
-				// Match worktree by the pane's cwd (most-specific path wins).
-				const cwd = pane.process?.cwd ?? null;
-				let matchedWorktree: WorktreeEnrichment | null = null;
-				if (cwd) {
-					for (const w of snap.worktrees) {
-						if (cwd === w.path || cwd.startsWith(w.path + "/")) {
-							if (!matchedWorktree || w.path.length > matchedWorktree.path.length)
-								matchedWorktree = w;
-						}
-					}
-				}
-				const hints = ci.sessionUuid ? snap.hintsByUuid[ci.sessionUuid] ?? null : null;
-				items.push(
-					buildSidebarItem(synthetic, matchedWorktree, lastMs, [], hints),
-				);
+				const ci = pane.claudeInstance as unknown as SessionCardT;
+				const worktree = (ci.worktree ?? null) as WorktreeEnrichment | null;
+				const conv = ci.conversation;
+				const lastActivityMs =
+					parseTime(conv?.lastSeenAt) || parseTime(ci.lastActivityAt);
+				const hints = conv
+					? { agentName: conv.agentName ?? null, customTitle: conv.customTitle ?? null }
+					: null;
+				items.push(buildSidebarItem(ci, worktree, lastActivityMs, [], hints));
 			}
 		}
 		sections.push({
@@ -174,4 +105,3 @@ export function buildTmuxSections(
 	}
 	return sections;
 }
-

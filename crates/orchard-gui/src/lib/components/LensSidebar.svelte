@@ -16,6 +16,7 @@
 	import { recentStore, buildRecentItems } from "$lib/data/lenses/recent";
 	import { tmuxStore, buildTmuxSections, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { issueStore, buildIssueSections } from "$lib/data/lenses/issue";
+	import { worktreeStore, buildWorktreeSections } from "$lib/data/lenses/worktree";
 
 	/**
 	 * Click target — what the panel needs to render this row. Either a
@@ -46,6 +47,7 @@
 		recentStore.fetch();
 		tmuxStore.fetch();
 		issueStore.fetch();
+		worktreeStore.fetch();
 	});
 
 	// All four lenses produce the same shape per #540 B0/B1: sections
@@ -71,6 +73,12 @@
 		issueSections.reduce((n, s) => n + s.items.length, 0),
 	);
 	const issueLoading = $derived($issueStore.fetching);
+
+	const worktreeSections = $derived(buildWorktreeSections($worktreeStore.data));
+	const worktreeTotal = $derived(
+		worktreeSections.reduce((n, s) => n + s.items.length, 0),
+	);
+	const worktreeLoading = $derived($worktreeStore.fetching);
 
 	// "here" derivation lifted out of `<SidebarItem>` so the row stays a
 	// pure renderer (no global store coupling). Reads the same tmux
@@ -273,6 +281,49 @@
 				</span>
 			</div>
 		{/if}
+	{:else if lens === "worktree"}
+		{#each worktreeSections as section (section.id)}
+			<div class="fleet-group" data-kind={section.id}>
+				<div class="group-header">
+					<span style="display: inline-flex; align-items: center; gap: 6px;">
+						<Icon name="git-branch" size={11} />
+						<span>{section.label}</span>
+					</span>
+					<span class="count">{section.items.length}</span>
+				</div>
+				{#if section.items.length === 0}
+					<div class="empty-section">
+						<span class="dimer">No active sessions in this repo.</span>
+					</div>
+				{:else}
+					{#each section.items as item (item.id)}
+						<SidebarItem
+							{item}
+							{now}
+							{density}
+							{surface}
+							here={isHere(item.session.pane?.paneId)}
+							selected={rowSelected({
+								paneId: item.session.pane?.paneId,
+								sessionUuid: item.session.sessionUuid,
+							})}
+							onSelect={(_id, ev) => onSelect({
+								kind: "session",
+								paneId: item.session.pane?.paneId,
+								sessionUuid: item.session.sessionUuid,
+							}, ev)}
+						/>
+					{/each}
+				{/if}
+			</div>
+		{/each}
+		{#if worktreeSections.length === 0}
+			<div class="empty-lens">
+				<span class="dimer">
+					{worktreeLoading ? "Loading…" : "No repos in config — run `orchard config init`."}
+				</span>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -281,6 +332,10 @@
 		padding: 36px 16px;
 		text-align: center;
 		font-size: 13px;
+	}
+	.empty-section {
+		padding: 8px 16px;
+		font-size: 11.5px;
 	}
 	.here-pip {
 		display: inline-block;

@@ -48,6 +48,15 @@ export const SESSION_CARD_FRAGMENT = gql`
 			pid
 			cwd
 		}
+		worktree {
+			...WorktreeEnrichment
+		}
+		conversation {
+			sessionUuid
+			lastSeenAt
+			agentName
+			customTitle
+		}
 	}
 `;
 
@@ -75,14 +84,14 @@ export const PANE_CARD_FRAGMENT = gql`
 			}
 		}
 		claudeInstance {
-			id
-			sessionUuid
-			state
-			lastActivityAt
+			...SessionCard
 		}
 		process {
 			pid
 			cwd
+			worktree {
+				...WorktreeEnrichment
+			}
 		}
 	}
 `;
@@ -120,6 +129,15 @@ export interface SessionCardT {
 		};
 	} | null;
 	process: { pid: number; cwd: string | null } | null;
+	/** Daemon-resolved worktree (cwd→path match). Null when no match. */
+	worktree?: WorktreeEnrichment | null;
+	/** Daemon-joined Conversation (sessionUuid lookup). Null when not yet observed. */
+	conversation?: {
+		sessionUuid: string;
+		lastSeenAt: string | null;
+		agentName: string | null;
+		customTitle: string | null;
+	} | null;
 }
 
 export interface PaneCardT {
@@ -140,13 +158,13 @@ export interface PaneCardT {
 			lastActivityAt: string | null;
 		};
 	};
-	claudeInstance: {
-		id: string;
-		sessionUuid: string;
-		state: ClaudeStateRaw;
-		lastActivityAt: string | null;
+	/** Full SessionCard via daemon's TmuxPane.claudeInstance edge. */
+	claudeInstance: SessionCardT | null;
+	process: {
+		pid: number;
+		cwd: string | null;
+		worktree?: WorktreeEnrichment | null;
 	} | null;
-	process: { pid: number; cwd: string | null } | null;
 }
 
 /** Worktree enrichment shape used by attention + issue lenses. */

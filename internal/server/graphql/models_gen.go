@@ -81,6 +81,17 @@ type ClaudeInstance struct {
 	// derived from the heartbeat's last_activity field, falling back to
 	// TmuxPane.lastActivityAt, falling back to null when neither is available.
 	LastActivityAt *string `json:"lastActivityAt,omitempty"`
+	// Worktree this Claude REPL is operating in — the deepest worktree whose
+	// `path` contains the resolved process cwd. Server-side join over the
+	// ps + git providers; null when no process can be matched or no worktree
+	// contains the cwd. Avoids duplicate cwd→path matching in clients.
+	Worktree *Worktree `json:"worktree,omitempty"`
+	// Conversation node for this Claude session — looked up by `sessionUuid`
+	// in the claudeprojects provider. Null when the Claude REPL has not yet
+	// written a JSONL record (or `sessionUuid` is null). Lets clients pull
+	// customTitle / agentName / lastSeenAt without a separate `conversations`
+	// query + uuid map.
+	Conversation *Conversation `json:"conversation,omitempty"`
 }
 
 func (ClaudeInstance) IsNode() {}
@@ -765,6 +776,15 @@ type Worktree struct {
 	// When two sessions tie on lastActivityAt, the session with the lexicographically-first name wins.
 	// Null when `tmuxPanes` is empty or when the tmux / ps providers are not wired.
 	TmuxSession *TmuxSession `json:"tmuxSession,omitempty"`
+	// Claude REPLs whose resolved process cwd lies under this worktree's `path`.
+	// Server-side join over the claudeprojects + ps providers (analogous to
+	// `tmuxPanes`). Returns `[]` when no match. Ordered deterministically by
+	// `id` ascending.
+	//
+	// Note: Claude *session* (a ClaudeInstance — running REPL identified by
+	// sessionUuid) is distinct from a *tmux session* (TmuxSession — server
+	// grouping of windows/panes). A worktree can carry zero or many of each.
+	ClaudeInstances []*ClaudeInstance `json:"claudeInstances"`
 }
 
 func (Worktree) IsNode() {}

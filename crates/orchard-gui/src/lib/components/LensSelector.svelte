@@ -7,6 +7,7 @@
 	const LENSES: LensDef[] = [
 		{ id: "attention", label: "Attention", hint: "Blocked / waiting / active", icon: "bell" },
 		{ id: "recent", label: "Recent", hint: "All Claude sessions, freshest first", icon: "clock" },
+		{ id: "worktree", label: "Worktree", hint: "Sessions grouped by repo / worktree", icon: "git-branch" },
 		{ id: "tmux", label: "Tmux", hint: "Sessions · windows · panes", icon: "terminal" },
 		{ id: "issue", label: "Issue", hint: "Open work — PRs linked to issues", icon: "issue" },
 	];

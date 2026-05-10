@@ -131,7 +131,7 @@ export class AppStore {
 	}
 
 	get view(): ConvView {
-		return this.activeTab?.view || "chat";
+		return this.activeTab?.view || "terminal";
 	}
 
 	get activeChannelRoomId(): string | null {
@@ -194,10 +194,10 @@ export class AppStore {
 	) => {
 		if (!key.paneId && !key.sessionUuid) return;
 
-		// Default view: when the row has a Claude session attached (sessionUuid),
-		// the chat transcript is what the user wants first; raw tmux panes
-		// without a session default to the terminal.
-		const defaultView: ConvView = key.sessionUuid ? "chat" : "terminal";
+		// Default view: terminal everywhere. Live tmux is the substrate;
+		// chat is opt-in via the view switcher. Drew 2026-05-10: terminal
+		// first, transcript on demand.
+		const defaultView: ConvView = "terminal";
 
 		// Mobile: always single-tab.
 		if (this.surface === "mobile") {
@@ -334,7 +334,7 @@ export class AppStore {
 	};
 
 	toggleView = () => {
-		this.setView(this.view === "chat" ? "terminal" : "chat");
+		this.setView(this.view === "terminal" ? "chat" : "terminal");
 	};
 
 	toggleSidebar = () => {

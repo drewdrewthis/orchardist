@@ -1,14 +1,12 @@
 /**
- * Issue lens — anchor: GitHub issues that we're actively working on,
- * filtered through worktrees with open PRs.
+ * Issue lens — anchor: GitHub issues that we're actively working on.
+ * A worktree appears iff its PR is OPEN/DRAFT and the daemon has joined
+ * it to an issue. The issue is the row; worktree + PR + Claude session
+ * are enrichment.
  *
- * Rule: an issue appears iff some worktree exists on a branch whose PR
- * is OPEN/DRAFT and the daemon has joined that worktree to the issue
- * (`worktree.issue != null`). The issue is the row; worktree + PR +
- * Claude session are enrichment.
- *
- * Houdini operation lives at `lenses/houdini/IssueLens.gql`. This file
- * exposes the singleton store + `buildIssueRows`.
+ * Daemon owns the joins: Worktree.claudeInstances brings the sessions
+ * for each worktree; ClaudeInstance.conversation brings agentName/
+ * customTitle. No cwd→worktree matching on the client.
  */
 import { IssueLensStore, type IssueLens$result } from "$houdini";
 import { parseTime } from "./client";
@@ -16,100 +14,50 @@ import type { SessionCardT, WorktreeEnrichment } from "./fragments";
 import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
 import { buildSidebarItem } from "$lib/data/sidebar-item";
 
-/** Singleton Houdini store for the issue lens. */
+/** Singleton store for the issue lens. */
 export const issueStore = new IssueLensStore();
 
 type Data = NonNullable<IssueLens$result>;
 
-export interface IssueRow {
-	issue: { number: number; state: string; title: string | null };
-	worktree: WorktreeEnrichment;
-	session: SessionCardT | null;
-	lastActivityMs: number;
-	hints: { agentName: string | null; customTitle: string | null } | null;
-}
-
-function findSessionFor(
-	worktree: WorktreeEnrichment,
-	sessions: SessionCardT[],
-	lastByUuid: Map<string, number>,
-): { session: SessionCardT | null; lastActivityMs: number } {
-	let best: SessionCardT | null = null;
-	let bestMs = 0;
-	for (const s of sessions) {
-		const cwd = s.process?.cwd;
-		if (!cwd) continue;
-		if (cwd === worktree.path || cwd.startsWith(worktree.path + "/")) {
-			const ms = lastByUuid.get(s.sessionUuid) ?? parseTime(s.lastActivityAt);
-			if (ms > bestMs || best == null) {
-				best = s;
-				bestMs = ms;
-			}
-		}
-	}
-	return { session: best, lastActivityMs: bestMs };
-}
-
 /**
- * Project the Houdini result into ordered issue rows. Pure —
- * components call this inside `$derived` against `$issueStore.data`.
- */
-export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
-	if (!data) return [];
-	const allWorktrees = data.workView.repos.flatMap(
-		(r) => r.worktrees as unknown as WorktreeEnrichment[],
-	);
-	const sessions = data.claudeInstances as unknown as SessionCardT[];
-	const lastByUuid = new Map<string, number>();
-	const hintsByUuid = new Map<string, { agentName: string | null; customTitle: string | null }>();
-	for (const c of data.conversations) {
-		const t = parseTime(c.lastSeenAt);
-		if (t > 0) lastByUuid.set(c.sessionUuid, t);
-		hintsByUuid.set(c.sessionUuid, {
-			agentName: c.agentName ?? null,
-			customTitle: c.customTitle ?? null,
-		});
-	}
-	const rows: IssueRow[] = [];
-	for (const w of allWorktrees) {
-		if (!w.issue) continue;
-		if (!w.pr) continue;
-		const prState = w.pr.state.toUpperCase();
-		if (prState !== "OPEN" && prState !== "DRAFT") continue;
-		const { session, lastActivityMs } = findSessionFor(w, sessions, lastByUuid);
-		const hints = session ? hintsByUuid.get(session.sessionUuid) ?? null : null;
-		rows.push({ issue: w.issue, worktree: w, session, lastActivityMs, hints });
-	}
-	rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
-	return rows;
-}
-
-/**
- * Projection into sectioned `SidebarItem[]` per #540 B0/B1. The issue
- * lens groups items by their linked GitHub issue — one section per
- * issue. Worktrees that have no Claude session attached are dropped at
- * this projection (the unified item model requires a session).
+ * Project into sectioned `SidebarItem[]` per #540 B0/B1. One section
+ * per issue. Worktrees with no Claude session attached are dropped at
+ * projection time (the unified item model requires a session).
  */
 export function buildIssueSections(
 	data: Data | null | undefined,
 ): SidebarSection[] {
-	const rows = buildIssueRows(data);
+	if (!data) return [];
 	const sections = new Map<number, SidebarSection>();
-	for (const r of rows) {
-		if (!r.session) continue; // SidebarItem requires a session
-		let sec = sections.get(r.issue.number);
-		if (!sec) {
-			const label =
-				r.issue.title != null
-					? `#${r.issue.number} · ${r.issue.title}`
-					: `#${r.issue.number}`;
-			sec = { id: `issue-${r.issue.number}`, label, items: [] };
-			sections.set(r.issue.number, sec);
+	for (const repo of data.workView.repos) {
+		for (const w of repo.worktrees as unknown as Array<
+			WorktreeEnrichment & { claudeInstances?: SessionCardT[] | null }
+		>) {
+			if (!w.issue) continue;
+			if (!w.pr) continue;
+			const prState = w.pr.state.toUpperCase();
+			if (prState !== "OPEN" && prState !== "DRAFT") continue;
+			const sessions = (w.claudeInstances ?? []) as SessionCardT[];
+			if (sessions.length === 0) continue;
+
+			let sec = sections.get(w.issue.number);
+			if (!sec) {
+				const label =
+					w.issue.title != null
+						? `#${w.issue.number} · ${w.issue.title}`
+						: `#${w.issue.number}`;
+				sec = { id: `issue-${w.issue.number}`, label, items: [] };
+				sections.set(w.issue.number, sec);
+			}
+			for (const s of sessions) {
+				const conv = s.conversation;
+				const lastActivityMs = parseTime(conv?.lastSeenAt) || parseTime(s.lastActivityAt);
+				const hints = conv
+					? { agentName: conv.agentName ?? null, customTitle: conv.customTitle ?? null }
+					: null;
+				sec.items.push(buildSidebarItem(s, w, lastActivityMs, [], hints));
+			}
 		}
-		sec.items.push(
-			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, [], r.hints),
-		);
 	}
 	return Array.from(sections.values());
 }
-

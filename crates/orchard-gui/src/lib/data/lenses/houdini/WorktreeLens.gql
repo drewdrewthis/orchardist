@@ -1,7 +1,4 @@
-query IssueLens {
-	claudeInstances {
-		...SessionCard
-	}
+query WorktreeLens {
 	workView {
 		repos {
 			id

@@ -25,6 +25,44 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
+// Worktree resolves ClaudeInstance.worktree (#540): the deepest worktree
+// whose path contains the resolved process cwd. Returns nil when no
+// process can be matched, no cwd resolves, or no worktree contains the
+// cwd. Mirrors the cwd→worktree match used by tmuxPane and Process.
+func (r *claudeInstanceResolver) Worktree(ctx context.Context, obj *graphql1.ClaudeInstance) (*graphql1.Worktree, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	// Reuse the same cwd-resolution path as Worktree.claudeInstances so
+	// the two halves of the join agree.
+	wr := &worktreeResolver{r.Resolver}
+	cwd := loadInstanceCwd(ctx, wr, obj)
+	if cwd == "" {
+		return nil, nil
+	}
+	return findWorktreeForCwd(ctx, r.Resolver, cwd)
+}
+
+// Conversation resolves ClaudeInstance.conversation (#540): looks up
+// the cached Conversation by the instance's sessionUuid in the
+// claudeprojects provider. Returns nil when the instance has no
+// sessionUuid, the provider is unwired, or no JSONL has yet been
+// observed for that uuid. Lets clients pull customTitle / agentName /
+// lastSeenAt without a separate `conversations` query + uuid map.
+func (r *claudeInstanceResolver) Conversation(ctx context.Context, obj *graphql1.ClaudeInstance) (*graphql1.Conversation, error) {
+	if obj == nil || obj.SessionUUID == nil || *obj.SessionUUID == "" {
+		return nil, nil
+	}
+	if r.ClaudeProjects == nil {
+		return nil, nil
+	}
+	conv, ok := r.ClaudeProjects.GetBySessionUUID(ctx, *obj.SessionUUID)
+	if !ok {
+		return nil, nil
+	}
+	return r.ClaudeProjects.ToGraphQL(conv), nil
+}
+
 // Peers is the resolver for the peers field.
 func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphql1.Host, error) {
 	if r.PeerProxy == nil {
@@ -375,10 +413,10 @@ func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.Contract
 
 // ClaudeInstances is the resolver for the claudeInstances field.
 func (r *queryResolver) ClaudeInstances(ctx context.Context) ([]*graphql1.ClaudeInstance, error) {
-	if r.ClaudeInstance == nil {
+	if r.ClaudeInstanceProvider == nil {
 		return nil, fmt.Errorf("claudeinstance provider not initialised")
 	}
-	return r.ClaudeInstance.List(ctx)
+	return r.ClaudeInstanceProvider.List(ctx)
 }
 
 // Peers is the resolver for the peers field.
@@ -562,7 +600,7 @@ func (r *queryResolver) DaemonState(ctx context.Context) (*graphql1.DaemonState,
 		{Name: "tmux", Configured: r.Tmux != nil},
 		{Name: "claudeProjects", Configured: r.ClaudeProjects != nil},
 		{Name: "claudeAccount", Configured: r.ClaudeAccount != nil},
-		{Name: "claudeInstance", Configured: r.ClaudeInstance != nil},
+		{Name: "claudeInstance", Configured: r.ClaudeInstanceProvider != nil},
 		{Name: "hostService", Configured: r.HostServiceProvider != nil},
 		{Name: "contracts", Configured: r.ContractsProvider != nil},
 		{Name: "gh", Configured: r.GH != nil},
@@ -1064,10 +1102,10 @@ func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) 
 
 // ClaudeInstance resolves the ClaudeInstance running inside this pane (nil when the provider is unwired or no tracked instance matches obj.ID). O(N) walk over cached instances; typically <10 per host so no dataloader.
 func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
-	if r.Resolver.ClaudeInstance == nil {
+	if r.Resolver.ClaudeInstanceProvider == nil {
 		return nil, nil
 	}
-	instances, err := r.Resolver.ClaudeInstance.List(ctx)
+	instances, err := r.Resolver.ClaudeInstanceProvider.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1151,7 +1189,7 @@ func (r *tmuxServerResolver) Alive(ctx context.Context, obj *graphql1.TmuxServer
 	return r.Tmux.Server().Alive, nil
 }
 
-// Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one).
+// Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one). NOTE: parameter is sortKey not sort to avoid shadowing the imported sort package; gqlgen rewrites this back to sort on every regen, restore sortKey after each codegen.
 func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sortKey *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
 	if r.Tmux == nil {
 		return nil, nil
@@ -1559,6 +1597,23 @@ func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *graphql1.Worktr
 	return projectSession(sessions[0]), nil
 }
 
+// ClaudeInstances resolves Worktree.claudeInstances (#540): every
+// ClaudeInstance whose resolved process cwd lies under obj.Path.
+// Returns []*graphql1.ClaudeInstance{} (never nil) when no match.
+// See worktree_claude.go for the matching logic; mirrors
+// Worktree.tmuxPanes (worktree_tmux.go) in shape and locking.
+func (r *worktreeResolver) ClaudeInstances(ctx context.Context, obj *graphql1.Worktree) ([]*graphql1.ClaudeInstance, error) {
+	if obj == nil {
+		return []*graphql1.ClaudeInstance{}, nil
+	}
+	return matchClaudeInstancesForWorktree(ctx, r, obj)
+}
+
+// ClaudeInstance returns graphql1.ClaudeInstanceResolver implementation.
+func (r *Resolver) ClaudeInstance() graphql1.ClaudeInstanceResolver {
+	return &claudeInstanceResolver{r}
+}
+
 // Host returns graphql1.HostResolver implementation.
 func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
 
@@ -1595,6 +1650,7 @@ func (r *Resolver) TmuxWindow() graphql1.TmuxWindowResolver { return &tmuxWindow
 // Worktree returns graphql1.WorktreeResolver implementation.
 func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolver{r} }
 
+type claudeInstanceResolver struct{ *Resolver }
 type hostResolver struct{ *Resolver }
 type processResolver struct{ *Resolver }
 type pullRequestResolver struct{ *Resolver }
