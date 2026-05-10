@@ -25,9 +25,9 @@ import (
 
 const e2eDeadline = 5 * time.Second
 
-func writeConfigE2E(t *testing.T, path string, projects []configprovider.ProjectRow) {
+func writeConfigE2E(t *testing.T, path string, repos []configprovider.RepoRow) {
 	t.Helper()
-	f := configprovider.File{Version: 1, Projects: projects}
+	f := configprovider.File{Version: 1, Repos: repos}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -43,9 +43,11 @@ func writeConfigE2E(t *testing.T, path string, projects []configprovider.Project
 	}
 }
 
-func gqlQuery(t *testing.T, ts *httptest.Server, doc string) []map[string]any {
+// queryRepos issues `{ repos { id slug path } }` and returns the result
+// rows sorted by id for deterministic assertions.
+func queryRepos(t *testing.T, ts *httptest.Server) []map[string]any {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"query": doc})
+	body, _ := json.Marshal(map[string]string{"query": "{ repos { id slug path } }"})
 	resp, err := http.Post(ts.URL+"/graphql", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -56,7 +58,7 @@ func gqlQuery(t *testing.T, ts *httptest.Server, doc string) []map[string]any {
 	}
 	var env struct {
 		Data struct {
-			Projects []map[string]any `json:"projects"`
+			Repos []map[string]any `json:"repos"`
 		} `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
@@ -68,25 +70,20 @@ func gqlQuery(t *testing.T, ts *httptest.Server, doc string) []map[string]any {
 	if len(env.Errors) > 0 {
 		t.Fatalf("graphql errors: %+v", env.Errors)
 	}
-	out := env.Data.Projects
+	out := env.Data.Repos
 	sort.Slice(out, func(i, j int) bool { return out[i]["id"].(string) < out[j]["id"].(string) })
 	return out
 }
 
 func TestConfigProvider_E2E_RoundTrip(t *testing.T) {
-	// Real tempdir, real config file, real fsnotify, real GraphQL
-	// server — no mocks. This is the integration contract for the
-	// provider end of the feature.
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
-	// Seed with two projects.
-	writeConfigE2E(t, cfgPath, []configprovider.ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
-		{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
+	writeConfigE2E(t, cfgPath, []configprovider.RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
+		{Slug: "team/beta", Path: "/abs/beta"},
 	})
 
-	// Build the provider stack the daemon would build.
 	adapter := configprovider.NewJSONFileAdapter(cfgPath, nil)
 	provider := configprovider.NewProvider(adapter, nil)
 
@@ -97,59 +94,55 @@ func TestConfigProvider_E2E_RoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = provider.Stop() })
 
-	// Spin the GraphQL HTTP handler in httptest.Server.
-	srv := server.New("", nil, server.WithProjects(provider))
+	srv := server.New("", nil, server.WithRepos(provider))
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
 
-	// Initial state: both projects present.
-	got := gqlQuery(t, ts, `{ projects { id directory name } }`)
+	got := queryRepos(t, ts)
 	if len(got) != 2 {
-		t.Fatalf("want 2 projects, got %d (%+v)", len(got), got)
+		t.Fatalf("want 2 repos, got %d (%+v)", len(got), got)
 	}
-	if got[0]["id"] != "alpha" || got[0]["directory"] != "/abs/alpha" || got[0]["name"] != "Alpha" {
+	if got[0]["id"] != "team/alpha" || got[0]["path"] != "/abs/alpha" || got[0]["slug"] != "team/alpha" {
 		t.Errorf("alpha row wrong: %+v", got[0])
 	}
-	if got[1]["id"] != "beta" {
+	if got[1]["id"] != "team/beta" {
 		t.Errorf("beta row wrong: %+v", got[1])
 	}
 
-	// Modify config — append gamma. fsnotify should reload, GraphQL
-	// should report three on next query. Poll for up to e2eDeadline
-	// because fsnotify timing varies across platforms.
-	writeConfigE2E(t, cfgPath, []configprovider.ProjectRow{
-		{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
-		{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
-		{ID: "gamma", Directory: "/abs/gamma", Name: "Gamma"},
+	// Append gamma. fsnotify should reload, GraphQL should report three.
+	writeConfigE2E(t, cfgPath, []configprovider.RepoRow{
+		{Slug: "team/alpha", Path: "/abs/alpha"},
+		{Slug: "team/beta", Path: "/abs/beta"},
+		{Slug: "team/gamma", Path: "/abs/gamma"},
 	})
 
 	deadline := time.Now().Add(e2eDeadline)
 	for {
-		got = gqlQuery(t, ts, `{ projects { id directory name } }`)
+		got = queryRepos(t, ts)
 		if len(got) == 3 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("expected 3 projects after fsnotify roundtrip, got %d (%+v)", len(got), got)
+			t.Fatalf("expected 3 repos after fsnotify roundtrip, got %d (%+v)", len(got), got)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if got[0]["id"] != "alpha" || got[1]["id"] != "beta" || got[2]["id"] != "gamma" {
+	if got[0]["id"] != "team/alpha" || got[1]["id"] != "team/beta" || got[2]["id"] != "team/gamma" {
 		t.Errorf("post-modify ordering wrong: %+v", got)
 	}
-	if got[2]["directory"] != "/abs/gamma" || got[2]["name"] != "Gamma" {
+	if got[2]["path"] != "/abs/gamma" {
 		t.Errorf("gamma row wrong: %+v", got[2])
 	}
 
-	// And remove a project — alpha goes away, two remain.
-	writeConfigE2E(t, cfgPath, []configprovider.ProjectRow{
-		{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
-		{ID: "gamma", Directory: "/abs/gamma", Name: "Gamma"},
+	// Remove alpha — two remain.
+	writeConfigE2E(t, cfgPath, []configprovider.RepoRow{
+		{Slug: "team/beta", Path: "/abs/beta"},
+		{Slug: "team/gamma", Path: "/abs/gamma"},
 	})
 	deadline = time.Now().Add(e2eDeadline)
 	for {
-		got = gqlQuery(t, ts, `{ projects { id directory name } }`)
-		if len(got) == 2 && got[0]["id"] == "beta" && got[1]["id"] == "gamma" {
+		got = queryRepos(t, ts)
+		if len(got) == 2 && got[0]["id"] == "team/beta" && got[1]["id"] == "team/gamma" {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -175,27 +168,27 @@ func TestConfigProvider_E2E_ColdBootBeforeFile(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = provider.Stop() })
 
-	srv := server.New("", nil, server.WithProjects(provider))
+	srv := server.New("", nil, server.WithRepos(provider))
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
 
-	got := gqlQuery(t, ts, `{ projects { id } }`)
+	got := queryRepos(t, ts)
 	if len(got) != 0 {
 		t.Fatalf("want empty before file, got %+v", got)
 	}
 
-	writeConfigE2E(t, cfgPath, []configprovider.ProjectRow{
-		{ID: "first", Directory: "/abs/first", Name: "First"},
+	writeConfigE2E(t, cfgPath, []configprovider.RepoRow{
+		{Slug: "team/first", Path: "/abs/first"},
 	})
 
 	deadline := time.Now().Add(e2eDeadline)
 	for {
-		got = gqlQuery(t, ts, `{ projects { id } }`)
-		if len(got) == 1 && got[0]["id"] == "first" {
+		got = queryRepos(t, ts)
+		if len(got) == 1 && got[0]["id"] == "team/first" {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("expected first project after file appears, got %+v", got)
+			t.Fatalf("expected first repo after file appears, got %+v", got)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

@@ -138,8 +138,8 @@ export function buildWorktreePickerRows(
 	data:
 		| {
 				workView: {
-					projects: Array<{
-						name: string;
+					repos: Array<{
+						slug: string;
 						worktrees: Array<{
 							id: string;
 							path: string;
@@ -155,8 +155,8 @@ export function buildWorktreePickerRows(
 		| undefined,
 ): WorktreePickerRow[] {
 	if (!data) return [];
-	return data.workView.projects.flatMap((p) =>
-		p.worktrees
+	return data.workView.repos.flatMap((r) =>
+		r.worktrees
 			.filter((w) => !w.bare)
 			.map((w) => ({
 				id: w.id,
@@ -164,7 +164,7 @@ export function buildWorktreePickerRows(
 				branch: w.branch,
 				bare: w.bare,
 				host: w.host,
-				repo: w.repo || p.name,
+				repo: w.repo || r.slug,
 			})),
 	);
 }

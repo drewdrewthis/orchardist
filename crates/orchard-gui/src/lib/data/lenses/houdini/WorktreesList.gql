@@ -1,8 +1,8 @@
 query WorktreesList {
 	workView {
-		projects {
+		repos {
 			id
-			name
+			slug
 			worktrees {
 				id
 				path

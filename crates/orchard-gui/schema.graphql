@@ -591,29 +591,6 @@ input ProcessFilter {
 }
 
 """
-A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
-"""
-type Project implements Node {
-  """Absolute filesystem path to the project's working tree."""
-  directory: String!
-
-  """
-  Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration.
-  """
-  id: ID!
-
-  """
-  Human-readable label. Defaults to the basename of `directory` when not specified in the config.
-  """
-  name: String!
-
-  """
-  Worktrees discovered for this project — the project's main checkout plus everything under `.git/worktrees/`.
-  """
-  worktrees: [Worktree!]!
-}
-
-"""
 A daemon provider's health snapshot — what its most recent refresh
 did, when, and how it ended.
 """
@@ -706,7 +683,7 @@ type Query {
   conversation(id: ID!): Conversation
 
   """
-  Every Claude Code conversation discovered under the projects root. Latest-first by lastSeenAt.
+  Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt.
   """
   conversations: [Conversation!]!
 
@@ -781,7 +758,7 @@ type Query {
 
   """
   All open pull requests on a GitHub repository, optionally filtered by
-  author login. Unlike `Project.pullRequests` (which only sees PRs whose
+  author login. Unlike `Repo.pullRequests` (which only sees PRs whose
   branch is locally checked out), this returns every open PR on the
   repo. Used by /standup-style "give me all my open PRs" gathers.
   Resolves issue #435.
@@ -799,11 +776,6 @@ type Query {
   peers: [Host!]!
 
   """
-  All projects declared in ~/.orchard/config.json. Read-only — projects are added with `orchard config add-repo`.
-  """
-  projects: [Project!]!
-
-  """
   Look up a single pull request by repo + number. Same shape as
   `issue(...)`. Returns null when not found. Resolves issue #436.
   """
@@ -811,6 +783,11 @@ type Query {
 
   """Pull requests on a GitHub repository. `repo` is `owner/name`."""
   pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
+
+  """
+  All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`.
+  """
+  repos: [Repo!]!
 
   """
   Returns the daemon's embedded schema.graphql contents as a single
@@ -838,7 +815,7 @@ type Query {
 
   """
   Composite "what's running, where, on what branch?" view (#469 F6).
-  Walks the local projects → worktrees graph and joins each worktree
+  Walks the local repos → worktrees graph and joins each worktree
   to its open PR, linked issue, processes, and tmux sessions in a
   single round trip. The fields underneath reuse existing resolvers,
   so semantics match per-field queries.
@@ -847,6 +824,25 @@ type Query {
 
   """Workflow runs on a GitHub repository. `repo` is `owner/name`."""
   workflowRuns(repo: String!): [WorkflowRun!]
+}
+
+"""
+A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
+"""
+type Repo implements Node {
+  """Stable identifier derived from `slug`. Survives re-registration."""
+  id: ID!
+
+  """Absolute filesystem path to the repo's working tree."""
+  path: String!
+
+  """GitHub-style `owner/repo` slug. The repo's identity."""
+  slug: String!
+
+  """
+  Worktrees discovered for this repo — the main checkout plus everything under `.git/worktrees/`.
+  """
+  worktrees: [Worktree!]!
 }
 
 """
@@ -940,11 +936,11 @@ type Subscription {
   tmuxSessionsChanged: [TmuxSession!]!
 
   """
-  Per-project worktree firehose (#469 F7). Emits the project's full
+  Per-repo worktree firehose (#469 F7). Emits the repo's full
   worktree list whenever the git provider invalidates any worktree
-  belonging to the named project. The argument is the Project id.
+  belonging to the named repo. The argument is the Repo id.
   """
-  worktreeChanged(project: ID!): [Worktree!]!
+  worktreeChanged(repo: ID!): [Worktree!]!
 }
 
 """RFC 3339 timestamp string. Mapped to Go's time.Time."""
@@ -1240,9 +1236,9 @@ type WorkView {
   meta: Meta!
 
   """
-  Projects in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked.
+  Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked.
   """
-  projects: [Project!]!
+  repos: [Repo!]!
 
   """
   Tmux sessions on the local host — same as Query.tmuxSessions with no filter.

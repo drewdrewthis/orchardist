@@ -44,10 +44,10 @@ type GHPullRequestLister interface {
 // ever read pointers off it and tests can swap individual fields
 // without writing N stub methods.
 type ProvidersBundle struct {
-	Host     *hostprovider.Provider
-	Git      *gitprovider.Provider
-	Ps       *psprovider.Provider
-	Projects configprovider.Lister
+	Host  *hostprovider.Provider
+	Git   *gitprovider.Provider
+	Ps    *psprovider.Provider
+	Repos configprovider.Lister
 	// GH is the narrow gh surface the PullRequestsForRepo loader needs.
 	// *gh.Provider satisfies GHPullRequestLister automatically; tests
 	// can inject a stub without standing up HTTP.
@@ -251,12 +251,12 @@ func loadWorktreesForCwds(providers *ProvidersBundle, cwds []string) []*dataload
 }
 
 // WorktreesForCwds runs the cwd-prefix join in one pass: list every
-// project, expand each project's worktrees, then for each requested
-// cwd find the longest worktree path that is a prefix.
+// repo, expand each repo's worktrees, then for each requested cwd
+// find the longest worktree path that is a prefix.
 func WorktreesForCwds(providers *ProvidersBundle, cwds []string) []*graphql1.Worktree {
 	out := make([]*graphql1.Worktree, len(cwds))
 	gp := providers.Git
-	pp := providers.Projects
+	pp := providers.Repos
 	if gp == nil || pp == nil {
 		return out
 	}

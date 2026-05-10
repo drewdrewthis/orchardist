@@ -29,6 +29,8 @@ export interface PanelData {
 		recap: string | null;
 		cwd: string | null;
 		jsonlPath: string | null;
+		agentName: string | null;
+		customTitle: string | null;
 	} | null;
 	worktree: WorktreeEnrichment | null;
 }
@@ -55,7 +57,7 @@ export function buildPanelData(
 
 	const panes = data.tmuxPanes as unknown as PaneCardT[];
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
-	const projects = data.workView.projects as unknown as Array<{
+	const repos = data.workView.repos as unknown as Array<{
 		worktrees: WorktreeEnrichment[];
 	}>;
 
@@ -90,6 +92,8 @@ export function buildPanelData(
 				recap: convRaw.recap,
 				cwd: convRaw.cwd,
 				jsonlPath: convRaw.jsonlPath,
+				agentName: convRaw.agentName ?? null,
+				customTitle: convRaw.customTitle ?? null,
 			}
 		: null;
 
@@ -99,8 +103,8 @@ export function buildPanelData(
 	let worktree: WorktreeEnrichment | null = null;
 	if (cwd) {
 		let best: WorktreeEnrichment | null = null;
-		for (const p of projects) {
-			for (const w of p.worktrees) {
+		for (const r of repos) {
+			for (const w of r.worktrees) {
 				if (cwd === w.path || cwd.startsWith(w.path + "/")) {
 					if (!best || w.path.length > best.path.length) best = w;
 				}

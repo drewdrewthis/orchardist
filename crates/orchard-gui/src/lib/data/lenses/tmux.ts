@@ -10,7 +10,9 @@
  * `conversations` into a uuid→lastSeenAt map).
  */
 import { TmuxLensStore, type TmuxLens$result } from "$houdini";
-import type { PaneCardT } from "./fragments";
+import type { PaneCardT, SessionCardT, WorktreeEnrichment } from "./fragments";
+import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
+import { buildSidebarItem } from "$lib/data/sidebar-item";
 
 /** Singleton Houdini store for the tmux lens. */
 export const tmuxStore = new TmuxLensStore();
@@ -42,6 +44,10 @@ export interface TmuxLensSnapshot {
 	alive: boolean;
 	/** sessionUuid → ms-since-epoch from the conversations transcript. */
 	lastSeenByUuid: Record<string, number>;
+	/** sessionUuid → conversation title hints (agentName/customTitle). */
+	hintsByUuid: Record<string, { agentName: string | null; customTitle: string | null }>;
+	/** All worktrees across all repos, used for cwd → worktree resolution. */
+	worktrees: WorktreeEnrichment[];
 }
 
 const EMPTY: TmuxLensSnapshot = {
@@ -49,6 +55,8 @@ const EMPTY: TmuxLensSnapshot = {
 	activePaneIds: new Set(),
 	alive: false,
 	lastSeenByUuid: {},
+	hintsByUuid: {},
+	worktrees: [],
 };
 
 /**
@@ -59,11 +67,19 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 	if (!data) return EMPTY;
 	const ts = data.tmuxServer;
 	const lastSeenByUuid: Record<string, number> = {};
+	const hintsByUuid: Record<string, { agentName: string | null; customTitle: string | null }> = {};
 	for (const c of data.conversations || []) {
 		const t = c.lastSeenAt ? Date.parse(c.lastSeenAt) || 0 : 0;
 		if (t > 0) lastSeenByUuid[c.sessionUuid] = t;
+		hintsByUuid[c.sessionUuid] = {
+			agentName: c.agentName ?? null,
+			customTitle: c.customTitle ?? null,
+		};
 	}
-	if (!ts) return { ...EMPTY, lastSeenByUuid };
+	const worktrees = (data.workView?.repos ?? []).flatMap(
+		(r) => r.worktrees as unknown as WorktreeEnrichment[],
+	);
+	if (!ts) return { ...EMPTY, lastSeenByUuid, hintsByUuid, worktrees };
 	const activePaneIds = new Set<string>();
 	for (const c of ts.clients) {
 		if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
@@ -73,6 +89,89 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 		activePaneIds,
 		alive: ts.alive,
 		lastSeenByUuid,
+		hintsByUuid,
+		worktrees,
 	};
+}
+
+/**
+ * Projection into sectioned `SidebarItem[]` per #540 B0/B1/B3.
+ * The tmux lens groups by tmux session — one section per session.
+ * Each item is the Claude session living on a pane in that tmux
+ * session; panes without a Claude session are dropped from the item
+ * list (the unified item model requires a session). Empty sections
+ * still surface so the user sees their tmux topology.
+ */
+export function buildTmuxSections(
+	data: Data | null | undefined,
+): SidebarSection[] {
+	const snap = buildTmuxSnapshot(data);
+	if (!snap.alive) return [];
+	const sections: SidebarSection[] = [];
+	for (const session of snap.sessions) {
+		const items: SidebarItem[] = [];
+		for (const win of session.windows) {
+			for (const pane of win.panes) {
+				if (!pane.claudeInstance) continue;
+				// Build a synthetic SessionCardT from the pane's claude
+				// instance + pane chain. We can't query the full SessionCard
+				// fragment from a TmuxPane, so rebuild the bits we need.
+				const ci = pane.claudeInstance;
+				const synthetic = {
+					id: ci.id,
+					sessionUuid: ci.sessionUuid,
+					state: ci.state,
+					startedAt: null,
+					lastActivityAt: ci.lastActivityAt ?? null,
+					rcEnabled: false,
+					account: null,
+					pane: {
+						paneId: pane.paneId,
+						title: pane.title,
+						currentCommand: pane.currentCommand,
+						window: {
+							id: win.id,
+							index: win.index,
+							name: win.name,
+							active: win.active,
+							session: {
+								id: session.id,
+								name: session.name,
+								attached: session.attached,
+								activeAttached: session.activeAttached,
+							},
+						},
+					},
+					process: pane.currentPid
+						? { pid: pane.currentPid, cwd: pane.process?.cwd ?? null }
+						: null,
+				} as unknown as SessionCardT;
+				const lastMs = ci.sessionUuid
+					? snap.lastSeenByUuid[ci.sessionUuid] ?? 0
+					: 0;
+				// Match worktree by the pane's cwd (most-specific path wins).
+				const cwd = pane.process?.cwd ?? null;
+				let matchedWorktree: WorktreeEnrichment | null = null;
+				if (cwd) {
+					for (const w of snap.worktrees) {
+						if (cwd === w.path || cwd.startsWith(w.path + "/")) {
+							if (!matchedWorktree || w.path.length > matchedWorktree.path.length)
+								matchedWorktree = w;
+						}
+					}
+				}
+				const hints = ci.sessionUuid ? snap.hintsByUuid[ci.sessionUuid] ?? null : null;
+				items.push(
+					buildSidebarItem(synthetic, matchedWorktree, lastMs, [], hints),
+				);
+			}
+		}
+		sections.push({
+			id: `tmux-${session.id}`,
+			label: session.name,
+			items,
+		});
+	}
+	return sections;
 }
 

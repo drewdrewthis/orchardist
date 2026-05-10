@@ -1,6 +1,6 @@
 package query_test
 
-// CLI E2E for `orchard query projects`. The test compiles the binary
+// CLI E2E for `orchard query repos`. The test compiles the binary
 // from cmd/orchard-daemon, spins the daemon's HTTP handler in an
 // httptest.Server (so we don't compete for the hard-coded localhost
 // port), points the binary at that URL via ORCHARD_DAEMON_URL, and
@@ -88,9 +88,9 @@ func TestCLI_QueryProjects_E2E(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.json")
 	cfg := configprovider.File{
 		Version: 1,
-		Projects: []configprovider.ProjectRow{
-			{ID: "alpha", Directory: "/abs/alpha", Name: "Alpha"},
-			{ID: "beta", Directory: "/abs/beta", Name: "Beta"},
+		Repos: []configprovider.RepoRow{
+			{Slug: "team/alpha", Path: "/abs/alpha"},
+			{Slug: "team/beta", Path: "/abs/beta"},
 		},
 	}
 	data, _ := json.MarshalIndent(cfg, "", "  ")
@@ -107,14 +107,14 @@ func TestCLI_QueryProjects_E2E(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = provider.Stop() })
 
-	srv := server.New("", nil, server.WithProjects(provider))
+	srv := server.New("", nil, server.WithRepos(provider))
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
 
-	// Run `bin/orchard query projects` against the test daemon URL.
-	stdout, stderr, err := runOrchard(t, binary, ts.URL, "query", "projects")
+	// Run `bin/orchard query repos` against the test daemon URL.
+	stdout, stderr, err := runOrchard(t, binary, ts.URL, "query", "repos")
 	if err != nil {
-		t.Fatalf("orchard query projects failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		t.Fatalf("orchard query repos failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
 	// Parse the JSON array off stdout and assert shape.
@@ -123,11 +123,11 @@ func TestCLI_QueryProjects_E2E(t *testing.T) {
 		t.Fatalf("decode stdout JSON: %v\nstdout: %s", err, stdout)
 	}
 	if len(got) != 2 {
-		t.Fatalf("want 2 projects, got %d (%+v)", len(got), got)
+		t.Fatalf("want 2 repos, got %d (%+v)", len(got), got)
 	}
 	want := []map[string]string{
-		{"id": "alpha", "directory": "/abs/alpha", "name": "Alpha"},
-		{"id": "beta", "directory": "/abs/beta", "name": "Beta"},
+		{"id": "team/alpha", "slug": "team/alpha", "path": "/abs/alpha"},
+		{"id": "team/beta", "slug": "team/beta", "path": "/abs/beta"},
 	}
 	for i, exp := range want {
 		for k, v := range exp {
@@ -142,7 +142,7 @@ func TestCLI_QueryProjects_Empty(t *testing.T) {
 	binary := buildOrchard(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"projects":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"repos":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,11 +155,11 @@ func TestCLI_QueryProjects_Empty(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = provider.Stop() })
 
-	srv := server.New("", nil, server.WithProjects(provider))
+	srv := server.New("", nil, server.WithRepos(provider))
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
 
-	stdout, stderr, err := runOrchard(t, binary, ts.URL, "query", "projects")
+	stdout, stderr, err := runOrchard(t, binary, ts.URL, "query", "repos")
 	if err != nil {
 		t.Fatalf("err: %v\nstderr: %s", err, stderr)
 	}
@@ -173,7 +173,7 @@ func TestCLI_QueryProjects_DaemonDown(t *testing.T) {
 	binary := buildOrchard(t)
 	// Point at a localhost port that is not bound. The CLI must error
 	// with the actionable hint, not a silent success.
-	stdout, stderr, err := runOrchard(t, binary, "http://127.0.0.1:1", "query", "projects")
+	stdout, stderr, err := runOrchard(t, binary, "http://127.0.0.1:1", "query", "repos")
 	if err == nil {
 		t.Fatalf("expected non-zero exit, got nil; stdout=%s", stdout)
 	}

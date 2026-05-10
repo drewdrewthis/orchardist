@@ -32,15 +32,15 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 )
 
-// staticProjectsLister is a fixture-grade resolvers.ProjectsLister
-// for the git e2e test — returns a fixed slice so the test can drive
-// Project.worktrees without standing up the config provider.
-type staticProjectsLister struct {
-	records []configprovider.Project
+// staticReposLister is a fixture-grade resolvers.ReposLister for the
+// git e2e test — returns a fixed slice so the test can drive
+// Repo.worktrees without standing up the config provider.
+type staticReposLister struct {
+	records []configprovider.Repo
 }
 
-func (s *staticProjectsLister) List(_ context.Context) ([]configprovider.Project, error) {
-	out := make([]configprovider.Project, len(s.records))
+func (s *staticReposLister) List(_ context.Context) ([]configprovider.Repo, error) {
+	out := make([]configprovider.Repo, len(s.records))
 	copy(out, s.records)
 	return out, nil
 }
@@ -79,13 +79,13 @@ func TestGitProvider_E2E(t *testing.T) {
 		t.Fatalf("AddProject: %v", err)
 	}
 
-	projects := &staticProjectsLister{
-		records: []configprovider.Project{
-			{ID: configprovider.ProjectID(projectID), Directory: repo, Name: "demo"},
+	repos := &staticReposLister{
+		records: []configprovider.Repo{
+			{ID: configprovider.RepoID(projectID), Slug: projectID, Path: repo},
 		},
 	}
 
-	srv := server.New("", nil, server.WithGit(provider), server.WithProjects(projects))
+	srv := server.New("", nil, server.WithGit(provider), server.WithRepos(repos))
 	ts := httptest.NewServer(srv.GraphQLHandler())
 	t.Cleanup(ts.Close)
 
@@ -183,10 +183,10 @@ type gqlWorktree struct {
 }
 
 // queryWorktrees runs the canonical AC6 query against the test server
-// and returns the flattened slice of worktrees from all projects.
+// and returns the flattened slice of worktrees from all repos.
 func queryWorktrees(t *testing.T, url string) []gqlWorktree {
 	t.Helper()
-	const q = `{ projects { worktrees { id path branch head bare } } }`
+	const q = `{ repos { worktrees { id path branch head bare } } }`
 	body, _ := json.Marshal(map[string]any{"query": q})
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -203,9 +203,9 @@ func queryWorktrees(t *testing.T, url string) []gqlWorktree {
 	}
 	var out struct {
 		Data struct {
-			Projects []struct {
+			Repos []struct {
 				Worktrees []gqlWorktree `json:"worktrees"`
-			} `json:"projects"`
+			} `json:"repos"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
@@ -216,7 +216,7 @@ func queryWorktrees(t *testing.T, url string) []gqlWorktree {
 		t.Fatalf("graphql errors: %v", out.Errors)
 	}
 	var all []gqlWorktree
-	for _, p := range out.Data.Projects {
+	for _, p := range out.Data.Repos {
 		all = append(all, p.Worktrees...)
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })

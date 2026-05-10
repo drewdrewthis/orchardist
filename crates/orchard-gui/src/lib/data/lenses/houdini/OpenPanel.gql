@@ -14,11 +14,13 @@ query OpenPanel($paneIds: [String!]) {
 		recap
 		cwd
 		jsonlPath
+		agentName
+		customTitle
 	}
 	workView {
-		projects {
+		repos {
 			id
-			name
+			slug
 			worktrees {
 				...WorktreeEnrichment
 			}

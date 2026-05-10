@@ -227,15 +227,15 @@ func buildWorktreeLayout(t *testing.T) (projectDir, checkoutDir string) {
 	return projectDir, checkoutDir
 }
 
-// staticProjectsListerE2E is a fixture-grade resolvers.ProjectsLister
-// that returns a fixed slice. Mirrors the identical type in git_e2e_test.go
+// staticReposListerE2E is a fixture-grade resolvers.ReposLister that
+// returns a fixed slice. Mirrors the identical type in git_e2e_test.go
 // (different package so we redefine it here).
-type staticProjectsListerE2E struct {
-	records []configprovider.Project
+type staticReposListerE2E struct {
+	records []configprovider.Repo
 }
 
-func (s *staticProjectsListerE2E) List(_ context.Context) ([]configprovider.Project, error) {
-	out := make([]configprovider.Project, len(s.records))
+func (s *staticReposListerE2E) List(_ context.Context) ([]configprovider.Repo, error) {
+	out := make([]configprovider.Repo, len(s.records))
 	copy(out, s.records)
 	return out, nil
 }
@@ -277,10 +277,10 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 	_ = ghProv.AuthError(context.Background())
 	gh.SetHTTPClientForTest(ghProv, tlsClient)
 
-	// ── 6. Build the projects lister ──────────────────────────────────────
-	projects := &staticProjectsListerE2E{
-		records: []configprovider.Project{
-			{ID: configprovider.ProjectID(projectID), Directory: projectDir, Name: "orchard-test"},
+	// ── 6. Build the repos lister ─────────────────────────────────────────
+	repos := &staticReposListerE2E{
+		records: []configprovider.Repo{
+			{ID: configprovider.RepoID(projectID), Slug: projectID, Path: projectDir},
 		},
 	}
 
@@ -288,7 +288,7 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 	r := resolvers.New(time.Now()).
 		WithGit(gitProv).
 		WithGH(ghProv).
-		WithProjects(projects)
+		WithRepos(repos)
 
 	gqlSrv := handler.New(gqlgen.NewExecutableSchema(gqlgen.Config{Resolvers: r}))
 	gqlSrv.AddTransport(transport.POST{})
@@ -298,7 +298,7 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 
 	// ── 8. Fire the dashboard query ───────────────────────────────────────
 	const q = `{
-		projects {
+		repos {
 			worktrees {
 				branch
 				host
@@ -328,7 +328,7 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 	// ── 9. Decode response ─────────────────────────────────────────────────
 	var out struct {
 		Data struct {
-			Projects []struct {
+			Repos []struct {
 				Worktrees []struct {
 					Branch string  `json:"branch"`
 					Host   string  `json:"host"`
@@ -340,7 +340,7 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 						Number int64 `json:"number"`
 					} `json:"issue"`
 				} `json:"worktrees"`
-			} `json:"projects"`
+			} `json:"repos"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
@@ -352,7 +352,7 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 	}
 
 	// ── 10. Find the linked worktree row (branch == "issue441/foo") ────────
-	if len(out.Data.Projects) == 0 {
+	if len(out.Data.Repos) == 0 {
 		t.Fatalf("expected at least one project, got none")
 	}
 
@@ -367,16 +367,16 @@ func TestWorktreeDashboard_E2E(t *testing.T) {
 			Number int64 `json:"number"`
 		} `json:"issue"`
 	}
-	for i := range out.Data.Projects[0].Worktrees {
-		wt := &out.Data.Projects[0].Worktrees[i]
+	for i := range out.Data.Repos[0].Worktrees {
+		wt := &out.Data.Repos[0].Worktrees[i]
 		if wt.Branch == "issue441/foo" {
 			target = wt
 			break
 		}
 	}
 	if target == nil {
-		branches := make([]string, 0, len(out.Data.Projects[0].Worktrees))
-		for _, wt := range out.Data.Projects[0].Worktrees {
+		branches := make([]string, 0, len(out.Data.Repos[0].Worktrees))
+		for _, wt := range out.Data.Repos[0].Worktrees {
 			branches = append(branches, fmt.Sprintf("%q", wt.Branch))
 		}
 		t.Fatalf("no worktree with branch 'issue441/foo'; got branches: %v", branches)

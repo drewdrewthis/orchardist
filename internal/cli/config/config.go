@@ -1,12 +1,13 @@
 // Package config hosts the `orchard config {init,add-repo}` cobra
 // subcommand group. These edit ~/.orchard/config.json directly;
-// the running daemon reflects changes via fsnotify (Workstream B).
+// the running daemon reflects changes via fsnotify.
 //
-// Workstream A scope: `init` writes a default config and creates the
-// state directory.
-// Workstream B-config scope: `add-repo PATH` validates and appends a
-// project entry; the daemon's fsnotify watcher reflects the change
-// without any mutation API.
+// `init` writes a default config and creates the state directory.
+// `add-repo PATH` validates and appends a repo entry; the daemon's
+// fsnotify watcher reflects the change without any mutation API.
+//
+// Schema per ADR-015: ~/.orchard/config.json carries exactly three
+// top-level keys (version, repos, peers).
 package config
 
 import (
@@ -50,32 +51,30 @@ func initCmd() *cobra.Command {
 
 func addRepoCmd() *cobra.Command {
 	var (
-		name        string
-		id          string
+		slug        string
 		allowNonGit bool
 	)
 	c := &cobra.Command{
 		Use:   "add-repo PATH",
-		Short: "Append a project to ~/.orchard/config.json",
+		Short: "Append a repo to ~/.orchard/config.json",
 		Long: "Validate PATH (must exist and, by default, contain a .git directory),\n" +
-			"append it to the config file's projects list, and rely on the running\n" +
+			"append it to the config file's repos list, and rely on the running\n" +
 			"daemon's fsnotify watcher to reflect the change. No daemon mutation\n" +
-			"API — config is the source of truth (ADR-011 §5.1).",
+			"API — config is the source of truth (ADR-015).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAddRepo(cmd.OutOrStdout(), args[0], name, id, allowNonGit)
+			return runAddRepo(cmd.OutOrStdout(), args[0], slug, allowNonGit)
 		},
 	}
-	c.Flags().StringVar(&name, "name", "", "human-readable label (defaults to basename of PATH)")
-	c.Flags().StringVar(&id, "id", "", "stable id (defaults to slug of name, then short hash of directory)")
+	c.Flags().StringVar(&slug, "slug", "", "GitHub-style owner/repo slug (defaults to a derived value when omitted)")
 	c.Flags().BoolVar(&allowNonGit, "allow-non-git", false, "skip the .git/ presence check (use for nested or virtual worktrees)")
 	return c
 }
 
-// runAddRepo loads the config file, appends or updates the project row
-// for PATH, and writes the file atomically (tmp + rename) so the daemon
+// runAddRepo loads the config file, appends or updates the repo row for
+// PATH, and writes the file atomically (tmp + rename) so the daemon
 // observes a single fsnotify event.
-func runAddRepo(w io.Writer, pathArg, name, id string, allowNonGit bool) error {
+func runAddRepo(w io.Writer, pathArg, slug string, allowNonGit bool) error {
 	abs, err := filepath.Abs(pathArg)
 	if err != nil {
 		return fmt.Errorf("resolve path %q: %w", pathArg, err)
@@ -112,32 +111,33 @@ func runAddRepo(w io.Writer, pathArg, name, id string, allowNonGit bool) error {
 		return err
 	}
 
-	row := configprovider.ProjectRow{
-		ID:        configprovider.ProjectID(id),
-		Directory: abs,
-		Name:      name,
+	row := configprovider.RepoRow{
+		Slug: slug,
+		Path: abs,
 	}.Normalise()
 
-	// Replace any existing entry for this directory or id.
+	// Replace any existing entry for this path or slug.
 	replaced := false
-	for i, existing := range file.Projects {
-		if existing.Directory == row.Directory || (row.ID != "" && existing.ID == row.ID) {
-			file.Projects[i] = row
+	for i, existing := range file.Repos {
+		if existing.Path == row.Path || (row.Slug != "" && existing.Slug == row.Slug) {
+			// Preserve the existing remotes[] when replacing.
+			row.Remotes = existing.Remotes
+			file.Repos[i] = row
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		file.Projects = append(file.Projects, row)
+		file.Repos = append(file.Repos, row)
 	}
 
 	if err := writeFileAtomic(cfgPath, file); err != nil {
 		return err
 	}
 	if replaced {
-		fmt.Fprintf(w, "updated project %s (%s) in %s\n", row.ID, row.Directory, cfgPath)
+		fmt.Fprintf(w, "updated repo %s (%s) in %s\n", row.Slug, row.Path, cfgPath)
 	} else {
-		fmt.Fprintf(w, "added project %s (%s) to %s\n", row.ID, row.Directory, cfgPath)
+		fmt.Fprintf(w, "added repo %s (%s) to %s\n", row.Slug, row.Path, cfgPath)
 	}
 	return nil
 }
@@ -237,7 +237,7 @@ func runInit(w io.Writer, force bool) error {
 }
 
 func writeConfig(path string) error {
-	cfg := configprovider.File{Version: 1, Projects: []configprovider.ProjectRow{}}
+	cfg := configprovider.File{Version: 1, Repos: []configprovider.RepoRow{}}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

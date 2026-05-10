@@ -60,13 +60,13 @@ func resolveNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, er
 	if isProcessID(id) {
 		return resolveProcessNode(ctx, r, id)
 	}
-	// Two un-prefixed candidates remain: Project ("alpha") and
-	// Worktree ("alpha:main"). Worktree ids always contain ":";
-	// Project ids never do (they are slugs of the project name).
+	// Two un-prefixed candidates remain: Repo ("owner/repo") and
+	// Worktree ("owner/repo:main"). Worktree ids always contain a
+	// trailing ":<branch>"; repo ids are owner/name slugs.
 	if strings.Contains(id, ":") {
 		return resolveWorktreeNode(ctx, r, id)
 	}
-	return resolveProjectNode(ctx, r, id)
+	return resolveRepoNode(ctx, r, id)
 }
 
 // isProcessID returns true when id parses as "<host>:<positive int>".
@@ -98,20 +98,20 @@ func resolveHostNode(ctx context.Context, r *Resolver, id string) (graphql1.Node
 	return *h, nil
 }
 
-func resolveProjectNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {
-	if r.ProjectsProvider == nil {
-		return nil, fmt.Errorf("projects provider not configured")
+func resolveRepoNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {
+	if r.ReposProvider == nil {
+		return nil, fmt.Errorf("repos provider not configured")
 	}
-	rows, err := r.ProjectsProvider.List(ctx)
+	rows, err := r.ReposProvider.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
 		if string(row.ID) == id {
-			return graphql1.Project{
-				ID:        string(row.ID),
-				Directory: row.Directory,
-				Name:      row.Name,
+			return graphql1.Repo{
+				ID:   string(row.ID),
+				Slug: row.Slug,
+				Path: row.Path,
 			}, nil
 		}
 	}

@@ -17,21 +17,25 @@ import (
 )
 
 // peeredFile is the on-disk view of ~/.orchard/config.json that
-// `add-peer` cares about. It tracks `version` + `projects` (owned by the
-// projects-config provider) plus the `peers` key peerproxy consumes.
-// Any other top-level keys — including legacy `peer_secret` from configs
-// written before issue #412 — round-trip via the `Extras` catch-all so
-// they aren't silently dropped on rewrite.
+// `add-peer` cares about. Per ADR-015 the file has exactly three
+// top-level keys: `version`, `repos`, `peers`. The `repos` array is
+// owned by add-repo; this writer round-trips it opaquely so add-peer
+// never clobbers it.
+//
+// Legacy / unknown top-level keys go through Extras so we don't drop
+// them on rewrite — eventually a migration command will scrub them, but
+// until then we preserve them silently so users can re-edit without
+// losing data.
 type peeredFile struct {
-	Version  int                        `json:"version,omitempty"`
-	Projects json.RawMessage            `json:"projects,omitempty"`
-	Peers    []peerproxy.PeerConfig     `json:"peers,omitempty"`
-	Extras   map[string]json.RawMessage `json:"-"`
+	Version int                        `json:"version,omitempty"`
+	Repos   json.RawMessage            `json:"repos,omitempty"`
+	Peers   []peerproxy.PeerConfig     `json:"peers,omitempty"`
+	Extras  map[string]json.RawMessage `json:"-"`
 }
 
 // MarshalJSON re-emits the canonical fields followed by any unknown
-// fields stored in Extras. Output order is: version, projects, peers,
-// then extras alphabetically.
+// fields stored in Extras. Output order is: version, repos, peers, then
+// extras alphabetically.
 func (f peeredFile) MarshalJSON() ([]byte, error) {
 	out := map[string]json.RawMessage{}
 	if f.Version != 0 {
@@ -41,8 +45,8 @@ func (f peeredFile) MarshalJSON() ([]byte, error) {
 		}
 		out["version"] = b
 	}
-	if len(f.Projects) > 0 {
-		out["projects"] = f.Projects
+	if len(f.Repos) > 0 {
+		out["repos"] = f.Repos
 	}
 	if len(f.Peers) > 0 {
 		b, err := json.Marshal(f.Peers)
@@ -74,8 +78,8 @@ func (f *peeredFile) UnmarshalJSON(data []byte) error {
 			if err := json.Unmarshal(v, &f.Version); err != nil {
 				return err
 			}
-		case "projects":
-			f.Projects = v
+		case "repos":
+			f.Repos = v
 		case "peers":
 			if err := json.Unmarshal(v, &f.Peers); err != nil {
 				return err

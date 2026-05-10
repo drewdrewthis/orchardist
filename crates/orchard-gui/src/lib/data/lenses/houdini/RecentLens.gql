@@ -8,5 +8,16 @@ query RecentLens {
 		messageCount
 		open
 		recap
+		agentName
+		customTitle
+	}
+	workView {
+		repos {
+			id
+			slug
+			worktrees {
+				...WorktreeEnrichment
+			}
+		}
 	}
 }

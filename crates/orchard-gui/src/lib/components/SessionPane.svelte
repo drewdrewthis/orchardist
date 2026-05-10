@@ -77,7 +77,9 @@
 	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 
 	const title = $derived(
-		worktree?.branch ||
+		conversation?.agentName ||
+			conversation?.customTitle ||
+			worktree?.branch ||
 			conversation?.cwd ||
 			pane?.window.name ||
 			session?.sessionUuid.slice(0, 8) ||
@@ -88,6 +90,17 @@
 		!!pane && tmuxSnapshot.activePaneIds.has(pane.paneId),
 	);
 	const hasTranscript = $derived(!!conversation?.jsonlPath);
+
+	// PR signal flags — same source-of-truth as SidebarItem so the focus
+	// view header matches what the sidebar row showed.
+	const ciBad = $derived(worktree?.pr?.statusCheckRollup === "FAILURE");
+	const reviewBad = $derived(worktree?.pr?.reviewDecision === "CHANGES_REQUESTED");
+	const conflict = $derived(
+		worktree?.pr?.mergeable === "CONFLICTING" ||
+			worktree?.pr?.mergeStateStatus === "DIRTY",
+	);
+	const prState = $derived(worktree?.pr?.state?.toUpperCase() ?? null);
+	const isDraft = $derived(prState === "DRAFT");
 
 	const attachArgv = $derived.by((): string[] | null => {
 		if (!pane) return null;
@@ -163,6 +176,22 @@
 									<Icon name="pull-request" size={10} />
 									<span>#{worktree.pr.number}</span>
 								</a>
+								{#if isDraft}
+									<span class="signal-badge draft" title="Draft PR">draft</span>
+								{:else if prState === "MERGED"}
+									<span class="signal-badge merged" title="PR merged">merged</span>
+								{:else if prState === "CLOSED"}
+									<span class="signal-badge closed" title="PR closed">closed</span>
+								{/if}
+								{#if ciBad}
+									<span class="signal-badge red" title="CI failing">CI</span>
+								{/if}
+								{#if reviewBad}
+									<span class="signal-badge red" title="Review changes requested">review</span>
+								{/if}
+								{#if conflict}
+									<span class="signal-badge red" title="Merge conflict">conflict</span>
+								{/if}
 							{/if}
 							{#if worktree.issue}
 								<a class="conv-chip" href="https://github.com/{worktree.repo}/issues/{worktree.issue.number}" target="_blank" rel="noreferrer">
@@ -258,6 +287,32 @@
 </div>
 
 <style>
+	.signal-badge {
+		font-size: 10px;
+		padding: 1px 6px;
+		border-radius: 3px;
+		font-family: var(--font-mono);
+	}
+	.signal-badge.draft {
+		background: rgba(140, 140, 140, 0.18);
+		color: #aaa;
+		border: 0.5px solid rgba(140, 140, 140, 0.32);
+	}
+	.signal-badge.merged {
+		background: rgba(120, 80, 200, 0.18);
+		color: #b990ff;
+		border: 0.5px solid rgba(120, 80, 200, 0.32);
+	}
+	.signal-badge.closed {
+		background: rgba(255, 100, 100, 0.18);
+		color: #ff7272;
+		border: 0.5px solid rgba(255, 100, 100, 0.32);
+	}
+	.signal-badge.red {
+		background: rgba(255, 100, 100, 0.14);
+		color: #ff7272;
+		border: 0.5px solid rgba(255, 100, 100, 0.32);
+	}
 	.chat-stack {
 		flex: 1;
 		min-height: 0;

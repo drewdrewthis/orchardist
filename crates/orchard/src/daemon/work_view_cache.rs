@@ -11,7 +11,7 @@
 //! payload:
 //!
 //! ```json
-//! { "version": 1, "snapshot": { "projects": [], ... } }
+//! { "version": 1, "snapshot": { "repos": [], ... } }
 //! ```
 //!
 //! Callers should treat `version != CURRENT_VERSION` as absent (the next
@@ -153,14 +153,14 @@ pub fn read_snapshot_from(path: &Path) -> Option<WorkViewSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::types::{WorkViewProject, WorkViewSnapshot};
+    use crate::daemon::types::{WorkViewRepo, WorkViewSnapshot};
     use tempfile::TempDir;
 
     fn sample_snapshot() -> WorkViewSnapshot {
         WorkViewSnapshot {
-            projects: vec![WorkViewProject {
-                name: "repo".to_string(),
-                directory: "/repos/owner/repo".to_string(),
+            repos: vec![WorkViewRepo {
+                slug: "repo".to_string(),
+                path: "/repos/owner/repo".to_string(),
                 worktrees: vec![],
             }],
             tmux_sessions: vec![],
@@ -178,9 +178,9 @@ mod tests {
         write_snapshot_to(&snap, &path).unwrap();
 
         let read_back = read_snapshot_from(&path).expect("should read back the snapshot");
-        assert_eq!(read_back.projects.len(), 1);
-        assert_eq!(read_back.projects[0].name, "repo");
-        assert_eq!(read_back.projects[0].directory, "/repos/owner/repo");
+        assert_eq!(read_back.repos.len(), 1);
+        assert_eq!(read_back.repos[0].slug, "repo");
+        assert_eq!(read_back.repos[0].path, "/repos/owner/repo");
     }
 
     /// Version mismatch returns `None` without panicking.
@@ -190,7 +190,7 @@ mod tests {
         let path = dir.path().join("work_view_snapshot.json");
 
         // Write a file with a version we don't recognise.
-        let raw = r#"{ "version": 999, "snapshot": { "projects": [], "tmuxSessions": [], "claudeInstances": [] } }"#;
+        let raw = r#"{ "version": 999, "snapshot": { "repos": [], "tmuxSessions": [], "claudeInstances": [] } }"#;
         std::fs::write(&path, raw).unwrap();
 
         let result = read_snapshot_from(&path);

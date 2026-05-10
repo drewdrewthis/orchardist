@@ -390,23 +390,6 @@ type ProcessFilter struct {
 	PidIn []int64 `json:"pidIn,omitempty"`
 }
 
-// A project (git repo) registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
-type Project struct {
-	// Stable identifier — slug of `name`, falling back to a short hash of `directory`. Survives re-registration.
-	ID string `json:"id"`
-	// Absolute filesystem path to the project's working tree.
-	Directory string `json:"directory"`
-	// Human-readable label. Defaults to the basename of `directory` when not specified in the config.
-	Name string `json:"name"`
-	// Worktrees discovered for this project — the project's main checkout plus everything under `.git/worktrees/`.
-	Worktrees []*Worktree `json:"worktrees"`
-}
-
-func (Project) IsNode() {}
-
-// Globally-unique id (e.g. "Host:<machineId>").
-func (this Project) GetID() string { return this.ID }
-
 // A daemon provider's health snapshot — what its most recent refresh
 // did, when, and how it ended.
 type ProviderHealth struct {
@@ -465,6 +448,23 @@ type PullRequestReview struct {
 
 type Query struct {
 }
+
+// A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify.
+type Repo struct {
+	// Stable identifier derived from `slug`. Survives re-registration.
+	ID string `json:"id"`
+	// GitHub-style `owner/repo` slug. The repo's identity.
+	Slug string `json:"slug"`
+	// Absolute filesystem path to the repo's working tree.
+	Path string `json:"path"`
+	// Worktrees discovered for this repo — the main checkout plus everything under `.git/worktrees/`.
+	Worktrees []*Worktree `json:"worktrees"`
+}
+
+func (Repo) IsNode() {}
+
+// Globally-unique id (e.g. "Host:<machineId>").
+func (this Repo) GetID() string { return this.ID }
 
 // A snapshot of a host's resource utilisation. Percentages are 0..100.
 // Load averages are the kernel-reported 1/5/15-minute moving averages.
@@ -702,8 +702,8 @@ func (this TmuxWindow) GetID() string { return this.ID }
 // Returns the same data the per-type resolvers return, joined into a
 // single tree to save round trips.
 type WorkView struct {
-	// Projects in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked.
-	Projects []*Project `json:"projects"`
+	// Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked.
+	Repos []*Repo `json:"repos"`
 	// Tmux sessions on the local host — same as Query.tmuxSessions with no filter.
 	TmuxSessions []*TmuxSession `json:"tmuxSessions"`
 	// Live Claude instances — same shape as Query.claudeInstances.

@@ -99,10 +99,10 @@ func TestWorktreeLoaderBatchesByCwd(t *testing.T) {
 		t.Fatalf("AddProject: %v", err)
 	}
 
-	projects := &fixedLister{rows: []configprovider.Project{
-		{ID: "demo", Directory: dir, Name: "demo"},
+	repos := &fixedLister{rows: []configprovider.Repo{
+		{ID: "demo", Slug: "demo", Path: dir},
 	}}
-	bundle := &loaders.ProvidersBundle{Git: gitProv, Projects: projects}
+	bundle := &loaders.ProvidersBundle{Git: gitProv, Repos: repos}
 	l := loaders.NewLoaders(bundle)
 
 	ctx := context.Background()
@@ -178,13 +178,13 @@ func (staticLoadReader) Read(_ context.Context) (hostprovider.Load, error) {
 // fixedLister implements configprovider.Lister with a static slice.
 type fixedLister struct {
 	mu   sync.Mutex
-	rows []configprovider.Project
+	rows []configprovider.Repo
 }
 
-func (f *fixedLister) List(_ context.Context) ([]configprovider.Project, error) {
+func (f *fixedLister) List(_ context.Context) ([]configprovider.Repo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]configprovider.Project, len(f.rows))
+	out := make([]configprovider.Repo, len(f.rows))
 	copy(out, f.rows)
 	return out, nil
 }

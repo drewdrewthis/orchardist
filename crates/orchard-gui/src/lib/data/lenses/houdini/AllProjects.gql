@@ -1,6 +1,0 @@
-query AllProjects {
-	projects {
-		id
-		name
-	}
-}

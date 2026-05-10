@@ -13,6 +13,8 @@
 import { IssueLensStore, type IssueLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT, WorktreeEnrichment } from "./fragments";
+import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
+import { buildSidebarItem } from "$lib/data/sidebar-item";
 
 /** Singleton Houdini store for the issue lens. */
 export const issueStore = new IssueLensStore();
@@ -24,6 +26,7 @@ export interface IssueRow {
 	worktree: WorktreeEnrichment;
 	session: SessionCardT | null;
 	lastActivityMs: number;
+	hints: { agentName: string | null; customTitle: string | null } | null;
 }
 
 function findSessionFor(
@@ -53,14 +56,19 @@ function findSessionFor(
  */
 export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 	if (!data) return [];
-	const allWorktrees = data.workView.projects.flatMap(
-		(p) => p.worktrees as unknown as WorktreeEnrichment[],
+	const allWorktrees = data.workView.repos.flatMap(
+		(r) => r.worktrees as unknown as WorktreeEnrichment[],
 	);
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
 	const lastByUuid = new Map<string, number>();
+	const hintsByUuid = new Map<string, { agentName: string | null; customTitle: string | null }>();
 	for (const c of data.conversations) {
 		const t = parseTime(c.lastSeenAt);
 		if (t > 0) lastByUuid.set(c.sessionUuid, t);
+		hintsByUuid.set(c.sessionUuid, {
+			agentName: c.agentName ?? null,
+			customTitle: c.customTitle ?? null,
+		});
 	}
 	const rows: IssueRow[] = [];
 	for (const w of allWorktrees) {
@@ -69,9 +77,39 @@ export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 		const prState = w.pr.state.toUpperCase();
 		if (prState !== "OPEN" && prState !== "DRAFT") continue;
 		const { session, lastActivityMs } = findSessionFor(w, sessions, lastByUuid);
-		rows.push({ issue: w.issue, worktree: w, session, lastActivityMs });
+		const hints = session ? hintsByUuid.get(session.sessionUuid) ?? null : null;
+		rows.push({ issue: w.issue, worktree: w, session, lastActivityMs, hints });
 	}
 	rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 	return rows;
+}
+
+/**
+ * Projection into sectioned `SidebarItem[]` per #540 B0/B1. The issue
+ * lens groups items by their linked GitHub issue — one section per
+ * issue. Worktrees that have no Claude session attached are dropped at
+ * this projection (the unified item model requires a session).
+ */
+export function buildIssueSections(
+	data: Data | null | undefined,
+): SidebarSection[] {
+	const rows = buildIssueRows(data);
+	const sections = new Map<number, SidebarSection>();
+	for (const r of rows) {
+		if (!r.session) continue; // SidebarItem requires a session
+		let sec = sections.get(r.issue.number);
+		if (!sec) {
+			const label =
+				r.issue.title != null
+					? `#${r.issue.number} · ${r.issue.title}`
+					: `#${r.issue.number}`;
+			sec = { id: `issue-${r.issue.number}`, label, items: [] };
+			sections.set(r.issue.number, sec);
+		}
+		sec.items.push(
+			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, [], r.hints),
+		);
+	}
+	return Array.from(sections.values());
 }
 

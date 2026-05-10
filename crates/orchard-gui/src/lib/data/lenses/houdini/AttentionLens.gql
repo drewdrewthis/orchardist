@@ -5,11 +5,13 @@ query AttentionLens {
 	conversations {
 		sessionUuid
 		lastSeenAt
+		agentName
+		customTitle
 	}
 	workView {
-		projects {
+		repos {
 			id
-			name
+			slug
 			worktrees {
 				...WorktreeEnrichment
 			}

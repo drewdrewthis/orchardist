@@ -30,15 +30,38 @@
 		hostsStore.fetch();
 	});
 
-	const worktrees = $derived(buildWorktreePickerRows($worktreesStore.data));
-	const hosts = $derived(buildHosts($hostsStore.data));
-
+	// Form state.
 	let worktreeId = $state("");
 	let host = $state("");
 	let model = $state("claude-sonnet-4-5");
 	let task = $state("");
 	let q = $state("");
 	let listOpen = $state(false);
+
+	// Per #540 E2: snapshot the data when the dialog opens so the user
+	// isn't watching counts and labels change underneath them. Snapshot
+	// only refreshes on the open→true transition; while open the
+	// dialog renders frozen content even if the underlying Houdini
+	// store updates.
+	let snapshotWorktrees = $state<ReturnType<typeof buildWorktreePickerRows>>([]);
+	let snapshotHosts = $state<ReturnType<typeof buildHosts>>([]);
+	let prevOpen = false;
+
+	$effect(() => {
+		if (open && !prevOpen) {
+			snapshotWorktrees = buildWorktreePickerRows($worktreesStore.data);
+			snapshotHosts = buildHosts($hostsStore.data);
+			worktreeId = snapshotWorktrees[0]?.id || "";
+			host = snapshotWorktrees[0]?.host || snapshotHosts[0]?.hostname || "";
+			model = "claude-sonnet-4-5";
+			task = "";
+			q = "";
+		}
+		prevOpen = open;
+	});
+
+	const worktrees = $derived(snapshotWorktrees);
+	const hosts = $derived(snapshotHosts);
 
 	const cur = $derived(worktrees.find((i) => i.id === worktreeId) || null);
 	const cwd = $derived(cur?.path || "~/code");
@@ -55,16 +78,6 @@
 				.slice(0, 8);
 		}
 		return worktrees.slice(0, 8).map((it) => ({ it, m: { score: 0, idx: [] } }));
-	});
-
-	$effect(() => {
-		if (open) {
-			worktreeId = worktrees[0]?.id || "";
-			host = worktrees[0]?.host || hosts[0]?.hostname || "";
-			model = "claude-sonnet-4-5";
-			task = "";
-			q = "";
-		}
 	});
 
 	function pickWorktree(id: string) {
@@ -232,14 +245,19 @@
 						(host:{host}, cwd:{cur?.path?.split("/").slice(-2).join("/") || ""})
 					</span>
 				</span>
+				<!-- #540 E3: Launch button alignment.
+				     Wrap content with inline-flex + gap so the icon and label
+				     align cleanly at all sizes. -->
 				<div style="display: flex; gap: 8px;">
 					<button class="btn-ghost" onclick={onClose}>Cancel</button>
 					<button
 						class="btn-primary"
+						style="display: inline-flex; align-items: center; gap: 6px;"
 						onclick={() => onLaunch({ worktreeId, host, model, task })}
 						disabled={!host}
 					>
-						<Icon name="sparkle" size={13} /> Launch
+						<Icon name="sparkle" size={13} />
+						<span>Launch</span>
 					</button>
 				</div>
 			</div>
