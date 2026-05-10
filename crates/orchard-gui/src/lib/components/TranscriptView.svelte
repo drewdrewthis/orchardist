@@ -13,6 +13,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
+	import { createVirtualizer } from "@tanstack/svelte-virtual";
 	import {
 		readTranscript,
 		parseTranscript,
@@ -36,6 +37,24 @@
 	let scrollHost: HTMLDivElement | undefined = $state();
 	let stickToBottom = $state(true);
 	let expandedTools = $state<Set<string>>(new Set());
+
+	// Virtualizer — only render the turns currently visible. Estimated
+	// turn height is a coarse average; the virtualizer remeasures real
+	// heights via `measureElement` so dynamic content stays accurate.
+	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: 0,
+		getScrollElement: () => scrollHost ?? null,
+		estimateSize: () => 120,
+		overscan: 6,
+	});
+	$effect(() => {
+		$virtualizer.setOptions({
+			count: turns.length,
+			getScrollElement: () => scrollHost ?? null,
+			estimateSize: () => 120,
+			overscan: 6,
+		});
+	});
 
 	function toggleTool(id: string) {
 		const next = new Set(expandedTools);
@@ -86,12 +105,14 @@
 	});
 
 	$effect(() => {
-		// Scroll to bottom on every new render when the user is anchored
-		// there. We track stickToBottom from scroll events below.
+		// Scroll to bottom (last virtualized index) on every new render
+		// when the user is anchored there. We track stickToBottom from
+		// scroll events below. scrollToIndex respects the virtualizer's
+		// measured offsets so it works regardless of windowed render.
 		void turns.length;
-		if (stickToBottom && scrollHost) {
+		if (stickToBottom && turns.length > 0) {
 			queueMicrotask(() => {
-				if (scrollHost) scrollHost.scrollTop = scrollHost.scrollHeight;
+				$virtualizer.scrollToIndex(turns.length - 1, { align: "end" });
 			});
 		}
 	});
@@ -156,61 +177,71 @@
 					… earlier turns omitted ({(totalSize / 1024).toFixed(0)}KB total)
 				</div>
 			{/if}
-			{#each turns as turn (turn.uuid)}
-				<div class="t-turn" data-role={turn.role} class:tool-feedback={turn.toolFeedback}>
-					<div class="t-meta mono">
-						<span class="t-role">{turn.role}</span>
-						{#if turn.model}
-							<span class="dimest">·</span>
-							<span class="dimer">{turn.model}</span>
-						{/if}
-						{#if turn.timestamp}
-							<span class="dimest">·</span>
-							<span class="dimer">{timeStr(turn.timestamp)}</span>
-						{/if}
-					</div>
-					{#each turn.blocks as block, i (i)}
-						{#if block.kind === "text"}
-							<div class="t-text">{block.text}</div>
-						{:else if block.kind === "thinking"}
-							<details class="t-thinking">
-								<summary class="dimer mono">thinking</summary>
+			<div class="transcript-virtual" style="height: {$virtualizer.getTotalSize()}px;">
+				{#each $virtualizer.getVirtualItems() as vRow (vRow.key)}
+					{@const turn = turns[vRow.index]}
+					<div
+						class="t-turn"
+						data-role={turn.role}
+						class:tool-feedback={turn.toolFeedback}
+						data-index={vRow.index}
+						use:$virtualizer.measureElement
+						style="position: absolute; top: 0; left: 0; right: 0; transform: translateY({vRow.start}px);"
+					>
+						<div class="t-meta mono">
+							<span class="t-role">{turn.role}</span>
+							{#if turn.model}
+								<span class="dimest">·</span>
+								<span class="dimer">{turn.model}</span>
+							{/if}
+							{#if turn.timestamp}
+								<span class="dimest">·</span>
+								<span class="dimer">{timeStr(turn.timestamp)}</span>
+							{/if}
+						</div>
+						{#each turn.blocks as block, i (i)}
+							{#if block.kind === "text"}
 								<div class="t-text">{block.text}</div>
-							</details>
-						{:else if block.kind === "tool_use"}
-							<div class="t-tool">
-								<button
-									class="t-tool-head mono"
-									onclick={() => toggleTool(block.toolId || `${turn.uuid}-tu-${i}`)}
-								>
-									<Icon name="terminal" size={11} />
-									<span class="t-tool-name">{block.name}</span>
-									<span class="t-tool-summary dimer">{blockSummary(block)}</span>
-									<span class="t-tool-chev dimer">{expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`) ? "▾" : "▸"}</span>
-								</button>
-								{#if expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`)}
-									<pre class="t-tool-body mono">{JSON.stringify(block.input, null, 2)}</pre>
-								{/if}
-							</div>
-						{:else if block.kind === "tool_result"}
-							<div class="t-tool" class:err={block.isError}>
-								<button
-									class="t-tool-head mono"
-									onclick={() => toggleTool(block.toolId || `${turn.uuid}-tr-${i}`)}
-								>
-									<Icon name={block.isError ? "alert" : "check"} size={11} />
-									<span class="t-tool-name">{block.isError ? "tool error" : "tool result"}</span>
-									<span class="t-tool-summary dimer">{blockSummary(block)}</span>
-									<span class="t-tool-chev dimer">{expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`) ? "▾" : "▸"}</span>
-								</button>
-								{#if expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`)}
-									<pre class="t-tool-body mono">{block.text}</pre>
-								{/if}
-							</div>
-						{/if}
-					{/each}
-				</div>
-			{/each}
+							{:else if block.kind === "thinking"}
+								<details class="t-thinking">
+									<summary class="dimer mono">thinking</summary>
+									<div class="t-text">{block.text}</div>
+								</details>
+							{:else if block.kind === "tool_use"}
+								<div class="t-tool">
+									<button
+										class="t-tool-head mono"
+										onclick={() => toggleTool(block.toolId || `${turn.uuid}-tu-${i}`)}
+									>
+										<Icon name="terminal" size={11} />
+										<span class="t-tool-name">{block.name}</span>
+										<span class="t-tool-summary dimer">{blockSummary(block)}</span>
+										<span class="t-tool-chev dimer">{expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`) ? "▾" : "▸"}</span>
+									</button>
+									{#if expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`)}
+										<pre class="t-tool-body mono">{JSON.stringify(block.input, null, 2)}</pre>
+									{/if}
+								</div>
+							{:else if block.kind === "tool_result"}
+								<div class="t-tool" class:err={block.isError}>
+									<button
+										class="t-tool-head mono"
+										onclick={() => toggleTool(block.toolId || `${turn.uuid}-tr-${i}`)}
+									>
+										<Icon name={block.isError ? "alert" : "check"} size={11} />
+										<span class="t-tool-name">{block.isError ? "tool error" : "tool result"}</span>
+										<span class="t-tool-summary dimer">{blockSummary(block)}</span>
+										<span class="t-tool-chev dimer">{expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`) ? "▾" : "▸"}</span>
+									</button>
+									{#if expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`)}
+										<pre class="t-tool-body mono">{block.text}</pre>
+									{/if}
+								</div>
+							{/if}
+						{/each}
+					</div>
+				{/each}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -228,9 +259,10 @@
 		min-height: 0;
 		overflow-y: auto;
 		padding: 12px 14px 24px 14px;
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
+	}
+	.transcript-virtual {
+		position: relative;
+		width: 100%;
 	}
 	.transcript-empty {
 		flex: 1;
