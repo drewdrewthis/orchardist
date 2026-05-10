@@ -12,6 +12,7 @@
 	import ChannelRow from "./ChannelRow.svelte";
 	import { getStore } from "$lib/store.svelte";
 	import { attentionStore, buildAttentionRows } from "$lib/data/lenses/attention";
+	import { recentStore, buildRecentRows } from "$lib/data/lenses/recent";
 	import { relTime } from "$lib/util/format";
 	import type { Agent } from "$lib/data/types";
 
@@ -37,12 +38,13 @@
 	const store = getStore();
 	const lens = $derived(store.lens);
 
-	// Houdini store: kicks off a CacheAndNetwork fetch on mount; the
-	// component subscribes via the `$attentionStore` reactive contract.
+	// Houdini stores: kick off CacheAndNetwork fetches on mount; the
+	// component subscribes via the `$<storeName>` reactive contract.
 	// Subsequent push events into the daemon (subscribeAll → cache patch)
-	// re-render this sidebar without an explicit re-fetch.
+	// re-render the sidebar without an explicit re-fetch.
 	onMount(() => {
 		attentionStore.fetch();
+		recentStore.fetch();
 	});
 
 	// Tier-classified rows derived from the Houdini store + the parent's
@@ -52,6 +54,9 @@
 	const waiting = $derived(attentionRows.filter((r) => r.tier === "waiting"));
 	const active = $derived(attentionRows.filter((r) => r.tier === "active"));
 	const attentionLoading = $derived($attentionStore.fetching);
+
+	const recentRows = $derived(buildRecentRows($recentStore.data));
+	const recentLoading = $derived($recentStore.fetching);
 
 	/**
 	 * A sidebar row matches the active tab if EITHER its paneId or its
@@ -150,9 +155,9 @@
 					<Icon name="clock" size={11} />
 					<span>Recent</span>
 				</span>
-				<span class="count">{store.lensSnapshots.recent.length}</span>
+				<span class="count">{recentRows.length}</span>
 			</div>
-			{#each store.lensSnapshots.recent as row (row.session.id)}
+			{#each recentRows as row (row.session.id)}
 				<SessionRow
 					session={row.session}
 					worktree={null}
@@ -173,9 +178,9 @@
 				/>
 			{/each}
 		</div>
-		{#if store.lensSnapshots.recent.length === 0}
+		{#if recentRows.length === 0}
 			<div class="empty-lens">
-				<span class="dimer">{store.lensLoading ? "Loading…" : "No Claude sessions known."}</span>
+				<span class="dimer">{recentLoading ? "Loading…" : "No Claude sessions known."}</span>
 			</div>
 		{/if}
 	{:else if lens === "tmux"}

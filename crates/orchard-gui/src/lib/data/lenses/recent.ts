@@ -4,37 +4,18 @@
  * ClaudeInstance.lastActivityAt is currently always null; the same
  * sessionUuid appears in `conversations` with the JSONL timestamp).
  * Sort: lastActivityMs desc.
+ *
+ * Houdini operation lives at `lenses/houdini/RecentLens.gql`. This
+ * file exposes the singleton store + the `buildRecentRows` projection.
  */
-import { gql } from "graphql-request";
-import { http, parseTime } from "./client";
-import { SESSION_CARD_FRAGMENT, type SessionCardT } from "./fragments";
+import { RecentLensStore, type RecentLens$result } from "$houdini";
+import { parseTime } from "./client";
+import type { SessionCardT } from "./fragments";
 
-const RECENT_QUERY = gql`
-	${SESSION_CARD_FRAGMENT}
-	query RecentLens {
-		claudeInstances {
-			...SessionCard
-		}
-		conversations {
-			sessionUuid
-			lastSeenAt
-			messageCount
-			open
-			recap
-		}
-	}
-`;
+/** Singleton Houdini store for the recent lens. */
+export const recentStore = new RecentLensStore();
 
-interface RecentResponse {
-	claudeInstances: SessionCardT[];
-	conversations: Array<{
-		sessionUuid: string;
-		lastSeenAt: string | null;
-		messageCount: number;
-		open: boolean;
-		recap: string | null;
-	}>;
-}
+type Data = NonNullable<RecentLens$result>;
 
 export interface RecentRow {
 	session: SessionCardT;
@@ -45,25 +26,38 @@ export interface RecentRow {
 	recap: string | null;
 }
 
+/**
+ * Project the Houdini result into ordered recent rows. Pure —
+ * components call this inside `$derived` against `$recentStore.data`.
+ */
+export function buildRecentRows(data: Data | null | undefined): RecentRow[] {
+	if (!data) return [];
+	const convByUuid = new Map<string, Data["conversations"][number]>();
+	for (const c of data.conversations) convByUuid.set(c.sessionUuid, c);
+	return (data.claudeInstances as unknown as SessionCardT[])
+		.map((s): RecentRow => {
+			const conv = convByUuid.get(s.sessionUuid) || null;
+			const fromConv = parseTime(conv?.lastSeenAt);
+			const fromDaemon = parseTime(s.lastActivityAt);
+			return {
+				session: s,
+				lastActivityMs: fromConv || fromDaemon,
+				messageCount: conv?.messageCount ?? 0,
+				open: conv?.open ?? false,
+				recap: conv?.recap ?? null,
+			};
+		})
+		.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+}
+
+/**
+ * Legacy facade for `AppStore.refreshActiveLens`. Phase 3 retires it
+ * along with the snapshot field.
+ */
 export async function fetchRecent(): Promise<RecentRow[]> {
 	try {
-		const data = await http().request<RecentResponse>(RECENT_QUERY);
-		const convByUuid = new Map<string, RecentResponse["conversations"][number]>();
-		for (const c of data.conversations) convByUuid.set(c.sessionUuid, c);
-		return data.claudeInstances
-			.map((s): RecentRow => {
-				const conv = convByUuid.get(s.sessionUuid) || null;
-				const fromConv = parseTime(conv?.lastSeenAt);
-				const fromDaemon = parseTime(s.lastActivityAt);
-				return {
-					session: s,
-					lastActivityMs: fromConv || fromDaemon,
-					messageCount: conv?.messageCount ?? 0,
-					open: conv?.open ?? false,
-					recap: conv?.recap ?? null,
-				};
-			})
-			.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+		const { data } = await recentStore.fetch({ policy: "NetworkOnly" });
+		return buildRecentRows(data);
 	} catch (err) {
 		console.warn("[orchard-gui] recent lens fetch failed:", err);
 		return [];
