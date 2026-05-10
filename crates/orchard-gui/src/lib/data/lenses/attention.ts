@@ -111,8 +111,8 @@ export function buildAttentionRows(
 	// hand-written `SessionCardT` / `WorktreeEnrichment` shapes — both
 	// come from the same schema. The cast is a type bridge for Phase 2;
 	// Phase 3 retires the hand-written interfaces.
-	const allWorktrees = data.workView.projects.flatMap(
-		(p) => p.worktrees as unknown as WorktreeEnrichment[],
+	const allWorktrees = data.workView.repos.flatMap(
+		(r) => r.worktrees as unknown as WorktreeEnrichment[],
 	);
 	const lastByUuid = new Map<string, number>();
 	for (const c of data.conversations) {

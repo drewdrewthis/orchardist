@@ -53,8 +53,8 @@ function findSessionFor(
  */
 export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 	if (!data) return [];
-	const allWorktrees = data.workView.projects.flatMap(
-		(p) => p.worktrees as unknown as WorktreeEnrichment[],
+	const allWorktrees = data.workView.repos.flatMap(
+		(r) => r.worktrees as unknown as WorktreeEnrichment[],
 	);
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
 	const lastByUuid = new Map<string, number>();

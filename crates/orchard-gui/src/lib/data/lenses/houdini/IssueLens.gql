@@ -7,9 +7,9 @@ query IssueLens {
 		lastSeenAt
 	}
 	workView {
-		projects {
+		repos {
 			id
-			name
+			slug
 			worktrees {
 				...WorktreeEnrichment
 			}

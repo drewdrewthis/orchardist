@@ -16,9 +16,9 @@ query OpenPanel($paneIds: [String!]) {
 		jsonlPath
 	}
 	workView {
-		projects {
+		repos {
 			id
-			name
+			slug
 			worktrees {
 				...WorktreeEnrichment
 			}
