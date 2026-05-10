@@ -2204,7 +2204,11 @@ impl App {
         let setup_script = crate::config::load_config().setup_script;
 
         std::thread::spawn(move || {
-            let worktree_path = crate::paths::derive_local_worktree_path(&repo_root, &branch);
+            // Single source of truth for the worktree-path slug rule lives in
+            // `worktree-core` so the TUI dialog and `orchard new` agree on
+            // where to put a new worktree.
+            let worktree_path = worktree_core::worktree_path_for(&repo_root, &branch);
+            let worktree_path = worktree_path.to_string_lossy().into_owned();
 
             // Delegate the new-branch-then-fallback dance to worktree-core.
             // The shared library is the single source of truth for git worktree

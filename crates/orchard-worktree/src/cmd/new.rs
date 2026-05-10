@@ -7,8 +7,7 @@
 
 use anyhow::{Result, anyhow};
 use clap::Args as ClapArgs;
-
-use crate::cmd::worktree_path_for;
+use worktree_core::worktree_path_for;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {

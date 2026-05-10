@@ -2,8 +2,10 @@
 //!
 //! `tildify` shortens absolute paths by replacing the home directory prefix
 //! with `~`; `truncate_left` caps display width by eliding from the left with
-//! a `…` character. `sanitize_branch_slug` and `derive_local_worktree_path`
-//! produce filesystem-safe paths for worktree directories.
+//! a `…` character. `sanitize_branch_slug` produces a filesystem-safe slug
+//! for the remote-registry-entry naming. New-worktree path computation lives
+//! in `worktree-core` (`worktree_core::worktree_path_for`) — the single
+//! source of truth shared with the `orchard-worktree` CLI.
 /// Replaces the user's home directory prefix in `path` with `~`.
 /// Returns the path unchanged if it does not start with `$HOME`.
 pub fn tildify(path: &str) -> String {
@@ -108,36 +110,6 @@ pub fn session_belongs_to_worktree(session_path: &str, worktree_path: &str) -> b
     session_path == wt || session_path.starts_with(&format!("{}/", wt))
 }
 
-/// Returns the absolute conventional path for a local worktree:
-/// `parent(repo_root)/worktrees/worktree-SLUG`.
-pub(crate) fn derive_local_worktree_path(repo_root: &str, branch: &str) -> String {
-    use std::path::Path;
-
-    let slug = sanitize_branch_slug(branch);
-    let parent = Path::new(repo_root)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let joined = parent.join("worktrees").join(format!("worktree-{}", slug));
-    // Try canonicalize to resolve symlinks and get an absolute path when the
-    // directory already exists. For new worktrees (the common case), the path
-    // doesn't exist yet and canonicalize fails — we fall through to building
-    // an absolute path manually instead.
-    match joined.canonicalize() {
-        Ok(abs) => abs.to_string_lossy().into_owned(),
-        Err(_) => {
-            if joined.is_absolute() {
-                joined.to_string_lossy().into_owned()
-            } else {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(&joined))
-                    .unwrap_or(joined)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,7 +192,7 @@ mod tests {
         assert_eq!(sanitize_branch_slug("main"), "main");
     }
 
-    // --- derive_local_worktree_path ---
+    // --- resolve_git_dir ---
 
     #[test]
     fn resolve_git_dir_finds_dir_form() {
@@ -254,26 +226,6 @@ mod tests {
     fn resolve_git_dir_returns_none_outside_repo() {
         let tmp = tempfile::TempDir::new().unwrap();
         assert!(resolve_git_dir(tmp.path()).is_none());
-    }
-
-    #[test]
-    fn local_path_uses_parent_and_slug() {
-        let result = derive_local_worktree_path("/home/user/repo", "feat/my-feature");
-        assert!(
-            result.ends_with("worktrees/worktree-feat-my-feature"),
-            "got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn local_path_parent_segment_correct() {
-        let result = derive_local_worktree_path("/srv/repos/myrepo", "fix/bug-101");
-        assert!(
-            result.contains("worktrees/worktree-fix-bug-101"),
-            "got: {}",
-            result
-        );
     }
 
     #[test]
