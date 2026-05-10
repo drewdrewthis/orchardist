@@ -182,6 +182,10 @@ type Conversation struct {
 	// Absolute path to the JSONL transcript on the daemon's host.
 	// Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
 	JsonlPath string `json:"jsonlPath"`
+	// User-set title from the JSONL `type: "custom-title"` record. Null when the session has not yet recorded one.
+	CustomTitle *string `json:"customTitle,omitempty"`
+	// Sub-agent name from the JSONL `type: "agent-name"` record. Null when the session has not yet recorded one.
+	AgentName *string `json:"agentName,omitempty"`
 }
 
 func (Conversation) IsNode() {}
@@ -617,7 +621,9 @@ type TmuxServer struct {
 	Pid *int64 `json:"pid,omitempty"`
 	// True while the tmux daemon answers a heartbeat command.
 	Alive bool `json:"alive"`
-	// Sessions hosted on this server.
+	// Sessions hosted on this server. Defaults to LAST_ACTIVITY which orders
+	// most-recently-active first (lex name break ties), matching the sidebar's
+	// "what should I look at next" intent. Pass NAME for stable lex order.
 	Sessions []*TmuxSession `json:"sessions"`
 	// Clients currently connected to this server.
 	Clients []*TmuxClient `json:"clients"`
@@ -1158,5 +1164,49 @@ func (e *ReviewDecisionEnum) UnmarshalGQL(v interface{}) error {
 }
 
 func (e ReviewDecisionEnum) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// Sort key for `TmuxServer.sessions`.
+type TmuxSessionSort string
+
+const (
+	// Most-recently-active first (lastActivityAt DESC). Lex-lower name breaks ties; sessions with no activity rank below those with one.
+	TmuxSessionSortLastActivity TmuxSessionSort = "LAST_ACTIVITY"
+	// Stable lex order by session name.
+	TmuxSessionSortName TmuxSessionSort = "NAME"
+)
+
+var AllTmuxSessionSort = []TmuxSessionSort{
+	TmuxSessionSortLastActivity,
+	TmuxSessionSortName,
+}
+
+func (e TmuxSessionSort) IsValid() bool {
+	switch e {
+	case TmuxSessionSortLastActivity, TmuxSessionSortName:
+		return true
+	}
+	return false
+}
+
+func (e TmuxSessionSort) String() string {
+	return string(e)
+}
+
+func (e *TmuxSessionSort) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = TmuxSessionSort(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid TmuxSessionSort", str)
+	}
+	return nil
+}
+
+func (e TmuxSessionSort) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }

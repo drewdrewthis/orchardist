@@ -281,6 +281,8 @@ func (p *Provider) ToGraphQL(c Conversation) *graphql.Conversation {
 		Open:         p.IsOpen(c),
 		Recap:        nil,
 		JsonlPath:    c.Path,
+		CustomTitle:  c.CustomTitle,
+		AgentName:    c.AgentName,
 	}
 }
 
