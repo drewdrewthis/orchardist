@@ -40,6 +40,7 @@ const ALLOWED_HOSTS = new Set([
   'github.com',
   'objects.githubusercontent.com',
   'github-releases.githubusercontent.com',
+  'release-assets.githubusercontent.com',
 ]);
 
 const MAX_REDIRECTS = 5;
