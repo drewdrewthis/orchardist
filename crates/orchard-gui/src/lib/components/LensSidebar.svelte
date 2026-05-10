@@ -337,12 +337,4 @@
 		padding: 8px 16px;
 		font-size: 11.5px;
 	}
-	.here-pip {
-		display: inline-block;
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--ok-fg, #6fd391);
-		box-shadow: 0 0 6px var(--ok-fg, rgba(111, 211, 145, 0.6));
-	}
 </style>
