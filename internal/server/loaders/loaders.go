@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,9 +62,9 @@ type loaderKey struct{}
 // emission). Every dataloader instance holds its own batched promise
 // state.
 type Loaders struct {
-	Host               *dataloader.Loader[string, *graphql1.Host]
-	WorktreeForCwd     *dataloader.Loader[string, *graphql1.Worktree]
-	Process            *dataloader.Loader[ProcessKey, *graphql1.Process]
+	Host                *dataloader.Loader[string, *graphql1.Host]
+	WorktreeForCwd      *dataloader.Loader[string, *graphql1.Worktree]
+	Process             *dataloader.Loader[ProcessKey, *graphql1.Process]
 	PullRequestsForRepo *dataloader.Loader[RepoKey, []*graphql1.PullRequest]
 
 	// metrics — provider call counts, used by the n+1 detector test.
@@ -287,7 +288,7 @@ func WorktreesForCwds(providers *ProvidersBundle, cwds []string) []*graphql1.Wor
 			if rec.worktree.Path == "" {
 				continue
 			}
-			if !strings.HasPrefix(cwd, rec.worktree.Path) {
+			if !cwdInWorktree(cwd, rec.worktree.Path) {
 				continue
 			}
 			if len(rec.worktree.Path) > len(bestPath) {
@@ -308,6 +309,36 @@ func WorktreesForCwds(providers *ProvidersBundle, cwds []string) []*graphql1.Wor
 		}
 	}
 	return out
+}
+
+// cwdInWorktree reports whether cwd is the worktree's path or a descendant.
+//
+// Uses filepath.Rel rather than strings.HasPrefix so that a worktree at
+// `/repo/foo` does not match cwd `/repo/foobar` — the classic prefix-bypass
+// anti-pattern. Mirrors the validatePath idiom in
+// internal/server/conversations_jsonl_handler.go, the codebase's canonical
+// shape for path-descent checks.
+//
+// The match is purely lexical (no symlink resolution): cwd and worktreePath
+// come from tmux/process introspection and provider listings respectively;
+// neither is user-controlled URL input. We Clean both so trailing slashes,
+// `./` segments, and double separators don't perturb the result.
+func cwdInWorktree(cwd, worktreePath string) bool {
+	if cwd == "" || worktreePath == "" {
+		return false
+	}
+	cleanCwd := filepath.Clean(cwd)
+	cleanWT := filepath.Clean(worktreePath)
+	rel, err := filepath.Rel(cleanWT, cleanCwd)
+	if err != nil {
+		return false
+	}
+	// rel == "." → exact match (cwd IS the worktree).
+	// rel starting with ".." → cwd is outside the worktree.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 // loadProcesses batches (host, pid) keys -> Process via one
