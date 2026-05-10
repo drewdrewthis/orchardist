@@ -19,6 +19,21 @@
 import type { SessionCardT, WorktreeEnrichment } from "./lenses/fragments";
 
 /**
+ * One sidebar section — a label plus the items that belong to it.
+ * Empty sections still surface so the user sees "yes I have a worktree
+ * here, no sessions running" (per #540 B0).
+ *
+ * Lives here (alongside `SidebarItem`) so per-lens projection files
+ * import the section type from a neutral location instead of
+ * cross-coupling to a sibling lens (e.g. issue.ts → attention.ts).
+ */
+export interface SidebarSection {
+	id: string;
+	label: string;
+	items: SidebarItem[];
+}
+
+/**
  * The unified sidebar item. Carries every field a `<SidebarItem>`
  * component needs to render — the lens supplies the projection; the
  * component is pure rendering.

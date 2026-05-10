@@ -33,10 +33,12 @@ type RepoID string
 // Repo is the in-memory representation of a configured repo. The
 // wire-level GraphQL type lives in internal/server/graphql; this type
 // is what the provider stores and what the resolver maps from.
+// On-disk serialisation goes through `RepoRow` — Repo itself never
+// hits a marshaller, hence no struct tags.
 type Repo struct {
-	ID   RepoID `json:"id"`
-	Slug string `json:"slug"`
-	Path string `json:"path"`
+	ID   RepoID
+	Slug string
+	Path string
 }
 
 // File is the on-disk shape of ~/.orchard/config.json (ADR-015).
@@ -75,10 +77,15 @@ type RemoteEntry struct {
 
 // PeerRow mirrors a peer entry. The peerproxy provider owns the rich
 // type; this struct exists so File can round-trip the array on write.
+//
+// `omitempty` on `tls` matches `peerproxy.PeerConfig.TLS` so add-repo
+// and add-peer round-trip identically — without this, every add-repo
+// invocation would re-emit `"tls": false` for peers that were
+// originally written without the key.
 type PeerRow struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
-	TLS     bool   `json:"tls"`
+	TLS     bool   `json:"tls,omitempty"`
 }
 
 // Normalise fills in missing fields per ADR-015's identity rules.

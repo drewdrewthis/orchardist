@@ -18,7 +18,6 @@
 <script lang="ts">
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import { relTime } from "$lib/util/format";
-	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import type { SidebarItem } from "$lib/data/sidebar-item";
 
 	type Props = {
@@ -27,17 +26,17 @@
 		density: "comfortable" | "compact";
 		surface: "desktop" | "mobile";
 		selected: boolean;
+		/**
+		 * True when a tmux client is currently watching this session's
+		 * pane. Caller derives from tmux state — this component stays a
+		 * pure renderer with no global store coupling.
+		 */
+		here?: boolean;
 		onSelect: (id: string, ev?: MouseEvent) => void;
 	};
-	let { item, now, density, surface, selected, onSelect }: Props = $props();
+	let { item, now, density, surface, selected, here = false, onSelect }: Props = $props();
 
-	// "here" — a tmux client is currently watching this session's pane.
-	// Reads the live tmux snapshot via the existing Houdini store.
-	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
-	const isHere = $derived(
-		!!item.session.pane &&
-			tmuxSnapshot.activePaneIds.has(item.session.pane.paneId),
-	);
+	const isHere = $derived(here);
 
 	const stateLabel = $derived(
 		item.state === "no_claude" ? "no claude" : item.state,

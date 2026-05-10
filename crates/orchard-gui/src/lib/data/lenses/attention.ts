@@ -21,7 +21,7 @@
 import { AttentionLensStore, type AttentionLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT, WorktreeEnrichment } from "./fragments";
-import type { SidebarItem } from "$lib/data/sidebar-item";
+import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
 import { buildSidebarItem } from "$lib/data/sidebar-item";
 
 /**
@@ -139,20 +139,12 @@ export function buildAttentionRows(
 }
 
 /**
- * One sidebar section — a label plus the items that belong to it.
- * Empty sections still surface so the user sees "yes I have a worktree
- * here, no sessions running" (per #540 B0).
- */
-export interface SidebarSection {
-	id: string;
-	label: string;
-	items: SidebarItem[];
-}
-
-/**
  * Projection into sectioned `SidebarItem[]` per #540 B0/B1. The
  * attention lens groups by tier — blocked / waiting / active — with
  * the same `SidebarItem` shape every other lens uses.
+ *
+ * `SidebarSection` is defined in `sidebar-item.ts` so per-lens files
+ * import the shape from a neutral location.
  */
 export function buildAttentionSections(
 	data: Data | null | undefined,

@@ -11,9 +11,8 @@
  */
 import { TmuxLensStore, type TmuxLens$result } from "$houdini";
 import type { PaneCardT, SessionCardT, WorktreeEnrichment } from "./fragments";
-import type { SidebarItem } from "$lib/data/sidebar-item";
+import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
 import { buildSidebarItem } from "$lib/data/sidebar-item";
-import type { SidebarSection } from "./attention";
 
 /** Singleton Houdini store for the tmux lens. */
 export const tmuxStore = new TmuxLensStore();

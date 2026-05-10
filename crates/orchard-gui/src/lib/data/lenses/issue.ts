@@ -13,9 +13,8 @@
 import { IssueLensStore, type IssueLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT, WorktreeEnrichment } from "./fragments";
-import type { SidebarItem } from "$lib/data/sidebar-item";
+import type { SidebarItem, SidebarSection } from "$lib/data/sidebar-item";
 import { buildSidebarItem } from "$lib/data/sidebar-item";
-import type { SidebarSection } from "./attention";
 
 /** Singleton Houdini store for the issue lens. */
 export const issueStore = new IssueLensStore();

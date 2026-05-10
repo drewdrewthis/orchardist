@@ -122,7 +122,7 @@ func (p *Provider) Stop() error {
 	return err
 }
 
-// Get returns one project by ID, plus its freshness. Cache hit is the
+// Get returns one repo by ID, plus its freshness. Cache hit is the
 // common path; on miss the adapter is consulted and the result cached.
 func (p *Provider) Get(ctx context.Context, key RepoID) (Repo, Freshness, error) {
 	if v, f, ok := p.cacheGet(key); ok {
@@ -185,7 +185,7 @@ func (p *Provider) GetMany(ctx context.Context, keys []RepoID) (map[RepoID]Repo,
 	return out, freshness, nil
 }
 
-// Keys returns every project ID currently in the cache. Cold boot
+// Keys returns every repo ID currently in the cache. Cold boot
 // returns an empty slice; the watcher hydrates the cache before any
 // resolver calls in well-formed setups.
 func (p *Provider) Keys(_ context.Context) ([]RepoID, error) {
@@ -199,7 +199,7 @@ func (p *Provider) Keys(_ context.Context) ([]RepoID, error) {
 }
 
 // List returns every cached Repo as a slice. This is what the
-// resolver for `Query.projects` calls; List is a thin convenience over
+// resolver for `Query.repos` calls; List is a thin convenience over
 // the read-mutex.
 func (p *Provider) List(_ context.Context) ([]Repo, error) {
 	p.mu.RLock()
@@ -253,7 +253,7 @@ func (p *Provider) run(ctx context.Context, ch <-chan RepoID) {
 	}
 }
 
-// reload fetches the full set of projects, replaces the cache, and
+// reload fetches the full set of repos, replaces the cache, and
 // broadcasts invalidations for every key whose value changed (or that
 // disappeared). Reason is propagated to subscribers verbatim.
 func (p *Provider) reload(ctx context.Context, reason string, source FreshnessSource) error {

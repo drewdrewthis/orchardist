@@ -95,7 +95,10 @@ export interface SessionCardT {
 	id: string;
 	sessionUuid: string;
 	state: ClaudeStateRaw;
-	startedAt: string;
+	// `startedAt` is `String` in the schema (nullable); the previous
+	// non-null declaration was a TS lie that broke synthetic-card
+	// construction in the tmux lens projection.
+	startedAt: string | null;
 	lastActivityAt: string | null;
 	rcEnabled: boolean;
 	account: { email: string } | null;

@@ -72,6 +72,13 @@
 	);
 	const issueLoading = $derived($issueStore.fetching);
 
+	// "here" derivation lifted out of `<SidebarItem>` so the row stays a
+	// pure renderer (no global store coupling). Reads the same tmux
+	// snapshot the lens already loaded for the tmux lens.
+	function isHere(paneId: string | undefined | null): boolean {
+		return !!paneId && tmuxSnapshot.activePaneIds.has(paneId);
+	}
+
 	/**
 	 * A sidebar row matches the active tab if EITHER its paneId or its
 	 * sessionUuid is in the active tab's selection keys. Different lens
@@ -132,6 +139,7 @@
 							{now}
 							{density}
 							{surface}
+							here={isHere(item.session.pane?.paneId)}
 							selected={rowSelected({
 								paneId: item.session.pane?.paneId,
 								sessionUuid: item.session.sessionUuid,
@@ -167,6 +175,7 @@
 					{now}
 					{density}
 					{surface}
+					here={isHere(item.session.pane?.paneId)}
 					selected={rowSelected({
 						paneId: item.session.pane?.paneId,
 						sessionUuid: item.session.sessionUuid,
@@ -200,6 +209,7 @@
 						{now}
 						{density}
 						{surface}
+						here={isHere(item.session.pane?.paneId)}
 						selected={rowSelected({
 							paneId: item.session.pane?.paneId,
 							sessionUuid: item.session.sessionUuid,
@@ -242,6 +252,7 @@
 						{now}
 						{density}
 						{surface}
+						here={isHere(item.session.pane?.paneId)}
 						selected={rowSelected({
 							paneId: item.session.pane?.paneId,
 							sessionUuid: item.session.sessionUuid,
