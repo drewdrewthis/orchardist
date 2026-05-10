@@ -135,19 +135,11 @@
 	open={store.newConvOpen}
 	surface={store.surface}
 	onClose={() => store.closeNewConv()}
-	onLaunch={async (spec) => {
+	onLaunch={async (_spec) => {
 		store.closeNewConv();
-		const wt = paletteWorktrees.find((i) => i.id === spec.worktreeId);
-		if (wt && spec.host === wt.host) {
-			try {
-				const { createWorktree } = await import("$lib/tauri");
-				const repoRoot = wt.path.split("/wt/")[0] || wt.path;
-				await createWorktree(repoRoot, wt.path, wt.branch);
-			} catch (err) {
-				console.warn("[orchard-gui] create_worktree failed:", err);
-			}
-		}
-		// Newly-created worktree: no session identity yet — the user can
-		// click its row in the sidebar once the daemon picks it up.
+		// NewConversation only emits an existing worktreeId from the picker,
+		// so the worktree is already on disk — no createWorktree needed.
+		// The session itself is started outside this flow (user clicks the
+		// row in the sidebar; future: launch a Claude REPL into the pane).
 	}}
 />

@@ -192,6 +192,7 @@
 			<div class="transcript-virtual" style="height: {$virtualizer.getTotalSize()}px;">
 				{#each $virtualizer.getVirtualItems() as vRow (vRow.key)}
 					{@const turn = turns[vRow.index]}
+					{#if turn}
 					<div
 						class="t-turn"
 						data-role={turn.role}
@@ -252,6 +253,7 @@
 							{/if}
 						{/each}
 					</div>
+					{/if}
 				{/each}
 			</div>
 		</div>

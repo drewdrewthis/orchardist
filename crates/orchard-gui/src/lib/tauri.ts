@@ -12,6 +12,21 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+/**
+ * Tauri-only sentinel: throw a clear error in browser dev rather than
+ * letting `invoke` blow up with `Cannot read properties of undefined`.
+ * The GUI deliberately keeps these proxies thin — callers handle the
+ * "browser dev, no Tauri" case at the call site.
+ */
+function inTauri(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+function requireTauri(op: string): void {
+	if (!inTauri()) {
+		throw new Error(`${op} requires the desktop app — Tauri bridge not available in browser dev`);
+	}
+}
+
 export interface WorktreeRow {
 	path: string;
 	branch: string | null;
@@ -22,6 +37,7 @@ export interface WorktreeRow {
 }
 
 export async function listWorktrees(): Promise<WorktreeRow[]> {
+	requireTauri("listWorktrees");
 	return await invoke<WorktreeRow[]>("list_worktrees");
 }
 
@@ -30,6 +46,7 @@ export async function createWorktree(
 	worktreePath: string,
 	branch: string,
 ): Promise<"new" | "existing"> {
+	requireTauri("createWorktree");
 	return await invoke<"new" | "existing">("create_worktree", {
 		repoRoot,
 		worktreePath,
@@ -38,10 +55,12 @@ export async function createWorktree(
 }
 
 export async function removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
+	requireTauri("removeWorktree");
 	await invoke("remove_worktree", { repoRoot, worktreePath });
 }
 
 export async function pruneWorktrees(repoRoot: string): Promise<void> {
+	requireTauri("pruneWorktrees");
 	await invoke("prune_worktrees", { repoRoot });
 }
 
@@ -50,5 +69,6 @@ export async function pruneWorktrees(repoRoot: string): Promise<void> {
  * The pane id is what the daemon reports as `TmuxPane.paneId` (e.g. `%66`).
  */
 export async function tmuxSendText(paneId: string, text: string): Promise<void> {
+	requireTauri("tmuxSendText");
 	await invoke("tmux_send_text", { paneId, text });
 }
