@@ -10,7 +10,10 @@
  * `conversations` into a uuid→lastSeenAt map).
  */
 import { TmuxLensStore, type TmuxLens$result } from "$houdini";
-import type { PaneCardT } from "./fragments";
+import type { PaneCardT, SessionCardT, WorktreeEnrichment } from "./fragments";
+import type { SidebarItem } from "$lib/data/sidebar-item";
+import { buildSidebarItem } from "$lib/data/sidebar-item";
+import type { SidebarSection } from "./attention";
 
 /** Singleton Houdini store for the tmux lens. */
 export const tmuxStore = new TmuxLensStore();
@@ -74,5 +77,74 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 		alive: ts.alive,
 		lastSeenByUuid,
 	};
+}
+
+/**
+ * Projection into sectioned `SidebarItem[]` per #540 B0/B1/B3.
+ * The tmux lens groups by tmux session — one section per session.
+ * Each item is the Claude session living on a pane in that tmux
+ * session; panes without a Claude session are dropped from the item
+ * list (the unified item model requires a session). Empty sections
+ * still surface so the user sees their tmux topology.
+ */
+export function buildTmuxSections(
+	data: Data | null | undefined,
+): SidebarSection[] {
+	const snap = buildTmuxSnapshot(data);
+	if (!snap.alive) return [];
+	const sections: SidebarSection[] = [];
+	for (const session of snap.sessions) {
+		const items: SidebarItem[] = [];
+		for (const win of session.windows) {
+			for (const pane of win.panes) {
+				if (!pane.claudeInstance) continue;
+				// Build a synthetic SessionCardT from the pane's claude
+				// instance + pane chain. We can't query the full SessionCard
+				// fragment from a TmuxPane, so rebuild the bits we need.
+				const ci = pane.claudeInstance;
+				const synthetic = {
+					id: ci.id,
+					sessionUuid: ci.sessionUuid,
+					state: ci.state,
+					startedAt: null,
+					lastActivityAt: ci.lastActivityAt ?? null,
+					rcEnabled: false,
+					account: null,
+					pane: {
+						paneId: pane.paneId,
+						title: pane.title,
+						currentCommand: pane.currentCommand,
+						window: {
+							id: win.id,
+							index: win.index,
+							name: win.name,
+							active: win.active,
+							session: {
+								id: session.id,
+								name: session.name,
+								attached: session.attached,
+								activeAttached: session.activeAttached,
+							},
+						},
+					},
+					process: pane.currentPid
+						? { pid: pane.currentPid, cwd: pane.process?.cwd ?? null }
+						: null,
+				} as unknown as SessionCardT;
+				const lastMs = ci.sessionUuid
+					? snap.lastSeenByUuid[ci.sessionUuid] ?? 0
+					: 0;
+				items.push(
+					buildSidebarItem(synthetic, /* worktree */ null, lastMs, []),
+				);
+			}
+		}
+		sections.push({
+			id: `tmux-${session.id}`,
+			label: session.name,
+			items,
+		});
+	}
+	return sections;
 }
 

@@ -21,6 +21,8 @@
 import { AttentionLensStore, type AttentionLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT, WorktreeEnrichment } from "./fragments";
+import type { SidebarItem } from "$lib/data/sidebar-item";
+import { buildSidebarItem } from "$lib/data/sidebar-item";
 
 /**
  * Singleton store for the attention lens. Houdini's normalized cache
@@ -134,4 +136,38 @@ export function buildAttentionRows(
 		return b.lastActivityMs - a.lastActivityMs;
 	});
 	return rows;
+}
+
+/**
+ * One sidebar section — a label plus the items that belong to it.
+ * Empty sections still surface so the user sees "yes I have a worktree
+ * here, no sessions running" (per #540 B0).
+ */
+export interface SidebarSection {
+	id: string;
+	label: string;
+	items: SidebarItem[];
+}
+
+/**
+ * Projection into sectioned `SidebarItem[]` per #540 B0/B1. The
+ * attention lens groups by tier — blocked / waiting / active — with
+ * the same `SidebarItem` shape every other lens uses.
+ */
+export function buildAttentionSections(
+	data: Data | null | undefined,
+	now: number,
+): SidebarSection[] {
+	const rows = buildAttentionRows(data, now);
+	const sections: Record<AttentionTier, SidebarSection> = {
+		blocked: { id: "blocked", label: "Blocked", items: [] },
+		waiting: { id: "waiting", label: "Waiting", items: [] },
+		active: { id: "active", label: "Active", items: [] },
+	};
+	for (const r of rows) {
+		sections[r.tier].items.push(
+			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, r.reasons),
+		);
+	}
+	return [sections.blocked, sections.waiting, sections.active];
 }

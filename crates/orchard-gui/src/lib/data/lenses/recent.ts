@@ -11,6 +11,8 @@
 import { RecentLensStore, type RecentLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT } from "./fragments";
+import type { SidebarItem } from "$lib/data/sidebar-item";
+import { buildSidebarItem } from "$lib/data/sidebar-item";
 
 /** Singleton Houdini store for the recent lens. */
 export const recentStore = new RecentLensStore();
@@ -50,3 +52,16 @@ export function buildRecentRows(data: Data | null | undefined): RecentRow[] {
 		.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 }
 
+/**
+ * Projection into `SidebarItem[]` per #540 B0/B1. Recent activity is a
+ * flat lens — no grouping axis — so the caller renders it as a single
+ * unsectioned list.
+ */
+export function buildRecentItems(
+	data: Data | null | undefined,
+): SidebarItem[] {
+	const rows = buildRecentRows(data);
+	return rows.map((r) =>
+		buildSidebarItem(r.session, /* worktree */ null, r.lastActivityMs, []),
+	);
+}

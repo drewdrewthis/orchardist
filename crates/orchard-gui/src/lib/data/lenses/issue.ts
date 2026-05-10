@@ -13,6 +13,9 @@
 import { IssueLensStore, type IssueLens$result } from "$houdini";
 import { parseTime } from "./client";
 import type { SessionCardT, WorktreeEnrichment } from "./fragments";
+import type { SidebarItem } from "$lib/data/sidebar-item";
+import { buildSidebarItem } from "$lib/data/sidebar-item";
+import type { SidebarSection } from "./attention";
 
 /** Singleton Houdini store for the issue lens. */
 export const issueStore = new IssueLensStore();
@@ -73,5 +76,34 @@ export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 	}
 	rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 	return rows;
+}
+
+/**
+ * Projection into sectioned `SidebarItem[]` per #540 B0/B1. The issue
+ * lens groups items by their linked GitHub issue — one section per
+ * issue. Worktrees that have no Claude session attached are dropped at
+ * this projection (the unified item model requires a session).
+ */
+export function buildIssueSections(
+	data: Data | null | undefined,
+): SidebarSection[] {
+	const rows = buildIssueRows(data);
+	const sections = new Map<number, SidebarSection>();
+	for (const r of rows) {
+		if (!r.session) continue; // SidebarItem requires a session
+		let sec = sections.get(r.issue.number);
+		if (!sec) {
+			const label =
+				r.issue.title != null
+					? `#${r.issue.number} · ${r.issue.title}`
+					: `#${r.issue.number}`;
+			sec = { id: `issue-${r.issue.number}`, label, items: [] };
+			sections.set(r.issue.number, sec);
+		}
+		sec.items.push(
+			buildSidebarItem(r.session, r.worktree, r.lastActivityMs, []),
+		);
+	}
+	return Array.from(sections.values());
 }
 

@@ -6,15 +6,16 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
-	import SessionRow from "./SessionRow.svelte";
-	import TmuxPaneRow from "./TmuxPaneRow.svelte";
-	import IssueRow from "./IssueRow.svelte";
+	import SidebarItem from "./SidebarItem.svelte";
 	import ChannelRow from "./ChannelRow.svelte";
 	import { getStore } from "$lib/store.svelte";
-	import { attentionStore, buildAttentionRows } from "$lib/data/lenses/attention";
-	import { recentStore, buildRecentRows } from "$lib/data/lenses/recent";
-	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
-	import { issueStore, buildIssueRows } from "$lib/data/lenses/issue";
+	import {
+		attentionStore,
+		buildAttentionSections,
+	} from "$lib/data/lenses/attention";
+	import { recentStore, buildRecentItems } from "$lib/data/lenses/recent";
+	import { tmuxStore, buildTmuxSections, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
+	import { issueStore, buildIssueSections } from "$lib/data/lenses/issue";
 
 	/**
 	 * Click target — what the panel needs to render this row. Either a
@@ -47,21 +48,28 @@
 		issueStore.fetch();
 	});
 
-	// Tier-classified rows derived from the Houdini store + the parent's
-	// `now` tick (so "idle 5m" updates as time passes).
-	const attentionRows = $derived(buildAttentionRows($attentionStore.data, now));
-	const blocked = $derived(attentionRows.filter((r) => r.tier === "blocked"));
-	const waiting = $derived(attentionRows.filter((r) => r.tier === "waiting"));
-	const active = $derived(attentionRows.filter((r) => r.tier === "active"));
+	// All four lenses produce the same shape per #540 B0/B1: sections
+	// of `SidebarItem[]`. The lens decides the grouping axis; the item
+	// component is uniform.
+	const attentionSections = $derived(
+		buildAttentionSections($attentionStore.data, now),
+	);
+	const attentionTotal = $derived(
+		attentionSections.reduce((n, s) => n + s.items.length, 0),
+	);
 	const attentionLoading = $derived($attentionStore.fetching);
 
-	const recentRows = $derived(buildRecentRows($recentStore.data));
+	const recentItems = $derived(buildRecentItems($recentStore.data));
 	const recentLoading = $derived($recentStore.fetching);
 
+	const tmuxSections = $derived(buildTmuxSections($tmuxStore.data));
 	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 	const tmuxLoading = $derived($tmuxStore.fetching);
 
-	const issueRows = $derived(buildIssueRows($issueStore.data));
+	const issueSections = $derived(buildIssueSections($issueStore.data));
+	const issueTotal = $derived(
+		issueSections.reduce((n, s) => n + s.items.length, 0),
+	);
 	const issueLoading = $derived($issueStore.fetching);
 
 	/**
@@ -108,132 +116,104 @@
 	{/if}
 
 	{#if lens === "attention"}
-		{#each [
-			{ key: "blocked", label: "Blocked", icon: "alert", rows: blocked },
-			{ key: "waiting", label: "Waiting", icon: "clock", rows: waiting },
-			{ key: "active", label: "Active", icon: "spark", rows: active },
-		] as group (group.key)}
-			{#if group.rows.length > 0}
-				<div class="fleet-group" data-kind={group.key}>
-					<div class="group-header" class:attn={group.key === "blocked"}>
+		{#each attentionSections as section (section.id)}
+			{#if section.items.length > 0}
+				<div class="fleet-group" data-kind={section.id}>
+					<div class="group-header" class:attn={section.id === "blocked"}>
 						<span style="display: inline-flex; align-items: center; gap: 6px;">
-							<Icon name={group.icon} size={11} />
-							<span>{group.label}</span>
+							<Icon name={section.id === "blocked" ? "alert" : section.id === "waiting" ? "clock" : "spark"} size={11} />
+							<span>{section.label}</span>
 						</span>
-						<span class="count">{group.rows.length}</span>
+						<span class="count">{section.items.length}</span>
 					</div>
-					{#each group.rows as row (row.session.id)}
-						<SessionRow
-							session={row.session}
-							worktree={row.worktree}
-							reasons={row.reasons}
-							lastActivityMs={row.lastActivityMs}
+					{#each section.items as item (item.id)}
+						<SidebarItem
+							{item}
 							{now}
 							{density}
 							{surface}
 							selected={rowSelected({
-								paneId: row.session.pane?.paneId,
-								sessionUuid: row.session.sessionUuid,
+								paneId: item.session.pane?.paneId,
+								sessionUuid: item.session.sessionUuid,
 							})}
 							onSelect={(_id, ev) => onSelect({
 								kind: "session",
-								paneId: row.session.pane?.paneId,
-								sessionUuid: row.session.sessionUuid,
+								paneId: item.session.pane?.paneId,
+								sessionUuid: item.session.sessionUuid,
 							}, ev)}
 						/>
 					{/each}
 				</div>
 			{/if}
 		{/each}
-		{#if attentionRows.length === 0}
+		{#if attentionTotal === 0}
 			<div class="empty-lens">
 				<span class="dimer">{attentionLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
 			</div>
 		{/if}
 	{:else if lens === "recent"}
+		<!-- Recent activity is the only flat lens — no grouping axis (#540 B0). -->
 		<div class="fleet-group" data-kind="recent">
 			<div class="group-header">
 				<span style="display: inline-flex; align-items: center; gap: 6px;">
 					<Icon name="clock" size={11} />
 					<span>Recent</span>
 				</span>
-				<span class="count">{recentRows.length}</span>
+				<span class="count">{recentItems.length}</span>
 			</div>
-			{#each recentRows as row (row.session.id)}
-				<SessionRow
-					session={row.session}
-					worktree={null}
-					reasons={row.messageCount > 0 ? [`${row.messageCount} msgs`] : []}
-					lastActivityMs={row.lastActivityMs}
+			{#each recentItems as item (item.id)}
+				<SidebarItem
+					{item}
 					{now}
 					{density}
 					{surface}
 					selected={rowSelected({
-						paneId: row.session.pane?.paneId,
-						sessionUuid: row.session.sessionUuid,
+						paneId: item.session.pane?.paneId,
+						sessionUuid: item.session.sessionUuid,
 					})}
 					onSelect={(_id, ev) => onSelect({
 						kind: "session",
-						paneId: row.session.pane?.paneId,
-						sessionUuid: row.session.sessionUuid,
+						paneId: item.session.pane?.paneId,
+						sessionUuid: item.session.sessionUuid,
 					}, ev)}
 				/>
 			{/each}
 		</div>
-		{#if recentRows.length === 0}
+		{#if recentItems.length === 0}
 			<div class="empty-lens">
 				<span class="dimer">{recentLoading ? "Loading…" : "No Claude sessions known."}</span>
 			</div>
 		{/if}
 	{:else if lens === "tmux"}
-		{#each tmuxSnapshot.sessions as sess (sess.id)}
-			<div class="fleet-group" data-kind="tmux-session">
+		{#each tmuxSections as section (section.id)}
+			<div class="fleet-group" data-kind={section.id}>
 				<div class="group-header">
 					<span style="display: inline-flex; align-items: center; gap: 6px;">
 						<Icon name="terminal" size={11} />
-						<span>{sess.name}</span>
-						{#if sess.activeAttached}
-							<span class="here-pip" title="A client is currently watching this session"></span>
-						{/if}
+						<span>{section.label}</span>
 					</span>
-					<span class="count">
-						{sess.windows.reduce((n, w) => n + w.panes.length, 0)}
-					</span>
+					<span class="count">{section.items.length}</span>
 				</div>
-				{#each sess.windows as win (win.id)}
-					<div class="fleet-subgroup">
-						<div class="subgroup-header">
-							<span class="subgroup-rule"></span>
-							<span class="mono dimer" style:font-size="10.5px" style:letter-spacing="0.2px">
-								window {win.index} · {win.name}
-							</span>
-							<span class="dimest mono" style:font-size="10.5px">{win.panes.length}</span>
-						</div>
-						{#each win.panes as pane (pane.paneId)}
-							<div class="fleet-nested">
-								<TmuxPaneRow
-									pane={pane}
-									here={tmuxSnapshot.activePaneIds.has(pane.paneId)}
-									{now}
-									{density}
-									{surface}
-									selected={rowSelected({
-										paneId: pane.paneId,
-										sessionUuid: pane.claudeInstance?.sessionUuid,
-									})}
-									onSelect={(_id, ev) => onSelect({
-										kind: "session",
-										paneId: pane.paneId,
-										sessionUuid: pane.claudeInstance?.sessionUuid,
-									}, ev)}
-								/>
-							</div>
-						{/each}
-					</div>
+				{#each section.items as item (item.id)}
+					<SidebarItem
+						{item}
+						{now}
+						{density}
+						{surface}
+						selected={rowSelected({
+							paneId: item.session.pane?.paneId,
+							sessionUuid: item.session.sessionUuid,
+						})}
+						onSelect={(_id, ev) => onSelect({
+							kind: "session",
+							paneId: item.session.pane?.paneId,
+							sessionUuid: item.session.sessionUuid,
+						}, ev)}
+					/>
 				{/each}
 			</div>
 		{/each}
-		{#if tmuxSnapshot.sessions.length === 0}
+		{#if tmuxSections.length === 0}
 			<div class="empty-lens">
 				<span class="dimer">
 					{#if !tmuxSnapshot.alive && !tmuxLoading}
@@ -247,35 +227,35 @@
 			</div>
 		{/if}
 	{:else if lens === "issue"}
-		<div class="fleet-group" data-kind="issue">
-			<div class="group-header">
-				<span style="display: inline-flex; align-items: center; gap: 6px;">
-					<Icon name="issue" size={11} />
-					<span>Open work</span>
-				</span>
-				<span class="count">{issueRows.length}</span>
+		{#each issueSections as section (section.id)}
+			<div class="fleet-group" data-kind={section.id}>
+				<div class="group-header">
+					<span style="display: inline-flex; align-items: center; gap: 6px;">
+						<Icon name="issue" size={11} />
+						<span>{section.label}</span>
+					</span>
+					<span class="count">{section.items.length}</span>
+				</div>
+				{#each section.items as item (item.id)}
+					<SidebarItem
+						{item}
+						{now}
+						{density}
+						{surface}
+						selected={rowSelected({
+							paneId: item.session.pane?.paneId,
+							sessionUuid: item.session.sessionUuid,
+						})}
+						onSelect={(_id, ev) => onSelect({
+							kind: "session",
+							paneId: item.session.pane?.paneId,
+							sessionUuid: item.session.sessionUuid,
+						}, ev)}
+					/>
+				{/each}
 			</div>
-			{#each issueRows as row (row.worktree.id)}
-				<IssueRow
-					issue={row.issue}
-					worktree={row.worktree}
-					session={row.session}
-					{now}
-					{density}
-					{surface}
-					selected={rowSelected({
-						paneId: row.session?.pane?.paneId,
-						sessionUuid: row.session?.sessionUuid,
-					})}
-					onSelect={(_id, ev) => onSelect({
-						kind: "session",
-						paneId: row.session?.pane?.paneId,
-						sessionUuid: row.session?.sessionUuid,
-					}, ev)}
-				/>
-			{/each}
-		</div>
-		{#if issueRows.length === 0}
+		{/each}
+		{#if issueTotal === 0}
 			<div class="empty-lens">
 				<span class="dimer">
 					{issueLoading ? "Loading…" : "No issues with open PRs in scope."}
