@@ -79,6 +79,48 @@ fn strip_prefix_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[a-zA-Z][a-zA-Z0-9]*[/_]").unwrap())
 }
 
+/// Returns true if the digit run at `match_start..match_end` (in `s`) looks
+/// like the year of an ISO date — e.g. `-2026-04-25-...` or `-2026-04` at end.
+/// We skip these so date-shaped branch names (`audit/foo-2026-04-25`) don't
+/// pin to a phantom issue 2026.
+fn looks_like_year_in_date(s: &str, match_start: usize, match_end: usize) -> bool {
+    if match_end - match_start != 4 {
+        return false;
+    }
+    let n: u32 = match s[match_start..match_end].parse() {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    if !(1900..=2099).contains(&n) {
+        return false;
+    }
+    // Look for `-MM` or `-MM-DD...` immediately after the year.
+    let after = &s[match_end..];
+    let mut bytes = after.bytes();
+    if bytes.next() != Some(b'-') {
+        return false;
+    }
+    let d1 = bytes.next();
+    let d2 = bytes.next();
+    let (Some(d1), Some(d2)) = (d1, d2) else {
+        return false;
+    };
+    if !d1.is_ascii_digit() || !d2.is_ascii_digit() {
+        return false;
+    }
+    let month = (d1 - b'0') * 10 + (d2 - b'0');
+    if !(1..=12).contains(&month) {
+        return false;
+    }
+    // After `-MM`, accept end-of-string or another non-digit-running boundary.
+    match bytes.next() {
+        None => true,
+        Some(b'-') => true,
+        Some(c) if !c.is_ascii_digit() => true,
+        _ => false,
+    }
+}
+
 /// Attempts to extract a GitHub issue number from a branch name.
 /// Strips common prefixes (e.g. `feat/`, `fix/`) before matching.
 pub fn extract_issue_number(branch: &str) -> Option<u32> {
@@ -94,19 +136,29 @@ pub fn extract_issue_number(branch: &str) -> Option<u32> {
         }
     }
 
-    // Leading number (>= 100) on stripped.
+    // Leading number (>= 100) on stripped. Skip year-in-date matches.
     if let Some(caps) = leading_number_re().captures(&stripped)
-        && let Ok(n) = caps[1].parse::<u32>()
+        && let Some(m) = caps.get(1)
+        && let Ok(n) = m.as_str().parse::<u32>()
         && n >= 100
+        && !looks_like_year_in_date(&stripped, m.start(), m.end())
     {
         return Some(n);
     }
 
-    // Embedded number (>= 100) on stripped.
-    if let Some(caps) = embedded_number_re().captures(&stripped)
-        && let Ok(n) = caps[1].parse::<u32>()
-        && n >= 100
-    {
+    // Embedded number (>= 100) on stripped. Skip year-in-date matches and
+    // continue scanning so a real issue number after the date still wins.
+    for caps in embedded_number_re().captures_iter(&stripped) {
+        let Some(m) = caps.get(1) else { continue };
+        let Ok(n) = m.as_str().parse::<u32>() else {
+            continue;
+        };
+        if n < 100 {
+            continue;
+        }
+        if looks_like_year_in_date(&stripped, m.start(), m.end()) {
+            continue;
+        }
         return Some(n);
     }
 
@@ -151,5 +203,36 @@ mod tests {
     #[test]
     fn returns_none_for_plain_branch() {
         assert_eq!(extract_issue_number("main"), None);
+    }
+
+    // Regression: branches like `audit/unimpl-suites-2026-04-25` used to
+    // resolve to issue 2026 because the embedded-number regex matched the
+    // year. See #379.
+    #[test]
+    fn ignores_iso_date_year_in_branch_name() {
+        assert_eq!(extract_issue_number("audit/unimpl-suites-2026-04-25"), None);
+    }
+
+    #[test]
+    fn ignores_iso_date_year_at_branch_end() {
+        assert_eq!(extract_issue_number("snapshot/2026-04"), None);
+    }
+
+    #[test]
+    fn keeps_real_issue_after_date_segment() {
+        assert_eq!(
+            extract_issue_number("audit/2026-04-25-followup-150"),
+            Some(150)
+        );
+    }
+
+    #[test]
+    fn does_not_skip_non_year_four_digit_numbers() {
+        assert_eq!(extract_issue_number("feat/some-3055-thing"), Some(3055));
+    }
+
+    #[test]
+    fn skips_leading_year_with_month() {
+        assert_eq!(extract_issue_number("2026-04-25-thing"), None);
     }
 }
