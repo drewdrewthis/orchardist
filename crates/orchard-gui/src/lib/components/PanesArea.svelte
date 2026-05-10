@@ -120,12 +120,19 @@
 			<div style="font-size: 14px; font-weight: 500; color: var(--fg-2);">
 				No conversations open
 			</div>
-			<div class="mono" style="display: flex; gap: 8px;">
-				<button class="btn-tonal" onclick={onOpenPalette}>
-					<Icon name="command" size={13} /> Search <span class="kbd">⌘</span><span class="kbd">K</span>
+			<!-- #540 E1: button row spacing — fixed-width buttons with stable
+			     internal gaps so labels + keyboard glyphs don't collide
+			     into each other regardless of viewport width. -->
+			<div class="empty-actions mono">
+				<button class="btn-tonal empty-action" onclick={onOpenPalette}>
+					<Icon name="command" size={13} />
+					<span class="action-label">Search</span>
+					<span class="action-kbd"><span class="kbd">⌘</span><span class="kbd">K</span></span>
 				</button>
-				<button class="btn-tonal" onclick={onLaunch}>
-					<Icon name="plus" size={13} /> New <span class="kbd">⌘</span><span class="kbd">N</span>
+				<button class="btn-tonal empty-action" onclick={onLaunch}>
+					<Icon name="plus" size={13} />
+					<span class="action-label">New</span>
+					<span class="action-kbd"><span class="kbd">⌘</span><span class="kbd">N</span></span>
 				</button>
 			</div>
 		</div>
@@ -189,4 +196,33 @@
 
 <style>
 	.pane-flex { display: flex; flex-direction: column; height: 100%; }
+
+	/* #540 E1 — empty-state button row.
+	   Buttons get stable internal layout (icon · label · keyboard glyph)
+	   so the row reads cleanly at every viewport width. The container
+	   gaps spread with `gap: 12px` so the buttons never touch. */
+	.empty-actions {
+		display: flex;
+		gap: 12px;
+		align-items: center;
+		justify-content: center;
+		flex-wrap: wrap;
+	}
+	.empty-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 120px;
+		justify-content: center;
+		padding: 6px 12px;
+	}
+	.empty-action .action-label {
+		flex: 0 0 auto;
+	}
+	.empty-action .action-kbd {
+		display: inline-flex;
+		gap: 3px;
+		margin-left: 6px;
+		opacity: 0.7;
+	}
 </style>
