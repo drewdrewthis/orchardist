@@ -9,7 +9,7 @@
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import { relTime } from "$lib/util/format";
-	import { getStore } from "$lib/store.svelte";
+	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import type {
 		SessionCardT,
 		WorktreeEnrichment,
@@ -39,9 +39,12 @@
 		onSelect,
 	}: Props = $props();
 
-	const store = getStore();
+	// Read the live tmux snapshot via the Houdini store — `activePaneIds`
+	// (clients[*].currentPane.paneId folded into a Set) is what powers
+	// the "here" badge.
+	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 	const isHere = $derived(
-		!!session.pane && store.lensSnapshots.tmux.activePaneIds.has(session.pane.paneId),
+		!!session.pane && tmuxSnapshot.activePaneIds.has(session.pane.paneId),
 	);
 	const lastMs = $derived(
 		lastActivityMs || (session.lastActivityAt ? Date.parse(session.lastActivityAt) || 0 : 0),

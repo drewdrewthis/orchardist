@@ -6,7 +6,7 @@
 -->
 <script lang="ts">
 	import { relTime } from "$lib/util/format";
-	import { getStore } from "$lib/store.svelte";
+	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import type { PaneCardT } from "$lib/data/lenses";
 
 	type Props = {
@@ -20,14 +20,17 @@
 	};
 	let { pane, here, now, density, surface, selected, onSelect }: Props = $props();
 
-	const store = getStore();
+	// `lastSeenByUuid` lives on the tmux Houdini store snapshot — the
+	// projection folds `conversations` into a uuid→ms map for O(1) lookup
+	// here.
+	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 	const claudeState = $derived(pane.claudeInstance?.state);
 	// Prefer the JSONL-derived timestamp (conversations.lastSeenAt) over
 	// claudeInstance.lastActivityAt, which the daemon currently leaves null.
 	const lastMs = $derived(() => {
 		const uuid = pane.claudeInstance?.sessionUuid;
 		if (uuid) {
-			const v = store.lensSnapshots.tmux.lastSeenByUuid[uuid];
+			const v = tmuxSnapshot.lastSeenByUuid[uuid];
 			if (v) return v;
 		}
 		return pane.claudeInstance?.lastActivityAt

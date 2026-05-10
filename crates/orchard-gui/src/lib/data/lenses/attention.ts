@@ -98,22 +98,6 @@ function classify(
 }
 
 /**
- * Legacy facade: drive the Houdini store imperatively, project into rows,
- * return them. Used by `AppStore.refreshActiveLens` until the legacy
- * snapshot path is retired in Phase 3 — components that already read
- * `$attentionStore` get reactivity directly and don't need this.
- */
-export async function fetchAttention(now: number = Date.now()): Promise<AttentionRow[]> {
-	try {
-		const { data } = await attentionStore.fetch({ policy: "NetworkOnly" });
-		return buildAttentionRows(data, now);
-	} catch (err) {
-		console.warn("[orchard-gui] attention lens fetch failed:", err);
-		return [];
-	}
-}
-
-/**
  * Project the Houdini result into ordered tier rows. Pure — components
  * call this inside `$derived` against `$attentionStore.data` so the
  * cache+network policy drives reactivity for free.

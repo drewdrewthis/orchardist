@@ -76,15 +76,3 @@ export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapsh
 	};
 }
 
-/**
- * Legacy facade for `AppStore.refreshActiveLens`. Phase 3 retires it.
- */
-export async function fetchTmux(): Promise<TmuxLensSnapshot> {
-	try {
-		const { data } = await tmuxStore.fetch({ policy: "NetworkOnly" });
-		return buildTmuxSnapshot(data);
-	} catch (err) {
-		console.warn("[orchard-gui] tmux lens fetch failed:", err);
-		return EMPTY;
-	}
-}

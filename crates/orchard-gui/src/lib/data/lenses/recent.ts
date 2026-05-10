@@ -50,16 +50,3 @@ export function buildRecentRows(data: Data | null | undefined): RecentRow[] {
 		.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 }
 
-/**
- * Legacy facade for `AppStore.refreshActiveLens`. Phase 3 retires it
- * along with the snapshot field.
- */
-export async function fetchRecent(): Promise<RecentRow[]> {
-	try {
-		const { data } = await recentStore.fetch({ policy: "NetworkOnly" });
-		return buildRecentRows(data);
-	} catch (err) {
-		console.warn("[orchard-gui] recent lens fetch failed:", err);
-		return [];
-	}
-}

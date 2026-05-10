@@ -1,0 +1,27 @@
+query OpenPanel($paneIds: [String!]) {
+	tmuxPanes(filter: { paneIdIn: $paneIds }) {
+		...PaneCard
+	}
+	claudeInstances {
+		...SessionCard
+	}
+	conversations {
+		sessionUuid
+		lastSeenAt
+		firstSeenAt
+		messageCount
+		open
+		recap
+		cwd
+		jsonlPath
+	}
+	workView {
+		projects {
+			id
+			name
+			worktrees {
+				...WorktreeEnrichment
+			}
+		}
+	}
+}

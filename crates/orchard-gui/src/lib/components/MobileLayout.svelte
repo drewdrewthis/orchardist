@@ -2,20 +2,30 @@
   Mobile layout: stack of fleet → conversation. Single-tab; back button
   pops back to the lens list. Uses SessionPane / ChannelPane like the
   desktop, just always one at a time.
+
+  Hosts come from the Houdini hostsStore directly — same daemon snapshot
+  the desktop topbar reads, so flipping orientation doesn't refetch.
 -->
 <script lang="ts">
+	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import LensSelector from "./LensSelector.svelte";
 	import LensSidebar from "./LensSidebar.svelte";
 	import PeerCluster from "./PeerCluster.svelte";
 	import SessionPane from "./SessionPane.svelte";
 	import ChannelPane from "./ChannelPane.svelte";
+	import { hostsStore, buildHosts } from "$lib/data/daemon-stores";
 	import type { AppStore } from "$lib/store.svelte";
 
 	type Props = { store: AppStore };
 	let { store }: Props = $props();
 
+	onMount(() => {
+		hostsStore.fetch();
+	});
+
 	const tab = $derived(store.activeTab);
+	const hosts = $derived(buildHosts($hostsStore.data));
 </script>
 
 <div class="mobile-shell">
@@ -27,7 +37,7 @@
 					<span style="font-size: 17px; font-weight: 600; letter-spacing: -0.02em;">Orchard</span>
 				</div>
 				<div class="mobile-top-actions">
-					<PeerCluster hosts={store.hosts} now={store.now} />
+					<PeerCluster {hosts} now={store.now} />
 					<button class="iconbtn" onclick={() => store.toggleTheme()} aria-label="Theme">
 						<Icon name={store.theme === "dark" ? "sun" : "moon"} size={15} />
 					</button>
@@ -56,8 +66,6 @@
 			now={store.now}
 			density="comfortable"
 			surface="mobile"
-			selectedId={null}
-			agents={store.agents}
 			onSelect={(target) => {
 				if (target.kind === "channel") store.openChannel(target.roomId);
 				else store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid });
@@ -92,7 +100,6 @@
 					isLast={true}
 					fullscreen={null}
 					conversation={store.visibleConversation || { itemId: '', recap: '', isChannel: true, messages: [] }}
-					agents={store.agents}
 					now={store.now}
 					composeText={store.composeText}
 					setComposeText={(s) => (store.composeText = s)}
@@ -102,7 +109,6 @@
 					onStartFork={(i, m) => store.startFork(i, m)}
 					onCommitFork={() => store.commitFork()}
 					onCancelFork={() => store.cancelFork()}
-					onJumpToAgent={() => {}}
 					onActivate={() => {}}
 					onClose={() => store.mobileBack()}
 				/>

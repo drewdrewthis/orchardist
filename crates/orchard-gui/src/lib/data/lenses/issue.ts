@@ -75,15 +75,3 @@ export function buildIssueRows(data: Data | null | undefined): IssueRow[] {
 	return rows;
 }
 
-/**
- * Legacy facade for `AppStore.refreshActiveLens`. Phase 3 retires it.
- */
-export async function fetchIssues(): Promise<IssueRow[]> {
-	try {
-		const { data } = await issueStore.fetch({ policy: "NetworkOnly" });
-		return buildIssueRows(data);
-	} catch (err) {
-		console.warn("[orchard-gui] issue lens fetch failed:", err);
-		return [];
-	}
-}

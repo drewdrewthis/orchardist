@@ -19,6 +19,12 @@ const config = {
 		url: "http://127.0.0.1:7777/graphql",
 	},
 	defaultCachePolicy: "CacheAndNetwork",
+	// Disable fragment data masking so query consumers see the full
+	// resolved shape inline. We don't have the team-of-many discipline
+	// that masking was designed for — every component reads the same
+	// shared SessionCard / WorktreeEnrichment / PaneCard fragments and
+	// expects them spread.
+	defaultFragmentMasking: "disable",
 	scalars: {
 		// The daemon's `Time` scalar marshals as RFC3339 strings — same
 		// shape the legacy code already parses with `Date.parse`. Surface

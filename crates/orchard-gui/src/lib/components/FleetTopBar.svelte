@@ -1,12 +1,22 @@
-<!-- App-wide topbar: brand + search trigger + peer cluster + quota + theme + new-conv. -->
+<!--
+  App-wide topbar: brand + search trigger + peer cluster + quota + theme + new-conv.
+
+  Hosts and account come straight from Houdini stores — when the daemon
+  reports null `quotaCap` (ccusage hasn't sampled yet), the bar is hidden
+  rather than rendering a fake "0/0".
+-->
 <script lang="ts">
+	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import PeerCluster from "./PeerCluster.svelte";
-	import type { Account, Host, Theme, Surface } from "$lib/data/types";
+	import {
+		hostsStore,
+		buildHosts,
+		buildAccount,
+	} from "$lib/data/daemon-stores";
+	import type { Surface, Theme } from "$lib/data/types";
 
 	type Props = {
-		hosts: Host[];
-		account: Account | null;
 		theme: Theme;
 		surface: Surface;
 		now: number;
@@ -15,22 +25,21 @@
 		onToggleTheme: () => void;
 		onToggleSidebar?: () => void;
 	};
-	let {
-		hosts,
-		account,
-		theme,
-		surface,
-		now,
-		onOpenPalette,
-		onNewConv,
-		onToggleTheme,
-		onToggleSidebar,
-	}: Props = $props();
+	let { theme, surface, now, onOpenPalette, onNewConv, onToggleTheme, onToggleSidebar }: Props = $props();
 
+	onMount(() => {
+		hostsStore.fetch();
+	});
+
+	const hosts = $derived(buildHosts($hostsStore.data));
+	const account = $derived(buildAccount($hostsStore.data));
 	const quotaPct = $derived(
-		account && account.quotaCap > 0 ? account.quotaUsed / account.quotaCap : 0,
+		account && account.quotaCap && account.quotaUsed != null && account.quotaCap > 0
+			? account.quotaUsed / account.quotaCap
+			: 0,
 	);
 	const overQuota = $derived(quotaPct > 0.8);
+	const showQuota = $derived(!!account && account.quotaCap != null && account.quotaCap > 0 && account.quotaUsed != null);
 </script>
 
 <div class="fleet-topbar">
@@ -60,9 +69,11 @@
 
 		<PeerCluster {hosts} {now} />
 
-		{#if account && account.quotaCap > 0}
-			<div class="fleet-quota">
-				<span class="mono dimer" style:font-size="11px">{account.quotaUsed}/{account.quotaCap}</span>
+		{#if showQuota && account}
+			<div class="fleet-quota" title={account.quotaEstimated ? "Estimated by ccusage" : "Reported"}>
+				<span class="mono dimer" style:font-size="11px">
+					{account.quotaUsed?.toFixed(0)}/{account.quotaCap?.toFixed(0)}
+				</span>
 				<span
 					style="display: inline-block; width: 28px; height: 4px; border-radius: 2px; background: var(--line-2); position: relative; overflow: hidden;"
 				>

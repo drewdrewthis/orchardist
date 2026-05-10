@@ -1,6 +1,10 @@
 <!--
   Desktop split: sidebar (resizable, auto-collapse to rail under 200px) and a
-  panes area on the right. Topbar + offline ribbon sit above. Card aesthetic.
+  panes area on the right. Topbar sits above. Card aesthetic.
+
+  Daemon-data flow: FleetTopBar / LensSidebar / SessionPane each own their
+  own Houdini queries; this component is just layout glue around UI state
+  (tabs, fullscreen, sidebar width).
 -->
 <script lang="ts">
 	import { onMount } from "svelte";
@@ -8,7 +12,6 @@
 	import LensSelector from "./LensSelector.svelte";
 	import LensSidebar from "./LensSidebar.svelte";
 	import PanesArea from "./PanesArea.svelte";
-	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import type { AppStore } from "$lib/store.svelte";
 
@@ -55,8 +58,6 @@
 <div class="desktop-frame" style:--sidebar-w="{store.sidebarWidth}px">
 	{#if !store.fullscreen}
 		<FleetTopBar
-			hosts={store.hosts}
-			account={store.account}
 			theme={store.theme}
 			surface="desktop"
 			now={store.now}
@@ -65,17 +66,6 @@
 			onToggleTheme={() => store.toggleTheme()}
 			onToggleSidebar={() => store.toggleSidebar()}
 		/>
-	{/if}
-
-	{#if store.offline && !store.fullscreen}
-		<div class="offline-banner">
-			<Icon name="wifi-off" size={13} />
-			<span>Daemon unreachable.</span>
-			<span class="mono dimer">last sync · 38s</span>
-			<button class="btn-ghost" style:height="22px" onclick={() => (store.offline = false)}>
-				Dismiss
-			</button>
-		</div>
 	{/if}
 
 	<div
@@ -95,8 +85,6 @@
 						now={store.now}
 						density={store.density}
 						surface="desktop"
-						selectedId={store.selectedId}
-						agents={store.agents}
 						onSelect={(target, ev) => {
 							const split = !!(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1));
 							if (target.kind === "channel") {
@@ -145,8 +133,6 @@
 				fullscreen={store.fullscreen}
 				view={store.view}
 				conversation={store.visibleConversation || { itemId: '', recap: '', isChannel: false, messages: [] }}
-				terminalLines={store.terminalLines}
-				agents={store.agents}
 				now={store.now}
 				composeText={store.composeText}
 				setComposeText={(s) => (store.composeText = s)}
@@ -167,10 +153,6 @@
 				onStartFork={(i, m) => store.startFork(i, m)}
 				onCommitFork={() => store.commitFork()}
 				onCancelFork={() => store.cancelFork()}
-				onJumpToAgent={() => {
-					/* Agent jump removed pending lens-aware impl. */
-				}}
-				onOpenContract={(id) => store.openContract(id)}
 				onToggleFullscreen={() => store.toggleFullscreen()}
 				onOpenPalette={() => store.openPalette()}
 				onLaunch={() => store.openNewConv()}

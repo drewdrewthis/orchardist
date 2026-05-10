@@ -1,7 +1,7 @@
 <!--
-  Lens-anchored sidebar. Each of the four lenses has its own snapshot
-  in the store and its own row layout — there is no shared Item[] that
-  gets reshuffled. Channels are rendered above the lens content.
+  Lens-anchored sidebar. Each of the four lenses has its own Houdini store
+  with its own row layout — there is no shared Item[] that gets reshuffled.
+  Channels (chat rooms from chat-core) are rendered above the lens content.
 -->
 <script lang="ts">
 	import { onMount } from "svelte";
@@ -15,8 +15,6 @@
 	import { recentStore, buildRecentRows } from "$lib/data/lenses/recent";
 	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { issueStore, buildIssueRows } from "$lib/data/lenses/issue";
-	import { relTime } from "$lib/util/format";
-	import type { Agent } from "$lib/data/types";
 
 	/**
 	 * Click target — what the panel needs to render this row. Either a
@@ -31,11 +29,9 @@
 		now: number;
 		density: "comfortable" | "compact";
 		surface: "desktop" | "mobile";
-		selectedId: string | null;
-		agents: Agent[];
 		onSelect: (target: SelectTarget, ev?: MouseEvent) => void;
 	};
-	let { now, density, surface, selectedId, agents, onSelect }: Props = $props();
+	let { now, density, surface, onSelect }: Props = $props();
 
 	const store = getStore();
 	const lens = $derived(store.lens);
@@ -83,34 +79,30 @@
 		return sessionKeyMatch;
 	}
 
-	// Channels (chat rooms) are shown across all lenses at the top —
-	// their relevance is independent of the lens filter.
-	const channelItems = $derived(
-		store.mergedItems.filter((it) => it.kind === "channel"),
-	);
+	// Channels (chat rooms from chat-core) live across all lenses at the
+	// top — their relevance is independent of the lens filter.
+	const channelRooms = $derived(store.chatRooms);
 </script>
 
 <div class="fleet-list">
-	{#if channelItems.length > 0}
+	{#if channelRooms.length > 0}
 		<div class="fleet-group" data-kind="channels">
 			<div class="group-header">
 				<span style="display: inline-flex; align-items: center; gap: 6px;">
 					<Icon name="message" size={11} />
 					<span>Channels</span>
 				</span>
-				<span class="count">{channelItems.length}</span>
+				<span class="count">{channelRooms.length}</span>
 			</div>
-			{#each channelItems as ch (ch.id)}
-				{#if ch.kind === "channel"}
-					<ChannelRow
-						item={ch}
-						selected={rowSelected({ channelId: ch.id })}
-						{density}
-						{surface}
-						{agents}
-						onSelect={(_id, ev) => onSelect({ kind: "channel", roomId: ch.id }, ev)}
-					/>
-				{/if}
+			{#each channelRooms as ch (ch.id)}
+				<ChannelRow
+					roomId={ch.id}
+					memberCount={ch.memberCount}
+					selected={rowSelected({ channelId: ch.id })}
+					{density}
+					{surface}
+					onSelect={(ev) => onSelect({ kind: "channel", roomId: ch.id }, ev)}
+				/>
 			{/each}
 		</div>
 	{/if}

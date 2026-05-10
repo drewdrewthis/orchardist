@@ -1,30 +1,14 @@
 /**
- * Lens registry. Four lenses, four anchors, four queries. Each lens
- * fetches its own snapshot — no reshuffling of a unified Item[].
- *
- * The store calls fetchLens(active) when the active lens changes; the
- * subscription fan-out re-fetches on tmuxSessionsChanged / processes /
- * pullRequestChanged via the existing daemon WS channel.
+ * Lens registry. Each lens owns its Houdini store + projection and
+ * is imported directly from its own module by the sidebar. The legacy
+ * `fetchXxx` facades have been deleted — components subscribe to the
+ * Houdini stores directly, no intermediate.
  */
-export { fetchRecent, type RecentRow } from "./recent";
-export {
-	fetchTmux,
-	type TmuxLensSnapshot,
-	type TmuxSessionNode,
-	type TmuxWindowNode,
-} from "./tmux";
-export {
-	fetchAttention,
-	type AttentionRow,
-	type AttentionTier,
-} from "./attention";
-export { fetchIssues, type IssueRow } from "./issue";
-export { fetchPanel, type PanelData } from "./panel";
-export type {
-	SessionCardT,
-	PaneCardT,
-	WorktreeEnrichment,
-	ClaudeStateRaw,
-} from "./fragments";
+export { attentionStore, buildAttentionRows, type AttentionRow, type AttentionTier } from "./attention";
+export { recentStore, buildRecentRows, type RecentRow } from "./recent";
+export { tmuxStore, buildTmuxSnapshot, type TmuxLensSnapshot, type TmuxSessionNode, type TmuxWindowNode } from "./tmux";
+export { issueStore, buildIssueRows, type IssueRow } from "./issue";
+export { createPanelStore, buildPanelData, type PanelData } from "./panel";
+export type { SessionCardT, PaneCardT, WorktreeEnrichment, ClaudeStateRaw } from "./fragments";
 
-export type LensId = "recent" | "tmux" | "attention" | "issue";
+export type LensId = "attention" | "recent" | "tmux" | "issue";

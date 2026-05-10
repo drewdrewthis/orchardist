@@ -1,24 +1,37 @@
 <!--
   Launch new conversation modal. Picks a worktree + host + model + first task,
   emits onLaunch with the spec. Anchored to "(host, cwd)" semantics from ADR-009.
+
+  Reads worktrees and hosts directly from Houdini stores — no AppStore
+  intermediary, no fake fields.
 -->
 <script lang="ts">
+	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
 	import { fuzzyMatch } from "$lib/util/format";
-	import type { Host, Item, WorktreeItem } from "$lib/data/types";
+	import {
+		hostsStore,
+		worktreesStore,
+		buildHosts,
+		buildWorktreePickerRows,
+	} from "$lib/data/daemon-stores";
 
 	type Props = {
 		open: boolean;
 		surface: "desktop" | "mobile";
-		items: Item[];
-		hosts: Host[];
 		onClose: () => void;
 		onLaunch: (spec: { worktreeId: string; host: string; model: string; task: string }) => void;
 	};
-	let { open, surface, items, hosts, onClose, onLaunch }: Props = $props();
+	let { open, surface, onClose, onLaunch }: Props = $props();
 
-	const worktrees = $derived(items.filter((i) => i.kind === "worktree") as WorktreeItem[]);
+	onMount(() => {
+		worktreesStore.fetch();
+		hostsStore.fetch();
+	});
+
+	const worktrees = $derived(buildWorktreePickerRows($worktreesStore.data));
+	const hosts = $derived(buildHosts($hostsStore.data));
 
 	let worktreeId = $state("");
 	let host = $state("");
@@ -35,7 +48,7 @@
 			return worktrees
 				.map((it) => ({
 					it,
-					m: fuzzyMatch(q, `${it.repo} ${it.branch} ${it.title}`),
+					m: fuzzyMatch(q, `${it.repo} ${it.branch}`),
 				}))
 				.filter((x) => x.m)
 				.sort((a, b) => (b.m?.score || 0) - (a.m?.score || 0))
@@ -124,7 +137,7 @@
 									>
 										<HostGlyph host={it.host} size={12} />
 										<span class="mono dimer" style:font-size="11px" style:width="110px">
-											{it.repo.split("/")[1]}
+											{it.repo.split("/")[1] ?? it.repo}
 										</span>
 										<span class="mono" style:font-size="12px">{it.branch}</span>
 									</div>
@@ -161,10 +174,12 @@
 									<div class="dimest mono" style="font-size: 10.5px; margin-top: 6px;">
 										{h.os.split(" ")[0]}
 									</div>
-									{#if h.reachable}
+									{#if h.reachable && h.resourceLoad}
 										<div style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
 											<span class="dimer mono" style:font-size="10px">cpu</span>
-											<span class="mono dimer tnum" style:font-size="10px">{h.load.cpu}%</span>
+											<span class="mono dimer tnum" style:font-size="10px">
+												{h.resourceLoad.cpuPercent.toFixed(0)}%
+											</span>
 										</div>
 									{/if}
 								</button>
