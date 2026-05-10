@@ -17,6 +17,7 @@
 -->
 <script lang="ts">
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
+	import Icon from "$lib/icons/Icon.svelte";
 	import { relTime } from "$lib/util/format";
 	import type { SidebarItem } from "$lib/data/sidebar-item";
 
@@ -123,12 +124,16 @@
 					{/if}
 				{/if}
 				{#if cwdBase && cwdBase !== item.title}
-					<span class="mono dimer" title={cwdFull}>{cwdBase}</span>
-					<span class="dimest">·</span>
+					<span class="meta-chip mono dimer" title={cwdFull}>
+						<Icon name="folder" size={11} />
+						<span>{cwdBase}</span>
+					</span>
 				{/if}
 				{#if item.worktree?.branch && item.worktree.branch !== item.title}
-					<span class="mono dimer" title="Branch">{item.worktree.branch}</span>
-					<span class="dimest">·</span>
+					<span class="meta-chip mono dimer" title="Branch">
+						<Icon name="git-branch" size={11} />
+						<span>{item.worktree.branch}</span>
+					</span>
 				{/if}
 				{#if item.worktree?.pr}
 					<span class="mono dimer">PR #{item.worktree.pr.number}</span>
@@ -182,6 +187,12 @@
 </div>
 
 <style>
+	.meta-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-size: 11px;
+	}
 	.reason-chip {
 		font-size: 10.5px;
 		padding: 1px 5px;

@@ -1,5 +1,14 @@
 query AttentionLens {
-	claudeInstances {
-		...SessionCard
+	workView {
+		repos {
+			id
+			slug
+			worktrees {
+				...WorktreeEnrichment
+				claudeInstances {
+					...SessionCard
+				}
+			}
+		}
 	}
 }
