@@ -38,22 +38,16 @@
 	let stickToBottom = $state(true);
 	let expandedTools = $state<Set<string>>(new Set());
 
-	// Virtualizer — only render the turns currently visible. Estimated
-	// turn height is a coarse average; the virtualizer remeasures real
-	// heights via `measureElement` so dynamic content stays accurate.
+	// Virtualizer — `count` is read from the reactive `turns` getter,
+	// which lets the @tanstack/svelte-virtual store re-derive whenever
+	// turns changes WITHOUT us calling setOptions (which writes virtualizer
+	// state and would re-trigger the effect that wrote it → effect_update_depth_exceeded).
+	// estimateSize tuned to ~realistic average for tool-heavy turns.
 	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
-		count: 0,
+		get count() { return turns.length; },
 		getScrollElement: () => scrollHost ?? null,
-		estimateSize: () => 120,
-		overscan: 6,
-	});
-	$effect(() => {
-		$virtualizer.setOptions({
-			count: turns.length,
-			getScrollElement: () => scrollHost ?? null,
-			estimateSize: () => 120,
-			overscan: 6,
-		});
+		estimateSize: () => 240,
+		overscan: 4,
 	});
 
 	function toggleTool(id: string) {
@@ -91,6 +85,7 @@
 		turns = [];
 		errMsg = null;
 		stickToBottom = true;
+		lastScrolledLen = 0;
 		load();
 	});
 
@@ -107,17 +102,19 @@
 		return () => unsub();
 	});
 
+	let lastScrolledLen = $state(0);
 	$effect(() => {
-		// Scroll to bottom (last virtualized index) on every new render
-		// when the user is anchored there. We track stickToBottom from
-		// scroll events below. scrollToIndex respects the virtualizer's
-		// measured offsets so it works regardless of windowed render.
-		void turns.length;
-		if (stickToBottom && turns.length > 0) {
-			queueMicrotask(() => {
-				$virtualizer.scrollToIndex(turns.length - 1, { align: "end" });
-			});
-		}
+		// Scroll to bottom only when turn count actually grows AND the user
+		// is anchored. Reading turns.length is fine; we DO NOT call into the
+		// virtualizer store inside this effect — scrollToIndex is fired off
+		// the reactive frame via setTimeout to avoid re-triggering measure
+		// pass writes during the same flush.
+		const len = turns.length;
+		if (!stickToBottom || len === 0 || len === lastScrolledLen) return;
+		lastScrolledLen = len;
+		setTimeout(() => {
+			try { $virtualizer.scrollToIndex(len - 1, { align: "end" }); } catch {}
+		}, 0);
 	});
 
 	function onScroll() {
