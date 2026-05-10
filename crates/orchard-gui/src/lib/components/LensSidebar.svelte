@@ -14,6 +14,7 @@
 	import { attentionStore, buildAttentionRows } from "$lib/data/lenses/attention";
 	import { recentStore, buildRecentRows } from "$lib/data/lenses/recent";
 	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
+	import { issueStore, buildIssueRows } from "$lib/data/lenses/issue";
 	import { relTime } from "$lib/util/format";
 	import type { Agent } from "$lib/data/types";
 
@@ -47,6 +48,7 @@
 		attentionStore.fetch();
 		recentStore.fetch();
 		tmuxStore.fetch();
+		issueStore.fetch();
 	});
 
 	// Tier-classified rows derived from the Houdini store + the parent's
@@ -62,6 +64,9 @@
 
 	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 	const tmuxLoading = $derived($tmuxStore.fetching);
+
+	const issueRows = $derived(buildIssueRows($issueStore.data));
+	const issueLoading = $derived($issueStore.fetching);
 
 	/**
 	 * A sidebar row matches the active tab if EITHER its paneId or its
@@ -256,9 +261,9 @@
 					<Icon name="issue" size={11} />
 					<span>Open work</span>
 				</span>
-				<span class="count">{store.lensSnapshots.issue.length}</span>
+				<span class="count">{issueRows.length}</span>
 			</div>
-			{#each store.lensSnapshots.issue as row (row.worktree.id)}
+			{#each issueRows as row (row.worktree.id)}
 				<IssueRow
 					issue={row.issue}
 					worktree={row.worktree}
@@ -278,10 +283,10 @@
 				/>
 			{/each}
 		</div>
-		{#if store.lensSnapshots.issue.length === 0}
+		{#if issueRows.length === 0}
 			<div class="empty-lens">
 				<span class="dimer">
-					{store.lensLoading ? "Loading…" : "No issues with open PRs in scope."}
+					{issueLoading ? "Loading…" : "No issues with open PRs in scope."}
 				</span>
 			</div>
 		{/if}

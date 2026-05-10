@@ -1,0 +1,18 @@
+query IssueLens {
+	claudeInstances {
+		...SessionCard
+	}
+	conversations {
+		sessionUuid
+		lastSeenAt
+	}
+	workView {
+		projects {
+			id
+			name
+			worktrees {
+				...WorktreeEnrichment
+			}
+		}
+	}
+}
