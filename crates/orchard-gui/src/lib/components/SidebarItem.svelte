@@ -42,15 +42,25 @@
 		item.state === "no_claude" ? "no claude" : item.state,
 	);
 
-	// Per-PR status flags (B6). Derived once; rendered as colored chips.
-	const ciBad = $derived(item.worktree?.pr?.statusCheckRollup === "FAILURE");
-	const reviewBad = $derived(
-		item.worktree?.pr?.reviewDecision === "CHANGES_REQUESTED",
-	);
+	// Per-PR status flags (B6). Derived once; rendered as chips.
+	// We surface MORE signals than the original strict-FAILURE rules so
+	// the user sees real PR state at a glance — PENDING CI matters,
+	// REVIEW_REQUIRED matters, BLOCKED merges matter.
+	const ci = $derived(item.worktree?.pr?.statusCheckRollup ?? null);
+	const ciBad = $derived(ci === "FAILURE" || ci === "ERROR");
+	const ciPending = $derived(ci === "PENDING" || ci === "EXPECTED");
+	const review = $derived(item.worktree?.pr?.reviewDecision ?? null);
+	const reviewBad = $derived(review === "CHANGES_REQUESTED");
+	const reviewNeeded = $derived(review === "REVIEW_REQUIRED");
+	const reviewApproved = $derived(review === "APPROVED");
+	const mergeable = $derived(item.worktree?.pr?.mergeable ?? null);
+	const mergeState = $derived(item.worktree?.pr?.mergeStateStatus ?? null);
 	const conflict = $derived(
-		item.worktree?.pr?.mergeable === "CONFLICTING" ||
-			item.worktree?.pr?.mergeStateStatus === "DIRTY",
+		mergeable === "CONFLICTING" || mergeState === "DIRTY",
 	);
+	// BLOCKED = mergeable in principle but blocked by required checks /
+	// review / branch protection. Distinct from a hard conflict.
+	const blocked = $derived(mergeState === "BLOCKED" && !conflict);
 	const prState = $derived(item.worktree?.pr?.state?.toUpperCase() ?? null);
 	// `state` carries DRAFT; the underlying schema's `draft` boolean isn't
 	// exposed via the WorktreeEnrichment fragment so we rely on state only.
@@ -148,12 +158,20 @@
 				{/if}
 				{#if ciBad}
 					<span class="reason-chip mono red" title="CI failing">CI</span>
+				{:else if ciPending}
+					<span class="reason-chip mono amber" title="CI in progress">CI…</span>
 				{/if}
 				{#if reviewBad}
-					<span class="reason-chip mono red" title="Review changes requested">review</span>
+					<span class="reason-chip mono red" title="Review changes requested">changes requested</span>
+				{:else if reviewNeeded}
+					<span class="reason-chip mono amber" title="Awaiting review">needs review</span>
+				{:else if reviewApproved}
+					<span class="reason-chip mono green" title="Review approved">approved</span>
 				{/if}
 				{#if conflict}
 					<span class="reason-chip mono red" title="Merge conflict">conflict</span>
+				{:else if blocked}
+					<span class="reason-chip mono amber" title="Merge blocked (required checks / branch protection)">blocked</span>
 				{/if}
 				{#each item.reasons as r}
 					<span class="reason-chip mono amber" title={r}>{r}</span>
@@ -178,6 +196,11 @@
 		background: rgba(255, 100, 100, 0.14);
 		color: #ff7272;
 		border: 0.5px solid rgba(255, 100, 100, 0.32);
+	}
+	.reason-chip.green {
+		background: rgba(120, 200, 130, 0.14);
+		color: #6fd391;
+		border: 0.5px solid rgba(120, 200, 130, 0.32);
 	}
 	.badge {
 		font-size: 10px;
