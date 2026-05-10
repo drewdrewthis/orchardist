@@ -95,13 +95,38 @@ func e2eFirstNonFlagTmuxArg(args []string) string {
 	return ""
 }
 
-// e2ePaneRow builds a list-panes row in the tmux adapter's field format.
-// Fields: session, windowIdx, paneId, title, command, pid, width, height, dead
+// e2ePaneRow builds a list-panes row in the tmux adapter's listAllFormat
+// (18 fields, U+0001-separated). The adapter consolidated list-sessions,
+// list-windows, and list-panes into a single `tmux list-panes -a -F
+// <listAllFormat>` call (#511 follow-up); session metadata is emitted on
+// every pane row.
 func e2ePaneRow(session, paneID string, pid int) string {
+	return e2ePaneRowAt(session, paneID, pid, 1700000000)
+}
+
+// e2ePaneRowAt is e2ePaneRow with parameterized session_activity (the field
+// the tmux adapter uses to drive lastActivityAt → tmuxSession most-recent
+// selection).
+func e2ePaneRowAt(session, paneID string, pid int, activityUnix int64) string {
 	return strings.Join([]string{
-		session, "0", paneID, "title", "zsh",
-		fmt.Sprintf("%d", pid),
-		"200", "50", "0",
+		session,                               // 0  session_name
+		"1700000000",                          // 1  session_created
+		"0",                                   // 2  session_attached
+		fmt.Sprintf("%d", activityUnix),       // 3  session_activity
+		"1",                                   // 4  session_windows
+		"0",                                   // 5  session_window_index
+		"0",                                   // 6  window_index
+		"main",                                // 7  window_name
+		"1",                                   // 8  window_active
+		"1",                                   // 9  window_panes
+		paneID,                                // 10 window_active_pane
+		paneID,                                // 11 pane_id
+		"title",                               // 12 pane_title
+		"zsh",                                 // 13 pane_current_command
+		fmt.Sprintf("%d", pid),                // 14 pane_pid
+		"200",                                 // 15 pane_width
+		"50",                                  // 16 pane_height
+		"0",                                   // 17 pane_dead
 	}, "\x01")
 }
 

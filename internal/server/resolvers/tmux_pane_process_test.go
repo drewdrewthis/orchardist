@@ -67,20 +67,31 @@ func (f *fakeTmuxRunner) Run(_ context.Context, name string, args ...string) ([]
 	}
 }
 
-// paneRow builds a single pane line in the nine-field format expected by
-// listPanes. sessionName, paneID, and pid are the only fields that matter
-// for these tests; the rest get safe defaults.
+// paneRow builds a single pane line in the 18-field format `tmux list-panes
+// -a -F <listAllFormat>` emits (tmux/adapter.go:406). sessionName, paneID,
+// and pid are the only fields the tests assert on; the rest get safe defaults.
+// listAll consolidated list-sessions + list-panes into one call (#511 follow-up),
+// so every pane row carries its session metadata too.
 func paneRow(sessionName, paneID string, pid int) string {
 	return strings.Join([]string{
-		sessionName, // session_name
-		"0",         // window_index
-		paneID,      // pane_id
-		"",          // pane_title
-		"zsh",       // pane_current_command
-		fmt.Sprintf("%d", pid), // pane_pid
-		"80",  // pane_width
-		"24",  // pane_height
-		"0",   // pane_dead
+		sessionName,                   // 0  session_name
+		"1700000000",                  // 1  session_created
+		"0",                           // 2  session_attached
+		"1700000000",                  // 3  session_activity
+		"1",                           // 4  session_windows
+		"0",                           // 5  session_window_index
+		"0",                           // 6  window_index
+		"main",                        // 7  window_name
+		"1",                           // 8  window_active
+		"1",                           // 9  window_panes
+		paneID,                        // 10 window_active_pane
+		paneID,                        // 11 pane_id
+		"",                            // 12 pane_title
+		"zsh",                         // 13 pane_current_command
+		fmt.Sprintf("%d", pid),        // 14 pane_pid
+		"80",                          // 15 pane_width
+		"24",                          // 16 pane_height
+		"0",                           // 17 pane_dead
 	}, fieldSepTest)
 }
 

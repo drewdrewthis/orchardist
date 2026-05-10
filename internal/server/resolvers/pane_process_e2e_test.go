@@ -33,8 +33,9 @@ const (
 )
 
 // stubTmuxRunnerWithPane returns a CommandRunner that answers tmux
-// list-sessions / list-windows / list-panes with one session ("alpha"),
-// one window (index 0), and one pane (id "%1", currentPid 4242).
+// commands. The adapter consolidated to a single `tmux list-panes -a -F
+// <listAllFormat>` call (#511 follow-up); the 18-field row carries
+// session + window + pane metadata.
 // info / list-clients return innocuous results.
 func stubTmuxRunnerWithPane() *stubRunner {
 	const fs = "\x01" // field separator used by the tmux adapter
@@ -43,31 +44,20 @@ func stubTmuxRunnerWithPane() *stubRunner {
 		case "info":
 			return []byte("ok\n"), nil
 
-		case "list-sessions":
-			// columns: session_name, session_created, session_attached,
-			//   session_activity, session_windows, session_window_index
-			line := "alpha" + fs + "1700000000" + fs + "0" + fs + "1700000010" + fs + "1" + fs + "0\n"
-			return []byte(line), nil
-
-		case "list-windows":
-			// columns: session_name, window_index, window_name, window_active,
-			//   window_panes, current_pane
-			line := "alpha" + fs + "0" + fs + "main" + fs + "1" + fs + "1" + fs + "%1\n"
-			return []byte(line), nil
-
 		case "list-panes":
-			// columns (paneFormat, 9 fields):
-			//   session_name, window_index, pane_id, pane_title,
-			//   pane_current_command, pane_pid, pane_width, pane_height, pane_dead
-			line := "alpha" + fs +
-				"0" + fs +
-				"%1" + fs +
-				"bash" + fs +
-				"claude" + fs +
-				fmt.Sprintf("%d", paneProcessTestPid) + fs +
-				"200" + fs +
-				"50" + fs +
-				"0\n"
+			// 18-field listAllFormat: session_name, session_created,
+			// session_attached, session_activity, session_windows,
+			// session_window_index, window_index, window_name,
+			// window_active, window_panes, window_active_pane, pane_id,
+			// pane_title, pane_current_command, pane_pid, pane_width,
+			// pane_height, pane_dead.
+			line := strings.Join([]string{
+				"alpha", "1700000000", "0", "1700000010", "1", "0",
+				"0", "main", "1", "1", "%1",
+				"%1", "bash", "claude",
+				fmt.Sprintf("%d", paneProcessTestPid),
+				"200", "50", "0",
+			}, fs) + "\n"
 			return []byte(line), nil
 
 		case "list-clients":

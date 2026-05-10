@@ -14,6 +14,7 @@
 package resolvers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"runtime"
@@ -78,16 +79,62 @@ func firstNonFlagTmuxArg(args []string) string {
 	return ""
 }
 
-// buildPaneRow builds a list-panes row in the adapter's field-separated format.
-// Fields: session, windowIdx, paneId, title, command, pid, width, height, dead.
+// buildPaneRow builds a `tmux list-panes -a -F <listAllFormat>` row.
+//
+// listAllFormat (tmux/adapter.go:406) emits 18 U+0001-separated fields per
+// pane row — every test row must include all 18 even when most are filler.
+// Field order (0-based):
+//
+//	0  session_name
+//	1  session_created
+//	2  session_attached
+//	3  session_activity
+//	4  session_windows
+//	5  session_window_index
+//	6  window_index
+//	7  window_name
+//	8  window_active
+//	9  window_panes
+//	10 window_active_pane
+//	11 pane_id
+//	12 pane_title
+//	13 pane_current_command
+//	14 pane_pid
+//	15 pane_width
+//	16 pane_height
+//	17 pane_dead
 //
 // Renamed from paneRow to avoid a redeclaration with the paneRow helper in
 // tmux_pane_process_test.go (#521 — sibling-PR collision between #508 and #516).
 func buildPaneRow(session, paneID string, pid int) string {
+	return buildPaneRowAt(session, paneID, pid, 1700000000)
+}
+
+// buildPaneRowAt is the same as buildPaneRow but lets the caller specify the
+// session_activity unix timestamp. listAll's consolidation of list-sessions +
+// list-panes into one call means session metadata (including activity) is
+// embedded on every pane row; this helper lets per-session activity-based
+// tests parameterise it without abandoning buildPaneRow's defaults.
+func buildPaneRowAt(session, paneID string, pid int, activityUnix int64) string {
 	return strings.Join([]string{
-		session, "0", paneID, "title", "zsh",
-		fmt.Sprintf("%d", pid),
-		"200", "50", "0",
+		session,                              // 0  session_name
+		"1700000000",                         // 1  session_created
+		"0",                                  // 2  session_attached
+		fmt.Sprintf("%d", activityUnix),      // 3  session_activity
+		"1",                                  // 4  session_windows
+		"0",                                  // 5  session_window_index
+		"0",                                  // 6  window_index
+		"main",                               // 7  window_name
+		"1",                                  // 8  window_active
+		"1",                                  // 9  window_panes
+		paneID,                               // 10 window_active_pane
+		paneID,                               // 11 pane_id
+		"title",                              // 12 pane_title
+		"zsh",                                // 13 pane_current_command
+		fmt.Sprintf("%d", pid),               // 14 pane_pid
+		"200",                                // 15 pane_width
+		"50",                                 // 16 pane_height
+		"0",                                  // 17 pane_dead
 	}, "\x01")
 }
 
@@ -123,28 +170,55 @@ func (r *psTestRunner) Run(_ context.Context, name string, args ...string) ([]by
 		// Return header-only so FetchAll succeeds with an empty process table.
 		return []byte(psHeader), nil
 	case "lsof":
-		// lsof -a -d cwd -p <pid> -F n
-		pid := parseLsofPid(args)
-		if cwd, ok := r.cwdByPid[pid]; ok {
-			return []byte(fmt.Sprintf("p%d\nn%s\n", pid, cwd)), nil
+		// lsof -a -d cwd -p <pid|pid,pid,...> -F n
+		// macOS lsof exits non-zero if ANY requested pid is missing, but it
+		// still emits the entries for the pids that were found. Mirror that
+		// behaviour: emit found entries; if any pid was unresolved, return
+		// the buffer with a non-nil error so the adapter's "len(raw) > 0
+		// AND err != nil" branch is exercised (parse what came through).
+		pids := parseLsofPids(args)
+		var buf bytes.Buffer
+		anyFound := false
+		anyMissing := false
+		for _, pid := range pids {
+			if cwd, ok := r.cwdByPid[pid]; ok {
+				fmt.Fprintf(&buf, "p%d\nn%s\n", pid, cwd)
+				anyFound = true
+			} else {
+				anyMissing = true
+			}
 		}
-		// Unknown pid: return non-zero exit (lsof convention for gone process)
-		return nil, fmt.Errorf("lsof: no entry for pid %d", pid)
+		if !anyFound {
+			return nil, fmt.Errorf("lsof: no entries for %v", pids)
+		}
+		if anyMissing {
+			return buf.Bytes(), fmt.Errorf("lsof: partial — some pids missing")
+		}
+		return buf.Bytes(), nil
 	default:
 		return nil, fmt.Errorf("unexpected command: %s", name)
 	}
 }
 
-// parseLsofPid extracts the pid argument from `lsof -a -d cwd -p <pid> -F n`.
-func parseLsofPid(args []string) int {
+// parseLsofPids extracts the pid argument(s) from `lsof -a -d cwd -p <pid|pid,pid,...> -F n`.
+// macOS lsof accepts a single -p with a comma-separated list, which the
+// real adapter uses to coalesce N requests into one shellout — the test
+// runner mirrors that.
+func parseLsofPids(args []string) []int {
 	for i, a := range args {
 		if a == "-p" && i+1 < len(args) {
-			var n int
-			fmt.Sscanf(args[i+1], "%d", &n)
-			return n
+			parts := strings.Split(args[i+1], ",")
+			out := make([]int, 0, len(parts))
+			for _, p := range parts {
+				var n int
+				if _, err := fmt.Sscanf(p, "%d", &n); err == nil {
+					out = append(out, n)
+				}
+			}
+			return out
 		}
 	}
-	return 0
+	return nil
 }
 
 // buildResolver wires a worktreeResolver backed by fake tmux and ps providers.
@@ -392,7 +466,7 @@ func TestTmuxSessionResolver_SinglePane(t *testing.T) {
 	tr := &tmuxTestRunner{
 		sessionRows: []string{sessionRow(sessionName, activityUnix)},
 		windowRows:  []string{windowRow(sessionName)},
-		paneRows:    []string{buildPaneRow(sessionName, "%1", fakePID)},
+		paneRows:    []string{buildPaneRowAt(sessionName, "%1", fakePID, activityUnix)},
 	}
 	r := buildResolver(t, tr, map[int]string{
 		fakePID: worktreePath,
@@ -484,8 +558,8 @@ func TestTmuxSessionResolver_HigherActivityWins(t *testing.T) {
 			windowRow("beta"),
 		},
 		paneRows: []string{
-			buildPaneRow("alpha", "%10", pidAlpha),
-			buildPaneRow("beta", "%11", pidBeta),
+			buildPaneRowAt("alpha", "%10", pidAlpha, alphaActivity),
+			buildPaneRowAt("beta", "%11", pidBeta, betaActivity),
 		},
 	}
 	r := buildResolver(t, tr, map[int]string{
@@ -539,8 +613,8 @@ func TestTmuxSessionResolver_NameTieBreak(t *testing.T) {
 			windowRow("alpha"),
 		},
 		paneRows: []string{
-			buildPaneRow("zebra", "%20", pidZebra),
-			buildPaneRow("alpha", "%21", pidAlpha),
+			buildPaneRowAt("zebra", "%20", pidZebra, sameActivity),
+			buildPaneRowAt("alpha", "%21", pidAlpha, sameActivity),
 		},
 	}
 	r := buildResolver(t, tr, map[int]string{
@@ -927,12 +1001,12 @@ func TestWorktreeTmuxJoin_Integration_AC7(t *testing.T) {
 			windowRow("sess-other"),
 		},
 		paneRows: []string{
-			buildPaneRow("sess-p1", "%101", pidP1),   // p1
-			buildPaneRow("sess-p2", "%102", pidP2),   // p2
-			buildPaneRow("sess-p3", "%103", pidP3),   // p3
-			buildPaneRow("sess-other", "%104", pidP4), // p4
-			buildPaneRow("sess-other", "%105", pidP5), // p5
-			buildPaneRow("sess-other", "%106", pidP6), // p6
+			buildPaneRowAt("sess-p1", "%101", pidP1, activityP1),
+			buildPaneRowAt("sess-p2", "%102", pidP2, activityP2),
+			buildPaneRowAt("sess-p3", "%103", pidP3, 1746784800),
+			buildPaneRowAt("sess-other", "%104", pidP4, 1700000000),
+			buildPaneRowAt("sess-other", "%105", pidP5, 1700000000),
+			buildPaneRowAt("sess-other", "%106", pidP6, 1700000000),
 		},
 	}
 
