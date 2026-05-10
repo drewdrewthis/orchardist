@@ -542,10 +542,9 @@
 .fleet-item-sub {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	flex-wrap: wrap;
+	gap: 4px 6px;
 	font-size: 11.5px;
-	white-space: nowrap;
-	overflow: hidden;
 	min-width: 0;
 }
 
