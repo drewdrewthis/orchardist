@@ -48,9 +48,9 @@ type Repo struct {
 // can read newer configs without crashing. On write, only these three
 // keys are emitted.
 type File struct {
-	Version int        `json:"version"`
-	Repos   []RepoRow  `json:"repos"`
-	Peers   []PeerRow  `json:"peers,omitempty"`
+	Version int       `json:"version"`
+	Repos   []RepoRow `json:"repos"`
+	Peers   []PeerRow `json:"peers,omitempty"`
 }
 
 // RepoRow is one entry in `repos`. Identity is `slug`; display name is

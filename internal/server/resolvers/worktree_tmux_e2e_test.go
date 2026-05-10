@@ -286,8 +286,8 @@ func TestWorktreeTmuxJoin_E2E_LiveQuery(t *testing.T) {
 	// elsewherePID resolves to /tmp/elsewhere (no worktree match).
 	psRunner := &e2ePsRunner{
 		cwdByPid: map[int]string{
-			livePID:       livePath,
-			elsewherePID:  "/tmp/elsewhere",
+			livePID:      livePath,
+			elsewherePID: "/tmp/elsewhere",
 		},
 	}
 	psAdapter := psprovider.NewAdapter(hostID).WithRunner(psRunner)

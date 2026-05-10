@@ -120,9 +120,9 @@ func TestWorkView_EmptyResolverReturnsEmptyLists(t *testing.T) {
 
 func TestSplitRepo(t *testing.T) {
 	cases := []struct {
-		in            string
-		owner, name   string
-		ok            bool
+		in          string
+		owner, name string
+		ok          bool
 	}{
 		{"owner/name", "owner", "name", true},
 		{"o/n", "o", "n", true},
