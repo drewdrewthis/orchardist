@@ -218,6 +218,34 @@ func TestReadJSONLMeta_HeadMarkers_EmptyStringDropped(t *testing.T) {
 	}
 }
 
+// TestReadJSONLMeta_LatestCwd_TailScan covers the case Drew hit on
+// session 3d0a5608: head record is `last-prompt` (no cwd), tail record
+// is `custom-title` (no cwd), but many middle records have cwd. The
+// daemon used to return cwd=null because it only sampled the endpoints.
+// readLatestCwd walks the tail backwards through real records to find
+// the most recent cwd.
+func TestReadJSONLMeta_LatestCwd_TailScan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail-cwd.jsonl")
+	want := "/example/workspace/some-worktree"
+	// Head: last-prompt (no cwd). Tail: custom-title (no cwd). Middle:
+	// user records with cwd.
+	body := `{"type":"last-prompt","leafUuid":"u0","sessionId":"s1"}` + "\n"
+	for i := 0; i < 20; i++ {
+		body += `{"timestamp":"2026-05-04T12:00:00Z","type":"user","uuid":"u` + string(rune('a'+i)) + `","cwd":"` + want + `"}` + "\n"
+	}
+	body += `{"type":"custom-title","customTitle":"renamed","sessionId":"s1"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	meta, err := readJSONLMeta(path)
+	if err != nil {
+		t.Fatalf("readJSONLMeta: %v", err)
+	}
+	if meta.Cwd == nil || *meta.Cwd != want {
+		t.Errorf("cwd = %v, want %q (tail records carry cwd; endpoints don't)", meta.Cwd, want)
+	}
+}
+
 // TestReadJSONLMeta_LatestMarkersWins covers the case Drew hit:
 // title/agentName are rewritten MID-SESSION (e.g. /title, /agent-name,
 // /btw RULE: ...) — the LATEST values must win, not the first ones.

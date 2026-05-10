@@ -115,6 +115,20 @@ func readJSONLMeta(path string) (jsonlMeta, error) {
 	meta.CustomTitle = customTitle
 	meta.AgentName = agentName
 
+	// If neither the first nor last record carried cwd, walk the tail
+	// backwards to find the most recent record that does. Many sessions
+	// only set cwd on substantive turns (user prompts, tool uses), not on
+	// the type=last-prompt / type=custom-title prologue/epilogue records.
+	// Drew (2026-05-10): live example 3d0a5608 has 774 cwd records but
+	// daemon returned cwd=null because both endpoints lacked it.
+	if meta.Cwd == nil {
+		cwd, cwdErr := readLatestCwd(path, info.Size())
+		if cwdErr != nil {
+			return jsonlMeta{}, fmt.Errorf("read latest cwd of %s: %w", path, cwdErr)
+		}
+		meta.Cwd = cwd
+	}
+
 	return meta, nil
 }
 
@@ -294,6 +308,94 @@ func readLatestMarkers(path string, size int64) (customTitle, agentName *string,
 		chunk *= 2
 	}
 	return customTitle, agentName, nil
+}
+
+// readLatestCwd scans path from the END backwards looking for the most
+// recent record with a non-empty cwd. Many session jsonls scatter cwd
+// only on substantive turns (user/assistant/tool records); the
+// prologue/epilogue (last-prompt, custom-title, agent-name) carry no
+// cwd, which is why a head/tail-only sample misses it entirely.
+//
+// Walks the tail in expanding chunks (cap maxLatestMarkersWindow),
+// returns the first non-empty cwd encountered (= latest in file order).
+// Returns nil when no record carries a non-empty cwd within the budget.
+func readLatestCwd(path string, size int64) (cwd *string, err error) {
+	if size == 0 {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	chunk := int64(initialTailWindow)
+	var sawHead bool
+	for {
+		if chunk > size {
+			chunk = size
+			sawHead = true
+		}
+		off := size - chunk
+		if _, err := f.Seek(off, io.SeekStart); err != nil {
+			return nil, err
+		}
+		buf := make([]byte, chunk)
+		if _, err := io.ReadFull(f, buf); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, err
+		}
+
+		start := 0
+		if off > 0 {
+			if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+				start = i + 1
+			} else {
+				if chunk >= maxLatestMarkersWindow || sawHead {
+					break
+				}
+				chunk *= 2
+				continue
+			}
+		}
+
+		end := len(buf)
+		for end > start {
+			if buf[end-1] == '\n' {
+				end--
+			}
+			lineStart := bytes.LastIndexByte(buf[:end], '\n')
+			if lineStart < start-1 {
+				lineStart = start - 1
+			}
+			line := buf[lineStart+1 : end]
+			end = lineStart + 1
+			if len(line) == 0 {
+				if end <= start {
+					break
+				}
+				continue
+			}
+			rec, decErr := decodeRecord(line)
+			if decErr != nil || rec == nil {
+				if end <= start {
+					break
+				}
+				continue
+			}
+			if rec.Cwd != nil && *rec.Cwd != "" {
+				return rec.Cwd, nil
+			}
+			if end <= start {
+				break
+			}
+		}
+
+		if sawHead || chunk >= maxLatestMarkersWindow {
+			break
+		}
+		chunk *= 2
+	}
+	return nil, nil
 }
 
 // readLastRecord parses the last newline-terminated JSON record in
