@@ -4,6 +4,10 @@
 	import { getStore } from "$lib/store.svelte";
 	import { onMount } from "svelte";
 
+	// Houdini's client at `src/client.ts` is wired by the houdini-svelte
+	// plugin (see `houdini.config.js:client`); it's lazy-imported the
+	// first time a Houdini store fetches. Nothing to call here.
+
 	type Props = { children?: import("svelte").Snippet };
 	let { children }: Props = $props();
 
