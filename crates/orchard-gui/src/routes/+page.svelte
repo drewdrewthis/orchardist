@@ -1,7 +1,6 @@
 <!--
   App root. Daemon-only — every visible row of data is hydrated from the
-  local daemon (HTTP + WS) or the Tauri chat bridge. Mock data has been
-  retired; surfaces without a daemon source render empty state.
+  local daemon via Houdini queries (HTTP + WS) or the chat-core bridge.
 -->
 <script lang="ts">
 	import { onMount } from "svelte";
@@ -10,7 +9,13 @@
 	import MobileLayout from "$lib/components/MobileLayout.svelte";
 	import Palette from "$lib/components/Palette.svelte";
 	import NewConversation from "$lib/components/NewConversation.svelte";
-	import ContractModal from "$lib/components/ContractModal.svelte";
+	import {
+		hostsStore,
+		worktreesStore,
+		buildHosts,
+		buildWorktreePickerRows,
+	} from "$lib/data/daemon-stores";
+	import { buildPaletteEntries, PALETTE_ACTIONS } from "$lib/data/palette";
 	import type { Lens, PaletteEntry } from "$lib/data/types";
 
 	const store = getStore();
@@ -24,6 +29,10 @@
 		};
 		onResize();
 		window.addEventListener("resize", onResize);
+
+		// Palette consumes hosts + worktrees; pre-fetch so ⌘K is instant.
+		hostsStore.fetch();
+		worktreesStore.fetch();
 
 		const onKey = (e: KeyboardEvent) => {
 			const cmd = e.metaKey || e.ctrlKey;
@@ -41,7 +50,6 @@
 			} else if (e.key === "Escape") {
 				store.closePalette();
 				store.closeNewConv();
-				store.openContract(null);
 			} else if (cmd && key === "n") {
 				e.preventDefault();
 				store.openNewConv();
@@ -76,6 +84,12 @@
 		};
 	});
 
+	const paletteWorktrees = $derived(buildWorktreePickerRows($worktreesStore.data));
+	const paletteHosts = $derived(buildHosts($hostsStore.data));
+	const paletteEntries = $derived(
+		buildPaletteEntries(paletteWorktrees, paletteHosts, store.chatRooms),
+	);
+
 	function onPalettePick(entry: PaletteEntry) {
 		store.closePalette();
 		if (entry.kind === "action") {
@@ -85,24 +99,15 @@
 			else if (entry.action === "toggle-view") store.toggleView();
 			return;
 		}
-		if (entry.itemId) {
-			// Palette entries today carry legacy item ids — for channels
-			// the id is the room id; for worktrees we don't have a
-			// session keyed at the lens level here, so we surface a
-			// session-tab keyed by sessionUuid when present.
-			const channel = store.chatRooms.find((r) => r.id === entry.itemId);
-			if (channel) {
-				store.openChannel(channel.id);
-			}
-			// Worktree-keyed palette entries don't currently map to a
-			// session/pane identity — skip until palette emits row
-			// identity directly.
+		if (entry.kind === "channel" && entry.roomId) {
+			store.openChannel(entry.roomId);
+		} else if (entry.kind === "session" && (entry.paneId || entry.sessionUuid)) {
+			store.openSession({ paneId: entry.paneId, sessionUuid: entry.sessionUuid });
 		}
+		// Worktree-keyed entries don't yet carry a session/pane handle —
+		// the next iteration will join Worktree.tmuxPanes into the palette
+		// query so the palette can open a live session directly.
 	}
-
-	const contractItem = $derived(
-		store.contractItemId ? store.items.find((i) => i.id === store.contractItemId) || null : null,
-	);
 </script>
 
 <svelte:head>
@@ -120,8 +125,8 @@
 <Palette
 	open={store.paletteOpen}
 	surface={store.surface}
-	entries={store.paletteEntries}
-	actions={store.paletteActions}
+	entries={paletteEntries}
+	actions={PALETTE_ACTIONS}
 	onClose={() => store.closePalette()}
 	onPick={onPalettePick}
 />
@@ -129,18 +134,15 @@
 <NewConversation
 	open={store.newConvOpen}
 	surface={store.surface}
-	items={store.items}
-	hosts={store.hosts}
 	onClose={() => store.closeNewConv()}
 	onLaunch={async (spec) => {
 		store.closeNewConv();
-		const wt = store.items.find((i) => i.id === spec.worktreeId);
-		if (wt && wt.kind === "worktree" && spec.host === wt.host) {
+		const wt = paletteWorktrees.find((i) => i.id === spec.worktreeId);
+		if (wt && spec.host === wt.host) {
 			try {
 				const { createWorktree } = await import("$lib/tauri");
 				const repoRoot = wt.path.split("/wt/")[0] || wt.path;
 				await createWorktree(repoRoot, wt.path, wt.branch);
-				store.hydrateFromDaemon();
 			} catch (err) {
 				console.warn("[orchard-gui] create_worktree failed:", err);
 			}
@@ -148,10 +150,4 @@
 		// Newly-created worktree: no session identity yet — the user can
 		// click its row in the sidebar once the daemon picks it up.
 	}}
-/>
-
-<ContractModal
-	item={contractItem}
-	messages={[]}
-	onClose={() => store.openContract(null)}
 />

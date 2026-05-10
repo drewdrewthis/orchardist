@@ -7,58 +7,38 @@
  *   2. Waiting — Claude session idle > 5min (no recent activity).
  *   3. Active — currently working sessions; FYI only.
  *
+ * The Houdini operation lives at `lenses/houdini/AttentionLens.gql`;
+ * its generated `AttentionLensStore` owns the fetch + the normalized
+ * cache. This file exposes:
+ *   - `attentionStore` — the singleton store consumers subscribe to
+ *   - `buildAttentionRows(data, now)` — pure projection from the
+ *     Houdini result into ordered tier rows.
+ *
  * Granular Claude states beyond "working" / "no_claude" are a daemon
- * gap (filed); when they exist we'll layer "asking question" /
- * "awaiting input" into tier 2.
+ * gap; when they exist we'll layer "asking question" / "awaiting
+ * input" into tier 2.
  */
-import { gql } from "graphql-request";
-import { http, parseTime } from "./client";
-import {
-	SESSION_CARD_FRAGMENT,
-	WORKTREE_ENRICHMENT_FRAGMENT,
-	type SessionCardT,
-	type WorktreeEnrichment,
-} from "./fragments";
+import { AttentionLensStore, type AttentionLens$result } from "$houdini";
+import { parseTime } from "./client";
+import type { SessionCardT, WorktreeEnrichment } from "./fragments";
 
-const ATTENTION_QUERY = gql`
-	${SESSION_CARD_FRAGMENT}
-	${WORKTREE_ENRICHMENT_FRAGMENT}
-	query AttentionLens {
-		claudeInstances {
-			...SessionCard
-		}
-		conversations {
-			sessionUuid
-			lastSeenAt
-		}
-		workView {
-			projects {
-				id
-				name
-				worktrees {
-					...WorktreeEnrichment
-				}
-			}
-		}
-	}
-`;
+/**
+ * Singleton store for the attention lens. Houdini's normalized cache
+ * means concurrent subscribers share one snapshot — instantiating
+ * once at module scope is the right shape.
+ */
+export const attentionStore = new AttentionLensStore();
 
 export type AttentionTier = "blocked" | "waiting" | "active";
+
+type Data = NonNullable<AttentionLens$result>;
 
 export interface AttentionRow {
 	session: SessionCardT;
 	worktree: WorktreeEnrichment | null;
 	tier: AttentionTier;
-	reasons: string[]; // human-readable, populated on tier=blocked / waiting
+	reasons: string[];
 	lastActivityMs: number;
-}
-
-interface AttentionResponse {
-	claudeInstances: SessionCardT[];
-	conversations: Array<{ sessionUuid: string; lastSeenAt: string | null }>;
-	workView: {
-		projects: Array<{ id: string; name: string; worktrees: WorktreeEnrichment[] }>;
-	};
 }
 
 const FIVE_MIN_MS = 5 * 60_000;
@@ -69,7 +49,10 @@ const FIVE_MIN_MS = 5 * 60_000;
  * worktrees (e.g. `repo` and `repo/.worktrees/branch`) both share a
  * prefix.
  */
-function matchWorktree(session: SessionCardT, worktrees: WorktreeEnrichment[]): WorktreeEnrichment | null {
+function matchWorktree(
+	session: SessionCardT,
+	worktrees: WorktreeEnrichment[],
+): WorktreeEnrichment | null {
 	const cwd = session.process?.cwd;
 	if (!cwd) return null;
 	let best: WorktreeEnrichment | null = null;
@@ -86,10 +69,7 @@ function classify(
 	worktree: WorktreeEnrichment | null,
 	lastActivityMs: number,
 	now: number,
-): {
-	tier: AttentionTier;
-	reasons: string[];
-} {
+): { tier: AttentionTier; reasons: string[] } {
 	const reasons: string[] = [];
 
 	// Tier 1 — blocked. PR signal only fires when a PR actually exists.
@@ -117,38 +97,41 @@ function classify(
 	return { tier: "active", reasons: [] };
 }
 
-export async function fetchAttention(now: number = Date.now()): Promise<AttentionRow[]> {
-	try {
-		const data = await http().request<AttentionResponse>(ATTENTION_QUERY);
-		const allWorktrees: WorktreeEnrichment[] = data.workView.projects.flatMap((p) => p.worktrees);
-		const lastByUuid = new Map<string, number>();
-		for (const c of data.conversations) {
-			const t = parseTime(c.lastSeenAt);
-			if (t > 0) lastByUuid.set(c.sessionUuid, t);
-		}
-		const rows = data.claudeInstances.map((session): AttentionRow => {
-			const worktree = matchWorktree(session, allWorktrees);
-			const lastActivityMs =
-				lastByUuid.get(session.sessionUuid) ?? parseTime(session.lastActivityAt);
-			const { tier, reasons } = classify(session, worktree, lastActivityMs, now);
-			return {
-				session,
-				worktree,
-				tier,
-				reasons,
-				lastActivityMs,
-			};
-		});
-		// Sort: blocked > waiting > active, then most-recent activity first.
-		const order: Record<AttentionTier, number> = { blocked: 0, waiting: 1, active: 2 };
-		rows.sort((a, b) => {
-			const t = order[a.tier] - order[b.tier];
-			if (t !== 0) return t;
-			return b.lastActivityMs - a.lastActivityMs;
-		});
-		return rows;
-	} catch (err) {
-		console.warn("[orchard-gui] attention lens fetch failed:", err);
-		return [];
+/**
+ * Project the Houdini result into ordered tier rows. Pure — components
+ * call this inside `$derived` against `$attentionStore.data` so the
+ * cache+network policy drives reactivity for free.
+ */
+export function buildAttentionRows(
+	data: Data | null | undefined,
+	now: number,
+): AttentionRow[] {
+	if (!data) return [];
+	// Houdini-typed nodes are structurally compatible with the
+	// hand-written `SessionCardT` / `WorktreeEnrichment` shapes — both
+	// come from the same schema. The cast is a type bridge for Phase 2;
+	// Phase 3 retires the hand-written interfaces.
+	const allWorktrees = data.workView.projects.flatMap(
+		(p) => p.worktrees as unknown as WorktreeEnrichment[],
+	);
+	const lastByUuid = new Map<string, number>();
+	for (const c of data.conversations) {
+		const t = parseTime(c.lastSeenAt);
+		if (t > 0) lastByUuid.set(c.sessionUuid, t);
 	}
+	const rows = (data.claudeInstances as unknown as SessionCardT[]).map((session): AttentionRow => {
+		const worktree = matchWorktree(session, allWorktrees);
+		const lastActivityMs =
+			lastByUuid.get(session.sessionUuid) ?? parseTime(session.lastActivityAt);
+		const { tier, reasons } = classify(session, worktree, lastActivityMs, now);
+		return { session, worktree, tier, reasons, lastActivityMs };
+	});
+	// Sort: blocked > waiting > active, then most-recent activity first.
+	const order: Record<AttentionTier, number> = { blocked: 0, waiting: 1, active: 2 };
+	rows.sort((a, b) => {
+		const t = order[a.tier] - order[b.tier];
+		if (t !== 0) return t;
+		return b.lastActivityMs - a.lastActivityMs;
+	});
+	return rows;
 }

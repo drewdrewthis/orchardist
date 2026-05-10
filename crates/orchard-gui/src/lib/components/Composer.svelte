@@ -1,17 +1,17 @@
 <!-- Multi-line composer with auto-grow + send icon. Enter sends, shift+enter newline. -->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
-	import type { ChannelItem, Surface, WorktreeItem } from "$lib/data/types";
+	import type { Surface } from "$lib/data/types";
 
 	type Props = {
 		value: string;
 		onChange: (s: string) => void;
 		onSend: () => void;
-		item: WorktreeItem | ChannelItem;
+		roomId: string;
 		sending: unknown;
 		surface: Surface;
 	};
-	let { value, onChange, onSend, item, sending }: Props = $props();
+	let { value, onChange, onSend, roomId, sending }: Props = $props();
 
 	let ta: HTMLTextAreaElement | undefined = $state();
 
@@ -32,11 +32,7 @@
 	});
 
 	const placeholder = $derived(
-		item.kind === "channel"
-			? `Message #${item.title}`
-			: item.session?.live
-				? "Reply to agent…"
-				: "Pick up this session…",
+		`Message ${roomId.startsWith("@") ? roomId : `#${roomId}`}`,
 	);
 </script>
 

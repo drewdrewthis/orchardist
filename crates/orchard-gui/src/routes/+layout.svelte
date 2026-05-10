@@ -4,6 +4,12 @@
 	import { getStore } from "$lib/store.svelte";
 	import { onMount } from "svelte";
 
+	// Houdini's client at `src/client.ts` is wired by the houdini-svelte
+	// plugin (see `houdini.config.js:client`); it's lazy-imported the
+	// first time a Houdini store fetches. Daemon-data subscriptions are
+	// owned by individual Houdini stores — no global hydrate/subscribe
+	// from here.
+
 	type Props = { children?: import("svelte").Snippet };
 	let { children }: Props = $props();
 
@@ -16,9 +22,7 @@
 
 	onMount(() => {
 		const stopTick = store.startNowTick();
-		store.hydrateFromDaemon();
 		store.hydrateChatRooms();
-		store.subscribeDaemon();
 		const subPromise = store.subscribeChat();
 
 		return () => {

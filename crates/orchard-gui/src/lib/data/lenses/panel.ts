@@ -1,56 +1,21 @@
 /**
  * Panel-side query — given a row's identity (paneId and/or sessionUuid),
- * fetch everything the open panel needs to render: pane breadcrumb,
- * claude session, conversation transcript metadata, worktree+pr+issue
+ * fetch everything the open panel needs: pane breadcrumb, claude
+ * session, conversation transcript metadata, worktree+pr+issue
  * enrichment.
  *
- * The panel runs this query itself so it owns its data shape; the
- * sidebar only emits row identity. Tabs hold {paneId, sessionUuid};
- * the panel resolves whatever it needs from the daemon.
+ * The Houdini operation lives at `lenses/houdini/OpenPanel.gql`. Tabs
+ * hold `{ paneId, sessionUuid }`; this file resolves whichever is
+ * supplied to a single `PanelData` shape.
+ *
+ * One Houdini store instance per open panel — Svelte 5 components
+ * pass it back and forth via `$openPanelStore.data`. Factory-spawned
+ * rather than singleton so two open panels with different paneIds
+ * don't fight over a shared store.
  */
-import { gql } from "graphql-request";
-import { http, parseTime } from "./client";
-import {
-	PANE_CARD_FRAGMENT,
-	SESSION_CARD_FRAGMENT,
-	WORKTREE_ENRICHMENT_FRAGMENT,
-	type PaneCardT,
-	type SessionCardT,
-	type WorktreeEnrichment,
-} from "./fragments";
-
-const PANEL_QUERY = gql`
-	${PANE_CARD_FRAGMENT}
-	${SESSION_CARD_FRAGMENT}
-	${WORKTREE_ENRICHMENT_FRAGMENT}
-	query OpenPanel($paneIds: [String!]) {
-		tmuxPanes(filter: { paneIdIn: $paneIds }) {
-			...PaneCard
-		}
-		claudeInstances {
-			...SessionCard
-		}
-		conversations {
-			sessionUuid
-			lastSeenAt
-			firstSeenAt
-			messageCount
-			open
-			recap
-			cwd
-			jsonlPath
-		}
-		workView {
-			projects {
-				id
-				name
-				worktrees {
-					...WorktreeEnrichment
-				}
-			}
-		}
-	}
-`;
+import { OpenPanelStore, type OpenPanel$result } from "$houdini";
+import { parseTime } from "./client";
+import type { PaneCardT, SessionCardT, WorktreeEnrichment } from "./fragments";
 
 export interface PanelData {
 	pane: PaneCardT | null;
@@ -68,95 +33,81 @@ export interface PanelData {
 	worktree: WorktreeEnrichment | null;
 }
 
-interface PanelResponse {
-	tmuxPanes: PaneCardT[];
-	claudeInstances: SessionCardT[];
-	conversations: Array<{
-		sessionUuid: string;
-		lastSeenAt: string | null;
-		firstSeenAt: string | null;
-		messageCount: number;
-		open: boolean;
-		recap: string | null;
-		cwd: string | null;
-		jsonlPath: string | null;
-	}>;
-	workView: {
-		projects: Array<{ id: string; name: string; worktrees: WorktreeEnrichment[] }>;
-	};
+/** Spawn a fresh OpenPanel store. Each open panel gets its own. */
+export function createPanelStore(): OpenPanelStore {
+	return new OpenPanelStore();
 }
 
+type Data = NonNullable<OpenPanel$result>;
+
 /**
- * Resolve a row identity into the full panel data. Either paneId or
- * sessionUuid must be supplied; both is fine and provides the most
- * specific match.
+ * Project the Houdini result into a single `PanelData` for the row
+ * identity supplied. Pure — call inside `$derived` against
+ * `$openPanelStore.data`.
  */
-export async function fetchPanel(args: {
-	paneId?: string | null;
-	sessionUuid?: string | null;
-}): Promise<PanelData | null> {
+export function buildPanelData(
+	data: Data | null | undefined,
+	args: { paneId?: string | null; sessionUuid?: string | null },
+): PanelData | null {
+	if (!data) return null;
 	const { paneId, sessionUuid } = args;
 	if (!paneId && !sessionUuid) return null;
-	try {
-		const data = await http().request<PanelResponse>(PANEL_QUERY, {
-			paneIds: paneId ? [paneId] : null,
-		});
 
-		const pane = data.tmuxPanes[0] || null;
+	const panes = data.tmuxPanes as unknown as PaneCardT[];
+	const sessions = data.claudeInstances as unknown as SessionCardT[];
+	const projects = data.workView.projects as unknown as Array<{
+		worktrees: WorktreeEnrichment[];
+	}>;
 
-		// Pick the claude instance:
-		//   - exact match on sessionUuid when supplied
-		//   - else the instance attached to this pane (paneId match)
-		let session: SessionCardT | null = null;
-		if (sessionUuid) {
-			session = data.claudeInstances.find((s) => s.sessionUuid === sessionUuid) || null;
-		}
-		if (!session && pane?.claudeInstance) {
-			session =
-				data.claudeInstances.find((s) => s.id === pane.claudeInstance!.id) || null;
-		}
-		if (!session && paneId) {
-			session = data.claudeInstances.find((s) => s.pane?.paneId === paneId) || null;
-		}
+	const pane = panes[0] || null;
 
-		// Conversation = the JSONL transcript matching session.sessionUuid.
-		const targetUuid = session?.sessionUuid || sessionUuid || null;
-		const convRaw = targetUuid
-			? data.conversations.find((c) => c.sessionUuid === targetUuid)
-			: null;
-		const conversation = convRaw
-			? {
-					sessionUuid: convRaw.sessionUuid,
-					lastSeenAt: parseTime(convRaw.lastSeenAt),
-					firstSeenAt: parseTime(convRaw.firstSeenAt),
-					messageCount: convRaw.messageCount,
-					open: convRaw.open,
-					recap: convRaw.recap,
-					cwd: convRaw.cwd,
-					jsonlPath: convRaw.jsonlPath,
-				}
-			: null;
+	// Pick the claude instance:
+	//   - exact match on sessionUuid when supplied
+	//   - else the instance attached to this pane (paneId match)
+	let session: SessionCardT | null = null;
+	if (sessionUuid) {
+		session = sessions.find((s) => s.sessionUuid === sessionUuid) || null;
+	}
+	if (!session && pane?.claudeInstance) {
+		session = sessions.find((s) => s.id === pane.claudeInstance!.id) || null;
+	}
+	if (!session && paneId) {
+		session = sessions.find((s) => s.pane?.paneId === paneId) || null;
+	}
 
-		// Worktree = deepest worktree path that contains the row's cwd.
-		// Cwd source priority: pane.process.cwd > session.process.cwd > conversation.cwd.
-		const cwd =
-			pane?.process?.cwd || session?.process?.cwd || conversation?.cwd || null;
-		let worktree: WorktreeEnrichment | null = null;
-		if (cwd) {
-			let best: WorktreeEnrichment | null = null;
-			for (const p of data.workView.projects) {
-				for (const w of p.worktrees) {
-					if (cwd === w.path || cwd.startsWith(w.path + "/")) {
-						if (!best || w.path.length > best.path.length) best = w;
-					}
+	// Conversation = the JSONL transcript matching session.sessionUuid.
+	const targetUuid = session?.sessionUuid || sessionUuid || null;
+	const convRaw = targetUuid
+		? data.conversations.find((c) => c.sessionUuid === targetUuid)
+		: null;
+	const conversation = convRaw
+		? {
+				sessionUuid: convRaw.sessionUuid,
+				lastSeenAt: parseTime(convRaw.lastSeenAt),
+				firstSeenAt: parseTime(convRaw.firstSeenAt),
+				messageCount: convRaw.messageCount,
+				open: convRaw.open,
+				recap: convRaw.recap,
+				cwd: convRaw.cwd,
+				jsonlPath: convRaw.jsonlPath,
+			}
+		: null;
+
+	// Worktree = deepest worktree path that contains the row's cwd.
+	// Cwd source priority: pane.process.cwd > session.process.cwd > conversation.cwd.
+	const cwd = pane?.process?.cwd || session?.process?.cwd || conversation?.cwd || null;
+	let worktree: WorktreeEnrichment | null = null;
+	if (cwd) {
+		let best: WorktreeEnrichment | null = null;
+		for (const p of projects) {
+			for (const w of p.worktrees) {
+				if (cwd === w.path || cwd.startsWith(w.path + "/")) {
+					if (!best || w.path.length > best.path.length) best = w;
 				}
 			}
-			worktree = best;
 		}
-
-		return { pane, session, conversation, worktree };
-	} catch (err) {
-		console.warn("[orchard-gui] panel fetch failed:", err);
-		return null;
+		worktree = best;
 	}
+
+	return { pane, session, conversation, worktree };
 }

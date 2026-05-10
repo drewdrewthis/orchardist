@@ -1,0 +1,12 @@
+query RecentLens {
+	claudeInstances {
+		...SessionCard
+	}
+	conversations {
+		sessionUuid
+		lastSeenAt
+		messageCount
+		open
+		recap
+	}
+}

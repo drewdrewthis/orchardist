@@ -1,0 +1,29 @@
+fragment PaneCard on TmuxPane {
+	paneId
+	title
+	currentCommand
+	currentPid
+	window {
+		id
+		index
+		name
+		active
+		session {
+			id
+			name
+			attached
+			activeAttached
+			lastActivityAt
+		}
+	}
+	claudeInstance {
+		id
+		sessionUuid
+		state
+		lastActivityAt
+	}
+	process {
+		pid
+		cwd
+	}
+}

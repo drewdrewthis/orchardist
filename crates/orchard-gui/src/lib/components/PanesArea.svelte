@@ -8,12 +8,10 @@
 	import ChannelPane from "./ChannelPane.svelte";
 	import type { Tab } from "$lib/store.svelte";
 	import type {
-		Agent,
 		Conversation,
 		ConvView,
 		ForkPreview,
 		Message,
-		TerminalLine,
 	} from "$lib/data/types";
 
 	type Props = {
@@ -23,8 +21,6 @@
 		fullscreen: boolean;
 		view: ConvView;
 		conversation: Conversation;
-		terminalLines: TerminalLine[];
-		agents: Agent[];
 		now: number;
 		statusVariant?: "ticks" | "dots" | "minimal" | "text";
 		composeText: string;
@@ -41,8 +37,6 @@
 		onStartFork: (idx: number, m: Message) => void;
 		onCommitFork: () => void;
 		onCancelFork: () => void;
-		onJumpToAgent: (id: string) => void;
-		onOpenContract: (id: string) => void;
 		onToggleFullscreen: () => void;
 		onOpenPalette: () => void;
 		onLaunch: () => void;
@@ -54,8 +48,6 @@
 		fullscreen,
 		view,
 		conversation,
-		terminalLines,
-		agents,
 		now,
 		statusVariant = "ticks",
 		composeText,
@@ -72,8 +64,6 @@
 		onStartFork,
 		onCommitFork,
 		onCancelFork,
-		onJumpToAgent,
-		onOpenContract,
 		onToggleFullscreen,
 		onOpenPalette,
 		onLaunch,
@@ -177,7 +167,6 @@
 						isLast={idx === tabs.length - 1}
 						fullscreen={idx === tabs.length - 1 ? fullscreen : null}
 						{conversation}
-						{agents}
 						{now}
 						{statusVariant}
 						{composeText}
@@ -188,7 +177,6 @@
 						{onStartFork}
 						{onCommitFork}
 						{onCancelFork}
-						{onJumpToAgent}
 						onActivate={() => onActivateTab(tab.id)}
 						onClose={() => onCloseTab(tab.id)}
 						onToggleFullscreen={idx === tabs.length - 1 ? onToggleFullscreen : undefined}

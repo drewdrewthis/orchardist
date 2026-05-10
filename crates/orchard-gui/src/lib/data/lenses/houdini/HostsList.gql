@@ -1,0 +1,26 @@
+query HostsList {
+	hosts {
+		id
+		hostname
+		os
+		kernel
+		reachable
+		lastSeenAt
+		resourceLoad {
+			cpuPercent
+			memPercent
+			diskPercent
+			loadAvg1m
+			loadAvg5m
+			loadAvg15m
+		}
+	}
+	claudeAccounts {
+		id
+		email
+		quotaUsed
+		quotaCap
+		quotaResetsAt
+		quotaEstimated
+	}
+}

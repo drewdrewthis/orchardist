@@ -1,0 +1,16 @@
+query WorktreesList {
+	workView {
+		projects {
+			id
+			name
+			worktrees {
+				id
+				path
+				branch
+				bare
+				host
+				repo
+			}
+		}
+	}
+}

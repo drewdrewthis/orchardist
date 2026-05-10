@@ -1,0 +1,20 @@
+fragment WorktreeEnrichment on Worktree {
+	id
+	path
+	branch
+	host
+	repo
+	pr {
+		number
+		state
+		statusCheckRollup
+		reviewDecision
+		mergeable
+		mergeStateStatus
+	}
+	issue {
+		number
+		state
+		title
+	}
+}

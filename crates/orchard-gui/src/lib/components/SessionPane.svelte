@@ -16,9 +16,10 @@
 	import TranscriptView from "./TranscriptView.svelte";
 	import SessionComposer from "./SessionComposer.svelte";
 	import ViewSwitcher from "./ViewSwitcher.svelte";
-	import { fetchPanel, type PanelData } from "$lib/data/lenses";
+	import { onMount } from "svelte";
+	import { createPanelStore, buildPanelData } from "$lib/data/lenses/panel";
+	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { relTime } from "$lib/util/format";
-	import { getStore } from "$lib/store.svelte";
 	import type { ConvView } from "$lib/data/types";
 
 	type Props = {
@@ -52,32 +53,28 @@
 		onToggleFullscreen,
 	}: Props = $props();
 
-	const store = getStore();
+	// One Houdini panel store per open pane. The tab identity
+	// (paneId, sessionUuid) feeds the query variables; the `paneIds`
+	// filter narrows the daemon's pane snapshot to this row.
+	const panelStore = createPanelStore();
 
-	let data = $state<PanelData | null>(null);
-	let loading = $state(true);
-
-	async function refresh() {
-		loading = true;
-		data = await fetchPanel({ paneId, sessionUuid });
-		loading = false;
-	}
-
-	// Re-fetch when the row identity changes OR when the store sees a
-	// daemon push event (worktreeChanged / tmuxSessionsChanged / etc).
-	// No polling — `store.hydrationTick` increments on every successful
-	// hydrate, so this $effect re-runs and pulls fresh panel data.
 	$effect(() => {
-		void paneId;
-		void sessionUuid;
-		void store.hydrationTick;
-		refresh();
+		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null } });
 	});
 
+	const data = $derived(
+		buildPanelData($panelStore.data, { paneId, sessionUuid }),
+	);
+	const loading = $derived($panelStore.fetching);
 	const pane = $derived(data?.pane ?? null);
 	const session = $derived(data?.session ?? null);
 	const conversation = $derived(data?.conversation ?? null);
 	const worktree = $derived(data?.worktree ?? null);
+
+	// `here` flag still needs the tmux server's client → currentPane
+	// map. Read straight from the tmux Houdini store (already kicked
+	// off by LensSidebar; the cache means this is free).
+	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 
 	const title = $derived(
 		worktree?.branch ||
@@ -88,7 +85,7 @@
 			"session",
 	);
 	const isHere = $derived(
-		!!pane && store.lensSnapshots.tmux.activePaneIds.has(pane.paneId),
+		!!pane && tmuxSnapshot.activePaneIds.has(pane.paneId),
 	);
 	const hasTranscript = $derived(!!conversation?.jsonlPath);
 

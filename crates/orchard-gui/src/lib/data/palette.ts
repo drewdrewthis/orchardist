@@ -1,66 +1,42 @@
 /**
- * Build palette entries from live store data. Pure function — no mock.
+ * Build palette entries from live Houdini data + chat rooms. Pure
+ * function — no AppStore intermediate. Each entry carries the row
+ * identity (paneId, sessionUuid, roomId) the panel needs to open it.
  *
- * The palette is a derived view of `items` + `hosts` + chat rooms; it must
- * not contain any data the user can't navigate to via the rest of the UI.
+ * The palette is a derived view of `worktreesStore`/`hostsStore` +
+ * the chat-room list; it must not contain any data the user can't
+ * navigate to via the rest of the UI.
  */
 
-import type { Host, Item, PaletteEntry } from "./types";
+import type { PaletteEntry } from "./types";
+import type { HostRow, WorktreePickerRow } from "./daemon-stores";
 
 export function buildPaletteEntries(
-	items: Item[],
-	hosts: Host[],
+	worktrees: WorktreePickerRow[],
+	hosts: HostRow[],
 	chatRooms: { id: string }[],
 ): PaletteEntry[] {
 	const out: PaletteEntry[] = [];
 
-	for (const it of items) {
-		if (it.kind !== "worktree") continue;
+	for (const w of worktrees) {
 		out.push({
-			kind: "worktree",
-			label: it.title,
-			sub: `${it.repo} · ${it.branch}`,
-			host: it.host,
-			anchor: it.id,
-			itemId: it.id,
+			kind: "session",
+			label: w.branch,
+			sub: `${w.repo} · ${w.host}`,
+			host: w.host,
 			group: "Worktrees",
-			keywords: [it.repo, it.branch, it.path, it.title].join(" ").toLowerCase(),
+			keywords: [w.repo, w.branch, w.path].join(" ").toLowerCase(),
 		});
-		if (it.pr) {
-			out.push({
-				kind: "pr",
-				label: `${it.repo} · PR #${it.pr.number}`,
-				sub: it.title,
-				host: it.host,
-				anchor: `${it.id}/pr`,
-				itemId: it.id,
-				group: "Pull requests",
-				keywords: [`#${it.pr.number}`, it.title, it.repo, it.branch].join(" ").toLowerCase(),
-			});
-		}
-		if (it.issue) {
-			out.push({
-				kind: "issue",
-				label: `${it.repo} · #${it.issue.number}`,
-				sub: it.title,
-				host: it.host,
-				anchor: `${it.id}/issue`,
-				itemId: it.id,
-				group: "Issues",
-				keywords: [`#${it.issue.number}`, it.title, it.repo].join(" ").toLowerCase(),
-			});
-		}
 	}
 
-	for (const host of hosts) {
+	for (const h of hosts) {
 		out.push({
 			kind: "host",
-			label: host.hostname,
-			sub: host.reachable ? "reachable" : "unreachable",
-			host: host.hostname,
-			anchor: host.id,
+			label: h.hostname,
+			sub: h.reachable ? "reachable" : "unreachable",
+			host: h.hostname,
 			group: "Hosts",
-			keywords: [host.hostname, host.os].join(" ").toLowerCase(),
+			keywords: [h.hostname, h.os, h.kernel || ""].join(" ").toLowerCase(),
 		});
 	}
 
@@ -70,8 +46,7 @@ export function buildPaletteEntries(
 			kind: "channel",
 			label: id.startsWith("@") ? id : `#${id}`,
 			sub: "chat room",
-			anchor: id,
-			itemId: id,
+			roomId: id,
 			group: "Channels",
 			keywords: id.toLowerCase(),
 		});
@@ -82,11 +57,10 @@ export function buildPaletteEntries(
 
 export const PALETTE_ACTIONS: PaletteEntry[] = [
 	{ kind: "action", label: "Launch new conversation", sub: "Pick a worktree + host", shortcut: ["⌘", "N"], action: "new-conversation", group: "Actions", keywords: "new conversation launch start" },
-	{ kind: "action", label: "Switch lens · By attention", action: "lens:attention", group: "Actions", keywords: "lens attention" },
-	{ kind: "action", label: "Switch lens · By host", action: "lens:host", group: "Actions", keywords: "lens host" },
-	{ kind: "action", label: "Switch lens · By recent activity", action: "lens:activity", group: "Actions", keywords: "lens activity recent" },
-	{ kind: "action", label: "Switch lens · By repo", action: "lens:repo", group: "Actions", keywords: "lens repo" },
-	{ kind: "action", label: "Switch lens · By tmux", action: "lens:tmux", group: "Actions", keywords: "lens tmux" },
+	{ kind: "action", label: "Switch lens · Attention", action: "lens:attention", group: "Actions", keywords: "lens attention" },
+	{ kind: "action", label: "Switch lens · Recent", action: "lens:recent", group: "Actions", keywords: "lens recent activity" },
+	{ kind: "action", label: "Switch lens · Tmux", action: "lens:tmux", group: "Actions", keywords: "lens tmux" },
+	{ kind: "action", label: "Switch lens · Issue", action: "lens:issue", group: "Actions", keywords: "lens issue work" },
 	{ kind: "action", label: "Toggle theme", action: "toggle-theme", group: "Actions", keywords: "theme dark light" },
 	{ kind: "action", label: "Toggle terminal view", shortcut: ["⌘", "\\"], action: "toggle-view", group: "Actions", keywords: "view terminal chat toggle" },
 ];

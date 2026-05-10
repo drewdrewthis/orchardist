@@ -8,10 +8,7 @@
 	import ChatView from "./ChatView.svelte";
 	import { getStore } from "$lib/store.svelte";
 	import type {
-		Agent,
-		ChannelItem,
 		Conversation,
-		ConvView,
 		ForkPreview,
 		Message,
 	} from "$lib/data/types";
@@ -23,7 +20,6 @@
 		isLast: boolean;
 		fullscreen: boolean | null;
 		conversation: Conversation;
-		agents: Agent[];
 		now: number;
 		statusVariant?: "ticks" | "dots" | "minimal" | "text";
 		composeText: string;
@@ -34,7 +30,6 @@
 		onStartFork: (idx: number, m: Message) => void;
 		onCommitFork: () => void;
 		onCancelFork: () => void;
-		onJumpToAgent: (id: string) => void;
 		onActivate: () => void;
 		onClose: () => void;
 		onToggleFullscreen?: () => void;
@@ -46,7 +41,6 @@
 		isLast,
 		fullscreen,
 		conversation,
-		agents,
 		now,
 		statusVariant = "ticks",
 		composeText,
@@ -57,7 +51,6 @@
 		onStartFork,
 		onCommitFork,
 		onCancelFork,
-		onJumpToAgent,
 		onActivate,
 		onClose,
 		onToggleFullscreen,
@@ -65,21 +58,7 @@
 
 	const store = getStore();
 	const room = $derived(store.chatRooms.find((r) => r.id === roomId));
-
-	const item = $derived<ChannelItem>({
-		id: roomId,
-		kind: "channel",
-		title: roomId.startsWith("@") ? roomId : `#${roomId}`,
-		topic: "",
-		participants: [],
-		host: "multi",
-		repo: "",
-		status: "ok",
-		attentionReason: null,
-		lastActivity: 0,
-		unread: 0,
-		sparkline: [],
-	});
+	const memberCount = $derived(room?.memberCount ?? 0);
 </script>
 
 <div
@@ -108,18 +87,16 @@
 	{/if}
 	<div class="conv">
 		<ChannelHeader
-			{item}
+			{roomId}
+			{memberCount}
 			view="chat"
 			surface="desktop"
-			{agents}
 			onView={() => {}}
 			onFork={() => {}}
-			{onJumpToAgent}
 		/>
 		<ChatView
-			{item}
+			{roomId}
 			{conversation}
-			{agents}
 			surface="desktop"
 			{now}
 			{statusVariant}

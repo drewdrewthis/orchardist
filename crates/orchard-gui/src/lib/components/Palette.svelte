@@ -1,6 +1,9 @@
 <!--
-  ⌘K palette. Searches anchors (worktrees, sessions, PRs, issues, contracts,
-  hosts, channels) + actions. Filter syntax: host: status: repo:
+  ⌘K palette. Searches anchors (worktrees, sessions, hosts, channels) +
+  actions. Filter syntax: host: repo:
+
+  Entries come from the Houdini-driven palette builder; each one carries
+  the row identity (paneId, sessionUuid, roomId) needed to open it.
 -->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
@@ -31,9 +34,9 @@
 	});
 
 	function parseFilters(q: string) {
-		const filters = { host: [] as string[], status: [] as string[], repo: [] as string[] };
+		const filters = { host: [] as string[], repo: [] as string[] };
 		const rest = q
-			.replace(/(host|status|repo):([^\s]+)/gi, (_m, k: string, v: string) => {
+			.replace(/(host|repo):([^\s]+)/gi, (_m, k: string, v: string) => {
 				filters[k.toLowerCase() as keyof typeof filters].push(v.toLowerCase());
 				return "";
 			})
@@ -77,7 +80,7 @@
 	});
 
 	const grouped = $derived.by(() => {
-		const order = ["Actions", "Worktrees", "Sessions", "Pull requests", "Issues", "Contracts", "Hosts", "Channels"];
+		const order = ["Actions", "Worktrees", "Hosts", "Channels"];
 		const map = new Map<string, { r: Hit; i: number }[]>();
 		results.forEach((r, i) => {
 			const g = r.kind === "action" ? "Actions" : r.group;
@@ -120,14 +123,11 @@
 
 	function iconForKind(kind: string): string {
 		const map: Record<string, string> = {
-			worktree: "git-branch",
-			session: "chat",
-			pr: "pull-request",
-			issue: "issue",
-			contract: "docs",
+			session: "git-branch",
 			host: "host",
 			channel: "message",
 			action: "bolt",
+			lens: "filter",
 		};
 		return map[kind] || "dot";
 	}
@@ -158,7 +158,7 @@
 				{#each grouped as g (g.name)}
 					<div class="palette-group">
 						<div class="palette-group-name">{g.name}</div>
-						{#each g.rows as { r, i } (r.anchor || r.action || r.label)}
+						{#each g.rows as { r, i } (`${r.kind}:${r.label}:${r.sub ?? ''}`)}
 							<div
 								class="palette-row"
 								class:active={i === active}
@@ -187,7 +187,7 @@
 										<div class="palette-row-sub mono">{r.sub}</div>
 									{/if}
 								</div>
-								{#if r.host && r.kind !== "action" && r.host !== "multi"}
+								{#if r.host && r.kind !== "action"}
 									<HostGlyph host={r.host} size={12} />
 								{/if}
 								{#if r.shortcut}
@@ -206,7 +206,7 @@
 						<span class="dimer">No matches.</span>
 						<span class="dimest" style:font-size="12px">
 							Try <span class="mono">host:drew-mac</span> or
-							<span class="mono">status:attn</span>
+							<span class="mono">repo:orchard</span>
 						</span>
 					</div>
 				{/if}

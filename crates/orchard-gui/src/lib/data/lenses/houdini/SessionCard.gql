@@ -1,0 +1,32 @@
+fragment SessionCard on ClaudeInstance {
+	id
+	sessionUuid
+	state
+	startedAt
+	lastActivityAt
+	rcEnabled
+	account {
+		email
+	}
+	pane {
+		paneId
+		title
+		currentCommand
+		window {
+			id
+			index
+			name
+			active
+			session {
+				id
+				name
+				attached
+				activeAttached
+			}
+		}
+	}
+	process {
+		pid
+		cwd
+	}
+}
