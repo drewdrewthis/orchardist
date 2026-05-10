@@ -19,6 +19,13 @@ const config = {
 		url: "http://127.0.0.1:7777/graphql",
 	},
 	defaultCachePolicy: "CacheAndNetwork",
+	scalars: {
+		// The daemon's `Time` scalar marshals as RFC3339 strings — same
+		// shape the legacy code already parses with `Date.parse`. Surface
+		// it as `string` so consumers keep using `parseTime` (defined in
+		// `lenses/client.ts`) without a typed wrapper.
+		Time: { type: "string" },
+	},
 	plugins: {
 		"houdini-svelte": {
 			client: "./src/client.ts",

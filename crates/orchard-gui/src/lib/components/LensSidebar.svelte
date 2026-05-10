@@ -4,12 +4,14 @@
   gets reshuffled. Channels are rendered above the lens content.
 -->
 <script lang="ts">
+	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import SessionRow from "./SessionRow.svelte";
 	import TmuxPaneRow from "./TmuxPaneRow.svelte";
 	import IssueRow from "./IssueRow.svelte";
 	import ChannelRow from "./ChannelRow.svelte";
 	import { getStore } from "$lib/store.svelte";
+	import { attentionStore, buildAttentionRows } from "$lib/data/lenses/attention";
 	import { relTime } from "$lib/util/format";
 	import type { Agent } from "$lib/data/types";
 
@@ -34,6 +36,22 @@
 
 	const store = getStore();
 	const lens = $derived(store.lens);
+
+	// Houdini store: kicks off a CacheAndNetwork fetch on mount; the
+	// component subscribes via the `$attentionStore` reactive contract.
+	// Subsequent push events into the daemon (subscribeAll → cache patch)
+	// re-render this sidebar without an explicit re-fetch.
+	onMount(() => {
+		attentionStore.fetch();
+	});
+
+	// Tier-classified rows derived from the Houdini store + the parent's
+	// `now` tick (so "idle 5m" updates as time passes).
+	const attentionRows = $derived(buildAttentionRows($attentionStore.data, now));
+	const blocked = $derived(attentionRows.filter((r) => r.tier === "blocked"));
+	const waiting = $derived(attentionRows.filter((r) => r.tier === "waiting"));
+	const active = $derived(attentionRows.filter((r) => r.tier === "active"));
+	const attentionLoading = $derived($attentionStore.fetching);
 
 	/**
 	 * A sidebar row matches the active tab if EITHER its paneId or its
@@ -83,9 +101,6 @@
 	{/if}
 
 	{#if lens === "attention"}
-		{@const blocked = store.lensSnapshots.attention.filter((r) => r.tier === "blocked")}
-		{@const waiting = store.lensSnapshots.attention.filter((r) => r.tier === "waiting")}
-		{@const active = store.lensSnapshots.attention.filter((r) => r.tier === "active")}
 		{#each [
 			{ key: "blocked", label: "Blocked", icon: "alert", rows: blocked },
 			{ key: "waiting", label: "Waiting", icon: "clock", rows: waiting },
@@ -123,9 +138,9 @@
 				</div>
 			{/if}
 		{/each}
-		{#if store.lensSnapshots.attention.length === 0}
+		{#if attentionRows.length === 0}
 			<div class="empty-lens">
-				<span class="dimer">{store.lensLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
+				<span class="dimer">{attentionLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
 			</div>
 		{/if}
 	{:else if lens === "recent"}
