@@ -65,7 +65,10 @@
 
 	async function load() {
 		try {
-			const chunk = await readTranscript(path);
+			// Pass sessionUuid so the reader can hit the daemon's /v1/conversations/<uuid>/jsonl?lastN=
+			// endpoint directly — skips the Tauri filesystem round-trip and works in the
+			// browser dev preview through the Vite proxy.
+			const chunk = await readTranscript(path, undefined, sessionUuid);
 			const parsed = parseTranscript(chunk.text);
 			turns = parsed;
 			totalSize = chunk.size;

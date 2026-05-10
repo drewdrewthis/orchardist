@@ -1,11 +1,15 @@
 /**
  * Transcript reader — pulls a Claude Code .jsonl conversation from the
- * filesystem via Tauri (`Conversation.jsonlPath` on the daemon points
- * at this file). The Rust side returns up to N bytes from the end of
- * the file; we parse the lines and shape them into renderable turns.
+ * **daemon** (`GET /v1/conversations/<sessionUuid>/jsonl?lastN=<N>`).
  *
- * Falls back to a structured error in the browser dev preview — the
- * renderer can show a "desktop app required" placeholder.
+ * The daemon's tail-N mode reads only the bytes needed to land on the
+ * Nth-from-last newline (worst case ~chunk*ceil(N/avg-line-length) bytes
+ * touched), then streams from there to EOF. A multi-MB transcript serves
+ * its last 200 turns in well under 100ms — instant in the renderer.
+ *
+ * Falls back to the legacy Tauri filesystem read when the daemon is
+ * unreachable (e.g. dev shell with no daemon up); browser dev preview
+ * works through the Vite `/__daemon` proxy → daemon, no Tauri required.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -19,20 +23,72 @@ export interface TranscriptChunk {
 
 export const TRANSCRIPT_UNSUPPORTED = "TRANSCRIPT_UNSUPPORTED";
 
-function ensureTauri(): void {
+/**
+ * Resolve the transcript URL for the daemon's HTTP endpoint. In Tauri
+ * we hit 127.0.0.1:7777 directly; in browser dev we go through Vite's
+ * `/__daemon` proxy (configured in vite.config.js).
+ */
+function transcriptURL(sessionUuid: string, lastN?: number): string {
 	const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-	if (!inTauri) throw new Error(TRANSCRIPT_UNSUPPORTED);
+	const base = inTauri ? "http://127.0.0.1:7777" : "/__daemon";
+	const q = lastN != null ? `?lastN=${lastN}` : "";
+	return `${base}/v1/conversations/${encodeURIComponent(sessionUuid)}/jsonl${q}`;
 }
 
-export async function readTranscript(path: string, maxBytes?: number): Promise<TranscriptChunk> {
-	ensureTauri();
+/**
+ * Read the last N records of a transcript via the daemon HTTP endpoint.
+ * Default lastN=200 keeps the renderer responsive on huge transcripts.
+ *
+ * Falls back to the Tauri filesystem reader when the daemon is unreachable
+ * AND we're inside Tauri. Browser dev with no daemon → throws.
+ */
+export async function readTranscript(
+	pathOrSession: string,
+	maxBytes?: number,
+	sessionUuid?: string,
+): Promise<TranscriptChunk> {
+	const lastN = 200;
+	const uuid = sessionUuid ?? guessUUIDFromPath(pathOrSession);
+	if (uuid) {
+		try {
+			const url = transcriptURL(uuid, lastN);
+			const res = await fetch(url, { headers: { Accept: "application/x-ndjson" } });
+			if (res.ok) {
+				const text = await res.text();
+				const startOffset = Number(res.headers.get("X-Orchard-StartOffset") ?? "0");
+				const fullSize = Number(res.headers.get("Content-Length") ?? text.length) + startOffset;
+				return {
+					path: pathOrSession,
+					size: fullSize,
+					truncated: startOffset > 0,
+					text,
+				};
+			}
+		} catch {
+			// Network/proxy down — fall through to Tauri.
+		}
+	}
+	// Last-resort Tauri fallback (dev shell with daemon down).
+	const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+	if (!inTauri) throw new Error(TRANSCRIPT_UNSUPPORTED);
 	const raw = await invoke<{
 		path: string;
 		size: number;
 		truncated: boolean;
 		text: string;
-	}>("read_transcript_jsonl", { path, maxBytes: maxBytes ?? null });
+	}>("read_transcript_jsonl", { path: pathOrSession, maxBytes: maxBytes ?? null });
 	return raw;
+}
+
+/**
+ * Claude Code names every JSONL by its sessionUuid: `<uuid>.jsonl`. When
+ * the caller passes a path instead of a uuid, recover the uuid from the
+ * filename so we can hit the daemon endpoint without forcing every call
+ * site to thread the uuid through.
+ */
+function guessUUIDFromPath(path: string): string | null {
+	const m = path.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
+	return m ? m[1] : null;
 }
 
 /**

@@ -787,3 +787,116 @@ func makeCountedContent(n int) []byte {
 	return b
 }
 
+// =============================================================================
+// lastN — daemon serves the trailing N records of a JSONL transcript so the
+// GUI can render a multi-MB transcript instantly (Drew, 2026-05-10).
+// =============================================================================
+
+func TestConversationsJSONL_LastN_ServesTail(t *testing.T) {
+	const uuid = "lastn-uuid-1"
+	// 100 numbered records, each "line N\n".
+	var buf bytes.Buffer
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&buf, "line %d\n", i)
+	}
+	_, root, lookup := makeFixture(t, uuid, buf.Bytes())
+	_, baseURL := newTestServer(t, lookup, root)
+
+	url := fmt.Sprintf("%s/v1/conversations/%s/jsonl?lastN=10", baseURL, uuid)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(body)
+	want := ""
+	for i := 90; i < 100; i++ {
+		want += fmt.Sprintf("line %d\n", i)
+	}
+	if got != want {
+		t.Errorf("lastN=10 body = %q, want %q", got, want)
+	}
+	if h := resp.Header.Get("X-Orchard-LastN"); h != "10" {
+		t.Errorf("X-Orchard-LastN = %q, want %q", h, "10")
+	}
+	if h := resp.Header.Get("X-Orchard-StartOffset"); h == "" || h == "0" {
+		t.Errorf("X-Orchard-StartOffset = %q, want non-zero offset (file has > 10 lines)", h)
+	}
+}
+
+func TestConversationsJSONL_LastN_FewerLinesThanRequested(t *testing.T) {
+	// File has 5 records; request lastN=20. Server should return all 5
+	// from offset 0 (no truncation).
+	const uuid = "lastn-uuid-2"
+	var buf bytes.Buffer
+	for i := 0; i < 5; i++ {
+		fmt.Fprintf(&buf, "row %d\n", i)
+	}
+	_, root, lookup := makeFixture(t, uuid, buf.Bytes())
+	_, baseURL := newTestServer(t, lookup, root)
+
+	url := fmt.Sprintf("%s/v1/conversations/%s/jsonl?lastN=20", baseURL, uuid)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != buf.String() {
+		t.Errorf("lastN=20 on 5-line file = %q, want %q", string(body), buf.String())
+	}
+	if off := resp.Header.Get("X-Orchard-StartOffset"); off != "0" {
+		t.Errorf("X-Orchard-StartOffset = %q, want %q (file fits in lastN)", off, "0")
+	}
+}
+
+func TestConversationsJSONL_LastN_InvalidQueryFallsBackToFull(t *testing.T) {
+	// lastN=abc → invalid → server falls back to full file via ServeContent.
+	const uuid = "lastn-uuid-3"
+	content := []byte("a\nb\nc\nd\n")
+	_, root, lookup := makeFixture(t, uuid, content)
+	_, baseURL := newTestServer(t, lookup, root)
+
+	url := fmt.Sprintf("%s/v1/conversations/%s/jsonl?lastN=abc", baseURL, uuid)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(body, content) {
+		t.Errorf("invalid lastN should fall back to full file; got %q, want %q", body, content)
+	}
+	if h := resp.Header.Get("X-Orchard-LastN"); h != "" {
+		t.Errorf("X-Orchard-LastN should not be set when lastN is invalid; got %q", h)
+	}
+}
+
+func TestConversationsJSONL_LastN_CapAt5000(t *testing.T) {
+	// lastN=999999 → capped to maxLastN=5000.
+	const uuid = "lastn-uuid-4"
+	var buf bytes.Buffer
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&buf, "x %d\n", i)
+	}
+	_, root, lookup := makeFixture(t, uuid, buf.Bytes())
+	_, baseURL := newTestServer(t, lookup, root)
+
+	url := fmt.Sprintf("%s/v1/conversations/%s/jsonl?lastN=999999", baseURL, uuid)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if h := resp.Header.Get("X-Orchard-LastN"); h != "5000" {
+		t.Errorf("X-Orchard-LastN = %q, want %q (capped to maxLastN)", h, "5000")
+	}
+}
+

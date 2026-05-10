@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -201,11 +203,108 @@ func (h *conversationsJSONLHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("ETag", etag)
 
+	// Optional `?lastN=<int>` mode — return only the last N newline-
+	// terminated records. Lets the GUI render an instant transcript from
+	// a multi-MB JSONL without pulling the whole thing. Disables Range/
+	// 304 caching (the server-side computed slice is dynamic).
+	if lastN, ok := parseLastN(r.URL.Query().Get("lastN")); ok {
+		serveLastN(w, f, stat, lastN, h.logger)
+		return
+	}
+
 	// ServeContent handles Range, If-Modified-Since, If-None-Match,
 	// Last-Modified, Content-Length, and 206/304/416 status codes.
 	// The empty name ("") prevents the stdlib from sniffing or
 	// overriding the Content-Type we set above.
 	http.ServeContent(w, r, "", stat.ModTime(), f)
+}
+
+// parseLastN parses the ?lastN= query parameter. Returns (n, true) when n
+// is a positive int <= maxLastN; otherwise (0, false) so the caller falls
+// back to full-file streaming. Capped to keep a single request from
+// allocating an unbounded buffer.
+const maxLastN = 5000
+
+func parseLastN(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	if n > maxLastN {
+		n = maxLastN
+	}
+	return n, true
+}
+
+// serveLastN reads the file's tail looking for the start of the last N
+// newline-terminated records, then streams from that offset to EOF.
+//
+// Strategy: read the file backwards in 64KB chunks, counting newlines.
+// Stop when N+1 newlines have been seen (the +1 anchors us to the start
+// of the Nth-from-last record), or when we hit BOF (file has fewer than
+// N records — serve the whole thing). Worst case: short transcripts
+// land in the first chunk; long ones touch only the tail bytes needed
+// to find N record boundaries.
+func serveLastN(w http.ResponseWriter, f *os.File, stat os.FileInfo, n int, logger *slog.Logger) {
+	const chunk = 64 * 1024
+	size := stat.Size()
+	if size == 0 {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Walk backwards counting newlines until we've found n+1 of them or
+	// reached the start of the file. The +1 ensures we land at a record
+	// boundary (skip the trailing newline of the (N+1)th-from-last
+	// record) rather than mid-record.
+	buf := make([]byte, chunk)
+	target := n + 1
+	seen := 0
+	pos := size
+	startOffset := int64(0)
+	for pos > 0 {
+		readSize := int64(chunk)
+		if pos < readSize {
+			readSize = pos
+		}
+		pos -= readSize
+		if _, err := f.ReadAt(buf[:readSize], pos); err != nil {
+			logger.Error("conversations jsonl: tail read failed", "err", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		// Walk this chunk backwards counting newlines.
+		for i := int(readSize) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				seen++
+				if seen == target {
+					// One past this newline is the start of the last N records.
+					startOffset = pos + int64(i) + 1
+					goto found
+				}
+			}
+		}
+	}
+	// Hit BOF without seeing target newlines — file has fewer than N
+	// records. Serve from offset 0.
+	startOffset = 0
+
+found:
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		logger.Error("conversations jsonl: seek failed", "offset", startOffset, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("X-Orchard-LastN", strconv.Itoa(n))
+	w.Header().Set("X-Orchard-StartOffset", strconv.FormatInt(startOffset, 10))
+	if _, err := io.Copy(w, f); err != nil {
+		// Client disconnect / write error — log at debug, don't try to
+		// send a status code (headers already flushed).
+		logger.Debug("conversations jsonl: tail copy aborted", "err", err)
+	}
 }
 
 // parseSessionUUID extracts the :sessionUuid segment from a path of
