@@ -11,7 +11,7 @@
   Browser dev preview shows a placeholder.
 -->
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, untrack } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import { createVirtualizer } from "@tanstack/svelte-virtual";
 	import {
@@ -38,16 +38,28 @@
 	let stickToBottom = $state(true);
 	let expandedTools = $state<Set<string>>(new Set());
 
-	// Virtualizer — `count` is read from the reactive `turns` getter,
-	// which lets the @tanstack/svelte-virtual store re-derive whenever
-	// turns changes WITHOUT us calling setOptions (which writes virtualizer
-	// state and would re-trigger the effect that wrote it → effect_update_depth_exceeded).
-	// estimateSize tuned to ~realistic average for tool-heavy turns.
+	// Virtualizer — @tanstack/svelte-virtual store. count is captured at
+	// setOptions() call time (it's spread, not a getter), so we must call
+	// setOptions whenever turns.length changes. Wrap in untrack() so the
+	// effect ONLY tracks `turns.length` and not the virtualizer store
+	// reads inside setOptions — otherwise we get effect_update_depth_exceeded.
+	// estimateSize tuned for tool-heavy turns (~240 close to real avg).
 	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
-		get count() { return turns.length; },
+		count: 0,
 		getScrollElement: () => scrollHost ?? null,
 		estimateSize: () => 240,
 		overscan: 4,
+	});
+	$effect(() => {
+		const count = turns.length;
+		untrack(() => {
+			$virtualizer.setOptions({
+				count,
+				getScrollElement: () => scrollHost ?? null,
+				estimateSize: () => 240,
+				overscan: 4,
+			});
+		});
 	});
 
 	function toggleTool(id: string) {
