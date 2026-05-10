@@ -1151,14 +1151,43 @@ func (r *tmuxServerResolver) Alive(ctx context.Context, obj *graphql1.TmuxServer
 	return r.Tmux.Server().Alive, nil
 }
 
-// Sessions is the resolver for tmuxServer.sessions.
-func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer) ([]*graphql1.TmuxSession, error) {
+// Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one).
+func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sortKey *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
 	if r.Tmux == nil {
 		return nil, nil
 	}
 	snap := r.Tmux.Snapshot()
-	out := make([]*graphql1.TmuxSession, 0, len(snap.Sessions))
+	sessions := make([]tmux.Session, 0, len(snap.Sessions))
 	for _, s := range snap.Sessions {
+		sessions = append(sessions, s)
+	}
+
+	key := graphql1.TmuxSessionSortLastActivity
+	if sortKey != nil {
+		key = *sortKey
+	}
+	switch key {
+	case graphql1.TmuxSessionSortName:
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].Key.Name < sessions[j].Key.Name
+		})
+	default: // LAST_ACTIVITY
+		sort.Slice(sessions, func(i, j int) bool {
+			a, b := sessions[i], sessions[j]
+			aZero := a.LastActivityAt.IsZero()
+			bZero := b.LastActivityAt.IsZero()
+			if aZero != bZero {
+				return !aZero
+			}
+			if !a.LastActivityAt.Equal(b.LastActivityAt) {
+				return a.LastActivityAt.After(b.LastActivityAt)
+			}
+			return a.Key.Name < b.Key.Name
+		})
+	}
+
+	out := make([]*graphql1.TmuxSession, 0, len(sessions))
+	for _, s := range sessions {
 		out = append(out, projectSession(s))
 	}
 	return out, nil

@@ -107,6 +107,8 @@ type ComplexityRoot struct {
 	}
 
 	Conversation struct {
+		AgentName    func(childComplexity int) int
+		CustomTitle  func(childComplexity int) int
 		Cwd          func(childComplexity int) int
 		FirstSeenAt  func(childComplexity int) int
 		ID           func(childComplexity int) int
@@ -333,7 +335,7 @@ type ComplexityRoot struct {
 		Clients    func(childComplexity int) int
 		ID         func(childComplexity int) int
 		Pid        func(childComplexity int) int
-		Sessions   func(childComplexity int) int
+		Sessions   func(childComplexity int, sort *TmuxSessionSort) int
 		SocketPath func(childComplexity int) int
 	}
 
@@ -491,7 +493,7 @@ type TmuxPaneResolver interface {
 type TmuxServerResolver interface {
 	Pid(ctx context.Context, obj *TmuxServer) (*int64, error)
 	Alive(ctx context.Context, obj *TmuxServer) (bool, error)
-	Sessions(ctx context.Context, obj *TmuxServer) ([]*TmuxSession, error)
+	Sessions(ctx context.Context, obj *TmuxServer, sort *TmuxSessionSort) ([]*TmuxSession, error)
 	Clients(ctx context.Context, obj *TmuxServer) ([]*TmuxClient, error)
 }
 type TmuxSessionResolver interface {
@@ -800,6 +802,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ContractQuestion.Text(childComplexity), true
+
+	case "Conversation.agentName":
+		if e.complexity.Conversation.AgentName == nil {
+			break
+		}
+
+		return e.complexity.Conversation.AgentName(childComplexity), true
+
+	case "Conversation.customTitle":
+		if e.complexity.Conversation.CustomTitle == nil {
+			break
+		}
+
+		return e.complexity.Conversation.CustomTitle(childComplexity), true
 
 	case "Conversation.cwd":
 		if e.complexity.Conversation.Cwd == nil {
@@ -2130,7 +2146,12 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 			break
 		}
 
-		return e.complexity.TmuxServer.Sessions(childComplexity), true
+		args, err := ec.field_TmuxServer_sessions_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.TmuxServer.Sessions(childComplexity, args["sort"].(*TmuxSessionSort)), true
 
 	case "TmuxServer.socketPath":
 		if e.complexity.TmuxServer.SocketPath == nil {
@@ -3186,8 +3207,12 @@ type TmuxServer implements Node {
   "True while the tmux daemon answers a heartbeat command."
   alive: Boolean!
 
-  "Sessions hosted on this server."
-  sessions: [TmuxSession!]!
+  """
+  Sessions hosted on this server. Defaults to LAST_ACTIVITY which orders
+  most-recently-active first (lex name break ties), matching the sidebar's
+  "what should I look at next" intent. Pass NAME for stable lex order.
+  """
+  sessions(sort: TmuxSessionSort = LAST_ACTIVITY): [TmuxSession!]!
 
   "Clients currently connected to this server."
   clients: [TmuxClient!]!
@@ -3394,6 +3419,14 @@ input TmuxSessionFilter {
   activeAttachedOnly: Boolean
 }
 
+"Sort key for ` + "`" + `TmuxServer.sessions` + "`" + `."
+enum TmuxSessionSort {
+  "Most-recently-active first (lastActivityAt DESC). Lex-lower name breaks ties; sessions with no activity rank below those with one."
+  LAST_ACTIVITY
+  "Stable lex order by session name."
+  NAME
+}
+
 """
 Filter for ` + "`" + `Query.hostServices` + "`" + `. AND-combined when multiple are set.
 
@@ -3483,6 +3516,12 @@ type Conversation implements Node {
   Use ` + "`" + `GET /v1/conversations/<sessionUuid>/jsonl` + "`" + ` (hosted on the same listener as ` + "`" + `/graphql` + "`" + `) to read transcript bodies.
   """
   jsonlPath: String!
+
+  "User-set title from the JSONL ` + "`" + `type: \"custom-title\"` + "`" + ` record. Null when the session has not yet recorded one."
+  customTitle: String
+
+  "Sub-agent name from the JSONL ` + "`" + `type: \"agent-name\"` + "`" + ` record. Null when the session has not yet recorded one."
+  agentName: String
 }
 
 """
@@ -4269,6 +4308,21 @@ func (ec *executionContext) field_TmuxPane_content_args(ctx context.Context, raw
 		}
 	}
 	args["stripAnsi"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_TmuxServer_sessions_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 *TmuxSessionSort
+	if tmp, ok := rawArgs["sort"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sort"))
+		arg0, err = ec.unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["sort"] = arg0
 	return args, nil
 }
 
@@ -6411,6 +6465,88 @@ func (ec *executionContext) _Conversation_jsonlPath(ctx context.Context, field g
 }
 
 func (ec *executionContext) fieldContext_Conversation_jsonlPath(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_customTitle(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_customTitle(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CustomTitle, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_customTitle(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Conversation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Conversation_agentName(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Conversation_agentName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AgentName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Conversation_agentName(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Conversation",
 		Field:      field,
@@ -11249,6 +11385,10 @@ func (ec *executionContext) fieldContext_Query_conversations(ctx context.Context
 				return ec.fieldContext_Conversation_recap(ctx, field)
 			case "jsonlPath":
 				return ec.fieldContext_Conversation_jsonlPath(ctx, field)
+			case "customTitle":
+				return ec.fieldContext_Conversation_customTitle(ctx, field)
+			case "agentName":
+				return ec.fieldContext_Conversation_agentName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Conversation", field.Name)
 		},
@@ -11310,6 +11450,10 @@ func (ec *executionContext) fieldContext_Query_conversation(ctx context.Context,
 				return ec.fieldContext_Conversation_recap(ctx, field)
 			case "jsonlPath":
 				return ec.fieldContext_Conversation_jsonlPath(ctx, field)
+			case "customTitle":
+				return ec.fieldContext_Conversation_customTitle(ctx, field)
+			case "agentName":
+				return ec.fieldContext_Conversation_agentName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Conversation", field.Name)
 		},
@@ -13614,6 +13758,10 @@ func (ec *executionContext) fieldContext_Subscription_conversationChanged(ctx co
 				return ec.fieldContext_Conversation_recap(ctx, field)
 			case "jsonlPath":
 				return ec.fieldContext_Conversation_jsonlPath(ctx, field)
+			case "customTitle":
+				return ec.fieldContext_Conversation_customTitle(ctx, field)
+			case "agentName":
+				return ec.fieldContext_Conversation_agentName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Conversation", field.Name)
 		},
@@ -15152,7 +15300,7 @@ func (ec *executionContext) _TmuxServer_sessions(ctx context.Context, field grap
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.TmuxServer().Sessions(rctx, obj)
+		return ec.resolvers.TmuxServer().Sessions(rctx, obj, fc.Args["sort"].(*TmuxSessionSort))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -15200,6 +15348,17 @@ func (ec *executionContext) fieldContext_TmuxServer_sessions(ctx context.Context
 			}
 			return nil, fmt.Errorf("no field named %q was found under type TmuxSession", field.Name)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_TmuxServer_sessions_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -20106,6 +20265,10 @@ func (ec *executionContext) _Conversation(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "customTitle":
+			out.Values[i] = ec._Conversation_customTitle(ctx, field, obj)
+		case "agentName":
+			out.Values[i] = ec._Conversation_agentName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -26510,6 +26673,22 @@ func (ec *executionContext) unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdr
 	}
 	res, err := ec.unmarshalInputTmuxSessionFilter(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx context.Context, v interface{}) (*TmuxSessionSort, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(TmuxSessionSort)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx context.Context, sel ast.SelectionSet, v *TmuxSessionSort) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {

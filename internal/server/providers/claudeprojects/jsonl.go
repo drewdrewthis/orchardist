@@ -24,6 +24,8 @@ type jsonlMeta struct {
 	Cwd          *string
 	MessageCount int64
 	ModTime      time.Time
+	CustomTitle  *string
+	AgentName    *string
 }
 
 // jsonlRecord is the parsed shape of a single JSONL line. Fields are
@@ -35,8 +37,11 @@ type jsonlMeta struct {
 // parses it for us. CWD is the only string we need from the body, and
 // only on the latest record we have it on (newer records carry it).
 type jsonlRecord struct {
-	Timestamp *time.Time `json:"timestamp,omitempty"`
-	Cwd       *string    `json:"cwd,omitempty"`
+	Timestamp   *time.Time `json:"timestamp,omitempty"`
+	Cwd         *string    `json:"cwd,omitempty"`
+	Type        string     `json:"type,omitempty"`
+	CustomTitle *string    `json:"customTitle,omitempty"`
+	AgentName   *string    `json:"agentName,omitempty"`
 }
 
 // readJSONLMeta returns the metadata summary of the JSONL at path
@@ -102,6 +107,13 @@ func readJSONLMeta(path string) (jsonlMeta, error) {
 			meta.Cwd = last.Cwd
 		}
 	}
+
+	customTitle, agentName, err := readHeadMarkers(path)
+	if err != nil {
+		return jsonlMeta{}, fmt.Errorf("read head markers of %s: %w", path, err)
+	}
+	meta.CustomTitle = customTitle
+	meta.AgentName = agentName
 
 	return meta, nil
 }
@@ -169,6 +181,51 @@ func readFirstRecord(path string) (*jsonlRecord, error) {
 		return nil, err
 	}
 	return decodeRecord(line)
+}
+
+// readHeadMarkers scans the first N records of path for the JSONL marker types `custom-title` and `agent-name`. Both are written by Claude Code at session start (typically lines 2-3) and stay stable for the life of the session, so a small bounded scan is sufficient — we never load the whole file.
+//
+// Returns nil pointers when the markers are absent, malformed, or carry empty strings. Bounded by `maxHeadRecords`; once both markers are seen the scan returns early.
+func readHeadMarkers(path string) (customTitle, agentName *string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	r := bufio.NewReaderSize(f, 64*1024)
+	for i := 0; i < maxHeadRecords; i++ {
+		line, lineErr := readBoundedLine(r, maxLineBytes)
+		if lineErr != nil {
+			if errors.Is(lineErr, io.EOF) {
+				// Partial trailing line is fine — let the loop exit; it's
+				// not a head marker we expect to be unterminated anyway.
+				break
+			}
+			if errors.Is(lineErr, errLineTooLong) {
+				continue
+			}
+			return customTitle, agentName, lineErr
+		}
+		rec, decErr := decodeRecord(line)
+		if decErr != nil || rec == nil {
+			continue
+		}
+		switch rec.Type {
+		case "custom-title":
+			if customTitle == nil && rec.CustomTitle != nil && *rec.CustomTitle != "" {
+				customTitle = rec.CustomTitle
+			}
+		case "agent-name":
+			if agentName == nil && rec.AgentName != nil && *rec.AgentName != "" {
+				agentName = rec.AgentName
+			}
+		}
+		if customTitle != nil && agentName != nil {
+			break
+		}
+	}
+	return customTitle, agentName, nil
 }
 
 // readLastRecord parses the last newline-terminated JSON record in
@@ -283,6 +340,12 @@ const (
 	// are skipped — we surface (nil, nil) to the caller, which
 	// degrades to "unknown firstSeenAt/lastSeenAt" on the node.
 	maxLineBytes = 1024 * 1024
+
+	// maxHeadRecords bounds readHeadMarkers. Claude Code writes the
+	// custom-title and agent-name markers at the very top of the JSONL
+	// (typically lines 2-3); 16 records is generous and never reads
+	// past the prologue.
+	maxHeadRecords = 16
 )
 
 // errLineTooLong is the sentinel error returned by readBoundedLine

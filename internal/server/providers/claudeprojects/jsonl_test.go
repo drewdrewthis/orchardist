@@ -153,6 +153,71 @@ func TestReadJSONLMeta_LongLineSkipped(t *testing.T) {
 	}
 }
 
+// TestReadJSONLMeta_HeadMarkers parses a transcript whose first three
+// records are the canonical Claude Code prologue: last-prompt,
+// custom-title, agent-name. We expect the latter two to be surfaced.
+func TestReadJSONLMeta_HeadMarkers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "markers.jsonl")
+	body := `{"type":"last-prompt","leafUuid":"u1","sessionId":"s1"}` + "\n" +
+		`{"type":"custom-title","customTitle":"local:my-session","sessionId":"s1"}` + "\n" +
+		`{"type":"agent-name","agentName":"my-agent","sessionId":"s1"}` + "\n" +
+		`{"timestamp":"2026-05-04T12:00:00Z","type":"user"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	meta, err := readJSONLMeta(path)
+	if err != nil {
+		t.Fatalf("readJSONLMeta: %v", err)
+	}
+	if meta.CustomTitle == nil || *meta.CustomTitle != "local:my-session" {
+		t.Errorf("customTitle = %v, want %q", meta.CustomTitle, "local:my-session")
+	}
+	if meta.AgentName == nil || *meta.AgentName != "my-agent" {
+		t.Errorf("agentName = %v, want %q", meta.AgentName, "my-agent")
+	}
+}
+
+// TestReadJSONLMeta_HeadMarkers_Missing degrades cleanly when neither
+// marker is present — both fields should be nil, not the empty string.
+func TestReadJSONLMeta_HeadMarkers_Missing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nomarkers.jsonl")
+	body := `{"timestamp":"2026-05-04T12:00:00Z","type":"user"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	meta, err := readJSONLMeta(path)
+	if err != nil {
+		t.Fatalf("readJSONLMeta: %v", err)
+	}
+	if meta.CustomTitle != nil {
+		t.Errorf("customTitle = %v, want nil", *meta.CustomTitle)
+	}
+	if meta.AgentName != nil {
+		t.Errorf("agentName = %v, want nil", *meta.AgentName)
+	}
+}
+
+// TestReadJSONLMeta_HeadMarkers_EmptyStringDropped treats an empty
+// customTitle as absent — no point surfacing "" to clients.
+func TestReadJSONLMeta_HeadMarkers_EmptyStringDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "emptymarkers.jsonl")
+	body := `{"type":"custom-title","customTitle":"","sessionId":"s1"}` + "\n" +
+		`{"type":"agent-name","agentName":"","sessionId":"s1"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	meta, err := readJSONLMeta(path)
+	if err != nil {
+		t.Fatalf("readJSONLMeta: %v", err)
+	}
+	if meta.CustomTitle != nil {
+		t.Errorf("customTitle = %v, want nil (empty string dropped)", *meta.CustomTitle)
+	}
+	if meta.AgentName != nil {
+		t.Errorf("agentName = %v, want nil (empty string dropped)", *meta.AgentName)
+	}
+}
+
 // TestSessionUUIDFromPath asserts the filename → uuid extraction
 // peels only the .jsonl suffix and respects directory components.
 func TestSessionUUIDFromPath(t *testing.T) {

@@ -62,6 +62,10 @@ type Conversation struct {
 	FirstSeenAt  *time.Time
 	LastSeenAt   *time.Time
 	MessageCount int64
+	// CustomTitle is the user-set title from the JSONL `type: "custom-title"` record. Nil when not yet recorded.
+	CustomTitle *string
+	// AgentName is the sub-agent name from the JSONL `type: "agent-name"` record. Nil when not yet recorded.
+	AgentName *string
 }
 
 // GraphQLID returns the stable orchard id for a Conversation node. The

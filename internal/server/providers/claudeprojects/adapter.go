@@ -184,5 +184,7 @@ func (a *FSAdapter) fromFile(path string) (Conversation, error) {
 		FirstSeenAt:  meta.FirstSeenAt,
 		LastSeenAt:   meta.LastSeenAt,
 		MessageCount: meta.MessageCount,
+		CustomTitle:  meta.CustomTitle,
+		AgentName:    meta.AgentName,
 	}, nil
 }
