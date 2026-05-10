@@ -55,6 +55,9 @@
 	// `state` carries DRAFT; the underlying schema's `draft` boolean isn't
 	// exposed via the WorktreeEnrichment fragment so we rely on state only.
 	const isDraft = $derived(prState === "DRAFT");
+	const issueClosed = $derived(
+		item.worktree?.issue?.state?.toUpperCase() === "CLOSED",
+	);
 </script>
 
 <div
@@ -99,12 +102,21 @@
 						<span class="dimest">·</span>
 					{/if}
 				{/if}
+				{#if item.worktree?.branch && item.worktree.branch !== item.title}
+					<span class="mono dimer" title="Branch">{item.worktree.branch}</span>
+					<span class="dimest">·</span>
+				{/if}
 				{#if item.worktree?.pr}
 					<span class="mono dimer">PR #{item.worktree.pr.number}</span>
 					<span class="dimest">·</span>
 				{/if}
 				{#if item.worktree?.issue}
-					<span class="mono dimer">#{item.worktree.issue.number}</span>
+					<span class="mono dimer">
+						#{item.worktree.issue.number}
+						{#if issueClosed}
+							<span class="reason-chip mono red" style:margin-left="3px" title="Issue closed">closed</span>
+						{/if}
+					</span>
 					<span class="dimest">·</span>
 				{/if}
 				{#if item.tmuxAddress && surface !== "mobile"}

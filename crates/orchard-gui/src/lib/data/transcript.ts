@@ -122,8 +122,9 @@ export function parseTranscript(text: string): TranscriptTurn[] {
 		}
 
 		// User turns sometimes carry plain string content rather than an array.
-		if (blocks.length === 0 && typeof (row.message as { content?: unknown }).content === "string") {
-			blocks.push({ kind: "text", text: (row.message as { content: string }).content });
+		const rawContent = (row.message as { content?: unknown }).content;
+		if (blocks.length === 0 && typeof rawContent === "string") {
+			blocks.push({ kind: "text", text: rawContent });
 		}
 
 		if (blocks.length === 0) continue;
