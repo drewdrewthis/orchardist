@@ -1,0 +1,32 @@
+query TmuxLens {
+	tmuxServer {
+		id
+		alive
+		sessions {
+			id
+			name
+			attached
+			activeAttached
+			lastActivityAt
+			windows {
+				id
+				index
+				name
+				active
+				panes {
+					...PaneCard
+				}
+			}
+		}
+		clients {
+			tty
+			currentPane {
+				paneId
+			}
+		}
+	}
+	conversations {
+		sessionUuid
+		lastSeenAt
+	}
+}

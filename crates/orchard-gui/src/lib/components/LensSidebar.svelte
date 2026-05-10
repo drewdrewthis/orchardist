@@ -13,6 +13,7 @@
 	import { getStore } from "$lib/store.svelte";
 	import { attentionStore, buildAttentionRows } from "$lib/data/lenses/attention";
 	import { recentStore, buildRecentRows } from "$lib/data/lenses/recent";
+	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { relTime } from "$lib/util/format";
 	import type { Agent } from "$lib/data/types";
 
@@ -45,6 +46,7 @@
 	onMount(() => {
 		attentionStore.fetch();
 		recentStore.fetch();
+		tmuxStore.fetch();
 	});
 
 	// Tier-classified rows derived from the Houdini store + the parent's
@@ -57,6 +59,9 @@
 
 	const recentRows = $derived(buildRecentRows($recentStore.data));
 	const recentLoading = $derived($recentStore.fetching);
+
+	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
+	const tmuxLoading = $derived($tmuxStore.fetching);
 
 	/**
 	 * A sidebar row matches the active tab if EITHER its paneId or its
@@ -184,7 +189,7 @@
 			</div>
 		{/if}
 	{:else if lens === "tmux"}
-		{#each store.lensSnapshots.tmux.sessions as sess (sess.id)}
+		{#each tmuxSnapshot.sessions as sess (sess.id)}
 			<div class="fleet-group" data-kind="tmux-session">
 				<div class="group-header">
 					<span style="display: inline-flex; align-items: center; gap: 6px;">
@@ -211,7 +216,7 @@
 							<div class="fleet-nested">
 								<TmuxPaneRow
 									pane={pane}
-									here={store.lensSnapshots.tmux.activePaneIds.has(pane.paneId)}
+									here={tmuxSnapshot.activePaneIds.has(pane.paneId)}
 									{now}
 									{density}
 									{surface}
@@ -231,12 +236,12 @@
 				{/each}
 			</div>
 		{/each}
-		{#if store.lensSnapshots.tmux.sessions.length === 0}
+		{#if tmuxSnapshot.sessions.length === 0}
 			<div class="empty-lens">
 				<span class="dimer">
-					{#if !store.lensSnapshots.tmux.alive && !store.lensLoading}
+					{#if !tmuxSnapshot.alive && !tmuxLoading}
 						No tmux server reachable.
-					{:else if store.lensLoading}
+					{:else if tmuxLoading}
 						Loading…
 					{:else}
 						No tmux sessions.

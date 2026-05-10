@@ -3,46 +3,19 @@
  *
  * The pane is the unit. Each pane carries its own claude / process /
  * cwd enrichment. The sidebar renders a tree, not a flat list.
+ *
+ * Houdini operation lives at `lenses/houdini/TmuxLens.gql`. This file
+ * exposes the singleton store + the `buildTmuxSnapshot` projection
+ * (which folds `clients` into a Set<paneId> for fast lookup and
+ * `conversations` into a uuid→lastSeenAt map).
  */
-import { gql } from "graphql-request";
-import { http } from "./client";
-import { PANE_CARD_FRAGMENT, type PaneCardT } from "./fragments";
+import { TmuxLensStore, type TmuxLens$result } from "$houdini";
+import type { PaneCardT } from "./fragments";
 
-const TMUX_QUERY = gql`
-	${PANE_CARD_FRAGMENT}
-	query TmuxLens {
-		tmuxServer {
-			id
-			alive
-			sessions {
-				id
-				name
-				attached
-				activeAttached
-				lastActivityAt
-				windows {
-					id
-					index
-					name
-					active
-					panes {
-						...PaneCard
-					}
-				}
-			}
-			clients {
-				tty
-				currentPane {
-					paneId
-				}
-			}
-		}
-		conversations {
-			sessionUuid
-			lastSeenAt
-		}
-	}
-`;
+/** Singleton Houdini store for the tmux lens. */
+export const tmuxStore = new TmuxLensStore();
+
+type Data = NonNullable<TmuxLens$result>;
 
 export interface TmuxWindowNode {
 	id: string;
@@ -71,33 +44,47 @@ export interface TmuxLensSnapshot {
 	lastSeenByUuid: Record<string, number>;
 }
 
-interface TmuxLensResponse {
-	tmuxServer: {
-		id: string;
-		alive: boolean;
-		sessions: TmuxSessionNode[];
-		clients: Array<{ tty: string; currentPane: { paneId: string } | null }>;
-	} | null;
-	conversations: Array<{ sessionUuid: string; lastSeenAt: string | null }>;
+const EMPTY: TmuxLensSnapshot = {
+	sessions: [],
+	activePaneIds: new Set(),
+	alive: false,
+	lastSeenByUuid: {},
+};
+
+/**
+ * Project the Houdini result into a tree-shaped lens snapshot. Pure —
+ * components call this inside `$derived` against `$tmuxStore.data`.
+ */
+export function buildTmuxSnapshot(data: Data | null | undefined): TmuxLensSnapshot {
+	if (!data) return EMPTY;
+	const ts = data.tmuxServer;
+	const lastSeenByUuid: Record<string, number> = {};
+	for (const c of data.conversations || []) {
+		const t = c.lastSeenAt ? Date.parse(c.lastSeenAt) || 0 : 0;
+		if (t > 0) lastSeenByUuid[c.sessionUuid] = t;
+	}
+	if (!ts) return { ...EMPTY, lastSeenByUuid };
+	const activePaneIds = new Set<string>();
+	for (const c of ts.clients) {
+		if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
+	}
+	return {
+		sessions: ts.sessions as unknown as TmuxSessionNode[],
+		activePaneIds,
+		alive: ts.alive,
+		lastSeenByUuid,
+	};
 }
 
+/**
+ * Legacy facade for `AppStore.refreshActiveLens`. Phase 3 retires it.
+ */
 export async function fetchTmux(): Promise<TmuxLensSnapshot> {
 	try {
-		const data = await http().request<TmuxLensResponse>(TMUX_QUERY);
-		const ts = data.tmuxServer;
-		const lastSeenByUuid: Record<string, number> = {};
-		for (const c of data.conversations || []) {
-			const t = c.lastSeenAt ? Date.parse(c.lastSeenAt) || 0 : 0;
-			if (t > 0) lastSeenByUuid[c.sessionUuid] = t;
-		}
-		if (!ts) return { sessions: [], activePaneIds: new Set(), alive: false, lastSeenByUuid };
-		const activePaneIds = new Set<string>();
-		for (const c of ts.clients) {
-			if (c.currentPane?.paneId) activePaneIds.add(c.currentPane.paneId);
-		}
-		return { sessions: ts.sessions, activePaneIds, alive: ts.alive, lastSeenByUuid };
+		const { data } = await tmuxStore.fetch({ policy: "NetworkOnly" });
+		return buildTmuxSnapshot(data);
 	} catch (err) {
 		console.warn("[orchard-gui] tmux lens fetch failed:", err);
-		return { sessions: [], activePaneIds: new Set(), alive: false, lastSeenByUuid: {} };
+		return EMPTY;
 	}
 }
