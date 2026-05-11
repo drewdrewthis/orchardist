@@ -174,6 +174,34 @@ func (p *Provider) AddPeer(peer PeerConfig) error {
 	return nil
 }
 
+// RemovePeer cancels a peer's probe goroutine, removes its entries from
+// the provider's internal maps, and closes its client transport.
+//
+// Returns an error when no peer with the given name is configured.
+// RemovePeer is safe to call concurrently with AddPeer / RemovePeer.
+func (p *Provider) RemovePeer(name string) error {
+	p.mu.Lock()
+	_, exists := p.adapters[name]
+	if !exists {
+		p.mu.Unlock()
+		return fmt.Errorf("RemovePeer: peer %q not found", name)
+	}
+	cancel := p.peerCancels[name]
+	client := p.clients[name]
+	delete(p.adapters, name)
+	delete(p.clients, name)
+	delete(p.peerCancels, name)
+	p.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if client != nil {
+		_ = client.Close()
+	}
+	return nil
+}
+
 // Stop cancels the start context, waits for goroutines to drain, and
 // closes every transport client. Safe to call repeatedly.
 func (p *Provider) Stop() error {

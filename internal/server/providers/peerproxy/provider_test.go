@@ -120,3 +120,73 @@ func TestAddPeer_PreStartReturnsError(t *testing.T) {
 		t.Fatal("expected error from AddPeer before Start, got nil")
 	}
 }
+
+// TestRemovePeer_CancelsAndDrops is the unit coverage for the scenario
+// "RemovePeer cancels the peer's goroutine and drops it from the map".
+//
+// Steps:
+//  1. NewProvider with no peers, Start.
+//  2. AddPeer "lw-fed-c" pointing at a fake HTTP server.
+//  3. Wait for at least one Ping to confirm the probe goroutine is live.
+//  4. Snapshot pingCount.
+//  5. Call RemovePeer("lw-fed-c") — must return nil.
+//  6. Assert "lw-fed-c" no longer appears in Peers().
+//  7. Wait 500ms and verify pingCount did not increase (probe stopped).
+func TestRemovePeer_CancelsAndDrops(t *testing.T) {
+	fake := newFakePeer(t)
+
+	// 1. Construct an empty provider and start it.
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 2. AddPeer.
+	if err := p.AddPeer(peerproxy.PeerConfig{
+		Name:    "lw-fed-c",
+		Address: fake.addr(),
+		TLS:     false,
+	}); err != nil {
+		t.Fatalf("AddPeer: %v", err)
+	}
+
+	// 3. Wait for at least one Ping to confirm the goroutine is live.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fake.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fake.pingCount.Load() < 1 {
+		t.Fatalf("probe goroutine did not issue a Ping within 200ms")
+	}
+
+	// 4. Snapshot pingCount after confirming at least one Ping.
+	countBefore := fake.pingCount.Load()
+
+	// 5. RemovePeer must return nil.
+	if err := p.RemovePeer("lw-fed-c"); err != nil {
+		t.Fatalf("RemovePeer returned unexpected error: %v", err)
+	}
+
+	// 6. Peer must no longer appear in Peers().
+	for _, peer := range p.Peers() {
+		if peer.Name == "lw-fed-c" {
+			t.Fatal("Peers() still contains lw-fed-c after RemovePeer")
+		}
+	}
+
+	// 7. Wait 500ms and assert pingCount did not grow — the probe goroutine
+	// must have stopped after context cancellation.
+	time.Sleep(500 * time.Millisecond)
+	countAfter := fake.pingCount.Load()
+	if countAfter > countBefore {
+		t.Fatalf("Ping count increased after RemovePeer: before=%d after=%d (goroutine still running)",
+			countBefore, countAfter)
+	}
+}
