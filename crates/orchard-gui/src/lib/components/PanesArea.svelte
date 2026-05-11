@@ -117,22 +117,32 @@
 	<div class="panes-empty">
 		<div class="conv-empty">
 			<Icon name="orchard" size={28} />
-			<div style="font-size: 14px; font-weight: 500; color: var(--fg-2);">
+			<div class="text-[14px] font-medium text-fg-2">
 				No conversations open
 			</div>
 			<!-- #540 E1: button row spacing — fixed-width buttons with stable
 			     internal gaps so labels + keyboard glyphs don't collide
 			     into each other regardless of viewport width. -->
-			<div class="empty-actions mono">
-				<button class="btn-tonal empty-action" onclick={onOpenPalette}>
+			<div class="mono flex items-center justify-center flex-wrap gap-3">
+				<button
+					class="btn-tonal inline-flex items-center justify-center gap-2 min-w-[120px] px-3 py-1.5"
+					onclick={onOpenPalette}
+				>
 					<Icon name="command" size={13} />
-					<span class="action-label">Search</span>
-					<span class="action-kbd"><span class="kbd">⌘</span><span class="kbd">K</span></span>
+					<span class="flex-none">Search</span>
+					<span class="inline-flex gap-[3px] ml-1.5 opacity-70">
+						<span class="kbd">⌘</span><span class="kbd">K</span>
+					</span>
 				</button>
-				<button class="btn-tonal empty-action" onclick={onLaunch}>
+				<button
+					class="btn-tonal inline-flex items-center justify-center gap-2 min-w-[120px] px-3 py-1.5"
+					onclick={onLaunch}
+				>
 					<Icon name="plus" size={13} />
-					<span class="action-label">New</span>
-					<span class="action-kbd"><span class="kbd">⌘</span><span class="kbd">N</span></span>
+					<span class="flex-none">New</span>
+					<span class="inline-flex gap-[3px] ml-1.5 opacity-70">
+						<span class="kbd">⌘</span><span class="kbd">N</span>
+					</span>
 				</button>
 			</div>
 		</div>
@@ -149,7 +159,7 @@
 					title="Drag to resize"
 				></div>
 			{/if}
-			<div class="pane-flex" style:flex="{sizes[idx] || 1 / tabs.length} 1 0" style:min-width="0">
+			<div class="flex flex-col h-full" style:flex="{sizes[idx] || 1 / tabs.length} 1 0" style:min-width="0">
 				{#if tab.kind === "session"}
 					<SessionPane
 						paneId={tab.paneId}
@@ -193,36 +203,3 @@
 		{/each}
 	</div>
 {/if}
-
-<style>
-	.pane-flex { display: flex; flex-direction: column; height: 100%; }
-
-	/* #540 E1 — empty-state button row.
-	   Buttons get stable internal layout (icon · label · keyboard glyph)
-	   so the row reads cleanly at every viewport width. The container
-	   gaps spread with `gap: 12px` so the buttons never touch. */
-	.empty-actions {
-		display: flex;
-		gap: 12px;
-		align-items: center;
-		justify-content: center;
-		flex-wrap: wrap;
-	}
-	.empty-action {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		min-width: 120px;
-		justify-content: center;
-		padding: 6px 12px;
-	}
-	.empty-action .action-label {
-		flex: 0 0 auto;
-	}
-	.empty-action .action-kbd {
-		display: inline-flex;
-		gap: 3px;
-		margin-left: 6px;
-		opacity: 0.7;
-	}
-</style>
