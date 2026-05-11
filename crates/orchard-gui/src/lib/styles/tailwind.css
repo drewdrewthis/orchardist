@@ -64,6 +64,9 @@
   --radius-lg: 14px;
   --radius-xl: 20px;
   --radius-2xl: 28px;
+
+  /* Animations */
+  --animate-typing: typing 1.2s ease-in-out infinite;
 }
 
 /* ─── Dynamic accent tokens ───────────────────────────────────────────────
@@ -173,4 +176,22 @@
   --glass-ring: var(--shadow-glass-ring);
   /* --radius (bare) renamed to --radius-DEFAULT in @theme */
   --radius: var(--radius-DEFAULT);
+}
+
+/* ─── Component keyframes ──────────────────────────────────────────────────
+ * Keyframe animations referenced by --animate-* tokens in @theme {}.
+ * Placed here (outside @theme) so Tailwind's JIT includes them when the
+ * animate-typing utility class is present in the scanned output.
+ * ────────────────────────────────────────────────────────────────────── */
+@keyframes typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
