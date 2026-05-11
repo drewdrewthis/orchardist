@@ -40,6 +40,9 @@ fi
 is_allowlisted() {
   local file="$1"
   local entry
+  # Guard the for-loop against an empty allowlist — `set -u` makes
+  # "${allowlist[@]}" expand-error when the array has zero elements.
+  (( ${#allowlist[@]} == 0 )) && return 1
   for entry in "${allowlist[@]}"; do
     if [[ "$file" == "$entry" ]]; then
       return 0
