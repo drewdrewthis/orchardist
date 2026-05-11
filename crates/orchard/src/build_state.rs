@@ -360,46 +360,16 @@ pub fn refresh_and_build_with_walker_config(
         .map(|(h, r)| (h.clone(), HostState { reachable: *r }))
         .collect();
 
-    // Refresh remote sources in parallel. Worktree refreshes fan out by
-    // (repo, remote) pair; adapter-routed tmux refreshes fan out once per
-    // unique host (picking any (repo, remote) whose host matches). Each
-    // writes its own cache file so no coordination is needed.
-    let tmux_dispatch: Vec<(
-        &crate::global_config::RepoConfig,
-        &crate::global_config::RemoteConfig,
-    )> = {
-        let mut seen = HashSet::new();
-        config
-            .repos
-            .iter()
-            .flat_map(|r| r.remotes.iter().map(move |rm| (r, rm)))
-            .filter(|(_, rm)| {
-                hosts.get(&rm.host).map(|s| s.reachable).unwrap_or(false)
-                    && seen.insert(rm.host.clone())
-            })
-            .collect()
-    };
-    std::thread::scope(|s| {
-        for repo in &config.repos {
-            for remote in &repo.remotes {
-                let reachable = hosts
-                    .get(&remote.host)
-                    .map(|st| st.reachable)
-                    .unwrap_or(false);
-                if reachable {
-                    s.spawn(move || {
-                        let _ = cache_sources::refresh_remote_worktrees(repo, remote);
-                    });
-                }
-            }
-        }
-        for (repo, remote) in &tmux_dispatch {
-            s.spawn(move || {
-                let old_hosts = cache_sources::snapshot_fork_hosts_for_remote(repo, remote);
-                let _ = cache_sources::refresh_remote_tmux_sessions(repo, remote, &old_hosts);
-            });
-        }
-    });
+    let reachable: HashSet<String> = probe_results
+        .iter()
+        .filter_map(|(h, r)| if *r { Some(h.clone()) } else { None })
+        .collect();
+
+    // Refresh remote sources via the shared post-probe pipeline (see
+    // `sources::refresh`). Fans out worktree + tmux refresh per reachable
+    // (repo, remote), takes fork-host snapshots BEFORE worktree refresh,
+    // dedups tmux by `{kind}:{host}`.
+    sources::refresh::refresh_remotes_for_reachable_hosts(config, &reachable);
 
     // Build base state from local caches and one-hop remotes.
     let mut state = build_state_with_hosts(config, &hosts);
