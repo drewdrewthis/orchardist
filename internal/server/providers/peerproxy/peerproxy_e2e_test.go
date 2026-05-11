@@ -891,11 +891,15 @@ func TestEndToEnd_AddingPeerSurfacesInGraphQL(t *testing.T) {
 		t.Fatalf("lw-fed-c never appeared in host.peers within 2s; last response: %v", lastEnvelope)
 	}
 
-	// 10. Provider.Start spawned a runPeer goroutine for lw-fed-c which calls
-	// Probe() immediately. The fake server counts all POST /graphql requests;
-	// at least one Ping must have landed.
+	// 10. AddPeer registers the adapter in the map (making it visible in
+	// host.peers) BEFORE the spawned runPeer goroutine's first Probe lands.
+	// Retry briefly: the Ping should arrive within a short window.
+	pingDeadline := time.Now().Add(500 * time.Millisecond)
+	for fakeFedC.pingCount.Load() < 1 && time.Now().Before(pingDeadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if fakeFedC.pingCount.Load() < 1 {
-		t.Fatalf("no Ping to lw-fed-c observed after it appeared in host.peers (pingCount=%d)", fakeFedC.pingCount.Load())
+		t.Fatalf("no Ping to lw-fed-c observed within 500ms after it appeared in host.peers (pingCount=%d)", fakeFedC.pingCount.Load())
 	}
 
 	// 11. orchard.boxd.sh must still be present — adding a peer must not evict
