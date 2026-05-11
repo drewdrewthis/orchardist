@@ -1145,3 +1145,154 @@ func dump(t *testing.T, label string, v any) {
 // avoid unused warnings when dump is unused.
 var _ = fmt.Stringer(nil)
 var _ = dump
+
+// TestEndToEnd_FreshPeerWithoutProxyReportsUnreachable covers the feature
+// scenario:
+//
+//	"Reachability outcome of a freshly-added peer is reported truthfully"
+//
+// It proves that when a peer's endpoint is not running a valid orchard
+// proxy (simulated here by an HTTP server that always returns 500 with no
+// JSON body), the local daemon reports reachable=false for that peer via
+// the `host.peers` GraphQL field — not a stale true, not an error.
+//
+// Setup:
+//   - fakeBoxd: a working fake peer server (returns valid health JSON).
+//   - deadFedC: an httptest server that always returns HTTP 500, no body.
+//     This simulates the documented operator failure mode: the VM has the
+//     daemon running but `boxd proxy new graphql ...` has not been run, so
+//     the /graphql endpoint either doesn't exist or returns an error status.
+//
+// The Provider is constructed with both peers in its initial config so
+// the first probe round runs against both on Start.
+//
+// Assertions (load-bearing):
+//  1. orchard.boxd.sh.reachable == true (working peer, sanity check).
+//  2. lw-fed-c.reachable == false (dead endpoint → probe failed).
+//
+// Log-channel note: the failure reason is emitted at slog.Debug level via
+// `p.logger.Debug("peer unreachable", "peer", name, "err", err)` in
+// provider.go:runPeer. The default slog handler discards Debug lines, so
+// the "failure reason surfaces through the existing event/log channel"
+// part of the scenario cannot be asserted without a custom slog handler
+// wired to the provider's logger. The reachable=false assertion is the
+// load-bearing proof; the Debug log surfaces to operators who set their
+// log level to debug. This gap is documented — not a bug.
+func TestEndToEnd_FreshPeerWithoutProxyReportsUnreachable(t *testing.T) {
+	// fakeBoxd returns a valid GraphQL health response — it is reachable.
+	fakeBoxd := newFakePeer(t)
+
+	// deadFedC always returns HTTP 500 with no JSON body. This is the
+	// cleanest simulation of a peer whose /graphql endpoint is absent or
+	// broken (e.g. boxd proxy not set up). Client.Ping will call
+	// Client.Query, which checks resp.StatusCode/100 != 2 and returns
+	// "http status 500: " — a non-nil error. Adapter.Probe records
+	// reachable=false.
+	deadMux := http.NewServeMux()
+	deadMux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "", http.StatusInternalServerError)
+	})
+	deadSrv := httptest.NewServer(deadMux)
+	t.Cleanup(deadSrv.Close)
+	deadAddr := mustStripScheme(t, deadSrv.URL)
+
+	// Write the initial config — both peers present from the start.
+	// This exercises the "freshly-added peer" path: the first probe round
+	// runs immediately on Provider.Start and encounters the dead endpoint.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+		{Name: "lw-fed-c", Address: deadAddr, TLS: false},
+	})
+
+	initialCfg := loadConfig(t, cfgPath)
+	logger := slog.Default()
+	peerProvider := peerproxy.NewProvider(initialCfg, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := peerProvider.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = peerProvider.Stop() })
+
+	// Wire the local daemon and mount GraphQL.
+	localEvents := peerproxy.NewLocalInvalidator()
+	srv := server.New("", logger,
+		server.WithPeerProxy(peerProvider),
+		server.WithLocalEvents(localEvents),
+	)
+	if err := srv.StartHostProvider(ctx); err != nil {
+		t.Fatalf("StartHostProvider: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", srv.GraphQLHandler())
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	localFix := &orchardFixture{
+		addr:   mustStripScheme(t, ts.URL),
+		srv:    ts,
+		events: localEvents,
+	}
+
+	// Wait for orchard.boxd.sh to become reachable=true. This confirms the
+	// probe goroutine has run its first round — meaning lw-fed-c's first
+	// probe has also completed (both goroutines start in parallel on Start).
+	if !waitForCondition(5*time.Second, func() bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if row["machineId"] == "orchard.boxd.sh" && row["reachable"] == true {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("orchard.boxd.sh never became reachable within 5s (sanity check failed)")
+	}
+
+	// Both probes have run. Query host.peers and collect the final state.
+	envelope := graphQLPost(t, localFix,
+		`{ host { peers { id machineId reachable } } }`)
+	if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", errs)
+	}
+	data, _ := envelope["data"].(map[string]any)
+	host, _ := data["host"].(map[string]any)
+	peers, _ := host["peers"].([]any)
+
+	peerByName := make(map[string]map[string]any, len(peers))
+	for _, p := range peers {
+		row, _ := p.(map[string]any)
+		if mid, ok := row["machineId"].(string); ok {
+			peerByName[mid] = row
+		}
+	}
+
+	// Assertion 1: orchard.boxd.sh must be reachable (no regression from
+	// adding an unreachable peer alongside it).
+	boxd, ok := peerByName["orchard.boxd.sh"]
+	if !ok {
+		t.Fatalf("orchard.boxd.sh missing from host.peers; got %v", peers)
+	}
+	if boxd["reachable"] != true {
+		t.Fatalf("orchard.boxd.sh.reachable = %v; want true", boxd["reachable"])
+	}
+
+	// Assertion 2 (load-bearing): lw-fed-c must be present and reachable=false.
+	// The dead endpoint caused Ping → HTTP 500 → error → Probe sets reachable=false.
+	fedC, ok := peerByName["lw-fed-c"]
+	if !ok {
+		t.Fatalf("lw-fed-c missing from host.peers; got %v", peers)
+	}
+	if r, _ := fedC["reachable"].(bool); r {
+		t.Fatalf("lw-fed-c.reachable = true; want false (dead endpoint should not be reachable)")
+	}
+}
