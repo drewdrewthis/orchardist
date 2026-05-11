@@ -376,6 +376,105 @@ func TestConfigWatcher_AtomicRenameTriggersReload(t *testing.T) {
 	}
 }
 
+// TestConfigWatcher_MissingFileAtStartup verifies that Start succeeds when the
+// config file does not yet exist, that no peers are loaded until the file is
+// created, and that creating the file triggers a single LoadFederationConfig +
+// ApplyPeers cycle.
+//
+// This is the unit coverage for the feature scenario:
+// "Watcher falls back gracefully if ~/.orchard/config.json is missing at startup".
+//
+// Steps:
+//  1. Point cfgPath at a file that does not exist (parent dir created by watcher).
+//  2. Construct an empty Provider (no peers) and Start it.
+//  3. Construct a ConfigWatcher with a short debounce (50ms). Start it.
+//     Assert err == nil — the missing file must not prevent startup.
+//  4. Wait ~100ms. Assert Peers() is empty and ApplyPeersInvocationCount == 0.
+//     (No file ⇒ no fsnotify events ⇒ no reload triggered.)
+//  5. Atomically create the config file (tmp + os.Rename) with one peer "lw-fed-c".
+//  6. Poll up to (debounce + 2s) for Peers() length to reach 1.
+//  7. Assert:
+//     - Peers() has exactly one entry "lw-fed-c".
+//     - SpawnCount("lw-fed-c") == 1 (goroutine spawned exactly once).
+//     - ApplyPeersInvocationCount() == 1 (the create event triggered one reload).
+func TestConfigWatcher_MissingFileAtStartup(t *testing.T) {
+	fakeFedC := newFakePeer(t)
+
+	// 1. cfgPath points at a file that does not exist.
+	// NOTE: do NOT write any config file here — the whole point is to test
+	// the missing-file code path.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	// 2. Construct an empty Provider (no initial peers) and start it.
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 3. Start the ConfigWatcher pointing at the non-existent config path.
+	// The watcher watches the PARENT DIRECTORY, which already exists (t.TempDir
+	// creates it), so Start must succeed even though config.json is absent.
+	const debounce = 50 * time.Millisecond
+	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(), peerproxy.WithDebounce(debounce))
+	if err := cw.Start(ctx); err != nil {
+		t.Fatalf("ConfigWatcher.Start with missing file: %v", err)
+	}
+	t.Cleanup(func() { _ = cw.Close() })
+
+	// 4. Wait briefly and confirm no peers and no reload have occurred.
+	// The file does not exist → no fsnotify events → watcher is idle.
+	time.Sleep(100 * time.Millisecond)
+
+	if got := len(p.Peers()); got != 0 {
+		t.Fatalf("Peers() len = %d before file creation, want 0", got)
+	}
+	if got := cw.ApplyPeersInvocationCount(); got != 0 {
+		t.Fatalf("ApplyPeersInvocationCount() = %d before file creation, want 0", got)
+	}
+
+	// 5. Atomically create the config file with one peer "lw-fed-c".
+	// Use write-then-rename to mimic real-world atomic file creation (this
+	// also exercises the fsnotify.Create event path, not just fsnotify.Write).
+	writeConfigAtomic(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "lw-fed-c", Address: fakeFedC.addr(), TLS: false},
+	})
+
+	// 6. Poll up to (debounce + 2s) for Peers() length to reach 1.
+	deadline := time.Now().Add(debounce + 2*time.Second)
+	for time.Now().Before(deadline) {
+		if len(p.Peers()) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// 7. Assertions.
+
+	// Peers() must contain exactly "lw-fed-c".
+	peers := p.Peers()
+	if len(peers) != 1 {
+		t.Fatalf("Peers() len = %d after file creation, want 1; peers=%v", len(peers), peerNames(peers))
+	}
+	if peers[0].Name != "lw-fed-c" {
+		t.Errorf("Peers()[0].Name = %q, want %q", peers[0].Name, "lw-fed-c")
+	}
+
+	// The peer goroutine must have been spawned exactly once.
+	if got := p.SpawnCount("lw-fed-c"); got != 1 {
+		t.Fatalf("SpawnCount(\"lw-fed-c\") = %d, want 1", got)
+	}
+
+	// Exactly one ApplyPeers invocation: the Create event triggered one reload.
+	if got := cw.ApplyPeersInvocationCount(); got != 1 {
+		t.Fatalf("ApplyPeersInvocationCount() = %d, want 1 (file creation must trigger exactly one reload)", got)
+	}
+}
+
 // writeConfig serialises peers into the federation config format and writes
 // it directly to path. Use writeConfigAtomic for production-style atomicity.
 func writeConfig(t *testing.T, path string, peers []peerproxy.PeerConfig) {
