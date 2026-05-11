@@ -543,10 +543,8 @@ fn regression_heal_must_never_kill_invoking_session() {
     let sessions = vec![session("orchardist", "/tmp")];
     let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
 
-    // Pass `Some("orchardist")` as the `current_session` argument.
-    // TODAY diagnose() only accepts 5 positional args — this 6th arg is the one
-    // the fix will add. Passing it here causes a compile error, which is the
-    // expected failing-first signal for Phase 1 of TDD.
+    // Pass `Some("orchardist")` as the `current_session` field so the diagnose
+    // self-protection branch fires.
     let report = diagnose(&HealInput {
         sessions: &sessions,
         worktrees: &worktrees,
