@@ -183,6 +183,19 @@ func runStart(parentCtx context.Context, addr string) error {
 		return fmt.Errorf("load federation config: %w", err)
 	}
 	peerProvider := peerproxy.NewProvider(fedCfg, logger)
+	if err := peerProvider.Start(ctx); err != nil {
+		return fmt.Errorf("peerproxy start: %w", err)
+	}
+	defer func() { _ = peerProvider.Stop() }()
+
+	peerWatcher := peerproxy.NewConfigWatcher(cfgPath, peerProvider, logger)
+	if err := peerWatcher.Start(ctx); err != nil {
+		// Non-fatal: log and continue without hot-reload.
+		logger.Warn("peerproxy: config watcher unavailable; hot-reload disabled", "err", err)
+	} else {
+		defer func() { _ = peerWatcher.Close() }()
+	}
+
 	localEvents := peerproxy.NewLocalInvalidator()
 
 	opts := []server.Option{
