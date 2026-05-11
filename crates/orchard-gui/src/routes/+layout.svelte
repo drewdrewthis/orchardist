@@ -1,4 +1,5 @@
 <script lang="ts">
+	import "$lib/styles/tailwind.css";
 	import "$lib/styles/theme.css";
 	import "$lib/styles/layout.css";
 	import { getStore } from "$lib/store.svelte";

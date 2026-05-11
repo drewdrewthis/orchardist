@@ -1,0 +1,10 @@
+/* Tailwind v4 entry point. See docs/adr/020-tailwind-css-adoption.md. */
+@import "tailwindcss";
+
+@source not "../../../design-prototype";
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+@theme {
+  /* tokens land in the next commit (AC4) */
+}
