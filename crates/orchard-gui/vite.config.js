@@ -1,14 +1,14 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 import houdini from "houdini/vite";
+import tailwindcss from "@tailwindcss/vite";
 
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-// Houdini plugin runs first so its codegen + $houdini alias resolve before
-// SvelteKit traverses the routes (the docs explicitly call this ordering out).
+// Plugin order: houdini → sveltekit → tailwindcss. See docs/adr/020-tailwind-css-adoption.md.
 export default defineConfig(async () => ({
-  plugins: [houdini(), sveltekit()],
+  plugins: [houdini(), sveltekit(), tailwindcss()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

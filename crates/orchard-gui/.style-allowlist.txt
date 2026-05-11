@@ -1,0 +1,14 @@
+# Stop-bleed allowlist — .svelte files in crates/orchard-gui/src/lib/components/
+# that are permitted to contain a `<style>` block. See ADR-020.
+#
+# One filename per line (basename only, no path). Lines starting with `#` are
+# comments. Blank lines are ignored.
+#
+# Add an entry ONLY when the scoped style is genuinely unavoidable — typically
+# because the component hosts third-party DOM that controls its own classes
+# and Tailwind utilities cannot reach those nodes from the parent.
+#
+# When you add an entry, include the reason as a trailing comment so a future
+# reader can audit.
+
+TerminalAttach.svelte  # hosts xterm.js DOM via :global(.xterm) selectors

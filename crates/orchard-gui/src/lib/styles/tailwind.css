@@ -1,0 +1,197 @@
+/* Tailwind v4 entry point. See docs/adr/020-tailwind-css-adoption.md. */
+@import "tailwindcss";
+
+@source not "../../../design-prototype";
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* ─── Static palette + scale tokens ──────────────────────────────────────
+ * These are fixed per-theme-mode values. Dark-mode overrides live in the
+ * [data-theme="dark"] block below. --accent-hue is NOT here — it lives
+ * on :root in theme.css because +layout.svelte mutates it at runtime.
+ * ────────────────────────────────────────────────────────────────────── */
+@theme {
+  /* Background */
+  --color-bg: #fafafb;
+  --color-bg-elev: #f3f3f5;
+
+  /* Surface */
+  --color-surface: #ffffff;
+  --color-surface-2: #f7f7f9;
+  --color-surface-glass: rgba(255, 255, 255, 0.72);
+  --color-surface-glass-strong: rgba(255, 255, 255, 0.86);
+
+  /* Lines / borders */
+  --color-line: rgba(15, 15, 22, 0.07);
+  --color-line-2: rgba(15, 15, 22, 0.10);
+  --color-line-strong: rgba(15, 15, 22, 0.14);
+
+  /* Foreground */
+  --color-fg: #0e0e10;
+  --color-fg-2: rgba(14, 14, 16, 0.66);
+  --color-fg-3: rgba(14, 14, 16, 0.42);
+  --color-fg-4: rgba(14, 14, 16, 0.24);
+
+  /* Semantic: attention (amber) */
+  --color-attn: oklch(0.74 0.14 78);
+  --color-attn-soft: oklch(0.74 0.14 78 / 0.13);
+  --color-attn-fg: oklch(0.42 0.10 78);
+
+  /* Semantic: ok / success (green) */
+  --color-ok: oklch(0.66 0.13 158);
+  --color-ok-soft: oklch(0.66 0.13 158 / 0.12);
+  --color-ok-fg: oklch(0.42 0.10 158);
+
+  /* Semantic: bad / error (red) */
+  --color-bad: oklch(0.62 0.18 24);
+  --color-bad-soft: oklch(0.62 0.18 24 / 0.12);
+  --color-bad-fg: oklch(0.50 0.16 24);
+
+  /* Stale */
+  --color-stale-fg: rgba(14, 14, 16, 0.32);
+
+  /* Shadows — kept as multi-value chains under --shadow-* */
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(15, 15, 22, 0.04),
+    0 4px 14px rgba(15, 15, 22, 0.06);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 12px 40px rgba(15, 15, 22, 0.18);
+  --shadow-glass-ring: inset 0 0.5px 0 rgba(255, 255, 255, 0.7),
+    inset 0 0 0 0.5px rgba(15, 15, 22, 0.06);
+
+  /* Radii */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-DEFAULT: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+
+  /* Animations */
+  --animate-typing: typing 1.2s ease-in-out infinite;
+}
+
+/* ─── Dynamic accent tokens ───────────────────────────────────────────────
+ * These reference var(--accent-hue), which is declared on :root in theme.css
+ * and mutated at runtime by +layout.svelte. @theme inline preserves the
+ * var() reference in generated output (not inlined at build time).
+ * ────────────────────────────────────────────────────────────────────── */
+@theme inline {
+  --color-accent: oklch(0.58 0.16 var(--accent-hue));
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: oklch(0.58 0.16 var(--accent-hue) / 0.10);
+  --color-accent-line: oklch(0.58 0.16 var(--accent-hue) / 0.30);
+}
+
+/* ─── Dark-mode token overrides ───────────────────────────────────────────
+ * Overrides for [data-theme="dark"] on <html>. The @custom-variant dark
+ * declaration above wires `dark:` utilities to this same selector. These
+ * CSS custom property overrides are for the plain var(--color-*) consumers
+ * (utility classes in theme.css + non-migrated scoped styles).
+ * ────────────────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --color-bg: #0a0a0c;
+  --color-bg-elev: #131318;
+  --color-surface: #131318;
+  --color-surface-2: #1a1a20;
+  --color-surface-glass: rgba(22, 22, 28, 0.66);
+  --color-surface-glass-strong: rgba(22, 22, 28, 0.84);
+
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-2: rgba(255, 255, 255, 0.10);
+  --color-line-strong: rgba(255, 255, 255, 0.16);
+
+  --color-fg: #f4f4f7;
+  --color-fg-2: rgba(244, 244, 247, 0.68);
+  --color-fg-3: rgba(244, 244, 247, 0.42);
+  --color-fg-4: rgba(244, 244, 247, 0.22);
+
+  --color-attn: oklch(0.82 0.13 78);
+  --color-attn-soft: oklch(0.82 0.13 78 / 0.14);
+  --color-attn-fg: oklch(0.86 0.13 78);
+
+  --color-ok: oklch(0.78 0.13 158);
+  --color-ok-soft: oklch(0.78 0.13 158 / 0.14);
+  --color-ok-fg: oklch(0.82 0.12 158);
+
+  --color-bad: oklch(0.72 0.17 24);
+  --color-bad-soft: oklch(0.72 0.17 24 / 0.16);
+  --color-bad-fg: oklch(0.78 0.16 24);
+
+  --color-stale-fg: rgba(244, 244, 247, 0.32);
+
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4),
+    0 12px 40px rgba(0, 0, 0, 0.44);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 60px rgba(0, 0, 0, 0.6);
+  --shadow-glass-ring: inset 0 0.5px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.05);
+}
+
+/* ─── Dark-mode accent overrides ──────────────────────────────────────────
+ * Accent values shift in dark mode (higher lightness, lower chroma).
+ * --color-accent-fg inverts to the dark bg color.
+ * ────────────────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --color-accent: oklch(0.72 0.14 var(--accent-hue));
+  --color-accent-fg: #0a0a0c;
+  --color-accent-soft: oklch(0.72 0.14 var(--accent-hue) / 0.16);
+  --color-accent-line: oklch(0.72 0.14 var(--accent-hue) / 0.34);
+}
+
+/* ─── Backward-compat alias layer ─────────────────────────────────────────
+ * Non-migrated .svelte files and layout.css still reference the old short
+ * names (e.g. var(--fg), var(--surface)). These aliases bridge them to the
+ * canonical --color-* tokens. Remove each alias as the consumer is migrated.
+ * See: docs/adr/020-tailwind-css-adoption.md (coexistence window).
+ * ────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Color token aliases — short names → canonical --color-* names */
+  --bg: var(--color-bg);
+  --bg-elev: var(--color-bg-elev);
+  --surface: var(--color-surface);
+  --surface-1: var(--color-surface);
+  --surface-2: var(--color-surface-2);
+  --surface-glass: var(--color-surface-glass);
+  --surface-glass-strong: var(--color-surface-glass-strong);
+  --line: var(--color-line);
+  --line-2: var(--color-line-2);
+  --line-strong: var(--color-line-strong);
+  --fg: var(--color-fg);
+  --fg-2: var(--color-fg-2);
+  --fg-3: var(--color-fg-3);
+  --fg-4: var(--color-fg-4);
+  --accent: var(--color-accent);
+  --accent-fg: var(--color-accent-fg);
+  --accent-soft: var(--color-accent-soft);
+  --accent-line: var(--color-accent-line);
+  --attn: var(--color-attn);
+  --attn-soft: var(--color-attn-soft);
+  --attn-fg: var(--color-attn-fg);
+  --ok: var(--color-ok);
+  --ok-soft: var(--color-ok-soft);
+  --ok-fg: var(--color-ok-fg);
+  --bad: var(--color-bad);
+  --bad-soft: var(--color-bad-soft);
+  --bad-fg: var(--color-bad-fg);
+  --stale-fg: var(--color-stale-fg);
+  /* Renamed token alias: --glass-ring renamed to --shadow-glass-ring */
+  --glass-ring: var(--shadow-glass-ring);
+  /* --radius (bare) renamed to --radius-DEFAULT in @theme */
+  --radius: var(--radius-DEFAULT);
+}
+
+/* ─── Component keyframes ──────────────────────────────────────────────────
+ * Keyframe animations referenced by --animate-* tokens in @theme {}.
+ * Placed here (outside @theme) so Tailwind's JIT includes them when the
+ * animate-typing utility class is present in the scanned output.
+ * ────────────────────────────────────────────────────────────────────── */
+@keyframes typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}

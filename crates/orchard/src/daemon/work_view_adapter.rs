@@ -581,11 +581,7 @@ mod tests {
             pr: Option<WorkViewPr>,
             issue: Option<WorkViewIssue>,
         ) -> Self {
-            let project = self
-                .snapshot
-                .repos
-                .last_mut()
-                .expect("add a project first");
+            let project = self.snapshot.repos.last_mut().expect("add a project first");
             project.worktrees.push(WorkViewWorktree {
                 path: path.to_string(),
                 branch: branch.to_string(),

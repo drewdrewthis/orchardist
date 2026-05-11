@@ -51,8 +51,7 @@ pub fn create_worktree(
     branch: String,
 ) -> Result<String, String> {
     let root = PathBuf::from(repo_root);
-    let outcome =
-        wc::create_worktree(&root, &branch, &worktree_path).map_err(|e| e.to_string())?;
+    let outcome = wc::create_worktree(&root, &branch, &worktree_path).map_err(|e| e.to_string())?;
     Ok(match outcome {
         wc::CreateOutcome::NewBranch => "new".into(),
         wc::CreateOutcome::ExistingBranch => "existing".into(),

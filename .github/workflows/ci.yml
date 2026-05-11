@@ -67,3 +67,19 @@ jobs:
             echo "::error::schema.json is out of sync. Run 'cargo build -p orchard' and commit the updated crates/orchard/schema.json."
             exit 1
           fi
+
+  gui-stop-bleed:
+    name: GUI stop-bleed (no new <style> blocks)
+    runs-on: ubuntu-latest
+    # Per ADR-020, new orchard-gui components must use Tailwind utilities,
+    # not scoped <style> blocks. This guard enforces the rule on PRs.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0  # need history to diff against base
+      - name: Run stop-bleed check
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          git fetch origin "$BASE_REF" --depth=1 || true
+          crates/orchard-gui/scripts/stop-bleed-check.sh "origin/$BASE_REF"

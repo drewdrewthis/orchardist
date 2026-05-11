@@ -56,6 +56,8 @@
 			.replace(/(`[^`]+`)/g, (m) => `<code class="mono inline-code">${m.slice(1, -1)}</code>`)
 			.replace(
 				/(#\d+)/g,
+				// Dynamic-accent pattern (ADR-020): inline style consumes var(--accent), which is bridged
+				// from @theme inline {} and tracks --accent-hue runtime mutation.
 				(m) => `<span class="mono" style="color:var(--accent);font-weight:500;">${m}</span>`,
 			)
 			.replace(/\n/g, "<br/>");
@@ -63,23 +65,22 @@
 </script>
 
 <div
-	class="chat-msg fadeIn"
-	class:grouped
-	class:is-user={isUser}
-	class:is-agent={!isUser}
-	class:is-question={msg.isQuestion}
-	class:is-paused={msg.isPaused}
+	class="fadeIn grid grid-cols-[30px_1fr] gap-2.5 px-3 relative group"
+	class:py-1={!grouped}
+	class:my-1.5={!grouped}
+	class:py-0={grouped}
+	class:m-0={grouped}
 >
-	<div class="chat-msg-gutter">
+	<div>
 		{#if !grouped}
 			<Avatar kind={msg.role} size={22} />
 		{/if}
 	</div>
-	<div class="chat-msg-body">
+	<div>
 		{#if !grouped}
-			<div class="chat-msg-meta">
-				<span class="chat-msg-name">{displayName}</span>
-				<span class="dimest mono" style:font-size="10.5px">{shortTime(msg.ts)}</span>
+			<div class="flex items-baseline gap-2 mb-1">
+				<span class="font-semibold text-[13px] tracking-tight">{displayName}</span>
+				<span class="dimest mono text-[10.5px]">{shortTime(msg.ts)}</span>
 				{#if msg.isQuestion}
 					<span class="chip attn" style="height: 16px; font-size: 10px; padding: 0 6px;">
 						<Icon name="question" size={9} /> open question
@@ -92,14 +93,31 @@
 				{/if}
 			</div>
 		{/if}
-		<div class="chat-msg-bubble">
+		<div
+			class="text-[13.5px] leading-[1.5] tracking-[-0.005em]"
+			class:text-fg={isUser && !msg.isQuestion && !msg.isPaused}
+			class:text-fg-2={!isUser && !msg.isQuestion && !msg.isPaused}
+			class:bg-attn-soft={msg.isQuestion}
+			class:border-l-2={msg.isQuestion}
+			class:border-attn={msg.isQuestion}
+			class:px-3.5={msg.isQuestion}
+			class:py-2.5={msg.isQuestion}
+			class:rounded-r-lg={msg.isQuestion}
+			class:text-attn-fg={msg.isQuestion}
+			class:italic={msg.isPaused}
+			class:text-fg-3={msg.isPaused}
+		>
 			{#if msg.typing}
-				<span class="typing-dots"><i></i><i></i><i></i></span>
+				<span class="inline-flex gap-[3px] items-center h-[18px]">
+					<i class="w-[5px] h-[5px] rounded-full bg-fg-3 animate-typing"></i>
+					<i class="w-[5px] h-[5px] rounded-full bg-fg-3 animate-typing [animation-delay:0.15s]"></i>
+					<i class="w-[5px] h-[5px] rounded-full bg-fg-3 animate-typing [animation-delay:0.3s]"></i>
+				</span>
 			{:else}
 				{@html linkify(msg.text)}
 			{/if}
 			{#if msg.tools && msg.tools.length > 0}
-				<div class="chat-msg-tools">
+				<div class="inline-flex gap-1 flex-wrap mt-1.5">
 					{#each msg.tools as t}
 						<span class="chip ghost" style="height: 18px; font-size: 10.5px; padding: 0 6px;">
 							<Icon name="bolt" size={9} /><span class="mono">{t}</span>
@@ -108,32 +126,40 @@
 				</div>
 			{/if}
 			{#if msg.diff}
-				<div class="chat-msg-diff mono">
-					<span style="color: var(--ok-fg);">+{msg.diff.plus}</span>
-					<span style="color: var(--bad-fg);">−{msg.diff.minus}</span>
+				<div class="mono inline-flex items-center gap-2 mt-2 px-2.5 py-1.5 bg-surface-2 border-[0.5px] border-line rounded-[7px] text-[11.5px]">
+					<span class="text-ok-fg">+{msg.diff.plus}</span>
+					<span class="text-bad-fg">−{msg.diff.minus}</span>
 					<span class="dimer">across {msg.diff.files} files</span>
 				</div>
 			{/if}
 		</div>
 		{#if isUser}
-			<div class="chat-msg-status">
+			<div class="inline-flex items-center mt-1">
 				<SendStatus status={msg.status} variant={statusVariant} />
 			</div>
 		{/if}
 		{#if showActions}
-			<div class="chat-msg-actions" role="group" aria-label="Message actions">
-				<button class="chat-msg-action" onclick={doCopy} title={copied ? "Copied" : "Copy"}>
+			<div
+				class="absolute top-1 right-2 inline-flex gap-0.5 p-0.5 bg-surface border-[0.5px] border-line rounded-[7px] shadow-[0_2px_8px_rgba(0,0,0,0.06)] opacity-0 -translate-y-0.5 transition duration-100 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto"
+				role="group"
+				aria-label="Message actions"
+			>
+				<button
+					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition duration-100 hover:bg-fg/[0.07] hover:text-fg"
+					onclick={doCopy}
+					title={copied ? "Copied" : "Copy"}
+				>
 					<Icon name={copied ? "check" : "copy"} size={11} />
 				</button>
 				<button
-					class="chat-msg-action"
+					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition duration-100 hover:bg-fg/[0.07] hover:text-fg"
 					onclick={() => onForkFrom(idx, msg)}
 					title="Fork from here"
 				>
 					<Icon name="git-fork" size={11} />
 				</button>
 				<button
-					class="chat-msg-action chat-msg-action-danger"
+					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition hover:bg-fg/[0.07] hover:text-bad-fg"
 					onclick={() => onReset(idx, msg)}
 					title="Reset from here"
 				>
@@ -143,37 +169,3 @@
 		{/if}
 	</div>
 </div>
-
-<style>
-	.typing-dots {
-		display: inline-flex;
-		gap: 3px;
-		align-items: center;
-		height: 18px;
-	}
-	.typing-dots i {
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: var(--fg-3);
-		animation: typing 1.2s ease-in-out infinite;
-	}
-	.typing-dots i:nth-child(2) {
-		animation-delay: 0.15s;
-	}
-	.typing-dots i:nth-child(3) {
-		animation-delay: 0.3s;
-	}
-	@keyframes typing {
-		0%,
-		80%,
-		100% {
-			opacity: 0.3;
-			transform: translateY(0);
-		}
-		40% {
-			opacity: 1;
-			transform: translateY(-2px);
-		}
-	}
-</style>
