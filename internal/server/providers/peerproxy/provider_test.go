@@ -444,6 +444,106 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 	}
 }
 
+// TestApplyPeers_TLSChangeRemoveAdd is the unit coverage for the scenario
+// "TLS flag change is treated as remove + add".
+//
+// When ApplyPeers sees the same peer name with TLS toggled from false → true,
+// it must perform a remove+add (not an in-place mutation). A TLS toggle
+// would require rewriting the http.Client transport and websocket dialer
+// mid-flight; remove+add keeps that lifecycle clean.
+//
+// Steps:
+//  1. NewProvider with no peers, Start.
+//  2. AddPeer "lw-fed-c" with TLS: false, pointing at the fake server. Wait for
+//     at least one ping.
+//  3. Snapshot SpawnCount — must be 1.
+//  4. Build new config: same name, same address, but TLS: true.
+//  5. Call ApplyPeers. Assert err == nil.
+//  6. Assert SpawnCount("lw-fed-c") == 2 (goroutine re-spawned).
+//  7. Assert Peers() still has exactly one "lw-fed-c" entry.
+//  8. Assert the live PeerConfig's TLS field is now true.
+func TestApplyPeers_TLSChangeRemoveAdd(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakePeer(t)
+
+	// 1. Construct an empty provider and start it.
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 2. AddPeer "lw-fed-c" with TLS: false.
+	if err := p.AddPeer(peerproxy.PeerConfig{
+		Name:    "lw-fed-c",
+		Address: fake.addr(),
+		TLS:     false,
+	}); err != nil {
+		t.Fatalf("AddPeer: %v", err)
+	}
+
+	// Wait for at least one ping to confirm the goroutine is live.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fake.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fake.pingCount.Load() < 1 {
+		t.Fatalf("initial probe goroutine did not issue a Ping within 200ms")
+	}
+
+	// 3. Snapshot SpawnCount — must be 1 before the TLS change.
+	if got := p.SpawnCount("lw-fed-c"); got != 1 {
+		t.Fatalf("SpawnCount before ApplyPeers = %d, want 1", got)
+	}
+
+	// 4. Build new config: same name, same address, TLS toggled to true.
+	newCfg := peerproxy.FederationConfig{
+		Peers: []peerproxy.PeerConfig{
+			{Name: "lw-fed-c", Address: fake.addr(), TLS: true},
+		},
+	}
+
+	// 5. Apply the diff. Must succeed.
+	if err := p.ApplyPeers(newCfg); err != nil {
+		t.Fatalf("ApplyPeers returned unexpected error: %v", err)
+	}
+
+	// 6. SpawnCount must be 2 — the goroutine was re-spawned.
+	if got := p.SpawnCount("lw-fed-c"); got != 2 {
+		t.Fatalf("SpawnCount after ApplyPeers = %d, want 2 (goroutine must be re-spawned on TLS change)", got)
+	}
+
+	// 7. Peers() must still contain exactly one "lw-fed-c" entry.
+	peers := p.Peers()
+	var count int
+	for _, peer := range peers {
+		if peer.Name == "lw-fed-c" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("Peers() has %d entries for \"lw-fed-c\", want exactly 1; got %v", count, peerNames(peers))
+	}
+
+	// 8. The live PeerConfig's TLS field must now be true.
+	var liveTLS bool
+	for _, peer := range peers {
+		if peer.Name == "lw-fed-c" {
+			liveTLS = peer.TLS
+		}
+	}
+	if !liveTLS {
+		t.Fatal("live PeerConfig.TLS = false, want true after ApplyPeers with TLS: true")
+	}
+}
+
 // peerNames extracts peer names for readable failure messages.
 func peerNames(peers []peerproxy.PeerConfig) []string {
 	names := make([]string, len(peers))

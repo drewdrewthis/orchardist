@@ -297,10 +297,12 @@ func (p *Provider) SpawnCount(name string) int {
 // in fields that are not observable at runtime (e.g. ordering within a
 // slice) are still considered equal.
 //
-// Currently compared: Name and Address. TLS comparison is added in the
-// next scenario — extend this function when that test is added.
+// Compared: Name, Address, and TLS. A TLS toggle cannot be applied
+// in-place — it would require rewriting the http.Client's transport AND
+// the websocket dialer mid-flight. Treating it as remove+add keeps that
+// lifecycle clean and predictable.
 func peerConfigEqual(a, b PeerConfig) bool {
-	return a.Name == b.Name && a.Address == b.Address
+	return a.Name == b.Name && a.Address == b.Address && a.TLS == b.TLS
 }
 
 // ApplyPeers diffs the current peer set against cfg and issues the minimum
