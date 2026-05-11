@@ -1296,3 +1296,192 @@ func TestEndToEnd_FreshPeerWithoutProxyReportsUnreachable(t *testing.T) {
 		t.Fatalf("lw-fed-c.reachable = true; want false (dead endpoint should not be reachable)")
 	}
 }
+
+// TestEndToEnd_OrchardBoxdSurvivesChurn is the E2E proof for the AC4 scenario:
+//
+//	"`orchard.boxd.sh` keeps probing through repeated config reloads"
+//
+// The test drives the full stack end-to-end: a real daemon, a real config file
+// watched by ConfigWatcher, and real GraphQL queries. It performs 5 cycles of
+// "add a churn peer, then remove it" (10 config edits total) and asserts that
+// `orchard.boxd.sh` was never removed from the peer map by `ApplyPeers` —
+// verified by `SpawnCount("orchard.boxd.sh") == 1` throughout.
+//
+// Steps:
+//  1. Start fakeBoxd + fakChurn (shared server for all churn-* names).
+//  2. Write initial config: [orchard.boxd.sh].
+//  3. Construct Provider; start it; start ConfigWatcher (100ms debounce).
+//  4. Wire server.New + mount GraphQL on httptest.
+//  5. Wait for orchard.boxd.sh to be reachable=true.
+//  6. Capture SpawnCount("orchard.boxd.sh") == 1.
+//  7. For each of 5 churn names:
+//     a. Write config: [orchard.boxd.sh, churn-N]. Wait for churn-N in GraphQL.
+//     b. Write config: [orchard.boxd.sh]. Wait for churn-N to disappear.
+//  8. Assert SpawnCount("orchard.boxd.sh") is still 1.
+//  9. Assert host.peers contains orchard.boxd.sh with reachable=true.
+// 10. Assert no churn-* names remain in host.peers.
+func TestEndToEnd_OrchardBoxdSurvivesChurn(t *testing.T) {
+	// 1. fakeBoxd is the fake orchard.boxd.sh endpoint. fakeChurn serves all
+	// churn-* names — they all point at the same address because the provider
+	// deduplicates by name, not address.
+	fakeBoxd := newFakePeer(t)
+	fakeChurn := newFakePeer(t)
+
+	// 2. Write the initial config — only orchard.boxd.sh.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+	})
+
+	// 3. Construct provider from the on-disk config.
+	initialCfg := loadConfig(t, cfgPath)
+	logger := slog.Default()
+	peerProvider := peerproxy.NewProvider(initialCfg, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := peerProvider.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = peerProvider.Stop() })
+
+	const debounce = 100 * time.Millisecond
+	cw := peerproxy.NewConfigWatcher(cfgPath, peerProvider, logger,
+		peerproxy.WithDebounce(debounce))
+	if err := cw.Start(ctx); err != nil {
+		t.Fatalf("ConfigWatcher.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = cw.Close() })
+
+	// 4. Wire the local daemon and mount GraphQL.
+	localEvents := peerproxy.NewLocalInvalidator()
+	srv := server.New("", logger,
+		server.WithPeerProxy(peerProvider),
+		server.WithLocalEvents(localEvents),
+	)
+	if err := srv.StartHostProvider(ctx); err != nil {
+		t.Fatalf("StartHostProvider: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", srv.GraphQLHandler())
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	localFix := &orchardFixture{
+		addr:   mustStripScheme(t, ts.URL),
+		srv:    ts,
+		events: localEvents,
+	}
+
+	// peerNamesInGraphQL polls host.peers and returns the set of machineId values.
+	peerNamesInGraphQL := func() map[string]bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { id machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		names := make(map[string]bool, len(peers))
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if mid, _ := row["machineId"].(string); mid != "" {
+				names[mid] = true
+			}
+		}
+		return names
+	}
+
+	// 5. Wait for orchard.boxd.sh to appear with reachable=true. The supervisor
+	// probes on Start; once it lands the reachable bit flips.
+	if !waitForCondition(5*time.Second, func() bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if row["machineId"] == "orchard.boxd.sh" && row["reachable"] == true {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("orchard.boxd.sh never became reachable=true within 5s (initial round-trip failed)")
+	}
+
+	// 6. SpawnCount for orchard.boxd.sh must be exactly 1 after the initial start.
+	if sc := peerProvider.SpawnCount("orchard.boxd.sh"); sc != 1 {
+		t.Fatalf("expected SpawnCount(orchard.boxd.sh) == 1 after Start, got %d", sc)
+	}
+
+	// 7. Five add+remove cycles. churn-N all share fakeChurn's address —
+	// provider deduplication is by name, so this is safe.
+	for i := 1; i <= 5; i++ {
+		churnName := fmt.Sprintf("churn-%d", i)
+
+		// 7a. Add churn peer — write [orchard.boxd.sh, churn-N].
+		writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+			{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+			{Name: churnName, Address: fakeChurn.addr(), TLS: false},
+		})
+
+		if !waitForCondition(2*time.Second, func() bool {
+			return peerNamesInGraphQL()[churnName]
+		}) {
+			t.Fatalf("cycle %d: %s never appeared in host.peers within 2s", i, churnName)
+		}
+
+		// 7b. Remove churn peer — write [orchard.boxd.sh].
+		writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+			{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+		})
+
+		if !waitForCondition(2*time.Second, func() bool {
+			return !peerNamesInGraphQL()[churnName]
+		}) {
+			t.Fatalf("cycle %d: %s still present in host.peers after 2s", i, churnName)
+		}
+	}
+
+	// 8. After all 10 config edits, orchard.boxd.sh must have been left untouched
+	// throughout — SpawnCount still == 1.
+	if sc := peerProvider.SpawnCount("orchard.boxd.sh"); sc != 1 {
+		t.Fatalf("SpawnCount(orchard.boxd.sh) = %d after 5 churn cycles; want 1 (goroutine must not have been restarted)", sc)
+	}
+
+	// 9. orchard.boxd.sh must still appear as reachable=true in the final response.
+	finalEnvelope := graphQLPost(t, localFix,
+		`{ host { peers { id machineId reachable } } }`)
+	if errs, ok := finalEnvelope["errors"].([]any); ok && len(errs) > 0 {
+		t.Fatalf("unexpected GraphQL errors in final check: %v", errs)
+	}
+	finalData, _ := finalEnvelope["data"].(map[string]any)
+	finalHost, _ := finalData["host"].(map[string]any)
+	finalPeers, _ := finalHost["peers"].([]any)
+
+	peerByName := make(map[string]map[string]any, len(finalPeers))
+	for _, p := range finalPeers {
+		row, _ := p.(map[string]any)
+		if mid, ok := row["machineId"].(string); ok {
+			peerByName[mid] = row
+		}
+	}
+
+	boxd, ok := peerByName["orchard.boxd.sh"]
+	if !ok {
+		t.Fatalf("orchard.boxd.sh missing from host.peers after 5 churn cycles; got %v", finalPeers)
+	}
+	if boxd["reachable"] != true {
+		t.Fatalf("orchard.boxd.sh.reachable = %v after churn; want true", boxd["reachable"])
+	}
+
+	// 10. No churn-* peers should remain in the final response.
+	for i := 1; i <= 5; i++ {
+		churnName := fmt.Sprintf("churn-%d", i)
+		if _, found := peerByName[churnName]; found {
+			t.Fatalf("%s still present in host.peers after final remove; peers=%v", churnName, finalPeers)
+		}
+	}
+}
