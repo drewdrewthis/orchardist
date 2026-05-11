@@ -125,14 +125,19 @@ func TestComposer_Compose_Working(t *testing.T) {
 	}
 }
 
-// TestComposer_Compose_StaleHeartbeat asserts a fresh-state heartbeat
-// from > staleAfter ago collapses to no_claude — covers the briefing's
-// "touch a heartbeat backward → state goes to no_claude" assertion.
-func TestComposer_Compose_StaleHeartbeat(t *testing.T) {
+// TestComposer_Compose_StaleHeartbeatAlivePidTrustsState asserts that a
+// stale heartbeat whose tracked pid is still alive does NOT collapse to
+// no_claude — the orchard hook is event-driven, so an idle session
+// legitimately stops heartbeating between events. The last-known state
+// (working/idle/input) survives so long as the pid is verifiably alive.
+//
+// Regression: prior to fix(claudeinstances) this returned no_claude for
+// every idle session past 30s, masking the entire fleet as dead (#421, #501).
+func TestComposer_Compose_StaleHeartbeatAlivePidTrustsState(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
-		TmuxSession:     "stale",
-		State:           "working",
+		TmuxSession:     "stale-but-alive",
+		State:           "input",
 		ClaudePid:       11,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -152,8 +157,105 @@ func TestComposer_Compose_StaleHeartbeat(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("got %d, want 1", len(out))
 	}
+	if out[0].State != graphql.InstanceStateInput {
+		t.Errorf("state = %s, want input (stale heartbeat but pid alive)", out[0].State)
+	}
+}
+
+// TestComposer_Compose_StaleHeartbeatDeadPidNoClaude asserts a stale
+// heartbeat AND a dead tracked pid AND no live pid in the pane collapses
+// to no_claude — the session is genuinely gone.
+func TestComposer_Compose_StaleHeartbeatDeadPidNoClaude(t *testing.T) {
+	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
+	hb := Heartbeat{
+		TmuxSession:     "stale-dead",
+		State:           "working",
+		ClaudePid:       11,
+		Timestamp:       now.Add(-2 * time.Minute),
+		LastHeartbeatAt: now.Add(-2 * time.Minute),
+	}
+
+	c := NewComposerWith(
+		"local",
+		nil,
+		nil,
+		nil,
+		fakeLiveness{alive: map[int]bool{11: false}},
+		nil,
+		func() time.Time { return now },
+		30*time.Second,
+	)
+	out := c.Compose(context.Background(), []Heartbeat{hb})
 	if out[0].State != graphql.InstanceStateNoClaude {
-		t.Errorf("state = %s, want no_claude", out[0].State)
+		t.Errorf("state = %s, want no_claude (stale + dead pid)", out[0].State)
+	}
+}
+
+// TestComposer_Compose_StaleHeartbeatNoPidNoClaude asserts that when
+// staleness applies AND no pid is available anywhere (heartbeat pid==0,
+// pane CurrentPid==nil), the state collapses to no_claude — we have no
+// way to verify the session is still alive, so the conservative call
+// stands.
+func TestComposer_Compose_StaleHeartbeatNoPidNoClaude(t *testing.T) {
+	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
+	hb := Heartbeat{
+		TmuxSession:     "stale-pidless",
+		State:           "working",
+		ClaudePid:       0,
+		Timestamp:       now.Add(-2 * time.Minute),
+		LastHeartbeatAt: now.Add(-2 * time.Minute),
+	}
+
+	c := NewComposerWith(
+		"local",
+		nil,
+		nil,
+		nil,
+		fakeLiveness{},
+		nil,
+		func() time.Time { return now },
+		30*time.Second,
+	)
+	out := c.Compose(context.Background(), []Heartbeat{hb})
+	if out[0].State != graphql.InstanceStateNoClaude {
+		t.Errorf("state = %s, want no_claude (stale + no pid)", out[0].State)
+	}
+}
+
+// TestComposer_Compose_RespawnedInSamePane asserts that when ralph-loop
+// (or any restart-in-place workflow) replaces the Claude process inside
+// the same tmux pane — old pid dies, new pid takes over — the composer
+// reports the session as alive rather than no_claude. Even though the
+// heartbeat tracks the dead pid, the pane's current foreground pid is
+// alive and belongs to a claude process, so the instance is not dead.
+//
+// Regression for #421: prior to fix, the daemon collapsed to no_claude
+// the moment the tracked pid died, even though `tmux capture-pane`
+// showed a live Claude REPL in the same pane.
+func TestComposer_Compose_RespawnedInSamePane(t *testing.T) {
+	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
+	hb := Heartbeat{
+		TmuxSession:     "respawned",
+		State:           "working",
+		ClaudePid:       100, // old, dead
+		Timestamp:       now.Add(-3 * time.Second),
+		LastHeartbeatAt: now.Add(-3 * time.Second),
+	}
+	newPid := int64(200) // pane now hosts a new claude
+	pane := &graphql.TmuxPane{ID: "TmuxPane:local:%99", CurrentPid: &newPid}
+	c := NewComposerWith(
+		"local",
+		&fakePaneFinder{byPid: map[int]*graphql.TmuxPane{100: pane}},
+		nil,
+		nil,
+		fakeLiveness{alive: map[int]bool{100: false, 200: true}},
+		nil,
+		func() time.Time { return now },
+		HeartbeatStaleAfter,
+	)
+	out := c.Compose(context.Background(), []Heartbeat{hb})
+	if out[0].State != graphql.InstanceStateWorking {
+		t.Errorf("state = %s, want working (pane respawn: heartbeat pid dead but new pid alive in same pane)", out[0].State)
 	}
 }
 

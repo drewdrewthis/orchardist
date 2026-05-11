@@ -185,8 +185,11 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 		t.Error("bravo rcEnabled = true, want false")
 	}
 
-	// -------- Phase 2: touch alpha heartbeat backward → no_claude.
-	// Rewrite alpha's content with an old timestamp; refresh; re-query.
+	// -------- Phase 2: touch alpha heartbeat backward but keep pid alive.
+	// Hook is event-driven so an idle session legitimately stops
+	// heartbeating; as long as the tracked pid is alive, the dashboard
+	// must keep showing the last-known state (working) — NOT collapse to
+	// no_claude. Cf. #421, #501.
 	staleTimestamp := now.Add(-2 * time.Minute).Format(time.RFC3339)
 	writeHeartbeat(t, heartbeatDir, "alpha", map[string]any{
 		"tmux_session":    "alpha",
@@ -210,11 +213,29 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 	for _, inst := range resp2.Data.ClaudeInstances {
 		staleByID[inst.ID] = inst.State
 	}
-	if got := staleByID["ClaudeInstance:local:10042"]; got != "no_claude" {
-		t.Errorf("alpha state after staling = %q, want no_claude", got)
+	if got := staleByID["ClaudeInstance:local:10042"]; got != "working" {
+		t.Errorf("alpha state after staling (pid still alive) = %q, want working", got)
 	}
 	if got := staleByID["ClaudeInstance:local:10099"]; got != "idle" {
 		t.Errorf("bravo state should still be idle, got %q", got)
+	}
+
+	// -------- Phase 3: alpha pid dies. Now the session is genuinely gone.
+	// Stale heartbeat + dead pid + no other live pid in the pane = no_claude.
+	liveness.alive[10042] = false
+	if err := provider.Refresh(context.Background(), "test-dead"); err != nil {
+		t.Fatalf("refresh after dead pid: %v", err)
+	}
+	resp3 := postQuery(t, srv.URL, `query { claudeInstances { id state } }`)
+	if len(resp3.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp3.Errors)
+	}
+	deadByID := map[string]string{}
+	for _, inst := range resp3.Data.ClaudeInstances {
+		deadByID[inst.ID] = inst.State
+	}
+	if got := deadByID["ClaudeInstance:local:10042"]; got != "no_claude" {
+		t.Errorf("alpha state after dead pid = %q, want no_claude", got)
 	}
 }
 
