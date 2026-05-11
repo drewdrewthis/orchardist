@@ -11,6 +11,41 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 )
 
+// TestAddPeerCmd_HelpMentionsPrerequisite asserts that the Long help text of
+// `orchard config add-peer` names both prerequisites an operator must satisfy
+// before adding a peer VM: the boxd proxy command and the orchard-daemon requirement.
+func TestAddPeerCmd_HelpMentionsPrerequisite(t *testing.T) {
+	cmd := addPeerCmd()
+	long := cmd.Long
+	for _, want := range []string{
+		"boxd proxy new graphql --vm",
+		"orchard-daemon",
+	} {
+		if !strings.Contains(long, want) {
+			t.Errorf("add-peer Long help missing prerequisite string %q", want)
+		}
+	}
+}
+
+// TestAdrMentionsPrerequisite guards ADR-021 against having the prerequisite
+// strings accidentally removed. If someone deletes these from the ADR, CI fails.
+func TestAdrMentionsPrerequisite(t *testing.T) {
+	// internal/cli/config/ is three levels below the repo root.
+	adrPath := filepath.Join("..", "..", "..", "docs", "adr", "021-federation-peers-hot-reload.md")
+	data, err := os.ReadFile(adrPath)
+	if err != nil {
+		t.Fatalf("read ADR-021: %v", err)
+	}
+	for _, want := range []string{
+		"boxd proxy new graphql --vm",
+		"orchard-daemon",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("ADR-021 missing prerequisite string %q", want)
+		}
+	}
+}
+
 // readPeeredConfig is a test helper — round-trip the on-disk JSON back
 // into peeredFile so assertions can read both repos and peer fields.
 func readPeeredConfig(t *testing.T, home string) peeredFile {
