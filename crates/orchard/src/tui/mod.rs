@@ -823,10 +823,7 @@ impl App {
             // `{kind}:{host}`, matching this site's previous behavior.
             // Daemon Workstream F will retire this path once per-peer data
             // lives in WorkView.
-            crate::sources::refresh::refresh_remotes_for_reachable_hosts(
-                &config,
-                &reachable_hosts,
-            );
+            crate::sources::refresh::refresh_remotes_for_reachable_hosts(&config, &reachable_hosts);
 
             // Ensure a main tmux session exists for each configured repo.
             ensure_main_sessions(&config);

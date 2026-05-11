@@ -3,19 +3,13 @@
 //! `tui::start_full_refresh`.
 //!
 //! Behavior contract (matches Site B today):
-//! - Fork-host snapshot is taken BEFORE `refresh_remote_worktrees` per
-//!   (repo, remote) — honors the documented contract at
-//!   `cache_sources::snapshot_fork_hosts_for_remote`.
-//! - Tmux refresh is deduped by `format!("{kind_str}:{host}")` (same as
-//!   `tui::mod::dedup_key`), NOT by raw host.
-//! - Worktree refresh is NOT deduped — it fires once per (repo, remote)
-//!   regardless of host overlap.
-//! - Parallelism is `std::thread::scope` flat per-(repo, remote) for worktrees
-//!   + per first-seen `{kind}:{host}` for tmux. No inner threading inside
-//!   `refresh_remote_*` (item 6 of #272 is out of scope).
 //!
-//! No `AppMsg` / `mpsc::Sender` coupling. Callers that need to emit messages
-//! (Site B) do so BEFORE calling this helper.
+//! - Fork-host snapshot is taken BEFORE `refresh_remote_worktrees` per (repo, remote) — honors the documented contract at `cache_sources::snapshot_fork_hosts_for_remote`.
+//! - Tmux refresh is deduped by `format!("{kind_str}:{host}")` (same as `tui::mod::dedup_key`), NOT by raw host.
+//! - Worktree refresh is NOT deduped — it fires once per (repo, remote) regardless of host overlap.
+//! - Parallelism is `std::thread::scope` flat per-(repo, remote) for worktrees, plus one spawn per first-seen `{kind}:{host}` for tmux. No inner threading inside `refresh_remote_*` (item 6 of #272 is out of scope).
+//!
+//! No `AppMsg` / `mpsc::Sender` coupling. Callers that need to emit messages (Site B) do so BEFORE calling this helper.
 
 use crate::global_config::GlobalConfig;
 use std::collections::HashSet;
@@ -195,11 +189,7 @@ mod tests {
     }
 
     impl RemoteRefreshDriver for Recorder {
-        fn snapshot_fork_hosts(
-            &self,
-            repo: &RepoConfig,
-            remote: &RemoteConfig,
-        ) -> HashSet<String> {
+        fn snapshot_fork_hosts(&self, repo: &RepoConfig, remote: &RemoteConfig) -> HashSet<String> {
             self.calls.lock().unwrap().push((
                 CallKind::Snapshot,
                 repo.slug.clone(),
