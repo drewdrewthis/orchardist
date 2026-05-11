@@ -469,7 +469,6 @@ fn is_paused(issue: &Option<IssueInfo>, pr: &Option<PrState>) -> bool {
     issue_paused || pr_paused
 }
 
-
 // ---------------------------------------------------------------------------
 // Sort key — pipeline status severity with priority rerank
 // ---------------------------------------------------------------------------

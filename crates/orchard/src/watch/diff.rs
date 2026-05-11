@@ -56,7 +56,6 @@ fn first_session(wt: &WorktreeState) -> String {
         .unwrap_or_default()
 }
 
-
 /// Returns a human-readable label for a worktree: issue title if available, else branch.
 fn label_for(wt: &WorktreeState) -> String {
     wt.issue
