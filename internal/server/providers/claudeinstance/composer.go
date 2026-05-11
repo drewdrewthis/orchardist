@@ -163,7 +163,7 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 	pid := c.resolvePid(hb, pane)
 	proc := c.findProcess(ctx, pid)
 	account := c.findAccount(ctx)
-	state := c.deriveState(hb, pid)
+	state := c.deriveState(hb, pid, pane)
 
 	id := buildID(c.hostID, pid, hb.TmuxSession)
 	inst := &graphql.ClaudeInstance{
@@ -294,27 +294,41 @@ func (c *Composer) findAccount(ctx context.Context) *graphql.ClaudeAccount {
 
 // deriveState collapses the briefing's matrix into one InstanceState.
 //
-//	working   — heartbeat fresh AND state==working AND pid alive (or unknown)
-//	idle      — heartbeat fresh AND state==idle    AND pid alive (or unknown)
-//	input     — heartbeat fresh AND state==input   AND pid alive (or unknown)
-//	no_claude — heartbeat stale OR pid known dead OR state unrecognised
+// The hook is event-driven (PreToolUse / PostToolUse / Notification), NOT
+// periodic — so a long-idle session sitting in `input` legitimately stops
+// emitting heartbeats. We therefore treat heartbeat freshness as a
+// fast-path signal, with pid liveness as the trumping authority:
 //
-// "pid unknown" (heartbeat predates the pid-recording shape) does NOT
-// downgrade to no_claude — we trust the heartbeat in that case because
-// the alternative is a permanent no_claude for every instance until the
-// hook script is updated.
-func (c *Composer) deriveState(hb Heartbeat, pid int) graphql.InstanceState {
+//	pid known alive  → trust the last-known heartbeat state, even if stale.
+//	                   Covers idle/input sessions that sit for minutes/hours
+//	                   between events (#501) and the respawn case where the
+//	                   tracked pid died but pane still hosts a live claude (#421).
+//	pid known dead   → no_claude. The session is genuinely gone.
+//	pid unknown      → trust the heartbeat freshness window. When stale and
+//	                   we have no way to verify liveness, conservative
+//	                   no_claude is the safer call.
+//
+// State string lookup happens last and unrecognised strings collapse to
+// no_claude — the hook MUST write one of working/idle/input or we treat
+// it as garbage.
+func (c *Composer) deriveState(hb Heartbeat, pid int, pane *graphql.TmuxPane) graphql.InstanceState {
 	now := c.clock()
 	stamp := hb.LastHeartbeatAt
 	if stamp.IsZero() {
 		stamp = hb.Timestamp
 	}
-	if stamp.IsZero() || now.Sub(stamp) > c.staleAfter {
+	fresh := !stamp.IsZero() && now.Sub(stamp) <= c.staleAfter
+
+	alive := c.aliveSignal(pid, pane)
+	switch alive {
+	case alivenessDead:
 		return graphql.InstanceStateNoClaude
+	case alivenessUnknown:
+		if !fresh {
+			return graphql.InstanceStateNoClaude
+		}
 	}
-	if pid > 0 && !c.liveness.IsAlive(pid) {
-		return graphql.InstanceStateNoClaude
-	}
+
 	switch strings.ToLower(strings.TrimSpace(hb.State)) {
 	case "working":
 		return graphql.InstanceStateWorking
@@ -325,6 +339,48 @@ func (c *Composer) deriveState(hb Heartbeat, pid int) graphql.InstanceState {
 	default:
 		return graphql.InstanceStateNoClaude
 	}
+}
+
+// aliveness is a three-valued signal — pid liveness can be authoritative
+// (alive or dead) or absent (no pid recorded anywhere).
+type aliveness int
+
+const (
+	alivenessUnknown aliveness = iota
+	alivenessAlive
+	alivenessDead
+)
+
+// aliveSignal answers "is there a live Claude for this heartbeat?" using
+// every pid we have. The pane's CurrentPid is consulted in addition to
+// the resolved pid because the pane may be hosting a respawned claude
+// whose pid differs from the heartbeat (#421). Either pid being alive
+// flips the signal to alivenessAlive.
+//
+// The function returns alivenessUnknown only when no pid is available at
+// all — neither heartbeat nor pane recorded one. The deriveState caller
+// then falls back to heartbeat-freshness alone.
+func (c *Composer) aliveSignal(pid int, pane *graphql.TmuxPane) aliveness {
+	checked := false
+	if pid > 0 {
+		checked = true
+		if c.liveness.IsAlive(pid) {
+			return alivenessAlive
+		}
+	}
+	if pane != nil && pane.CurrentPid != nil && *pane.CurrentPid > 0 {
+		panePid := int(*pane.CurrentPid)
+		if panePid != pid {
+			checked = true
+			if c.liveness.IsAlive(panePid) {
+				return alivenessAlive
+			}
+		}
+	}
+	if checked {
+		return alivenessDead
+	}
+	return alivenessUnknown
 }
 
 // buildID is the canonical id formatter — `ClaudeInstance:<host>:<pid>`

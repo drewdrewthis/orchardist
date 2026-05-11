@@ -19,6 +19,7 @@ package daemon
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,9 +134,10 @@ func (a *tmuxInputAdapter) PaneByPid(ctx context.Context, hostID string, pid int
 	if a.p == nil || pid <= 0 {
 		return nil, false
 	}
-	for _, pn := range a.p.Snapshot().Panes {
+	snap := a.p.Snapshot()
+	for _, pn := range snap.Panes {
 		if string(pn.Key.Host) == hostID && pn.CurrentPid == pid {
-			return projectPane(pn), true
+			return projectPaneWithSession(pn, snap), true
 		}
 	}
 	return nil, false
@@ -155,7 +157,8 @@ func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session st
 	if a.p == nil || session == "" {
 		return nil, false
 	}
-	for _, pn := range a.p.Snapshot().Panes {
+	snap := a.p.Snapshot()
+	for _, pn := range snap.Panes {
 		if string(pn.Key.Host) != hostID || pn.WindowKey.Session != session {
 			continue
 		}
@@ -164,7 +167,7 @@ func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session st
 		}
 		if a.ps == nil {
 			// No ps provider: return first pane with a non-zero pid (v1 behaviour).
-			return projectPane(pn), true
+			return projectPaneWithSession(pn, snap), true
 		}
 		// ps cross-check: only return the pane if its foreground process Command
 		// basename contains "claude".
@@ -173,7 +176,7 @@ func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session st
 			continue
 		}
 		if strings.Contains(strings.ToLower(filepath.Base(cmd)), "claude") {
-			return projectPane(pn), true
+			return projectPaneWithSession(pn, snap), true
 		}
 	}
 	return nil, false
@@ -200,7 +203,10 @@ func (a *psGetterAdapter) CommandForPid(ctx context.Context, hostID string, pid 
 	return proc.Command, true
 }
 
-// projectPane projects a tmuxprovider.Pane onto *gql.TmuxPane.
+// projectPane projects a tmuxprovider.Pane onto *gql.TmuxPane. Window /
+// Session edges are left nil — callers that need session-level data (e.g.
+// lastActivityAt fallback for ClaudeInstance) MUST use projectPaneWithSession
+// instead so the composer can reach Pane.Window.Session.LastActivityAt.
 func projectPane(pn tmuxprovider.Pane) *gql.TmuxPane {
 	out := &gql.TmuxPane{
 		ID:             "TmuxPane:" + string(pn.Key.Host) + ":" + pn.Key.PaneID,
@@ -210,6 +216,42 @@ func projectPane(pn tmuxprovider.Pane) *gql.TmuxPane {
 	if pn.CurrentPid > 0 {
 		pid := int64(pn.CurrentPid)
 		out.CurrentPid = &pid
+	}
+	return out
+}
+
+// projectPaneWithSession extends projectPane with the minimal Window/Session
+// chain the ClaudeInstance composer's third lastActivityAt fallback walks
+// (composer.composeOne: pane.Window.Session.LastActivityAt). Only the fields
+// composer reads are populated — there is no full hydration, since the
+// composer does not need Window.Panes or Session.AttachedClients.
+//
+// The session's LastActivityAt is the coarsest of the three lastActivityAt
+// fallbacks but the only one that survives when the hook stops heartbeating
+// AND the jsonl reader can't resolve the transcript path. It is the reason
+// idle sessions still show a non-null `lastActivityAt` in the dashboard.
+func projectPaneWithSession(pn tmuxprovider.Pane, snap tmuxprovider.RuntimeSnapshot) *gql.TmuxPane {
+	out := projectPane(pn)
+	sess, ok := snap.Sessions[tmuxprovider.SessionKey{
+		Host: pn.Key.Host,
+		Name: pn.WindowKey.Session,
+	}]
+	if !ok {
+		return out
+	}
+	session := &gql.TmuxSession{
+		ID:   "TmuxSession:" + string(sess.Key.Host) + ":" + sess.Key.Name,
+		Name: sess.Key.Name,
+	}
+	if !sess.LastActivityAt.IsZero() {
+		v := sess.LastActivityAt.UTC().Format(time.RFC3339)
+		session.LastActivityAt = &v
+	}
+	out.Window = &gql.TmuxWindow{
+		ID: "TmuxWindow:" + string(pn.WindowKey.Host) + ":" + pn.WindowKey.Session +
+			":" + strconv.Itoa(pn.WindowKey.Index),
+		Index:   int64(pn.WindowKey.Index),
+		Session: session,
 	}
 	return out
 }
