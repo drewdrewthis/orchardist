@@ -142,8 +142,7 @@ pub fn chat_send(
     let sender_resolved = match sender {
         Some(s) if !s.is_empty() => s,
         _ => default_sender_handle().ok_or_else(|| {
-            "cannot derive sender (not in a tmux session) — supply explicit sender"
-                .to_string()
+            "cannot derive sender (not in a tmux session) — supply explicit sender".to_string()
         })?,
     };
 

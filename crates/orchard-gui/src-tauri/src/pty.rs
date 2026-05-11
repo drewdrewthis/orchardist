@@ -116,11 +116,13 @@ pub fn pty_spawn(
         .take_writer()
         .map_err(|e| format!("take writer failed: {e}"))?;
 
-    state
-        .sessions
-        .lock()
-        .unwrap()
-        .insert(id, PtySession { master: pair.master, writer });
+    state.sessions.lock().unwrap().insert(
+        id,
+        PtySession {
+            master: pair.master,
+            writer,
+        },
+    );
 
     let app_for_reader = app.clone();
     let data_event_clone = data_event.clone();
@@ -169,19 +171,12 @@ pub fn pty_write(state: State<'_, PtyState>, id: u64, b64: String) -> Result<(),
     s.writer
         .write_all(&bytes)
         .map_err(|e| format!("write failed: {e}"))?;
-    s.writer
-        .flush()
-        .map_err(|e| format!("flush failed: {e}"))?;
+    s.writer.flush().map_err(|e| format!("flush failed: {e}"))?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn pty_resize(
-    state: State<'_, PtyState>,
-    id: u64,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
+pub fn pty_resize(state: State<'_, PtyState>, id: u64, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
     let s = sessions
         .get(&id)
@@ -234,17 +229,40 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     for (i, c) in B64.iter().enumerate() {
         lookup[*c as usize] = i as u8;
     }
-    let bytes: Vec<u8> = input.bytes().filter(|b| *b != b'\n' && *b != b'\r').collect();
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|b| *b != b'\n' && *b != b'\r')
+        .collect();
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
     for chunk in bytes.chunks(4) {
         if chunk.len() < 4 {
             return Err("truncated base64".into());
         }
-        let v0 = if chunk[0] == b'=' { 0 } else { lookup[chunk[0] as usize] };
-        let v1 = if chunk[1] == b'=' { 0 } else { lookup[chunk[1] as usize] };
-        let v2 = if chunk[2] == b'=' { 0 } else { lookup[chunk[2] as usize] };
-        let v3 = if chunk[3] == b'=' { 0 } else { lookup[chunk[3] as usize] };
-        if v0 == 255 || v1 == 255 || (chunk[2] != b'=' && v2 == 255) || (chunk[3] != b'=' && v3 == 255) {
+        let v0 = if chunk[0] == b'=' {
+            0
+        } else {
+            lookup[chunk[0] as usize]
+        };
+        let v1 = if chunk[1] == b'=' {
+            0
+        } else {
+            lookup[chunk[1] as usize]
+        };
+        let v2 = if chunk[2] == b'=' {
+            0
+        } else {
+            lookup[chunk[2] as usize]
+        };
+        let v3 = if chunk[3] == b'=' {
+            0
+        } else {
+            lookup[chunk[3] as usize]
+        };
+        if v0 == 255
+            || v1 == 255
+            || (chunk[2] != b'=' && v2 == 255)
+            || (chunk[3] != b'=' && v3 == 255)
+        {
             return Err("invalid base64 character".into());
         }
         out.push((v0 << 2) | (v1 >> 4));

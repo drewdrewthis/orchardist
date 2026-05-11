@@ -32,8 +32,7 @@ fn chat_send_appends_jsonl_and_history_readback() {
     with_chat_dir(|| {
         let target = Target::parse("#alpha").unwrap();
         let room = target.room_name();
-        let id =
-            append_message(&room, "@gui-tester", "hello from gui").expect("append");
+        let id = append_message(&room, "@gui-tester", "hello from gui").expect("append");
         assert!(!id.is_empty(), "message id should be non-empty");
 
         let history = read_history(&room, 0).expect("history");

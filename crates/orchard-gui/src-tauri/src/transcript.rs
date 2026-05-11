@@ -30,9 +30,7 @@ pub fn read_transcript_jsonl(
     path: String,
     max_bytes: Option<u64>,
 ) -> Result<TranscriptChunk, String> {
-    let cap = max_bytes
-        .unwrap_or(DEFAULT_MAX_BYTES)
-        .min(HARD_MAX_BYTES);
+    let cap = max_bytes.unwrap_or(DEFAULT_MAX_BYTES).min(HARD_MAX_BYTES);
 
     let mut file = File::open(&path).map_err(|e| format!("open failed: {e}"))?;
     let total = file
