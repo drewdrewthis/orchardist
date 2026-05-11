@@ -217,8 +217,6 @@ func (p *Provider) Stop() error {
 	for _, c := range p.clients {
 		clients = append(clients, c)
 	}
-	subs := p.subs
-	p.subs = map[chan InvalidationEvent]struct{}{}
 	p.mu.Unlock()
 
 	if cancel != nil {
@@ -226,7 +224,12 @@ func (p *Provider) Stop() error {
 	}
 	p.wg.Wait()
 
+	// p.subs is owned by p.subMu (broadcast() reads it under that lock).
+	// Snapshot and reset under the same lock to avoid racing with
+	// broadcast() during the wg.Wait drain.
 	p.subMu.Lock()
+	subs := p.subs
+	p.subs = map[chan InvalidationEvent]struct{}{}
 	for ch := range subs {
 		close(ch)
 	}
