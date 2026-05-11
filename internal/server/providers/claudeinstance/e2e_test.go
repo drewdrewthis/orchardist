@@ -227,6 +227,9 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 		t.Fatalf("refresh after dead pid: %v", err)
 	}
 	resp3 := postQuery(t, srv.URL, `query { claudeInstances { id state } }`)
+	if len(resp3.Errors) > 0 {
+		t.Fatalf("graphql errors: %+v", resp3.Errors)
+	}
 	deadByID := map[string]string{}
 	for _, inst := range resp3.Data.ClaudeInstances {
 		deadByID[inst.ID] = inst.State
