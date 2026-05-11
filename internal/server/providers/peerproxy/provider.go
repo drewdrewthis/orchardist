@@ -3,6 +3,7 @@ package peerproxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -32,9 +33,11 @@ type InvalidationEvent struct {
 type Provider struct {
 	logger *slog.Logger
 
-	mu       sync.RWMutex
-	adapters map[string]*PeerAdapter
-	clients  map[string]*Client
+	mu          sync.RWMutex
+	adapters    map[string]*PeerAdapter
+	clients     map[string]*Client
+	peerCancels map[string]context.CancelFunc
+	spawnCounts map[string]int // incremented each time startPeer is called; test seam
 
 	subMu sync.Mutex
 	subs  map[chan InvalidationEvent]struct{}
@@ -44,6 +47,10 @@ type Provider struct {
 	wg          sync.WaitGroup
 	started     bool
 	closed      bool
+
+	// opts holds construction-time options so AddPeer can reuse them
+	// when building clients for dynamically-added peers.
+	opts providerOptions
 }
 
 // ProviderOption configures a Provider at construction time. The only
@@ -84,10 +91,13 @@ func NewProvider(cfg FederationConfig, logger *slog.Logger, opts ...ProviderOpti
 		opt(&options)
 	}
 	p := &Provider{
-		logger:   logger,
-		adapters: make(map[string]*PeerAdapter, len(cfg.Peers)),
-		clients:  make(map[string]*Client, len(cfg.Peers)),
-		subs:     map[chan InvalidationEvent]struct{}{},
+		logger:      logger,
+		adapters:    make(map[string]*PeerAdapter, len(cfg.Peers)),
+		clients:     make(map[string]*Client, len(cfg.Peers)),
+		peerCancels: make(map[string]context.CancelFunc, len(cfg.Peers)),
+		spawnCounts: make(map[string]int, len(cfg.Peers)),
+		subs:        map[chan InvalidationEvent]struct{}{},
+		opts:        options,
 	}
 	for _, peer := range cfg.Peers {
 		client := buildClient(peer, options.tlsConfig)
@@ -116,21 +126,82 @@ func buildClient(peer PeerConfig, tlsCfg *tls.Config) *Client {
 // to call once; subsequent calls are no-ops. Stop tears them down.
 func (p *Provider) Start(ctx context.Context) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.started || p.closed {
-		p.mu.Unlock()
 		return nil
 	}
 	p.started = true
 	p.startCtx, p.startCancel = context.WithCancel(ctx)
-	adapters := make([]*PeerAdapter, 0, len(p.adapters))
 	for _, a := range p.adapters {
-		adapters = append(adapters, a)
+		p.startPeer(a)
 	}
+	return nil
+}
+
+// startPeer spawns the runPeer goroutine for a single adapter with its
+// own child context derived from startCtx. The per-peer cancel is stored
+// in peerCancels so RemovePeer can cancel it independently.
+//
+// Callers MUST hold p.mu when writing peerCancels, or call startPeer
+// only from Start (which does its own locking). AddPeer holds the lock
+// before calling startPeer.
+func (p *Provider) startPeer(a *PeerAdapter) {
+	ctx, cancel := context.WithCancel(p.startCtx)
+	p.peerCancels[a.peer.Name] = cancel
+	p.spawnCounts[a.peer.Name]++
+	p.wg.Add(1)
+	go p.runPeer(ctx, a)
+}
+
+// AddPeer dynamically inserts a new peer into the running provider and
+// begins probing it. Returns an error when the name is already present
+// (use RemovePeer first) or when Start has not been called yet.
+//
+// AddPeer is safe to call concurrently with other AddPeer / RemovePeer
+// invocations.
+func (p *Provider) AddPeer(peer PeerConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.started {
+		return fmt.Errorf("AddPeer: provider not started — call Start first")
+	}
+	if _, exists := p.adapters[peer.Name]; exists {
+		return fmt.Errorf("AddPeer: peer %q already exists", peer.Name)
+	}
+
+	client := buildClient(peer, p.opts.tlsConfig)
+	adapter := NewPeerAdapter(peer, client)
+	p.adapters[peer.Name] = adapter
+	p.clients[peer.Name] = client
+	p.startPeer(adapter)
+	return nil
+}
+
+// RemovePeer cancels a peer's probe goroutine, removes its entries from
+// the provider's internal maps, and closes its client transport.
+//
+// Returns an error when no peer with the given name is configured.
+// RemovePeer is safe to call concurrently with AddPeer / RemovePeer.
+func (p *Provider) RemovePeer(name string) error {
+	p.mu.Lock()
+	_, exists := p.adapters[name]
+	if !exists {
+		p.mu.Unlock()
+		return fmt.Errorf("RemovePeer: peer %q not found", name)
+	}
+	cancel := p.peerCancels[name]
+	client := p.clients[name]
+	delete(p.adapters, name)
+	delete(p.clients, name)
+	delete(p.peerCancels, name)
 	p.mu.Unlock()
 
-	for _, a := range adapters {
-		p.wg.Add(1)
-		go p.runPeer(p.startCtx, a)
+	if cancel != nil {
+		cancel()
+	}
+	if client != nil {
+		_ = client.Close()
 	}
 	return nil
 }
@@ -150,8 +221,6 @@ func (p *Provider) Stop() error {
 	for _, c := range p.clients {
 		clients = append(clients, c)
 	}
-	subs := p.subs
-	p.subs = map[chan InvalidationEvent]struct{}{}
 	p.mu.Unlock()
 
 	if cancel != nil {
@@ -159,7 +228,12 @@ func (p *Provider) Stop() error {
 	}
 	p.wg.Wait()
 
+	// p.subs is owned by p.subMu (broadcast() reads it under that lock).
+	// Snapshot and reset under the same lock to avoid racing with
+	// broadcast() during the wg.Wait drain.
 	p.subMu.Lock()
+	subs := p.subs
+	p.subs = map[chan InvalidationEvent]struct{}{}
 	for ch := range subs {
 		close(ch)
 	}
@@ -206,6 +280,102 @@ func (p *Provider) HasPeer(name string) bool {
 	_, ok := p.adapters[name]
 	p.mu.RUnlock()
 	return ok
+}
+
+// SpawnCount returns the number of times startPeer has been called for name.
+// It is intended for tests that need to verify a peer's goroutine was NOT
+// restarted across an ApplyPeers call — a count of 1 means the goroutine
+// was spawned exactly once and left alone.
+func (p *Provider) SpawnCount(name string) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.spawnCounts[name]
+}
+
+// peerConfigEqual reports whether two PeerConfig values are equivalent
+// for the purposes of the ApplyPeers diff. Two configs that differ only
+// in fields that are not observable at runtime (e.g. ordering within a
+// slice) are still considered equal.
+//
+// Compared: Name, Address, and TLS. A TLS toggle cannot be applied
+// in-place — it would require rewriting the http.Client's transport AND
+// the websocket dialer mid-flight. Treating it as remove+add keeps that
+// lifecycle clean and predictable.
+func peerConfigEqual(a, b PeerConfig) bool {
+	return a.Name == b.Name && a.Address == b.Address && a.TLS == b.TLS
+}
+
+// ApplyPeers diffs the current peer set against cfg and issues the minimum
+// AddPeer / RemovePeer calls needed to converge on the new config.
+//
+// Algorithm:
+//   - Peers in cfg but not in the current set → AddPeer.
+//   - Peers in the current set but not in cfg → RemovePeer.
+//   - Peers present in both sets with an unchanged config → left untouched
+//     (goroutine is NOT restarted).
+//   - Peers present in both sets whose config changed (address, TLS, …) →
+//     RemovePeer then AddPeer, in that order. This ensures the old goroutine's
+//     context is cancelled before the new one starts.
+//
+// Error policy: best-effort. If one AddPeer or RemovePeer fails, the error is
+// collected and the rest of the diff is still applied. All errors are joined
+// and returned at the end. This ensures a single misconfigured peer does not
+// block convergence for the others.
+//
+// ApplyPeers is safe to call concurrently with AddPeer / RemovePeer.
+func (p *Provider) ApplyPeers(cfg FederationConfig) error {
+	// Snapshot the current peer configs without holding the lock during
+	// AddPeer/RemovePeer calls — those methods acquire p.mu.Lock() themselves,
+	// and holding p.mu.RLock() here while calling them would deadlock.
+	p.mu.RLock()
+	currentConfigs := make(map[string]PeerConfig, len(p.adapters))
+	for name, a := range p.adapters {
+		currentConfigs[name] = a.Peer()
+	}
+	p.mu.RUnlock()
+
+	newConfigs := make(map[string]PeerConfig, len(cfg.Peers))
+	for _, peer := range cfg.Peers {
+		newConfigs[peer.Name] = peer
+	}
+
+	var errs []error
+
+	// Process peers in the new config: add new ones; remove+add changed ones.
+	for _, peer := range cfg.Peers {
+		current, exists := currentConfigs[peer.Name]
+		if !exists {
+			// Brand-new peer — just add it.
+			if err := p.AddPeer(peer); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		// Peer exists in both sets. Check if the config changed.
+		if !peerConfigEqual(current, peer) {
+			// Config changed — treat as remove+add so the old goroutine's
+			// context is cancelled before the new one starts.
+			if err := p.RemovePeer(peer.Name); err != nil {
+				errs = append(errs, err)
+				continue // don't try to add if remove failed
+			}
+			if err := p.AddPeer(peer); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		// Config unchanged — leave the goroutine untouched.
+	}
+
+	// Remove peers that are no longer in the config.
+	for name := range currentConfigs {
+		if _, exists := newConfigs[name]; !exists {
+			if err := p.RemovePeer(name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // Get implements the transparent forwarder side of Provider[NodeID,

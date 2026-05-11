@@ -103,10 +103,18 @@ func addPeerCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "add-peer",
 		Short: "Append a peer to ~/.orchard/config.json",
-		Long: "Validate the supplied name + address, append a peer entry,\n" +
-			"and rely on the running daemon's fsnotify watcher to pick up\n" +
-			"the change. Pass --tls (or use an `https://`/`wss://` address)\n" +
-			"for TLS-fronted peers.",
+		Long: "Append a peer to ~/.orchard/config.json. The running daemon's\n" +
+			"fsnotify watcher picks up the change without a restart.\n" +
+			"\n" +
+			"Prerequisites: every candidate peer VM must (1) run\n" +
+			"`boxd proxy new graphql --vm=<name> --port=7777` so the daemon\n" +
+			"is reachable over HTTPS, and (2) have `orchard-daemon` running\n" +
+			"inside the VM listening on 127.0.0.1:7777. Peers added before\n" +
+			"this setup will surface as Host.peers[].reachable == false until\n" +
+			"the boxd proxy and daemon are in place.\n" +
+			"\n" +
+			"Pass --tls (or use an https://wss:// address) for TLS-fronted\n" +
+			"peers.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAddPeer(cmd.OutOrStdout(), name, address, tls)
 		},
