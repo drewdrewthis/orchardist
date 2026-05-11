@@ -58,15 +58,19 @@
 	}
 </script>
 
-<div class="composer">
+<div class="flex flex-col gap-1 px-3 py-2.5 border-t-[0.5px] border-line bg-surface">
 	{#if error}
-		<div class="composer-error mono">
+		<div class="mono flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-bad-fg rounded-md bg-[color-mix(in_oklab,var(--color-bad-fg)_10%,transparent)] border-[0.5px] border-[color-mix(in_oklab,var(--color-bad-fg)_30%,var(--color-line))]">
 			<Icon name="alert" size={11} />
 			<span>{error}</span>
-			<button class="composer-error-close" onclick={() => (error = null)} aria-label="Dismiss">×</button>
+			<button
+				class="ml-auto border-0 bg-transparent text-inherit cursor-pointer text-[13px]"
+				onclick={() => (error = null)}
+				aria-label="Dismiss"
+			>×</button>
 		</div>
 	{/if}
-	<div class="composer-row">
+	<div class="flex items-end gap-2">
 		<textarea
 			bind:this={textarea}
 			bind:value={text}
@@ -75,9 +79,10 @@
 			placeholder={sessionLabel ? `Message ${sessionLabel}…` : "Message session…"}
 			rows="1"
 			disabled={sending}
+			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[13px] leading-[1.45] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
 		></textarea>
 		<button
-			class="composer-send"
+			class="inline-flex items-center justify-center w-9 h-9 border-0 bg-fg text-bg rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
 			onclick={send}
 			disabled={sending || !text.trim()}
 			title="Send (Enter) · Shift+Enter for newline"
@@ -89,79 +94,7 @@
 			{/if}
 		</button>
 	</div>
-	<div class="composer-hint mono dimer">
+	<div class="mono dimer text-[10.5px]">
 		Sent via tmux send-keys → {paneId} · Enter to send · Shift+Enter for newline
 	</div>
 </div>
-
-<style>
-	.composer {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		padding: 10px 12px 10px 12px;
-		border-top: 0.5px solid var(--line);
-		background: var(--surface-1);
-	}
-	.composer-error {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 5px 8px;
-		font-size: 11.5px;
-		color: var(--bad-fg, #f06);
-		background: color-mix(in oklab, var(--bad-fg, #f06) 10%, transparent);
-		border: 0.5px solid color-mix(in oklab, var(--bad-fg, #f06) 30%, var(--line));
-		border-radius: 6px;
-	}
-	.composer-error-close {
-		margin-left: auto;
-		border: 0;
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
-		font-size: 13px;
-	}
-	.composer-row {
-		display: flex;
-		align-items: flex-end;
-		gap: 8px;
-	}
-	textarea {
-		flex: 1;
-		min-height: 36px;
-		max-height: 200px;
-		resize: none;
-		border: 0.5px solid var(--line);
-		background: var(--surface-2);
-		color: var(--fg);
-		border-radius: 8px;
-		padding: 8px 10px;
-		font: inherit;
-		font-size: 13px;
-		line-height: 1.45;
-	}
-	textarea:focus {
-		outline: none;
-		border-color: color-mix(in oklab, var(--accent, #6cf) 60%, var(--line));
-	}
-	.composer-send {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 36px;
-		height: 36px;
-		border: 0;
-		background: var(--fg);
-		color: var(--bg);
-		border-radius: 8px;
-		cursor: pointer;
-	}
-	.composer-send:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-	.composer-hint {
-		font-size: 10.5px;
-	}
-</style>

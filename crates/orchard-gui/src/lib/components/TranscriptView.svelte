@@ -158,51 +158,57 @@
 		}
 		return "";
 	}
+
 </script>
 
-<div class="transcript">
+<div class="flex-1 min-h-0 flex flex-col bg-surface">
 	{#if status === "loading"}
-		<div class="transcript-empty"><span class="dimer">Loading transcript…</span></div>
+		<div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+			<span class="dimer">Loading transcript…</span>
+		</div>
 	{:else if status === "unsupported"}
-		<div class="transcript-empty">
-			<div style="font-size: 13px; font-weight: 500; color: var(--fg-2);">
+		<div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+			<div class="text-[13px] font-medium text-fg-2">
 				Open in the Orchard desktop app to view this transcript.
 			</div>
 		</div>
 	{:else if status === "error"}
-		<div class="transcript-empty">
-			<div style="font-size: 13px; color: var(--bad-fg);">Transcript failed to load.</div>
-			<div class="dimer mono" style="font-size: 11.5px; margin-top: 4px;">{errMsg}</div>
+		<div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+			<div class="text-[13px] text-bad-fg">Transcript failed to load.</div>
+			<div class="dimer mono text-[11.5px] mt-1">{errMsg}</div>
 		</div>
 	{:else if status === "empty"}
-		<div class="transcript-empty">
+		<div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
 			<span class="dimer">No conversation turns parsed from {path}</span>
 		</div>
 	{:else}
 		<div
-			class="transcript-scroll"
+			class="flex-1 min-h-0 overflow-y-auto px-3.5 pt-3 pb-6"
 			bind:this={scrollHost}
 			onscroll={onScroll}
 		>
 			{#if truncated}
-				<div class="transcript-trunc mono">
+				<div class="mono text-center text-[11px] text-fg-3 pt-1 pb-2 border-b-[0.5px] border-dashed border-line">
 					… earlier turns omitted ({(totalSize / 1024).toFixed(0)}KB total)
 				</div>
 			{/if}
-			<div class="transcript-virtual" style="height: {$virtualizer.getTotalSize()}px;">
+			<div class="relative w-full" style="height: {$virtualizer.getTotalSize()}px;">
 				{#each $virtualizer.getVirtualItems() as vRow (vRow.key)}
 					{@const turn = turns[vRow.index]}
 					{#if turn}
 					<div
-						class="t-turn"
+						class="flex flex-col gap-1.5 absolute top-0 left-0 right-0 pl-1.5 border-l-2"
+						class:opacity-65={turn.toolFeedback}
+						class:border-l-[color-mix(in_oklab,var(--color-accent)_60%,transparent)]={turn.role === "user"}
+						class:border-l-[color-mix(in_oklab,var(--color-ok-fg)_35%,transparent)]={turn.role === "assistant"}
+						class:border-l-transparent={turn.role !== "user" && turn.role !== "assistant"}
 						data-role={turn.role}
-						class:tool-feedback={turn.toolFeedback}
 						data-index={vRow.index}
 						use:$virtualizer.measureElement
-						style="position: absolute; top: 0; left: 0; right: 0; transform: translateY({vRow.start}px);"
+						style="transform: translateY({vRow.start}px);"
 					>
-						<div class="t-meta mono">
-							<span class="t-role">{turn.role}</span>
+						<div class="flex items-center gap-1.5 mono text-[11px] text-fg-3">
+							<span class="lowercase font-medium text-fg-2">{turn.role}</span>
 							{#if turn.model}
 								<span class="dimest">·</span>
 								<span class="dimer">{turn.model}</span>
@@ -214,40 +220,44 @@
 						</div>
 						{#each turn.blocks as block, i (i)}
 							{#if block.kind === "text"}
-								<div class="t-text">{block.text}</div>
+								<div class="text-[13px] leading-[1.55] whitespace-pre-wrap break-words text-fg">{block.text}</div>
 							{:else if block.kind === "thinking"}
-								<details class="t-thinking">
-									<summary class="dimer mono">thinking</summary>
-									<div class="t-text">{block.text}</div>
+								<details class="text-[12.5px] open:pl-2 open:border-l open:border-dashed open:border-line">
+									<summary class="dimer mono cursor-pointer text-[11px] py-0.5">thinking</summary>
+									<div class="text-[13px] leading-[1.55] whitespace-pre-wrap break-words text-fg">{block.text}</div>
 								</details>
 							{:else if block.kind === "tool_use"}
-								<div class="t-tool">
+								<div class="rounded-md bg-surface-2 border-[0.5px] border-line overflow-hidden">
 									<button
-										class="t-tool-head mono"
+										class="mono flex items-center gap-1.5 w-full px-2 py-1 bg-transparent border-0 text-[11.5px] text-left cursor-pointer text-fg hover:bg-fg/[0.04]"
 										onclick={() => toggleTool(block.toolId || `${turn.uuid}-tu-${i}`)}
 									>
 										<Icon name="terminal" size={11} />
-										<span class="t-tool-name">{block.name}</span>
-										<span class="t-tool-summary dimer">{blockSummary(block)}</span>
-										<span class="t-tool-chev dimer">{expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`) ? "▾" : "▸"}</span>
+										<span class="font-medium">{block.name}</span>
+										<span class="dimer flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{blockSummary(block)}</span>
+										<span class="dimer text-[10px]">{expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`) ? "▾" : "▸"}</span>
 									</button>
 									{#if expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`)}
-										<pre class="t-tool-body mono">{JSON.stringify(block.input, null, 2)}</pre>
+										<pre class="mono m-0 px-2.5 py-2 text-[11.5px] leading-[1.5] max-h-80 overflow-auto bg-surface border-t-[0.5px] border-line whitespace-pre-wrap break-words">{JSON.stringify(block.input, null, 2)}</pre>
 									{/if}
 								</div>
 							{:else if block.kind === "tool_result"}
-								<div class="t-tool" class:err={block.isError}>
+								<div
+									class="rounded-md bg-surface-2 border-[0.5px] overflow-hidden"
+									class:border-line={!block.isError}
+									class:border-[color-mix(in_oklab,var(--color-bad-fg),50%,var(--color-line))]={block.isError}
+								>
 									<button
-										class="t-tool-head mono"
+										class="mono flex items-center gap-1.5 w-full px-2 py-1 bg-transparent border-0 text-[11.5px] text-left cursor-pointer text-fg hover:bg-fg/[0.04]"
 										onclick={() => toggleTool(block.toolId || `${turn.uuid}-tr-${i}`)}
 									>
 										<Icon name={block.isError ? "alert" : "check"} size={11} />
-										<span class="t-tool-name">{block.isError ? "tool error" : "tool result"}</span>
-										<span class="t-tool-summary dimer">{blockSummary(block)}</span>
-										<span class="t-tool-chev dimer">{expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`) ? "▾" : "▸"}</span>
+										<span class="font-medium">{block.isError ? "tool error" : "tool result"}</span>
+										<span class="dimer flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{blockSummary(block)}</span>
+										<span class="dimer text-[10px]">{expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`) ? "▾" : "▸"}</span>
 									</button>
 									{#if expandedTools.has(block.toolId || `${turn.uuid}-tr-${i}`)}
-										<pre class="t-tool-body mono">{block.text}</pre>
+										<pre class="mono m-0 px-2.5 py-2 text-[11.5px] leading-[1.5] max-h-80 overflow-auto bg-surface border-t-[0.5px] border-line whitespace-pre-wrap break-words">{block.text}</pre>
 									{/if}
 								</div>
 							{/if}
@@ -260,135 +270,3 @@
 	{/if}
 </div>
 
-<style>
-	.transcript {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-		background: var(--surface-1);
-	}
-	.transcript-scroll {
-		flex: 1;
-		min-height: 0;
-		overflow-y: auto;
-		padding: 12px 14px 24px 14px;
-	}
-	.transcript-virtual {
-		position: relative;
-		width: 100%;
-	}
-	.transcript-empty {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		padding: 32px;
-		text-align: center;
-	}
-	.transcript-trunc {
-		text-align: center;
-		font-size: 11px;
-		color: var(--fg-3);
-		padding: 4px 0 8px 0;
-		border-bottom: 0.5px dashed var(--line);
-	}
-	.t-turn {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-	.t-turn[data-role="user"] {
-		padding-left: 6px;
-		border-left: 2px solid color-mix(in oklab, var(--accent, #6cf) 60%, transparent);
-	}
-	.t-turn[data-role="assistant"] {
-		padding-left: 6px;
-		border-left: 2px solid color-mix(in oklab, var(--ok-fg, #6fd391) 35%, transparent);
-	}
-	.t-turn.tool-feedback {
-		opacity: 0.65;
-	}
-	.t-meta {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 11px;
-		color: var(--fg-3);
-	}
-	.t-role {
-		text-transform: lowercase;
-		font-weight: 500;
-		color: var(--fg-2);
-	}
-	.t-text {
-		font-size: 13px;
-		line-height: 1.55;
-		white-space: pre-wrap;
-		word-break: break-word;
-		color: var(--fg);
-	}
-	.t-thinking {
-		font-size: 12.5px;
-	}
-	.t-thinking summary {
-		cursor: pointer;
-		font-size: 11px;
-		padding: 2px 0;
-	}
-	.t-thinking[open] {
-		padding-left: 8px;
-		border-left: 1px dashed var(--line);
-	}
-	.t-tool {
-		border-radius: 6px;
-		background: var(--surface-2);
-		border: 0.5px solid var(--line);
-		overflow: hidden;
-	}
-	.t-tool.err {
-		border-color: color-mix(in oklab, var(--bad-fg, #f06), 50%, var(--line));
-	}
-	.t-tool-head {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		padding: 4px 8px;
-		background: transparent;
-		border: 0;
-		font-size: 11.5px;
-		text-align: left;
-		cursor: pointer;
-		color: var(--fg);
-	}
-	.t-tool-head:hover {
-		background: color-mix(in oklab, var(--fg) 4%, transparent);
-	}
-	.t-tool-name {
-		font-weight: 500;
-	}
-	.t-tool-summary {
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.t-tool-chev {
-		font-size: 10px;
-	}
-	.t-tool-body {
-		margin: 0;
-		padding: 8px 10px;
-		font-size: 11.5px;
-		line-height: 1.5;
-		max-height: 320px;
-		overflow: auto;
-		background: var(--surface-1);
-		border-top: 0.5px solid var(--line);
-		white-space: pre-wrap;
-		word-break: break-word;
-	}
-</style>

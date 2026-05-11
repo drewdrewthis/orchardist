@@ -114,6 +114,11 @@
 			`tmux select-pane -t ${pane.paneId} 2>/dev/null; exec tmux attach-session -t ${sessName}`,
 		];
 	});
+
+	const signalBadgeBase =
+		"text-[10px] px-1.5 py-px rounded-[3px] font-[var(--font-mono)] border-[0.5px]";
+	const signalBadgeRed =
+		"bg-[rgba(255,100,100,0.14)] text-[#ff7272] border-[rgba(255,100,100,0.32)]";
 </script>
 
 <div
@@ -152,7 +157,7 @@
 							<span class="here-badge mono">here</span>
 						{/if}
 						{#if pane || hasTranscript}
-							<span style="margin-left: auto;">
+							<span class="ml-auto">
 								<ViewSwitcher
 									value={view}
 									onChange={(v) => onSetView(v)}
@@ -177,20 +182,29 @@
 									<span>#{worktree.pr.number}</span>
 								</a>
 								{#if isDraft}
-									<span class="signal-badge draft" title="Draft PR">draft</span>
+									<span
+										class="{signalBadgeBase} bg-[rgba(140,140,140,0.18)] text-[#aaa] border-[rgba(140,140,140,0.32)]"
+										title="Draft PR"
+									>draft</span>
 								{:else if prState === "MERGED"}
-									<span class="signal-badge merged" title="PR merged">merged</span>
+									<span
+										class="{signalBadgeBase} bg-[rgba(120,80,200,0.18)] text-[#b990ff] border-[rgba(120,80,200,0.32)]"
+										title="PR merged"
+									>merged</span>
 								{:else if prState === "CLOSED"}
-									<span class="signal-badge closed" title="PR closed">closed</span>
+									<span
+										class="{signalBadgeBase} bg-[rgba(255,100,100,0.18)] text-[#ff7272] border-[rgba(255,100,100,0.32)]"
+										title="PR closed"
+									>closed</span>
 								{/if}
 								{#if ciBad}
-									<span class="signal-badge red" title="CI failing">CI</span>
+									<span class="{signalBadgeBase} {signalBadgeRed}" title="CI failing">CI</span>
 								{/if}
 								{#if reviewBad}
-									<span class="signal-badge red" title="Review changes requested">review</span>
+									<span class="{signalBadgeBase} {signalBadgeRed}" title="Review changes requested">review</span>
 								{/if}
 								{#if conflict}
-									<span class="signal-badge red" title="Merge conflict">conflict</span>
+									<span class="{signalBadgeBase} {signalBadgeRed}" title="Merge conflict">conflict</span>
 								{/if}
 							{/if}
 							{#if worktree.issue}
@@ -210,7 +224,7 @@
 						{/if}
 						{#if session?.sessionUuid}
 							<span class="conv-chip mono" title="Session UUID">
-								<span style:opacity="0.7">id</span>
+								<span class="opacity-70">id</span>
 								<span>{session.sessionUuid.slice(0, 6)}…</span>
 							</span>
 						{/if}
@@ -234,7 +248,10 @@
 						{/if}
 					</div>
 					{#if conversation?.recap}
-						<div class="conv-recap mono dimer" title={conversation.recap}>{conversation.recap}</div>
+						<div
+							class="mono dimer mt-1 text-[11.5px] leading-[1.4] line-clamp-2"
+							title={conversation.recap}
+						>{conversation.recap}</div>
 					{/if}
 				</div>
 			</div>
@@ -243,12 +260,12 @@
 		{#if loading && !data}
 			<div class="conv-empty"><span class="dimer">Loading…</span></div>
 		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
-			<div class="chat-stack">
+			<div class="flex-1 min-h-0 flex flex-col">
 				<TranscriptView path={conversation.jsonlPath} sessionUuid={conversation.sessionUuid} />
 				{#if pane?.paneId}
 					<SessionComposer paneId={pane.paneId} sessionLabel={pane.window.session.name} />
 				{:else}
-					<div class="composer-disabled mono dimer">
+					<div class="mono dimer text-center text-[11.5px] px-3.5 py-2.5 border-t-[0.5px] border-line bg-surface">
 						No live tmux pane — open Terminal view to attach a fresh client.
 					</div>
 				{/if}
@@ -271,7 +288,7 @@
 			/>
 		{:else}
 			<div class="conv-empty">
-				<div style="font-size: 13px; font-weight: 500; color: var(--fg-2);">
+				<div class="text-[13px] font-medium text-fg-2">
 					{#if session && !pane}
 						No live tmux pane for this session.
 					{:else}
@@ -279,63 +296,9 @@
 					{/if}
 				</div>
 				{#if conversation?.cwd}
-					<div class="dimer mono" style="font-size: 11.5px; margin-top: 4px;">{conversation.cwd}</div>
+					<div class="dimer mono text-[11.5px] mt-1">{conversation.cwd}</div>
 				{/if}
 			</div>
 		{/if}
 	</div>
 </div>
-
-<style>
-	.signal-badge {
-		font-size: 10px;
-		padding: 1px 6px;
-		border-radius: 3px;
-		font-family: var(--font-mono);
-	}
-	.signal-badge.draft {
-		background: rgba(140, 140, 140, 0.18);
-		color: #aaa;
-		border: 0.5px solid rgba(140, 140, 140, 0.32);
-	}
-	.signal-badge.merged {
-		background: rgba(120, 80, 200, 0.18);
-		color: #b990ff;
-		border: 0.5px solid rgba(120, 80, 200, 0.32);
-	}
-	.signal-badge.closed {
-		background: rgba(255, 100, 100, 0.18);
-		color: #ff7272;
-		border: 0.5px solid rgba(255, 100, 100, 0.32);
-	}
-	.signal-badge.red {
-		background: rgba(255, 100, 100, 0.14);
-		color: #ff7272;
-		border: 0.5px solid rgba(255, 100, 100, 0.32);
-	}
-	.chat-stack {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-	}
-	.composer-disabled {
-		padding: 10px 14px;
-		border-top: 0.5px solid var(--line);
-		background: var(--surface-1);
-		font-size: 11.5px;
-		text-align: center;
-	}
-	.conv-recap {
-		margin-top: 4px;
-		font-size: 11.5px;
-		line-height: 1.4;
-		max-height: 2.8em;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		line-clamp: 2;
-		-webkit-box-orient: vertical;
-	}
-</style>
