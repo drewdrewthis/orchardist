@@ -3,6 +3,7 @@ package peerproxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,7 @@ type Provider struct {
 	adapters    map[string]*PeerAdapter
 	clients     map[string]*Client
 	peerCancels map[string]context.CancelFunc
+	spawnCounts map[string]int // incremented each time startPeer is called; test seam
 
 	subMu sync.Mutex
 	subs  map[chan InvalidationEvent]struct{}
@@ -93,6 +95,7 @@ func NewProvider(cfg FederationConfig, logger *slog.Logger, opts ...ProviderOpti
 		adapters:    make(map[string]*PeerAdapter, len(cfg.Peers)),
 		clients:     make(map[string]*Client, len(cfg.Peers)),
 		peerCancels: make(map[string]context.CancelFunc, len(cfg.Peers)),
+		spawnCounts: make(map[string]int, len(cfg.Peers)),
 		subs:        map[chan InvalidationEvent]struct{}{},
 		opts:        options,
 	}
@@ -145,6 +148,7 @@ func (p *Provider) Start(ctx context.Context) error {
 func (p *Provider) startPeer(a *PeerAdapter) {
 	ctx, cancel := context.WithCancel(p.startCtx)
 	p.peerCancels[a.peer.Name] = cancel
+	p.spawnCounts[a.peer.Name]++
 	p.wg.Add(1)
 	go p.runPeer(ctx, a)
 }
@@ -276,6 +280,75 @@ func (p *Provider) HasPeer(name string) bool {
 	_, ok := p.adapters[name]
 	p.mu.RUnlock()
 	return ok
+}
+
+// SpawnCount returns the number of times startPeer has been called for name.
+// It is intended for tests that need to verify a peer's goroutine was NOT
+// restarted across an ApplyPeers call — a count of 1 means the goroutine
+// was spawned exactly once and left alone.
+func (p *Provider) SpawnCount(name string) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.spawnCounts[name]
+}
+
+// ApplyPeers diffs the current peer set against cfg and issues the minimum
+// AddPeer / RemovePeer calls needed to converge on the new config.
+//
+// Algorithm (name-based diff only — this is the first pass):
+//   - Peers in cfg but not in the current set → AddPeer.
+//   - Peers in the current set but not in cfg → RemovePeer.
+//   - Peers present in both sets → left untouched (goroutine is NOT restarted).
+//
+// Future passes will tighten the equality check: if address or TLS differ,
+// the peer is treated as a remove+add pair. Structure the "both sets" branch
+// to accommodate that — the equality predicate is the only thing that changes.
+//
+// Error policy: best-effort. If one AddPeer or RemovePeer fails, the error is
+// collected and the rest of the diff is still applied. All errors are joined
+// and returned at the end. This ensures a single misconfigured peer does not
+// block convergence for the others.
+//
+// ApplyPeers is safe to call concurrently with AddPeer / RemovePeer.
+func (p *Provider) ApplyPeers(cfg FederationConfig) error {
+	// Snapshot the current peer names without holding the lock during
+	// AddPeer/RemovePeer calls — those methods acquire p.mu.Lock() themselves,
+	// and holding p.mu.RLock() here while calling them would deadlock.
+	p.mu.RLock()
+	currentNames := make(map[string]struct{}, len(p.adapters))
+	for name := range p.adapters {
+		currentNames[name] = struct{}{}
+	}
+	p.mu.RUnlock()
+
+	newNames := make(map[string]struct{}, len(cfg.Peers))
+	for _, peer := range cfg.Peers {
+		newNames[peer.Name] = struct{}{}
+	}
+
+	var errs []error
+
+	// Add peers that are new.
+	for _, peer := range cfg.Peers {
+		if _, exists := currentNames[peer.Name]; !exists {
+			if err := p.AddPeer(peer); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		// Peers in both sets: leave untouched for now.
+		// Future: if peer.Address != current.Address || peer.TLS != current.TLS → remove+add.
+	}
+
+	// Remove peers that are no longer in the config.
+	for name := range currentNames {
+		if _, exists := newNames[name]; !exists {
+			if err := p.RemovePeer(name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // Get implements the transparent forwarder side of Provider[NodeID,

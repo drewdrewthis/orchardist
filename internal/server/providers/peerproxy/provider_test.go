@@ -453,6 +453,124 @@ func peerNames(peers []peerproxy.PeerConfig) []string {
 	return names
 }
 
+// TestApplyPeers_BasicDiff is the unit coverage for the AC scenario
+// "ApplyPeers diffs current vs new and emits the right calls".
+//
+// Setup: provider running peers ["orchard.boxd.sh", "lw-fed-d"].
+// New config: ["orchard.boxd.sh", "lw-fed-c"].
+//
+// Expected:
+//   - AddPeer("lw-fed-c") called exactly once.
+//   - RemovePeer("lw-fed-d") called exactly once.
+//   - "orchard.boxd.sh" goroutine NOT restarted (SpawnCount stays 1).
+//   - Peers() == {"lw-fed-c", "orchard.boxd.sh"} after the diff.
+func TestApplyPeers_BasicDiff(t *testing.T) {
+	fakeBoxd := newFakePeer(t)
+	fakeFedD := newFakePeer(t)
+	fakeFedC := newFakePeer(t)
+
+	// 1. Start provider with two initial peers.
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	if err := p.AddPeer(peerproxy.PeerConfig{
+		Name:    "orchard.boxd.sh",
+		Address: fakeBoxd.addr(),
+		TLS:     false,
+	}); err != nil {
+		t.Fatalf("AddPeer orchard.boxd.sh: %v", err)
+	}
+	if err := p.AddPeer(peerproxy.PeerConfig{
+		Name:    "lw-fed-d",
+		Address: fakeFedD.addr(),
+		TLS:     false,
+	}); err != nil {
+		t.Fatalf("AddPeer lw-fed-d: %v", err)
+	}
+
+	// Wait for both goroutines to fire at least one ping.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fakeBoxd.pingCount.Load() >= 1 && fakeFedD.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fakeBoxd.pingCount.Load() < 1 {
+		t.Fatalf("orchard.boxd.sh probe did not fire within 300ms")
+	}
+	if fakeFedD.pingCount.Load() < 1 {
+		t.Fatalf("lw-fed-d probe did not fire within 300ms")
+	}
+
+	// Verify spawn counts are 1 for each — we only added them once.
+	if got := p.SpawnCount("orchard.boxd.sh"); got != 1 {
+		t.Fatalf("SpawnCount(orchard.boxd.sh) before ApplyPeers = %d, want 1", got)
+	}
+
+	// 2. Build the new config: swap "lw-fed-d" → "lw-fed-c", keep "orchard.boxd.sh".
+	newCfg := peerproxy.FederationConfig{
+		Peers: []peerproxy.PeerConfig{
+			{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+			{Name: "lw-fed-c", Address: fakeFedC.addr(), TLS: false},
+		},
+	}
+
+	// 3. Apply the diff. Must succeed.
+	if err := p.ApplyPeers(newCfg); err != nil {
+		t.Fatalf("ApplyPeers returned unexpected error: %v", err)
+	}
+
+	// 4. Peers() must contain exactly "lw-fed-c" and "orchard.boxd.sh".
+	peers := p.Peers()
+	if len(peers) != 2 {
+		t.Fatalf("Peers() len = %d, want 2; got %v", len(peers), peerNames(peers))
+	}
+	wantNames := []string{"lw-fed-c", "orchard.boxd.sh"} // sorted order
+	gotNames := peerNames(peers)
+	// peerNames from Peers() are already sorted by the provider.
+	for i, want := range wantNames {
+		if gotNames[i] != want {
+			t.Errorf("Peers()[%d] = %q, want %q", i, gotNames[i], want)
+		}
+	}
+
+	// 5. "lw-fed-d" must be gone.
+	for _, peer := range peers {
+		if peer.Name == "lw-fed-d" {
+			t.Fatal("Peers() still contains lw-fed-d after ApplyPeers")
+		}
+	}
+
+	// 6. "orchard.boxd.sh" goroutine was NOT restarted — SpawnCount must remain 1.
+	if got := p.SpawnCount("orchard.boxd.sh"); got != 1 {
+		t.Fatalf("SpawnCount(orchard.boxd.sh) after ApplyPeers = %d, want 1 (goroutine was restarted)", got)
+	}
+
+	// 7. "lw-fed-c" was newly spawned — SpawnCount must be exactly 1.
+	if got := p.SpawnCount("lw-fed-c"); got != 1 {
+		t.Fatalf("SpawnCount(lw-fed-c) after ApplyPeers = %d, want 1", got)
+	}
+
+	// 8. Within 200ms, "lw-fed-c" probe must have fired at least once.
+	deadline = time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fakeFedC.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fakeFedC.pingCount.Load() < 1 {
+		t.Fatalf("lw-fed-c probe did not fire within 200ms after ApplyPeers")
+	}
+}
+
 // TestRemovePeer_CancelsAndDrops is the unit coverage for the scenario
 // "RemovePeer cancels the peer's goroutine and drops it from the map".
 //
