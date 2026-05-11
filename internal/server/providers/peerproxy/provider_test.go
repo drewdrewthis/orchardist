@@ -212,6 +212,92 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 	}
 }
 
+// TestRemovePeer_UnknownNameReturnsError covers the scenario
+// "RemovePeer on an unknown name returns an error without side effects".
+//
+// Steps:
+//  1. NewProvider with no peers, Start.
+//  2. AddPeer "real" pointing at a fake HTTP server. Wait for at least
+//     one Ping to confirm the goroutine is live.
+//  3. Snapshot pingCount.
+//  4. Call RemovePeer("ghost") — a name that does NOT exist.
+//  5. Assert err != nil and err.Error() contains "ghost".
+//  6. Peers() still contains "real".
+//  7. After ~150ms, fake.pingCount has continued to grow (original goroutine alive).
+//  8. (Optional) RemovePeer("real") returns nil — maps are not corrupted.
+func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
+	fake := newFakePeer(t)
+
+	// 1. Construct an empty provider and start it.
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 2. AddPeer "real" — must succeed.
+	if err := p.AddPeer(peerproxy.PeerConfig{
+		Name:    "real",
+		Address: fake.addr(),
+		TLS:     false,
+	}); err != nil {
+		t.Fatalf("AddPeer: %v", err)
+	}
+
+	// Wait for at least one Ping to confirm the goroutine is live.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fake.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fake.pingCount.Load() < 1 {
+		t.Fatalf("probe goroutine did not issue a Ping within 200ms")
+	}
+
+	// 3. Snapshot pingCount after confirming the goroutine is live.
+	countBefore := fake.pingCount.Load()
+
+	// 4. RemovePeer on a name that does not exist.
+	err := p.RemovePeer("ghost")
+
+	// 5. Must return a non-nil error that identifies the missing name.
+	if err == nil {
+		t.Fatal("RemovePeer(\"ghost\") returned nil error; expected an error for unknown peer")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "ghost") {
+		t.Fatalf("error message %q does not contain the missing name %q", msg, "ghost")
+	}
+
+	// 6. Peers() must still contain "real".
+	found := false
+	for _, peer := range p.Peers() {
+		if peer.Name == "real" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Peers() no longer contains \"real\" after RemovePeer(\"ghost\")")
+	}
+
+	// 7. After ~150ms the original goroutine must still be alive and probing.
+	time.Sleep(150 * time.Millisecond)
+	countAfter := fake.pingCount.Load()
+	if countAfter < countBefore {
+		t.Fatalf("pingCount decreased after RemovePeer(\"ghost\"): before=%d after=%d", countBefore, countAfter)
+	}
+
+	// 8. (Optional) RemovePeer("real") must succeed — maps were not corrupted.
+	if err := p.RemovePeer("real"); err != nil {
+		t.Fatalf("RemovePeer(\"real\") after removing ghost: unexpected error: %v", err)
+	}
+}
+
 // TestRemovePeer_CancelsAndDrops is the unit coverage for the scenario
 // "RemovePeer cancels the peer's goroutine and drops it from the map".
 //
