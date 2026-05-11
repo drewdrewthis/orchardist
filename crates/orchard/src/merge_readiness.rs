@@ -66,8 +66,8 @@ pub fn is_ready_to_merge(view: &MergeReadinessView<'_>) -> bool {
     if view.is_draft || view.has_conflicts || view.unresolved_threads > 0 {
         return false;
     }
-    if view.ci_code_state == Some("failing") {
+    if !matches!(view.ci_code_state, Some("passing") | None) {
         return false;
     }
-    !matches!(view.ci_gate_state, Some("blocked") | Some("pending"))
+    matches!(view.ci_gate_state, Some("cleared") | None)
 }

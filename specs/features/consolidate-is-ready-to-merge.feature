@@ -207,14 +207,14 @@ Feature: Consolidate is_ready_to_merge across signal.rs, classify.rs, watch/diff
     Given a watch fixture where `new_pr` is approved, `ci_code_state = Some("passing")`,
        `ci_gate_state = Some("cleared")`, not draft, no conflicts, zero unresolved threads
     And `old_pr` was not ready (e.g. `review_decision = None`)
-    When `watch::diff::diff_state` runs
+    When `watch::diff::diff` runs
     Then a `PrReadyToMerge` event is emitted for that worktree
 
   @integration
   Scenario: Approved + code-green + gate-blocked PR no longer fires PrReadyToMerge in watch
     Given a watch fixture where `new_pr` is approved, `ci_code_state = Some("passing")`,
        `ci_gate_state = Some("blocked")`, not draft, no conflicts, zero unresolved threads
-    When `watch::diff::diff_state` runs
+    When `watch::diff::diff` runs
     Then no `PrReadyToMerge` event is emitted for that worktree
     # Documented behaviour delta: watch/diff.rs starts respecting gate state.
 
@@ -227,7 +227,7 @@ Feature: Consolidate is_ready_to_merge across signal.rs, classify.rs, watch/diff
     Given a watch fixture where `new_pr` is approved, `ci_code_state = Some("passing")`,
        `ci_gate_state = Some("cleared")`, `is_draft = true`, no conflicts, zero unresolved threads
     And `old_pr` was not ready
-    When `watch::diff::diff_state` runs
+    When `watch::diff::diff` runs
     Then no `PrReadyToMerge` event is emitted for that worktree
     # Pre-refactor watch/diff.rs did NOT filter draft. The unified predicate does.
 

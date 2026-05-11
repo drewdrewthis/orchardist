@@ -64,6 +64,17 @@ fn label_for(wt: &WorktreeState) -> String {
         .unwrap_or_else(|| wt.branch.clone())
 }
 
+/// Returns true when the PR's state is "open" (case-insensitive).
+///
+/// `merge_readiness::is_ready_to_merge` intentionally does not check open-ness —
+/// it is the callsite's responsibility. Without this guard, a closed-unmerged PR
+/// could spuriously emit `PrReadyToMerge`.
+fn is_open(pr: &crate::orchard_state::PrState) -> bool {
+    pr.state
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("open"))
+}
+
 // ---------------------------------------------------------------------------
 // Public diff function
 // ---------------------------------------------------------------------------
@@ -218,8 +229,10 @@ pub fn diff(
                 }
 
                 // PR ready to merge: approved + passing + wasn't already in that state
-                let new_ready = crate::merge_readiness::is_ready_to_merge(&new_pr.into());
-                let old_ready = crate::merge_readiness::is_ready_to_merge(&old_pr.into());
+                let new_ready =
+                    is_open(new_pr) && crate::merge_readiness::is_ready_to_merge(&new_pr.into());
+                let old_ready =
+                    is_open(old_pr) && crate::merge_readiness::is_ready_to_merge(&old_pr.into());
                 if new_ready && !old_ready {
                     events.push(WatchEvent::now(EventKind::PrReadyToMerge {
                         worktree: path.to_string(),
@@ -231,7 +244,7 @@ pub fn diff(
             (None, Some(new_pr)) => {
                 // PR just appeared — check if it's already ready
                 let label = label_for(new_wt);
-                if crate::merge_readiness::is_ready_to_merge(&new_pr.into()) {
+                if is_open(new_pr) && crate::merge_readiness::is_ready_to_merge(&new_pr.into()) {
                     events.push(WatchEvent::now(EventKind::PrReadyToMerge {
                         worktree: path.to_string(),
                         pr_number: new_pr.number,

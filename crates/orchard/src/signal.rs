@@ -424,7 +424,7 @@ pub fn resolve_status(wt: &WorktreeState) -> PipelineStatus {
         if pr.is_draft.unwrap_or(false) {
             return PipelineStatus::Draft;
         }
-        if crate::merge_readiness::is_ready_to_merge(&pr.into()) {
+        if is_open(pr) && crate::merge_readiness::is_ready_to_merge(&pr.into()) {
             return PipelineStatus::Ready;
         }
         if is_open(pr) {
