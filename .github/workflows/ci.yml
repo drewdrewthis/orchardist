@@ -78,7 +78,8 @@ jobs:
         with:
           fetch-depth: 0  # need history to diff against base
       - name: Run stop-bleed check
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
-          BASE_REF="origin/${{ github.base_ref || 'main' }}"
-          git fetch origin "${{ github.base_ref || 'main' }}" --depth=1 || true
-          crates/orchard-gui/scripts/stop-bleed-check.sh "$BASE_REF"
+          git fetch origin "$BASE_REF" --depth=1 || true
+          crates/orchard-gui/scripts/stop-bleed-check.sh "origin/$BASE_REF"

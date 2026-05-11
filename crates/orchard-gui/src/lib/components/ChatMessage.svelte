@@ -80,7 +80,7 @@
 		{#if !grouped}
 			<div class="flex items-baseline gap-2 mb-1">
 				<span class="font-semibold text-[13px] tracking-tight">{displayName}</span>
-				<span class="dimest mono" style:font-size="10.5px">{shortTime(msg.ts)}</span>
+				<span class="dimest mono text-[10.5px]">{shortTime(msg.ts)}</span>
 				{#if msg.isQuestion}
 					<span class="chip attn" style="height: 16px; font-size: 10px; padding: 0 6px;">
 						<Icon name="question" size={9} /> open question
@@ -127,8 +127,8 @@
 			{/if}
 			{#if msg.diff}
 				<div class="mono inline-flex items-center gap-2 mt-2 px-2.5 py-1.5 bg-surface-2 border-[0.5px] border-line rounded-[7px] text-[11.5px]">
-					<span style="color: var(--ok-fg);">+{msg.diff.plus}</span>
-					<span style="color: var(--bad-fg);">−{msg.diff.minus}</span>
+					<span class="text-ok-fg">+{msg.diff.plus}</span>
+					<span class="text-bad-fg">−{msg.diff.minus}</span>
 					<span class="dimer">across {msg.diff.files} files</span>
 				</div>
 			{/if}
@@ -140,26 +140,26 @@
 		{/if}
 		{#if showActions}
 			<div
-				class="absolute top-1 right-2 inline-flex gap-0.5 p-0.5 bg-surface border-[0.5px] border-line rounded-[7px] shadow-md opacity-0 -translate-y-0.5 transition pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto"
+				class="absolute top-1 right-2 inline-flex gap-0.5 p-0.5 bg-surface border-[0.5px] border-line rounded-[7px] shadow-[0_2px_8px_rgba(0,0,0,0.06)] opacity-0 -translate-y-0.5 transition duration-100 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto"
 				role="group"
 				aria-label="Message actions"
 			>
 				<button
-					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition hover:bg-fg/[0.07] hover:text-fg"
+					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition duration-100 hover:bg-fg/[0.07] hover:text-fg"
 					onclick={doCopy}
 					title={copied ? "Copied" : "Copy"}
 				>
 					<Icon name={copied ? "check" : "copy"} size={11} />
 				</button>
 				<button
-					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition hover:bg-fg/[0.07] hover:text-fg"
+					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition duration-100 hover:bg-fg/[0.07] hover:text-fg"
 					onclick={() => onForkFrom(idx, msg)}
 					title="Fork from here"
 				>
 					<Icon name="git-fork" size={11} />
 				</button>
 				<button
-					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition hover:bg-fg/[0.07] hover:text-fg hover:text-bad-fg"
+					class="w-[22px] h-[22px] rounded-[5px] inline-flex items-center justify-center bg-transparent border-0 text-fg-3 transition hover:bg-fg/[0.07] hover:text-bad-fg"
 					onclick={() => onReset(idx, msg)}
 					title="Reset from here"
 				>

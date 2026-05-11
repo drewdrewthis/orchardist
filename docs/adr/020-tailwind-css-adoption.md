@@ -140,10 +140,12 @@ Implementation: grep-on-diff in a GitHub Actions step is acceptable; an
 and must not be scanned. Exclude it from inside the global stylesheet:
 
 ```css
-@source not "../../design-prototype";
+@source not "../../../design-prototype";
 ```
 
-The path is resolved relative to the global stylesheet's location.
+The path is resolved relative to the global stylesheet's location
+(`crates/orchard-gui/src/lib/styles/`, so three `..` reach
+`crates/orchard-gui/design-prototype`).
 
 ### Completion deadline / revert condition
 
