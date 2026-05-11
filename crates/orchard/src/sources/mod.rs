@@ -6,3 +6,4 @@
 //! or `cache_sources::refresh_*` (watch daemon, heal, --json).
 
 pub mod hosts;
+pub mod refresh;
