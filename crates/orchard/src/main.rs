@@ -247,14 +247,14 @@ fn handle_heal(fix: bool, json: bool) {
     // Build HealWorktree entries from all configured repo caches.
     let worktrees = build_heal_worktrees_for_cli(&config);
 
-    let report = heal::diagnose(
-        &sessions,
-        &worktrees,
-        &claude_states,
-        &cache_files,
-        &known_slugs,
-        current_session.as_deref(),
-    );
+    let report = heal::diagnose(&heal::HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        claude_states: &claude_states,
+        cache_files: &cache_files,
+        known_repo_slugs: &known_slugs,
+        current_session: current_session.as_deref(),
+    });
 
     // Abort before applying any destructive fixes when the invoking session
     // has an Error-severity self-classification. A session in an unknown-bad

@@ -3,7 +3,7 @@
 /// These tests exercise the `heal::diagnose` pure function with realistic inputs,
 /// corresponding to acceptance criteria from `specs/features/orchard-heal.feature`.
 use orchard::heal::{
-    HealAction, HealCategory, HealClaudeState, HealWorktree, Severity, apply_fixes,
+    HealAction, HealCategory, HealClaudeState, HealInput, HealWorktree, Severity, apply_fixes,
     detect_self_error, diagnose, format_report,
 };
 use orchard::types::TmuxSession;
@@ -48,7 +48,12 @@ fn dry_run_reports_findings_without_applying_fixes() {
         tmux_session: "myrepo_dead".to_string(),
     }];
 
-    let report = diagnose(&sessions, &worktrees, &claude_states, &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        claude_states: &claude_states,
+        ..Default::default()
+    });
 
     // Orphaned session finding.
     let orphan = report
@@ -86,7 +91,11 @@ fn all_healthy_when_sessions_match_worktrees() {
     let sessions = vec![session("myrepo_main", &tmp)];
     let worktrees = vec![worktree(&tmp, "main")];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        ..Default::default()
+    });
 
     assert_eq!(report.findings.len(), 0, "should have no findings");
     assert!(report.is_all_ok());
@@ -109,7 +118,11 @@ fn orphaned_session_detected_when_path_exists_but_no_worktree_matches() {
     let sessions = vec![session("myrepo_old-feature", "/tmp")];
     let worktrees = vec![worktree("/workspace/other", "main")];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -139,7 +152,11 @@ fn dead_session_directory_detected_for_nonexistent_path() {
     )];
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -163,7 +180,11 @@ fn stale_claude_state_detected_for_dead_session() {
         tmux_session: "myrepo_dead".to_string(),
     }];
 
-    let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        claude_states: &claude_states,
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -187,7 +208,11 @@ fn no_stale_claude_state_when_session_is_alive() {
         tmux_session: "myrepo_live".to_string(),
     }];
 
-    let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        claude_states: &claude_states,
+        ..Default::default()
+    });
 
     let stale = report
         .findings
@@ -209,7 +234,11 @@ fn stale_cache_file_flagged_for_unknown_repo() {
     let cache_files = vec!["ghost_repo_issues.json".to_string()];
     let known_slugs = vec!["owner/known-project".to_string()];
 
-    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
+    let report = diagnose(&HealInput {
+        cache_files: &cache_files,
+        known_repo_slugs: &known_slugs,
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -226,7 +255,11 @@ fn no_stale_cache_for_known_repo() {
     let cache_files = vec!["owner_myrepo_issues.json".to_string()];
     let known_slugs = vec!["owner/myrepo".to_string()];
 
-    let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
+    let report = diagnose(&HealInput {
+        cache_files: &cache_files,
+        known_repo_slugs: &known_slugs,
+        ..Default::default()
+    });
 
     let stale = report
         .findings
@@ -246,7 +279,10 @@ fn merged_pr_worktree_flagged_for_manual_cleanup() {
     wt.pr_state = Some("merged".to_string());
     wt.pr_number = Some(12);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        worktrees: &[wt],
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -267,7 +303,10 @@ fn closed_pr_worktree_flagged() {
     wt.pr_state = Some("closed".to_string());
     wt.pr_number = Some(15);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        worktrees: &[wt],
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -283,7 +322,10 @@ fn fix_does_not_auto_delete_merged_pr_worktrees() {
     wt.pr_state = Some("merged".to_string());
     wt.pr_number = Some(12);
 
-    let report = diagnose(&[], &[wt], &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        worktrees: &[wt],
+        ..Default::default()
+    });
     let fix_results = orchard::heal::apply_fixes(&report.findings);
 
     // All results should be FlagForCleanup (not KillSession or DeleteFile).
@@ -306,7 +348,10 @@ fn closed_issue_worktree_flagged_when_no_pr() {
     let mut wt = worktree(".worktrees/issue8-refactor", "issue8/refactor");
     wt.issue_state = Some("closed".to_string());
 
-    let report = diagnose(&[], &[wt], &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        worktrees: &[wt],
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -330,7 +375,11 @@ fn session_naming_mismatch_detected() {
     let mut wt = worktree("/workspace/feature-login", "feature/login");
     wt.expected_session_name = Some("myrepo_feature-login".to_string());
 
-    let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &[wt],
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -354,7 +403,11 @@ fn multiple_sessions_per_worktree_detected() {
     ];
     let wt = worktree("/workspace/issue10-api", "issue10/api");
 
-    let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &[wt],
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -375,7 +428,11 @@ fn report_format_includes_icons() {
     let sessions = vec![session("orphan", "/tmp")]; // /tmp is a real path but not a worktree
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        ..Default::default()
+    });
     let text = format_report(&report, None);
 
     // Should contain at least one icon character.
@@ -390,7 +447,11 @@ fn json_output_contains_findings_array() {
     let sessions = vec![session("orphan", "/tmp")];
     let worktrees = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        ..Default::default()
+    });
     let json_str = serde_json::to_string(&report).expect("serialize report");
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
 
@@ -440,7 +501,11 @@ fn outside_tmux_no_self_protection_applied() {
     let worktrees: Vec<HealWorktree> = vec![];
 
     // current_session = None simulates running outside tmux.
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        ..Default::default()
+    });
 
     let finding = report
         .findings
@@ -478,11 +543,14 @@ fn regression_heal_must_never_kill_invoking_session() {
     let sessions = vec![session("orchardist", "/tmp")];
     let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
 
-    // Pass `Some("orchardist")` as the `current_session` argument.
-    // TODAY diagnose() only accepts 5 positional args — this 6th arg is the one
-    // the fix will add. Passing it here causes a compile error, which is the
-    // expected failing-first signal for Phase 1 of TDD.
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    // Pass `Some("orchardist")` as the `current_session` field so the diagnose
+    // self-protection branch fires.
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        current_session: Some("orchardist"),
+        ..Default::default()
+    });
 
     let fix_results = orchard::heal::apply_fixes(&report.findings);
 
@@ -517,7 +585,12 @@ fn format_report_marks_invoking_session_as_skipped() {
     let sessions = vec![session("orchardist", "/tmp")];
     let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        current_session: Some("orchardist"),
+        ..Default::default()
+    });
     let text = format_report(&report, None);
 
     assert!(
@@ -536,7 +609,12 @@ fn json_output_exposes_is_self_field() {
     let sessions = vec![session("orchardist", "/tmp")];
     let worktrees: Vec<orchard::heal::HealWorktree> = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        current_session: Some("orchardist"),
+        ..Default::default()
+    });
     let json_str = serde_json::to_string(&report).expect("serialize report");
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
 
@@ -581,7 +659,12 @@ fn regression_full_pipeline_from_inside_named_tmux_session_never_kills_self() {
     let sessions = vec![session("orchardist", "/tmp"), session(orphan_name, "/tmp")];
     let worktrees: Vec<HealWorktree> = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        current_session: Some("orchardist"),
+        ..Default::default()
+    });
     let fix_results = apply_fixes(&report.findings);
 
     // Self must be skipped, not killed.
@@ -633,7 +716,12 @@ fn regression_sister_window_of_invoking_session_is_still_treated_as_self() {
         }];
         let worktrees: Vec<HealWorktree> = vec![];
 
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            current_session: Some("orchardist"),
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -664,7 +752,12 @@ fn regression_sister_window_of_invoking_session_is_still_treated_as_self() {
         }];
         let worktrees: Vec<HealWorktree> = vec![];
 
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            current_session: Some("orchardist"),
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -692,7 +785,12 @@ fn regression_warning_severity_self_does_not_trigger_abort_path() {
     let sessions = vec![session("orchardist", "/tmp")];
     let worktrees: Vec<HealWorktree> = vec![];
 
-    let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+    let report = diagnose(&HealInput {
+        sessions: &sessions,
+        worktrees: &worktrees,
+        current_session: Some("orchardist"),
+        ..Default::default()
+    });
 
     // Confirm we actually got a self finding at Warning severity.
     let self_finding = report

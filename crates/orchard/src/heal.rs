@@ -208,6 +208,42 @@ pub struct HealClaudeState {
     pub tmux_session: String,
 }
 
+/// Bundled inputs for `diagnose`.
+///
+/// All fields are borrowed slices/references — `HealInput` is `Copy` and zero-cost
+/// to construct. The `Default` impl produces an all-empty input, which lets test
+/// sites that only need a subset of fields use struct-update syntax:
+///
+/// ```ignore
+/// let report = diagnose(&HealInput {
+///     sessions: &sessions,
+///     worktrees: &worktrees,
+///     ..Default::default()
+/// });
+/// ```
+///
+/// # Invariant
+///
+/// All fields must remain borrowed (`&'a [T]` or `Option<&'a T>`). Adding an
+/// owned `Vec<T>` field would break both the `Copy` derive and the zero-copy
+/// contract — drop the derive and revisit the design instead.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HealInput<'a> {
+    /// Live tmux sessions from the daemon (or any equivalent source).
+    pub sessions: &'a [TmuxSession],
+    /// Enriched worktrees to check.
+    pub worktrees: &'a [HealWorktree],
+    /// Stale-check candidates from `/tmp/orchard-claude-*.json`.
+    pub claude_states: &'a [HealClaudeState],
+    /// Cache file names from `~/.cache/orchard/`.
+    pub cache_files: &'a [String],
+    /// Repo slugs from global config (e.g. `["owner/repo"]`).
+    pub known_repo_slugs: &'a [String],
+    /// Name of the tmux session invoking heal, if any. `KillSession` findings
+    /// whose target matches this name will have `is_self` set to `true`.
+    pub current_session: Option<&'a str>,
+}
+
 // ---------------------------------------------------------------------------
 // Core diagnostic function (pure)
 // ---------------------------------------------------------------------------
@@ -215,25 +251,21 @@ pub struct HealClaudeState {
 /// Diagnoses the health of the Orchard environment.
 ///
 /// This is a pure function: all I/O is performed by callers who gather the
-/// inputs. The function only analyzes and classifies findings.
+/// inputs via `HealInput`. The function only analyzes and classifies findings.
 ///
-/// # Parameters
-/// - `sessions`: live tmux sessions from the daemon (or any equivalent source)
-/// - `worktrees`: enriched worktrees to check
-/// - `claude_states`: stale-check candidates from `/tmp/orchard-claude-*.json`
-/// - `cache_files`: cache file names from `~/.cache/orchard/`
-/// - `known_repo_slugs`: repo slugs from global config (e.g. `["owner/repo"]`)
-/// - `current_session`: name of the tmux session invoking heal, if any.
-///   `KillSession` findings whose target matches this name will have `is_self`
-///   set to `true`, allowing callers to skip self-destructive kills.
-pub fn diagnose(
-    sessions: &[TmuxSession],
-    worktrees: &[HealWorktree],
-    claude_states: &[HealClaudeState],
-    cache_files: &[String],
-    known_repo_slugs: &[String],
-    current_session: Option<&str>,
-) -> HealReport {
+/// `current_session` (via `HealInput`) names the tmux session invoking heal, if
+/// any. `KillSession` findings whose target matches this name will have `is_self`
+/// set to `true`, allowing callers to skip self-destructive kills.
+pub fn diagnose(input: &HealInput<'_>) -> HealReport {
+    let HealInput {
+        sessions,
+        worktrees,
+        claude_states,
+        cache_files,
+        known_repo_slugs,
+        current_session,
+    } = *input;
+
     let mut findings = Vec::new();
 
     check_sessions(sessions, worktrees, &mut findings, current_session);
@@ -796,7 +828,11 @@ mod tests {
             "/tmp/nonexistent-worktree",
         )];
         let worktrees = vec![make_worktree("/workspace/main", "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
 
         // Path doesn't exist → DeadSessionDirectory, not orphaned
         let finding = &report.findings[0];
@@ -809,7 +845,11 @@ mod tests {
         // Use a real path that exists but is not a worktree.
         let sessions = vec![make_session("myrepo_old-feature", "/tmp")];
         let worktrees = vec![make_worktree("/workspace/main", "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -830,7 +870,11 @@ mod tests {
     fn detect_dead_session_directory() {
         let sessions = vec![make_session("myrepo_gone", "/tmp/nonexistent-path-xyz")];
         let worktrees = vec![];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -853,7 +897,11 @@ mod tests {
             path: "/tmp/orchard-claude-abc123.json".to_string(),
             tmux_session: "myrepo_dead".to_string(),
         }];
-        let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            claude_states: &claude_states,
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -872,7 +920,11 @@ mod tests {
             path: "/tmp/orchard-claude-abc123.json".to_string(),
             tmux_session: "myrepo_live".to_string(),
         }];
-        let report = diagnose(&sessions, &[], &claude_states, &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            claude_states: &claude_states,
+            ..Default::default()
+        });
 
         let stale = report
             .findings
@@ -892,7 +944,11 @@ mod tests {
     fn detect_stale_cache_file_for_unknown_repo() {
         let cache_files = vec!["ghost_repo_issues.json".to_string()];
         let known_slugs = vec!["owner/my-project".to_string()];
-        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
+        let report = diagnose(&HealInput {
+            cache_files: &cache_files,
+            known_repo_slugs: &known_slugs,
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -906,7 +962,11 @@ mod tests {
     fn no_stale_cache_finding_for_known_repo() {
         let cache_files = vec!["owner_myproject_issues.json".to_string()];
         let known_slugs = vec!["owner/myproject".to_string()];
-        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
+        let report = diagnose(&HealInput {
+            cache_files: &cache_files,
+            known_repo_slugs: &known_slugs,
+            ..Default::default()
+        });
 
         let stale = report
             .findings
@@ -919,7 +979,11 @@ mod tests {
     fn tmux_sessions_cache_file_ignored() {
         let cache_files = vec!["tmux_sessions.json".to_string()];
         let known_slugs: Vec<String> = vec![];
-        let report = diagnose(&[], &[], &[], &cache_files, &known_slugs, None);
+        let report = diagnose(&HealInput {
+            cache_files: &cache_files,
+            known_repo_slugs: &known_slugs,
+            ..Default::default()
+        });
 
         let stale = report
             .findings
@@ -937,7 +1001,10 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue3-tests", "issue3/tests");
         wt.pr_state = Some("merged".to_string());
         wt.pr_number = Some(12);
-        let report = diagnose(&[], &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -957,7 +1024,10 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue5-fix", "issue5/fix");
         wt.pr_state = Some("closed".to_string());
         wt.pr_number = Some(15);
-        let report = diagnose(&[], &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -971,7 +1041,10 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue3-tests", "issue3/tests");
         wt.pr_state = Some("merged".to_string());
         wt.pr_number = Some(12);
-        let report = diagnose(&[], &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let results = apply_fixes(&report.findings);
         // FlagForCleanup produces a result but does not kill/delete anything.
@@ -988,7 +1061,10 @@ mod tests {
     fn flag_worktree_with_closed_issue_no_pr() {
         let mut wt = make_worktree(".worktrees/issue8-refactor", "issue8/refactor");
         wt.issue_state = Some("closed".to_string());
-        let report = diagnose(&[], &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -1003,7 +1079,10 @@ mod tests {
         let mut wt = make_worktree(".worktrees/issue8-refactor", "issue8/refactor");
         wt.issue_state = Some("closed".to_string());
         wt.pr_state = Some("open".to_string());
-        let report = diagnose(&[], &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let issue_finding = report
             .findings
@@ -1024,7 +1103,11 @@ mod tests {
         let sessions = vec![make_session("wrong-name", "/workspace/feature-login")];
         let mut wt = make_worktree("/workspace/feature-login", "feature/login");
         wt.expected_session_name = Some("myrepo_feature-login".to_string());
-        let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -1043,7 +1126,11 @@ mod tests {
         )];
         let mut wt = make_worktree("/workspace/feature-login", "feature/login");
         wt.expected_session_name = Some("myrepo_feature-login".to_string());
-        let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let mismatch = report
             .findings
@@ -1063,7 +1150,11 @@ mod tests {
             make_session("extra-session", "/workspace/issue10-api"),
         ];
         let wt = make_worktree("/workspace/issue10-api", "issue10/api");
-        let report = diagnose(&sessions, &[wt], &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &[wt],
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -1085,7 +1176,11 @@ mod tests {
         let path = tmp.to_string_lossy().to_string();
         let sessions = vec![make_session("myrepo_main", &path)];
         let worktrees = vec![make_worktree(&path, "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
 
         assert!(report.is_all_ok(), "should report all-ok");
         assert_eq!(report.findings.len(), 0);
@@ -1099,7 +1194,11 @@ mod tests {
     fn format_report_suggests_fix_when_actionable() {
         let sessions = vec![make_session("orphan", "/tmp")];
         let worktrees = vec![];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
         let text = format_report(&report, None);
 
         assert!(
@@ -1115,7 +1214,11 @@ mod tests {
         let path = tmp.to_string_lossy().to_string();
         let sessions = vec![make_session("myrepo_main", &path)];
         let worktrees = vec![make_worktree(&path, "main")];
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
         let text = format_report(&report, None);
 
         assert!(
@@ -1196,7 +1299,11 @@ mod tests {
         };
 
         let worktrees = vec![make_worktree(&worktree_path, "issue297/fix")];
-        let report = diagnose(&[session], &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &[session],
+            worktrees: &worktrees,
+            ..Default::default()
+        });
 
         let bad = report.findings.iter().find(|f| {
             matches!(
@@ -1247,7 +1354,12 @@ mod tests {
         let sessions = vec![make_session("orchardist", "/tmp")];
         let worktrees: Vec<HealWorktree> = vec![];
 
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            current_session: Some("orchardist"),
+            ..Default::default()
+        });
 
         let finding = report
             .findings
@@ -1272,7 +1384,12 @@ mod tests {
         ];
         let worktrees: Vec<HealWorktree> = vec![];
 
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], Some("orchardist"));
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            current_session: Some("orchardist"),
+            ..Default::default()
+        });
 
         let orchardist_finding = report
             .findings
@@ -1305,7 +1422,11 @@ mod tests {
         let sessions = vec![make_session("orchardist", "/tmp")];
         let worktrees: Vec<HealWorktree> = vec![];
 
-        let report = diagnose(&sessions, &worktrees, &[], &[], &[], None);
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            worktrees: &worktrees,
+            ..Default::default()
+        });
 
         for finding in &report.findings {
             assert!(
@@ -1326,7 +1447,12 @@ mod tests {
             tmux_session: "anything".to_string(),
         }];
 
-        let report = diagnose(&sessions, &[], &claude_states, &[], &[], Some("anything"));
+        let report = diagnose(&HealInput {
+            sessions: &sessions,
+            claude_states: &claude_states,
+            current_session: Some("anything"),
+            ..Default::default()
+        });
 
         for finding in &report.findings {
             if !matches!(finding.action, HealAction::KillSession(_)) {
