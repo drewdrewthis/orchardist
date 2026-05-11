@@ -56,24 +56,23 @@ fn first_session(wt: &WorktreeState) -> String {
         .unwrap_or_default()
 }
 
-/// Returns `true` when a PR is approved, CI is passing, no conflicts, and no unresolved threads.
-///
-/// Reads the legacy `checks_state` field for one release per issue #218; a
-/// follow-up will migrate this to `ci_code_state`.
-#[allow(deprecated)]
-fn is_ready_to_merge(pr: &crate::orchard_state::PrState) -> bool {
-    pr.review_decision.as_deref() == Some("approved")
-        && pr.checks_state.as_deref() == Some("passing")
-        && !pr.has_conflicts
-        && pr.unresolved_threads == 0
-}
-
 /// Returns a human-readable label for a worktree: issue title if available, else branch.
 fn label_for(wt: &WorktreeState) -> String {
     wt.issue
         .as_ref()
         .map(|i| i.title.clone())
         .unwrap_or_else(|| wt.branch.clone())
+}
+
+/// Returns true when the PR's state is "open" (case-insensitive).
+///
+/// `merge_readiness::is_ready_to_merge` intentionally does not check open-ness —
+/// it is the callsite's responsibility. Without this guard, a closed-unmerged PR
+/// could spuriously emit `PrReadyToMerge`.
+fn is_open(pr: &crate::orchard_state::PrState) -> bool {
+    pr.state
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("open"))
 }
 
 // ---------------------------------------------------------------------------
@@ -230,8 +229,10 @@ pub fn diff(
                 }
 
                 // PR ready to merge: approved + passing + wasn't already in that state
-                let new_ready = is_ready_to_merge(new_pr);
-                let old_ready = is_ready_to_merge(old_pr);
+                let new_ready =
+                    is_open(new_pr) && crate::merge_readiness::is_ready_to_merge(&new_pr.into());
+                let old_ready =
+                    is_open(old_pr) && crate::merge_readiness::is_ready_to_merge(&old_pr.into());
                 if new_ready && !old_ready {
                     events.push(WatchEvent::now(EventKind::PrReadyToMerge {
                         worktree: path.to_string(),
@@ -243,7 +244,7 @@ pub fn diff(
             (None, Some(new_pr)) => {
                 // PR just appeared — check if it's already ready
                 let label = label_for(new_wt);
-                if is_ready_to_merge(new_pr) {
+                if is_open(new_pr) && crate::merge_readiness::is_ready_to_merge(&new_pr.into()) {
                     events.push(WatchEvent::now(EventKind::PrReadyToMerge {
                         worktree: path.to_string(),
                         pr_number: new_pr.number,

@@ -27,6 +27,7 @@ pub mod hook_enrich;
 pub mod join;
 pub mod json_output;
 pub mod logger;
+pub mod merge_readiness;
 pub mod merge_remote;
 pub mod models;
 mod navigation;
