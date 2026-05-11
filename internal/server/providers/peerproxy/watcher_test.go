@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -229,6 +230,149 @@ func TestConfigWatcher_ParseErrorKeepsLastGood(t *testing.T) {
 	if pingAfter < pingBefore {
 		t.Errorf("pingCount decreased after malformed write: before=%d now=%d (probe goroutine was cancelled)",
 			pingBefore, pingAfter)
+	}
+}
+
+// TestConfigWatcher_AtomicRenameTriggersReload is the regression guard for the
+// macOS atomic-rename scenario from federation-peers-hot-reload.feature.
+//
+// # Background
+//
+// On macOS, fsnotify historically misses writes when watching a single file
+// path and the write is performed via a tmp-then-rename pattern (which is how
+// `orchard config add-peer` and most editors save files). The documented
+// workaround is to watch the PARENT DIRECTORY and filter events by filename.
+// That workaround is already in ConfigWatcher.Start via `w.Add(filepath.Dir(path))`.
+//
+// This test PROTECTS that workaround from regression. If someone "simplifies"
+// ConfigWatcher.Start to call `w.Add(path)` instead of `w.Add(filepath.Dir(path))`,
+// this test will fail on darwin because the Rename event for the config file
+// would never arrive.
+//
+// Steps:
+//  1. Start a fake peer (orchard.boxd.sh).
+//  2. Write an initial 1-peer config; build and start the Provider.
+//  3. Start ConfigWatcher with short debounce (100ms).
+//  4. Wait for orchard.boxd.sh to begin probing.
+//  5. Atomically write a 2-peer config via `path+".tmp"` then `os.Rename` —
+//     the exact sequence `orchard config add-peer` uses.
+//  6. Poll up to (debounce + 2s) for Peers() length to reach 2.
+//  7. Assert:
+//   - Peers() length == 2.
+//   - SpawnCount("orchard.boxd.sh") == 1 (not restarted).
+//   - SpawnCount("lw-fed-c") == 1 (started exactly once).
+//   - ApplyPeersInvocationCount() == 1 (exactly one reload, no spurious calls).
+func TestConfigWatcher_AtomicRenameTriggersReload(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-specific scenario: atomic-rename + parent-dir watch workaround")
+	}
+
+	// 1. Fake peers for the two addresses.
+	fakeBoxd := newFakePeer(t)
+	fakeFedC := newFakePeer(t)
+
+	// 2. Write initial config — only orchard.boxd.sh.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+	})
+
+	initialCfg := loadConfig(t, cfgPath)
+	p := peerproxy.NewProvider(initialCfg, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 3. Start ConfigWatcher with short debounce so the test completes quickly.
+	const debounce = 100 * time.Millisecond
+	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(), peerproxy.WithDebounce(debounce))
+	if err := cw.Start(ctx); err != nil {
+		t.Fatalf("ConfigWatcher.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = cw.Close() })
+
+	// 4. Wait for the initial peer to begin probing (confirms goroutine is live).
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fakeBoxd.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fakeBoxd.pingCount.Load() < 1 {
+		t.Fatalf("orchard.boxd.sh probe goroutine did not issue a Ping within 500ms")
+	}
+
+	// Snapshot initial spawn counts.
+	initialBoxdSpawnCount := p.SpawnCount("orchard.boxd.sh")
+	if initialBoxdSpawnCount != 1 {
+		t.Fatalf("initial SpawnCount(orchard.boxd.sh) = %d, want 1", initialBoxdSpawnCount)
+	}
+	if got := len(p.Peers()); got != 1 {
+		t.Fatalf("initial Peers() len = %d, want 1", got)
+	}
+
+	// 5. Perform the atomic-rename write: write to path+".tmp" then os.Rename.
+	// This is the exact sequence used by `orchard config add-peer` and most
+	// editors. On macOS, watching the file directly (w.Add(path)) would miss
+	// this Rename event; only parent-dir watching catches it.
+	writeConfigAtomic(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+		{Name: "lw-fed-c", Address: fakeFedC.addr(), TLS: false},
+	})
+
+	// 6. Poll up to debounce + 2s for Peers() to grow to 2.
+	deadline = time.Now().Add(debounce + 2*time.Second)
+	for time.Now().Before(deadline) {
+		if len(p.Peers()) == 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 7. Assertions.
+
+	// Peers() must have grown to 2 — the rename event was observed.
+	peers := p.Peers()
+	if len(peers) != 2 {
+		t.Fatalf("Peers() len = %d after atomic rename, want 2; peers=%v\n"+
+			"(If this fails on macOS, ConfigWatcher may be watching the file directly\n"+
+			" instead of the parent directory — check ConfigWatcher.Start for w.Add(path))",
+			len(peers), peerNames(peers))
+	}
+
+	// Both peers must be present.
+	peerSet := make(map[string]bool, len(peers))
+	for _, peer := range peers {
+		peerSet[peer.Name] = true
+	}
+	if !peerSet["orchard.boxd.sh"] {
+		t.Errorf("Peers() missing %q; got %v", "orchard.boxd.sh", peerNames(peers))
+	}
+	if !peerSet["lw-fed-c"] {
+		t.Errorf("Peers() missing %q; got %v", "lw-fed-c", peerNames(peers))
+	}
+
+	// orchard.boxd.sh must NOT have been restarted.
+	if got := p.SpawnCount("orchard.boxd.sh"); got != initialBoxdSpawnCount {
+		t.Fatalf("SpawnCount(orchard.boxd.sh) = %d after reload, want %d (peer was restarted unexpectedly)",
+			got, initialBoxdSpawnCount)
+	}
+
+	// lw-fed-c was newly added — spawned exactly once.
+	if got := p.SpawnCount("lw-fed-c"); got != 1 {
+		t.Fatalf("SpawnCount(lw-fed-c) = %d after reload, want 1", got)
+	}
+
+	// Exactly one ApplyPeers call: not zero (rename was not missed), not more
+	// than one (debounce prevented double-reload).
+	if got := cw.ApplyPeersInvocationCount(); got != 1 {
+		t.Fatalf("ApplyPeersInvocationCount() = %d, want 1 (one rename → one debounced reload)", got)
 	}
 }
 
