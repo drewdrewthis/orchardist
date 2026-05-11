@@ -18,6 +18,21 @@
 
   Out of scope for this release: the orchardist working directory at `~/.config/orchard/.orchardist/` and the state directory `~/.local/state/orchard` both stay where they are.
 
+## [1.1.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v1.0.0...orchard-v1.1.0) (2026-05-11)
+
+
+### Features
+
+* daemon-side joins (Worktree.claudeInstances, ClaudeInstance.{worktree,conversation}) + worktree lens ([137893f](https://github.com/drewdrewthis/git-orchard-rs/commit/137893f58380a0bbf89c271a98e401c43564bc1e))
+* **orchard-gui:** adopt Tailwind v4 (foundation PR for [#544](https://github.com/drewdrewthis/git-orchard-rs/issues/544)) ([#556](https://github.com/drewdrewthis/git-orchard-rs/issues/556)) ([5201bc2](https://github.com/drewdrewthis/git-orchard-rs/commit/5201bc21e892d3f7588c0a3e79ec980e5601069d))
+
+
+### Bug Fixes
+
+* **github:** skip ISO date years in branch-name issue extractor ([#531](https://github.com/drewdrewthis/git-orchard-rs/issues/531)) ([3a237a9](https://github.com/drewdrewthis/git-orchard-rs/commit/3a237a9d88476818c04d34aa12e8bb1e2a434ac1)), closes [#379](https://github.com/drewdrewthis/git-orchard-rs/issues/379)
+* restore canonical schema.json key order (test fixture invariance) ([7d1633e](https://github.com/drewdrewthis/git-orchard-rs/commit/7d1633e6ed0b944e22505afb5ca945a139f8fb15))
+* **tui:** three UX ergonomics fixes — [#331](https://github.com/drewdrewthis/git-orchard-rs/issues/331), [#438](https://github.com/drewdrewthis/git-orchard-rs/issues/438), [#545](https://github.com/drewdrewthis/git-orchard-rs/issues/545) ([#574](https://github.com/drewdrewthis/git-orchard-rs/issues/574)) ([b70ce86](https://github.com/drewdrewthis/git-orchard-rs/commit/b70ce86b90e82a4cdaa32e333b08bf5fe5cf0d40))
+
 ## [1.0.0](https://github.com/drewdrewthis/git-orchard-rs/compare/orchard-v0.14.0...orchard-v1.0.0) (2026-05-09)
 
 
