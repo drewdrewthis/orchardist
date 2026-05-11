@@ -1146,6 +1146,200 @@ func dump(t *testing.T, label string, v any) {
 var _ = fmt.Stringer(nil)
 var _ = dump
 
+// TestEndToEnd_OrchardBoxdRoundTrip is the E2E proof for the AC4 round-trip
+// scenario:
+//
+//	"Removing and re-adding `orchard.boxd.sh` round-trips cleanly"
+//
+// The test drives the full stack end-to-end: a real daemon, a real config file
+// watched by ConfigWatcher, and real GraphQL queries. It performs one
+// remove+re-add cycle for orchard.boxd.sh and asserts that:
+//
+//   - RemovePeer was called first (orchard.boxd.sh disappears from GraphQL)
+//   - AddPeer was called second (orchard.boxd.sh reappears with reachable=true)
+//   - SpawnCount("orchard.boxd.sh") == 2 (a fresh goroutine was started on re-add)
+//
+// Steps:
+//  1. Start fakeBoxd (the fake orchard.boxd.sh endpoint).
+//  2. Write initial config: [orchard.boxd.sh].
+//  3. Construct Provider from on-disk config; start it; start ConfigWatcher (100ms debounce).
+//  4. Wire server.New + mount GraphQL on httptest.
+//  5. Wait for orchard.boxd.sh to be reachable=true.
+//  6. Snapshot SpawnCount("orchard.boxd.sh") == 1.
+//  7. Atomically write config with peers=[] (remove orchard.boxd.sh).
+//  8. Poll host.peers until orchard.boxd.sh disappears; assert ApplyPeersInvocationCount grew.
+//  9. Atomically write config with peers=[orchard.boxd.sh] (re-add).
+// 10. Poll host.peers until orchard.boxd.sh appears with reachable=true.
+// 11. Assert SpawnCount("orchard.boxd.sh") == 2 (fresh goroutine on re-add).
+// 12. Final GraphQL check: orchard.boxd.sh reachable=true.
+func TestEndToEnd_OrchardBoxdRoundTrip(t *testing.T) {
+	// 1. Single fake peer server for orchard.boxd.sh.
+	fakeBoxd := newFakePeer(t)
+
+	// 2. Write the initial config — only orchard.boxd.sh.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+	})
+
+	// 3. Construct provider from the on-disk config.
+	initialCfg := loadConfig(t, cfgPath)
+	logger := slog.Default()
+	peerProvider := peerproxy.NewProvider(initialCfg, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := peerProvider.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = peerProvider.Stop() })
+
+	const debounce = 100 * time.Millisecond
+	cw := peerproxy.NewConfigWatcher(cfgPath, peerProvider, logger,
+		peerproxy.WithDebounce(debounce))
+	if err := cw.Start(ctx); err != nil {
+		t.Fatalf("ConfigWatcher.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = cw.Close() })
+
+	// 4. Wire the local daemon and mount GraphQL.
+	localEvents := peerproxy.NewLocalInvalidator()
+	srv := server.New("", logger,
+		server.WithPeerProxy(peerProvider),
+		server.WithLocalEvents(localEvents),
+	)
+	if err := srv.StartHostProvider(ctx); err != nil {
+		t.Fatalf("StartHostProvider: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", srv.GraphQLHandler())
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	localFix := &orchardFixture{
+		addr:   mustStripScheme(t, ts.URL),
+		srv:    ts,
+		events: localEvents,
+	}
+
+	// 5. Wait for orchard.boxd.sh to appear with reachable=true. The supervisor
+	// probes on Start; once it lands the reachable bit flips.
+	if !waitForCondition(5*time.Second, func() bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if row["machineId"] == "orchard.boxd.sh" && row["reachable"] == true {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("orchard.boxd.sh never became reachable=true within 5s (initial round-trip failed)")
+	}
+
+	// 6. SpawnCount for orchard.boxd.sh must be exactly 1 after the initial start.
+	if sc := peerProvider.SpawnCount("orchard.boxd.sh"); sc != 1 {
+		t.Fatalf("expected SpawnCount(orchard.boxd.sh) == 1 after Start, got %d", sc)
+	}
+
+	// Snapshot the applyPeersCount before writing the first config change.
+	applyCountBefore := cw.ApplyPeersInvocationCount()
+
+	// 7. Atomically write config with peers=[] — remove orchard.boxd.sh entirely.
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{})
+
+	// 8. Poll host.peers until orchard.boxd.sh disappears from the GraphQL response.
+	if !waitForCondition(2*time.Second, func() bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if row["machineId"] == "orchard.boxd.sh" {
+				return false // still present
+			}
+		}
+		return true // orchard.boxd.sh gone
+	}) {
+		t.Fatal("orchard.boxd.sh still present in host.peers after 2s (RemovePeer did not fire)")
+	}
+
+	// Assert ApplyPeersInvocationCount grew — the watcher actually called ApplyPeers.
+	if got := cw.ApplyPeersInvocationCount(); got <= applyCountBefore {
+		t.Fatalf("ApplyPeersInvocationCount = %d after remove, want > %d (ApplyPeers must have been called)",
+			got, applyCountBefore)
+	}
+
+	// Snapshot count again before the re-add.
+	applyCountAfterRemove := cw.ApplyPeersInvocationCount()
+
+	// 9. Atomically write config with peers=[orchard.boxd.sh] — re-add the peer.
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+	})
+
+	// 10. Poll host.peers until orchard.boxd.sh reappears with reachable=true.
+	if !waitForCondition(5*time.Second, func() bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if row["machineId"] == "orchard.boxd.sh" && row["reachable"] == true {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("orchard.boxd.sh never reappeared with reachable=true within 5s (AddPeer or probe did not fire)")
+	}
+
+	// Assert ApplyPeersInvocationCount grew again — the re-add triggered another ApplyPeers.
+	if got := cw.ApplyPeersInvocationCount(); got <= applyCountAfterRemove {
+		t.Fatalf("ApplyPeersInvocationCount = %d after re-add, want > %d (ApplyPeers must have been called again)",
+			got, applyCountAfterRemove)
+	}
+
+	// 11. SpawnCount must be exactly 2: once on initial Start, once on re-add via AddPeer.
+	// A count of 1 would mean the peer goroutine was never restarted (bug).
+	// A count > 2 would mean it was restarted spuriously.
+	if sc := peerProvider.SpawnCount("orchard.boxd.sh"); sc != 2 {
+		t.Fatalf("SpawnCount(orchard.boxd.sh) = %d after round-trip, want 2 (remove+re-add must spawn a fresh goroutine)",
+			sc)
+	}
+
+	// 12. Final GraphQL check — orchard.boxd.sh is reachable in the last response.
+	finalEnvelope := graphQLPost(t, localFix,
+		`{ host { peers { id machineId reachable } } }`)
+	if errs, ok := finalEnvelope["errors"].([]any); ok && len(errs) > 0 {
+		t.Fatalf("unexpected GraphQL errors in final check: %v", errs)
+	}
+	finalData, _ := finalEnvelope["data"].(map[string]any)
+	finalHost, _ := finalData["host"].(map[string]any)
+	finalPeers, _ := finalHost["peers"].([]any)
+
+	var finalBoxdReachable bool
+	for _, p := range finalPeers {
+		row, _ := p.(map[string]any)
+		if row["machineId"] == "orchard.boxd.sh" && row["reachable"] == true {
+			finalBoxdReachable = true
+		}
+	}
+	if !finalBoxdReachable {
+		t.Fatalf("orchard.boxd.sh not reachable=true in final GraphQL check; peers=%v", finalPeers)
+	}
+}
+
 // TestEndToEnd_FreshPeerWithoutProxyReportsUnreachable covers the feature
 // scenario:
 //
