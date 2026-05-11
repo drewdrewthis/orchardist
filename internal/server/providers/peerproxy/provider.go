@@ -32,9 +32,10 @@ type InvalidationEvent struct {
 type Provider struct {
 	logger *slog.Logger
 
-	mu       sync.RWMutex
-	adapters map[string]*PeerAdapter
-	clients  map[string]*Client
+	mu          sync.RWMutex
+	adapters    map[string]*PeerAdapter
+	clients     map[string]*Client
+	peerCancels map[string]context.CancelFunc
 
 	subMu sync.Mutex
 	subs  map[chan InvalidationEvent]struct{}
@@ -44,6 +45,10 @@ type Provider struct {
 	wg          sync.WaitGroup
 	started     bool
 	closed      bool
+
+	// opts holds construction-time options so AddPeer can reuse them
+	// when building clients for dynamically-added peers.
+	opts providerOptions
 }
 
 // ProviderOption configures a Provider at construction time. The only
@@ -84,10 +89,12 @@ func NewProvider(cfg FederationConfig, logger *slog.Logger, opts ...ProviderOpti
 		opt(&options)
 	}
 	p := &Provider{
-		logger:   logger,
-		adapters: make(map[string]*PeerAdapter, len(cfg.Peers)),
-		clients:  make(map[string]*Client, len(cfg.Peers)),
-		subs:     map[chan InvalidationEvent]struct{}{},
+		logger:      logger,
+		adapters:    make(map[string]*PeerAdapter, len(cfg.Peers)),
+		clients:     make(map[string]*Client, len(cfg.Peers)),
+		peerCancels: make(map[string]context.CancelFunc, len(cfg.Peers)),
+		subs:        map[chan InvalidationEvent]struct{}{},
+		opts:        options,
 	}
 	for _, peer := range cfg.Peers {
 		client := buildClient(peer, options.tlsConfig)
@@ -116,22 +123,54 @@ func buildClient(peer PeerConfig, tlsCfg *tls.Config) *Client {
 // to call once; subsequent calls are no-ops. Stop tears them down.
 func (p *Provider) Start(ctx context.Context) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.started || p.closed {
-		p.mu.Unlock()
 		return nil
 	}
 	p.started = true
 	p.startCtx, p.startCancel = context.WithCancel(ctx)
-	adapters := make([]*PeerAdapter, 0, len(p.adapters))
 	for _, a := range p.adapters {
-		adapters = append(adapters, a)
+		p.startPeer(a)
 	}
-	p.mu.Unlock()
+	return nil
+}
 
-	for _, a := range adapters {
-		p.wg.Add(1)
-		go p.runPeer(p.startCtx, a)
+// startPeer spawns the runPeer goroutine for a single adapter with its
+// own child context derived from startCtx. The per-peer cancel is stored
+// in peerCancels so RemovePeer can cancel it independently.
+//
+// Callers MUST hold p.mu when writing peerCancels, or call startPeer
+// only from Start (which does its own locking). AddPeer holds the lock
+// before calling startPeer.
+func (p *Provider) startPeer(a *PeerAdapter) {
+	ctx, cancel := context.WithCancel(p.startCtx)
+	p.peerCancels[a.peer.Name] = cancel
+	p.wg.Add(1)
+	go p.runPeer(ctx, a)
+}
+
+// AddPeer dynamically inserts a new peer into the running provider and
+// begins probing it. Returns an error when the name is already present
+// (use RemovePeer first) or when Start has not been called yet.
+//
+// AddPeer is safe to call concurrently with other AddPeer / RemovePeer
+// invocations.
+func (p *Provider) AddPeer(peer PeerConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.started {
+		return fmt.Errorf("AddPeer: provider not started — call Start first")
 	}
+	if _, exists := p.adapters[peer.Name]; exists {
+		return fmt.Errorf("AddPeer: peer %q already exists", peer.Name)
+	}
+
+	client := buildClient(peer, p.opts.tlsConfig)
+	adapter := NewPeerAdapter(peer, client)
+	p.adapters[peer.Name] = adapter
+	p.clients[peer.Name] = client
+	p.startPeer(adapter)
 	return nil
 }
 
