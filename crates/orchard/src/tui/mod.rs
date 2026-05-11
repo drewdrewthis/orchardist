@@ -29,7 +29,6 @@ use ratatui::prelude::*;
 use std::cell::Cell;
 
 use crate::cache;
-use crate::cache_sources;
 use crate::derive;
 use crate::global_config;
 use crate::navigation;
@@ -818,35 +817,16 @@ impl App {
                 }
             }
 
-            // REMOTE data — unchanged per AC #2.
-            // daemon doesn't yet populate per-peer worktrees in WorkView.
-            let seen_remotes: std::sync::Mutex<std::collections::HashSet<String>> =
-                std::sync::Mutex::new(std::collections::HashSet::new());
-
-            crate::refresh_parallel::for_each_repo_parallel(&config, |repo| {
-                for remote in &repo.remotes {
-                    if !reachable_hosts.contains(&remote.host) {
-                        continue;
-                    }
-                    // Snapshot fork hosts BEFORE refresh_remote_worktrees mutates
-                    // the cache — preserves real host strings for vanished-fork
-                    // detection in refresh_remote_tmux_sessions.
-                    let pre_snapshot = cache_sources::snapshot_fork_hosts_for_remote(repo, remote);
-                    let _ = cache_sources::refresh_remote_worktrees(repo, remote);
-
-                    // Refresh tmux sessions for reachable remotes only.
-                    // Dedup prevents double deletion when the same BoxdFork
-                    // golden host appears in multiple repos.
-                    let key = dedup_key(remote);
-                    if seen_remotes.lock().unwrap().insert(key) {
-                        let _ = cache_sources::refresh_remote_tmux_sessions(
-                            repo,
-                            remote,
-                            &pre_snapshot,
-                        );
-                    }
-                }
-            });
+            // REMOTE data — fan out via the shared post-probe pipeline (see
+            // `crate::sources::refresh`). The helper takes fork-host snapshots
+            // BEFORE worktree refresh per (repo, remote) and dedups tmux by
+            // `{kind}:{host}`, matching this site's previous behavior.
+            // Daemon Workstream F will retire this path once per-peer data
+            // lives in WorkView.
+            crate::sources::refresh::refresh_remotes_for_reachable_hosts(
+                &config,
+                &reachable_hosts,
+            );
 
             // Ensure a main tmux session exists for each configured repo.
             ensure_main_sessions(&config);
@@ -2524,24 +2504,6 @@ pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelecti
         });
     }
     None
-}
-
-// ---------------------------------------------------------------------------
-// Remote dedup helpers
-// ---------------------------------------------------------------------------
-
-/// Returns the dedup key for a remote, used to avoid running
-/// `refresh_remote_tmux_sessions` twice for the same BoxdFork golden host
-/// when it appears in multiple repos.
-///
-/// Uses `kind_str` (kebab-case) rather than `{:?}` debug output so the key
-/// is stable across Rust version changes.
-fn dedup_key(remote: &crate::global_config::RemoteConfig) -> String {
-    format!(
-        "{}:{}",
-        crate::cache_sources::kind_str(remote.kind),
-        remote.host
-    )
 }
 
 /// Fetches ahead/behind commit counts for every configured repo by running
@@ -5853,44 +5815,6 @@ mod tests {
             SubCursor::Pane { window: 1, pane: 1 },
             "lands on last pane of expanded last window"
         );
-    }
-
-    // -- dedup_key ------------------------------------------------------------
-
-    #[test]
-    fn dedup_key_uses_kebab_case_kind_and_host() {
-        use crate::global_config::RemoteConfig;
-        use crate::remote_adapter::RemoteKind;
-
-        let boxd_fork = RemoteConfig {
-            name: "boxd".to_string(),
-            host: "boxd.sh".to_string(),
-            path: "/workspace".to_string(),
-            shell: "ssh".to_string(),
-            kind: RemoteKind::BoxdFork,
-            allow_transitive: false,
-        };
-        assert_eq!(dedup_key(&boxd_fork), "boxd-fork:boxd.sh");
-
-        let remmy = RemoteConfig {
-            name: "remmy".to_string(),
-            host: "ubuntu@myhost".to_string(),
-            path: "/workspace".to_string(),
-            shell: "ssh".to_string(),
-            kind: RemoteKind::Remmy,
-            allow_transitive: false,
-        };
-        assert_eq!(dedup_key(&remmy), "remmy:ubuntu@myhost");
-
-        let boxd_shared = RemoteConfig {
-            name: "shared".to_string(),
-            host: "shared.boxd.sh".to_string(),
-            path: "/workspace".to_string(),
-            shell: "ssh".to_string(),
-            kind: RemoteKind::BoxdShared,
-            allow_transitive: false,
-        };
-        assert_eq!(dedup_key(&boxd_shared), "boxd-shared:shared.boxd.sh");
     }
 
     // -----------------------------------------------------------------------
