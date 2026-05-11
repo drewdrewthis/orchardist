@@ -163,3 +163,76 @@ func loadConfig(t *testing.T, path string) peerproxy.FederationConfig {
 	}
 	return cfg
 }
+
+// TestConfigWatcher_BurstCoalesced is the integration coverage for the feature
+// scenario "Bursty editor saves are coalesced into one reload".
+//
+// Steps:
+//  1. Write an initial 1-peer config.
+//  2. Construct and start a Provider from that config.
+//  3. Construct a ConfigWatcher with a SHORT debounce (100ms) via WithDebounce.
+//  4. Start the watcher. Wait briefly for it to be ready.
+//  5. Rapidly write the SAME 2-peer config 5 times within ~50ms.
+//  6. Wait debounce + slack (300ms total).
+//  7. Assert ReloadCount() == 1 (all 5 events coalesced into one reload).
+//  8. Assert SpawnCount("lw-fed-c") == 1 (AddPeer called exactly once).
+func TestConfigWatcher_BurstCoalesced(t *testing.T) {
+	fakeBoxd := newFakePeer(t)
+	fakeFedC := newFakePeer(t)
+
+	// 1. Write the initial config — only orchard.boxd.sh.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+	})
+
+	// 2. Construct provider from the initial config.
+	initialCfg := loadConfig(t, cfgPath)
+	p := peerproxy.NewProvider(initialCfg, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 3. Construct a ConfigWatcher with a 100ms debounce (10× shorter than
+	// the 1-second default) so the test completes quickly.
+	const debounce = 100 * time.Millisecond
+	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(), peerproxy.WithDebounce(debounce))
+
+	// 4. Start the watcher and give fsnotify a moment to attach.
+	if err := cw.Start(ctx); err != nil {
+		t.Fatalf("ConfigWatcher.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = cw.Close() })
+	time.Sleep(20 * time.Millisecond) // let the watcher goroutine reach its select
+
+	// 5. Rapidly write the same 2-peer config 5 times within ~50ms.
+	// Each write fires one or more fsnotify events. All five should coalesce
+	// into a single debounced reload.
+	twoPeerConfig := []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+		{Name: "lw-fed-c", Address: fakeFedC.addr(), TLS: false},
+	}
+	for i := 0; i < 5; i++ {
+		writeConfig(t, cfgPath, twoPeerConfig)
+		time.Sleep(10 * time.Millisecond) // ~50ms total for 5 writes
+	}
+
+	// 6. Wait debounce + generous slack for the single reload to fire.
+	time.Sleep(debounce + 200*time.Millisecond)
+
+	// 7. ReloadCount must be exactly 1 — all 5 events coalesced.
+	if got := cw.ReloadCount(); got != 1 {
+		t.Fatalf("ReloadCount() = %d after burst of 5 writes, want 1 (debounce did not coalesce)", got)
+	}
+
+	// 8. SpawnCount for the newly-added peer must be 1 — AddPeer was called
+	// exactly once (not once per burst event).
+	if got := p.SpawnCount("lw-fed-c"); got != 1 {
+		t.Fatalf("SpawnCount(lw-fed-c) = %d, want 1 (ApplyPeers invoked more than once)", got)
+	}
+}
