@@ -384,12 +384,27 @@ fn build_output() -> JsonOutput {
 }
 
 fn handle_json() {
+    emit_json_deprecation_warning("orchard-tui --json");
     let output = build_output();
     let json = serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
         eprintln!("Error serializing JSON: {e}");
         std::process::exit(1);
     });
     println!("{json}");
+}
+
+/// Emits a deprecation warning for `--json` flag surfaces (issue #438).
+///
+/// The daemon's GraphQL endpoint at `http://127.0.0.1:7777/graphql` is the
+/// canonical read surface. Full removal of `--json` is blocked by #404
+/// (peerproxy cross-host federation); the warning ships first so consumers
+/// have a migration runway.
+fn emit_json_deprecation_warning(surface: &str) {
+    eprintln!(
+        "[deprecated] `{surface}` is deprecated and will be removed. \
+         Query the daemon's GraphQL endpoint at http://127.0.0.1:7777/graphql instead. \
+         See https://github.com/drewdrewthis/git-orchard-rs/issues/438."
+    );
 }
 
 /// Handles `orchard-tui sessions --json` — comprehensive sessions index keyed by host.
@@ -410,6 +425,7 @@ fn handle_json() {
 /// worktree-centric `--json` output.
 fn handle_sessions(json: bool) {
     if json {
+        emit_json_deprecation_warning("orchard-tui sessions --json");
         // `--json` keeps the legacy SessionsIndexOutput shape so the
         // orchardist `/prune` skill (and other downstream consumers that
         // pin on it) don't break. Issue #426 introduces the federated

@@ -465,7 +465,15 @@ impl App {
         match self.reachability(host) {
             Reachability::Reachable | Reachability::Unknown => false,
             Reachability::Unreachable => {
-                self.warning = Some((format!("@{} is unreachable", host), Instant::now()));
+                // #331: a transient `warning` fades after WARNING_DURATION_SECS
+                // and is invisible in practice during active redraws. Mirror
+                // the message into `sticky_error` so it persists until the
+                // user takes another action.
+                let msg = format!(
+                    "@{host} is unreachable. Press R to retry the probe, or check the host's network/VM state."
+                );
+                self.warning = Some((msg.clone(), Instant::now()));
+                self.sticky_error = Some(msg);
                 true
             }
         }
@@ -1036,7 +1044,15 @@ impl App {
                     true
                 }
                 Err(e) => {
-                    self.warning = Some((format!("remote session error: {e}"), Instant::now()));
+                    // #331: name the host and the underlying reason so the
+                    // user can act without dropping to a shell. Persist via
+                    // `sticky_error` because the transient `warning` banner
+                    // fades after 3s and is invisible during redraws.
+                    let msg = format!(
+                        "@{host}: remote session error — {e}. Press R to retry probe, or check SSH/VM state."
+                    );
+                    self.warning = Some((msg.clone(), Instant::now()));
+                    self.sticky_error = Some(msg);
                     false
                 }
             }
@@ -1053,7 +1069,12 @@ impl App {
                     true
                 }
                 Err(e) => {
-                    self.warning = Some((format!("session error: {e}"), Instant::now()));
+                    // #331: persist local session failures too — they're
+                    // rarer but equally invisible behind the transient
+                    // warning banner.
+                    let msg = format!("session error: {e}");
+                    self.warning = Some((msg.clone(), Instant::now()));
+                    self.sticky_error = Some(msg);
                     false
                 }
             }
@@ -1196,6 +1217,12 @@ impl App {
             .as_ref()
             .is_some_and(|(_, t)| t.elapsed().as_secs() < WARNING_DURATION_SECS);
 
+        // #331: sticky_error is a persistent banner that does NOT auto-expire.
+        // Reserves its own row in the layout below the preview so the user
+        // can see it across multiple redraws after an Enter failure on an
+        // unreachable host. Wraps to two lines when the message is long.
+        let has_sticky_error = self.sticky_error.is_some();
+
         // Calculate total table body height from individual row heights
         let body_height: u16 = row_heights.iter().sum::<u16>();
         let table_height = body_height.saturating_add(3); // +2 borders +1 header row
@@ -1228,6 +1255,11 @@ impl App {
 
         if has_warning {
             constraints.push(Constraint::Length(1));
+        }
+
+        if has_sticky_error {
+            // 2 rows so a message with a host name + reason wraps cleanly.
+            constraints.push(Constraint::Length(2));
         }
 
         constraints.push(Constraint::Length(1)); // hints
@@ -1357,6 +1389,21 @@ impl App {
                     .style(Style::default().fg(theme.warning))
                     .alignment(Alignment::Center);
                 f.render_widget(warn, chunks[idx]);
+            }
+            idx += 1;
+        }
+
+        if has_sticky_error {
+            if let Some(ref msg) = self.sticky_error {
+                let err = Paragraph::new(msg.as_str())
+                    .style(
+                        Style::default()
+                            .fg(theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .alignment(Alignment::Center)
+                    .wrap(Wrap { trim: true });
+                f.render_widget(err, chunks[idx]);
             }
             idx += 1;
         }

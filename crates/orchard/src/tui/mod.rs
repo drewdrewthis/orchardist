@@ -106,6 +106,15 @@ pub struct App {
     refreshing: bool,
     error: Option<String>,
     warning: Option<(String, Instant)>,
+    /// Persistent error banner that does NOT auto-expire (issue #331).
+    ///
+    /// Set by Enter-action failure paths whose error must remain visible
+    /// until the user explicitly takes another action (typically a
+    /// "remote session error" for an unreachable host). Cleared at the
+    /// top of `update()` so any subsequent input dismisses it — unlike
+    /// `warning`, which fades after `WARNING_DURATION_SECS` and is
+    /// invisible in practice for transient failures.
+    sticky_error: Option<String>,
     repo_root: String,
     repo_name: String,
     pane_content: String,
@@ -304,6 +313,7 @@ impl App {
             refreshing: false,
             error: None,
             warning: None,
+            sticky_error: None,
             repo_root,
             repo_name,
             pane_content: String::new(),
@@ -1408,6 +1418,13 @@ impl App {
             }
         }
 
+        // #331: clear the persistent error banner on any user-driven message.
+        // The banner is set by failure paths (e.g. Enter on an unreachable
+        // remote) and must remain visible until the user takes another
+        // action. Background refresh signals are dispatched as `AppMsg`,
+        // not `Message`, so this site only fires on real user input.
+        self.sticky_error = None;
+
         match msg {
             Message::Quit => UpdateResult {
                 quit: true,
@@ -2277,6 +2294,7 @@ impl App {
             refreshing: false,
             error: None,
             warning: None,
+            sticky_error: None,
             repo_root: "/test".to_string(),
             repo_name: "test-repo".to_string(),
             pane_content: String::new(),
@@ -3053,6 +3071,49 @@ mod tests {
         assert!(
             app.warning.as_ref().unwrap().0.contains("unreachable"),
             "expected 'unreachable' in warning message"
+        );
+        // #331: the persistent banner must also be set so the message
+        // survives the WARNING_DURATION_SECS fade.
+        assert!(
+            app.sticky_error.is_some(),
+            "expected sticky_error to be set (issue #331)"
+        );
+        let sticky = app.sticky_error.as_ref().unwrap();
+        assert!(
+            sticky.contains("gpu1"),
+            "sticky_error must name the host, got: {sticky}"
+        );
+        assert!(
+            sticky.contains("unreachable"),
+            "sticky_error must name the reason, got: {sticky}"
+        );
+    }
+
+    /// #331: any subsequent user-driven Message dismisses the sticky_error
+    /// banner. Background AppMsg signals (refresh completions) do not.
+    #[test]
+    fn sticky_error_clears_on_next_user_message() {
+        let mut app = App::new_test(vec![]);
+        app.sticky_error = Some("@gpu1 is unreachable.".to_string());
+        let _ = app.update(Message::CursorDown);
+        assert!(
+            app.sticky_error.is_none(),
+            "sticky_error must clear on user input (issue #331)"
+        );
+    }
+
+    /// #331: rendering the sticky_error must produce visible text in the
+    /// terminal buffer — not just set internal state. Guards against the
+    /// transient-banner regression where state was set but invisible.
+    #[test]
+    fn sticky_error_renders_in_terminal_buffer() {
+        let row = make_task_row(1, DisplayGroup::Other);
+        let mut app = App::new_test(vec![row]);
+        app.sticky_error = Some("@gpu1 is unreachable".to_string());
+        let output = render_to_string(&mut app, 120, 40);
+        assert!(
+            output.contains("@gpu1 is unreachable"),
+            "sticky_error message must appear in the rendered output (issue #331); got:\n{output}"
         );
     }
 
@@ -6308,6 +6369,41 @@ mod tests {
         assert!(
             !output.contains("daemon: connecting"),
             "header must NOT contain 'daemon: connecting' when daemon is reachable"
+        );
+    }
+
+    /// Regression test for #545: orchard-tui must NEVER silently mutate
+    /// `~/.orchard/config.json`.
+    ///
+    /// `App::new` previously called `register_cwd_repo_if_new` which wrote
+    /// to disk on every TUI launch from an untracked repo. Only explicit
+    /// CLI commands (`orchard config init`, `orchard config write`,
+    /// `orchard init` wizard) may mutate the global config.
+    ///
+    /// This is a source-content invariant — we grep `App::new` for any
+    /// reference to the silent writer. A behavioral test isn't possible
+    /// here because `App::new` reads `~/.orchard/config.json` via
+    /// `dirs::home_dir()` with no test override.
+    #[test]
+    fn app_new_does_not_register_cwd_repo() {
+        let src = include_str!("mod.rs");
+        let new_fn_start = src
+            .find("    fn new(command: &str) -> Self {")
+            .expect("App::new function must exist");
+        // Scan from the start of `fn new` to the next top-level `}` (end of impl block boundary
+        // before next function). Use a conservative window: 200 lines of body.
+        let window_end = src[new_fn_start..]
+            .char_indices()
+            .filter(|(_, c)| *c == '\n')
+            .nth(200)
+            .map(|(idx, _)| new_fn_start + idx)
+            .unwrap_or(src.len());
+        let body = &src[new_fn_start..window_end];
+        assert!(
+            !body.contains("register_cwd_repo_if_new"),
+            "App::new must not call register_cwd_repo_if_new (issue #545). \
+             The TUI startup path must NOT silently mutate ~/.orchard/config.json. \
+             Only explicit CLI commands (`orchard config init`, `orchard init`) may write it."
         );
     }
 }
