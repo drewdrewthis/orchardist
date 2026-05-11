@@ -1437,12 +1437,12 @@ func (r *worktreeResolver) Repo(ctx context.Context, obj *graphql1.Worktree) (*s
 	return &slug, nil
 }
 
-// Pr is the resolver for the worktree.pr field. Looks up the open PR whose headRef matches the worktree's branch via the PullRequestsForRepo DataLoader (concurrent resolver calls for the same repo collapse into one ListPullRequests call). Returns nil for missing obj, empty branch, default branch, non-GitHub origin, or no headRef match. Errors only when the DataLoader is missing from context or the gh provider fails hard.
+// Pr is the resolver for the worktree.pr field. Looks up a PR whose headRef matches the worktree's branch via the PullRequestsForRepo DataLoader (which fetches PRs in all states per issue #489 so the TUI stale-fade UX works post-merge). Selection precedence: an OPEN match wins; otherwise the most-recent CLOSED/MERGED match. Returns nil for missing obj, empty branch, default branch, non-GitHub origin, or no headRef match in any state.
 func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*graphql1.PullRequest, error) {
 	if obj == nil || obj.Branch == "" {
 		return nil, nil
 	}
-	// Default-branch exclusion: the default branch never has an open PR
+	// Default-branch exclusion: the default branch never has its own PR
 	// targeting itself, so skip the DataLoader call entirely.
 	if defaultBranch, ok := readDefaultBranch(obj.Path); ok && defaultBranch == obj.Branch {
 		return nil, nil
@@ -1456,7 +1456,7 @@ func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*gra
 	if !ok {
 		return nil, nil // non-GitHub origin → null
 	}
-	// Load all open PRs for the repo via the DataLoader.
+	// Load all PRs (across all states) for the repo via the DataLoader.
 	ldrs := loaders.FromContext(ctx)
 	if ldrs == nil {
 		return nil, fmt.Errorf("loaders not in context")
@@ -1465,12 +1465,22 @@ func (r *worktreeResolver) Pr(ctx context.Context, obj *graphql1.Worktree) (*gra
 	if err != nil {
 		return nil, err
 	}
+	// First pass: prefer any OPEN PR — the list is already sorted UpdatedAt
+	// DESC by the GitHub API, so the first match is most-recent. Track the
+	// first non-OPEN match as a fallback for the post-merge stale-fade case.
+	var fallback *graphql1.PullRequest
 	for _, pr := range prs {
-		if pr != nil && pr.HeadRef == obj.Branch {
+		if pr == nil || pr.HeadRef != obj.Branch {
+			continue
+		}
+		if pr.State == graphql1.PullRequestStateOpen {
 			return pr, nil
 		}
+		if fallback == nil {
+			fallback = pr
+		}
 	}
-	return nil, nil
+	return fallback, nil
 }
 
 // Issue is the resolver for the worktree.issue field. Parses the issue number from the worktree branch (rules ported from crates/orchard/src/github.rs) then fetches via the gh provider. Returns nil for empty branch, unparseable branch, missing/non-GitHub origin, unwired gh provider, or 404.

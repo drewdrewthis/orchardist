@@ -662,7 +662,19 @@ type TmuxSession struct {
 	ActiveAttached bool `json:"activeAttached"`
 	// Clients currently attached to this session.
 	AttachedClients []*TmuxClient `json:"attachedClients"`
-	// Most recent activity timestamp across all panes/windows. RFC3339; null if never observed.
+	// Most recent activity timestamp across all panes/windows. RFC3339;
+	// null if never observed.
+	//
+	// Tracks tmux's `pane_activity` field, which fires on NEW pane content —
+	// not on in-place redraws. A Claude REPL spinner ticking in place
+	// ("Elucidating… 1m 11s") does NOT bump `lastActivityAt`, so a long
+	// agentic turn can look identical to a hung pane (issue #506).
+	//
+	// Do NOT use this field as a Claude-REPL stall signal. The canonical
+	// signal is `Worktree.claudeInstances[].state` (working|idle|input|stalled,
+	// issue #501) once that lands, OR the heartbeat freshness exposed on
+	// `ClaudeInstance` directly. `lastActivityAt` remains useful for plain
+	// shell panes and for the lex-tie-breaker in `Worktree.tmuxSession`.
 	LastActivityAt *string `json:"lastActivityAt,omitempty"`
 	// Windows in this session.
 	Windows []*TmuxWindow `json:"windows"`
@@ -761,7 +773,14 @@ type Worktree struct {
 	Host string `json:"host"`
 	// owner/repo slug derived from origin remote. Null when origin is not a GitHub URL.
 	Repo *string `json:"repo,omitempty"`
-	// Open PR whose headRef matches this worktree's branch. Null when no match, branch is detached, or branch is the project's default branch.
+	// PR whose headRef matches this worktree's branch. Selection precedence
+	// (issue #489): an OPEN PR is returned when one exists; otherwise the
+	// most-recent CLOSED/MERGED PR with the matching headRef is returned so
+	// the TUI stale-fade UX can render the post-merge cleanup affordance.
+	// The `state` field on the returned PullRequest disambiguates between
+	// live and post-merge. Null when no PR has ever existed for this branch
+	// in any state, when the branch is detached, or when the branch is the
+	// project's default branch.
 	Pr *PullRequest `json:"pr,omitempty"`
 	// Issue linked from the worktree's branch (issue<N>/... convention). Null when the branch doesn't carry an issue number.
 	Issue *Issue `json:"issue,omitempty"`

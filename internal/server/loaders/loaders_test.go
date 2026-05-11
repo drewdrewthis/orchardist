@@ -268,6 +268,30 @@ func TestPullRequestsForRepo_BatchesAcrossRepos(t *testing.T) {
 	}
 }
 
+// TestPullRequestsForRepo_FetchesAllStates asserts that the loader requests
+// state=ALL from the gh provider so the Worktree.pr resolver can return the
+// most-recent CLOSED/MERGED PR when no OPEN PR matches the branch (issue
+// #489 — TUI stale-fade UX needs post-merge PR data).
+func TestPullRequestsForRepo_FetchesAllStates(t *testing.T) {
+	stub := &prStub{prs: map[string]int{"owner/repo": 1}}
+	bundle := &loaders.ProvidersBundle{GH: stub}
+	l := loaders.NewLoaders(bundle)
+
+	ctx := context.Background()
+	if _, err := l.PullRequestsForRepo.Load(ctx, loaders.RepoKey{Owner: "owner", Name: "repo"})(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	states := stub.StateRequests()
+	if len(states) != 1 {
+		t.Fatalf("StateRequests = %v, want exactly 1 call", states)
+	}
+	if states[0] != ghprovider.PullRequestStateAll {
+		t.Errorf("loader requested state=%q, want state=%q (issue #489: need CLOSED/MERGED for stale-fade)",
+			states[0], ghprovider.PullRequestStateAll)
+	}
+}
+
 // TestPullRequestsForRepo_PerRequestScoped asserts that two separate
 // Loaders instances do not share state: each fires its own batch, so
 // the provider receives two calls for the same repo.
@@ -305,15 +329,18 @@ func TestPullRequestsForRepo_PerRequestScoped(t *testing.T) {
 
 // prStub implements loaders.GHPullRequestLister with a call counter.
 // prs maps "owner/name" to the number of dummy PRs to return.
+// stateRequests records the PullRequestState arg of each call (for #489).
 type prStub struct {
-	mu    sync.Mutex
-	calls int
-	prs   map[string]int // slug → PR count
+	mu             sync.Mutex
+	calls          int
+	prs            map[string]int // slug → PR count
+	stateRequests  []ghprovider.PullRequestState
 }
 
-func (s *prStub) ListPullRequests(_ context.Context, owner, name string, _ ghprovider.PullRequestState) ([]ghprovider.PullRequest, error) {
+func (s *prStub) ListPullRequests(_ context.Context, owner, name string, state ghprovider.PullRequestState) ([]ghprovider.PullRequest, error) {
 	s.mu.Lock()
 	s.calls++
+	s.stateRequests = append(s.stateRequests, state)
 	s.mu.Unlock()
 
 	slug := owner + "/" + name
@@ -335,4 +362,14 @@ func (s *prStub) CallCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
+}
+
+// StateRequests returns a snapshot of the PullRequestState values the loader
+// passed on each ListPullRequests call. Used to assert the loader requests
+// state=ALL so the Worktree.pr resolver can fall back to CLOSED/MERGED
+// matches when no OPEN PR exists (issue #489).
+func (s *prStub) StateRequests() []ghprovider.PullRequestState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]ghprovider.PullRequestState(nil), s.stateRequests...)
 }
