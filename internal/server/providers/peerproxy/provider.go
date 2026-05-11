@@ -292,17 +292,28 @@ func (p *Provider) SpawnCount(name string) int {
 	return p.spawnCounts[name]
 }
 
+// peerConfigEqual reports whether two PeerConfig values are equivalent
+// for the purposes of the ApplyPeers diff. Two configs that differ only
+// in fields that are not observable at runtime (e.g. ordering within a
+// slice) are still considered equal.
+//
+// Currently compared: Name and Address. TLS comparison is added in the
+// next scenario — extend this function when that test is added.
+func peerConfigEqual(a, b PeerConfig) bool {
+	return a.Name == b.Name && a.Address == b.Address
+}
+
 // ApplyPeers diffs the current peer set against cfg and issues the minimum
 // AddPeer / RemovePeer calls needed to converge on the new config.
 //
-// Algorithm (name-based diff only — this is the first pass):
+// Algorithm:
 //   - Peers in cfg but not in the current set → AddPeer.
 //   - Peers in the current set but not in cfg → RemovePeer.
-//   - Peers present in both sets → left untouched (goroutine is NOT restarted).
-//
-// Future passes will tighten the equality check: if address or TLS differ,
-// the peer is treated as a remove+add pair. Structure the "both sets" branch
-// to accommodate that — the equality predicate is the only thing that changes.
+//   - Peers present in both sets with an unchanged config → left untouched
+//     (goroutine is NOT restarted).
+//   - Peers present in both sets whose config changed (address, TLS, …) →
+//     RemovePeer then AddPeer, in that order. This ensures the old goroutine's
+//     context is cancelled before the new one starts.
 //
 // Error policy: best-effort. If one AddPeer or RemovePeer fails, the error is
 // collected and the rest of the diff is still applied. All errors are joined
@@ -311,37 +322,51 @@ func (p *Provider) SpawnCount(name string) int {
 //
 // ApplyPeers is safe to call concurrently with AddPeer / RemovePeer.
 func (p *Provider) ApplyPeers(cfg FederationConfig) error {
-	// Snapshot the current peer names without holding the lock during
+	// Snapshot the current peer configs without holding the lock during
 	// AddPeer/RemovePeer calls — those methods acquire p.mu.Lock() themselves,
 	// and holding p.mu.RLock() here while calling them would deadlock.
 	p.mu.RLock()
-	currentNames := make(map[string]struct{}, len(p.adapters))
-	for name := range p.adapters {
-		currentNames[name] = struct{}{}
+	currentConfigs := make(map[string]PeerConfig, len(p.adapters))
+	for name, a := range p.adapters {
+		currentConfigs[name] = a.Peer()
 	}
 	p.mu.RUnlock()
 
-	newNames := make(map[string]struct{}, len(cfg.Peers))
+	newConfigs := make(map[string]PeerConfig, len(cfg.Peers))
 	for _, peer := range cfg.Peers {
-		newNames[peer.Name] = struct{}{}
+		newConfigs[peer.Name] = peer
 	}
 
 	var errs []error
 
-	// Add peers that are new.
+	// Process peers in the new config: add new ones; remove+add changed ones.
 	for _, peer := range cfg.Peers {
-		if _, exists := currentNames[peer.Name]; !exists {
+		current, exists := currentConfigs[peer.Name]
+		if !exists {
+			// Brand-new peer — just add it.
+			if err := p.AddPeer(peer); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		// Peer exists in both sets. Check if the config changed.
+		if !peerConfigEqual(current, peer) {
+			// Config changed — treat as remove+add so the old goroutine's
+			// context is cancelled before the new one starts.
+			if err := p.RemovePeer(peer.Name); err != nil {
+				errs = append(errs, err)
+				continue // don't try to add if remove failed
+			}
 			if err := p.AddPeer(peer); err != nil {
 				errs = append(errs, err)
 			}
 		}
-		// Peers in both sets: leave untouched for now.
-		// Future: if peer.Address != current.Address || peer.TLS != current.TLS → remove+add.
+		// Config unchanged — leave the goroutine untouched.
 	}
 
 	// Remove peers that are no longer in the config.
-	for name := range currentNames {
-		if _, exists := newNames[name]; !exists {
+	for name := range currentConfigs {
+		if _, exists := newConfigs[name]; !exists {
 			if err := p.RemovePeer(name); err != nil {
 				errs = append(errs, err)
 			}

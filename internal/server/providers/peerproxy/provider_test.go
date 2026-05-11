@@ -640,3 +640,123 @@ func TestRemovePeer_CancelsAndDrops(t *testing.T) {
 			countBefore, countAfter)
 	}
 }
+
+// TestApplyPeers_AddressChangeRemoveAdd is the unit coverage for the scenario
+// "Address change is treated as remove + add (not in-place mutation)".
+//
+// Steps:
+//  1. NewProvider with no peers, Start.
+//  2. AddPeer "lw-fed-c" pointing at fakePeerA. Wait for at least one ping.
+//  3. Snapshot SpawnCount — should be 1.
+//  4. Build new config with same name but address pointing at fakePeerB.
+//  5. Call ApplyPeers. Assert err == nil.
+//  6. Assert SpawnCount("lw-fed-c") == 2 (goroutine was re-spawned).
+//  7. Assert Peers() still has exactly one "lw-fed-c" entry.
+//  8. Assert the live address is now fakePeerB.addr().
+//  9. Wait ~150ms, assert fakePeerB.pingCount > 0 (new goroutine probing new address).
+// 10. Assert fakePeerA.pingCount has stopped growing (old goroutine cancelled).
+func TestApplyPeers_AddressChangeRemoveAdd(t *testing.T) {
+	fakePeerA := newFakePeer(t)
+	fakePeerB := newFakePeer(t)
+
+	// 1. Construct an empty provider and start it.
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop() })
+
+	// 2. AddPeer "lw-fed-c" pointing at fakePeerA.
+	if err := p.AddPeer(peerproxy.PeerConfig{
+		Name:    "lw-fed-c",
+		Address: fakePeerA.addr(),
+		TLS:     false,
+	}); err != nil {
+		t.Fatalf("AddPeer: %v", err)
+	}
+
+	// Wait for at least one ping to confirm the goroutine is live.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fakePeerA.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fakePeerA.pingCount.Load() < 1 {
+		t.Fatalf("initial probe goroutine did not issue a Ping within 200ms")
+	}
+
+	// 3. Snapshot SpawnCount — must be 1 before the address change.
+	if got := p.SpawnCount("lw-fed-c"); got != 1 {
+		t.Fatalf("SpawnCount before ApplyPeers = %d, want 1", got)
+	}
+
+	// 4. Build new config: same name, different address (fakePeerB).
+	newCfg := peerproxy.FederationConfig{
+		Peers: []peerproxy.PeerConfig{
+			{Name: "lw-fed-c", Address: fakePeerB.addr(), TLS: false},
+		},
+	}
+
+	// 5. Apply the diff. Must succeed.
+	if err := p.ApplyPeers(newCfg); err != nil {
+		t.Fatalf("ApplyPeers returned unexpected error: %v", err)
+	}
+
+	// 6. SpawnCount must be 2 — the goroutine was re-spawned.
+	if got := p.SpawnCount("lw-fed-c"); got != 2 {
+		t.Fatalf("SpawnCount after ApplyPeers = %d, want 2 (goroutine must be re-spawned on address change)", got)
+	}
+
+	// 7. Peers() must still contain exactly one "lw-fed-c" entry.
+	peers := p.Peers()
+	var count int
+	for _, peer := range peers {
+		if peer.Name == "lw-fed-c" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("Peers() has %d entries for \"lw-fed-c\", want exactly 1; got %v", count, peerNames(peers))
+	}
+
+	// 8. The live address must be fakePeerB's address, not fakePeerA's.
+	var liveAddr string
+	for _, peer := range peers {
+		if peer.Name == "lw-fed-c" {
+			liveAddr = peer.Address
+		}
+	}
+	if liveAddr != fakePeerB.addr() {
+		t.Fatalf("live address = %q, want %q (fakePeerB)", liveAddr, fakePeerB.addr())
+	}
+
+	// 9. Wait ~150ms and confirm fakePeerB has received at least one ping —
+	// the new goroutine is probing the new address.
+	deadline = time.Now().Add(150 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if fakePeerB.pingCount.Load() >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fakePeerB.pingCount.Load() < 1 {
+		t.Fatalf("new goroutine did not ping fakePeerB within 150ms")
+	}
+
+	// 10. fakePeerA's pingCount must have stopped growing — the old goroutine
+	// was cancelled. Capture the count right after ApplyPeers returned (already
+	// past that point), wait, then recheck. Any increase means the old goroutine
+	// is still running.
+	countA := fakePeerA.pingCount.Load()
+	time.Sleep(200 * time.Millisecond)
+	countAAfter := fakePeerA.pingCount.Load()
+	if countAAfter > countA {
+		t.Fatalf("fakePeerA still received pings after ApplyPeers: before=%d after=%d (old goroutine not cancelled)",
+			countA, countAAfter)
+	}
+}
