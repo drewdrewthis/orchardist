@@ -53,7 +53,7 @@ pub(crate) fn derive_display_group(
             return DisplayGroup::ClaudeWorking;
         }
 
-        if is_ready_to_merge(pr) {
+        if crate::merge_readiness::is_ready_to_merge(&pr.into()) {
             return DisplayGroup::ReadyToMerge;
         }
     } else {
@@ -93,29 +93,6 @@ pub(crate) fn is_needs_attention(pr: &PrInfo) -> bool {
     }
 }
 
-/// Returns true when the PR is approved, passing, and conflict-free.
-pub(crate) fn is_ready_to_merge(pr: &PrInfo) -> bool {
-    if pr.review_decision.as_deref() != Some("approved")
-        || pr.has_conflicts
-        || pr.unresolved_threads > 0
-    {
-        return false;
-    }
-
-    // Prefer ci_code_state + ci_gate_state when present.
-    // Both code must be passing AND gate must not be blocked/pending.
-    if let Some(code_state) = pr.ci_code_state.as_deref() {
-        return code_state == "passing"
-            && pr.ci_gate_state.as_deref() != Some("blocked")
-            && pr.ci_gate_state.as_deref() != Some("pending");
-    }
-
-    // Fallback for cache files predating split CI state.
-    #[allow(deprecated)] // checks_state: retained for one release per issue #218
-    {
-        pr.checks_state.as_deref() == Some("passing")
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests

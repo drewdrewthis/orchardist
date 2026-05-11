@@ -424,7 +424,7 @@ pub fn resolve_status(wt: &WorktreeState) -> PipelineStatus {
         if pr.is_draft.unwrap_or(false) {
             return PipelineStatus::Draft;
         }
-        if is_ready_to_merge(pr) {
+        if crate::merge_readiness::is_ready_to_merge(&pr.into()) {
             return PipelineStatus::Ready;
         }
         if is_open(pr) {
@@ -469,28 +469,6 @@ fn is_paused(issue: &Option<IssueInfo>, pr: &Option<PrState>) -> bool {
     issue_paused || pr_paused
 }
 
-fn is_ready_to_merge(pr: &PrState) -> bool {
-    if !is_open(pr) {
-        return false;
-    }
-    if pr.is_draft.unwrap_or(false) || pr.has_conflicts {
-        return false;
-    }
-    // Unresolved review threads block merge — aligns with classify.rs:100.
-    // This check MUST precede the UnresolvedThreads branch in resolve_status so
-    // that an approved+passing+thread-blocked PR never short-circuits to Ready.
-    if pr.unresolved_threads > 0 {
-        return false;
-    }
-    // Approved with no failing/pending CI — call it ready.
-    let approved = matches_review(&pr.review_decision, "APPROVED")
-        || pr
-            .review_decision
-            .as_deref()
-            .is_some_and(|v| v.eq_ignore_ascii_case("approved"));
-    let ci_ok = matches!(pr.ci_code_state.as_deref(), Some("passing") | None);
-    approved && ci_ok
-}
 
 // ---------------------------------------------------------------------------
 // Sort key — pipeline status severity with priority rerank
@@ -1237,7 +1215,7 @@ mod tests {
     fn status_ready_when_approved_and_ci_passing() {
         let mut w = wt();
         w.pr = Some(pr(|p| {
-            p.review_decision = Some("APPROVED".into());
+            p.review_decision = Some("approved".into());
             p.ci_code_state = Some("passing".into());
         }));
         assert_eq!(resolve_status(&w), PipelineStatus::Ready);
@@ -1273,7 +1251,7 @@ mod tests {
         // Approved + CI passing + no higher blocker + unresolved_threads = 1.
         let mut w = wt();
         w.pr = Some(pr(|p| {
-            p.review_decision = Some("APPROVED".into());
+            p.review_decision = Some("approved".into());
             p.ci_code_state = Some("passing".into());
             p.unresolved_threads = 1;
         }));
@@ -1312,7 +1290,7 @@ mod tests {
         // short-circuit to Ready through is_ready_to_merge.
         let mut w = wt();
         w.pr = Some(pr(|p| {
-            p.review_decision = Some("APPROVED".into());
+            p.review_decision = Some("approved".into());
             p.ci_code_state = Some("passing".into());
             p.unresolved_threads = 1;
         }));
@@ -1325,7 +1303,7 @@ mod tests {
     fn status_ready_when_no_unresolved_threads() {
         let mut w = wt();
         w.pr = Some(pr(|p| {
-            p.review_decision = Some("APPROVED".into());
+            p.review_decision = Some("approved".into());
             p.ci_code_state = Some("passing".into());
             p.unresolved_threads = 0;
         }));
@@ -1336,14 +1314,15 @@ mod tests {
 
     #[test]
     fn is_ready_to_merge_returns_false_when_unresolved_threads_gt_zero() {
-        // Direct unit test for AC #4 fix: signal.rs::is_ready_to_merge must
+        // Direct unit test for AC #4 fix: merge_readiness::is_ready_to_merge must
         // return false when pr.unresolved_threads > 0, aligning with classify.rs:100.
+        // Uses lowercase "approved" to match production cache data (see AC4 / AC8 spec).
         let p = pr(|p| {
-            p.review_decision = Some("APPROVED".into());
+            p.review_decision = Some("approved".into());
             p.ci_code_state = Some("passing".into());
             p.unresolved_threads = 1;
         });
-        assert!(!is_ready_to_merge(&p));
+        assert!(!crate::merge_readiness::is_ready_to_merge(&(&p).into()));
     }
 
     // -- activity rollup -----------------------------------------------------

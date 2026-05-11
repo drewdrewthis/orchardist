@@ -1966,7 +1966,7 @@ mod tests {
                 author: None,
                 requested_reviewers: vec![],
                 reviews: vec![],
-                review_decision: Some("APPROVED".to_string()),
+                review_decision: Some("approved".to_string()),
                 checks_state: None,
                 ci_code_state: Some("passing".to_string()),
                 ci_gate_state: None,
