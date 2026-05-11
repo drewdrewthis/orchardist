@@ -22,6 +22,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -737,6 +739,181 @@ func TestPeers_Processes_UnreachablePeer(t *testing.T) {
 	if len(errs) == 0 {
 		t.Fatalf("expected GraphQL errors for unreachable peer.processes; envelope=%v", envelope)
 	}
+}
+
+// TestEndToEnd_AddingPeerSurfacesInGraphQL is the E2E proof for the feature
+// scenario:
+//
+//	"Adding a peer entry surfaces it in the live Host.peers GraphQL query
+//	 within 2s"
+//
+// The test drives the full stack end-to-end: a real daemon, a real config file
+// watched by ConfigWatcher, and a real GraphQL query. No mocking of the
+// Provider/ConfigWatcher internals.
+//
+// Steps:
+//  1. Start two fake peer servers (orchard.boxd.sh, lw-fed-c) that count pings.
+//  2. Write an initial config file with only orchard.boxd.sh.
+//  3. Construct a Provider from the file-loaded config; start it.
+//  4. Start a ConfigWatcher on the config file with a short debounce (100ms).
+//  5. Wire server.New + mount GraphQL on an httptest.Server.
+//  6. Wait for orchard.boxd.sh to appear in host.peers (initial round-trip).
+//  7. Atomically rewrite the config to add lw-fed-c.
+//  8. Poll host.peers every 100ms for up to 2 seconds.
+//  9. Assert: lw-fed-c appears with machineId=="lw-fed-c".
+// 10. Assert: fakeFedC.pingCount >= 1 (probe goroutine issued at least one Ping).
+// 11. Assert: orchard.boxd.sh is still present (no regression).
+func TestEndToEnd_AddingPeerSurfacesInGraphQL(t *testing.T) {
+	// 1. Two fake peer servers.
+	fakeBoxd := newFakePeer(t)
+	fakeFedC := newFakePeer(t)
+
+	// 2. Write the initial config — only orchard.boxd.sh.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	writeConfig(t, cfgPath, []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+	})
+
+	// 3. Construct provider from the on-disk config.
+	initialCfg := loadConfig(t, cfgPath)
+	logger := slog.Default()
+	peerProvider := peerproxy.NewProvider(initialCfg, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := peerProvider.Start(ctx); err != nil {
+		t.Fatalf("Provider.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = peerProvider.Stop() })
+
+	// 4. Start ConfigWatcher with a short debounce so the 2-second assertion
+	// window comfortably covers debounce + probe latency.
+	const debounce = 100 * time.Millisecond
+	cw := peerproxy.NewConfigWatcher(cfgPath, peerProvider, logger,
+		peerproxy.WithDebounce(debounce))
+	if err := cw.Start(ctx); err != nil {
+		t.Fatalf("ConfigWatcher.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = cw.Close() })
+
+	// 5. Wire the local daemon and mount GraphQL.
+	localEvents := peerproxy.NewLocalInvalidator()
+	srv := server.New("", logger,
+		server.WithPeerProxy(peerProvider),
+		server.WithLocalEvents(localEvents),
+	)
+	if err := srv.StartHostProvider(ctx); err != nil {
+		t.Fatalf("StartHostProvider: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", srv.GraphQLHandler())
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	localFix := &orchardFixture{
+		addr:   mustStripScheme(t, ts.URL),
+		srv:    ts,
+		events: localEvents,
+	}
+
+	// 6. Wait for orchard.boxd.sh to appear in host.peers. The local
+	// peerproxy supervisor probes on Start; once it lands the reachable
+	// bit flips to true and the peer appears in the GraphQL response.
+	if !waitForCondition(5*time.Second, func() bool {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { id machineId reachable } } }`)
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			if mid, _ := row["machineId"].(string); mid == "orchard.boxd.sh" {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("orchard.boxd.sh never appeared in host.peers within 5s (initial round-trip failed)")
+	}
+
+	// 7. Atomically rewrite the config to add lw-fed-c.
+	// Use write-then-rename for atomicity — same as `orchard config add-peer`.
+	newCfgData, err := json.Marshal(map[string]any{"peers": []peerproxy.PeerConfig{
+		{Name: "orchard.boxd.sh", Address: fakeBoxd.addr(), TLS: false},
+		{Name: "lw-fed-c", Address: fakeFedC.addr(), TLS: false},
+	}})
+	if err != nil {
+		t.Fatalf("marshal new config: %v", err)
+	}
+	tmpCfg := cfgPath + ".tmp"
+	if err := os.WriteFile(tmpCfg, newCfgData, 0o644); err != nil {
+		t.Fatalf("write tmp config: %v", err)
+	}
+	if err := os.Rename(tmpCfg, cfgPath); err != nil {
+		t.Fatalf("rename config: %v", err)
+	}
+
+	// 8–9. Poll host.peers every 100ms for up to 2 seconds. Record the last
+	// envelope for a meaningful failure message at deadline.
+	const pollInterval = 100 * time.Millisecond
+	deadline := time.Now().Add(2 * time.Second)
+	var lastEnvelope map[string]any
+	var foundFedC, foundBoxd bool
+	for time.Now().Before(deadline) {
+		envelope := graphQLPost(t, localFix,
+			`{ host { peers { id machineId reachable } } }`)
+		lastEnvelope = envelope
+		data, _ := envelope["data"].(map[string]any)
+		host, _ := data["host"].(map[string]any)
+		peers, _ := host["peers"].([]any)
+		foundFedC = false
+		foundBoxd = false
+		for _, p := range peers {
+			row, _ := p.(map[string]any)
+			mid, _ := row["machineId"].(string)
+			switch mid {
+			case "lw-fed-c":
+				foundFedC = true
+			case "orchard.boxd.sh":
+				foundBoxd = true
+			}
+		}
+		if foundFedC {
+			break
+		}
+		time.Sleep(pollInterval)
+	}
+
+	// 9. lw-fed-c must appear within 2 seconds.
+	if !foundFedC {
+		t.Fatalf("lw-fed-c never appeared in host.peers within 2s; last response: %v", lastEnvelope)
+	}
+
+	// 10. Provider.Start spawned a runPeer goroutine for lw-fed-c which calls
+	// Probe() immediately. The fake server counts all POST /graphql requests;
+	// at least one Ping must have landed.
+	if fakeFedC.pingCount.Load() < 1 {
+		t.Fatalf("no Ping to lw-fed-c observed after it appeared in host.peers (pingCount=%d)", fakeFedC.pingCount.Load())
+	}
+
+	// 11. orchard.boxd.sh must still be present — adding a peer must not evict
+	// an existing peer.
+	if !foundBoxd {
+		t.Fatalf("orchard.boxd.sh disappeared from host.peers after adding lw-fed-c; last response: %v", lastEnvelope)
+	}
+}
+
+// mustStripScheme is the panic-on-error variant of stripScheme for inline use
+// in test setup where a bad URL is a programming error.
+func mustStripScheme(t *testing.T, rawURL string) string {
+	t.Helper()
+	h, err := stripScheme(rawURL)
+	if err != nil {
+		t.Fatalf("mustStripScheme(%q): %v", rawURL, err)
+	}
+	return h
 }
 
 // tlsConfigFromTestServer extracts a *tls.Config that trusts ts's
