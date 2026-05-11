@@ -1,106 +1,19 @@
 /*
- * Orchard GUI — global design tokens + base utilities.
+ * Orchard GUI — base utilities, typography reset, and animations.
  *
- * Per-component styling lives in scoped `<style>` blocks in each .svelte file.
- * This file owns: the token vars, base typography reset, and a few utility
- * classes that are referenced by name across components (.mono, .pip, .chip,
- * .glass, .row, .btn-*, .iconbtn, .seg, .scroll). Per-component styling lives
- * in scoped `<style>` blocks.
+ * Design tokens (custom properties) have moved to tailwind.css @theme {}
+ * and @theme inline {}. This file owns: --accent-hue (runtime-mutable,
+ * must NOT be in @theme), base typography reset, and utility classes
+ * referenced by name across components (.mono, .pip, .chip, .glass, .row,
+ * .btn-*, .iconbtn, .seg, .scroll). Per-component styling lives in scoped
+ * <style> blocks.
  */
 
-:root,
-[data-theme="light"] {
-	--bg: #fafafb;
-	--bg-elev: #f3f3f5;
-	--surface: #ffffff;
-	--surface-2: #f7f7f9;
-	--surface-glass: rgba(255, 255, 255, 0.72);
-	--surface-glass-strong: rgba(255, 255, 255, 0.86);
-
-	--line: rgba(15, 15, 22, 0.07);
-	--line-2: rgba(15, 15, 22, 0.10);
-	--line-strong: rgba(15, 15, 22, 0.14);
-
-	--fg: #0e0e10;
-	--fg-2: rgba(14, 14, 16, 0.66);
-	--fg-3: rgba(14, 14, 16, 0.42);
-	--fg-4: rgba(14, 14, 16, 0.24);
-
+:root {
+	/* Runtime-mutable accent hue. Mutated by +layout.svelte via
+	 * document.documentElement.style.setProperty("--accent-hue", ...).
+	 * NOT in @theme — Tailwind would inline the build-time value. */
 	--accent-hue: 215;
-	--accent: oklch(0.58 0.16 var(--accent-hue));
-	--accent-fg: #ffffff;
-	--accent-soft: oklch(0.58 0.16 var(--accent-hue) / 0.10);
-	--accent-line: oklch(0.58 0.16 var(--accent-hue) / 0.30);
-
-	--attn: oklch(0.74 0.14 78);
-	--attn-soft: oklch(0.74 0.14 78 / 0.13);
-	--attn-fg: oklch(0.42 0.10 78);
-
-	--ok: oklch(0.66 0.13 158);
-	--ok-soft: oklch(0.66 0.13 158 / 0.12);
-	--ok-fg: oklch(0.42 0.10 158);
-
-	--bad: oklch(0.62 0.18 24);
-	--bad-soft: oklch(0.62 0.18 24 / 0.12);
-	--bad-fg: oklch(0.50 0.16 24);
-
-	--stale-fg: rgba(14, 14, 16, 0.32);
-
-	--shadow-1: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(15, 15, 22, 0.04),
-		0 4px 14px rgba(15, 15, 22, 0.06);
-	--shadow-2: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 12px 40px rgba(15, 15, 22, 0.18);
-	--glass-ring: inset 0 0.5px 0 rgba(255, 255, 255, 0.7),
-		inset 0 0 0 0.5px rgba(15, 15, 22, 0.06);
-
-	--radius-xs: 6px;
-	--radius-sm: 8px;
-	--radius: 10px;
-	--radius-lg: 14px;
-	--radius-xl: 20px;
-	--radius-2xl: 28px;
-}
-
-[data-theme="dark"] {
-	--bg: #0a0a0c;
-	--bg-elev: #131318;
-	--surface: #131318;
-	--surface-2: #1a1a20;
-	--surface-glass: rgba(22, 22, 28, 0.66);
-	--surface-glass-strong: rgba(22, 22, 28, 0.84);
-
-	--line: rgba(255, 255, 255, 0.07);
-	--line-2: rgba(255, 255, 255, 0.10);
-	--line-strong: rgba(255, 255, 255, 0.16);
-
-	--fg: #f4f4f7;
-	--fg-2: rgba(244, 244, 247, 0.68);
-	--fg-3: rgba(244, 244, 247, 0.42);
-	--fg-4: rgba(244, 244, 247, 0.22);
-
-	--accent: oklch(0.72 0.14 var(--accent-hue));
-	--accent-fg: #0a0a0c;
-	--accent-soft: oklch(0.72 0.14 var(--accent-hue) / 0.16);
-	--accent-line: oklch(0.72 0.14 var(--accent-hue) / 0.34);
-
-	--attn: oklch(0.82 0.13 78);
-	--attn-soft: oklch(0.82 0.13 78 / 0.14);
-	--attn-fg: oklch(0.86 0.13 78);
-
-	--ok: oklch(0.78 0.13 158);
-	--ok-soft: oklch(0.78 0.13 158 / 0.14);
-	--ok-fg: oklch(0.82 0.12 158);
-
-	--bad: oklch(0.72 0.17 24);
-	--bad-soft: oklch(0.72 0.17 24 / 0.16);
-	--bad-fg: oklch(0.78 0.16 24);
-
-	--stale-fg: rgba(244, 244, 247, 0.32);
-
-	--shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4),
-		0 12px 40px rgba(0, 0, 0, 0.44);
-	--shadow-2: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 60px rgba(0, 0, 0, 0.6);
-	--glass-ring: inset 0 0.5px 0 rgba(255, 255, 255, 0.06),
-		inset 0 0 0 0.5px rgba(255, 255, 255, 0.05);
 }
 
 * {
@@ -111,8 +24,8 @@ html,
 body {
 	margin: 0;
 	height: 100%;
-	background: var(--bg);
-	color: var(--fg);
+	background: var(--color-bg);
+	color: var(--color-fg);
 	font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 	font-size: 14px;
 	line-height: 1.45;
@@ -146,15 +59,15 @@ textarea {
 }
 
 .dim {
-	color: var(--fg-2);
+	color: var(--color-fg-2);
 }
 
 .dimer {
-	color: var(--fg-3);
+	color: var(--color-fg-3);
 }
 
 .dimest {
-	color: var(--fg-4);
+	color: var(--color-fg-4);
 }
 
 .kbd {
@@ -167,11 +80,11 @@ textarea {
 	font-family: "Geist Mono", ui-monospace, monospace;
 	font-size: 10.5px;
 	line-height: 1;
-	color: var(--fg-2);
-	background: var(--surface-2);
-	border: 0.5px solid var(--line-2);
+	color: var(--color-fg-2);
+	background: var(--color-surface-2);
+	border: 0.5px solid var(--color-line-2);
 	border-radius: 4px;
-	box-shadow: 0 1px 0 var(--line);
+	box-shadow: 0 1px 0 var(--color-line);
 }
 
 .pip {
@@ -183,27 +96,27 @@ textarea {
 }
 
 .pip.attn {
-	background: var(--attn);
-	box-shadow: 0 0 0 3px var(--attn-soft);
+	background: var(--color-attn);
+	box-shadow: 0 0 0 3px var(--color-attn-soft);
 }
 
 .pip.ok {
-	background: var(--ok);
-	box-shadow: 0 0 0 3px var(--ok-soft);
+	background: var(--color-ok);
+	box-shadow: 0 0 0 3px var(--color-ok-soft);
 }
 
 .pip.bad {
-	background: var(--bad);
-	box-shadow: 0 0 0 3px var(--bad-soft);
+	background: var(--color-bad);
+	box-shadow: 0 0 0 3px var(--color-bad-soft);
 }
 
 .pip.idle {
-	background: var(--fg-4);
+	background: var(--color-fg-4);
 }
 
 .pip.stale {
 	background: transparent;
-	outline: 1px dashed var(--fg-4);
+	outline: 1px dashed var(--color-fg-4);
 	outline-offset: -1px;
 }
 
@@ -215,7 +128,7 @@ textarea {
 @keyframes orchardPulseSoft {
 	0%,
 	100% {
-		box-shadow: 0 0 0 0 var(--ok-soft);
+		box-shadow: 0 0 0 0 var(--color-ok-soft);
 	}
 	50% {
 		box-shadow: 0 0 0 5px transparent;
@@ -223,7 +136,7 @@ textarea {
 }
 
 .pip.live {
-	background: var(--ok);
+	background: var(--color-ok);
 	animation: orchardPulseSoft 2.4s ease-in-out infinite;
 }
 
@@ -236,9 +149,9 @@ textarea {
 	font-size: 11.5px;
 	font-weight: 500;
 	border-radius: 999px;
-	background: var(--surface-2);
-	color: var(--fg-2);
-	border: 0.5px solid var(--line-2);
+	background: var(--color-surface-2);
+	color: var(--color-fg-2);
+	border: 0.5px solid var(--color-line-2);
 	white-space: nowrap;
 }
 
@@ -249,26 +162,26 @@ textarea {
 }
 
 .chip.attn {
-	background: var(--attn-soft);
-	color: var(--attn-fg);
+	background: var(--color-attn-soft);
+	color: var(--color-attn-fg);
 	border-color: transparent;
 }
 
 .chip.ok {
-	background: var(--ok-soft);
-	color: var(--ok-fg);
+	background: var(--color-ok-soft);
+	color: var(--color-ok-fg);
 	border-color: transparent;
 }
 
 .chip.bad {
-	background: var(--bad-soft);
-	color: var(--bad-fg);
+	background: var(--color-bad-soft);
+	color: var(--color-bad-fg);
 	border-color: transparent;
 }
 
 .chip.accent {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--color-accent-soft);
+	color: var(--color-accent);
 	border-color: transparent;
 }
 
@@ -277,22 +190,22 @@ textarea {
 }
 
 .glass {
-	background: var(--surface-glass);
+	background: var(--color-surface-glass);
 	backdrop-filter: blur(24px) saturate(140%);
 	-webkit-backdrop-filter: blur(24px) saturate(140%);
-	box-shadow: var(--glass-ring), var(--shadow-2);
+	box-shadow: var(--shadow-glass-ring), var(--shadow-2);
 }
 
 .glass-strong {
-	background: var(--surface-glass-strong);
+	background: var(--color-surface-glass-strong);
 	backdrop-filter: blur(28px) saturate(160%);
 	-webkit-backdrop-filter: blur(28px) saturate(160%);
-	box-shadow: var(--glass-ring), var(--shadow-2);
+	box-shadow: var(--shadow-glass-ring), var(--shadow-2);
 }
 
 .hr {
 	height: 1px;
-	background: var(--line);
+	background: var(--color-line);
 	border: 0;
 	margin: 0;
 }
@@ -300,7 +213,7 @@ textarea {
 .scroll {
 	overflow-y: auto;
 	scrollbar-width: thin;
-	scrollbar-color: var(--line-strong) transparent;
+	scrollbar-color: var(--color-line-strong) transparent;
 }
 
 .scroll::-webkit-scrollbar {
@@ -313,14 +226,14 @@ textarea {
 }
 
 .scroll::-webkit-scrollbar-thumb {
-	background: var(--line-2);
+	background: var(--color-line-2);
 	border: 3px solid transparent;
 	background-clip: content-box;
 	border-radius: 8px;
 }
 
 .scroll::-webkit-scrollbar-thumb:hover {
-	background: var(--line-strong);
+	background: var(--color-line-strong);
 	background-clip: content-box;
 	border: 3px solid transparent;
 }
@@ -342,9 +255,9 @@ textarea {
 	height: 28px;
 	padding: 0 12px;
 	border-radius: 8px;
-	background: var(--surface-2);
-	color: var(--fg);
-	border: 0.5px solid var(--line-2);
+	background: var(--color-surface-2);
+	color: var(--color-fg);
+	border: 0.5px solid var(--color-line-2);
 	font-weight: 500;
 	font-size: 13px;
 	transition: background 0.12s, border-color 0.12s;
@@ -352,16 +265,16 @@ textarea {
 }
 
 .btn-tonal:hover {
-	background: var(--bg-elev);
-	border-color: var(--line-strong);
+	background: var(--color-bg-elev);
+	border-color: var(--color-line-strong);
 }
 
 .btn-primary {
 	height: 28px;
 	padding: 0 12px;
 	border-radius: 8px;
-	background: var(--fg);
-	color: var(--bg);
+	background: var(--color-fg);
+	color: var(--color-bg);
 	font-weight: 500;
 	font-size: 13px;
 	border: 0;
@@ -376,7 +289,7 @@ textarea {
 	height: 28px;
 	padding: 0 10px;
 	border-radius: 8px;
-	color: var(--fg-2);
+	color: var(--color-fg-2);
 	font-weight: 500;
 	font-size: 13px;
 	background: transparent;
@@ -385,8 +298,8 @@ textarea {
 }
 
 .btn-ghost:hover {
-	background: color-mix(in oklab, var(--fg) 5%, transparent);
-	color: var(--fg);
+	background: color-mix(in oklab, var(--color-fg) 5%, transparent);
+	color: var(--color-fg);
 }
 
 .iconbtn {
@@ -396,7 +309,7 @@ textarea {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	color: var(--fg-2);
+	color: var(--color-fg-2);
 	cursor: default;
 	transition: background 0.12s, color 0.12s;
 	background: transparent;
@@ -405,13 +318,13 @@ textarea {
 }
 
 .iconbtn:hover {
-	background: color-mix(in oklab, var(--fg) 6%, transparent);
-	color: var(--fg);
+	background: color-mix(in oklab, var(--color-fg) 6%, transparent);
+	color: var(--color-fg);
 }
 
 .iconbtn[data-active="true"] {
-	background: var(--surface-2);
-	color: var(--fg);
+	background: var(--color-surface-2);
+	color: var(--color-fg);
 }
 
 .iconbtn-primary {
@@ -421,8 +334,8 @@ textarea {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	background: var(--fg);
-	color: var(--bg);
+	background: var(--color-fg);
+	color: var(--color-bg);
 	border: 0;
 	cursor: default;
 	transition: opacity 0.12s, transform 0.12s;
@@ -444,10 +357,10 @@ textarea {
 	width: 100%;
 	height: 32px;
 	padding: 0 12px;
-	background: var(--surface-2);
-	border: 0.5px solid var(--line-2);
+	background: var(--color-surface-2);
+	border: 0.5px solid var(--color-line-2);
 	border-radius: 8px;
-	color: var(--fg);
+	color: var(--color-fg);
 	font: inherit;
 	font-size: 13px;
 	outline: none;
@@ -455,17 +368,17 @@ textarea {
 }
 
 .input:focus {
-	border-color: var(--accent-line);
-	background: var(--surface);
-	box-shadow: 0 0 0 3px var(--accent-soft);
+	border-color: var(--color-accent-line);
+	background: var(--color-surface);
+	box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 .seg {
 	display: inline-flex;
 	padding: 2px;
-	background: var(--surface-2);
+	background: var(--color-surface-2);
 	border-radius: 8px;
-	border: 0.5px solid var(--line);
+	border: 0.5px solid var(--color-line);
 	position: relative;
 }
 
@@ -478,7 +391,7 @@ textarea {
 	font: inherit;
 	font-size: 12px;
 	font-weight: 500;
-	color: var(--fg-2);
+	color: var(--color-fg-2);
 	border-radius: 6px;
 	cursor: default;
 	display: inline-flex;
@@ -490,7 +403,7 @@ textarea {
 }
 
 .seg button[data-on="true"] {
-	color: var(--fg);
+	color: var(--color-fg);
 }
 
 .seg.seg-icon button {
@@ -514,9 +427,9 @@ textarea {
 	position: absolute;
 	top: 2px;
 	bottom: 2px;
-	background: var(--surface);
+	background: var(--color-surface);
 	border-radius: 6px;
-	box-shadow: 0 0 0 0.5px var(--line-2), 0 1px 2px rgba(0, 0, 0, 0.06);
+	box-shadow: 0 0 0 0.5px var(--color-line-2), 0 1px 2px rgba(0, 0, 0, 0.06);
 	transition: left 0.18s cubic-bezier(0.3, 0.7, 0.3, 1), width 0.18s;
 }
 
@@ -525,8 +438,8 @@ textarea {
 	font-size: 11px;
 	line-height: 1;
 	padding: 5px 7px;
-	background: var(--fg);
-	color: var(--bg);
+	background: var(--color-fg);
+	color: var(--color-bg);
 	border-radius: 5px;
 	pointer-events: none;
 	white-space: nowrap;
@@ -538,7 +451,7 @@ textarea {
 .hairline {
 	height: 2px;
 	width: 100%;
-	background: var(--line);
+	background: var(--color-line);
 	position: relative;
 	overflow: hidden;
 	border-radius: 999px;
@@ -548,7 +461,7 @@ textarea {
 	position: absolute;
 	top: 0;
 	bottom: 0;
-	background: var(--accent);
+	background: var(--color-accent);
 }
 
 @keyframes orchardFadeIn {
@@ -594,7 +507,7 @@ textarea {
 	display: inline-block;
 	width: 7px;
 	height: 14px;
-	background: var(--ok);
+	background: var(--color-ok);
 	vertical-align: -2px;
 	animation: orchardBlinkCaret 1s step-end infinite;
 }
@@ -622,7 +535,7 @@ textarea {
 	position: relative;
 	display: inline-flex;
 	align-items: center;
-	color: var(--accent);
+	color: var(--color-accent);
 }
 
 .unread-glyph .unread-count {
@@ -633,8 +546,8 @@ textarea {
 	height: 11px;
 	padding: 0 2px;
 	border-radius: 6px;
-	background: var(--accent);
-	color: var(--bg);
+	background: var(--color-accent);
+	color: var(--color-bg);
 	font-size: 8.5px;
 	line-height: 11px;
 	text-align: center;
@@ -642,15 +555,15 @@ textarea {
 }
 
 .ok-fg {
-	color: var(--ok);
+	color: var(--color-ok);
 }
 
 .attn-fg {
-	color: var(--attn);
+	color: var(--color-attn);
 }
 
 .bad-fg {
-	color: var(--bad);
+	color: var(--color-bad);
 }
 
 .term {
@@ -674,18 +587,18 @@ textarea {
 	font-size: 11px;
 	font-weight: 600;
 	letter-spacing: 0.06em;
-	color: var(--fg-3);
+	color: var(--color-fg-3);
 	text-transform: uppercase;
 }
 
 .group-header .count {
 	font-variant-numeric: tabular-nums;
-	color: var(--fg-4);
+	color: var(--color-fg-4);
 	font-weight: 500;
 }
 
 .group-header.attn {
-	color: var(--attn-fg);
+	color: var(--color-attn-fg);
 }
 
 .offline-ribbon {
@@ -696,14 +609,14 @@ textarea {
 	height: 28px;
 	font-size: 12px;
 	font-weight: 500;
-	background: var(--attn-soft);
-	color: var(--attn-fg);
-	border-bottom: 0.5px solid color-mix(in oklab, var(--attn) 30%, transparent);
+	background: var(--color-attn-soft);
+	color: var(--color-attn-fg);
+	border-bottom: 0.5px solid color-mix(in oklab, var(--color-attn) 30%, transparent);
 }
 
 ::selection {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--color-accent-soft);
+	color: var(--color-accent);
 }
 
 .no-select {
