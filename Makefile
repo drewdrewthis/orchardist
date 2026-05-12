@@ -26,9 +26,12 @@
         install install-daemon install-dispatcher install-tui install-worktree-cli \
         test test-go test-rust
 
+VERSION ?= dev
+
 # Go binary — orchard-daemon. Built from cmd/orchard-daemon.
+# Pass VERSION=<semver> to bake a release version: make daemon VERSION=1.2.3
 daemon:
-	go build -o bin/orchard-daemon ./cmd/orchard-daemon
+	go build -ldflags "-X main.version=$(VERSION)" -o bin/orchard-daemon ./cmd/orchard-daemon
 
 # Generate gqlgen types/stubs from schema.graphql + gqlgen.yml.
 # Generated files live under internal/server/graphql/ and are committed
