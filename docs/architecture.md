@@ -425,3 +425,15 @@ discovery only. See ADR-008 for the decision rationale.
 - **ADR-019**: Houdini cache — no client-side cache layers; rely on Houdini's normalized cache and subscription invalidation.
 - **ADR-020**: Tailwind-first styling — no new scoped CSS in orchard-gui; opportunistic migration on touched components.
 - **ADR-021**: Federation peers hot-reload — fsnotify watcher + `Provider.ApplyPeers` diff applier lets operators add/remove `peers[]` entries without restarting the daemon; prerequisite: each peer VM must run `boxd proxy new graphql --vm=<name> --port=7777` and have `orchard-daemon` listening on `127.0.0.1:7777`.
+
+### Legacy vs target state
+
+The sections above this ADR list describe **legacy** orchard-tui shape: cache
+files joined client-side, source modules that shell out to `git`/`gh`/`tmux`,
+`--json` as a per-invocation refresh. ADRs 016–020 define the **target** shape:
+daemon owns state, joins, and mutations; clients call `/graphql`; Houdini's
+normalized cache holds query results; no module-level Maps or scoped CSS in
+new code. Migration is incremental and lives across many PRs — when both
+sections describe the same behaviour, the ADR (target) wins. Build new
+features against the target; only touch the legacy path when fixing bugs in
+it or when a target equivalent does not yet exist.

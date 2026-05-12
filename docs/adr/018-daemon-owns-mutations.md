@@ -12,6 +12,7 @@ All worktree, tmux, Claude session, and config mutations flow through daemon Gra
 - Follows ADR-017 layer responsibilities: daemon owns state changes.
 
 ## Scope
+
 | Action | Owner |
 |--------|-------|
 | Create/destroy worktree | daemon mutation |
