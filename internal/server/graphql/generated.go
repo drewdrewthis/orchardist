@@ -3320,12 +3320,12 @@ type TmuxSession implements Node {
 
   Tracks tmux's ` + "`" + `pane_activity` + "`" + ` field, which fires on NEW pane content —
   not on in-place redraws. A Claude REPL spinner ticking in place
-  (` + "\"" + `Elucidating… 1m 11s` + "\"" + `) does NOT bump ` + "`" + `lastActivityAt` + "`" + `, so a long
+  ("Elucidating… 1m 11s") does NOT bump ` + "`" + `lastActivityAt` + "`" + `, so a long
   agentic turn can look identical to a hung pane (issue #506).
 
   Do NOT use this field as a Claude-REPL stall signal. The canonical
   signal is ` + "`" + `Worktree.claudeInstances[].state` + "`" + ` (working|idle|input|stalled,
-  issue #501) once that lands, OR the heartbeat freshness exposed on
+  issue #501), OR the heartbeat freshness exposed on
   ` + "`" + `ClaudeInstance` + "`" + ` directly. ` + "`" + `lastActivityAt` + "`" + ` remains useful for plain
   shell panes and for the lex-tie-breaker in ` + "`" + `Worktree.tmuxSession` + "`" + `.
   """

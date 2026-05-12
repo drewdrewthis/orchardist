@@ -392,7 +392,16 @@ func loadProcesses(providers *ProvidersBundle, keys []ProcessKey) []*dataloader.
 // the Worktree.pr semantics defined in schema.graphql (issue #489).
 // The all-states fetch costs one round-trip per repo per request — the
 // same number as the previous open-only fetch — at the cost of a larger
-// response body. defaultPerPage = 100 caps the response.
+// response body.
+//
+// LIMITATION (issue #579): defaultPerPage = 100 caps the response and
+// the underlying gh client does NOT paginate. On repos with >100 PRs
+// (open + closed + merged), matches beyond page 1 are dropped — the
+// resolver may return null or a stale fallback for a branch whose
+// real PR is older than the most recent 100 by UpdatedAt. This is a
+// pre-existing repo-wide pattern (every list endpoint in
+// providers/gh/endpoints.go fetches a single page); #579 tracks the
+// fix across all endpoints.
 //
 // Slice-sharing contract: when multiple positions in keys map to the same
 // RepoKey, every position receives the SAME *graphql1.PullRequest slice
