@@ -1,47 +1,39 @@
-You are an expert Rust engineer. pecialty: async CLI tools, TUI (ratatui), process orchestration (git/tmux/ssh), and cache-driven data pipelines.
+Expert Rust engineer: async CLI, TUI (ratatui), process orchestration (git/tmux/ssh), cache pipelines.
 
 # Git Orchard
 
-Worktree/session dashboard: aggregates git, tmux, GitHub, and SSH into a unified TUI and JSON API.
-
-Release binary symlinked: `~/Library/pnpm/orchard` → `target/release/orchard`.
+Worktree/session dashboard. Aggregates git, tmux, GitHub, SSH into TUI + JSON API. Binary: `~/Library/pnpm/orchard` → `target/release/orchard`.
 
 ## Architecture
 
-See @docs/architecture.md for the full picture. Constraints to enforce:
-
-- **Functional Core, Imperative Shell** — pure `build_state()` joins data, shell modules fetch it
-- **SRP** — files ≤ 300 lines, one responsibility per module/function
-- **`OrchardState`** is the single unified data model for TUI and `--json`
+See @docs/architecture.md. Enforce:
+- Functional core, imperative shell — pure `build_state()` joins, shell fetches
+- SRP, files ≤ 300 lines
+- `OrchardState` = single data model (TUI + `--json`)
 - ADRs in `docs/adr/`
 
-Agent coordination rules and common mistakes: @AGENTS.md
+Coordination: @AGENTS.md
 
-## Project-Specific Rules (learned the hard way)
+## Rules
 
-### Daemon-first joins — don't double-build on the frontend
+### GraphQL is the protocol (ADR-016, 017, 018)
 
-**Rule**: If a join belongs to the daemon (cwd→worktree, sessionUuid→Conversation, lastSeenAt→ClaudeInstance), expose it on the daemon. Do NOT re-implement the join in TS lens projections.
+Clients call daemon GraphQL. No client-side `git`/`gh`/`tmux` exec. No client-side joins or caches — daemon owns state. Subscriptions drive live updates. File a daemon issue for gaps; don't paper over client-side.
 
-- Bad pattern: `const byUuid = new Map(); for (c of conversations) ...` repeated across 5 lens files.
-- Good pattern: query `claudeInstance { worktree { ... } conversation { ... } }` — one daemon trip, no client-side glue.
-- The frontend stays a render layer. GraphQL is "ask for what you need," not "fetch slices and re-join."
-- Title fallback chain (agentName → customTitle → branch → cwd → uuid) is the rare exception that stays client-side — GraphQL doesn't fluent-coalesce.
+Exception: title fallback chain (`agentName → customTitle → branch → cwd → uuid`) stays client-side; GraphQL doesn't fluent-coalesce.
 
 ### Tmux session ≠ Claude session
 
-These are distinct concepts in the schema and must NOT be conflated in field names:
-
 | Concept | Type | Identity | Lifetime |
 |---|---|---|---|
-| Tmux session | `TmuxSession` | `<host>:<name>` | Until tmux server kills it |
-| Claude session | `ClaudeInstance` | `<host>:<claudePid>` (live) + `sessionUuid` (transcript) | Until Claude REPL exits |
+| Tmux | `TmuxSession` | `<host>:<name>` | tmux server kill |
+| Claude | `ClaudeInstance` | `<host>:<claudePid>` live, `sessionUuid` transcript | REPL exit |
 
-A worktree can carry both, neither, or several of each. Don't add `Worktree.sessions` — use `Worktree.tmuxPanes` / `Worktree.tmuxSession` (already exists, #511) and `Worktree.claudeInstances` (when added).
+Use `Worktree.tmuxPanes` / `Worktree.tmuxSession` / `Worktree.claudeInstances`. Never `Worktree.sessions`.
 
-### Verify the live daemon schema before writing client queries
+### Verify live daemon schema before client queries
 
-Don't assume a field exists because it's in `schema.graphql` — the daemon may not have been regenerated/restarted. Verify with introspection:
+Don't assume a field exists in the running daemon. Introspect:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7777/graphql \
@@ -49,40 +41,39 @@ curl -s -X POST http://127.0.0.1:7777/graphql \
   -d '{"query":"{__type(name:\"<Type>\"){fields{name type{name}}}}"}'
 ```
 
-Daemon-first hook fires on every `gh` call — check `~/.claude/references/orchard-daemon.md` for daemon coverage. File an issue when there's a gap rather than papering over it client-side.
+"Verified live" requires daemon restart after rebuild. Test-pass ≠ deployed.
 
 ### gqlgen traps
 
-1. **Resolver-method/provider-field collision**: Adding a type to `gqlgen.yml` under `models:` makes gqlgen generate a `func (r *Resolver) <TypeName>() <TypeName>Resolver` method. If `Resolver` already has a *field* of the same name (e.g. `ClaudeInstance *claudeinstance.Provider`), build breaks with "field and method with the same name." Fix: rename the provider field (`r.ClaudeInstance` → `r.ClaudeInstanceProvider`) before adding the type to gqlgen.yml, OR avoid the resolver-method codegen by binding the field directly.
+1. **Resolver/field name collision**: type in `gqlgen.yml` `models:` generates `Resolver.<TypeName>()` method. Rename clashing provider fields (e.g. `r.ClaudeInstance` → `r.ClaudeInstanceProvider`) before adding.
+2. **Stale code rescue**: snapshot `schema.resolvers.go` to `/tmp/` before every `make generate`; revert on explosion.
+3. **`sortKey` rewrite**: regen overwrites our `sortKey` rename. Re-rename `sort` → `sortKey` in `internal/server/resolvers/schema.resolvers.go` after every regen.
 
-2. **Stale-code "rescue"** — when you delete a resolver function before regen, gqlgen may dump its body as raw text into `schema.resolvers.go` outside any function, breaking the build. Mitigation: snapshot `schema.resolvers.go` to `/tmp/` before every `make generate`. If the regen explodes, revert.
+### Heavy fields excluded from Conversation (ADR-016)
 
-3. **`sortKey` arg rewrite**: gqlgen regenerates the parameter named `sort` (matching schema) on every run. Our resolver renames it to `sortKey` to avoid shadowing the imported `sort` package. After every regen, re-rename `sort` → `sortKey` in the generated resolver signature. Search `internal/server/resolvers/schema.resolvers.go` for `sort *graphql1.TmuxSessionSort` after regen.
+`Conversation` excludes transcripts/message bodies. Heavy reads: `GET /v1/conversations/<uuid>/jsonl`. Don't add `Conversation.transcript`.
 
-### Heavy fields excluded from Conversation by design
+### Config writers — CLI only
 
-Per schema docs (lines 882–887): `Conversation` deliberately excludes full transcripts and message bodies. Heavy reads go through `GET /v1/conversations/<sessionUuid>/jsonl` (HTTP, last-N bytes from end of file). Don't add a `Conversation.transcript` GraphQL field — it would violate the v1 contract. Virtualize the existing reader instead.
+`~/.orchard/config.json` mutated only by `orchard config init|write` and `orchard init` wizard. Never written from TUI startup. New silent writer = file issue.
 
-### Config writers must be explicit CLI/manual ONLY
+### Houdini cache, no client layers (ADR-019)
 
-`~/.orchard/config.json` may only be mutated by:
-1. `orchard config init` / `orchard config write` (CLI in `internal/cli/config/config.go`)
-2. `orchard init` wizard (CLI in `crates/orchard/src/shell.rs`)
+Use Houdini's normalized cache + `defaultCachePolicy`. No module-level Maps. No custom invalidation. Subscriptions update the cache.
 
-`orchard-tui` startup must NOT write the config. The earlier `register_cwd_repo_if_new` call from `App::new` was removed (#545). If you find a new silent writer, file an issue.
+### Tailwind-first (ADR-020, #544)
 
-### No-handrolling rule (Drew, 2026-05-10)
+No new scoped CSS in orchard-gui. Tailwind classes only. Opportunistic migration on touched components.
 
-If a tool/library does the job, use it. Don't hand-roll:
-- gqlgen has `resolver: true` per field — use it instead of writing your own dispatch.
-- Houdini has `defaultCachePolicy` — use it instead of caching layers.
-- CSS gap/flex — use it instead of margin math.
-- Rust `#[serde(rename_all)]` — use it instead of bespoke `Deserialize`.
-- Go stdlib utilities (`gofmt`, `errors.Is`, `slices`, `cmp`) — use them.
-- Virtualization (`@tanstack/svelte-virtual`) — use it instead of manual visible-window math.
-- Tailwind (when adopted, #544) over hand-rolled scoped CSS.
+### No hand-rolling
 
-When the tool fights you, slow down — likely you're using it wrong, not the tool being broken. (cf. the gqlgen schema-drift fight that wasted a session.)
+Use the tool. Examples: gqlgen `resolver: true`, Houdini cache, CSS flex/grid (no margin math), `#[serde(rename_all)]`, Go stdlib (`errors.Is`, `slices`, `cmp`), `@tanstack/svelte-virtual`, Tailwind.
+
+Tool fighting you = you're using it wrong.
+
+### GUI work requires rendering
+
+UI changes verified by rendering, not diff inspection. Playwright snapshot or browser check before claiming done.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

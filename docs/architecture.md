@@ -418,4 +418,22 @@ discovery only. See ADR-008 for the decision rationale.
 - **ADR-010**: `orchard-tui --json` (and `orchard-tui sessions --json`) is the live read; the TUI keeps the cached fast path. Reverses ADR-008's cache-only `--json` clause.
 - **ADR-013**: Orchard CLI ecosystem — one user-facing `orchard` binary as a thin dispatcher; `orchard-tui`, `orchard-daemon`, `orchard-worktree` as helper binaries; `crates/worktree-core/` is the shared library backing worktree mutation in TUI + CLI. Hybrid grammar (namespaced verbs + bare-verb shortcuts for the worktree primary unit).
 - **ADR-014**: Global config location — `~/.orchard/config.json` (dotdir) instead of `~/.config/orchard/config.json` (XDG). Matches every other dotdir tool in the stack (`~/.aws`, `~/.kube`, `~/.ssh`, `~/.cargo`, `~/.claude`). Clean break — daemon and CLI emit a migration hint when the legacy path is detected.
+- **ADR-015**: Minimal config schema.
+- **ADR-016**: GraphQL is the wire protocol — daemon serves `/graphql`; clients (TUI, GUI, CLI, mobile) call it; no client-side `git`/`gh`/`tmux` exec.
+- **ADR-017**: Layer responsibilities — daemon owns state/joins/mutations; clients render only; no client-side joins or caching layers.
+- **ADR-018**: Daemon owns mutations — worktree, tmux, config writes flow through GraphQL mutations; mobile and remote clients unblock.
+- **ADR-019**: Houdini cache — no client-side cache layers; rely on Houdini's normalized cache and subscription invalidation.
+- **ADR-020**: Tailwind-first styling — no new scoped CSS in orchard-gui; opportunistic migration on touched components.
 - **ADR-021**: Federation peers hot-reload — fsnotify watcher + `Provider.ApplyPeers` diff applier lets operators add/remove `peers[]` entries without restarting the daemon; prerequisite: each peer VM must run `boxd proxy new graphql --vm=<name> --port=7777` and have `orchard-daemon` listening on `127.0.0.1:7777`.
+
+### Legacy vs target state
+
+The sections above this ADR list describe **legacy** orchard-tui shape: cache
+files joined client-side, source modules that shell out to `git`/`gh`/`tmux`,
+`--json` as a per-invocation refresh. ADRs 016–020 define the **target** shape:
+daemon owns state, joins, and mutations; clients call `/graphql`; Houdini's
+normalized cache holds query results; no module-level Maps or scoped CSS in
+new code. Migration is incremental and lives across many PRs — when both
+sections describe the same behaviour, the ADR (target) wins. Build new
+features against the target; only touch the legacy path when fixing bugs in
+it or when a target equivalent does not yet exist.
