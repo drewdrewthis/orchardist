@@ -230,6 +230,13 @@ func WithManifest(m *manifest.Provider) Option {
 	}
 }
 
+// WithVersion injects the daemon binary version so Query.version can
+// surface it. Callers pass the package-level `version` variable from
+// cmd/orchard-daemon/main.go; the value is "dev" when no -ldflags were used.
+func WithVersion(v string) Option {
+	return func(_ *Server, r *resolvers.Resolver) { r.WithVersion(v) }
+}
+
 // New constructs a Server bound to addr.
 func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	if addr == "" {

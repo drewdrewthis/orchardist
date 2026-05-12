@@ -630,6 +630,15 @@ func (r *queryResolver) DaemonState(ctx context.Context) (*graphql1.DaemonState,
 	}, nil
 }
 
+// Version is the resolver for Query.version (#417 AC2). Returns the daemon
+// binary version baked in via -ldflags at release time, or "dev" when
+// built without ldflags (plain `go build`). The value originates from the
+// package-level `version` variable in cmd/orchard-daemon/main.go, injected
+// into the resolver at boot via Resolver.WithVersion.
+func (r *queryResolver) Version(ctx context.Context) (string, error) {
+	return r.DaemonVersion, nil
+}
+
 // Worktrees is the resolver for the repo.worktrees field.
 func (r *repoResolver) Worktrees(ctx context.Context, obj *graphql1.Repo) ([]*graphql1.Worktree, error) {
 	if r.Git == nil {

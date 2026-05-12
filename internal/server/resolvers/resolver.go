@@ -29,26 +29,41 @@ type ReposLister interface {
 
 // Resolver is the dependency-injection root for GraphQL resolvers.
 type Resolver struct {
-	StartedAt           time.Time
-	HostProvider        *host.Provider
-	ReposProvider       ReposLister
-	Git                 *gitprovider.Provider
-	PS                  *ps.Provider
-	Tmux                *tmux.Provider
-	ClaudeProjects      *claudeprojects.Provider
-	ClaudeAccount       *claudeaccount.Provider
+	StartedAt time.Time
+	// DaemonVersion is the binary version, injected at boot from the
+	// -ldflags -X main.version=<semver> bake. Named DaemonVersion (not
+	// Version) to avoid shadowing the Query.Version resolver method on
+	// the embedded queryResolver. Defaults to "dev" when no ldflags
+	// were used (plain `go build`).
+	DaemonVersion          string
+	HostProvider           *host.Provider
+	ReposProvider          ReposLister
+	Git                    *gitprovider.Provider
+	PS                     *ps.Provider
+	Tmux                   *tmux.Provider
+	ClaudeProjects         *claudeprojects.Provider
+	ClaudeAccount          *claudeaccount.Provider
 	HostServiceProvider    *hostservice.Provider
 	ContractsProvider      *contracts.Provider
 	ClaudeInstanceProvider *claudeinstance.Provider
 	GH                     *gh.Provider
-	PeerProxy           *peerproxy.Provider
-	LocalEvents         *peerproxy.LocalInvalidator
-	Manifest            *manifest.Provider
+	PeerProxy              *peerproxy.Provider
+	LocalEvents            *peerproxy.LocalInvalidator
+	Manifest               *manifest.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured.
+// DaemonVersion defaults to "dev"; call WithVersion to inject a build-time semver.
 func New(startedAt time.Time) *Resolver {
-	return &Resolver{StartedAt: startedAt}
+	return &Resolver{StartedAt: startedAt, DaemonVersion: "dev"}
+}
+
+// WithVersion injects the daemon binary version into the resolver so
+// Query.version can surface it. The value is set by -ldflags at release
+// time; callers pass the package-level `version` variable from main.
+func (r *Resolver) WithVersion(v string) *Resolver {
+	r.DaemonVersion = v
+	return r
 }
 
 // WithHost wires the host provider.

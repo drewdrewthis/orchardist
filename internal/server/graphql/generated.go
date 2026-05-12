@@ -285,6 +285,7 @@ type ComplexityRoot struct {
 		TmuxPanes        func(childComplexity int, filter *TmuxPaneFilter) int
 		TmuxServer       func(childComplexity int) int
 		TmuxSessions     func(childComplexity int, filter *TmuxSessionFilter) int
+		Version          func(childComplexity int) int
 		WorkView         func(childComplexity int) int
 		WorkflowRuns     func(childComplexity int, repo string) int
 	}
@@ -471,6 +472,7 @@ type QueryResolver interface {
 	SchemaSdl(ctx context.Context) (string, error)
 	WorkView(ctx context.Context) (*WorkView, error)
 	DaemonState(ctx context.Context) (*DaemonState, error)
+	Version(ctx context.Context) (string, error)
 }
 type RepoResolver interface {
 	Worktrees(ctx context.Context, obj *Repo) ([]*Worktree, error)
@@ -1863,6 +1865,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.TmuxSessions(childComplexity, args["filter"].(*TmuxSessionFilter)), true
 
+	case "Query.version":
+		if e.complexity.Query.Version == nil {
+			break
+		}
+
+		return e.complexity.Query.Version(childComplexity), true
+
 	case "Query.workView":
 		if e.complexity.Query.WorkView == nil {
 			break
@@ -3043,6 +3052,9 @@ type Query {
   meta envelope. Cheap — reads in-memory counters, no I/O.
   """
   daemonState: DaemonState!
+
+  "Daemon binary version. Set at build time via -ldflags -X main.version=<semver>; ` + "`" + `dev` + "`" + ` for plain ` + "`" + `go build` + "`" + `."
+  version: String!
 }
 
 """
@@ -13517,6 +13529,50 @@ func (ec *executionContext) fieldContext_Query_daemonState(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_version(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_version(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().Version(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_version(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query___type(ctx, field)
 	if err != nil {
@@ -23224,6 +23280,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_daemonState(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "version":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_version(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}

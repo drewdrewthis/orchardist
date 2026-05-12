@@ -35,7 +35,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(daemon.Command())
+	root.AddCommand(daemon.Command(version))
 	root.AddCommand(config.Command())
 	root.AddCommand(query.Command())
 
