@@ -385,9 +385,23 @@ func loadProcesses(providers *ProvidersBundle, keys []ProcessKey) []*dataloader.
 // internally so the gh provider is called at most once per unique repo,
 // regardless of how many Load calls arrived with the same key.
 //
-// Returns the full open-PR slice for each position in keys (including
-// duplicate positions). The resolver layer does the headRef→branch match
-// locally against this slice.
+// Returns PRs across all states (open + closed + merged) for each
+// position in keys, sorted by UpdatedAt DESC (GitHub's sort order on
+// the list endpoint). The resolver layer does the headRef→branch match
+// locally against this slice and chooses OPEN over CLOSED/MERGED per
+// the Worktree.pr semantics defined in schema.graphql (issue #489).
+// The all-states fetch costs one round-trip per repo per request — the
+// same number as the previous open-only fetch — at the cost of a larger
+// response body.
+//
+// LIMITATION (issue #579): defaultPerPage = 100 caps the response and
+// the underlying gh client does NOT paginate. On repos with >100 PRs
+// (open + closed + merged), matches beyond page 1 are dropped — the
+// resolver may return null or a stale fallback for a branch whose
+// real PR is older than the most recent 100 by UpdatedAt. This is a
+// pre-existing repo-wide pattern (every list endpoint in
+// providers/gh/endpoints.go fetches a single page); #579 tracks the
+// fix across all endpoints.
 //
 // Slice-sharing contract: when multiple positions in keys map to the same
 // RepoKey, every position receives the SAME *graphql1.PullRequest slice
@@ -416,7 +430,12 @@ func loadPullRequestsForRepo(ctx context.Context, providers *ProvidersBundle, ke
 		if _, seen := cache[key]; seen {
 			continue
 		}
-		prs, err := ghp.ListPullRequests(ctx, key.Owner, key.Name, ghprovider.PullRequestStateOpen)
+		// state=ALL so the Worktree.pr resolver can return the most-recent
+		// CLOSED/MERGED PR when no OPEN PR matches the branch (issue #489).
+		// Stays a single round-trip — the GitHub /pulls endpoint accepts a
+		// state query param and returns one page (per_page=100) sorted by
+		// UpdatedAt DESC.
+		prs, err := ghp.ListPullRequests(ctx, key.Owner, key.Name, ghprovider.PullRequestStateAll)
 		if err != nil {
 			cache[key] = &repoResult{err: err}
 			continue
