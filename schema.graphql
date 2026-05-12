@@ -542,6 +542,15 @@ type Host implements Node {
   "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
   peers: [Host!]!
 
+  """
+  Daemon binary version running on this host. Set at build time via
+  -ldflags -X main.version=<semver>; `dev` for plain `go build`.
+  Non-null on the local host (always at least "dev"). Null for a peer
+  host whose probe has not yet succeeded — "unknown" is represented as
+  null rather than an error so dashboards can render partial information.
+  """
+  version: String
+
   "Processes visible to this host's `ps` adapter, optionally filtered."
   processes(filter: ProcessFilter): [Process!]!
 

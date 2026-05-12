@@ -91,6 +91,24 @@ func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphq
 	return out, nil
 }
 
+// Version is the resolver for the host.version field (#417 AC3).
+//
+// Local host: returns DaemonVersion (set at boot via WithVersion / -ldflags).
+// Peer host: returns the version the peerproxy provider cached on the
+// most recent successful probe, or nil when the peer has never been reached.
+// Null is the legitimate "unknown" — no error is raised.
+func (r *hostResolver) Version(ctx context.Context, obj *graphql1.Host) (*string, error) {
+	if isLocalHostNode(r, obj) {
+		v := r.DaemonVersion
+		return &v, nil
+	}
+	// Peer host — return the version cached by the probe, or nil.
+	if r.PeerProxy == nil {
+		return nil, nil
+	}
+	return r.PeerProxy.PeerVersion(obj.MachineID), nil
+}
+
 // Processes is the resolver for the host.processes field. Local host: in-process ps. Peer Host: federate via peerproxy (#465 — never return local ps for a peer).
 func (r *hostResolver) Processes(ctx context.Context, obj *graphql1.Host, filter *graphql1.ProcessFilter) ([]*graphql1.Process, error) {
 	if isLocalHostNode(r, obj) {

@@ -154,6 +154,7 @@ type ComplexityRoot struct {
 		Reachable          func(childComplexity int) int
 		ResourceLoad       func(childComplexity int) int
 		Role               func(childComplexity int) int
+		Version            func(childComplexity int) int
 	}
 
 	HostService struct {
@@ -427,6 +428,7 @@ type ClaudeInstanceResolver interface {
 }
 type HostResolver interface {
 	Peers(ctx context.Context, obj *Host) ([]*Host, error)
+	Version(ctx context.Context, obj *Host) (*string, error)
 	Processes(ctx context.Context, obj *Host, filter *ProcessFilter) ([]*Process, error)
 }
 type ProcessResolver interface {
@@ -1092,6 +1094,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Host.Role(childComplexity), true
+
+	case "Host.version":
+		if e.complexity.Host.Version == nil {
+			break
+		}
+
+		return e.complexity.Host.Version(childComplexity), true
 
 	case "HostService.exitCode":
 		if e.complexity.HostService.ExitCode == nil {
@@ -3276,6 +3285,15 @@ type Host implements Node {
   "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
   peers: [Host!]!
 
+  """
+  Daemon binary version running on this host. Set at build time via
+  -ldflags -X main.version=<semver>; ` + "`" + `dev` + "`" + ` for plain ` + "`" + `go build` + "`" + `.
+  Non-null on the local host (always at least "dev"). Null for a peer
+  host whose probe has not yet succeeded — "unknown" is represented as
+  null rather than an error so dashboards can render partial information.
+  """
+  version: String
+
   "Processes visible to this host's ` + "`" + `ps` + "`" + ` adapter, optionally filtered."
   processes(filter: ProcessFilter): [Process!]!
 
@@ -4965,6 +4983,8 @@ func (ec *executionContext) fieldContext_ClaudeAccount_host(ctx context.Context,
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -7746,6 +7766,8 @@ func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field g
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -7764,6 +7786,47 @@ func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field g
 				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_version(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_version(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Host().Version(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_version(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -8264,6 +8327,8 @@ func (ec *executionContext) fieldContext_HostService_host(ctx context.Context, f
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -9698,6 +9763,8 @@ func (ec *executionContext) fieldContext_Process_host(ctx context.Context, field
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -11772,6 +11839,8 @@ func (ec *executionContext) fieldContext_Query_host(ctx context.Context, field g
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -11854,6 +11923,8 @@ func (ec *executionContext) fieldContext_Query_hosts(ctx context.Context, field 
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -12648,6 +12719,8 @@ func (ec *executionContext) fieldContext_Query_peers(ctx context.Context, field 
 				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
+			case "version":
+				return ec.fieldContext_Host_version(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
@@ -21682,6 +21755,39 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "version":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Host_version(ctx, field, obj)
 				return res
 			}
 
