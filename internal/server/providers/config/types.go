@@ -6,9 +6,10 @@
 // package owns the file format, the JSON adapter, and the provider that
 // surfaces Repos to the GraphQL resolver.
 //
-// Schema: per ADR-015 the file has exactly three top-level keys —
-// `version`, `repos`, and `peers`. Older shapes (`projects[]`) are not
-// supported on read or write.
+// Schema: per ADR-015 the file has four top-level keys —
+// `version`, `repos`, `peers`, and `excluded` (the last added in
+// issue #527). Older shapes (`projects[]`) are not supported on read
+// or write.
 package config
 
 import (
@@ -43,14 +44,22 @@ type Repo struct {
 
 // File is the on-disk shape of ~/.orchard/config.json (ADR-015).
 //
-// Three top-level keys: `version`, `repos`, `peers`. Unknown fields are
-// tolerated on read (json.Unmarshal default behaviour) so older daemons
-// can read newer configs without crashing. On write, only these three
-// keys are emitted.
+// Top-level keys: `version`, `repos`, `peers`, `excluded`. Unknown
+// fields are tolerated on read (json.Unmarshal default behaviour) so
+// older daemons can read newer configs without crashing. On write, only
+// these keys are emitted; empty slices are elided.
+//
+// `excluded` is an opt-in list of absolute repo-root paths that the
+// repo-discovery layer (issue #527) drops from the auto-discovery
+// union. Configured `repos[]` are NOT filtered by `excluded` — a path
+// the operator explicitly added stays visible. The field is therefore
+// only consulted by the repodiscovery package; the config provider
+// itself simply round-trips it.
 type File struct {
-	Version int       `json:"version"`
-	Repos   []RepoRow `json:"repos"`
-	Peers   []PeerRow `json:"peers,omitempty"`
+	Version  int       `json:"version"`
+	Repos    []RepoRow `json:"repos"`
+	Peers    []PeerRow `json:"peers,omitempty"`
+	Excluded []string  `json:"excluded,omitempty"`
 }
 
 // RepoRow is one entry in `repos`. Identity is `slug`; display name is

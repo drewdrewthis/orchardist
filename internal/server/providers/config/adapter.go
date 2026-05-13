@@ -106,6 +106,31 @@ func (a *JSONFileAdapter) FetchAll(ctx context.Context) (map[RepoID]Repo, error)
 	return out, nil
 }
 
+// FetchExcluded returns the `excluded` top-level array from the config
+// file as a slice of absolute paths (issue #527). A missing or empty
+// file returns nil, not an error — discovery degrades to "no
+// exclusions" rather than failing closed.
+func (a *JSONFileAdapter) FetchExcluded(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(a.path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", a.path, err)
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var f File
+	if err := json.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", a.path, err)
+	}
+	return f.Excluded, nil
+}
+
 // Watch starts an fsnotify watcher on the parent directory of a.path
 // and emits allKey whenever an event matching the config file is
 // observed. The channel is closed when ctx is cancelled or Close is
