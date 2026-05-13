@@ -45,6 +45,7 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/manifest"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
@@ -85,6 +86,7 @@ type Server struct {
 	peerProxy      *peerproxy.Provider
 	localEvents    *peerproxy.LocalInvalidator
 	convoJSONL     *convoJSONLConfig
+	manifest       *manifest.Provider
 }
 
 // LocalEvents exposes the configured local-invalidation broker for
@@ -214,6 +216,17 @@ func WithLocalEvents(l *peerproxy.LocalInvalidator) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.localEvents = l
 		r.WithLocalEvents(l)
+	}
+}
+
+// WithManifest attaches the fleet-manifest provider. Run() starts the
+// provider so the periodic refresh ticks even when the daemon never
+// receives a request; resolvers gain manifest-aware `Query.hosts` +
+// `Query.health.manifest`.
+func WithManifest(m *manifest.Provider) Option {
+	return func(s *Server, r *resolvers.Resolver) {
+		s.manifest = m
+		r.WithManifest(m)
 	}
 }
 
@@ -356,6 +369,17 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("peerproxy start: %w", err)
 		}
 		defer func() { _ = s.peerProxy.Stop() }()
+	}
+	if s.manifest != nil {
+		// Manifest.Start performs one synchronous load and then forks
+		// the refresh goroutine. Parse failures are non-fatal — they
+		// surface via Query.health and the daemon continues without
+		// manifest enrichment. We still propagate any wiring-shape
+		// errors so accidental nil-derefs show up loudly.
+		if err := s.manifest.Start(ctx); err != nil {
+			return fmt.Errorf("manifest start: %w", err)
+		}
+		defer func() { _ = s.manifest.Stop() }()
 	}
 	if s.gitProv != nil {
 		// The git provider's watchers are spawned by AddProject; Stop

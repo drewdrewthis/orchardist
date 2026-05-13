@@ -40,6 +40,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/manifest"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
@@ -198,6 +199,16 @@ func runStart(parentCtx context.Context, addr string) error {
 
 	localEvents := peerproxy.NewLocalInvalidator()
 
+	// Manifest provider — best-effort. An empty path (no
+	// $FLEET_MANIFEST and no HOME) is permitted; the resolver layer
+	// reports `health.manifest.loaded=false` in that case so callers
+	// see the daemon is running without manifest enrichment rather
+	// than crashing.
+	manifestProvider := manifest.New(
+		manifest.DefaultPath(),
+		manifest.WithLogger(logger),
+	)
+
 	opts := []server.Option{
 		server.WithRepos(configProvider),
 		server.WithGit(gitProvider),
@@ -211,6 +222,7 @@ func runStart(parentCtx context.Context, addr string) error {
 		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),
 		server.WithLocalEvents(localEvents),
+		server.WithManifest(manifestProvider),
 	}
 	if hsvc != nil {
 		opts = append(opts, server.WithHostService(hsvc))

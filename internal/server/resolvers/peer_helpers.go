@@ -27,11 +27,11 @@ func isLocalHostNode(r *hostResolver, obj *graphql1.Host) bool {
 }
 
 // peerLastSeen formats a peer's last-known reachable timestamp into the
-// schema's RFC3339 string. A zero time falls back to now() so callers
-// see "I have not yet talked to this peer" rather than "1970".
+// schema's RFC3339 string. A zero time returns "" so callers can detect
+// "I have not yet talked to this peer" without emitting a false "now".
 func peerLastSeen(t time.Time) string {
 	if t.IsZero() {
-		return time.Now().UTC().Format(time.RFC3339Nano)
+		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
 }

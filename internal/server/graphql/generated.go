@@ -130,23 +130,30 @@ type ComplexityRoot struct {
 	}
 
 	Health struct {
-		Status  func(childComplexity int) int
-		UptimeS func(childComplexity int) int
+		Manifest func(childComplexity int) int
+		Status   func(childComplexity int) int
+		UptimeS  func(childComplexity int) int
 	}
 
 	Host struct {
-		Address      func(childComplexity int) int
-		HostServices func(childComplexity int) int
-		Hostname     func(childComplexity int) int
-		ID           func(childComplexity int) int
-		Kernel       func(childComplexity int) int
-		LastSeenAt   func(childComplexity int) int
-		MachineID    func(childComplexity int) int
-		Os           func(childComplexity int) int
-		Peers        func(childComplexity int) int
-		Processes    func(childComplexity int, filter *ProcessFilter) int
-		Reachable    func(childComplexity int) int
-		ResourceLoad func(childComplexity int) int
+		Address            func(childComplexity int) int
+		DecommissionSignal func(childComplexity int) int
+		HostServices       func(childComplexity int) int
+		Hostname           func(childComplexity int) int
+		ID                 func(childComplexity int) int
+		InManifest         func(childComplexity int) int
+		Kernel             func(childComplexity int) int
+		LastSeenAt         func(childComplexity int) int
+		LastVerified       func(childComplexity int) int
+		MachineID          func(childComplexity int) int
+		Os                 func(childComplexity int) int
+		OwnerOrchardist    func(childComplexity int) int
+		Peers              func(childComplexity int) int
+		Processes          func(childComplexity int, filter *ProcessFilter) int
+		Purpose            func(childComplexity int) int
+		Reachable          func(childComplexity int) int
+		ResourceLoad       func(childComplexity int) int
+		Role               func(childComplexity int) int
 	}
 
 	HostService struct {
@@ -180,6 +187,14 @@ type ComplexityRoot struct {
 		CreatedAt   func(childComplexity int) int
 		ID          func(childComplexity int) int
 		UpdatedAt   func(childComplexity int) int
+	}
+
+	ManifestStatus struct {
+		Error        func(childComplexity int) int
+		HostCount    func(childComplexity int) int
+		LastLoadedAt func(childComplexity int) int
+		Loaded       func(childComplexity int) int
+		Path         func(childComplexity int) int
 	}
 
 	Meta struct {
@@ -924,6 +939,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.DaemonState.UptimeS(childComplexity), true
 
+	case "Health.manifest":
+		if e.complexity.Health.Manifest == nil {
+			break
+		}
+
+		return e.complexity.Health.Manifest(childComplexity), true
+
 	case "Health.status":
 		if e.complexity.Health.Status == nil {
 			break
@@ -944,6 +966,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Host.Address(childComplexity), true
+
+	case "Host.decommissionSignal":
+		if e.complexity.Host.DecommissionSignal == nil {
+			break
+		}
+
+		return e.complexity.Host.DecommissionSignal(childComplexity), true
 
 	case "Host.hostServices":
 		if e.complexity.Host.HostServices == nil {
@@ -966,6 +995,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Host.ID(childComplexity), true
 
+	case "Host.inManifest":
+		if e.complexity.Host.InManifest == nil {
+			break
+		}
+
+		return e.complexity.Host.InManifest(childComplexity), true
+
 	case "Host.kernel":
 		if e.complexity.Host.Kernel == nil {
 			break
@@ -980,6 +1016,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Host.LastSeenAt(childComplexity), true
 
+	case "Host.lastVerified":
+		if e.complexity.Host.LastVerified == nil {
+			break
+		}
+
+		return e.complexity.Host.LastVerified(childComplexity), true
+
 	case "Host.machineId":
 		if e.complexity.Host.MachineID == nil {
 			break
@@ -993,6 +1036,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Host.Os(childComplexity), true
+
+	case "Host.ownerOrchardist":
+		if e.complexity.Host.OwnerOrchardist == nil {
+			break
+		}
+
+		return e.complexity.Host.OwnerOrchardist(childComplexity), true
 
 	case "Host.peers":
 		if e.complexity.Host.Peers == nil {
@@ -1013,6 +1063,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Host.Processes(childComplexity, args["filter"].(*ProcessFilter)), true
 
+	case "Host.purpose":
+		if e.complexity.Host.Purpose == nil {
+			break
+		}
+
+		return e.complexity.Host.Purpose(childComplexity), true
+
 	case "Host.reachable":
 		if e.complexity.Host.Reachable == nil {
 			break
@@ -1026,6 +1083,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Host.ResourceLoad(childComplexity), true
+
+	case "Host.role":
+		if e.complexity.Host.Role == nil {
+			break
+		}
+
+		return e.complexity.Host.Role(childComplexity), true
 
 	case "HostService.exitCode":
 		if e.complexity.HostService.ExitCode == nil {
@@ -1194,6 +1258,41 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.IssueComment.UpdatedAt(childComplexity), true
+
+	case "ManifestStatus.error":
+		if e.complexity.ManifestStatus.Error == nil {
+			break
+		}
+
+		return e.complexity.ManifestStatus.Error(childComplexity), true
+
+	case "ManifestStatus.hostCount":
+		if e.complexity.ManifestStatus.HostCount == nil {
+			break
+		}
+
+		return e.complexity.ManifestStatus.HostCount(childComplexity), true
+
+	case "ManifestStatus.lastLoadedAt":
+		if e.complexity.ManifestStatus.LastLoadedAt == nil {
+			break
+		}
+
+		return e.complexity.ManifestStatus.LastLoadedAt(childComplexity), true
+
+	case "ManifestStatus.loaded":
+		if e.complexity.ManifestStatus.Loaded == nil {
+			break
+		}
+
+		return e.complexity.ManifestStatus.Loaded(childComplexity), true
+
+	case "ManifestStatus.path":
+		if e.complexity.ManifestStatus.Path == nil {
+			break
+		}
+
+		return e.complexity.ManifestStatus.Path(childComplexity), true
 
 	case "Meta.failureReason":
 		if e.complexity.Meta.FailureReason == nil {
@@ -3094,6 +3193,35 @@ type Health {
 
   "Uptime in seconds since daemon started."
   uptimeS: Int!
+
+  """
+  Fleet-manifest ingestion status. Reflects the last attempt the daemon
+  made to load ` + "`" + `$FLEET_MANIFEST` + "`" + ` (default ` + "`" + `~/.claude/references/fleet-manifest.yaml` + "`" + `).
+  Parse errors are surfaced here rather than crashing the daemon —
+  consumers should fall back to live-fleet data when ` + "`" + `loaded=false` + "`" + `.
+  """
+  manifest: ManifestStatus!
+}
+
+"""
+Status of the fleet-manifest ingestion. Updated each time the daemon
+re-reads the manifest file.
+"""
+type ManifestStatus {
+  "Absolute path the daemon attempted to read."
+  path: String!
+
+  "True when the last read succeeded and parsed cleanly."
+  loaded: Boolean!
+
+  "RFC 3339 timestamp of the last successful parse. Null when never loaded."
+  lastLoadedAt: String
+
+  "Number of host entries currently held from the manifest."
+  hostCount: Int!
+
+  "Human-readable error message from the last failed read. Null when loaded=true."
+  error: String
 }
 
 """
@@ -3123,11 +3251,15 @@ type Host implements Node {
   "True when the daemon last heard from this host. v1: always true for local host."
   reachable: Boolean!
 
+  """
+  RFC 3339 timestamp of the last successful read. For manifest-only
+  hosts the daemon has never reached, this is the empty string
+  (` + "`" + `""` + "`" + `); pair with ` + "`" + `reachable=false` + "`" + ` to detect "never seen live".
+  """
+  lastSeenAt: String!
+
   "Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands."
   resourceLoad: ResourceLoad
-
-  "RFC 3339 timestamp of the last successful read. v1: time of the last load sample for the local host."
-  lastSeenAt: String!
 
   "Peer hosts this daemon federates with. v1: always empty; Workstream F populates."
   peers: [Host!]!
@@ -3137,6 +3269,65 @@ type Host implements Node {
 
   "Curated launchd / systemd watchlist for this host, drawn from ` + "`" + `services` + "`" + ` in ~/.orchard/config.json."
   hostServices: [HostService!]!
+
+  """
+  Free-form description from the fleet manifest — what this host is for.
+  Null when the host is not present in the manifest.
+  """
+  purpose: String
+
+  """
+  Role the manifest assigns to this host. Null when the host is not
+  present in the manifest.
+  """
+  role: HostRole
+
+  """
+  Which orchardist (` + "`" + `local_orchardist` + "`" + `, ` + "`" + `boxd_orchardist` + "`" + `, ` + "`" + `shared` + "`" + `)
+  owns this host's spawn decisions. Null when not in the manifest.
+  """
+  ownerOrchardist: String
+
+  "Condition under which this host may be decommissioned. Null when not in the manifest."
+  decommissionSignal: String
+
+  """
+  Last date a human (or ` + "`" + `fleet-verify.sh` + "`" + `) confirmed the host was alive
+  and serving its stated purpose. ISO date (` + "`" + `YYYY-MM-DD` + "`" + `) or the literal
+  string ` + "`" + `\"unknown\"` + "`" + `. Null when the host is not in the manifest.
+  """
+  lastVerified: String
+
+  """
+  True when the host appears in the fleet manifest (` + "`" + `$FLEET_MANIFEST` + "`" + `).
+  False is a drift signal: the host is reachable / a configured peer but
+  has not yet been catalogued.
+  """
+  inManifest: Boolean!
+}
+
+"""
+Roles a host can play in the orchard fleet. Drawn from the manifest
+file at ` + "`" + `~/.claude/references/fleet-manifest.yaml` + "`" + `. ` + "`" + `external` + "`" + ` covers
+hosts present in the manifest but outside the orchardist hierarchy.
+"""
+enum HostRole {
+  "Drew's primary workstation. Hosts the local orchardist."
+  local_orchardist
+  "Always-on VM that hosts the boxd orchardist + federation broker."
+  boxd_orchardist
+  "Shared federation worker that runs grinder sessions."
+  federation_worker
+  "Generic grinder VM, registered as an orchard daemon peer."
+  grinder_pool
+  "Long-lived grinder VM dedicated to one repo/workstream."
+  dedicated_grinder
+  "Per-issue boxd fork, decommissioned when the issue closes."
+  fork_per_issue
+  "Plain orchard daemon peer with no other manifest role."
+  daemon_peer
+  "Host catalogued in the manifest but outside the orchardist hierarchy."
+  external
 }
 
 """
@@ -4756,16 +4947,28 @@ func (ec *executionContext) fieldContext_ClaudeAccount_host(ctx context.Context,
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -7015,6 +7218,62 @@ func (ec *executionContext) fieldContext_Health_uptimeS(ctx context.Context, fie
 	return fc, nil
 }
 
+func (ec *executionContext) _Health_manifest(ctx context.Context, field graphql.CollectedField, obj *Health) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Health_manifest(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Manifest, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*ManifestStatus)
+	fc.Result = res
+	return ec.marshalNManifestStatus2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐManifestStatus(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Health_manifest(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Health",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "path":
+				return ec.fieldContext_ManifestStatus_path(ctx, field)
+			case "loaded":
+				return ec.fieldContext_ManifestStatus_loaded(ctx, field)
+			case "lastLoadedAt":
+				return ec.fieldContext_ManifestStatus_lastLoadedAt(ctx, field)
+			case "hostCount":
+				return ec.fieldContext_ManifestStatus_hostCount(ctx, field)
+			case "error":
+				return ec.fieldContext_ManifestStatus_error(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ManifestStatus", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Host_id(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Host_id(ctx, field)
 	if err != nil {
@@ -7317,6 +7576,50 @@ func (ec *executionContext) fieldContext_Host_reachable(ctx context.Context, fie
 	return fc, nil
 }
 
+func (ec *executionContext) _Host_lastSeenAt(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_lastSeenAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastSeenAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_lastSeenAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Host_resourceLoad(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Host_resourceLoad(ctx, field)
 	if err != nil {
@@ -7367,50 +7670,6 @@ func (ec *executionContext) fieldContext_Host_resourceLoad(ctx context.Context, 
 				return ec.fieldContext_ResourceLoad_loadAvg15m(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ResourceLoad", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Host_lastSeenAt(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Host_lastSeenAt(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.LastSeenAt, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Host_lastSeenAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Host",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -7469,16 +7728,28 @@ func (ec *executionContext) fieldContext_Host_peers(ctx context.Context, field g
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -7629,6 +7900,255 @@ func (ec *executionContext) fieldContext_Host_hostServices(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Host_purpose(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_purpose(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Purpose, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_purpose(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_role(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_role(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Role, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*HostRole)
+	fc.Result = res
+	return ec.marshalOHostRole2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostRole(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_role(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type HostRole does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_ownerOrchardist(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_ownerOrchardist(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.OwnerOrchardist, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_ownerOrchardist(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_decommissionSignal(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_decommissionSignal(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DecommissionSignal, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_decommissionSignal(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_lastVerified(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_lastVerified(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastVerified, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_lastVerified(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Host_inManifest(ctx context.Context, field graphql.CollectedField, obj *Host) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Host_inManifest(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.InManifest, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Host_inManifest(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Host",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _HostService_id(ctx context.Context, field graphql.CollectedField, obj *HostService) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_HostService_id(ctx, field)
 	if err != nil {
@@ -7726,16 +8246,28 @@ func (ec *executionContext) fieldContext_HostService_host(ctx context.Context, f
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -8711,6 +9243,220 @@ func (ec *executionContext) fieldContext_IssueComment_updatedAt(ctx context.Cont
 	return fc, nil
 }
 
+func (ec *executionContext) _ManifestStatus_path(ctx context.Context, field graphql.CollectedField, obj *ManifestStatus) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ManifestStatus_path(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Path, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ManifestStatus_path(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManifestStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManifestStatus_loaded(ctx context.Context, field graphql.CollectedField, obj *ManifestStatus) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ManifestStatus_loaded(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Loaded, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ManifestStatus_loaded(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManifestStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManifestStatus_lastLoadedAt(ctx context.Context, field graphql.CollectedField, obj *ManifestStatus) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ManifestStatus_lastLoadedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastLoadedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ManifestStatus_lastLoadedAt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManifestStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManifestStatus_hostCount(ctx context.Context, field graphql.CollectedField, obj *ManifestStatus) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ManifestStatus_hostCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HostCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int64)
+	fc.Result = res
+	return ec.marshalNInt2int64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ManifestStatus_hostCount(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManifestStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManifestStatus_error(ctx context.Context, field graphql.CollectedField, obj *ManifestStatus) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ManifestStatus_error(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Error, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ManifestStatus_error(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManifestStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Meta_provider(ctx context.Context, field graphql.CollectedField, obj *Meta) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Meta_provider(ctx, field)
 	if err != nil {
@@ -8934,16 +9680,28 @@ func (ec *executionContext) fieldContext_Process_host(ctx context.Context, field
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -10934,6 +11692,8 @@ func (ec *executionContext) fieldContext_Query_health(ctx context.Context, field
 				return ec.fieldContext_Health_status(ctx, field)
 			case "uptimeS":
 				return ec.fieldContext_Health_uptimeS(ctx, field)
+			case "manifest":
+				return ec.fieldContext_Health_manifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Health", field.Name)
 		},
@@ -10994,16 +11754,28 @@ func (ec *executionContext) fieldContext_Query_host(ctx context.Context, field g
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -11064,16 +11836,28 @@ func (ec *executionContext) fieldContext_Query_hosts(ctx context.Context, field 
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -11846,16 +12630,28 @@ func (ec *executionContext) fieldContext_Query_peers(ctx context.Context, field 
 				return ec.fieldContext_Host_address(ctx, field)
 			case "reachable":
 				return ec.fieldContext_Host_reachable(ctx, field)
-			case "resourceLoad":
-				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "lastSeenAt":
 				return ec.fieldContext_Host_lastSeenAt(ctx, field)
+			case "resourceLoad":
+				return ec.fieldContext_Host_resourceLoad(ctx, field)
 			case "peers":
 				return ec.fieldContext_Host_peers(ctx, field)
 			case "processes":
 				return ec.fieldContext_Host_processes(ctx, field)
 			case "hostServices":
 				return ec.fieldContext_Host_hostServices(ctx, field)
+			case "purpose":
+				return ec.fieldContext_Host_purpose(ctx, field)
+			case "role":
+				return ec.fieldContext_Host_role(ctx, field)
+			case "ownerOrchardist":
+				return ec.fieldContext_Host_ownerOrchardist(ctx, field)
+			case "decommissionSignal":
+				return ec.fieldContext_Host_decommissionSignal(ctx, field)
+			case "lastVerified":
+				return ec.fieldContext_Host_lastVerified(ctx, field)
+			case "inManifest":
+				return ec.fieldContext_Host_inManifest(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Host", field.Name)
 		},
@@ -20742,6 +21538,11 @@ func (ec *executionContext) _Health(ctx context.Context, sel ast.SelectionSet, o
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "manifest":
+			out.Values[i] = ec._Health_manifest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -20805,13 +21606,13 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
-		case "resourceLoad":
-			out.Values[i] = ec._Host_resourceLoad(ctx, field, obj)
 		case "lastSeenAt":
 			out.Values[i] = ec._Host_lastSeenAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "resourceLoad":
+			out.Values[i] = ec._Host_resourceLoad(ctx, field, obj)
 		case "peers":
 			field := field
 
@@ -20886,6 +21687,21 @@ func (ec *executionContext) _Host(ctx context.Context, sel ast.SelectionSet, obj
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "hostServices":
 			out.Values[i] = ec._Host_hostServices(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "purpose":
+			out.Values[i] = ec._Host_purpose(ctx, field, obj)
+		case "role":
+			out.Values[i] = ec._Host_role(ctx, field, obj)
+		case "ownerOrchardist":
+			out.Values[i] = ec._Host_ownerOrchardist(ctx, field, obj)
+		case "decommissionSignal":
+			out.Values[i] = ec._Host_decommissionSignal(ctx, field, obj)
+		case "lastVerified":
+			out.Values[i] = ec._Host_lastVerified(ctx, field, obj)
+		case "inManifest":
+			out.Values[i] = ec._Host_inManifest(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
@@ -21099,6 +21915,59 @@ func (ec *executionContext) _IssueComment(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var manifestStatusImplementors = []string{"ManifestStatus"}
+
+func (ec *executionContext) _ManifestStatus(ctx context.Context, sel ast.SelectionSet, obj *ManifestStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, manifestStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ManifestStatus")
+		case "path":
+			out.Values[i] = ec._ManifestStatus_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "loaded":
+			out.Values[i] = ec._ManifestStatus_loaded(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastLoadedAt":
+			out.Values[i] = ec._ManifestStatus_lastLoadedAt(ctx, field, obj)
+		case "hostCount":
+			out.Values[i] = ec._ManifestStatus_hostCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._ManifestStatus_error(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -25560,6 +26429,16 @@ func (ec *executionContext) marshalNIssueState2githubᚗcomᚋdrewdrewthisᚋgit
 	return v
 }
 
+func (ec *executionContext) marshalNManifestStatus2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐManifestStatus(ctx context.Context, sel ast.SelectionSet, v *ManifestStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ManifestStatus(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, v interface{}) (MergeableState, error) {
 	var res MergeableState
 	err := res.UnmarshalGQL(v)
@@ -26593,6 +27472,22 @@ func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel as
 	}
 	res := graphql.MarshalFloatContext(*v)
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) unmarshalOHostRole2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostRole(ctx context.Context, v interface{}) (*HostRole, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(HostRole)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOHostRole2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostRole(ctx context.Context, sel ast.SelectionSet, v *HostRole) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx context.Context, v interface{}) (*HostServiceFilter, error) {
