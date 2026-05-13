@@ -19,6 +19,7 @@ package daemon
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -147,17 +148,28 @@ func (a *tmuxInputAdapter) PaneByPid(ctx context.Context, hostID string, pid int
 // named session that is owned by a claude process.
 //
 // When a.ps is non-nil, every candidate pane's foreground pid is looked up in
-// the ps snapshot; only panes whose process Command basename contains "claude"
-// are eligible. This ensures that a session containing [vim, claude] returns
-// the claude pane even when vim is iterated first.
+// the ps snapshot; panes whose process Command basename contains "claude" win.
+// This preserves the multi-pane fix from issue #468 where a session like
+// [vim, claude] must surface the claude pane.
 //
-// When a.ps is nil (tests, no-ps mode), the first pane with a non-zero
-// currentPid is returned — v1 behaviour sufficient when ps data is unavailable.
+// Fallback (issue #580): if the ps cross-check finds no claude-named pane —
+// because the pid is missing from ps cache or the basename is a wrapper (e.g.
+// `node /usr/local/bin/claude`) — return the first pane in the session with a
+// non-zero currentPid, but with CurrentPid stripped. A heartbeat for this
+// session means SOME process here is claude; surfacing the pane (with
+// session/window edges) is strictly better than null for consumers that need
+// pane.window.session.name (e.g. attend.sh self-suppression). Stripping
+// CurrentPid keeps the composer's pid-liveness signal at alivenessUnknown,
+// so a stale heartbeat for a repurposed session still resolves to no_claude
+// when the heartbeat is past its freshness window — same as today.
 func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session string) (*gql.TmuxPane, bool) {
 	if a.p == nil || session == "" {
 		return nil, false
 	}
 	snap := a.p.Snapshot()
+	// Sort candidates by window index then pane id so "first pane" semantics are
+	// stable across runs — snap.Panes is a Go map and iteration is randomized.
+	candidates := make([]tmuxprovider.Pane, 0, len(snap.Panes))
 	for _, pn := range snap.Panes {
 		if string(pn.Key.Host) != hostID || pn.WindowKey.Session != session {
 			continue
@@ -165,19 +177,37 @@ func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session st
 		if pn.CurrentPid <= 0 {
 			continue
 		}
-		if a.ps == nil {
-			// No ps provider: return first pane with a non-zero pid (v1 behaviour).
-			return projectPaneWithSession(pn, snap), true
+		candidates = append(candidates, pn)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].WindowKey.Index != candidates[j].WindowKey.Index {
+			return candidates[i].WindowKey.Index < candidates[j].WindowKey.Index
 		}
-		// ps cross-check: only return the pane if its foreground process Command
-		// basename contains "claude".
+		return candidates[i].Key.PaneID < candidates[j].Key.PaneID
+	})
+
+	var fallback *tmuxprovider.Pane
+	for _, pn := range candidates {
+		pnCopy := pn
+		if a.ps == nil {
+			// No ps provider: first pane with non-zero pid is the answer.
+			return projectPaneWithSession(pnCopy, snap), true
+		}
+		if fallback == nil {
+			fallback = &pnCopy
+		}
 		cmd, ok := a.ps.CommandForPid(ctx, hostID, pn.CurrentPid)
 		if !ok {
 			continue
 		}
 		if strings.Contains(strings.ToLower(filepath.Base(cmd)), "claude") {
-			return projectPaneWithSession(pn, snap), true
+			return projectPaneWithSession(pnCopy, snap), true
 		}
+	}
+	if fallback != nil {
+		fb := *fallback
+		fb.CurrentPid = 0 // Strip so aliveSignal stays alivenessUnknown; only the session edge matters here.
+		return projectPaneWithSession(fb, snap), true
 	}
 	return nil, false
 }
