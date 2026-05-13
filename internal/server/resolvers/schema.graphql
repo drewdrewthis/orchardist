@@ -1384,6 +1384,31 @@ type Issue implements Node {
   ones are surfaced, matching `PullRequest.labels` semantics.
   """
   labels: [Label!]!
+
+  """
+  Issues that block this one (#563). Mirrors GitHub's
+  `Issue.blockedByIssues` connection, fetched via the preview-gated
+  GraphQL features `issue_types,sub_issues`. Empty list when none.
+  """
+  blockedByIssues: [Issue!]!
+
+  """
+  Issues this one blocks (#563). The inverse of `blockedByIssues`.
+  Empty list when none.
+  """
+  blockingIssues: [Issue!]!
+
+  """
+  Sub-issues nested under this issue when it acts as a tracker (#563).
+  Empty list when this issue is a leaf, not a tracker.
+  """
+  subIssues: [Issue!]!
+
+  """
+  Parent tracker issue when this issue is itself a sub-issue (#563).
+  Null when this issue has no parent.
+  """
+  parentIssue: Issue
 }
 
 """

@@ -235,6 +235,7 @@ func (p *Provider) dropPRCache(k PullRequestKey) {
 func (p *Provider) dropIssueCache(k IssueKey) {
 	p.issueMu.Lock()
 	delete(p.issues, k)
+	delete(p.issueDeps, k)
 	p.issueMu.Unlock()
 	p.listMu.Lock()
 	for lk := range p.listIssCache {

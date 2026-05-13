@@ -2,7 +2,9 @@ package gh
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 )
@@ -27,6 +29,11 @@ import (
 
 // ListPulls fetches the list of pull requests for a repository.
 // state must be one of OPEN, CLOSED, MERGED, ALL.
+//
+// The underlying request is paginated through GitHub's Link header up
+// to MaxPages (1000 items at defaultPerPage = 100); repos with more
+// PRs than that surface as a truncated slice rather than an
+// open-ended fetch.
 func (c *Client) ListPulls(ctx context.Context, owner, name string, state PullRequestState) ([]PullRequest, error) {
 	q := url.Values{}
 	q.Set("per_page", strconv.Itoa(defaultPerPage))
@@ -45,11 +52,11 @@ func (c *Client) ListPulls(ctx context.Context, owner, name string, state PullRe
 	q.Set("sort", "updated")
 	q.Set("direction", "desc")
 
-	var raw listPullRequestsRaw
-	if err := c.do(ctx, fmt.Sprintf("/repos/%s/%s/pulls", owner, name), q, &raw); err != nil {
+	var items []listPullRequestsRawItem
+	if err := doListPaginated(ctx, c, fmt.Sprintf("/repos/%s/%s/pulls", owner, name), q, &items); err != nil {
 		return nil, err
 	}
-	prs := raw.toPullRequests(owner, name)
+	prs := listPullRequestsRaw(items).toPullRequests(owner, name)
 	if state == PullRequestStateMerged {
 		filtered := prs[:0]
 		for _, p := range prs {
@@ -122,7 +129,8 @@ func (c *Client) GetPull(ctx context.Context, owner, name string, number int) (P
 }
 
 // ListIssues fetches the list of issues for a repository. PRs are
-// filtered out — see types.go.
+// filtered out — see types.go. Pagination walks Link rel="next" up
+// to MaxPages.
 func (c *Client) ListIssues(ctx context.Context, owner, name string, state IssueState) ([]Issue, error) {
 	q := url.Values{}
 	q.Set("per_page", strconv.Itoa(defaultPerPage))
@@ -137,11 +145,11 @@ func (c *Client) ListIssues(ctx context.Context, owner, name string, state Issue
 		return nil, fmt.Errorf("unknown IssueState %q", state)
 	}
 
-	var raw listIssuesRaw
-	if err := c.do(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, name), q, &raw); err != nil {
+	var items []listIssuesRawItem
+	if err := doListPaginated(ctx, c, fmt.Sprintf("/repos/%s/%s/issues", owner, name), q, &items); err != nil {
 		return nil, err
 	}
-	return raw.toIssues(owner, name), nil
+	return listIssuesRaw(items).toIssues(owner, name), nil
 }
 
 // GetIssue fetches one issue by number.
@@ -188,14 +196,25 @@ func (c *Client) GetIssue(ctx context.Context, owner, name string, number int) (
 }
 
 // ListWorkflowRuns fetches the most recent workflow runs for a repo.
+// Pagination walks Link rel="next" up to MaxPages. GitHub's response
+// is enveloped (`{ "workflow_runs": [...] }`), so each page is decoded
+// per-iteration and the inner slice concatenated.
 func (c *Client) ListWorkflowRuns(ctx context.Context, owner, name string) ([]WorkflowRun, error) {
 	q := url.Values{}
 	q.Set("per_page", strconv.Itoa(defaultPerPage))
-	var raw listWorkflowRunsRaw
-	if err := c.do(ctx, fmt.Sprintf("/repos/%s/%s/actions/runs", owner, name), q, &raw); err != nil {
+	var accum listWorkflowRunsRaw
+	decode := func(body io.Reader) error {
+		var page listWorkflowRunsRaw
+		if err := json.NewDecoder(body).Decode(&page); err != nil {
+			return fmt.Errorf("decode /repos/%s/%s/actions/runs body: %w", owner, name, err)
+		}
+		accum.WorkflowRuns = append(accum.WorkflowRuns, page.WorkflowRuns...)
+		return nil
+	}
+	if err := doEnvelopePaginated(ctx, c, fmt.Sprintf("/repos/%s/%s/actions/runs", owner, name), q, decode); err != nil {
 		return nil, err
 	}
-	return raw.toRuns(owner, name), nil
+	return accum.toRuns(owner, name), nil
 }
 
 // GetWorkflowRun fetches one workflow run by id.
@@ -231,15 +250,16 @@ func (c *Client) GetWorkflowRun(ctx context.Context, owner, name string, runID i
 	}, nil
 }
 
-// ListPullReviews fetches reviews on one pull request.
+// ListPullReviews fetches reviews on one pull request. Pagination
+// walks Link rel="next" up to MaxPages.
 func (c *Client) ListPullReviews(ctx context.Context, owner, name string, number int) ([]PullRequestReview, error) {
 	q := url.Values{}
 	q.Set("per_page", strconv.Itoa(defaultPerPage))
-	var raw listReviewsRaw
-	if err := c.do(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, name, number), q, &raw); err != nil {
+	var items []listReviewsRawItem
+	if err := doListPaginated(ctx, c, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, name, number), q, &items); err != nil {
 		return nil, err
 	}
-	return raw.toReviews(), nil
+	return listReviewsRaw(items).toReviews(), nil
 }
 
 // ListPullComments fetches conversation comments on a pull request.
@@ -257,11 +277,11 @@ func (c *Client) ListIssueComments(ctx context.Context, owner, name string, numb
 func (c *Client) listIssueLikeComments(ctx context.Context, owner, name string, number int) ([]IssueComment, error) {
 	q := url.Values{}
 	q.Set("per_page", strconv.Itoa(defaultPerPage))
-	var raw listCommentsRaw
-	if err := c.do(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, name, number), q, &raw); err != nil {
+	var items []listCommentsRawItem
+	if err := doListPaginated(ctx, c, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, name, number), q, &items); err != nil {
 		return nil, err
 	}
-	return raw.toComments(), nil
+	return listCommentsRaw(items).toComments(), nil
 }
 
 // GetRepo fetches the repository metadata.

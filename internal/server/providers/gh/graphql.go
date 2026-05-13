@@ -37,6 +37,15 @@ const graphqlPath = "/graphql"
 // `variables` may be nil for queries that take no variables; callers
 // pass a `map[string]any` keyed by GraphQL variable name.
 func (c *Client) GraphQL(ctx context.Context, query string, variables map[string]any) (json.RawMessage, error) {
+	return c.GraphQLWithHeaders(ctx, query, variables, nil)
+}
+
+// GraphQLWithHeaders is the same as GraphQL but lets the caller attach
+// extra request headers — required for GitHub's preview-gated fields
+// (`GraphQL-Features: issue_types,sub_issues`, etc). Headers passed
+// here are added AFTER the standard auth / content-type / API-version
+// headers; callers cannot override the core set.
+func (c *Client) GraphQLWithHeaders(ctx context.Context, query string, variables map[string]any, extraHeaders map[string]string) (json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -73,6 +82,9 @@ func (c *Client) GraphQL(ctx context.Context, query string, variables map[string
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	if ua := c.UserAgent; ua != "" {
 		req.Header.Set("User-Agent", ua)
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.httpClient().Do(req)

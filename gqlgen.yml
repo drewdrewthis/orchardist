@@ -223,9 +223,23 @@ models:
   # list) and projected to the GraphQL Label type by a custom resolver
   # so the orchard phase-label filter and color/description mapping live
   # in one place — same shape as PullRequest.labels.
+  #
+  # Dependency fields (blockedByIssues, blockingIssues, subIssues,
+  # parentIssue — #563) hit GitHub's GraphQL with the preview-gated
+  # `issue_types,sub_issues` features. EnrichIssueDependencies fetches
+  # all four edges in one round-trip and caches them with a short TTL;
+  # each field resolver projects one edge.
   Issue:
     fields:
       labels:
+        resolver: true
+      blockedByIssues:
+        resolver: true
+      blockingIssues:
+        resolver: true
+      subIssues:
+        resolver: true
+      parentIssue:
         resolver: true
 
   # JSON scalar binds to gqlgen's Any marshaller, which round-trips any

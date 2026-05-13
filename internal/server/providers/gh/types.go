@@ -206,6 +206,36 @@ func (i Issue) ID() string {
 	return fmt.Sprintf("Issue:%s/%s#%d", i.RepoOwner, i.RepoName, i.Number)
 }
 
+// IssueRef carries the cross-issue identity (Owner, Name, Number)
+// plus the title — enough for typical UI projections without a
+// follow-up GetIssue per node. Heavier fields (body, labels, comments)
+// hydrate lazily on field selection via the standard Issue resolvers.
+type IssueRef struct {
+	Owner  string
+	Name   string
+	Number int
+	Title  string
+}
+
+// ID renders the same GraphQL id Issue.ID() does. Lets resolvers turn
+// an IssueRef into a thin *graphql.Issue without re-fetching when only
+// the id and identity triple are needed.
+func (r IssueRef) ID() string {
+	return fmt.Sprintf("Issue:%s/%s#%d", r.Owner, r.Name, r.Number)
+}
+
+// IssueDependencies aggregates the four dependency edges GitHub exposes
+// on an issue: blocked-by, blocking, sub-issues, and parent tracker.
+// Lazily populated by EnrichIssueDependencies; resolvers project each
+// edge into the GraphQL schema fields blockedByIssues, blockingIssues,
+// subIssues, parentIssue (#563).
+type IssueDependencies struct {
+	BlockedBy []IssueRef
+	Blocking  []IssueRef
+	SubIssues []IssueRef
+	Parent    *IssueRef
+}
+
 // IssueComment mirrors a GitHub issue / PR conversation comment.
 type IssueComment struct {
 	GitHubID    int64

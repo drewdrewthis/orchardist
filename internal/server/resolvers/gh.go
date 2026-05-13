@@ -361,6 +361,49 @@ func toGraphQLIssue(i gh.Issue) *graphql1.Issue {
 	}
 }
 
+// issueRefToGraphQL projects a thin gh.IssueRef into a graphql.Issue
+// carrying identity + title. Body / labels / comments hydrate lazily
+// on field selection via the standard Issue resolvers — the
+// dependency fetch stays one round-trip for tree-shaped queries.
+func issueRefToGraphQL(ref gh.IssueRef) *graphql1.Issue {
+	return &graphql1.Issue{
+		ID:        ref.ID(),
+		RepoOwner: ref.Owner,
+		RepoName:  ref.Name,
+		Number:    int64(ref.Number),
+		Title:     ref.Title,
+	}
+}
+
+// issueRefsToGraphQL projects a slice of gh.IssueRef. Returns an empty
+// (non-nil) slice so callers don't have to guard against null.
+func issueRefsToGraphQL(refs []gh.IssueRef) []*graphql1.Issue {
+	out := make([]*graphql1.Issue, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, issueRefToGraphQL(r))
+	}
+	return out
+}
+
+// issueDependencies fetches the dependency-edge snapshot for an Issue
+// resolver root. Returns nil deps and nil error on the soft-fail cases
+// (gh not configured, malformed node id) so the field resolvers fall
+// back to empty results without surfacing a GraphQL error.
+func (r *issueResolver) issueDependencies(ctx context.Context, obj *graphql1.Issue) (*gh.IssueDependencies, error) {
+	if r.GH == nil || obj == nil {
+		return nil, nil
+	}
+	owner, name, number, ok := splitGHNodeID(obj.ID, "Issue:")
+	if !ok {
+		return nil, nil
+	}
+	deps, err := r.GH.EnrichIssueDependencies(ctx, gh.IssueKey{Owner: owner, Name: name, Number: number})
+	if err != nil {
+		return nil, err
+	}
+	return &deps, nil
+}
+
 // toGraphQLLabels projects gh.Label slice to the GraphQL Label list,
 // preserving order. Returns an empty (non-nil) slice so callers don't
 // have to guard against null. Used by both Issue.labels and
