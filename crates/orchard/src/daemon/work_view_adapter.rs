@@ -298,9 +298,7 @@ fn build_standalone_sessions(
 /// Converts a [`WorkViewWorktree`] into a [`CachedWorktree`].
 ///
 /// Ahead/behind are read directly from the daemon-supplied fields (#483).
-fn work_view_worktree_to_cached(
-    wt: &crate::daemon::types::WorkViewWorktree,
-) -> CachedWorktree {
+fn work_view_worktree_to_cached(wt: &crate::daemon::types::WorkViewWorktree) -> CachedWorktree {
     CachedWorktree {
         path: wt.path.clone(),
         branch: wt.branch.clone(),

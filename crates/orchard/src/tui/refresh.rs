@@ -536,8 +536,7 @@ mod tests {
             claude_instances: vec![],
         };
 
-        let mut state =
-            build_local_state(&snapshot, &GlobalConfig::default(), &HashMap::new());
+        let mut state = build_local_state(&snapshot, &GlobalConfig::default(), &HashMap::new());
 
         // ---- Remote data via merge_remote_snapshot -------------------------
 
