@@ -6,9 +6,10 @@
 // package owns the file format, the JSON adapter, and the provider that
 // surfaces Repos to the GraphQL resolver.
 //
-// Schema: per ADR-015 the file has exactly three top-level keys —
-// `version`, `repos`, and `peers`. Older shapes (`projects[]`) are not
-// supported on read or write.
+// Schema: per ADR-015 the file has four top-level keys —
+// `version`, `repos`, `peers`, and `excluded` (the last added in
+// issue #527). Older shapes (`projects[]`) are not supported on read
+// or write.
 package config
 
 import (

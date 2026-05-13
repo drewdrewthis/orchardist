@@ -57,11 +57,14 @@ type namedSource struct {
 }
 
 // inflight gates concurrent refresh calls so a thundering herd of
-// `workView` queries only triggers one filesystem walk. The first
-// caller writes the result; the rest read it once Done is closed.
+// `workView` queries only triggers one filesystem walk. The leader
+// writes either result or err before closing done; followers read
+// both so they observe the same outcome (success-with-stale,
+// success-with-fresh, or error-with-no-cache) the leader did.
 type inflight struct {
 	done   chan struct{}
 	result []config.Repo
+	err    error
 }
 
 // NewProvider builds a discoverer.
@@ -133,17 +136,19 @@ func (p *Provider) List(ctx context.Context) ([]config.Repo, error) {
 		return out, nil
 	}
 	if p.inflight != nil {
-		ch := p.inflight.done
+		flight := p.inflight
 		p.mu.Unlock()
 		select {
-		case <-ch:
+		case <-flight.done:
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		p.mu.Lock()
-		out := append([]config.Repo(nil), p.cached...)
-		p.mu.Unlock()
-		return out, nil
+		// Mirror the leader's outcome: if it errored with no cache,
+		// surface the same error; otherwise return its result slice.
+		if flight.err != nil {
+			return nil, flight.err
+		}
+		return append([]config.Repo(nil), flight.result...), nil
 	}
 	flight := &inflight{done: make(chan struct{})}
 	p.inflight = flight
@@ -156,18 +161,24 @@ func (p *Provider) List(ctx context.Context) ([]config.Repo, error) {
 		p.cached = out
 		p.cachedAt = p.clock()
 	}
-	flight.result = out
+	// Decide what followers (and this caller) get back. A transient
+	// refresh failure that still has a previous cache to fall back on
+	// serves stale rather than blanking the dashboard; a failure with
+	// no cache propagates so callers know discovery is dead.
+	served := append([]config.Repo(nil), p.cached...)
+	if err != nil && len(served) == 0 {
+		flight.err = err
+	} else {
+		flight.result = served
+	}
 	close(flight.done)
 	p.inflight = nil
-	result := append([]config.Repo(nil), p.cached...)
 	p.mu.Unlock()
 
 	if err != nil {
-		// Return the stale cache on refresh error if we have one — a
-		// transient tmux failure shouldn't blank the dashboard.
-		if len(result) > 0 {
+		if len(served) > 0 {
 			p.logger.Warn("repodiscovery: refresh failed, serving stale cache", "err", err)
-			return result, nil
+			return served, nil
 		}
 		return nil, err
 	}

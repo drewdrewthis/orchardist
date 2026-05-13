@@ -398,3 +398,54 @@ type delegatingSource struct {
 func (d *delegatingSource) Roots(_ context.Context) ([]string, error) {
 	return d.provider(), nil
 }
+
+func TestProvider_List_PropagatesCtxErrorToWaitingFollower(t *testing.T) {
+	// When a waiter's ctx is cancelled while it's blocked on the
+	// leader's refresh, List returns the ctx error — the inflight
+	// gating must not swallow it. (The leader path's no-cache error
+	// propagation is exercised by code review rather than a test
+	// because the current refresh() degrades all backing errors to
+	// logs + empty data; this test pins the ctx half of the same
+	// contract.)
+	tmp := t.TempDir()
+	repo := mkRepo(t, filepath.Join(tmp, "repo"))
+
+	// A slow source forces the leader to remain inside refresh() so
+	// the follower can race in and cancel its ctx before done fires.
+	gate := make(chan struct{})
+	slow := &delegatingSource{provider: func() []string {
+		<-gate
+		return []string{repo}
+	}}
+
+	p := NewProvider(&fakeConfigLister{}, nil, silentLogger()).
+		AddSource("slow", slow)
+
+	leaderDone := make(chan struct{})
+	go func() {
+		_, _ = p.List(context.Background())
+		close(leaderDone)
+	}()
+
+	// Wait until the leader is inside refresh (i.e. holding the
+	// inflight slot). A short retry loop is enough — the goroutine
+	// reaches the slow source within microseconds.
+	for tries := 0; tries < 100; tries++ {
+		p.mu.Lock()
+		inflight := p.inflight != nil
+		p.mu.Unlock()
+		if inflight {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	followerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.List(followerCtx); err == nil {
+		t.Errorf("follower with cancelled ctx: expected error, got nil")
+	}
+
+	close(gate)
+	<-leaderDone
+}
