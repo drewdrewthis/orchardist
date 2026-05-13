@@ -158,19 +158,23 @@ type ComplexityRoot struct {
 	}
 
 	Issue struct {
-		AuthorLogin func(childComplexity int) int
-		Body        func(childComplexity int) int
-		Comments    func(childComplexity int) int
-		CreatedAt   func(childComplexity int) int
-		ID          func(childComplexity int) int
-		Labels      func(childComplexity int) int
-		Number      func(childComplexity int) int
-		RepoName    func(childComplexity int) int
-		RepoOwner   func(childComplexity int) int
-		State       func(childComplexity int) int
-		Title       func(childComplexity int) int
-		URL         func(childComplexity int) int
-		UpdatedAt   func(childComplexity int) int
+		AuthorLogin     func(childComplexity int) int
+		BlockedByIssues func(childComplexity int) int
+		BlockingIssues  func(childComplexity int) int
+		Body            func(childComplexity int) int
+		Comments        func(childComplexity int) int
+		CreatedAt       func(childComplexity int) int
+		ID              func(childComplexity int) int
+		Labels          func(childComplexity int) int
+		Number          func(childComplexity int) int
+		ParentIssue     func(childComplexity int) int
+		RepoName        func(childComplexity int) int
+		RepoOwner       func(childComplexity int) int
+		State           func(childComplexity int) int
+		SubIssues       func(childComplexity int) int
+		Title           func(childComplexity int) int
+		URL             func(childComplexity int) int
+		UpdatedAt       func(childComplexity int) int
 	}
 
 	IssueComment struct {
@@ -432,6 +436,10 @@ type HostResolver interface {
 }
 type IssueResolver interface {
 	Labels(ctx context.Context, obj *Issue) ([]*Label, error)
+	BlockedByIssues(ctx context.Context, obj *Issue) ([]*Issue, error)
+	BlockingIssues(ctx context.Context, obj *Issue) ([]*Issue, error)
+	SubIssues(ctx context.Context, obj *Issue) ([]*Issue, error)
+	ParentIssue(ctx context.Context, obj *Issue) (*Issue, error)
 }
 type ProcessResolver interface {
 	Host(ctx context.Context, obj *Process) (*Host, error)
@@ -1081,6 +1089,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Issue.AuthorLogin(childComplexity), true
+	case "Issue.blockedByIssues":
+		if e.ComplexityRoot.Issue.BlockedByIssues == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.BlockedByIssues(childComplexity), true
+	case "Issue.blockingIssues":
+		if e.ComplexityRoot.Issue.BlockingIssues == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.BlockingIssues(childComplexity), true
 	case "Issue.body":
 		if e.ComplexityRoot.Issue.Body == nil {
 			break
@@ -1117,6 +1137,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Issue.Number(childComplexity), true
+	case "Issue.parentIssue":
+		if e.ComplexityRoot.Issue.ParentIssue == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.ParentIssue(childComplexity), true
 	case "Issue.repoName":
 		if e.ComplexityRoot.Issue.RepoName == nil {
 			break
@@ -1135,6 +1161,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Issue.State(childComplexity), true
+	case "Issue.subIssues":
+		if e.ComplexityRoot.Issue.SubIssues == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.SubIssues(childComplexity), true
 	case "Issue.title":
 		if e.ComplexityRoot.Issue.Title == nil {
 			break
@@ -3893,6 +3925,31 @@ type Issue implements Node {
   ones are surfaced, matching ` + "`" + `PullRequest.labels` + "`" + ` semantics.
   """
   labels: [Label!]!
+
+  """
+  Issues that block this one (#563). Mirrors GitHub's
+  ` + "`" + `Issue.blockedByIssues` + "`" + ` connection, fetched via the preview-gated
+  GraphQL features ` + "`" + `issue_types,sub_issues` + "`" + `. Empty list when none.
+  """
+  blockedByIssues: [Issue!]!
+
+  """
+  Issues this one blocks (#563). The inverse of ` + "`" + `blockedByIssues` + "`" + `.
+  Empty list when none.
+  """
+  blockingIssues: [Issue!]!
+
+  """
+  Sub-issues nested under this issue when it acts as a tracker (#563).
+  Empty list when this issue is a leaf, not a tracker.
+  """
+  subIssues: [Issue!]!
+
+  """
+  Parent tracker issue when this issue is itself a sub-issue (#563).
+  Null when this issue has no parent.
+  """
+  parentIssue: Issue
 }
 
 """
@@ -4196,6 +4253,14 @@ func (ec *executionContext) childFields_Issue(ctx context.Context, field graphql
 		return ec.fieldContext_Issue_comments(ctx, field)
 	case "labels":
 		return ec.fieldContext_Issue_labels(ctx, field)
+	case "blockedByIssues":
+		return ec.fieldContext_Issue_blockedByIssues(ctx, field)
+	case "blockingIssues":
+		return ec.fieldContext_Issue_blockingIssues(ctx, field)
+	case "subIssues":
+		return ec.fieldContext_Issue_subIssues(ctx, field)
+	case "parentIssue":
+		return ec.fieldContext_Issue_parentIssue(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Issue", field.Name)
 }
@@ -7589,6 +7654,134 @@ func (ec *executionContext) fieldContext_Issue_labels(_ context.Context, field g
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Label(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Issue_blockedByIssues(ctx context.Context, field graphql.CollectedField, obj *Issue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_blockedByIssues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Issue().BlockedByIssues(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
+			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_blockedByIssues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Issue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Issue_blockingIssues(ctx context.Context, field graphql.CollectedField, obj *Issue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_blockingIssues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Issue().BlockingIssues(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
+			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_blockingIssues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Issue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Issue_subIssues(ctx context.Context, field graphql.CollectedField, obj *Issue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_subIssues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Issue().SubIssues(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
+			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_subIssues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Issue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Issue_parentIssue(ctx context.Context, field graphql.CollectedField, obj *Issue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_parentIssue(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Issue().ParentIssue(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *Issue) graphql.Marshaler {
+			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_parentIssue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Issue(ctx, field)
 		},
 	}
 	return fc, nil
@@ -15211,6 +15404,147 @@ func (ec *executionContext) _Issue(ctx context.Context, sel ast.SelectionSet, ob
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "blockedByIssues":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Issue_blockedByIssues(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "blockingIssues":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Issue_blockingIssues(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "subIssues":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Issue_subIssues(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "parentIssue":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Issue_parentIssue(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -19644,6 +19978,22 @@ func (ec *executionContext) marshalNInt2int64(ctx context.Context, sel ast.Selec
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []*Issue) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx context.Context, sel ast.SelectionSet, v *Issue) graphql.Marshaler {

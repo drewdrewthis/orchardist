@@ -394,14 +394,11 @@ func loadProcesses(providers *ProvidersBundle, keys []ProcessKey) []*dataloader.
 // same number as the previous open-only fetch — at the cost of a larger
 // response body.
 //
-// LIMITATION (issue #579): defaultPerPage = 100 caps the response and
-// the underlying gh client does NOT paginate. On repos with >100 PRs
-// (open + closed + merged), matches beyond page 1 are dropped — the
-// resolver may return null or a stale fallback for a branch whose
-// real PR is older than the most recent 100 by UpdatedAt. This is a
-// pre-existing repo-wide pattern (every list endpoint in
-// providers/gh/endpoints.go fetches a single page); #579 tracks the
-// fix across all endpoints.
+// Pagination (issue #579): the gh client walks GitHub's Link rel="next"
+// chain up to gh.MaxPages (1000 items at per_page=100), so matches
+// across multiple pages are now visible to the headRef→branch join.
+// Repos with more than gh.MaxPages × per_page PRs surface as a
+// truncated slice rather than an unbounded fetch.
 //
 // Slice-sharing contract: when multiple positions in keys map to the same
 // RepoKey, every position receives the SAME *graphql1.PullRequest slice

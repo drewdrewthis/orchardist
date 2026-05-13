@@ -49,8 +49,9 @@ type Provider struct {
 	prs      map[PullRequestKey]prEntry
 	enrichAt map[PullRequestKey]time.Time // when EnrichPullRequest last populated the enrichment fields
 
-	issueMu sync.RWMutex
-	issues  map[IssueKey]issueEntry
+	issueMu   sync.RWMutex
+	issues    map[IssueKey]issueEntry
+	issueDeps map[IssueKey]issueDepsEntry // per-issue dependency snapshot (#563); shorter TTL than issues
 
 	runMu sync.RWMutex
 	runs  map[WorkflowRunKey]runEntry
@@ -77,6 +78,13 @@ type prEntry struct {
 
 type issueEntry struct {
 	value Issue
+	at    time.Time
+}
+
+// issueDepsEntry caches the dependency-edge fetch for an issue. The
+// shorter TTL (issueDepsTTL) lives in graphql_issue_deps.go.
+type issueDepsEntry struct {
+	value IssueDependencies
 	at    time.Time
 }
 
@@ -145,6 +153,7 @@ func NewWith(logger *slog.Logger, baseURL string, auth AuthSource, clock func() 
 		prs:          map[PullRequestKey]prEntry{},
 		enrichAt:     map[PullRequestKey]time.Time{},
 		issues:       map[IssueKey]issueEntry{},
+		issueDeps:    map[IssueKey]issueDepsEntry{},
 		runs:         map[WorkflowRunKey]runEntry{},
 		listPRsCache: map[listPRsKey]listPRsEntry{},
 		listIssCache: map[listIssKey]listIssEntry{},

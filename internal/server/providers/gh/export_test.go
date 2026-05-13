@@ -36,3 +36,9 @@ func (p *Provider) ExportEnrichTimestamp(key PullRequestKey) time.Time {
 	defer p.prMu.RUnlock()
 	return p.enrichAt[key]
 }
+
+// ExportParseLinkNext wraps parseLinkNext so external tests can assert
+// the Link-header parser without touching the package-private symbol.
+func ExportParseLinkNext(header string) string {
+	return parseLinkNext(header)
+}

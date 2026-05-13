@@ -50,6 +50,11 @@ type Client struct {
 	// requires a non-empty UA; defaults to "orchard/v1" via
 	// NewClient.
 	UserAgent string
+
+	// MaxPagesOverride caps pagination at a lower-than-default value.
+	// Zero (default) means use the package-level MaxPages constant.
+	// Tests stub this to walk a shorter chain without hitting GitHub.
+	MaxPagesOverride int
 }
 
 // NewClient constructs a Client with sane defaults. baseURL is
@@ -157,9 +162,10 @@ func SplitRepo(repo string) (owner, name string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// listPullRequestsRaw is the wire-shape decoder for `/repos/{o}/{n}/pulls`.
-// Kept private — callers go through the typed adapter methods.
-type listPullRequestsRaw []struct {
+// listPullRequestsRawItem is the wire-shape element for
+// `/repos/{o}/{n}/pulls`. Extracted from the slice alias so the
+// paginating helper can express it as a named type parameter.
+type listPullRequestsRawItem struct {
 	Number    int    `json:"number"`
 	Title     string `json:"title"`
 	Body      string `json:"body"`
@@ -179,6 +185,10 @@ type listPullRequestsRaw []struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
 }
+
+// listPullRequestsRaw is the wire-shape decoder for `/repos/{o}/{n}/pulls`.
+// Kept private — callers go through the typed adapter methods.
+type listPullRequestsRaw []listPullRequestsRawItem
 
 func (raws listPullRequestsRaw) toPullRequests(owner, name string) []PullRequest {
 	out := make([]PullRequest, 0, len(raws))
@@ -210,8 +220,10 @@ func (raws listPullRequestsRaw) toPullRequests(owner, name string) []PullRequest
 	return out
 }
 
-// listIssuesRaw is the wire-shape decoder for `/repos/{o}/{n}/issues`.
-type listIssuesRaw []struct {
+// listIssuesRawItem is the wire-shape element for
+// `/repos/{o}/{n}/issues`. Extracted so the paginating helper can use
+// a named type parameter.
+type listIssuesRawItem struct {
 	Number      int    `json:"number"`
 	Title       string `json:"title"`
 	Body        string `json:"body"`
@@ -227,6 +239,9 @@ type listIssuesRaw []struct {
 	} `json:"user"`
 	Labels []restLabelRaw `json:"labels"`
 }
+
+// listIssuesRaw is the wire-shape decoder for `/repos/{o}/{n}/issues`.
+type listIssuesRaw []listIssuesRawItem
 
 // restLabelRaw mirrors the GitHub REST label payload. Color and
 // description are missing on some labels; defaulting to empty string is
@@ -321,8 +336,9 @@ func (raws listWorkflowRunsRaw) toRuns(owner, name string) []WorkflowRun {
 	return out
 }
 
-// listReviewsRaw is the wire-shape for `/repos/{o}/{n}/pulls/{n}/reviews`.
-type listReviewsRaw []struct {
+// listReviewsRawItem is the wire-shape element for the reviews
+// endpoint, extracted so pagination can express it as a named type.
+type listReviewsRawItem struct {
 	ID          int64  `json:"id"`
 	State       string `json:"state"`
 	Body        string `json:"body"`
@@ -331,6 +347,9 @@ type listReviewsRaw []struct {
 		Login string `json:"login"`
 	} `json:"user"`
 }
+
+// listReviewsRaw is the wire-shape for `/repos/{o}/{n}/pulls/{n}/reviews`.
+type listReviewsRaw []listReviewsRawItem
 
 func (raws listReviewsRaw) toReviews() []PullRequestReview {
 	out := make([]PullRequestReview, 0, len(raws))
@@ -346,8 +365,9 @@ func (raws listReviewsRaw) toReviews() []PullRequestReview {
 	return out
 }
 
-// listCommentsRaw is the wire-shape for issue comments.
-type listCommentsRaw []struct {
+// listCommentsRawItem is the wire-shape element for the comments
+// endpoint, extracted so pagination can express it as a named type.
+type listCommentsRawItem struct {
 	ID        int64  `json:"id"`
 	Body      string `json:"body"`
 	CreatedAt string `json:"created_at"`
@@ -356,6 +376,9 @@ type listCommentsRaw []struct {
 		Login string `json:"login"`
 	} `json:"user"`
 }
+
+// listCommentsRaw is the wire-shape for issue comments.
+type listCommentsRaw []listCommentsRawItem
 
 func (raws listCommentsRaw) toComments() []IssueComment {
 	out := make([]IssueComment, 0, len(raws))

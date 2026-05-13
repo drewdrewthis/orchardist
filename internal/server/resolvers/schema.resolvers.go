@@ -141,6 +141,45 @@ func (r *issueResolver) Labels(ctx context.Context, obj *graphql1.Issue) ([]*gra
 	return toGraphQLLabels(issue.Labels), nil
 }
 
+// BlockedByIssues is the resolver for the issue.blockedByIssues field (#563).
+// Delegates to issueDependencies which loads all four dependency edges
+// in one round-trip and caches the result.
+func (r *issueResolver) BlockedByIssues(ctx context.Context, obj *graphql1.Issue) ([]*graphql1.Issue, error) {
+	deps, err := r.issueDependencies(ctx, obj)
+	if err != nil || deps == nil {
+		return []*graphql1.Issue{}, err
+	}
+	return issueRefsToGraphQL(deps.BlockedBy), nil
+}
+
+// BlockingIssues is the resolver for the issue.blockingIssues field (#563).
+func (r *issueResolver) BlockingIssues(ctx context.Context, obj *graphql1.Issue) ([]*graphql1.Issue, error) {
+	deps, err := r.issueDependencies(ctx, obj)
+	if err != nil || deps == nil {
+		return []*graphql1.Issue{}, err
+	}
+	return issueRefsToGraphQL(deps.Blocking), nil
+}
+
+// SubIssues is the resolver for the issue.subIssues field (#563).
+func (r *issueResolver) SubIssues(ctx context.Context, obj *graphql1.Issue) ([]*graphql1.Issue, error) {
+	deps, err := r.issueDependencies(ctx, obj)
+	if err != nil || deps == nil {
+		return []*graphql1.Issue{}, err
+	}
+	return issueRefsToGraphQL(deps.SubIssues), nil
+}
+
+// ParentIssue is the resolver for the issue.parentIssue field (#563).
+func (r *issueResolver) ParentIssue(ctx context.Context, obj *graphql1.Issue) (*graphql1.Issue, error) {
+	deps, err := r.issueDependencies(ctx, obj)
+	if err != nil || deps == nil || deps.Parent == nil {
+		return nil, err
+	}
+	out := issueRefToGraphQL(*deps.Parent)
+	return out, nil
+}
+
 // Host is the resolver for the process.host field.
 func (r *processResolver) Host(ctx context.Context, obj *graphql1.Process) (*graphql1.Host, error) {
 	hostID, _ := splitProcessNodeID(obj.ID)
@@ -1731,5 +1770,3 @@ type tmuxServerResolver struct{ *Resolver }
 type tmuxSessionResolver struct{ *Resolver }
 type tmuxWindowResolver struct{ *Resolver }
 type worktreeResolver struct{ *Resolver }
-
-

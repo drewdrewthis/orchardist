@@ -353,6 +353,19 @@ type Issue struct {
 	// (e.g. `in-progress`, `pr-ready`) are filtered out — only the user-set
 	// ones are surfaced, matching `PullRequest.labels` semantics.
 	Labels []*Label `json:"labels"`
+	// Issues that block this one (#563). Mirrors GitHub's
+	// `Issue.blockedByIssues` connection, fetched via the preview-gated
+	// GraphQL features `issue_types,sub_issues`. Empty list when none.
+	BlockedByIssues []*Issue `json:"blockedByIssues"`
+	// Issues this one blocks (#563). The inverse of `blockedByIssues`.
+	// Empty list when none.
+	BlockingIssues []*Issue `json:"blockingIssues"`
+	// Sub-issues nested under this issue when it acts as a tracker (#563).
+	// Empty list when this issue is a leaf, not a tracker.
+	SubIssues []*Issue `json:"subIssues"`
+	// Parent tracker issue when this issue is itself a sub-issue (#563).
+	// Null when this issue has no parent.
+	ParentIssue *Issue `json:"parentIssue,omitempty"`
 }
 
 func (Issue) IsNode() {}
