@@ -43,6 +43,7 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/manifest"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/repodiscovery"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
@@ -145,7 +146,24 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 	claudeProjectsRoot := claudeprojectsRoot()
 	claudeProjectsProvider := claudeprojects.New(claudeProjectsRoot, "local", logger)
 
-	gitProvider, err := buildGitProvider(ctx, configProvider, logger)
+	// Hydrate the claudeprojects cache before discovery runs so the
+	// claudeprojects source can contribute repo roots from the first
+	// boot tick (issue #527). Failures here are non-fatal — the
+	// discoverer simply gets a smaller initial union.
+	if err := claudeProjectsProvider.Start(ctx); err != nil {
+		logger.Warn("claudeprojects: pre-start failed; discovery may miss conversation cwds at boot", "err", err)
+	}
+
+	// Repo-discovery union (issue #527): configured repos + tmux pane
+	// CWDs + Claude conversation CWDs, with phantom guard and
+	// excluded[] filter. The git provider takes this as its
+	// project-lister so worktree enumeration covers every discovered
+	// repo, not just config.json entries.
+	repoDiscoverer := repodiscovery.NewProvider(configProvider, configProvider, logger).
+		AddSource("tmux", repodiscovery.NewTmuxSource()).
+		AddSource("claudeprojects", repodiscovery.NewClaudeProjectsSource(claudeProjectsProvider))
+
+	gitProvider, err := buildGitProvider(ctx, repoDiscoverer, logger)
 	if err != nil {
 		return fmt.Errorf("build git provider: %w", err)
 	}
@@ -214,7 +232,7 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 
 	opts := []server.Option{
 		server.WithVersion(version),
-		server.WithRepos(configProvider),
+		server.WithRepos(repoDiscoverer),
 		server.WithGit(gitProvider),
 		server.WithPS(psProvider),
 		server.WithTmux(tmuxProvider),
@@ -242,27 +260,40 @@ func localHostID() tmux.HostID {
 }
 
 // buildGitProvider constructs the git provider and registers every
-// project the config provider has currently loaded. The git provider
-// owns a watcher per project; resolvers query it for `Project.worktrees`
-// and node-id lookups.
+// project from the supplied lister. The git provider owns a watcher
+// per project; resolvers query it for `Project.worktrees` and node-id
+// lookups.
+//
+// The lister parameter is a resolvers.ReposLister so callers can pass
+// either the raw configured provider (legacy) or the repodiscovery
+// union (issue #527). The git provider must learn about every repo
+// the resolver layer can surface, otherwise worktree lookups on
+// discovered repos return empty.
 //
 // Per-project AddProject failures (e.g. an fsnotify watcher couldn't be
 // installed) are logged and skipped so the daemon still boots — the
 // affected project simply won't surface live worktree updates until it
 // is reconfigured.
-func buildGitProvider(ctx context.Context, repos *configprovider.Provider, logger *slog.Logger) (*gitprovider.Provider, error) {
+func buildGitProvider(ctx context.Context, lister gitProjectLister, logger *slog.Logger) (*gitprovider.Provider, error) {
 	gp := gitprovider.NewProvider(logger)
-	configured, err := repos.List(ctx)
+	repos, err := lister.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list configured repos: %w", err)
+		return nil, fmt.Errorf("list repos: %w", err)
 	}
-	for _, p := range configured {
+	for _, p := range repos {
 		if err := gp.AddProject(gitprovider.Project{ID: string(p.ID), Dir: p.Path}); err != nil {
 			logger.Warn("git: skipping repo, watcher unavailable",
 				"repo", p.ID, "path", p.Path, "err", err)
 		}
 	}
 	return gp, nil
+}
+
+// gitProjectLister is the local narrow contract `buildGitProvider`
+// needs. Both [configprovider.Provider] and [repodiscovery.Provider]
+// satisfy it.
+type gitProjectLister interface {
+	List(ctx context.Context) ([]configprovider.Repo, error)
 }
 
 // buildHostServiceProvider resolves the local machine id, reads the

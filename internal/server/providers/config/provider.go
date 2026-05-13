@@ -211,6 +211,28 @@ func (p *Provider) List(_ context.Context) ([]Repo, error) {
 	return out, nil
 }
 
+// Excluded returns the on-disk `excluded` list (issue #527). The
+// provider does not cache this list — it is consumed once per
+// discovery refresh by the repodiscovery layer, which already
+// throttles refreshes via its own TTL. A nil adapter returns nil, nil.
+//
+// The adapter contract here is the [ExcludedFetcher] interface; the
+// JSON file adapter satisfies it. Tests pass an in-memory adapter.
+func (p *Provider) Excluded(ctx context.Context) ([]string, error) {
+	if e, ok := p.adapter.(ExcludedFetcher); ok {
+		return e.FetchExcluded(ctx)
+	}
+	return nil, nil
+}
+
+// ExcludedFetcher is the optional capability for an adapter that can
+// surface the `excluded` config field separately from the repo list.
+// The JSON-file adapter implements it; in-memory test adapters can opt
+// in by implementing the method.
+type ExcludedFetcher interface {
+	FetchExcluded(ctx context.Context) ([]string, error)
+}
+
 // Subscribe returns a buffered channel that receives invalidation
 // events for as long as ctx is alive. Closing the returned context (or
 // calling Stop) cleans the subscription up.
