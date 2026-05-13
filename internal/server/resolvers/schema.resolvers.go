@@ -225,8 +225,9 @@ func (r *pullRequestResolver) Labels(ctx context.Context, obj *graphql1.PullRequ
 func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	uptime := int64(time.Since(r.StartedAt).Round(time.Second).Seconds())
 	return &graphql1.Health{
-		Status:  "ok",
-		UptimeS: uptime,
+		Status:   "ok",
+		UptimeS:  uptime,
+		Manifest: buildManifestStatus(r.Manifest),
 	}, nil
 }
 
@@ -255,12 +256,27 @@ func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
 }
 
 // Hosts is the resolver for the hosts field.
+//
+// Returns the merged fleet view: local host + federated peers, enriched
+// with manifest metadata, plus a stub entry for every manifest host the
+// daemon has not heard from. Drift surfaces via `inManifest=false` (live
+// host missing from manifest) and `reachable=false` (manifest host the
+// daemon has not reached).
 func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
-	h, err := r.Query().Host(ctx)
+	local, err := r.Query().Host(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return []*graphql1.Host{h}, nil
+	hosts := []*graphql1.Host{local}
+	if r.PeerProxy != nil {
+		hostRes := r.Resolver.Host()
+		peers, err := hostRes.Peers(ctx, local)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, peers...)
+	}
+	return mergeManifestHosts(hosts, r.Manifest), nil
 }
 
 // Repos is the resolver for the repos field.
