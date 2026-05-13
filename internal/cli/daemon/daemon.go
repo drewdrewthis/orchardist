@@ -168,6 +168,14 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 		return fmt.Errorf("build git provider: %w", err)
 	}
 
+	// Hot-reload: when ~/.orchard/config.json changes, re-list repos and
+	// converge the git provider via ApplyProjects (issue #571). Failures
+	// to subscribe are non-fatal — the daemon still serves the boot-time
+	// project set.
+	gitHotReload := newGitConfigSubscriber(repoDiscoverer, gitProvider, logger)
+	gitHotReload.start(ctx, configProvider.Subscribe(ctx))
+	defer gitHotReload.close()
+
 	claudeAccountProvider := claudeaccount.New("local", logger)
 
 	psAdapter := &psInputAdapter{p: psProvider}
