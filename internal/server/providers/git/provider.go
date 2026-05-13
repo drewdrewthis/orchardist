@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -17,23 +18,29 @@ import (
 // Concurrency model:
 //   - projects is guarded by mu.
 //   - store mirrors the freshest known state; reads + writes go through mu.
-//   - Each project owns one watcher goroutine; its invalidation channel
-//     is fanned out to provider subscribers.
+//   - Each project owns one watcher goroutine + one consumer goroutine,
+//     both bound to a per-project context derived from rootCtx. The
+//     per-project cancel is stored in projectCancels so RemoveProject can
+//     tear a single project down without affecting the others.
+//   - Watcher invalidation channels are fanned out to provider subscribers.
 //
 // The provider owns its goroutines: Stop() returns once every watcher
 // goroutine has exited.
 type Provider struct {
-	mu         sync.RWMutex
-	projects   []Project
-	store      map[WorktreeID]storeEntry
-	watchers   map[string]*watcher // keyed by project id
-	subs       map[chan adapter.InvalidationEvent[WorktreeID]]struct{}
-	subsMu     sync.Mutex
-	adapterImp *GitWorktreeAdapter
-	logger     *slog.Logger
-	wg         sync.WaitGroup
-	rootCtx    context.Context
-	rootCancel context.CancelFunc
+	mu             sync.RWMutex
+	projects       []Project
+	store          map[WorktreeID]storeEntry
+	watchers       map[string]*watcher           // keyed by project id
+	projectCancels map[string]context.CancelFunc // keyed by project id
+	projectDoneChs map[string]chan struct{}      // closes when both per-project goroutines exit
+	subs           map[chan adapter.InvalidationEvent[WorktreeID]]struct{}
+	subsMu         sync.Mutex
+	adapterImp     *GitWorktreeAdapter
+	logger         *slog.Logger
+	wg             sync.WaitGroup
+	rootCtx        context.Context
+	rootCancel     context.CancelFunc
+	spawnCounts    map[string]int // test seam: incremented each time AddProject starts watcher goroutines
 }
 
 type storeEntry struct {
@@ -50,12 +57,15 @@ func NewProvider(logger *slog.Logger) *Provider {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Provider{
-		store:      map[WorktreeID]storeEntry{},
-		watchers:   map[string]*watcher{},
-		subs:       map[chan adapter.InvalidationEvent[WorktreeID]]struct{}{},
-		logger:     logger,
-		rootCtx:    ctx,
-		rootCancel: cancel,
+		store:          map[WorktreeID]storeEntry{},
+		watchers:       map[string]*watcher{},
+		projectCancels: map[string]context.CancelFunc{},
+		projectDoneChs: map[string]chan struct{}{},
+		subs:           map[chan adapter.InvalidationEvent[WorktreeID]]struct{}{},
+		logger:         logger,
+		rootCtx:        ctx,
+		rootCancel:     cancel,
+		spawnCounts:    map[string]int{},
 	}
 	p.adapterImp = NewGitWorktreeAdapter(p.snapshotProjects)
 	return p
@@ -77,7 +87,7 @@ func (p *Provider) Adapter() *GitWorktreeAdapter { return p.adapterImp }
 
 // AddProject registers a project for scanning and starts a watcher for
 // it. Returns nil for duplicate IDs (idempotent re-add). The watcher
-// runs until Stop() is called.
+// runs until RemoveProject(id) or Stop() is called.
 func (p *Provider) AddProject(proj Project) error {
 	if proj.ID == "" {
 		return fmt.Errorf("git: project id cannot be empty")
@@ -98,29 +108,196 @@ func (p *Provider) AddProject(proj Project) error {
 
 	w, err := newWatcher(proj, p.logger)
 	if err != nil {
+		// Undo the projects append so an AddProject failure doesn't leave a
+		// half-registered project behind.
+		p.mu.Lock()
+		p.projects = removeProjectFromSlice(p.projects, proj.ID)
+		p.mu.Unlock()
 		return fmt.Errorf("watcher for %q: %w", proj.ID, err)
 	}
 
+	projCtx, projCancel := context.WithCancel(p.rootCtx)
+	done := make(chan struct{})
+
 	p.mu.Lock()
 	p.watchers[proj.ID] = w
+	p.projectCancels[proj.ID] = projCancel
+	p.projectDoneChs[proj.ID] = done
+	p.spawnCounts[proj.ID]++
 	p.mu.Unlock()
 
+	var inner sync.WaitGroup
+	inner.Add(2)
 	p.wg.Add(2)
 	go func() {
 		defer p.wg.Done()
-		w.run(p.rootCtx)
+		defer inner.Done()
+		w.run(projCtx)
 	}()
 	go func() {
 		defer p.wg.Done()
+		defer inner.Done()
 		p.consumeInvalidations(w)
+	}()
+	go func() {
+		inner.Wait()
+		close(done)
 	}()
 
 	// Cold-load the project's worktrees so subscribers querying right
 	// after registration see something.
-	if err := p.refreshProject(p.rootCtx, proj); err != nil {
+	if err := p.refreshProject(projCtx, proj); err != nil {
 		p.logger.Warn("git initial refresh failed", "project", proj.ID, "err", err)
 	}
 	return nil
+}
+
+// RemoveProject cancels the per-project context, closes the watcher,
+// drains the consumer goroutine, drops the project's entries from the
+// store, and unregisters it from the projects slice. Idempotent: a call
+// for an unknown id is a no-op (returns nil), matching how callers
+// expect "best-effort convergence" diffs (ApplyProjects) to behave.
+//
+// Safe to call concurrently with AddProject / RemoveProject.
+func (p *Provider) RemoveProject(id string) error {
+	if id == "" {
+		return fmt.Errorf("git: project id cannot be empty")
+	}
+
+	p.mu.Lock()
+	cancel, hasCancel := p.projectCancels[id]
+	done, hasDone := p.projectDoneChs[id]
+	_, hasWatcher := p.watchers[id]
+	if !hasCancel && !hasWatcher {
+		// Unknown id — no-op. The projects slice is the source of
+		// truth for what's registered, but absence from both the cancel
+		// map and the watchers map means there's nothing to tear down.
+		p.mu.Unlock()
+		return nil
+	}
+	delete(p.watchers, id)
+	delete(p.projectCancels, id)
+	delete(p.projectDoneChs, id)
+	p.projects = removeProjectFromSlice(p.projects, id)
+	// Drop cached worktrees for this project — once it's gone, callers
+	// must not see stale entries.
+	for k := range p.store {
+		pid, _, ok := splitID(k)
+		if ok && pid == id {
+			delete(p.store, k)
+		}
+	}
+	p.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	// Wait for the per-project watcher + consumer goroutines to exit so
+	// callers can rely on no further events from this project after the
+	// call returns. Watcher.run cancels the underlying fsnotify watcher
+	// and closes its invalidation channel; consumeInvalidations exits as
+	// soon as the channel drains.
+	if hasDone {
+		<-done
+	}
+	return nil
+}
+
+// removeProjectFromSlice returns projects with any entry whose ID
+// matches id removed. Order-preserving.
+func removeProjectFromSlice(projects []Project, id string) []Project {
+	out := projects[:0]
+	for _, proj := range projects {
+		if proj.ID != id {
+			out = append(out, proj)
+		}
+	}
+	return out
+}
+
+// projectsEqual reports whether two Projects are equivalent for the
+// purposes of the ApplyProjects diff. A change in Dir triggers a
+// remove + add so the watcher re-seeds against the new directory.
+func projectsEqual(a, b Project) bool {
+	return a.ID == b.ID && a.Dir == b.Dir
+}
+
+// ApplyProjects diffs the current project set against projs and issues
+// the minimum AddProject / RemoveProject calls needed to converge on
+// the new set.
+//
+// Algorithm:
+//   - Projects in projs but not in the current set → AddProject.
+//   - Projects in the current set but not in projs → RemoveProject.
+//   - Projects present in both with an unchanged Dir → left untouched
+//     (watcher goroutine is NOT restarted).
+//   - Projects present in both whose Dir changed → RemoveProject then
+//     AddProject so the watcher rebinds.
+//
+// Error policy: best-effort. Errors from individual Add/Remove calls
+// are collected; the rest of the diff is still applied. All errors are
+// joined and returned at the end so a single misbehaving project does
+// not block convergence for the others.
+//
+// Safe to call concurrently with AddProject / RemoveProject.
+func (p *Provider) ApplyProjects(projs []Project) error {
+	p.mu.RLock()
+	current := make(map[string]Project, len(p.projects))
+	for _, proj := range p.projects {
+		current[proj.ID] = proj
+	}
+	p.mu.RUnlock()
+
+	next := make(map[string]Project, len(projs))
+	for _, proj := range projs {
+		next[proj.ID] = proj
+	}
+
+	var errs []error
+	for _, proj := range projs {
+		cur, exists := current[proj.ID]
+		if !exists {
+			if err := p.AddProject(proj); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if !projectsEqual(cur, proj) {
+			if err := p.RemoveProject(proj.ID); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := p.AddProject(proj); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	for id := range current {
+		if _, exists := next[id]; !exists {
+			if err := p.RemoveProject(id); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SpawnCount returns the number of times AddProject has launched the
+// watcher goroutines for id. Intended for tests that verify ApplyProjects
+// did NOT restart a project's goroutines — a count of 1 means the
+// project was added exactly once and left untouched.
+func (p *Provider) SpawnCount(id string) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.spawnCounts[id]
+}
+
+// HasProject returns true when id is currently registered.
+func (p *Provider) HasProject(id string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	_, ok := p.watchers[id]
+	return ok
 }
 
 // Stop cancels watchers and waits for them to exit. Safe to call at
