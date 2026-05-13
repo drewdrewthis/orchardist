@@ -19,6 +19,7 @@ package daemon
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -166,7 +167,9 @@ func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session st
 		return nil, false
 	}
 	snap := a.p.Snapshot()
-	var fallback *tmuxprovider.Pane
+	// Sort candidates by window index then pane id so "first pane" semantics are
+	// stable across runs — snap.Panes is a Go map and iteration is randomized.
+	candidates := make([]tmuxprovider.Pane, 0, len(snap.Panes))
 	for _, pn := range snap.Panes {
 		if string(pn.Key.Host) != hostID || pn.WindowKey.Session != session {
 			continue
@@ -174,6 +177,17 @@ func (a *tmuxInputAdapter) PaneBySession(ctx context.Context, hostID, session st
 		if pn.CurrentPid <= 0 {
 			continue
 		}
+		candidates = append(candidates, pn)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].WindowKey.Index != candidates[j].WindowKey.Index {
+			return candidates[i].WindowKey.Index < candidates[j].WindowKey.Index
+		}
+		return candidates[i].Key.PaneID < candidates[j].Key.PaneID
+	})
+
+	var fallback *tmuxprovider.Pane
+	for _, pn := range candidates {
 		pnCopy := pn
 		if a.ps == nil {
 			// No ps provider: first pane with non-zero pid is the answer.

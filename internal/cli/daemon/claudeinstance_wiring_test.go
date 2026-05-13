@@ -54,16 +54,28 @@ func makePane(paneID, session string, currentPid int) tmuxprovider.Pane {
 	}
 }
 
-// snapshotWithPanes builds a RuntimeSnapshot containing exactly the given panes.
+// snapshotWithPanes builds a RuntimeSnapshot containing the given panes plus
+// synthesized Sessions/Windows entries keyed off each pane's WindowKey/Session.
+// Tests that assert pane.Window/Session edges in the projected GraphQL value
+// require Sessions to be populated (projectPaneWithSession reads from snap.Sessions).
 func snapshotWithPanes(panes ...tmuxprovider.Pane) tmuxprovider.RuntimeSnapshot {
-	m := make(map[tmuxprovider.PaneKey]tmuxprovider.Pane, len(panes))
+	paneMap := make(map[tmuxprovider.PaneKey]tmuxprovider.Pane, len(panes))
+	sessMap := make(map[tmuxprovider.SessionKey]tmuxprovider.Session)
+	winMap := make(map[tmuxprovider.WindowKey]tmuxprovider.Window)
 	for _, p := range panes {
-		m[p.Key] = p
+		paneMap[p.Key] = p
+		sk := tmuxprovider.SessionKey{Host: p.Key.Host, Name: p.WindowKey.Session}
+		if _, ok := sessMap[sk]; !ok {
+			sessMap[sk] = tmuxprovider.Session{Key: sk}
+		}
+		if _, ok := winMap[p.WindowKey]; !ok {
+			winMap[p.WindowKey] = tmuxprovider.Window{Key: p.WindowKey}
+		}
 	}
 	return tmuxprovider.RuntimeSnapshot{
-		Sessions: map[tmuxprovider.SessionKey]tmuxprovider.Session{},
-		Windows:  map[tmuxprovider.WindowKey]tmuxprovider.Window{},
-		Panes:    m,
+		Sessions: sessMap,
+		Windows:  winMap,
+		Panes:    paneMap,
 		Clients:  map[tmuxprovider.ClientKey]tmuxprovider.Client{},
 	}
 }
@@ -152,13 +164,16 @@ func TestTmuxInputAdapter_PaneBySession_NoClaudeMatch_ReturnsFallback(t *testing
 	if pane.CurrentPid != nil {
 		t.Errorf("PaneBySession (no claude match): expected stripped CurrentPid (nil), got %v", *pane.CurrentPid)
 	}
+	if pane.Window == nil || pane.Window.Session == nil || pane.Window.Session.Name != "no-claude" {
+		t.Errorf("PaneBySession (no claude match): expected pane.Window.Session.Name = %q, got %+v", "no-claude", pane.Window)
+	}
 }
 
 // TestTmuxInputAdapter_PaneBySession_PsCacheMiss_ReturnsFallback covers the
 // real-world issue #580 trigger: ps cross-check returns ok=false (pid not in
 // ps cache, ps provider stale, or ps unavailable). The fallback pane must be
-// returned with CurrentPid stripped so downstream liveness stays unknown but
-// pane.window.session edges are populated.
+// returned with CurrentPid stripped, but pane.window.session edges must be
+// populated so attend.sh self-suppression can match.
 func TestTmuxInputAdapter_PaneBySession_PsCacheMiss_ReturnsFallback(t *testing.T) {
 	snap := snapshotWithPanes(
 		makePane("%21", "orchardist", 95507),
@@ -182,6 +197,41 @@ func TestTmuxInputAdapter_PaneBySession_PsCacheMiss_ReturnsFallback(t *testing.T
 	}
 	if pane.CurrentPid != nil {
 		t.Errorf("PaneBySession (ps cache miss): expected stripped CurrentPid (nil), got %v", *pane.CurrentPid)
+	}
+	if pane.Window == nil || pane.Window.Session == nil || pane.Window.Session.Name != "orchardist" {
+		t.Errorf("PaneBySession (ps cache miss): expected pane.Window.Session.Name = %q, got %+v", "orchardist", pane.Window)
+	}
+}
+
+// TestTmuxInputAdapter_PaneBySession_DeterministicOrder verifies that when a
+// session has multiple eligible panes, PaneBySession picks the same one every
+// call. snap.Panes is a Go map (randomized iteration) so the implementation
+// must sort candidates explicitly. Running the call many times in a tight
+// loop catches map-order regressions even if a single run got lucky.
+func TestTmuxInputAdapter_PaneBySession_DeterministicOrder(t *testing.T) {
+	// Five non-claude vim panes in the same session. With map iteration the
+	// chosen fallback would drift; with sort it must lock onto %10 (lowest
+	// pane id) every time.
+	snap := snapshotWithPanes(
+		makePane("%14", "deterministic", 1004),
+		makePane("%10", "deterministic", 1000),
+		makePane("%13", "deterministic", 1003),
+		makePane("%11", "deterministic", 1001),
+		makePane("%12", "deterministic", 1002),
+	)
+	ps := &staticPsGetter{commands: map[int]string{
+		1000: "vim", 1001: "vim", 1002: "vim", 1003: "vim", 1004: "vim",
+	}}
+	a := &tmuxInputAdapter{p: &staticSnapshotter{snap: snap}, ps: ps}
+
+	for i := 0; i < 100; i++ {
+		pane, ok := a.PaneBySession(context.Background(), "local", "deterministic")
+		if !ok || pane == nil {
+			t.Fatalf("iteration %d: expected ok=true and non-nil pane", i)
+		}
+		if pane.PaneID != "%10" {
+			t.Fatalf("iteration %d: got pane %q, want %%10 (lowest pane id)", i, pane.PaneID)
+		}
 	}
 }
 
@@ -230,11 +280,10 @@ func TestTmuxInputAdapter_PaneBySession_NilPs_ReturnsFirstNonZeroPid(t *testing.
 	if pane == nil {
 		t.Fatal("PaneBySession (nil ps): expected non-nil pane, got nil")
 	}
-	// When ps is nil we expect the first pane with non-zero pid.
-	// Map iteration order is non-deterministic in Go, so we just assert
-	// we got one of the non-zero-pid panes (not %10 which has pid 0).
-	if pane.PaneID == "%10" {
-		t.Errorf("PaneBySession (nil ps): got pane %%10 (pid=0), want a non-zero-pid pane")
+	// Candidates are sorted by (window index, pane id); %11 has the lowest
+	// pane id among non-zero-pid panes, so it is the deterministic winner.
+	if pane.PaneID != "%11" {
+		t.Errorf("PaneBySession (nil ps): got pane %q, want %%11 (lowest pane id, non-zero pid)", pane.PaneID)
 	}
 	if pane.CurrentPid == nil || *pane.CurrentPid == 0 {
 		t.Errorf("PaneBySession (nil ps): got pane with zero/nil CurrentPid, want non-zero")
