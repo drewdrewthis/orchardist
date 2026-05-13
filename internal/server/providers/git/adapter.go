@@ -192,8 +192,9 @@ func readLinkedWorktree(p Project, name string) (Worktree, error) {
 }
 
 // computeAheadBehind shells out to `git rev-list --left-right --count
-// @{u}...HEAD` from worktreePath and parses the two-column "ahead\tbehind"
-// output (#483).
+// @{u}...HEAD` from worktreePath and parses the two-column
+// "behind\tahead" output (`--left-right` prints upstream-only commits
+// first, then HEAD-only) (#483).
 //
 // Returns (nil, nil) when:
 //   - branch is empty (detached HEAD) or bare is true (deleted upstream)

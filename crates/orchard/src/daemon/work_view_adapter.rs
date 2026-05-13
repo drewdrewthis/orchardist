@@ -309,8 +309,8 @@ fn work_view_worktree_to_cached(wt: &crate::daemon::types::WorkViewWorktree) -> 
         } else {
             Some(wt.host.clone())
         },
-        ahead: wt.ahead.filter(|&n| n > 0),
-        behind: wt.behind.filter(|&n| n > 0),
+        ahead: wt.ahead,
+        behind: wt.behind,
         last_commit_at: None,
         layout: WorktreeLayout::Bare,
     }
