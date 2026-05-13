@@ -59,11 +59,16 @@ models:
   # Host.processes accepts a filter argument, so route it through a custom
   # resolver instead of struct-field auto-binding. The resolver consults the
   # ps provider and applies the filter at the resolver layer (ADR-011 §6).
+  # Host.version is a resolver field: local host returns DaemonVersion; peer
+  # hosts return the version fetched from the peer's probe (cached, not
+  # fetched on every GraphQL request).
   Host:
     fields:
       processes:
         resolver: true
       peers:
+        resolver: true
+      version:
         resolver: true
 
   # Process is materialised by the ps provider's resolver layer. `args` and

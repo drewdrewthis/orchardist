@@ -282,6 +282,20 @@ func (p *Provider) HasPeer(name string) bool {
 	return ok
 }
 
+// PeerVersion returns the last-known binary version fetched from the
+// named peer via `{ version }` on each successful probe. Returns nil
+// when the peer is unknown or the probe has not yet succeeded — callers
+// should treat nil as "unknown" and render it as a null GraphQL value.
+func (p *Provider) PeerVersion(name string) *string {
+	p.mu.RLock()
+	a, ok := p.adapters[name]
+	p.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return a.Version()
+}
+
 // SpawnCount returns the number of times startPeer has been called for name.
 // It is intended for tests that need to verify a peer's goroutine was NOT
 // restarted across an ApplyPeers call — a count of 1 means the goroutine

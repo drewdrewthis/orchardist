@@ -47,23 +47,25 @@ import (
 )
 
 // Command returns the `daemon` subcommand group rooted with three leaves.
-func Command() *cobra.Command {
+// version is the binary version baked via -ldflags; it is surfaced through
+// Query.version in the GraphQL schema (AC2, #417).
+func Command(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Manage the orchard GraphQL daemon",
 		Long:  "Start, stop, or query the local orchard daemon listening on " + server.DefaultAddr + ".",
 	}
-	cmd.AddCommand(startCmd(), stopCmd(), statusCmd())
+	cmd.AddCommand(startCmd(version), stopCmd(), statusCmd())
 	return cmd
 }
 
-func startCmd() *cobra.Command {
+func startCmd(version string) *cobra.Command {
 	var addr string
 	c := &cobra.Command{
 		Use:   "start",
 		Short: "Run the orchard daemon in the foreground",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStart(cmd.Context(), addr)
+			return runStart(cmd.Context(), addr, version)
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", server.DefaultAddr, "host:port to bind")
@@ -92,7 +94,8 @@ func statusCmd() *cobra.Command {
 
 // runStart is the foreground daemon entry point. It honours SIGINT and
 // SIGTERM by cancelling the server context for a clean shutdown.
-func runStart(parentCtx context.Context, addr string) error {
+// version is the binary version injected via -ldflags; defaults to "dev".
+func runStart(parentCtx context.Context, addr string, version string) error {
 	pidPath, err := orchpaths.PidFile()
 	if err != nil {
 		return fmt.Errorf("resolve pidfile: %w", err)
@@ -210,6 +213,7 @@ func runStart(parentCtx context.Context, addr string) error {
 	)
 
 	opts := []server.Option{
+		server.WithVersion(version),
 		server.WithRepos(configProvider),
 		server.WithGit(gitProvider),
 		server.WithPS(psProvider),

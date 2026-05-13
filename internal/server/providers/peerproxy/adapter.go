@@ -56,6 +56,10 @@ type PeerAdapter struct {
 	lastReachedAt  time.Time
 	lastProbedAt   time.Time
 	subscriptionOn bool
+	// version holds the peer daemon's binary version fetched via
+	// `{ version }` on every successful Probe. Nil until the first
+	// successful probe — represents "unknown" rather than an error.
+	version *string
 }
 
 // NewPeerAdapter wires a PeerConfig up to a transport Client.
@@ -83,8 +87,10 @@ func (a *PeerAdapter) Reachable() (bool, time.Time) {
 }
 
 // Probe runs a one-shot health query against the peer and records the
-// outcome. Used by the dashboard to decide whether to mark the peer
-// reachable; safe to call concurrently with Subscribe.
+// outcome. On success, also fetches `{ version }` from the peer and
+// caches the result so Host.peers[].version resolvers can serve it
+// without issuing a network call per GraphQL request.
+// Safe to call concurrently with Subscribe.
 func (a *PeerAdapter) Probe(ctx context.Context) error {
 	err := a.client.Ping(ctx)
 	now := a.now()
@@ -96,9 +102,45 @@ func (a *PeerAdapter) Probe(ctx context.Context) error {
 		a.lastReachedAt = now
 	} else {
 		a.reachable = false
+		a.version = nil
 	}
 	a.mu.Unlock()
+
+	if err == nil {
+		// Fetch version outside the lock — Query does its own synchronisation.
+		a.fetchVersion(ctx)
+	}
 	return err
+}
+
+// fetchVersion issues `{ version }` against the peer and caches the
+// result. Called from Probe on each successful health check so the
+// version stays fresh without adding latency to every GraphQL request.
+// Failures are silently swallowed — a nil version is the legitimate
+// "unknown" signal.
+func (a *PeerAdapter) fetchVersion(ctx context.Context) {
+	res, err := a.client.Query(ctx, `{ version }`, nil)
+	if err != nil || res.AsError() != nil {
+		return
+	}
+	var data struct {
+		Version *string `json:"version"`
+	}
+	if err := json.Unmarshal(res.Data, &data); err != nil {
+		return
+	}
+	a.mu.Lock()
+	a.version = data.Version
+	a.mu.Unlock()
+}
+
+// Version returns the last-known version string fetched from the peer
+// daemon. Nil until the first successful Probe completes — callers
+// should treat nil as "unknown".
+func (a *PeerAdapter) Version() *string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.version
 }
 
 // FetchNode proxies a single `node(id)` lookup through the client.

@@ -254,6 +254,12 @@ type Host struct {
 	ResourceLoad *ResourceLoad `json:"resourceLoad,omitempty"`
 	// Peer hosts this daemon federates with. v1: always empty; Workstream F populates.
 	Peers []*Host `json:"peers"`
+	// Daemon binary version running on this host. Set at build time via
+	// -ldflags -X main.version=<semver>; `dev` for plain `go build`.
+	// Non-null on the local host (always at least "dev"). Null for a peer
+	// host whose probe has not yet succeeded — "unknown" is represented as
+	// null rather than an error so dashboards can render partial information.
+	Version *string `json:"version,omitempty"`
 	// Processes visible to this host's `ps` adapter, optionally filtered.
 	Processes []*Process `json:"processes"`
 	// Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json.
