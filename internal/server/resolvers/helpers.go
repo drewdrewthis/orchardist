@@ -1,0 +1,374 @@
+// Package resolvers — helpers shared across the gqlgen-managed resolver
+// stubs. Lives in its own file because gqlgen v0.17.46+ relocates
+// non-resolver declarations out of schema.resolvers.go on every regen.
+package resolvers
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"strings"
+	"time"
+
+	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+)
+
+func prKeyFromGraphQL(r *Resolver, obj *graphql1.PullRequest) (gh.PullRequestKey, bool) {
+	if r.GH == nil || obj == nil {
+		return gh.PullRequestKey{}, false
+	}
+	owner, name, number, ok := splitGHNodeID(obj.ID, "PullRequest:")
+	if !ok {
+		return gh.PullRequestKey{}, false
+	}
+	return gh.PullRequestKey{Owner: owner, Name: name, Number: number}, true
+}
+
+func (r *subscriptionResolver) streamLocalEvents(ctx context.Context) (<-chan graphql1.Node, error) {
+	if r.LocalEvents == nil {
+		out := make(chan graphql1.Node)
+		go func() {
+			<-ctx.Done()
+			close(out)
+		}()
+		return out, nil
+	}
+	stream := r.LocalEvents.Subscribe(ctx)
+	out := make(chan graphql1.Node, 16)
+	go func() {
+		defer close(out)
+		for ev := range stream {
+			id := string(ev.NodeID)
+			if id == "" {
+				continue
+			}
+			node, err := projectLocalInvalidation(id)
+			if err != nil || node == nil {
+				continue
+			}
+			select {
+			case out <- node:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+func buildHostServices(ctx context.Context, p *hostservice.Provider, hostID string) []*graphql1.HostService {
+	services := p.Services()
+	out := make([]*graphql1.HostService, 0, len(services))
+	for _, name := range services {
+		key := hostservice.MakeID(hostID, name)
+		snap, _, err := p.Get(ctx, key)
+		if err != nil {
+			out = append(out, hostServiceUnknown(hostID, name))
+			_ = errors.Is(err, hostservice.ErrServiceManagerMissing) // documented
+			continue
+		}
+		out = append(out, hostServiceFromSnapshot(snap))
+	}
+	return out
+}
+
+func hostServiceUnknown(hostID, name string) *graphql1.HostService {
+	return &graphql1.HostService{
+		ID:    "HostService:" + hostID + ":" + name,
+		Host:  &graphql1.Host{ID: "Host:" + hostID, MachineID: hostID},
+		Name:  name,
+		State: graphql1.HostServiceStateUnknown,
+	}
+}
+
+func hostServiceFromSnapshot(s hostservice.Snapshot) *graphql1.HostService {
+	hs := &graphql1.HostService{
+		ID:    "HostService:" + s.HostID + ":" + s.Name,
+		Host:  &graphql1.Host{ID: "Host:" + s.HostID, MachineID: s.HostID},
+		Name:  s.Name,
+		State: mapState(s.State),
+	}
+	if s.Since != nil {
+		ts := s.Since.UTC().Format(time.RFC3339Nano)
+		hs.Since = &ts
+	}
+	if s.ExitCode != nil {
+		v := int64(*s.ExitCode)
+		hs.ExitCode = &v
+	}
+	if s.LogTail != nil {
+		tail := *s.LogTail
+		hs.LogTail = &tail
+	}
+	return hs
+}
+
+func mapState(s hostservice.State) graphql1.HostServiceState {
+	switch s {
+	case hostservice.StateActive:
+		return graphql1.HostServiceStateActive
+	case hostservice.StateInactive:
+		return graphql1.HostServiceStateInactive
+	case hostservice.StateFailed:
+		return graphql1.HostServiceStateFailed
+	case hostservice.StateNotInstalled:
+		return graphql1.HostServiceStateNotInstalled
+	default:
+		return graphql1.HostServiceStateUnknown
+	}
+}
+
+func stripContractIDPrefix(id string) string {
+	const prefix = "Contract:"
+	if len(id) > len(prefix) && id[:len(prefix)] == prefix {
+		return id[len(prefix):]
+	}
+	return id
+}
+
+func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
+	// Host is the single source of truth for the worktree's host sentinel.
+	// "local" is the v1 sentinel for locally-discovered worktrees.
+	// Workstream F will replace this with the actual remote host id once
+	// federated discovery lands. The worktreeResolver.Host field resolver
+	// reads obj.Host (set here) rather than hardcoding "local". (#511)
+	return &graphql1.Worktree{
+		ID:     string(w.ID),
+		Path:   w.Path,
+		Branch: w.Branch,
+		Head:   w.Head,
+		Bare:   w.Bare,
+		Host:   "local",
+		Ahead:  w.Ahead,
+		Behind: w.Behind,
+	}
+}
+
+func projectProcess(p *ps.Process, hostID string) *graphql1.Process {
+	tty := p.TTY
+	startedAt := p.StartedRaw
+	if !p.StartedAt.IsZero() {
+		startedAt = p.StartedAt.Format(time.RFC3339)
+	}
+	out := &graphql1.Process{
+		ID:         p.ID.String(),
+		Host:       &graphql1.Host{ID: hostID},
+		Pid:        int64(p.ID.PID),
+		Ppid:       int64(p.PPID),
+		Command:    p.Command,
+		StartedAt:  startedAt,
+		CPUPercent: p.CPUPercent,
+		MemBytes:   p.MemBytes,
+	}
+	if tty != "" {
+		out.Tty = &tty
+	}
+	return out
+}
+
+func applyProcessFilter(ctx context.Context, p *ps.Provider, in []ps.Process, filter *graphql1.ProcessFilter) []ps.Process {
+	if filter == nil {
+		return in
+	}
+	out := make([]ps.Process, len(in))
+	copy(out, in)
+
+	if pids := filter.PidIn; len(pids) > 0 {
+		want := make(map[int]struct{}, len(pids))
+		for _, pid := range pids {
+			want[int(pid)] = struct{}{}
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if _, ok := want[proc.ID.PID]; ok {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	if cmds := filter.CommandIn; len(cmds) > 0 {
+		want := make(map[string]struct{}, len(cmds))
+		for _, c := range cmds {
+			want[c] = struct{}{}
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if _, ok := want[proc.Command]; ok {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	if filter.CwdPrefix != nil && *filter.CwdPrefix != "" {
+		prefix := *filter.CwdPrefix
+		pids := make([]int, 0, len(out))
+		for _, proc := range out {
+			pids = append(pids, proc.ID.PID)
+		}
+		cwds, err := p.LoadCwds(ctx, pids)
+		if err != nil {
+			return nil
+		}
+		next := out[:0]
+		for _, proc := range out {
+			if cwd, ok := cwds[proc.ID.PID]; ok && strings.HasPrefix(cwd, prefix) {
+				next = append(next, proc)
+			}
+		}
+		out = next
+	}
+
+	return out
+}
+
+func splitProcessNodeID(s string) (string, string) {
+	idx := strings.LastIndexByte(s, ':')
+	if idx <= 0 {
+		return "local", s
+	}
+	return s[:idx], s[idx+1:]
+}
+
+func projectServer(host tmux.HostID, info tmux.ServerInfo) *graphql1.TmuxServer {
+	return &graphql1.TmuxServer{
+		ID:         "TmuxServer:" + string(host) + ":" + info.SocketPath,
+		SocketPath: info.SocketPath,
+	}
+}
+
+func projectSession(s tmux.Session) *graphql1.TmuxSession {
+	return &graphql1.TmuxSession{
+		ID:   "TmuxSession:" + string(s.Key.Host) + ":" + s.Key.Name,
+		Name: s.Key.Name,
+	}
+}
+
+func projectWindow(w tmux.Window) *graphql1.TmuxWindow {
+	return &graphql1.TmuxWindow{
+		ID:    "TmuxWindow:" + string(w.Key.Host) + ":" + w.Key.Session + ":" + strconv.Itoa(w.Key.Index),
+		Index: int64(w.Key.Index),
+	}
+}
+
+func projectPane(p tmux.Pane) *graphql1.TmuxPane {
+	return &graphql1.TmuxPane{
+		ID:     "TmuxPane:" + string(p.Key.Host) + ":" + p.Key.PaneID,
+		PaneID: p.Key.PaneID,
+	}
+}
+
+func projectClient(c tmux.Client) *graphql1.TmuxClient {
+	return &graphql1.TmuxClient{
+		ID: "TmuxClient:" + string(c.Key.Host) + ":" + c.Key.ClientName,
+	}
+}
+
+func stripPrefix(s, prefix string) string {
+	if strings.HasPrefix(s, prefix) {
+		return s[len(prefix):]
+	}
+	return s
+}
+
+func sessionMatchesFilter(s tmux.Session, f *graphql1.TmuxSessionFilter) bool {
+	if f == nil {
+		return true
+	}
+	if names := f.NameIn; len(names) > 0 && !contains(names, s.Key.Name) {
+		return false
+	}
+	if f.AttachedOnly != nil && *f.AttachedOnly && !s.Attached {
+		return false
+	}
+	if f.ActiveAttachedOnly != nil && *f.ActiveAttachedOnly && !s.Attached {
+		return false
+	}
+	return true
+}
+
+func paneMatchesFilter(p tmux.Pane, f *graphql1.TmuxPaneFilter) bool {
+	if f == nil {
+		return true
+	}
+	if ids := f.PaneIDIn; len(ids) > 0 && !contains(ids, p.Key.PaneID) {
+		return false
+	}
+	if cmds := f.CurrentCommandIn; len(cmds) > 0 && !contains(cmds, p.CurrentCommand) {
+		return false
+	}
+	if sessions := f.SessionIn; len(sessions) > 0 && !contains(sessions, p.WindowKey.Session) {
+		return false
+	}
+	if f.TitleContains != nil && *f.TitleContains != "" && !strings.Contains(p.Title, *f.TitleContains) {
+		return false
+	}
+	if f.Dead != nil && *f.Dead != p.Dead {
+		return false
+	}
+	return true
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *tmuxClientResolver) lookupClient(id string) (tmux.Client, bool) {
+	if r.Tmux == nil {
+		return tmux.Client{}, false
+	}
+	host := r.Tmux.Host()
+	name := stripPrefix(id, "TmuxClient:"+string(host)+":")
+	c, ok := r.Tmux.Snapshot().Clients[tmux.ClientKey{Host: host, ClientName: name}]
+	return c, ok
+}
+
+func (r *tmuxPaneResolver) lookupPane(id string) (tmux.Pane, bool) {
+	if r.Tmux == nil {
+		return tmux.Pane{}, false
+	}
+	host := r.Tmux.Host()
+	paneID := stripPrefix(id, "TmuxPane:"+string(host)+":")
+	p, ok := r.Tmux.Snapshot().Panes[tmux.PaneKey{Host: host, PaneID: paneID}]
+	return p, ok
+}
+
+func (r *tmuxSessionResolver) lookupSession(id string) (tmux.Session, bool) {
+	if r.Tmux == nil {
+		return tmux.Session{}, false
+	}
+	host := r.Tmux.Host()
+	name := stripPrefix(id, "TmuxSession:"+string(host)+":")
+	s, ok := r.Tmux.Snapshot().Sessions[tmux.SessionKey{Host: host, Name: name}]
+	return s, ok
+}
+
+func (r *tmuxWindowResolver) lookupWindow(id string) (tmux.Window, bool) {
+	if r.Tmux == nil {
+		return tmux.Window{}, false
+	}
+	host := r.Tmux.Host()
+	rest := stripPrefix(id, "TmuxWindow:"+string(host)+":")
+	idx := strings.LastIndex(rest, ":")
+	if idx == -1 {
+		return tmux.Window{}, false
+	}
+	session := rest[:idx]
+	indexN, err := strconv.Atoi(rest[idx+1:])
+	if err != nil {
+		return tmux.Window{}, false
+	}
+	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: session, Index: indexN}]
+	return w, ok
+}

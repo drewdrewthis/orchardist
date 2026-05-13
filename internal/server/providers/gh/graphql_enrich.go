@@ -36,7 +36,7 @@ const enrichPRQuery = `query($owner:String!,$name:String!,$number:Int!){
       mergeable
       mergeStateStatus
       reviewDecision
-      labels(first:50){ nodes{ name } }
+      labels(first:50){ nodes{ name color description } }
       commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
     }
   }
@@ -67,7 +67,9 @@ type enrichRaw struct {
 				ReviewDecision   *string `json:"reviewDecision"`
 				Labels           struct {
 					Nodes []struct {
-						Name string `json:"name"`
+						Name        string `json:"name"`
+						Color       string `json:"color"`
+						Description string `json:"description"`
 					} `json:"nodes"`
 				} `json:"labels"`
 				Commits struct {
@@ -162,9 +164,13 @@ func (p *Provider) EnrichPullRequest(ctx context.Context, key PullRequestKey) (P
 		rd = &mapped
 	}
 
-	labelNames := make([]string, 0, len(wire.Labels.Nodes))
+	labels := make([]Label, 0, len(wire.Labels.Nodes))
 	for _, n := range wire.Labels.Nodes {
-		labelNames = append(labelNames, n.Name)
+		labels = append(labels, Label{
+			Name:        n.Name,
+			Color:       n.Color,
+			Description: n.Description,
+		})
 	}
 
 	ciStatus := CiStatusUnknown
@@ -182,7 +188,7 @@ func (p *Provider) EnrichPullRequest(ctx context.Context, key PullRequestKey) (P
 	base.value.MergeStateStatus = wire.MergeStateStatus
 	base.value.ReviewDecision = rd
 	base.value.StatusCheckRollup = ciStatus
-	base.value.Labels = filterPhaseLabels(labelNames)
+	base.value.Labels = filterPhaseLabels(labels)
 
 	// Cache the enriched result only when mergeable is definitive.
 	// UNKNOWN means GitHub is still computing — don't cache it so the
@@ -233,10 +239,10 @@ func mapStatusCheckRollup(state string) CiStatus {
 
 // filterPhaseLabels returns the input slice with orchard phase labels
 // removed, preserving the relative order of the remaining labels.
-func filterPhaseLabels(in []string) []string {
-	out := make([]string, 0, len(in))
+func filterPhaseLabels(in []Label) []Label {
+	out := make([]Label, 0, len(in))
 	for _, l := range in {
-		if _, isPhase := phaseLabels[l]; !isPhase {
+		if _, isPhase := phaseLabels[l.Name]; !isPhase {
 			out = append(out, l)
 		}
 	}

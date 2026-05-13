@@ -225,6 +225,16 @@ type listIssuesRaw []struct {
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	Labels []restLabelRaw `json:"labels"`
+}
+
+// restLabelRaw mirrors the GitHub REST label payload. Color and
+// description are missing on some labels; defaulting to empty string is
+// fine because the GraphQL schema surfaces them as non-null strings.
+type restLabelRaw struct {
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
 }
 
 func (raws listIssuesRaw) toIssues(owner, name string) []Issue {
@@ -250,6 +260,25 @@ func (raws listIssuesRaw) toIssues(owner, name string) []Issue {
 			URL:         r.HTMLURL,
 			CreatedAt:   r.CreatedAt,
 			UpdatedAt:   r.UpdatedAt,
+			Labels:      restLabelsToLabels(r.Labels),
+		})
+	}
+	return out
+}
+
+// restLabelsToLabels is a free-function wrapper around the slice
+// method so receivers across files can convert label payloads without
+// awkward type-aliasing. Same filter applies.
+func restLabelsToLabels(raws []restLabelRaw) []Label {
+	out := make([]Label, 0, len(raws))
+	for _, l := range raws {
+		if _, isPhase := phaseLabels[l.Name]; isPhase {
+			continue
+		}
+		out = append(out, Label{
+			Name:        l.Name,
+			Color:       l.Color,
+			Description: l.Description,
 		})
 	}
 	return out

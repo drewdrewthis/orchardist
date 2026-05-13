@@ -160,6 +160,7 @@ func (c *Client) GetIssue(ctx context.Context, owner, name string, number int) (
 		User struct {
 			Login string `json:"login"`
 		} `json:"user"`
+		Labels []restLabelRaw `json:"labels"`
 	}
 	if err := c.do(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, name, number), nil, &raw); err != nil {
 		return Issue{}, err
@@ -182,6 +183,7 @@ func (c *Client) GetIssue(ctx context.Context, owner, name string, number int) (
 		URL:         raw.HTMLURL,
 		CreatedAt:   raw.CreatedAt,
 		UpdatedAt:   raw.UpdatedAt,
+		Labels:      restLabelsToLabels(raw.Labels),
 	}, nil
 }
 

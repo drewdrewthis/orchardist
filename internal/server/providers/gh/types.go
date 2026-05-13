@@ -149,7 +149,16 @@ type PullRequest struct {
 	MergeStateStatus  string          // raw GitHub mergeStateStatus string
 	ReviewDecision    *ReviewDecision // nil when GitHub returns null
 	StatusCheckRollup CiStatus
-	Labels            []string // user labels only; phase labels excluded
+	Labels            []Label // user labels only; phase labels excluded
+}
+
+// Label mirrors a GitHub label attached to an issue or pull request.
+// Color and Description fall back to empty strings when GitHub omits
+// them so resolvers never have to deal with nil-vs-empty distinctions.
+type Label struct {
+	Name        string
+	Color       string
+	Description string
 }
 
 // ID is the GraphQL-stable id `PullRequest:<owner>/<repo>#<number>`.
@@ -174,6 +183,10 @@ func (r PullRequestReview) NodeID() string {
 
 // Issue mirrors a GitHub issue (real issues only — PRs are filtered out
 // upstream so resolver code can trust this list).
+//
+// Labels are populated by the REST endpoints that fill the rest of the
+// Issue (list + single) so callers never need a separate enrichment
+// step. Phase labels are stripped to match PullRequest.Labels.
 type Issue struct {
 	RepoOwner   string
 	RepoName    string
@@ -185,6 +198,7 @@ type Issue struct {
 	URL         string
 	CreatedAt   string
 	UpdatedAt   string
+	Labels      []Label
 }
 
 // ID is the GraphQL-stable id `Issue:<owner>/<repo>#<number>`.

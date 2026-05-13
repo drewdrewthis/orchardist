@@ -11,8 +11,20 @@ func ExportMapStatusCheckRollup(state string) CiStatus {
 }
 
 // ExportFilterPhaseLabels wraps filterPhaseLabels for external tests.
+// Accepts label names as a slice of strings (the historical shape) and
+// converts to []Label internally, then projects the filtered result
+// back down to a []string of names so existing tests stay terse.
 func ExportFilterPhaseLabels(in []string) []string {
-	return filterPhaseLabels(in)
+	labels := make([]Label, 0, len(in))
+	for _, n := range in {
+		labels = append(labels, Label{Name: n})
+	}
+	filtered := filterPhaseLabels(labels)
+	out := make([]string, 0, len(filtered))
+	for _, l := range filtered {
+		out = append(out, l.Name)
+	}
+	return out
 }
 
 // ExportEnrichTimestamp returns the recorded enrichment timestamp for a

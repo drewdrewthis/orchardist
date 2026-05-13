@@ -219,6 +219,15 @@ models:
       labels:
         resolver: true
 
+  # Issue.labels is populated by the gh provider's REST fetch (single +
+  # list) and projected to the GraphQL Label type by a custom resolver
+  # so the orchard phase-label filter and color/description mapping live
+  # in one place — same shape as PullRequest.labels.
+  Issue:
+    fields:
+      labels:
+        resolver: true
+
   # JSON scalar binds to gqlgen's Any marshaller, which round-trips any
   # JSON-shaped value (`map[string]any`, `[]any`, primitives) verbatim.
   # Used by Query.gh to forward GitHub GraphQL responses without imposing

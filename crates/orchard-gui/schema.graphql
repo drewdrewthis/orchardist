@@ -1,7 +1,18 @@
 """
-The @defer directive may be specified on a fragment spread to imply de-prioritization, that causes the fragment to be omitted in the initial response, and delivered as a subsequent response afterward. A query with @defer directive will cause the request to potentially return multiple responses, where non-deferred data is delivered in the initial response and data deferred delivered in a subsequent response. @include and @skip take precedence over @defer.
+Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
-directive @defer(if: Boolean = true, label: String) on FRAGMENT_SPREAD | INLINE_FRAGMENT
+directive @defer(
+  """Deferred when true or undefined."""
+  if: Boolean = true
+
+  """Unique name"""
+  label: String
+) on FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+"""
+Indicates exactly one field must be supplied and this field must not be `null`.
+"""
+directive @oneOf on INPUT_OBJECT
 
 """
 Aggregated CI status across all check runs and statuses on the PR head sha.
@@ -294,6 +305,14 @@ type DaemonState {
 }
 
 type Health {
+  """
+  Fleet-manifest ingestion status. Reflects the last attempt the daemon
+  made to load `$FLEET_MANIFEST` (default `~/.claude/references/fleet-manifest.yaml`).
+  Parse errors are surfaced here rather than crashing the daemon —
+  consumers should fall back to live-fleet data when `loaded=false`.
+  """
+  manifest: ManifestStatus!
+
   """Daemon health status — 'ok' when serving."""
   status: String!
 
@@ -313,6 +332,11 @@ type Host implements Node {
   address: String
 
   """
+  Condition under which this host may be decommissioned. Null when not in the manifest.
+  """
+  decommissionSignal: String
+
+  """
   Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json.
   """
   hostServices: [HostService!]!
@@ -324,20 +348,42 @@ type Host implements Node {
   id: ID!
 
   """
+  True when the host appears in the fleet manifest (`$FLEET_MANIFEST`).
+  False is a drift signal: the host is reachable / a configured peer but
+  has not yet been catalogued.
+  """
+  inManifest: Boolean!
+
+  """
   Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable.
   """
   kernel: String
 
   """
-  RFC 3339 timestamp of the last successful read. v1: time of the last load sample for the local host.
+  RFC 3339 timestamp of the last successful read. For manifest-only
+  hosts the daemon has never reached, this is the empty string
+  (`""`); pair with `reachable=false` to detect "never seen live".
   """
   lastSeenAt: String!
+
+  """
+  Last date a human (or `fleet-verify.sh`) confirmed the host was alive
+  and serving its stated purpose. ISO date (`YYYY-MM-DD`) or the literal
+  string `\"unknown\"`. Null when the host is not in the manifest.
+  """
+  lastVerified: String
 
   """OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID."""
   machineId: String!
 
   """Operating system family — 'darwin', 'linux', etc."""
   os: String!
+
+  """
+  Which orchardist (`local_orchardist`, `boxd_orchardist`, `shared`)
+  owns this host's spawn decisions. Null when not in the manifest.
+  """
+  ownerOrchardist: String
 
   """
   Peer hosts this daemon federates with. v1: always empty; Workstream F populates.
@@ -348,6 +394,12 @@ type Host implements Node {
   processes(filter: ProcessFilter): [Process!]!
 
   """
+  Free-form description from the fleet manifest — what this host is for.
+  Null when the host is not present in the manifest.
+  """
+  purpose: String
+
+  """
   True when the daemon last heard from this host. v1: always true for local host.
   """
   reachable: Boolean!
@@ -356,6 +408,52 @@ type Host implements Node {
   Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands.
   """
   resourceLoad: ResourceLoad
+
+  """
+  Role the manifest assigns to this host. Null when the host is not
+  present in the manifest.
+  """
+  role: HostRole
+
+  """
+  Daemon binary version running on this host. Set at build time via
+  -ldflags -X main.version=<semver>; `dev` for plain `go build`.
+  Non-null on the local host (always at least "dev"). Null for a peer
+  host whose probe has not yet succeeded — "unknown" is represented as
+  null rather than an error so dashboards can render partial information.
+  """
+  version: String
+}
+
+"""
+Roles a host can play in the orchard fleet. Drawn from the manifest
+file at `~/.claude/references/fleet-manifest.yaml`. `external` covers
+hosts present in the manifest but outside the orchardist hierarchy.
+"""
+enum HostRole {
+  """Always-on VM that hosts the boxd orchardist + federation broker."""
+  boxd_orchardist
+
+  """Plain orchard daemon peer with no other manifest role."""
+  daemon_peer
+
+  """Long-lived grinder VM dedicated to one repo/workstream."""
+  dedicated_grinder
+
+  """Host catalogued in the manifest but outside the orchardist hierarchy."""
+  external
+
+  """Shared federation worker that runs grinder sessions."""
+  federation_worker
+
+  """Per-issue boxd fork, decommissioned when the issue closes."""
+  fork_per_issue
+
+  """Generic grinder VM, registered as an orchard daemon peer."""
+  grinder_pool
+
+  """Drew's primary workstation. Hosts the local orchardist."""
+  local_orchardist
 }
 
 """
@@ -455,6 +553,13 @@ type Issue implements Node {
   comments: [IssueComment!]
   createdAt: String!
   id: ID!
+
+  """
+  User-assigned labels on the issue. Orchard lifecycle / phase labels
+  (e.g. `in-progress`, `pr-ready`) are filtered out — only the user-set
+  ones are surfaced, matching `PullRequest.labels` semantics.
+  """
+  labels: [Label!]!
   number: Int!
   repoName: String!
   repoOwner: String!
@@ -487,6 +592,53 @@ an orchard-side schema on them. Callers deserialise against their
 knowledge of GitHub's schema.
 """
 scalar JSON
+
+"""
+A GitHub label attached to an issue or pull request. The `color` and
+`description` fields mirror the GitHub REST/GraphQL payloads and are
+empty strings (not null) when GitHub omits them.
+"""
+type Label {
+  """
+  The label's hex color without leading `#` (e.g. `d73a4a`). Empty
+  string when GitHub returns no color for the label.
+  """
+  color: String!
+
+  """
+  The label's short description, as set on the repository's labels
+  page. Empty string when no description is set.
+  """
+  description: String!
+
+  """The label's textual name (e.g. `bug`, `P0`)."""
+  name: String!
+}
+
+"""
+Status of the fleet-manifest ingestion. Updated each time the daemon
+re-reads the manifest file.
+"""
+type ManifestStatus {
+  """
+  Human-readable error message from the last failed read. Null when loaded=true.
+  """
+  error: String
+
+  """Number of host entries currently held from the manifest."""
+  hostCount: Int!
+
+  """
+  RFC 3339 timestamp of the last successful parse. Null when never loaded.
+  """
+  lastLoadedAt: String
+
+  """True when the last read succeeded and parsed cleanly."""
+  loaded: Boolean!
+
+  """Absolute path the daemon attempted to read."""
+  path: String!
+}
 
 """
 Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing.
@@ -647,7 +799,7 @@ type PullRequest implements Node {
   draft: Boolean!
   headRef: String!
   id: ID!
-  labels: [String!]!
+  labels: [Label!]!
   mergeStateStatus: String!
   mergeable: MergeableState!
   number: Int!
@@ -829,6 +981,11 @@ type Query {
   Tmux sessions on the local host, optionally filtered. Empty when no tmux daemon is reachable.
   """
   tmuxSessions(filter: TmuxSessionFilter): [TmuxSession!]!
+
+  """
+  Daemon binary version. Set at build time via -ldflags -X main.version=<semver>; `dev` for plain `go build`.
+  """
+  version: String!
 
   """
   Composite "what's running, where, on what branch?" view (#469 F6).
@@ -1174,7 +1331,19 @@ type TmuxSession implements Node {
   id: ID!
 
   """
-  Most recent activity timestamp across all panes/windows. RFC3339; null if never observed.
+  Most recent activity timestamp across all panes/windows. RFC3339; null
+  if never observed.
+  
+  Tracks tmux's `pane_activity` field, which fires on NEW pane content —
+  not on in-place redraws. A Claude REPL spinner ticking in place
+  ("Elucidating… 1m 11s") does NOT bump `lastActivityAt`, so a long
+  agentic turn can look identical to a hung pane (issue #506).
+  
+  Do NOT use this field as a Claude-REPL stall signal. The canonical
+  signal is `Worktree.claudeInstances[].state` (working|idle|input|stalled,
+  issue #501), OR the heartbeat freshness exposed on
+  `ClaudeInstance` directly. `lastActivityAt` remains useful for plain
+  shell panes and for the lex-tie-breaker in `Worktree.tmuxSession`.
   """
   lastActivityAt: String
 
@@ -1285,9 +1454,25 @@ A git worktree — either the project's main checkout or one created with `git w
 """
 type Worktree implements Node {
   """
+  Number of commits the worktree's branch is AHEAD of its upstream tracking
+  branch (issue #483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  ahead: Int
+
+  """
   True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch.
   """
   bare: Boolean!
+
+  """
+  Number of commits the worktree's branch is BEHIND its upstream tracking
+  branch (issue #483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  behind: Int
 
   """
   Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees.
@@ -1330,7 +1515,16 @@ type Worktree implements Node {
   path: String!
 
   """
-  Open PR whose headRef matches this worktree's branch. Null when no match, branch is detached, or branch is the project's default branch.
+  PR whose headRef matches this worktree's branch.
+  
+  Selection precedence (issue #489): an OPEN PR is returned when one exists;
+  otherwise the most-recent CLOSED/MERGED PR with the matching headRef is
+  returned so the TUI stale-fade UX can render the post-merge cleanup
+  affordance. The `state` field on the returned PullRequest disambiguates
+  between live and post-merge.
+  
+  Null when no PR has ever existed for this branch in any state, when the
+  branch is detached, or when the branch is the project's default branch.
   """
   pr: PullRequest
 

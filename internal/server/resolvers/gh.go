@@ -361,6 +361,22 @@ func toGraphQLIssue(i gh.Issue) *graphql1.Issue {
 	}
 }
 
+// toGraphQLLabels projects gh.Label slice to the GraphQL Label list,
+// preserving order. Returns an empty (non-nil) slice so callers don't
+// have to guard against null. Used by both Issue.labels and
+// PullRequest.labels.
+func toGraphQLLabels(in []gh.Label) []*graphql1.Label {
+	out := make([]*graphql1.Label, 0, len(in))
+	for _, l := range in {
+		out = append(out, &graphql1.Label{
+			Name:        l.Name,
+			Color:       l.Color,
+			Description: l.Description,
+		})
+	}
+	return out
+}
+
 func toGraphQLWorkflowRun(w gh.WorkflowRun) *graphql1.WorkflowRun {
 	return &graphql1.WorkflowRun{
 		ID:           w.ID(),
