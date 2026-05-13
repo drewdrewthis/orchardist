@@ -725,6 +725,22 @@ type Worktree implements Node {
   grouping of windows/panes). A worktree can carry zero or many of each.
   """
   claudeInstances: [ClaudeInstance!]!
+
+  """
+  Number of commits the worktree's branch is AHEAD of its upstream tracking
+  branch (issue #483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  ahead: Int
+
+  """
+  Number of commits the worktree's branch is BEHIND its upstream tracking
+  branch (issue #483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  behind: Int
 }
 
 # ---------------------------------------------------------------------

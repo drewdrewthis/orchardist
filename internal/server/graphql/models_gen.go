@@ -853,6 +853,16 @@ type Worktree struct {
 	// sessionUuid) is distinct from a *tmux session* (TmuxSession — server
 	// grouping of windows/panes). A worktree can carry zero or many of each.
 	ClaudeInstances []*ClaudeInstance `json:"claudeInstances"`
+	// Number of commits the worktree's branch is AHEAD of its upstream tracking
+	// branch (issue #483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+	// Null when the branch has no upstream configured, when HEAD is detached, or
+	// when the count cannot be determined.
+	Ahead *int64 `json:"ahead,omitempty"`
+	// Number of commits the worktree's branch is BEHIND its upstream tracking
+	// branch (issue #483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+	// Null when the branch has no upstream configured, when HEAD is detached, or
+	// when the count cannot be determined.
+	Behind *int64 `json:"behind,omitempty"`
 }
 
 func (Worktree) IsNode() {}

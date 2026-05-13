@@ -63,6 +63,13 @@ type Worktree struct {
 	Branch    string // empty when detached or bare
 	Head      string // 40-char SHA, or "" when HEAD cannot be resolved
 	Bare      bool
+	// Ahead is the commit count this branch is ahead of its upstream (#483).
+	// Nil when the branch has no upstream, HEAD is detached, or the count
+	// could not be computed (e.g. transient git failure).
+	Ahead *int64
+	// Behind is the commit count this branch is behind its upstream (#483).
+	// Same nil semantics as Ahead.
+	Behind *int64
 }
 
 // CleanPath returns p with [filepath.Clean] applied. We keep this in a

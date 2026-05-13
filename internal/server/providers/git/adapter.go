@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // GitWorktreeAdapter reads `.git/worktrees/<name>/HEAD` + `gitdir` files
@@ -98,6 +101,7 @@ func readMainWorktree(p Project) (Worktree, error) {
 	if err != nil {
 		return Worktree{}, fmt.Errorf("read HEAD: %w", err)
 	}
+	ahead, behind := computeAheadBehind(p.Dir, branch, bare)
 	return Worktree{
 		ID:        NewWorktreeID(p.ID, MainWorktreeName),
 		ProjectID: p.ID,
@@ -106,6 +110,8 @@ func readMainWorktree(p Project) (Worktree, error) {
 		Branch:    branch,
 		Head:      head,
 		Bare:      bare,
+		Ahead:     ahead,
+		Behind:    behind,
 	}, nil
 }
 
@@ -171,6 +177,7 @@ func readLinkedWorktree(p Project, name string) (Worktree, error) {
 		return Worktree{}, fmt.Errorf("read HEAD for %q: %w", name, err)
 	}
 
+	ahead, behind := computeAheadBehind(worktreeRoot, branch, bare)
 	return Worktree{
 		ID:        NewWorktreeID(p.ID, name),
 		ProjectID: p.ID,
@@ -179,7 +186,50 @@ func readLinkedWorktree(p Project, name string) (Worktree, error) {
 		Branch:    branch,
 		Head:      head,
 		Bare:      bare,
+		Ahead:     ahead,
+		Behind:    behind,
 	}, nil
+}
+
+// computeAheadBehind shells out to `git rev-list --left-right --count
+// @{u}...HEAD` from worktreePath and parses the two-column
+// "behind\tahead" output (`--left-right` prints upstream-only commits
+// first, then HEAD-only) (#483).
+//
+// Returns (nil, nil) when:
+//   - branch is empty (detached HEAD) or bare is true (deleted upstream)
+//   - the worktree has no upstream configured (`@{u}` resolution fails)
+//   - the git command times out, errors, or produces unparseable output
+//
+// All failure modes are silent. ahead/behind is enrichment, not load-bearing.
+func computeAheadBehind(worktreePath, branch string, bare bool) (*int64, *int64) {
+	if branch == "" || bare {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", worktreePath, "rev-list",
+		"--left-right", "--count", "@{u}...HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) != 2 {
+		return nil, nil
+	}
+	// `--left-right --count A...B` prints "<left>\t<right>" where
+	// left=A-only commits (behind from B's view) and right=B-only (ahead).
+	// We invoked with @{u}...HEAD so behind=fields[0], ahead=fields[1].
+	behindN, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return nil, nil
+	}
+	aheadN, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return nil, nil
+	}
+	return &aheadN, &behindN
 }
 
 // readHeadFile parses HEAD. Either a `ref: refs/heads/<branch>` line

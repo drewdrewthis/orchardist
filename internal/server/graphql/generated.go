@@ -406,7 +406,9 @@ type ComplexityRoot struct {
 	}
 
 	Worktree struct {
+		Ahead           func(childComplexity int) int
 		Bare            func(childComplexity int) int
+		Behind          func(childComplexity int) int
 		Branch          func(childComplexity int) int
 		ClaudeInstances func(childComplexity int) int
 		Head            func(childComplexity int) int
@@ -2538,12 +2540,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.WorkflowRun.WorkflowPath(childComplexity), true
 
+	case "Worktree.ahead":
+		if e.complexity.Worktree.Ahead == nil {
+			break
+		}
+
+		return e.complexity.Worktree.Ahead(childComplexity), true
+
 	case "Worktree.bare":
 		if e.complexity.Worktree.Bare == nil {
 			break
 		}
 
 		return e.complexity.Worktree.Bare(childComplexity), true
+
+	case "Worktree.behind":
+		if e.complexity.Worktree.Behind == nil {
+			break
+		}
+
+		return e.complexity.Worktree.Behind(childComplexity), true
 
 	case "Worktree.branch":
 		if e.complexity.Worktree.Branch == nil {
@@ -3468,6 +3484,22 @@ type Worktree implements Node {
   grouping of windows/panes). A worktree can carry zero or many of each.
   """
   claudeInstances: [ClaudeInstance!]!
+
+  """
+  Number of commits the worktree's branch is AHEAD of its upstream tracking
+  branch (issue #483). Computed from ` + "`" + `git rev-list --left-right --count <upstream>...HEAD` + "`" + `.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  ahead: Int
+
+  """
+  Number of commits the worktree's branch is BEHIND its upstream tracking
+  branch (issue #483). Computed from ` + "`" + `git rev-list --left-right --count <upstream>...HEAD` + "`" + `.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  behind: Int
 }
 
 # ---------------------------------------------------------------------
@@ -5637,6 +5669,10 @@ func (ec *executionContext) fieldContext_ClaudeInstance_worktree(ctx context.Con
 				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			case "claudeInstances":
 				return ec.fieldContext_Worktree_claudeInstances(ctx, field)
+			case "ahead":
+				return ec.fieldContext_Worktree_ahead(ctx, field)
+			case "behind":
+				return ec.fieldContext_Worktree_behind(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -10237,6 +10273,10 @@ func (ec *executionContext) fieldContext_Process_worktree(ctx context.Context, f
 				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			case "claudeInstances":
 				return ec.fieldContext_Worktree_claudeInstances(ctx, field)
+			case "ahead":
+				return ec.fieldContext_Worktree_ahead(ctx, field)
+			case "behind":
+				return ec.fieldContext_Worktree_behind(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -13972,6 +14012,10 @@ func (ec *executionContext) fieldContext_Repo_worktrees(ctx context.Context, fie
 				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			case "claudeInstances":
 				return ec.fieldContext_Worktree_claudeInstances(ctx, field)
+			case "ahead":
+				return ec.fieldContext_Worktree_ahead(ctx, field)
+			case "behind":
+				return ec.fieldContext_Worktree_behind(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -14833,6 +14877,10 @@ func (ec *executionContext) fieldContext_Subscription_worktreeChanged(ctx contex
 				return ec.fieldContext_Worktree_tmuxSession(ctx, field)
 			case "claudeInstances":
 				return ec.fieldContext_Worktree_claudeInstances(ctx, field)
+			case "ahead":
+				return ec.fieldContext_Worktree_ahead(ctx, field)
+			case "behind":
+				return ec.fieldContext_Worktree_behind(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 		},
@@ -19038,6 +19086,88 @@ func (ec *executionContext) fieldContext_Worktree_claudeInstances(ctx context.Co
 				return ec.fieldContext_ClaudeInstance_conversation(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_ahead(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_ahead(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Ahead, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int64)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_ahead(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Worktree_behind(ctx context.Context, field graphql.CollectedField, obj *Worktree) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Worktree_behind(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Behind, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int64)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Worktree_behind(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Worktree",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -25724,6 +25854,10 @@ func (ec *executionContext) _Worktree(ctx context.Context, sel ast.SelectionSet,
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "ahead":
+			out.Values[i] = ec._Worktree_ahead(ctx, field, obj)
+		case "behind":
+			out.Values[i] = ec._Worktree_behind(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

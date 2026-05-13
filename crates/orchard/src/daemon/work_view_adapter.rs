@@ -39,13 +39,6 @@ use crate::session::{
     EnrichedSession, Host, SessionStatus, StandaloneConfig, StandaloneSessionRow, TmuxSessionInfo,
 };
 
-/// Two-level map of ahead/behind commit counts: `project_dir → branch → (ahead, behind)`.
-///
-/// Populated by `tui::App::start_full_refresh` via `git branch -vv` per project
-/// directory, until daemon issue #483 lands and the daemon's `Worktree` type
-/// exposes `ahead`/`behind` directly.
-pub type AheadBehindMap = HashMap<String, HashMap<String, (u32, u32)>>;
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -64,18 +57,12 @@ pub type AheadBehindMap = HashMap<String, HashMap<String, (u32, u32)>>;
 /// Remote enrichment (`*_remote_worktrees.json` / `*_remote_tmux_sessions.json`)
 /// is folded in by the existing `merge_remote::merge_remote_snapshot` path.
 ///
-/// # ahead_behind carve-out
-///
-/// `ahead_behind` is a two-level map `project_dir → branch → (ahead, behind)`.
-/// It is populated by `tui::App::start_full_refresh` via `git branch -vv` per
-/// project directory. Pass `None` when ahead/behind data is unavailable (daemon
-/// unreachable, cold start, or local-only refresh). Remove once the daemon's
-/// `Worktree` type exposes `ahead`/`behind` directly.
+/// Ahead/behind counts come from `WorkViewWorktree.ahead` / `.behind` (daemon
+/// issue #483) — populated server-side by the git provider.
 pub fn build_local_state(
     snapshot: &WorkViewSnapshot,
     config: &GlobalConfig,
     hosts: &HashMap<String, HostState>,
-    ahead_behind: Option<&AheadBehindMap>,
 ) -> OrchardState {
     // 1. Convert ClaudeInstances → ClaudeStateFiles (indexed by session name).
     let claude_states: Vec<ClaudeStateFile> = snapshot
@@ -116,12 +103,8 @@ pub fn build_local_state(
                 }
             }
 
-            // Worktree entry (with ahead/behind from git branch -vv carve-out).
-            let wt_ab = ahead_behind
-                .and_then(|ab| ab.get(&repo.path))
-                .and_then(|branch_map| branch_map.get(&wt.branch))
-                .copied();
-            entry.3.push(work_view_worktree_to_cached(wt, wt_ab));
+            // Worktree entry. Ahead/behind come from the daemon (#483).
+            entry.3.push(work_view_worktree_to_cached(wt));
         }
     }
 
@@ -314,13 +297,8 @@ fn build_standalone_sessions(
 
 /// Converts a [`WorkViewWorktree`] into a [`CachedWorktree`].
 ///
-/// `ahead_behind` carries the `(ahead, behind)` counts from the `git branch -vv`
-/// carve-out in `tui::App::start_full_refresh`. Pass `None` when unavailable.
-fn work_view_worktree_to_cached(
-    wt: &crate::daemon::types::WorkViewWorktree,
-    ahead_behind: Option<(u32, u32)>,
-) -> CachedWorktree {
-    let (ahead, behind) = ahead_behind.unwrap_or((0, 0));
+/// Ahead/behind are read directly from the daemon-supplied fields (#483).
+fn work_view_worktree_to_cached(wt: &crate::daemon::types::WorkViewWorktree) -> CachedWorktree {
     CachedWorktree {
         path: wt.path.clone(),
         branch: wt.branch.clone(),
@@ -331,8 +309,8 @@ fn work_view_worktree_to_cached(
         } else {
             Some(wt.host.clone())
         },
-        ahead: if ahead > 0 { Some(ahead) } else { None },
-        behind: if behind > 0 { Some(behind) } else { None },
+        ahead: wt.ahead,
+        behind: wt.behind,
         last_commit_at: None,
         layout: WorktreeLayout::Bare,
     }
@@ -589,6 +567,8 @@ mod tests {
                 bare: false,
                 host: "local".to_string(),
                 repo: repo.to_string(),
+                ahead: None,
+                behind: None,
                 pr,
                 issue,
             });
@@ -679,7 +659,7 @@ mod tests {
             )
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
 
         assert_eq!(state.repos.len(), 1);
         let repo = &state.repos[0];
@@ -718,7 +698,7 @@ mod tests {
             .session("issue429", Some(wt_path))
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
 
         let wt = state
             .repos
@@ -754,7 +734,7 @@ mod tests {
             .claude("issue429", "working", session_uuid)
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
 
         let wt = state
             .repos
@@ -799,7 +779,7 @@ mod tests {
             .session("shepherd", Some("/home/user"))
             .build();
 
-        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new(), None);
+        let state = build_local_state(&snapshot, &empty_config(), &HashMap::new());
 
         // The shepherd session should be standalone, not attached to a worktree.
         let worktree_sessions: Vec<&str> = state
@@ -842,7 +822,7 @@ mod tests {
             HostState { reachable: true },
         );
 
-        let state = build_local_state(&snapshot, &empty_config(), &hosts, None);
+        let state = build_local_state(&snapshot, &empty_config(), &hosts);
 
         assert!(state.repos.is_empty());
         assert!(state.standalone_sessions.is_empty());
