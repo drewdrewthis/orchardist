@@ -1350,7 +1350,7 @@ type PullRequest implements Node {
   mergeStateStatus: String!
   reviewDecision: ReviewDecisionEnum
   statusCheckRollup: CiStatus!
-  labels: [String!]!
+  labels: [Label!]!
 }
 
 "A review submitted on a pull request."
@@ -1378,6 +1378,32 @@ type Issue implements Node {
   createdAt: String!
   updatedAt: String!
   comments: [IssueComment!]
+  """
+  User-assigned labels on the issue. Orchard lifecycle / phase labels
+  (e.g. `in-progress`, `pr-ready`) are filtered out — only the user-set
+  ones are surfaced, matching `PullRequest.labels` semantics.
+  """
+  labels: [Label!]!
+}
+
+"""
+A GitHub label attached to an issue or pull request. The `color` and
+`description` fields mirror the GitHub REST/GraphQL payloads and are
+empty strings (not null) when GitHub omits them.
+"""
+type Label {
+  "The label's textual name (e.g. `bug`, `P0`)."
+  name: String!
+  """
+  The label's hex color without leading `#` (e.g. `d73a4a`). Empty
+  string when GitHub returns no color for the label.
+  """
+  color: String!
+  """
+  The label's short description, as set on the repository's labels
+  page. Empty string when no description is set.
+  """
+  description: String!
 }
 
 "A comment on an issue or pull request thread."

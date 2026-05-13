@@ -285,15 +285,15 @@ func TestEnrichPullRequest_LabelFilter(t *testing.T) {
 		"pr-ready": true, "blocked": true,
 	}
 	for _, l := range pr.Labels {
-		if phaseLabels[l] {
-			t.Errorf("phase label %q survived into PullRequest.Labels", l)
+		if phaseLabels[l.Name] {
+			t.Errorf("phase label %q survived into PullRequest.Labels", l.Name)
 		}
 	}
 
 	// user labels must survive
 	want := map[string]bool{"P0": true, "bug": true, "autonomous": true}
 	for _, l := range pr.Labels {
-		delete(want, l)
+		delete(want, l.Name)
 	}
 	for l := range want {
 		t.Errorf("user label %q missing from PullRequest.Labels", l)

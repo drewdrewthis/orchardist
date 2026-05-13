@@ -106,3 +106,64 @@ func TestParseGitHubURL(t *testing.T) {
 		}
 	}
 }
+
+// TestGetIssue_LabelsDecoded asserts that GetIssue surfaces user
+// labels with color/description from the REST payload and strips
+// orchard phase labels (mirroring PullRequest.Labels semantics).
+func TestGetIssue_LabelsDecoded(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/alice/repo/issues/42", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"number": 42,
+			"title": "labels",
+			"body": "",
+			"state": "open",
+			"html_url": "https://github.com/alice/repo/issues/42",
+			"created_at": "2026-05-13T00:00:00Z",
+			"updated_at": "2026-05-13T00:00:00Z",
+			"user": {"login": "alice"},
+			"labels": [
+				{"name": "bug", "color": "d73a4a", "description": "Something broken"},
+				{"name": "in-progress", "color": "fbca04", "description": "phase tag"},
+				{"name": "P0", "color": "ff0000", "description": ""}
+			]
+		}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	c := gh.NewClient(ts.URL, "tok")
+	issue, err := c.GetIssue(context.Background(), "alice", "repo", 42)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+
+	names := make([]string, 0, len(issue.Labels))
+	for _, l := range issue.Labels {
+		names = append(names, l.Name)
+	}
+	for _, n := range names {
+		if n == "in-progress" {
+			t.Errorf("phase label %q survived GetIssue labels: %v", n, names)
+		}
+	}
+
+	want := map[string]gh.Label{
+		"bug": {Name: "bug", Color: "d73a4a", Description: "Something broken"},
+		"P0":  {Name: "P0", Color: "ff0000", Description: ""},
+	}
+	got := map[string]gh.Label{}
+	for _, l := range issue.Labels {
+		got[l.Name] = l
+	}
+	for n, w := range want {
+		g, ok := got[n]
+		if !ok {
+			t.Errorf("label %q missing from issue.Labels: %v", n, names)
+			continue
+		}
+		if g != w {
+			t.Errorf("label %q = %+v, want %+v", n, g, w)
+		}
+	}
+}

@@ -188,7 +188,7 @@ func TestPREnrich_E2E_AllFiveFields(t *testing.T) {
 			mergeStateStatus
 			reviewDecision
 			statusCheckRollup
-			labels
+			labels { name color description }
 		}
 	}`)
 
@@ -224,21 +224,27 @@ func TestPREnrich_E2E_AllFiveFields(t *testing.T) {
 		t.Errorf("statusCheckRollup = %v, want SUCCESS", got)
 	}
 
-	// labels — phase label "in-progress" must be filtered; P0 and bug must survive
+	// labels — phase label "in-progress" must be filtered; P0 and bug must
+	// survive with their full Label shape.
 	rawLabels, _ := pr["labels"].([]any)
-	labels := make([]string, 0, len(rawLabels))
+	names := make([]string, 0, len(rawLabels))
 	for _, l := range rawLabels {
-		labels = append(labels, fmt.Sprint(l))
+		obj, _ := l.(map[string]any)
+		if obj == nil {
+			continue
+		}
+		name, _ := obj["name"].(string)
+		names = append(names, name)
 	}
-	labelsStr := strings.Join(labels, ",")
-	if strings.Contains(labelsStr, "in-progress") {
-		t.Errorf("phase label 'in-progress' leaked into labels: %v", labels)
+	namesStr := strings.Join(names, ",")
+	if strings.Contains(namesStr, "in-progress") {
+		t.Errorf("phase label 'in-progress' leaked into labels: %v", names)
 	}
-	if !strings.Contains(labelsStr, "P0") {
-		t.Errorf("user label 'P0' missing from labels: %v", labels)
+	if !strings.Contains(namesStr, "P0") {
+		t.Errorf("user label 'P0' missing from labels: %v", names)
 	}
-	if !strings.Contains(labelsStr, "bug") {
-		t.Errorf("user label 'bug' missing from labels: %v", labels)
+	if !strings.Contains(namesStr, "bug") {
+		t.Errorf("user label 'bug' missing from labels: %v", names)
 	}
 }
 

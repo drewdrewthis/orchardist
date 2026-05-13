@@ -3,6 +3,7 @@
 package graphql
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -348,6 +349,10 @@ type Issue struct {
 	CreatedAt   string          `json:"createdAt"`
 	UpdatedAt   string          `json:"updatedAt"`
 	Comments    []*IssueComment `json:"comments,omitempty"`
+	// User-assigned labels on the issue. Orchard lifecycle / phase labels
+	// (e.g. `in-progress`, `pr-ready`) are filtered out — only the user-set
+	// ones are surfaced, matching `PullRequest.labels` semantics.
+	Labels []*Label `json:"labels"`
 }
 
 func (Issue) IsNode() {}
@@ -362,6 +367,20 @@ type IssueComment struct {
 	Body        string `json:"body"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+}
+
+// A GitHub label attached to an issue or pull request. The `color` and
+// `description` fields mirror the GitHub REST/GraphQL payloads and are
+// empty strings (not null) when GitHub omits them.
+type Label struct {
+	// The label's textual name (e.g. `bug`, `P0`).
+	Name string `json:"name"`
+	// The label's hex color without leading `#` (e.g. `d73a4a`). Empty
+	// string when GitHub returns no color for the label.
+	Color string `json:"color"`
+	// The label's short description, as set on the repository's labels
+	// page. Empty string when no description is set.
+	Description string `json:"description"`
 }
 
 // Status of the fleet-manifest ingestion. Updated each time the daemon
@@ -487,7 +506,7 @@ type PullRequest struct {
 	MergeStateStatus  string               `json:"mergeStateStatus"`
 	ReviewDecision    *ReviewDecisionEnum  `json:"reviewDecision,omitempty"`
 	StatusCheckRollup CiStatus             `json:"statusCheckRollup"`
-	Labels            []string             `json:"labels"`
+	Labels            []*Label             `json:"labels"`
 }
 
 func (PullRequest) IsNode() {}
@@ -899,7 +918,7 @@ func (e CiStatus) String() string {
 	return string(e)
 }
 
-func (e *CiStatus) UnmarshalGQL(v interface{}) error {
+func (e *CiStatus) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -914,6 +933,20 @@ func (e *CiStatus) UnmarshalGQL(v interface{}) error {
 
 func (e CiStatus) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CiStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CiStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Lifecycle states for Contract.
@@ -955,7 +988,7 @@ func (e ContractStatus) String() string {
 	return string(e)
 }
 
-func (e *ContractStatus) UnmarshalGQL(v interface{}) error {
+func (e *ContractStatus) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -970,6 +1003,20 @@ func (e *ContractStatus) UnmarshalGQL(v interface{}) error {
 
 func (e ContractStatus) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ContractStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ContractStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Roles a host can play in the orchard fleet. Drawn from the manifest
@@ -1019,7 +1066,7 @@ func (e HostRole) String() string {
 	return string(e)
 }
 
-func (e *HostRole) UnmarshalGQL(v interface{}) error {
+func (e *HostRole) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1034,6 +1081,20 @@ func (e *HostRole) UnmarshalGQL(v interface{}) error {
 
 func (e HostRole) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *HostRole) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e HostRole) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Lifecycle state of a HostService.
@@ -1074,7 +1135,7 @@ func (e HostServiceState) String() string {
 	return string(e)
 }
 
-func (e *HostServiceState) UnmarshalGQL(v interface{}) error {
+func (e *HostServiceState) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1089,6 +1150,20 @@ func (e *HostServiceState) UnmarshalGQL(v interface{}) error {
 
 func (e HostServiceState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *HostServiceState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e HostServiceState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Lifecycle states for a Claude instance.
@@ -1130,7 +1205,7 @@ func (e InstanceState) String() string {
 	return string(e)
 }
 
-func (e *InstanceState) UnmarshalGQL(v interface{}) error {
+func (e *InstanceState) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1145,6 +1220,20 @@ func (e *InstanceState) UnmarshalGQL(v interface{}) error {
 
 func (e InstanceState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *InstanceState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e InstanceState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // State filter for the issues query.
@@ -1174,7 +1263,7 @@ func (e IssueState) String() string {
 	return string(e)
 }
 
-func (e *IssueState) UnmarshalGQL(v interface{}) error {
+func (e *IssueState) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1189,6 +1278,20 @@ func (e *IssueState) UnmarshalGQL(v interface{}) error {
 
 func (e IssueState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *IssueState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e IssueState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing.
@@ -1218,7 +1321,7 @@ func (e MergeableState) String() string {
 	return string(e)
 }
 
-func (e *MergeableState) UnmarshalGQL(v interface{}) error {
+func (e *MergeableState) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1233,6 +1336,20 @@ func (e *MergeableState) UnmarshalGQL(v interface{}) error {
 
 func (e MergeableState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MergeableState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MergeableState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // State filter for the pullRequests query.
@@ -1264,7 +1381,7 @@ func (e PullRequestState) String() string {
 	return string(e)
 }
 
-func (e *PullRequestState) UnmarshalGQL(v interface{}) error {
+func (e *PullRequestState) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1279,6 +1396,20 @@ func (e *PullRequestState) UnmarshalGQL(v interface{}) error {
 
 func (e PullRequestState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *PullRequestState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e PullRequestState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Reviewer decision on a PR. Null when no review activity yet.
@@ -1312,7 +1443,7 @@ func (e ReviewDecisionEnum) String() string {
 	return string(e)
 }
 
-func (e *ReviewDecisionEnum) UnmarshalGQL(v interface{}) error {
+func (e *ReviewDecisionEnum) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1327,6 +1458,20 @@ func (e *ReviewDecisionEnum) UnmarshalGQL(v interface{}) error {
 
 func (e ReviewDecisionEnum) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ReviewDecisionEnum) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ReviewDecisionEnum) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Sort key for `TmuxServer.sessions`.
@@ -1356,7 +1501,7 @@ func (e TmuxSessionSort) String() string {
 	return string(e)
 }
 
-func (e *TmuxSessionSort) UnmarshalGQL(v interface{}) error {
+func (e *TmuxSessionSort) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
@@ -1371,4 +1516,18 @@ func (e *TmuxSessionSort) UnmarshalGQL(v interface{}) error {
 
 func (e TmuxSessionSort) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *TmuxSessionSort) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e TmuxSessionSort) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
