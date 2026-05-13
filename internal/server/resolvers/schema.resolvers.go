@@ -1842,6 +1842,8 @@ func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 		Head:   w.Head,
 		Bare:   w.Bare,
 		Host:   "local",
+		Ahead:  w.Ahead,
+		Behind: w.Behind,
 	}
 }
 func projectProcess(p *ps.Process, hostID string) *graphql1.Process {

@@ -222,30 +222,6 @@ pub struct App {
     /// the message handler can share it across the channel boundary.
     work_view_snapshot: std::sync::Arc<std::sync::Mutex<Option<crate::daemon::WorkViewSnapshot>>>,
 
-    /// Ahead/behind counts fetched via `git branch -vv` in `start_full_refresh`.
-    ///
-    /// Keyed by project directory path → branch name → `(ahead, behind)`.
-    ///
-    /// # Carve-out: ahead/behind via `git branch -vv`
-    ///
-    /// The daemon's `Worktree` schema does not yet expose `ahead`/`behind`
-    /// counts. Until the daemon exposes these fields, the refresh thread
-    /// shells out to `git branch -vv` per project directory to populate them.
-    /// Remove this field and the corresponding `git branch -vv` call in
-    /// `start_full_refresh` once the daemon exposes `Worktree.ahead` and
-    /// `Worktree.behind` (tracked as daemon issue #483).
-    ///
-    /// **Staleness note**: this slot is populated by `start_full_refresh` only —
-    /// the local-only refresh path (`start_local_refresh`) does NOT re-run
-    /// `git branch -vv` per project to keep the local tick fast. Worst-case
-    /// staleness for ahead/behind data is bounded by the full refresh cadence
-    /// (~60s + focus events). New branches that appear between full refreshes
-    /// render with stale (or zero) ahead/behind until the next full tick. This
-    /// is acceptable because ahead/behind is a hint, not a contract — and
-    /// tracked-for-removal in #483 (daemon to expose ahead/behind directly).
-    ahead_behind_snapshot:
-        std::sync::Arc<std::sync::Mutex<Option<crate::daemon::work_view_adapter::AheadBehindMap>>>,
-
     /// Injectable source for `workView` GraphQL queries.
     ///
     /// In production this is a real [`crate::daemon::Client`].
@@ -354,7 +330,6 @@ impl App {
                 let initial_snap = crate::daemon::work_view_cache::read_snapshot();
                 std::sync::Arc::new(std::sync::Mutex::new(initial_snap))
             },
-            ahead_behind_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
             work_view_source: {
                 // Build the daemon client; fall back to a no-op source if the
                 // client cannot be constructed (e.g. invalid URL env var).
@@ -780,7 +755,6 @@ impl App {
         let config = self.global_config.clone();
         let tx = self.tx.clone();
         let work_view_slot = self.work_view_snapshot.clone();
-        let ahead_behind_slot = self.ahead_behind_snapshot.clone();
         let work_view_source = self.work_view_source.clone();
         std::thread::spawn(move || {
             // Probe each unique remote host concurrently before attempting remote
@@ -804,14 +778,6 @@ impl App {
             //           refresh_worktrees + refresh_tmux_sessions
             match work_view_source.work_view() {
                 Ok(snapshot) => {
-                    // Carve-out: ahead/behind via `git branch -vv` — runs in
-                    // parallel across all configured repos via
-                    // `fetch_ahead_behind_for_snapshot`. Remove once the daemon
-                    // exposes `Worktree.ahead`/`Worktree.behind` (tracked as #483).
-                    let ahead_behind = fetch_ahead_behind_for_snapshot(&config);
-                    if let Ok(mut slot) = ahead_behind_slot.lock() {
-                        *slot = Some(ahead_behind);
-                    }
                     // Persist snapshot so cold-start fallback has fresh data.
                     if let Err(e) = crate::daemon::work_view_cache::write_snapshot(&snapshot) {
                         crate::logger::LOG.warn(&format!("work_view_cache write failed: {e}"));
@@ -848,16 +814,6 @@ impl App {
     /// `cache_sources::refresh_tmux_sessions` calls with a single round-trip
     /// to the daemon. No remote host probing, no GitHub API calls.
     /// Sends `AppMsg::LocalCacheRefreshed` when done.
-    ///
-    /// **Staleness note**: `ahead_behind_snapshot` is populated by
-    /// `start_full_refresh` only — this local-only refresh path does NOT
-    /// re-run `git branch -vv` per project to keep the local tick fast.
-    /// Worst-case staleness for ahead/behind data is bounded by the full
-    /// refresh cadence (~60s + focus events). New branches that appear
-    /// between full refreshes render with stale (or zero) ahead/behind
-    /// until the next full tick. This is acceptable because ahead/behind
-    /// is a hint, not a contract — and tracked-for-removal in #483
-    /// (daemon to expose ahead/behind directly).
     fn start_local_refresh(&self) {
         let tx = self.tx.clone();
         let work_view_slot = self.work_view_snapshot.clone();
@@ -895,18 +851,12 @@ impl App {
     fn rebuild_state_from_snapshot(&self) -> crate::orchard_state::OrchardState {
         let hosts = crate::cache::read_host_reachability();
         let snapshot_opt = self.work_view_snapshot.lock().ok().and_then(|g| g.clone());
-        let ahead_behind_opt = self
-            .ahead_behind_snapshot
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
 
         let mut state = if let Some(snapshot) = snapshot_opt {
             crate::daemon::work_view_adapter::build_local_state(
                 &snapshot,
                 &self.global_config,
                 &hosts,
-                ahead_behind_opt.as_ref(),
             )
         } else {
             crate::build_state::build_state_with_hosts(&self.global_config, &hosts)
@@ -2329,7 +2279,6 @@ impl App {
             seen_expandable_keys: HashSet::new(),
             seen_window_keys: HashSet::new(),
             work_view_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            ahead_behind_snapshot: std::sync::Arc::new(std::sync::Mutex::new(None)),
             work_view_source: std::sync::Arc::new(crate::tui::refresh::NullWorkViewSource),
             daemon_status: DaemonStatus::Unknown,
         };
@@ -2519,31 +2468,6 @@ pub(crate) fn current_selection(app: &App) -> Option<last_selection::LastSelecti
         });
     }
     None
-}
-
-/// Fetches ahead/behind commit counts for every configured repo by running
-/// `git branch -vv` per repo directory, in parallel.
-///
-/// The daemon's `Worktree` schema does not yet expose `ahead`/`behind` counts
-/// (tracked in #483); this is a temporary carve-out that will be removed when
-/// the daemon ships those fields.
-///
-/// Returns a `HashMap` keyed by repo directory path → branch name →
-/// `(ahead, behind)`.
-fn fetch_ahead_behind_for_snapshot(
-    config: &global_config::GlobalConfig,
-) -> crate::daemon::work_view_adapter::AheadBehindMap {
-    let result: std::sync::Mutex<crate::daemon::work_view_adapter::AheadBehindMap> =
-        std::sync::Mutex::new(HashMap::new());
-    crate::refresh_parallel::for_each_repo_parallel(config, |repo| {
-        if let Ok(out) = crate::cache_sources::run_local_in("git", &["branch", "-vv"], &repo.path) {
-            let branch_map = crate::cache_sources::parse_git_ahead_behind(&out);
-            if let Ok(mut acc) = result.lock() {
-                acc.insert(repo.path.clone(), branch_map);
-            }
-        }
-    });
-    result.into_inner().unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -5904,6 +5828,8 @@ mod tests {
                     bare: false,
                     host: "local".to_string(),
                     repo: "owner/repo".to_string(),
+                    ahead: None,
+                    behind: None,
                     pr: None,
                     issue: None,
                 }],
@@ -6076,6 +6002,8 @@ mod tests {
                     bare: false,
                     host: "local".to_string(),
                     repo: "owner/repo".to_string(),
+                    ahead: None,
+                    behind: None,
                     pr: None,
                     issue: None,
                 }],
@@ -6174,6 +6102,8 @@ mod tests {
                     bare: false,
                     host: "local".to_string(),
                     repo: "owner/repo".to_string(),
+                    ahead: None,
+                    behind: None,
                     pr: None,
                     issue: None,
                 }],

@@ -178,6 +178,8 @@ impl Client {
                     bare
                     host
                     repo
+                    ahead
+                    behind
                     pr {
                       number
                       state

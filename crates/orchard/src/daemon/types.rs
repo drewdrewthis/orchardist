@@ -181,6 +181,15 @@ pub struct WorkViewWorktree {
     /// Repository slug (`owner/repo`).
     pub repo: String,
 
+    /// Commits ahead of upstream. `None` when no upstream is configured, HEAD
+    /// is detached, or the count could not be determined (#483).
+    #[serde(default)]
+    pub ahead: Option<u32>,
+
+    /// Commits behind upstream. Same null semantics as `ahead`.
+    #[serde(default)]
+    pub behind: Option<u32>,
+
     /// Open PR whose head branch matches this worktree's branch. `None` when
     /// there is no open matching PR. Note: closed/merged PRs are **not**
     /// included in v1 (see research/035 for the schema limitation).

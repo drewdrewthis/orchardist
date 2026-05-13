@@ -513,6 +513,8 @@ mod tests {
                         bare: false,
                         host: "local".to_string(),
                         repo: "owner/repo".to_string(),
+                        ahead: None,
+                        behind: None,
                         pr: None,
                         issue: None,
                     },
@@ -523,6 +525,8 @@ mod tests {
                         bare: false,
                         host: "local".to_string(),
                         repo: "owner/repo".to_string(),
+                        ahead: None,
+                        behind: None,
                         pr: None,
                         issue: None,
                     },
@@ -533,7 +537,7 @@ mod tests {
         };
 
         let mut state =
-            build_local_state(&snapshot, &GlobalConfig::default(), &HashMap::new(), None);
+            build_local_state(&snapshot, &GlobalConfig::default(), &HashMap::new());
 
         // ---- Remote data via merge_remote_snapshot -------------------------
 
