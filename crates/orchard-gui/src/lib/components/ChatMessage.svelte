@@ -44,7 +44,9 @@
 		if (msg.text) {
 			try {
 				await navigator.clipboard.writeText(msg.text);
-			} catch {}
+			} catch {
+				// intentional swallow: clipboard write denied (no user gesture or permission blocked); copy action silently no-ops
+			}
 		}
 		copied = true;
 		setTimeout(() => (copied = false), 1100);

@@ -145,6 +145,7 @@ export function parseTranscript(text: string): TranscriptTurn[] {
 		try {
 			row = JSON.parse(line);
 		} catch {
+			// intentional swallow: malformed JSONL line (truncated write or non-JSON footer); skip to next line
 			continue;
 		}
 		if (row.type && SKIP_TYPES.has(row.type)) continue;

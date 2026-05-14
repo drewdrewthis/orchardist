@@ -29,6 +29,7 @@
 
 		return () => {
 			stopTick();
+			// intentional swallow: cleanup-time unsubscribe; if the promise never resolved the subscription was never established
 			subPromise.then((u) => u()).catch(() => {});
 			store.teardown();
 		};

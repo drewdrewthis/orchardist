@@ -9,6 +9,7 @@
 	import SidebarItem from "./SidebarItem.svelte";
 	import ChannelRow from "./ChannelRow.svelte";
 	import { getStore } from "$lib/store.svelte";
+	import { toast } from "$lib/util/toast";
 	import {
 		attentionStore,
 		buildAttentionSections,
@@ -60,6 +61,13 @@
 		attentionSections.reduce((n, s) => n + s.items.length, 0),
 	);
 	const attentionLoading = $derived($attentionStore.fetching);
+
+	// Surface attention-lens fetch errors via toast so the user isn't left
+	// with a silently empty sidebar (Scenario L208 / #600).
+	$effect(() => {
+		const errs = $attentionStore.errors;
+		if (errs && errs.length > 0) toast.error(errs[0].message);
+	});
 
 	const recentItems = $derived(buildRecentItems($recentStore.data));
 	const recentLoading = $derived($recentStore.fetching);

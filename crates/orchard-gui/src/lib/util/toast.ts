@@ -12,6 +12,7 @@ function extractMessage(err: unknown): string {
 	try {
 		return JSON.stringify(err);
 	} catch {
+		// intentional swallow: circular-reference or non-serialisable object; fall back to String coercion
 		return String(err);
 	}
 }

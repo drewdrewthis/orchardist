@@ -17,6 +17,7 @@ import {
 	getSelfHandle,
 	type ChatBackend,
 } from "./data/chat";
+import { toast } from "./util/toast";
 import type {
 	Conversation,
 	ConvView,
@@ -412,7 +413,7 @@ export class AppStore {
 				this.sending = null;
 			})
 			.catch((err) => {
-				console.warn("[orchard-gui] chat send failed:", err);
+				toast.error(err);
 				this.sending = null;
 			});
 	};
@@ -422,6 +423,7 @@ export class AppStore {
 		try {
 			this.chatRooms = await b.listRooms();
 		} catch {
+			// intentional swallow: chat-core may not be running; sidebar degrades to empty rooms list silently on startup
 			this.chatRooms = [];
 		}
 	};
@@ -447,6 +449,7 @@ export class AppStore {
 		if (this.chatRoomCache[roomId] || this._chatRoomLoading.has(roomId)) return;
 		this._chatRoomLoading.add(roomId);
 		this.loadChatRoom(roomId)
+			// intentional swallow: lazy background room load; failure leaves the room absent from cache, user can re-select to retry
 			.catch(() => {})
 			.finally(() => this._chatRoomLoading.delete(roomId));
 	};

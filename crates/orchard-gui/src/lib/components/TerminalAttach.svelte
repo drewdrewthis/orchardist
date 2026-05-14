@@ -60,15 +60,20 @@
 	async function killCurrentPty() {
 		try {
 			unsubData?.();
-		} catch {}
+		} catch {
+			// intentional swallow: pty already dead during cleanup; unsub throws harmlessly
+		}
 		try {
 			unsubExit?.();
-		} catch {}
+		} catch {
+			// intentional swallow: pty already dead during cleanup; unsub throws harmlessly
+		}
 		unsubData = null;
 		unsubExit = null;
 		if (ptyId != null) {
 			const old = ptyId;
 			ptyId = null;
+			// intentional swallow: pty already dead during cleanup
 			killPty(old).catch(() => {});
 		}
 	}
@@ -91,6 +96,7 @@
 		try {
 			const handle = await spawnPty(currentArgv, { cwd, cols, rows });
 			if (cancelled || lastArgvKey !== argvKey(currentArgv)) {
+				// intentional swallow: stale PTY spawned after argv changed; kill is best-effort
 				killPty(handle.id).catch(() => {});
 				return;
 			}
@@ -181,12 +187,14 @@
 
 				const enc = new TextEncoder();
 				term.onData((data) => {
-					if (ptyId != null) writePty(ptyId, enc.encode(data)).catch(() => {});
+					// intentional swallow: keystrokes may arrive after PTY exits; drop silently
+				if (ptyId != null) writePty(ptyId, enc.encode(data)).catch(() => {});
 				});
 
 				resizeObserver = new ResizeObserver(() => {
 					try {
 						fitAddon?.fit();
+						// intentional swallow: PTY may have exited between resize check and IPC call
 						if (ptyId != null && term) resizePty(ptyId, term.cols, term.rows).catch(() => {});
 					} catch {
 						// Window not visible / 0-sized — skip silently.

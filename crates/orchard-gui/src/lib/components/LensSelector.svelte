@@ -1,4 +1,8 @@
 <!-- Icon-only segmented control for the fleet's lens (attention/host/tmux/etc). -->
+<!--
+  Note: issue #600 referred to the attention lens as "activity lens" — the live Lens enum has
+  no `activity` member; any reference to "activity lens" maps to the attention lens.
+-->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
 	import type { Lens } from "$lib/data/types";

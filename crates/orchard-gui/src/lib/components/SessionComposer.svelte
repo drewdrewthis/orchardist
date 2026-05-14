@@ -11,6 +11,7 @@
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
 	import { tmuxSendText } from "$lib/tauri";
+	import { toast } from "$lib/util/toast";
 
 	type Props = {
 		paneId: string;
@@ -35,6 +36,7 @@
 			autosize();
 		} catch (err) {
 			error = (err as Error)?.message ?? String(err);
+			toast.error(err);
 		} finally {
 			sending = false;
 			queueMicrotask(() => textarea?.focus());
