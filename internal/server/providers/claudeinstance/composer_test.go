@@ -73,7 +73,6 @@ func TestComposer_Compose_Working(t *testing.T) {
 	hb := Heartbeat{
 		TmuxSession:     "alpha",
 		SessionID:       "uuid-alpha",
-		State:           "working",
 		ClaudePid:       42100,
 		Cwd:             "/workspace/alpha",
 		RcURL:           "https://claude.ai/code/session_xyz",
@@ -153,7 +152,6 @@ func TestComposer_Compose_StaleHeartbeatAlivePidNotNoClaude(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "stale-but-alive",
-		State:           "input",
 		ClaudePid:       11,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -190,7 +188,6 @@ func TestComposer_Compose_StaleHeartbeatDeadPidNoClaude(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "stale-dead",
-		State:           "working",
 		ClaudePid:       11,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -221,7 +218,6 @@ func TestComposer_Compose_StaleHeartbeatNoPidNoClaude(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "stale-pidless",
-		State:           "working",
 		ClaudePid:       0,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -260,7 +256,6 @@ func TestComposer_Compose_RespawnedInSamePane(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "respawned",
-		State:           "working",
 		ClaudePid:       100, // old, dead
 		Timestamp:       now.Add(-3 * time.Second),
 		LastHeartbeatAt: now.Add(-3 * time.Second),
@@ -294,7 +289,6 @@ func TestComposer_Compose_DeadPid(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "deadpid",
-		State:           "working",
 		ClaudePid:       99,
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
@@ -323,7 +317,6 @@ func TestComposer_Compose_NoPaneStillEmits(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "ghost",
-		State:           "idle",
 		ClaudePid:       55,
 		Timestamp:       now.Add(-1 * time.Second),
 		LastHeartbeatAt: now.Add(-1 * time.Second),
@@ -360,7 +353,6 @@ func TestComposer_Compose_FallbackToSession(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "legacy",
-		State:           "working",
 		ClaudePid:       0, // legacy hook didn't write pid
 		Timestamp:       now.Add(-1 * time.Second),
 		LastHeartbeatAt: now.Add(-1 * time.Second),
@@ -396,7 +388,6 @@ func TestComposer_Compose_HookStateIgnored(t *testing.T) {
 	now := time.Now()
 	hb := Heartbeat{
 		TmuxSession:     "unknown",
-		State:           "garbage", // should be ignored
 		ClaudePid:       7,
 		Timestamp:       now,
 		LastHeartbeatAt: now,

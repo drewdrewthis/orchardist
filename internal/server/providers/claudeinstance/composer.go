@@ -184,31 +184,20 @@ func (c *Composer) Compose(ctx context.Context, heartbeats []Heartbeat) []*graph
 // composeOne builds a single ClaudeInstance from one Heartbeat. Pure
 // in the sense that all I/O is delegated to the injected interfaces.
 //
-// Phase 2: when the jsonl snapshot reader has records for this session AND
-// the pid liveness check confirms the process is alive (or unknown), the
-// jsonl-derived state wins. When pid is confirmed dead, no_claude is forced
-// regardless. hb.State is no longer used for the resolver's state output;
-// it is preserved for the shadow log only.
-//
-// When no jsonl is found the session has no observable transcript state;
-// we emit idle rather than trusting the hook's potentially-fabricated value.
-// Dead pid still forces no_claude regardless.
+// State is derived exclusively from the jsonl snapshot (Phase 2+). The
+// hook-written state field is no longer read. When no jsonl is found the
+// session has no observable transcript state; we emit idle rather than
+// trusting the hook's potentially-fabricated value. Dead pid still forces
+// no_claude regardless.
 func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.ClaudeInstance {
 	pane := c.findPane(ctx, hb)
 	pid := c.resolvePid(hb, pane)
 	proc := c.findProcess(ctx, pid)
 	account := c.findAccount(ctx)
-	hookState := c.deriveState(hb, pid, pane) // used only for shadow log
 
-	// Phase 2: derive state from jsonl. Falls back to idle (not hook value)
-	// when no jsonl exists so we never surface fabricated hook input events.
+	// Derive state from jsonl. Falls back to idle (not hook value) when no
+	// jsonl exists so we never surface fabricated hook input events.
 	state, snap := c.deriveStateFromJsonl(ctx, hb, pid, pane)
-
-	// Shadow log: now that jsonl is authoritative, log when it diverges from
-	// the hook-derived value so production surprises remain observable.
-	if c.shadow != nil {
-		c.shadow.CompareAndLog(hb, hookState, c.clock())
-	}
 
 	id := buildID(c.hostID, pid, hb.TmuxSession)
 	inst := &graphql.ClaudeInstance{
@@ -242,8 +231,7 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 	//     of the last N records; authoritative because claude appends on
 	//     every assistant/user/system step. Quantized to 1-second resolution
 	//     to prevent subscription thrash during streaming.
-	//  2. Heartbeat last_activity — hook's recorded activity timestamp.
-	//     Today's hook does not write this field; preserved as a fallback.
+	//  2. Jsonl reader fallback — tail of the session's jsonl file.
 	//  3. Pane session fallback — coarse tmux session lastActivityAt.
 	if !snap.LastActivityAt.IsZero() {
 		// Quantize to 1s resolution to prevent subscription thrash when
@@ -260,10 +248,6 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 			v := quantized.Format(time.RFC3339)
 			inst.LastActivityAt = &v
 		}
-	}
-	if inst.LastActivityAt == nil && !hb.LastActivity.IsZero() {
-		v := hb.LastActivity.UTC().Format(time.RFC3339Nano)
-		inst.LastActivityAt = &v
 	}
 	if inst.LastActivityAt == nil &&
 		pane != nil && pane.Window != nil && pane.Window.Session != nil &&
@@ -396,55 +380,6 @@ func (c *Composer) findAccount(ctx context.Context) *graphql.ClaudeAccount {
 		return a
 	}
 	return nil
-}
-
-// deriveState collapses the briefing's matrix into one InstanceState.
-//
-// The hook is event-driven (PreToolUse / PostToolUse / Notification), NOT
-// periodic — so a long-idle session sitting in `input` legitimately stops
-// emitting heartbeats. We therefore treat heartbeat freshness as a
-// fast-path signal, with pid liveness as the trumping authority:
-//
-//	pid known alive  → trust the last-known heartbeat state, even if stale.
-//	                   Covers idle/input sessions that sit for minutes/hours
-//	                   between events (#501) and the respawn case where the
-//	                   tracked pid died but pane still hosts a live claude (#421).
-//	pid known dead   → no_claude. The session is genuinely gone.
-//	pid unknown      → trust the heartbeat freshness window. When stale and
-//	                   we have no way to verify liveness, conservative
-//	                   no_claude is the safer call.
-//
-// State string lookup happens last and unrecognised strings collapse to
-// no_claude — the hook MUST write one of working/idle/input or we treat
-// it as garbage.
-func (c *Composer) deriveState(hb Heartbeat, pid int, pane *graphql.TmuxPane) graphql.InstanceState {
-	now := c.clock()
-	stamp := hb.LastHeartbeatAt
-	if stamp.IsZero() {
-		stamp = hb.Timestamp
-	}
-	fresh := !stamp.IsZero() && now.Sub(stamp) <= c.staleAfter
-
-	alive := c.aliveSignal(pid, pane)
-	switch alive {
-	case alivenessDead:
-		return graphql.InstanceStateNoClaude
-	case alivenessUnknown:
-		if !fresh {
-			return graphql.InstanceStateNoClaude
-		}
-	}
-
-	switch strings.ToLower(strings.TrimSpace(hb.State)) {
-	case "working":
-		return graphql.InstanceStateWorking
-	case "idle":
-		return graphql.InstanceStateIdle
-	case "input":
-		return graphql.InstanceStateInput
-	default:
-		return graphql.InstanceStateNoClaude
-	}
 }
 
 // aliveness is a three-valued signal — pid liveness can be authoritative

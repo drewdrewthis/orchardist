@@ -63,37 +63,43 @@ func TestInstancesEqual_TreatsLastActivityAtAsObservable(t *testing.T) {
 // TestProvider_Subscribe_FiresOnLastActivityChange covers the @integration
 // scenario:
 //
-//	"Heartbeat refresh that changes only last_activity emits a nodeChanged event"
+//	"Refresh that changes only last_activity emits a nodeChanged event"
 //
 // The test boots a Provider with a staticReader, subscribes, triggers an
-// initial sweep to populate the cache, then triggers a second sweep that
-// produces the same instance with an updated LastActivityAt — only that
+// initial sweep to populate the cache, then triggers a second sweep
+// where the jsonl reader returns an updated LastActivityAt — only that
 // field changes. The subscriber must receive exactly one event.
+//
+// Phase 3: lastActivityAt is sourced from the jsonl reader; the
+// heartbeat no longer carries a LastActivity field. The mutable
+// fakeJsonlReader below stands in for fsnotify-driven jsonl updates.
 func TestProvider_Subscribe_FiresOnLastActivityChange(t *testing.T) {
 	now := time.Date(2026, 5, 7, 18, 30, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 
 	const pid = 42100
+	const cwd = "/home/user/workspace/alpha"
+	const sessionID = "uuid-alpha"
 	baseTS := "2026-05-07T18:30:00Z"
 	laterTS := "2026-05-07T18:42:11Z"
 
-	// Heartbeat for the initial sweep: baseTS as LastActivity.
 	baseActivity, _ := time.Parse(time.RFC3339, baseTS)
+	laterActivity, _ := time.Parse(time.RFC3339, laterTS)
 
 	r := &staticReader{
 		heartbeats: []Heartbeat{{
 			TmuxSession:     "alpha",
-			SessionID:       "uuid-alpha",
-			State:           "working",
+			SessionID:       sessionID,
 			ClaudePid:       pid,
+			Cwd:             cwd,
 			Timestamp:       now.Add(-2 * time.Second),
 			LastHeartbeatAt: now.Add(-2 * time.Second),
-			LastActivity:    baseActivity,
 		}},
 	}
+	jsonl := &fakeJsonlReader{at: baseActivity, ok: true}
 	c := NewComposerWith("local", nil, nil, nil,
 		fakeLiveness{alive: map[int]bool{pid: true}},
-		nil,
+		jsonl,
 		clock,
 		HeartbeatStaleAfter,
 	)
@@ -114,17 +120,8 @@ func TestProvider_Subscribe_FiresOnLastActivityChange(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	// Re-sweep with a new LastActivity and nothing else changed.
-	laterActivity, _ := time.Parse(time.RFC3339, laterTS)
-	r.heartbeats = []Heartbeat{{
-		TmuxSession:     "alpha",
-		SessionID:       "uuid-alpha",
-		State:           "working",
-		ClaudePid:       pid,
-		Timestamp:       now.Add(-2 * time.Second),
-		LastHeartbeatAt: now.Add(-2 * time.Second),
-		LastActivity:    laterActivity,
-	}}
+	// Re-sweep with a new jsonl-reported activity and nothing else changed.
+	jsonl.at = laterActivity
 
 	if err := p.Refresh(ctx, "activity-changed"); err != nil {
 		t.Fatalf("second Refresh: %v", err)
@@ -174,22 +171,23 @@ func TestProvider_Subscribe_SilentOnLastActivityUnchanged(t *testing.T) {
 	clock := func() time.Time { return now }
 
 	const pid = 42200
+	const cwd = "/home/user/workspace/bravo"
+	const sessionID = "uuid-bravo"
 	const sameTS = "2026-05-07T18:30:00Z"
 	sameActivity, _ := time.Parse(time.RFC3339, sameTS)
 
 	hb := Heartbeat{
 		TmuxSession:     "bravo",
-		SessionID:       "uuid-bravo",
-		State:           "idle",
+		SessionID:       sessionID,
 		ClaudePid:       pid,
+		Cwd:             cwd,
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
-		LastActivity:    sameActivity,
 	}
 	r := &staticReader{heartbeats: []Heartbeat{hb}}
 	c := NewComposerWith("local", nil, nil, nil,
 		fakeLiveness{alive: map[int]bool{pid: true}},
-		nil,
+		&fakeJsonlReader{at: sameActivity, ok: true},
 		clock,
 		HeartbeatStaleAfter,
 	)

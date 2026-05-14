@@ -29,28 +29,20 @@ func (f *fakeJsonlReader) LastActivityAt(_ context.Context, cwd, sessionID strin
 }
 
 // TestComposer_LastActivityAt_PrefersJsonlOverHeartbeat pins the
-// priority order set in composeOne: when both the jsonl reader and the
-// heartbeat have a value, the jsonl wins. The hook's last_activity
-// becomes a fallback layer behind the jsonl.
-//
-// This is the load-bearing assertion for the lastActiveAt field — the
-// jsonl tail is appended to on every assistant/user/system step, so it
-// is more recent and more precise than the hook's lifecycle-only
-// last_activity.
+// priority order set in composeOne: when the jsonl reader has a value,
+// it wins. The jsonl tail is appended to on every assistant/user/system
+// step, so it is the most precise source for lastActivityAt.
 func TestComposer_LastActivityAt_PrefersJsonlOverHeartbeat(t *testing.T) {
 	now := time.Date(2026, 5, 9, 22, 0, 0, 0, time.UTC)
-	heartbeatActivity := now.Add(-5 * time.Minute) // hook last_activity
-	jsonlActivity := now.Add(-15 * time.Second)    // jsonl tail timestamp
+	jsonlActivity := now.Add(-15 * time.Second) // jsonl tail timestamp
 
 	hb := Heartbeat{
 		TmuxSession:     "alpha",
 		SessionID:       "uuid-alpha",
-		State:           "working",
 		ClaudePid:       42100,
 		Cwd:             "/home/user/workspace/foo",
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
-		LastActivity:    heartbeatActivity,
 	}
 
 	c := NewComposerWith(
@@ -76,70 +68,26 @@ func TestComposer_LastActivityAt_PrefersJsonlOverHeartbeat(t *testing.T) {
 		t.Fatalf("parse %q: %v", *out[0].LastActivityAt, err)
 	}
 	if !got.Equal(jsonlActivity) {
-		t.Errorf("LastActivityAt = %v, want jsonlActivity %v (heartbeat was %v)",
-			got, jsonlActivity, heartbeatActivity)
-	}
-}
-
-// TestComposer_LastActivityAt_FallsBackToHeartbeatWhenJsonlMisses
-// covers the second tier of the priority chain: jsonl reader returned
-// (zero, false) (file missing, no timestamp on last line, etc.); the
-// composer must fall back to the hook's last_activity rather than
-// jumping all the way to the pane fallback.
-func TestComposer_LastActivityAt_FallsBackToHeartbeatWhenJsonlMisses(t *testing.T) {
-	now := time.Date(2026, 5, 9, 22, 0, 0, 0, time.UTC)
-	heartbeatActivity := now.Add(-30 * time.Second)
-
-	hb := Heartbeat{
-		TmuxSession:     "alpha",
-		SessionID:       "uuid-alpha",
-		State:           "working",
-		ClaudePid:       42100,
-		Cwd:             "/home/user/workspace/foo",
-		Timestamp:       now.Add(-2 * time.Second),
-		LastHeartbeatAt: now.Add(-2 * time.Second),
-		LastActivity:    heartbeatActivity,
-	}
-
-	c := NewComposerWith(
-		"local",
-		nil,
-		nil,
-		nil,
-		fakeLiveness{alive: map[int]bool{42100: true}},
-		&fakeJsonlReader{ok: false}, // jsonl miss
-		func() time.Time { return now },
-		HeartbeatStaleAfter,
-	)
-
-	out := c.Compose(context.Background(), []Heartbeat{hb})
-	if out[0].LastActivityAt == nil {
-		t.Fatal("LastActivityAt is nil; want heartbeat fallback")
-	}
-	got, _ := time.Parse(time.RFC3339Nano, *out[0].LastActivityAt)
-	if !got.Equal(heartbeatActivity) {
-		t.Errorf("LastActivityAt = %v, want heartbeatActivity %v", got, heartbeatActivity)
+		t.Errorf("LastActivityAt = %v, want jsonlActivity %v", got, jsonlActivity)
 	}
 }
 
 // TestComposer_LastActivityAt_SkipsJsonlWhenCwdMissing pins the
 // composer's "if hb.Cwd != ''" guard. When the heartbeat predates cwd
 // recording (legacy hook), the jsonl reader is bypassed entirely — its
-// LastActivityAt method is never called. We verify this by configuring
-// the fake to return a value that would be wrong if used.
+// LastActivityAt method is never called. Phase 3 removed the heartbeat
+// last_activity fallback, so with no cwd AND no pane session timestamp,
+// LastActivityAt remains nil.
 func TestComposer_LastActivityAt_SkipsJsonlWhenCwdMissing(t *testing.T) {
 	now := time.Date(2026, 5, 9, 22, 0, 0, 0, time.UTC)
-	heartbeatActivity := now.Add(-30 * time.Second)
 
 	hb := Heartbeat{
 		TmuxSession:     "alpha",
 		SessionID:       "uuid-alpha",
-		State:           "working",
 		ClaudePid:       42100,
 		// Cwd intentionally absent
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
-		LastActivity:    heartbeatActivity,
 	}
 
 	wrongTime := now.Add(1 * time.Hour) // would be obviously wrong if surfaced
@@ -155,30 +103,24 @@ func TestComposer_LastActivityAt_SkipsJsonlWhenCwdMissing(t *testing.T) {
 	)
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
-	got, _ := time.Parse(time.RFC3339Nano, *out[0].LastActivityAt)
-	if got.Equal(wrongTime) {
-		t.Error("composer called jsonl reader despite missing Cwd; want skip")
-	}
-	if !got.Equal(heartbeatActivity) {
-		t.Errorf("LastActivityAt = %v, want heartbeat %v", got, heartbeatActivity)
+	if out[0].LastActivityAt != nil {
+		t.Errorf("LastActivityAt = %v, want nil (no cwd, no pane fallback)", *out[0].LastActivityAt)
 	}
 }
 
-// TestComposer_LastActivityAt_FallsBackToPaneSession verifies the third
-// tier: with no heartbeat last_activity AND no jsonl hit, the pane's
-// session-level lastActivityAt is the last resort. Coarse but better
-// than null for the GUI.
+// TestComposer_LastActivityAt_FallsBackToPaneSession verifies the
+// second tier: with no jsonl hit, the pane's session-level
+// lastActivityAt is the fallback. Coarse but better than null for the
+// GUI. (Phase 3 removed the heartbeat last_activity tier entirely.)
 func TestComposer_LastActivityAt_FallsBackToPaneSession(t *testing.T) {
 	now := time.Date(2026, 5, 9, 22, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "alpha",
 		SessionID:       "uuid-alpha",
-		State:           "working",
 		ClaudePid:       42100,
 		Cwd:             "/home/user/workspace/foo",
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
-		// LastActivity intentionally zero
 	}
 
 	const sessionTS = "2026-05-09T21:30:00Z"

@@ -68,12 +68,17 @@ func newTestComposerWithSnapshot(
 
 // freshHeartbeat builds a heartbeat that is well within the stale window
 // so liveness is the only gating factor.
-func freshHeartbeat(tmuxSession, sessionID, state, cwd string, pid int) Heartbeat {
+//
+// Phase 3 (issue #603) removed the heartbeat.State field; the hook's
+// claim of state is no longer carried through this struct. Each test
+// below documents in a comment what the hook *would* have written as
+// `state`, but the value never appears in the Heartbeat — the test
+// asserts what the resolver derives from the jsonl snapshot instead.
+func freshHeartbeat(tmuxSession, sessionID, cwd string, pid int) Heartbeat {
 	now := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
 	return Heartbeat{
 		TmuxSession:     tmuxSession,
 		SessionID:       sessionID,
-		State:           state,
 		ClaudePid:       pid,
 		Cwd:             cwd,
 		Timestamp:       now.Add(-2 * time.Second),
@@ -91,7 +96,7 @@ func TestResolver_StateFromJsonl_Idle(t *testing.T) {
 		systemRecord(ts(2), "turn_duration"),
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
-	hb := freshHeartbeat("alpha", "uuid-alpha", "input", "/workspace/alpha", 42100)
+	hb := freshHeartbeat("alpha", "uuid-alpha", "/workspace/alpha", 42100)
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42100: true}})
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
@@ -113,7 +118,7 @@ func TestResolver_StateFromJsonl_Working(t *testing.T) {
 		}),
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
-	hb := freshHeartbeat("bravo", "uuid-bravo", "idle", "/workspace/bravo", 42200)
+	hb := freshHeartbeat("bravo", "uuid-bravo", "/workspace/bravo", 42200)
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42200: true}})
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
@@ -132,7 +137,7 @@ func TestResolver_StateFromJsonl_InputAskUserQuestion(t *testing.T) {
 		}),
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
-	hb := freshHeartbeat("charlie", "uuid-charlie", "working", "/workspace/charlie", 42300)
+	hb := freshHeartbeat("charlie", "uuid-charlie", "/workspace/charlie", 42300)
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42300: true}})
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
@@ -154,7 +159,7 @@ func TestResolver_StateFromJsonl_NotificationNoFlip(t *testing.T) {
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
 	// Hook says input — as it would for a Notification event.
-	hb := freshHeartbeat("delta", "uuid-delta", "input", "/workspace/delta", 42400)
+	hb := freshHeartbeat("delta", "uuid-delta", "/workspace/delta", 42400)
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42400: true}})
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
@@ -176,7 +181,7 @@ func TestResolver_FallbackWhenNoJsonl(t *testing.T) {
 	snap := &fakeSnapshotReader{ok: false}
 
 	// Alive pid with hook state "working" → falls back to idle (not working)
-	hb := freshHeartbeat("echo", "uuid-echo", "working", "/workspace/echo", 42500)
+	hb := freshHeartbeat("echo", "uuid-echo", "/workspace/echo", 42500)
 	cAlive := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42500: true}})
 	outAlive := cAlive.Compose(context.Background(), []Heartbeat{hb})
 	if outAlive[0].State != graphql.InstanceStateIdle {
@@ -211,7 +216,7 @@ func TestResolver_ModelFieldPopulated(t *testing.T) {
 		systemRecord(ts(2), "turn_duration"),
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
-	hb := freshHeartbeat("foxtrot", "uuid-foxtrot", "idle", "/workspace/foxtrot", 42600)
+	hb := freshHeartbeat("foxtrot", "uuid-foxtrot", "/workspace/foxtrot", 42600)
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42600: true}})
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
@@ -242,7 +247,7 @@ func TestResolver_InflightToolCount(t *testing.T) {
 		}),
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
-	hb := freshHeartbeat("golf", "uuid-golf", "working", "/workspace/golf", 42700)
+	hb := freshHeartbeat("golf", "uuid-golf", "/workspace/golf", 42700)
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42700: true}})
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
@@ -277,7 +282,7 @@ func TestResolver_LastActivityAtQuantized(t *testing.T) {
 	snap1 := &fakeSnapshotReader{records: makeRecords(t1), ok: true}
 	snap2 := &fakeSnapshotReader{records: makeRecords(t2), ok: true}
 
-	hb := freshHeartbeat("hotel", "uuid-hotel", "working", "/workspace/hotel", 42800)
+	hb := freshHeartbeat("hotel", "uuid-hotel", "/workspace/hotel", 42800)
 	liveness := fakeLiveness{alive: map[int]bool{42800: true}}
 
 	c1 := newTestComposerWithSnapshot(snap1, liveness)
@@ -312,7 +317,7 @@ func TestResolver_DeadPidForcesNoClaude(t *testing.T) {
 		}),
 	}
 	snap := &fakeSnapshotReader{records: records, ok: true}
-	hb := freshHeartbeat("india", "uuid-india", "working", "/workspace/india", 42900)
+	hb := freshHeartbeat("india", "uuid-india", "/workspace/india", 42900)
 	// pid confirmed dead
 	c := newTestComposerWithSnapshot(snap, fakeLiveness{alive: map[int]bool{42900: false}})
 

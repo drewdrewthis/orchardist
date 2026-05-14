@@ -41,6 +41,23 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
 
+// e2eFakeJsonl implements claudeinstance.JsonlReader for e2e tests.
+// Configure byKey (keyed by cwd+"|"+sessionID) with timestamps; missing
+// keys return (zero, false), mirroring FsJsonlReader's miss contract.
+type e2eFakeJsonl struct {
+	byKey map[string]time.Time
+}
+
+func (f *e2eFakeJsonl) LastActivityAt(_ context.Context, cwd, sessionID string) (time.Time, bool) {
+	if f.byKey == nil {
+		return time.Time{}, false
+	}
+	if t, ok := f.byKey[cwd+"|"+sessionID]; ok {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 // newTestDaemonWS is like newTestDaemon but also registers the WebSocket
 // transport so Subscription.nodeChanged is reachable over WS. Used for
 // the AC 3 subscription e2e test.
@@ -126,23 +143,23 @@ func TestClaudeInstance_E2E_QueryLastActivityAt(t *testing.T) {
 	now := time.Date(2026, 5, 7, 18, 42, 15, 0, time.UTC)
 	freshTS := now.Add(-2 * time.Second).Format(time.RFC3339)
 	const activityTS = "2026-05-07T18:42:11Z"
+	const alphaCwd = "/workspace/alpha"
+	const alphaSession = "uuid-alpha"
 
-	// alpha: has last_activity.
+	// alpha: jsonl reader returns activityTS.
 	writeHeartbeat(t, heartbeatDir, "alpha", map[string]any{
 		"tmux_session":    "alpha",
-		"session_id":      "uuid-alpha",
-		"state":           "working",
+		"session_id":      alphaSession,
 		"timestamp":       freshTS,
 		"claudePid":       20042,
+		"cwd":             alphaCwd,
 		"lastHeartbeatAt": freshTS,
-		"last_activity":   activityTS,
 	})
 
-	// bravo: no last_activity, no pane → lastActivityAt must be null.
+	// bravo: no jsonl, no pane → lastActivityAt must be null.
 	writeHeartbeat(t, heartbeatDir, "bravo", map[string]any{
 		"tmux_session":    "bravo",
 		"session_id":      "uuid-bravo",
-		"state":           "idle",
 		"timestamp":       freshTS,
 		"claudePid":       20099,
 		"lastHeartbeatAt": freshTS,
@@ -162,8 +179,13 @@ func TestClaudeInstance_E2E_QueryLastActivityAt(t *testing.T) {
 	}
 	liveness := fakeLiveness{alive: map[int]bool{20042: true, 20099: true}}
 
+	activityParsed, _ := time.Parse(time.RFC3339, activityTS)
+	jsonl := &e2eFakeJsonl{byKey: map[string]time.Time{
+		alphaCwd + "|" + alphaSession: activityParsed,
+	}}
+
 	composer := claudeinstance.NewComposerWith(
-		"local", panes, procs, &fakeAccountFinder{}, liveness, nil,
+		"local", panes, procs, &fakeAccountFinder{}, liveness, jsonl,
 		func() time.Time { return now }, claudeinstance.HeartbeatStaleAfter,
 	)
 	reader := claudeinstance.NewFileReader(heartbeatDir)
@@ -236,25 +258,30 @@ func TestClaudeInstance_E2E_SubscriptionOnLastActivityChange(t *testing.T) {
 	const initialActivity = "2026-05-07T18:30:00Z"
 	const updatedActivity = "2026-05-07T18:42:11Z"
 	const pid = 30042
+	const gammaCwd = "/workspace/gamma"
+	const gammaSession = "uuid-gamma"
 
 	writeHeartbeat(t, heartbeatDir, "gamma", map[string]any{
 		"tmux_session":    "gamma",
-		"session_id":      "uuid-gamma",
-		"state":           "working",
+		"session_id":      gammaSession,
 		"timestamp":       freshTS,
 		"claudePid":       pid,
+		"cwd":             gammaCwd,
 		"lastHeartbeatAt": freshTS,
-		"last_activity":   initialActivity,
 	})
 
 	liveness := fakeLiveness{alive: map[int]bool{pid: true}}
+	initialParsed, _ := time.Parse(time.RFC3339, initialActivity)
+	jsonl := &e2eFakeJsonl{byKey: map[string]time.Time{
+		gammaCwd + "|" + gammaSession: initialParsed,
+	}}
 	composer := claudeinstance.NewComposerWith(
 		"local",
 		&fakePaneFinder{},
 		&fakeProcessFinder{},
 		&fakeAccountFinder{},
 		liveness,
-		nil,
+		jsonl,
 		func() time.Time { return now },
 		claudeinstance.HeartbeatStaleAfter,
 	)
@@ -310,16 +337,10 @@ func TestClaudeInstance_E2E_SubscriptionOnLastActivityChange(t *testing.T) {
 	// Give the server a beat to register the subscription before we refresh.
 	time.Sleep(100 * time.Millisecond)
 
-	// Rewrite the heartbeat with the updated last_activity.
-	writeHeartbeat(t, heartbeatDir, "gamma", map[string]any{
-		"tmux_session":    "gamma",
-		"session_id":      "uuid-gamma",
-		"state":           "working",
-		"timestamp":       freshTS,
-		"claudePid":       pid,
-		"lastHeartbeatAt": freshTS,
-		"last_activity":   updatedActivity,
-	})
+	// Update the jsonl reader to return the new timestamp; the heartbeat
+	// no longer carries last_activity (Phase 3 removed that field).
+	updatedParsed, _ := time.Parse(time.RFC3339, updatedActivity)
+	jsonl.byKey[gammaCwd+"|"+gammaSession] = updatedParsed
 
 	// Drive the refresh that the watcher would do.
 	if err := provider.Refresh(context.Background(), "activity-update"); err != nil {
