@@ -28,6 +28,7 @@ type PeerConfig struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
 	TLS     bool   `json:"tls,omitempty"`
+	Purpose string `json:"purpose,omitempty"`
 }
 
 // FederationConfig is the slice of the daemon's on-disk config that
@@ -95,6 +96,7 @@ func (f FederationConfig) normalise() FederationConfig {
 			Name:    name,
 			Address: host,
 			TLS:     p.TLS || tls,
+			Purpose: p.Purpose,
 		})
 	}
 	return out

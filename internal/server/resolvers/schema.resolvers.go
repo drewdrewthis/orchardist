@@ -84,6 +84,10 @@ func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphq
 			Peers:      []*graphql1.Host{},
 			LastSeenAt: peerLastSeen(lastReachedAt),
 		}
+		if cfg.Purpose != "" {
+			p := cfg.Purpose
+			host.Purpose = &p
+		}
 		out = append(out, host)
 	}
 	return out, nil
@@ -343,6 +347,13 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 			return nil, err
 		}
 		hosts = append(hosts, peers...)
+		// Enrich local host purpose from peer config before manifest runs.
+		// Manifest overrides if present; step 3 removes the manifest path.
+		if local.Purpose == nil {
+			if p := purposeForLocalHost(local, r.PeerProxy.Peers()); p != "" {
+				local.Purpose = &p
+			}
+		}
 	}
 	return mergeManifestHosts(hosts, r.Manifest), nil
 }

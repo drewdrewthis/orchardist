@@ -118,6 +118,35 @@ func TestLoadFederationConfig_TLSAndSchemes(t *testing.T) {
 	}
 }
 
+// TestLoadFederationConfig_PurposeRoundTrip asserts that the `purpose`
+// field survives LoadFederationConfig without being dropped or altered.
+func TestLoadFederationConfig_PurposeRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	const body = `{
+		"peers": [
+			{"name": "orchard", "address": "graphql.orchard.boxd.sh", "purpose": "boxd_orchardist"},
+			{"name": "plain",   "address": "127.0.0.1:7777"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := LoadFederationConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d: %+v", len(cfg.Peers), cfg.Peers)
+	}
+	if cfg.Peers[0].Purpose != "boxd_orchardist" {
+		t.Errorf("peers[0].Purpose = %q; want %q", cfg.Peers[0].Purpose, "boxd_orchardist")
+	}
+	if cfg.Peers[1].Purpose != "" {
+		t.Errorf("peers[1].Purpose = %q; want empty", cfg.Peers[1].Purpose)
+	}
+}
+
 // TestSplitAddress isolates the URL-stripping helper used by normalise
 // so AC-4 has a focused regression net.
 func TestSplitAddress(t *testing.T) {
