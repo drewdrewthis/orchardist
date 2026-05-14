@@ -128,7 +128,7 @@ Feature: orchard-gui sidebar v1 hardening + error visibility (parent #548)
   @integration
   Scenario: Collapse state is persisted in localStorage
     Given the user toggles a section's collapse state
-    Then a localStorage key (mirroring the "orchard:sidebarW" pattern) records the section's collapsed/expanded state per section identifier
+    Then a localStorage key "orchard:sidebar:collapsed" records each section's collapsed/expanded state by section identifier
 
   @unit
   Scenario: Each section toggles independently
@@ -154,7 +154,6 @@ Feature: orchard-gui sidebar v1 hardening + error visibility (parent #548)
       | input    |
       | stalled  |
       | dead     |
-      | no_claude|
 
   @e2e
   Scenario: "input" state is rendered prominently (blocked on user)

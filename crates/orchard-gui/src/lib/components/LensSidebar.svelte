@@ -58,10 +58,19 @@
 	const attentionLoading = $derived($attentionStore.fetching);
 
 	// Surface attention-lens fetch errors via toast so the user isn't left
-	// with a silently empty sidebar (Scenario L208 / #600).
+	// with a silently empty sidebar (Scenario L208 / #600). Track the
+	// last-shown message so the effect doesn't re-fire the same toast every
+	// time another reactive read in scope changes.
+	let lastAttentionError: string | null = null;
 	$effect(() => {
-		const errs = $attentionStore.errors;
-		if (errs && errs.length > 0) toast.error(errs[0].message);
+		const msg = $attentionStore.errors?.[0]?.message?.trim() ?? "";
+		if (!msg) {
+			lastAttentionError = null;
+			return;
+		}
+		if (msg === lastAttentionError) return;
+		lastAttentionError = msg;
+		toast.error(msg);
 	});
 
 	const recentItems = $derived(buildRecentItems($recentStore.data));
