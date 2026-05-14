@@ -217,6 +217,8 @@ impl Client {
                   sessionUuid
                   rcEnabled
                   lastActivityAt
+                  model
+                  inflightToolCount
                 }
               }
             }

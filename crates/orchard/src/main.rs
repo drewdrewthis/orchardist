@@ -19,7 +19,6 @@ use orchard::chat;
 use orchard::federation;
 use orchard::global_config;
 use orchard::heal;
-use orchard::hook_enrich;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::restore;
@@ -47,7 +46,6 @@ fn main() {
 
     let mut chat_target: Option<String> = None;
     let mut chat_message: Option<String> = None;
-    let mut transcript_path: Option<String> = None;
     let mut skip_next = false;
 
     for (i, arg) in args[1..].iter().enumerate() {
@@ -73,10 +71,6 @@ fn main() {
             }
             "--message" => {
                 chat_message = args.get(i + 2).cloned();
-                skip_next = true;
-            }
-            "--transcript" => {
-                transcript_path = args.get(i + 2).cloned();
                 skip_next = true;
             }
             _ if !arg.starts_with('-') && command.is_empty() => command = arg.clone(),
@@ -106,7 +100,6 @@ fn main() {
         "chat" => handle_chat(chat_target.as_deref(), chat_message.as_deref()),
         "watch" => handle_watch(&args),
         "refresh" => handle_refresh(&args),
-        "hook-enrich" => handle_hook_enrich(transcript_path.as_deref()),
         "webhook-serve" => handle_webhook_serve(&args),
         "list-remotes" => handle_list_remotes(json_flag),
         "sessions" => handle_sessions(json_flag),
@@ -240,7 +233,9 @@ fn handle_heal(fix: bool, json: bool) {
         })
         .collect();
 
-    let claude_states = heal::gather_claude_states();
+    // Sidecar cleanup is handled daemon-side (the SidecarJanitor in
+    // `internal/server/providers/claudeinstance/janitor.go` sweeps at every
+    // daemon boot). Heal no longer touches `$TMPDIR/orchard-claude-*.json`.
     let cache_files = heal::gather_cache_files();
     let known_slugs: Vec<String> = config.repos.iter().map(|r| r.slug.clone()).collect();
 
@@ -250,7 +245,6 @@ fn handle_heal(fix: bool, json: bool) {
     let report = heal::diagnose(&heal::HealInput {
         sessions: &sessions,
         worktrees: &worktrees,
-        claude_states: &claude_states,
         cache_files: &cache_files,
         known_repo_slugs: &known_slugs,
         current_session: current_session.as_deref(),
@@ -660,25 +654,13 @@ fn install_panic_hooks() {
 /// `color_eyre::HookBuilder::default()` probes the terminal during install,
 /// which opens `/dev/tty` and fails with ENXIO in any non-interactive
 /// context (cron, systemd, CI runner, `ssh` with no `-t`). Batch commands
-/// like `orchard-tui refresh`, `orchard-tui --json`, and `orchard-tui hook-enrich`
-/// must not require a controlling TTY (AC7: background services never
-/// block or fail on terminal absence), so we gate the install on
-/// `stderr` being a TTY. The default Rust panic handler works fine for
-/// batch invocations — it just produces less pretty output, which no one
-/// reads from cron anyway.
+/// like `orchard-tui refresh` and `orchard-tui --json` must not require a
+/// controlling TTY (AC7: background services never block or fail on terminal
+/// absence), so we gate the install on `stderr` being a TTY. The default
+/// Rust panic handler works fine for batch invocations — it just produces
+/// less pretty output, which no one reads from cron anyway.
 fn should_install_panic_hooks() -> bool {
     std::io::stderr().is_terminal()
-}
-
-/// Handles `orchard-tui hook-enrich --transcript <path>`.
-///
-/// Reads the JSONL transcript and prints a JSON enrichment object to stdout.
-/// Prints `{}` and exits 0 on any error (missing path, missing file, etc.).
-fn handle_hook_enrich(transcript: Option<&str>) {
-    match transcript {
-        Some(path) => hook_enrich::run(path),
-        None => println!("{{}}"),
-    }
 }
 
 fn print_usage() {

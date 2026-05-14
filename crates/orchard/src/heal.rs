@@ -8,7 +8,7 @@
 //! - `diagnose()` is a pure function that computes a `HealReport` from its inputs.
 //! - `apply_fixes()` performs the actual I/O side effects.
 //! - `format_report()` formats a human-readable text output.
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -28,8 +28,6 @@ pub enum HealCategory {
     OrphanedSession,
     /// A tmux session whose working directory no longer exists on disk.
     DeadSessionDirectory,
-    /// A `/tmp/orchard-claude-*.json` file for a tmux session that no longer exists.
-    StaleClaudeState,
     /// A `~/.cache/orchard/` file whose repo slug is not in the active config.
     StaleCache,
     /// A worktree whose associated PR has been merged.
@@ -199,15 +197,6 @@ pub struct HealWorktree {
     pub issue_state: Option<String>,
 }
 
-/// Describes a Claude state file to the healer.
-#[derive(Debug, Clone)]
-pub struct HealClaudeState {
-    /// Absolute path to the state file.
-    pub path: String,
-    /// The tmux session name recorded in the file.
-    pub tmux_session: String,
-}
-
 /// Bundled inputs for `diagnose`.
 ///
 /// All fields are borrowed slices/references — `HealInput` is `Copy` and zero-cost
@@ -233,8 +222,6 @@ pub struct HealInput<'a> {
     pub sessions: &'a [TmuxSession],
     /// Enriched worktrees to check.
     pub worktrees: &'a [HealWorktree],
-    /// Stale-check candidates from `/tmp/orchard-claude-*.json`.
-    pub claude_states: &'a [HealClaudeState],
     /// Cache file names from `~/.cache/orchard/`.
     pub cache_files: &'a [String],
     /// Repo slugs from global config (e.g. `["owner/repo"]`).
@@ -260,7 +247,6 @@ pub fn diagnose(input: &HealInput<'_>) -> HealReport {
     let HealInput {
         sessions,
         worktrees,
-        claude_states,
         cache_files,
         known_repo_slugs,
         current_session,
@@ -269,7 +255,6 @@ pub fn diagnose(input: &HealInput<'_>) -> HealReport {
     let mut findings = Vec::new();
 
     check_sessions(sessions, worktrees, &mut findings, current_session);
-    check_claude_states(claude_states, sessions, &mut findings);
     check_cache_files(cache_files, known_repo_slugs, &mut findings);
     check_worktree_pr_states(worktrees, &mut findings);
     check_worktree_issue_states(worktrees, &mut findings);
@@ -321,29 +306,6 @@ fn check_sessions(
                 ),
                 action: HealAction::KillSession(session.name.clone()),
                 is_self,
-            });
-        }
-    }
-}
-
-fn check_claude_states(
-    claude_states: &[HealClaudeState],
-    sessions: &[TmuxSession],
-    findings: &mut Vec<HealFinding>,
-) {
-    let session_names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
-
-    for cs in claude_states {
-        if !session_names.contains(&cs.tmux_session.as_str()) {
-            findings.push(HealFinding {
-                category: HealCategory::StaleClaudeState,
-                severity: Severity::Warning,
-                message: format!(
-                    "Stale Claude state file for dead session \"{}\" ({})",
-                    cs.tmux_session, cs.path
-                ),
-                action: HealAction::DeleteFile(cs.path.clone()),
-                is_self: false,
             });
         }
     }
@@ -711,29 +673,6 @@ fn severity_icon(severity: &Severity) -> &'static str {
 // I/O helpers for gathering heal inputs
 // ---------------------------------------------------------------------------
 
-/// Reads all Claude state files from `/tmp` and returns them as `HealClaudeState` entries.
-pub fn gather_claude_states() -> Vec<HealClaudeState> {
-    let tmp = PathBuf::from("/tmp");
-    let pattern = format!("{}/orchard-claude-*.json", tmp.display());
-    let mut results = Vec::new();
-
-    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
-        if path.to_string_lossy().contains(".tmp.") {
-            continue;
-        }
-        if let Ok(data) = std::fs::read(&path)
-            && let Ok(state) = serde_json::from_slice::<crate::claude_state::ClaudeStateFile>(&data)
-        {
-            results.push(HealClaudeState {
-                path: path.to_string_lossy().to_string(),
-                tmux_session: state.tmux_session,
-            });
-        }
-    }
-
-    results
-}
-
 /// Reads all files from the orchard cache directory and returns their filenames.
 pub fn gather_cache_files() -> Vec<String> {
     let dir = cache::cache_dir();
@@ -883,56 +822,6 @@ mod tests {
         assert!(finding.is_some());
         assert!(
             matches!(&finding.unwrap().action, HealAction::KillSession(n) if n == "myrepo_gone")
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Stale claude state files
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn detect_stale_claude_state_for_dead_session() {
-        let sessions = vec![];
-        let claude_states = vec![HealClaudeState {
-            path: "/tmp/orchard-claude-abc123.json".to_string(),
-            tmux_session: "myrepo_dead".to_string(),
-        }];
-        let report = diagnose(&HealInput {
-            sessions: &sessions,
-            claude_states: &claude_states,
-            ..Default::default()
-        });
-
-        let finding = report
-            .findings
-            .iter()
-            .find(|f| f.category == HealCategory::StaleClaudeState);
-        assert!(finding.is_some(), "should detect stale claude state");
-        assert!(
-            matches!(&finding.unwrap().action, HealAction::DeleteFile(p) if p == "/tmp/orchard-claude-abc123.json")
-        );
-    }
-
-    #[test]
-    fn no_finding_when_claude_state_session_is_alive() {
-        let sessions = vec![make_session("myrepo_live", "/workspace/main")];
-        let claude_states = vec![HealClaudeState {
-            path: "/tmp/orchard-claude-abc123.json".to_string(),
-            tmux_session: "myrepo_live".to_string(),
-        }];
-        let report = diagnose(&HealInput {
-            sessions: &sessions,
-            claude_states: &claude_states,
-            ..Default::default()
-        });
-
-        let stale = report
-            .findings
-            .iter()
-            .find(|f| f.category == HealCategory::StaleClaudeState);
-        assert!(
-            stale.is_none(),
-            "should not flag live session's claude state"
         );
     }
 
@@ -1434,34 +1323,6 @@ mod tests {
                 "is_self must be false when current_session is None, but found is_self=true on: {:?}",
                 finding
             );
-        }
-    }
-
-    #[test]
-    fn is_self_is_false_on_findings_whose_action_is_not_kill_session() {
-        // A stale Claude state file produces DeleteFile — not KillSession.
-        // is_self must remain false regardless of current_session.
-        let sessions: Vec<TmuxSession> = vec![];
-        let claude_states = vec![HealClaudeState {
-            path: "/tmp/orchard-claude-abc123.json".to_string(),
-            tmux_session: "anything".to_string(),
-        }];
-
-        let report = diagnose(&HealInput {
-            sessions: &sessions,
-            claude_states: &claude_states,
-            current_session: Some("anything"),
-            ..Default::default()
-        });
-
-        for finding in &report.findings {
-            if !matches!(finding.action, HealAction::KillSession(_)) {
-                assert!(
-                    !finding.is_self,
-                    "is_self must be false on non-KillSession finding: {:?}",
-                    finding
-                );
-            }
         }
     }
 

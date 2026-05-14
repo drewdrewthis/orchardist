@@ -41,23 +41,15 @@ type InstanceID struct {
 }
 
 // Heartbeat is the in-memory shape of one heartbeat file from the
-// orchard hook script. Field names mirror the on-disk JSON (snake_case)
-// so the adapter unmarshal stays trivial.
-//
-// The hook script's current shape (ClaudeStateFile in the Rust crate)
-// has TmuxSession, SessionID, State, Timestamp. ADR-011 §5.1 anticipates
-// the hook will eventually also write ClaudePid, RcURL, RcEnabled, and
-// LastHeartbeatAt. Both are accepted: when ClaudePid is zero or missing,
-// the composer falls back to tmux-session-based matching via PaneFinder.
+// orchard hook script. Only the fields that the composer actively reads
+// are present; the hook may write additional fields (e.g. state,
+// last_activity) that are no longer consumed by the daemon.
 type Heartbeat struct {
 	// TmuxSession is the tmux session name the heartbeat belongs to. The
 	// orchard hook script always populates this.
 	TmuxSession string
 	// SessionID is the Claude session UUID (the `session_id` field).
 	SessionID string
-	// State is the raw state string: "working", "idle", "input", or any
-	// other value (treated as no_claude).
-	State string
 	// Timestamp is the RFC3339 timestamp the hook wrote when emitting
 	// this file. We use this for staleness when LastHeartbeatAt is
 	// absent.
@@ -78,12 +70,6 @@ type Heartbeat struct {
 	// field is absent — the schema's `rcEnabled` is non-nullable so we
 	// default to false rather than nil.
 	RcEnabled bool
-	// LastActivity is the RFC3339/RFC3339Nano timestamp of the most recent
-	// Claude activity as recorded by the hook script in the last_activity /
-	// lastActivity field. Zero when the heartbeat file does not include the
-	// field (e.g. older hook versions). Used as the primary source for
-	// ClaudeInstance.lastActivityAt; zero means "fall back to jsonl tail".
-	LastActivity time.Time
 	// Cwd is the working directory the Claude process was launched from,
 	// as recorded by the hook script. Used together with SessionID to
 	// resolve the session's transcript jsonl under

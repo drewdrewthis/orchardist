@@ -209,8 +209,11 @@ func TestRegression_PidJoin_ProductionAdapters_Issue468(t *testing.T) {
 		t.Error("issue #468 regression: Process is nil; expected non-nil because pane.currentPid=88631 maps to a claude process")
 	}
 
-	// AC#7: state must be working (heartbeat fresh + state=working + pid live).
-	if inst.State != gql.InstanceStateWorking {
-		t.Errorf("issue #468 regression: State=%q, want %q", inst.State, gql.InstanceStateWorking)
+	// AC#7 (Phase 2 update): state comes from jsonl, not heartbeat. No cwd in
+	// this heartbeat → no jsonl lookup → alive pid → falls back to idle.
+	// The regression test's primary assertion is Pane/Process population (#468);
+	// state derivation is covered by resolver_jsonl_test.go.
+	if inst.State == gql.InstanceStateNoClaude {
+		t.Errorf("issue #468 regression: State=no_claude but pid is alive; state must not be no_claude when pid is live")
 	}
 }

@@ -3,8 +3,8 @@
 /// These tests exercise the `heal::diagnose` pure function with realistic inputs,
 /// corresponding to acceptance criteria from `specs/features/orchard-heal.feature`.
 use orchard::heal::{
-    HealAction, HealCategory, HealClaudeState, HealInput, HealWorktree, Severity, apply_fixes,
-    detect_self_error, diagnose, format_report,
+    HealAction, HealCategory, HealInput, HealWorktree, Severity, apply_fixes, detect_self_error,
+    diagnose, format_report,
 };
 use orchard::types::TmuxSession;
 
@@ -37,21 +37,16 @@ fn worktree(path: &str, branch: &str) -> HealWorktree {
 // Dry-run: reports what it would do without making changes
 // ---------------------------------------------------------------------------
 
-/// Scenario: Dry run reports orphaned session and stale claude state as warnings.
-/// No sessions are killed or files deleted.
+/// Scenario: Dry run reports orphaned session as a warning. No sessions are
+/// killed or files deleted.
 #[test]
 fn dry_run_reports_findings_without_applying_fixes() {
     let sessions = vec![session("myrepo_old-feature", "/tmp")]; // /tmp exists but no matching wt
     let worktrees = vec![worktree("/workspace/main", "main")];
-    let claude_states = vec![HealClaudeState {
-        path: "/tmp/orchard-claude-abc123.json".to_string(),
-        tmux_session: "myrepo_dead".to_string(),
-    }];
 
     let report = diagnose(&HealInput {
         sessions: &sessions,
         worktrees: &worktrees,
-        claude_states: &claude_states,
         ..Default::default()
     });
 
@@ -62,14 +57,6 @@ fn dry_run_reports_findings_without_applying_fixes() {
         .find(|f| f.category == HealCategory::OrphanedSession);
     assert!(orphan.is_some(), "should find orphaned session");
     assert_eq!(orphan.unwrap().severity, Severity::Warning);
-
-    // Stale claude state finding.
-    let stale = report
-        .findings
-        .iter()
-        .find(|f| f.category == HealCategory::StaleClaudeState);
-    assert!(stale.is_some(), "should find stale claude state");
-    assert_eq!(stale.unwrap().severity, Severity::Warning);
 
     // Suggest fix in report.
     let text = format_report(&report, None);
@@ -165,63 +152,6 @@ fn dead_session_directory_detected_for_nonexistent_path() {
     assert!(finding.is_some(), "should detect dead session directory");
     assert_eq!(finding.unwrap().severity, Severity::Error);
     assert!(matches!(&finding.unwrap().action, HealAction::KillSession(n) if n == "myrepo_gone"));
-}
-
-// ---------------------------------------------------------------------------
-// Stale claude state files
-// ---------------------------------------------------------------------------
-
-/// Scenario: Claude state file for dead session is flagged.
-#[test]
-fn stale_claude_state_detected_for_dead_session() {
-    let sessions = vec![];
-    let claude_states = vec![HealClaudeState {
-        path: "/tmp/orchard-claude-abc123.json".to_string(),
-        tmux_session: "myrepo_dead".to_string(),
-    }];
-
-    let report = diagnose(&HealInput {
-        sessions: &sessions,
-        claude_states: &claude_states,
-        ..Default::default()
-    });
-
-    let finding = report
-        .findings
-        .iter()
-        .find(|f| f.category == HealCategory::StaleClaudeState);
-    assert!(finding.is_some(), "should detect stale claude state");
-    assert!(
-        matches!(&finding.unwrap().action, HealAction::DeleteFile(p) if p == "/tmp/orchard-claude-abc123.json")
-    );
-    // Report warns about "myrepo_dead".
-    assert!(finding.unwrap().message.contains("myrepo_dead"));
-}
-
-/// Scenario: Claude state file for a live session is NOT flagged.
-#[test]
-fn no_stale_claude_state_when_session_is_alive() {
-    // Use /tmp so the path-exists check passes.
-    let sessions = vec![session("myrepo_live", "/tmp")];
-    let claude_states = vec![HealClaudeState {
-        path: "/tmp/orchard-claude-xyz.json".to_string(),
-        tmux_session: "myrepo_live".to_string(),
-    }];
-
-    let report = diagnose(&HealInput {
-        sessions: &sessions,
-        claude_states: &claude_states,
-        ..Default::default()
-    });
-
-    let stale = report
-        .findings
-        .iter()
-        .find(|f| f.category == HealCategory::StaleClaudeState);
-    assert!(
-        stale.is_none(),
-        "live session's claude state should not be flagged"
-    );
 }
 
 // ---------------------------------------------------------------------------

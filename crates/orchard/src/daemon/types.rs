@@ -333,6 +333,18 @@ pub struct ClaudeInstance {
     /// RFC3339 timestamp of most recent activity.
     #[serde(default, rename = "lastActivityAt")]
     pub last_activity_at: Option<String>,
+
+    /// Claude model in use for this session, e.g. `"claude-opus-4-7"`.
+    /// `None` when the daemon has not yet observed an assistant message.
+    /// Sourced from the conversation jsonl (issue #603 phase 2).
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Number of tool_use calls open (sent by assistant, no matching
+    /// tool_result) in the current turn. Sourced from the conversation
+    /// jsonl (issue #603 phase 2). Zero when no jsonl is found.
+    #[serde(default, rename = "inflightToolCount")]
+    pub inflight_tool_count: i32,
 }
 
 #[cfg(test)]

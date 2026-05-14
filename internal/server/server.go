@@ -349,6 +349,34 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 	if s.claudeInstance != nil {
+		// Run the sidecar janitor BEFORE the first provider sweep so any
+		// orphan files left by the old hook are removed before we read the
+		// heartbeat directory. liveSessions reads the tmux snapshot which is
+		// already populated above (tmuxProv.Start completed). Errors are
+		// non-blocking — the janitor logs and continues.
+		janitor := claudeinstance.NewSidecarJanitor(
+			claudeinstance.ResolveDir(),
+			func(_ context.Context) (map[string]bool, error) {
+				// If tmux isn't wired we cannot enumerate live sessions, and
+				// returning an empty set would tell the janitor every sidecar
+				// is orphaned — which would delete files for sessions that are
+				// genuinely alive. Surface the unavailability as an error so
+				// the janitor's existing error path skips the sweep.
+				// (https://github.com/drewdrewthis/git-orchard-rs/pull/606#discussion_r3243103673)
+				if s.tmuxProv == nil {
+					return nil, errors.New("tmux provider unavailable; skipping sidecar sweep")
+				}
+				snap := s.tmuxProv.Snapshot()
+				live := make(map[string]bool, len(snap.Sessions))
+				for k := range snap.Sessions {
+					live[k.Name] = true
+				}
+				return live, nil
+			},
+			s.logger,
+		)
+		_ = janitor.Sweep(ctx)
+
 		if err := s.claudeInstance.Start(ctx); err != nil {
 			return fmt.Errorf("start claudeinstance provider: %w", err)
 		}

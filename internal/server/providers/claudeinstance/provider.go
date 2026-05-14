@@ -292,6 +292,10 @@ func (p *Provider) fanOutInvalidations(prev, next map[InstanceID]*graphql.Claude
 // observationally equal for the fields a resolver would expose. Used to
 // suppress noise events when the heartbeat sweep produces an
 // identical instance to the one already cached.
+//
+// Note: LastActivityAt is already quantized to 1-second resolution in
+// composeOne (Truncate(time.Second)), so sub-second streaming changes do
+// not trigger subscription events.
 func instancesEqual(a, b *graphql.ClaudeInstance) bool {
 	if a == nil && b == nil {
 		return true
@@ -318,6 +322,12 @@ func instancesEqual(a, b *graphql.ClaudeInstance) bool {
 		return false
 	}
 	if !ptrStringEqual(a.LastActivityAt, b.LastActivityAt) {
+		return false
+	}
+	if a.InflightToolCount != b.InflightToolCount {
+		return false
+	}
+	if !ptrStringEqual(a.Model, b.Model) {
 		return false
 	}
 	return true

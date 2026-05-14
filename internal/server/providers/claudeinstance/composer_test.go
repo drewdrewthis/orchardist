@@ -63,19 +63,30 @@ type fakeLiveness struct {
 func (f fakeLiveness) IsAlive(pid int) bool { return f.alive[pid] }
 
 // TestComposer_Compose_Working asserts the happy path — a fresh
-// heartbeat with a known pid produces a working ClaudeInstance with
-// every cross-provider edge populated.
+// heartbeat with a known pid and a jsonl showing an open tool_use produces
+// a working ClaudeInstance with every cross-provider edge populated.
+//
+// Phase 2: state comes from the jsonl snapshot, not the heartbeat. The
+// jsonl must have an open tool_use for state==working.
 func TestComposer_Compose_Working(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "alpha",
 		SessionID:       "uuid-alpha",
-		State:           "working",
 		ClaudePid:       42100,
+		Cwd:             "/workspace/alpha",
 		RcURL:           "https://claude.ai/code/session_xyz",
 		RcEnabled:       true,
 		Timestamp:       now.Add(-5 * time.Second),
 		LastHeartbeatAt: now.Add(-5 * time.Second),
+	}
+
+	// Jsonl snapshot with an open tool_use → working state.
+	workingRecords := []Record{
+		userRecord(now.Add(-6*time.Second), nil),
+		assistantRecord(now.Add(-5*time.Second), "tool_use", []ContentItem{
+			toolUseContent("bash_001", "Bash"),
+		}),
 	}
 
 	pane := &graphql.TmuxPane{ID: "TmuxPane:local:%26"}
@@ -92,6 +103,7 @@ func TestComposer_Compose_Working(t *testing.T) {
 		func() time.Time { return now },
 		HeartbeatStaleAfter,
 	)
+	c.snapshot = &fakeSnapshotReader{records: workingRecords, ok: true}
 
 	out := c.Compose(context.Background(), []Heartbeat{hb})
 	if len(out) != 1 {
@@ -99,7 +111,7 @@ func TestComposer_Compose_Working(t *testing.T) {
 	}
 	inst := out[0]
 	if inst.State != graphql.InstanceStateWorking {
-		t.Errorf("state = %s, want working", inst.State)
+		t.Errorf("state = %s, want working (jsonl open tool_use)", inst.State)
 	}
 	if inst.Pane != pane {
 		t.Errorf("pane = %v, want %v", inst.Pane, pane)
@@ -125,19 +137,21 @@ func TestComposer_Compose_Working(t *testing.T) {
 	}
 }
 
-// TestComposer_Compose_StaleHeartbeatAlivePidTrustsState asserts that a
+// TestComposer_Compose_StaleHeartbeatAlivePidNotNoClaude asserts that a
 // stale heartbeat whose tracked pid is still alive does NOT collapse to
 // no_claude — the orchard hook is event-driven, so an idle session
-// legitimately stops heartbeating between events. The last-known state
-// (working/idle/input) survives so long as the pid is verifiably alive.
+// legitimately stops heartbeating between events.
+//
+// Phase 2: state now comes from jsonl, not the heartbeat. Without a jsonl
+// the fallback is idle (not the hook's input). The critical guarantee is
+// that a live pid never produces no_claude just because the heartbeat is stale.
 //
 // Regression: prior to fix(claudeinstances) this returned no_claude for
 // every idle session past 30s, masking the entire fleet as dead (#421, #501).
-func TestComposer_Compose_StaleHeartbeatAlivePidTrustsState(t *testing.T) {
+func TestComposer_Compose_StaleHeartbeatAlivePidNotNoClaude(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "stale-but-alive",
-		State:           "input",
 		ClaudePid:       11,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -157,8 +171,13 @@ func TestComposer_Compose_StaleHeartbeatAlivePidTrustsState(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("got %d, want 1", len(out))
 	}
-	if out[0].State != graphql.InstanceStateInput {
-		t.Errorf("state = %s, want input (stale heartbeat but pid alive)", out[0].State)
+	// Phase 2: no jsonl → falls back to idle (not no_claude, pid is alive).
+	if out[0].State == graphql.InstanceStateNoClaude {
+		t.Errorf("state = no_claude but pid is alive; stale heartbeat must not force no_claude when pid is live")
+	}
+	// The no-jsonl fallback for an alive pid is idle.
+	if out[0].State != graphql.InstanceStateIdle {
+		t.Errorf("state = %s, want idle (stale heartbeat, alive pid, no jsonl)", out[0].State)
 	}
 }
 
@@ -169,7 +188,6 @@ func TestComposer_Compose_StaleHeartbeatDeadPidNoClaude(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "stale-dead",
-		State:           "working",
 		ClaudePid:       11,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -200,7 +218,6 @@ func TestComposer_Compose_StaleHeartbeatNoPidNoClaude(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "stale-pidless",
-		State:           "working",
 		ClaudePid:       0,
 		Timestamp:       now.Add(-2 * time.Minute),
 		LastHeartbeatAt: now.Add(-2 * time.Minute),
@@ -229,6 +246,9 @@ func TestComposer_Compose_StaleHeartbeatNoPidNoClaude(t *testing.T) {
 // heartbeat tracks the dead pid, the pane's current foreground pid is
 // alive and belongs to a claude process, so the instance is not dead.
 //
+// Phase 2: state comes from jsonl. Without a jsonl the fallback is idle
+// (not no_claude), because the new pid in the pane is alive.
+//
 // Regression for #421: prior to fix, the daemon collapsed to no_claude
 // the moment the tracked pid died, even though `tmux capture-pane`
 // showed a live Claude REPL in the same pane.
@@ -236,7 +256,6 @@ func TestComposer_Compose_RespawnedInSamePane(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "respawned",
-		State:           "working",
 		ClaudePid:       100, // old, dead
 		Timestamp:       now.Add(-3 * time.Second),
 		LastHeartbeatAt: now.Add(-3 * time.Second),
@@ -254,8 +273,13 @@ func TestComposer_Compose_RespawnedInSamePane(t *testing.T) {
 		HeartbeatStaleAfter,
 	)
 	out := c.Compose(context.Background(), []Heartbeat{hb})
-	if out[0].State != graphql.InstanceStateWorking {
-		t.Errorf("state = %s, want working (pane respawn: heartbeat pid dead but new pid alive in same pane)", out[0].State)
+	// The pane has a live new pid — must NOT be no_claude (#421).
+	if out[0].State == graphql.InstanceStateNoClaude {
+		t.Errorf("state = no_claude but pane has a live pid; respawned session must not be no_claude")
+	}
+	// Without jsonl the fallback is idle (no-jsonl path for alive pid).
+	if out[0].State != graphql.InstanceStateIdle {
+		t.Errorf("state = %s, want idle (respawn: new pid alive, no jsonl)", out[0].State)
 	}
 }
 
@@ -265,7 +289,6 @@ func TestComposer_Compose_DeadPid(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "deadpid",
-		State:           "working",
 		ClaudePid:       99,
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
@@ -294,7 +317,6 @@ func TestComposer_Compose_NoPaneStillEmits(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "ghost",
-		State:           "idle",
 		ClaudePid:       55,
 		Timestamp:       now.Add(-1 * time.Second),
 		LastHeartbeatAt: now.Add(-1 * time.Second),
@@ -324,11 +346,13 @@ func TestComposer_Compose_NoPaneStillEmits(t *testing.T) {
 // TestComposer_Compose_FallbackToSession asserts that when ClaudePid is
 // 0 (legacy heartbeat without pid), the composer falls back to
 // FindBySession so it still finds a pane.
+//
+// Phase 2: state comes from jsonl. Without a jsonl (no cwd) the fallback
+// is idle. The pane-discovery via session name still works as before.
 func TestComposer_Compose_FallbackToSession(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	hb := Heartbeat{
 		TmuxSession:     "legacy",
-		State:           "working",
 		ClaudePid:       0, // legacy hook didn't write pid
 		Timestamp:       now.Add(-1 * time.Second),
 		LastHeartbeatAt: now.Add(-1 * time.Second),
@@ -348,28 +372,31 @@ func TestComposer_Compose_FallbackToSession(t *testing.T) {
 	if out[0].Pane != pane {
 		t.Errorf("pane = %v, want %v (session-keyed fallback)", out[0].Pane, pane)
 	}
-	// State trusts the heartbeat when pid is unknown.
-	if out[0].State != graphql.InstanceStateWorking {
-		t.Errorf("state = %s, want working when pid unknown", out[0].State)
+	// Phase 2: no jsonl (no cwd) → idle fallback for unknown-pid session.
+	if out[0].State != graphql.InstanceStateIdle {
+		t.Errorf("state = %s, want idle (no jsonl: pid unknown, no cwd)", out[0].State)
 	}
 }
 
-// TestComposer_Compose_UnknownStateStaysNoClaude asserts that an
-// unrecognised state string (e.g. "" or "?") does not silently default
-// to working — it collapses to no_claude.
-func TestComposer_Compose_UnknownStateStaysNoClaude(t *testing.T) {
+// TestComposer_Compose_HookStateIgnored asserts that the hook's state
+// field (even garbage values like "?") is NOT used by Phase 2 — state
+// comes from the jsonl snapshot only. With no jsonl the fallback is idle
+// (not no_claude, provided the pid is alive).
+//
+// Phase 2: the hook state string is entirely ignored for state derivation.
+func TestComposer_Compose_HookStateIgnored(t *testing.T) {
 	now := time.Now()
 	hb := Heartbeat{
 		TmuxSession:     "unknown",
-		State:           "garbage",
 		ClaudePid:       7,
 		Timestamp:       now,
 		LastHeartbeatAt: now,
 	}
 	c := NewComposerWith("local", nil, nil, nil, fakeLiveness{alive: map[int]bool{7: true}}, nil, func() time.Time { return now }, HeartbeatStaleAfter)
 	out := c.Compose(context.Background(), []Heartbeat{hb})
-	if out[0].State != graphql.InstanceStateNoClaude {
-		t.Errorf("state = %s, want no_claude for unknown state string", out[0].State)
+	// Phase 2: garbage hook state → jsonl fallback → idle (pid alive, no jsonl).
+	if out[0].State != graphql.InstanceStateIdle {
+		t.Errorf("state = %s, want idle (hook state ignored; no-jsonl fallback for alive pid)", out[0].State)
 	}
 }
 

@@ -60,18 +60,20 @@ type ComplexityRoot struct {
 	}
 
 	ClaudeInstance struct {
-		Account        func(childComplexity int) int
-		Conversation   func(childComplexity int) int
-		ID             func(childComplexity int) int
-		LastActivityAt func(childComplexity int) int
-		Pane           func(childComplexity int) int
-		Process        func(childComplexity int) int
-		RcEnabled      func(childComplexity int) int
-		RcURL          func(childComplexity int) int
-		SessionUUID    func(childComplexity int) int
-		StartedAt      func(childComplexity int) int
-		State          func(childComplexity int) int
-		Worktree       func(childComplexity int) int
+		Account           func(childComplexity int) int
+		Conversation      func(childComplexity int) int
+		ID                func(childComplexity int) int
+		InflightToolCount func(childComplexity int) int
+		LastActivityAt    func(childComplexity int) int
+		Model             func(childComplexity int) int
+		Pane              func(childComplexity int) int
+		Process           func(childComplexity int) int
+		RcEnabled         func(childComplexity int) int
+		RcURL             func(childComplexity int) int
+		SessionUUID       func(childComplexity int) int
+		StartedAt         func(childComplexity int) int
+		State             func(childComplexity int) int
+		Worktree          func(childComplexity int) int
 	}
 
 	Contract struct {
@@ -630,12 +632,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ClaudeInstance.ID(childComplexity), true
+	case "ClaudeInstance.inflightToolCount":
+		if e.ComplexityRoot.ClaudeInstance.InflightToolCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.InflightToolCount(childComplexity), true
 	case "ClaudeInstance.lastActivityAt":
 		if e.ComplexityRoot.ClaudeInstance.LastActivityAt == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ClaudeInstance.LastActivityAt(childComplexity), true
+	case "ClaudeInstance.model":
+		if e.ComplexityRoot.ClaudeInstance.Model == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.Model(childComplexity), true
 	case "ClaudeInstance.pane":
 		if e.ComplexityRoot.ClaudeInstance.Pane == nil {
 			break
@@ -2588,6 +2602,20 @@ type ClaudeInstance implements Node {
   lastActivityAt: String
 
   """
+  Claude model used by this session — from the last non-sidechain
+  assistant record's message.model field (e.g. \"claude-opus-4-7\").
+  Null when no jsonl has been observed yet for this session.
+  """
+  model: String
+
+  """
+  Number of tool_use calls open (sent by assistant, no matching tool_result)
+  in the current turn. Derived from the jsonl classifier. 0 when no jsonl
+  is found.
+  """
+  inflightToolCount: Int!
+
+  """
   Worktree this Claude REPL is operating in — the deepest worktree whose
   ` + "`" + `path` + "`" + ` contains the resolved process cwd. Server-side join over the
   ps + git providers; null when no process can be matched or no worktree
@@ -3881,6 +3909,10 @@ func (ec *executionContext) childFields_ClaudeInstance(ctx context.Context, fiel
 		return ec.fieldContext_ClaudeInstance_startedAt(ctx, field)
 	case "lastActivityAt":
 		return ec.fieldContext_ClaudeInstance_lastActivityAt(ctx, field)
+	case "model":
+		return ec.fieldContext_ClaudeInstance_model(ctx, field)
+	case "inflightToolCount":
+		return ec.fieldContext_ClaudeInstance_inflightToolCount(ctx, field)
 	case "worktree":
 		return ec.fieldContext_ClaudeInstance_worktree(ctx, field)
 	case "conversation":
@@ -5568,6 +5600,52 @@ func (ec *executionContext) _ClaudeInstance_lastActivityAt(ctx context.Context, 
 }
 func (ec *executionContext) fieldContext_ClaudeInstance_lastActivityAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeInstance_model(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_model(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Model, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_model(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeInstance_inflightToolCount(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_inflightToolCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.InflightToolCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNInt2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_inflightToolCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _ClaudeInstance_worktree(ctx context.Context, field graphql.CollectedField, obj *ClaudeInstance) (ret graphql.Marshaler) {
@@ -14173,6 +14251,13 @@ func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._ClaudeInstance_startedAt(ctx, field, obj)
 		case "lastActivityAt":
 			out.Values[i] = ec._ClaudeInstance_lastActivityAt(ctx, field, obj)
+		case "model":
+			out.Values[i] = ec._ClaudeInstance_model(ctx, field, obj)
+		case "inflightToolCount":
+			out.Values[i] = ec._ClaudeInstance_inflightToolCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "worktree":
 			field := field
 

@@ -111,27 +111,24 @@ func (r *FileReader) ReadAll(ctx context.Context) ([]Heartbeat, error) {
 // exist: the legacy snake_case the Rust crate writes today, and the
 // camelCase shape ADR-011 §5.1 anticipates. We accept both via the
 // dual struct tags below — whichever the writer chose, we read.
+//
+// Fields that the hook writes but the daemon no longer consumes
+// (state, last_activity, etc.) are intentionally absent; json.Unmarshal
+// ignores unknown keys.
 type rawHeartbeat struct {
 	TmuxSession string `json:"tmux_session"`
 	SessionID   string `json:"session_id"`
-	State       string `json:"state"`
 	Timestamp   string `json:"timestamp"`
 
 	// Optional ADR-011 fields. The hook script will be updated to emit
 	// these; when absent, the composer falls back to other matching.
-	ClaudePid          int    `json:"claudePid,omitempty"`
-	ClaudePidSnake     int    `json:"claude_pid,omitempty"`
-	RcURL              string `json:"rcUrl,omitempty"`
-	RcURLSnake         string `json:"rc_url,omitempty"`
-	RcEnabled          *bool  `json:"rcEnabled,omitempty"`
-	RcEnabledSnake     *bool  `json:"rc_enabled,omitempty"`
-	LastHeartbeatAt    string `json:"lastHeartbeatAt,omitempty"`
-	// last_activity / lastActivity — RFC3339 or RFC3339Nano timestamp of the
-	// most recent activity this session performed (tool call, user turn, etc.).
-	// Both naming conventions are accepted; snake_case matches today's hook
-	// script style while camelCase matches the ADR-011 forward-compatible shape.
-	LastActivity      string `json:"last_activity,omitempty"`
-	LastActivityCamel string `json:"lastActivity,omitempty"`
+	ClaudePid       int    `json:"claudePid,omitempty"`
+	ClaudePidSnake  int    `json:"claude_pid,omitempty"`
+	RcURL           string `json:"rcUrl,omitempty"`
+	RcURLSnake      string `json:"rc_url,omitempty"`
+	RcEnabled       *bool  `json:"rcEnabled,omitempty"`
+	RcEnabledSnake  *bool  `json:"rc_enabled,omitempty"`
+	LastHeartbeatAt string `json:"lastHeartbeatAt,omitempty"`
 	// cwd — working directory the Claude process was launched from. Used
 	// together with session_id to locate the session's transcript jsonl.
 	Cwd string `json:"cwd,omitempty"`
@@ -153,7 +150,6 @@ func parseFile(path string) (Heartbeat, bool) {
 	hb := Heartbeat{
 		TmuxSession: raw.TmuxSession,
 		SessionID:   raw.SessionID,
-		State:       raw.State,
 		ClaudePid:   firstNonZero(raw.ClaudePid, raw.ClaudePidSnake),
 		RcURL:       firstNonEmpty(raw.RcURL, raw.RcURLSnake),
 		Cwd:         raw.Cwd,
@@ -175,20 +171,6 @@ func parseFile(path string) (Heartbeat, bool) {
 	}
 	if hb.LastHeartbeatAt.IsZero() {
 		hb.LastHeartbeatAt = hb.Timestamp
-	}
-
-	// Parse last_activity / lastActivity — prefer snake_case (today's hook
-	// script convention) then fall back to camelCase. Malformed values are
-	// silently ignored; the zero value signals "no last_activity available"
-	// so the composer can fall back to the pane's lastActivityAt.
-	rawLastActivity := firstNonEmpty(raw.LastActivity, raw.LastActivityCamel)
-	if rawLastActivity != "" {
-		if t, err := time.Parse(time.RFC3339Nano, rawLastActivity); err == nil {
-			hb.LastActivity = t
-		} else if t, err := time.Parse(time.RFC3339, rawLastActivity); err == nil {
-			hb.LastActivity = t
-		}
-		// Malformed value: hb.LastActivity stays zero (silently ignored).
 	}
 
 	// A heartbeat with no tmux session is unparseable from the

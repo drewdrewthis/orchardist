@@ -46,7 +46,6 @@ func TestProvider_Refresh_PopulatesCache(t *testing.T) {
 	hbs := []Heartbeat{{
 		TmuxSession:     "alpha",
 		SessionID:       "uuid-alpha",
-		State:           "working",
 		ClaudePid:       42100,
 		Timestamp:       now.Add(-2 * time.Second),
 		LastHeartbeatAt: now.Add(-2 * time.Second),
@@ -102,7 +101,6 @@ func TestProvider_Subscribe_FiresOnChange(t *testing.T) {
 	// Add a heartbeat; refresh should emit an event for the new key.
 	r.heartbeats = []Heartbeat{{
 		TmuxSession:     "alpha",
-		State:           "working",
 		ClaudePid:       42100,
 		Timestamp:       now.Add(-1 * time.Second),
 		LastHeartbeatAt: now.Add(-1 * time.Second),
