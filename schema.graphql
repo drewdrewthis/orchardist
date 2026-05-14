@@ -471,35 +471,6 @@ type Health {
 
   "Uptime in seconds since daemon started."
   uptimeS: Int!
-
-  """
-  Fleet-manifest ingestion status. Reflects the last attempt the daemon
-  made to load `$FLEET_MANIFEST` (default `~/.claude/references/fleet-manifest.yaml`).
-  Parse errors are surfaced here rather than crashing the daemon —
-  consumers should fall back to live-fleet data when `loaded=false`.
-  """
-  manifest: ManifestStatus!
-}
-
-"""
-Status of the fleet-manifest ingestion. Updated each time the daemon
-re-reads the manifest file.
-"""
-type ManifestStatus {
-  "Absolute path the daemon attempted to read."
-  path: String!
-
-  "True when the last read succeeded and parsed cleanly."
-  loaded: Boolean!
-
-  "RFC 3339 timestamp of the last successful parse. Null when never loaded."
-  lastLoadedAt: String
-
-  "Number of host entries currently held from the manifest."
-  hostCount: Int!
-
-  "Human-readable error message from the last failed read. Null when loaded=true."
-  error: String
 }
 
 """
@@ -529,11 +500,7 @@ type Host implements Node {
   "True when the daemon last heard from this host. v1: always true for local host."
   reachable: Boolean!
 
-  """
-  RFC 3339 timestamp of the last successful read. For manifest-only
-  hosts the daemon has never reached, this is the empty string
-  (`""`); pair with `reachable=false` to detect "never seen live".
-  """
+  "RFC 3339 timestamp of the last contact. Empty string when the daemon has never reached this host; pair with `reachable=false` to detect 'never seen live'."
   lastSeenAt: String!
 
   "Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands."
@@ -557,64 +524,8 @@ type Host implements Node {
   "Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json."
   hostServices: [HostService!]!
 
-  """
-  Free-form description from the fleet manifest — what this host is for.
-  Null when the host is not present in the manifest.
-  """
+  "Free-form description of what this host is for. Set via the daemon config."
   purpose: String
-
-  """
-  Role the manifest assigns to this host. Null when the host is not
-  present in the manifest.
-  """
-  role: HostRole
-
-  """
-  Which orchardist (`local_orchardist`, `boxd_orchardist`, `shared`)
-  owns this host's spawn decisions. Null when not in the manifest.
-  """
-  ownerOrchardist: String
-
-  "Condition under which this host may be decommissioned. Null when not in the manifest."
-  decommissionSignal: String
-
-  """
-  Last date a human (or `fleet-verify.sh`) confirmed the host was alive
-  and serving its stated purpose. ISO date (`YYYY-MM-DD`) or the literal
-  string `\"unknown\"`. Null when the host is not in the manifest.
-  """
-  lastVerified: String
-
-  """
-  True when the host appears in the fleet manifest (`$FLEET_MANIFEST`).
-  False is a drift signal: the host is reachable / a configured peer but
-  has not yet been catalogued.
-  """
-  inManifest: Boolean!
-}
-
-"""
-Roles a host can play in the orchard fleet. Drawn from the manifest
-file at `~/.claude/references/fleet-manifest.yaml`. `external` covers
-hosts present in the manifest but outside the orchardist hierarchy.
-"""
-enum HostRole {
-  "Drew's primary workstation. Hosts the local orchardist."
-  local_orchardist
-  "Always-on VM that hosts the boxd orchardist + federation broker."
-  boxd_orchardist
-  "Shared federation worker that runs grinder sessions."
-  federation_worker
-  "Generic grinder VM, registered as an orchard daemon peer."
-  grinder_pool
-  "Long-lived grinder VM dedicated to one repo/workstream."
-  dedicated_grinder
-  "Per-issue boxd fork, decommissioned when the issue closes."
-  fork_per_issue
-  "Plain orchard daemon peer with no other manifest role."
-  daemon_peer
-  "Host catalogued in the manifest but outside the orchardist hierarchy."
-  external
 }
 
 """

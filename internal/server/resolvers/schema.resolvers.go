@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -83,6 +84,10 @@ func (r *hostResolver) Peers(ctx context.Context, obj *graphql1.Host) ([]*graphq
 			Address:    &addr,
 			Peers:      []*graphql1.Host{},
 			LastSeenAt: peerLastSeen(lastReachedAt),
+		}
+		if cfg.Purpose != "" {
+			p := cfg.Purpose
+			host.Purpose = &p
 		}
 		out = append(out, host)
 	}
@@ -293,9 +298,8 @@ func (r *pullRequestResolver) Labels(ctx context.Context, obj *graphql1.PullRequ
 func (r *queryResolver) Health(ctx context.Context) (*graphql1.Health, error) {
 	uptime := int64(time.Since(r.StartedAt).Round(time.Second).Seconds())
 	return &graphql1.Health{
-		Status:   "ok",
-		UptimeS:  uptime,
-		Manifest: buildManifestStatus(r.Manifest),
+		Status:  "ok",
+		UptimeS: uptime,
 	}, nil
 }
 
@@ -325,11 +329,8 @@ func (r *queryResolver) Host(ctx context.Context) (*graphql1.Host, error) {
 
 // Hosts is the resolver for the hosts field.
 //
-// Returns the merged fleet view: local host + federated peers, enriched
-// with manifest metadata, plus a stub entry for every manifest host the
-// daemon has not heard from. Drift surfaces via `inManifest=false` (live
-// host missing from manifest) and `reachable=false` (manifest host the
-// daemon has not reached).
+// Returns the live-fleet view: local host + federated peers. The local
+// host's purpose is enriched from the peer config when set.
 func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 	local, err := r.Query().Host(ctx)
 	if err != nil {
@@ -343,8 +344,11 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 			return nil, err
 		}
 		hosts = append(hosts, peers...)
+		if p := purposeForLocalHost(local, r.PeerProxy.Peers()); p != "" {
+			local.Purpose = &p
+		}
 	}
-	return mergeManifestHosts(hosts, r.Manifest), nil
+	return hosts, nil
 }
 
 // Repos is the resolver for the repos field.
@@ -1299,21 +1303,38 @@ func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxSer
 	}
 	switch key {
 	case graphql1.TmuxSessionSortName:
-		sort.Slice(sessions, func(i, j int) bool {
-			return sessions[i].Key.Name < sessions[j].Key.Name
+		slices.SortStableFunc(sessions, func(a, b tmux.Session) int {
+			if a.Key.Name < b.Key.Name {
+				return -1
+			}
+			if a.Key.Name > b.Key.Name {
+				return 1
+			}
+			return 0
 		})
 	default: // LAST_ACTIVITY
-		sort.Slice(sessions, func(i, j int) bool {
-			a, b := sessions[i], sessions[j]
+		slices.SortStableFunc(sessions, func(a, b tmux.Session) int {
 			aZero := a.LastActivityAt.IsZero()
 			bZero := b.LastActivityAt.IsZero()
 			if aZero != bZero {
-				return !aZero
+				if !aZero {
+					return -1
+				}
+				return 1
 			}
 			if !a.LastActivityAt.Equal(b.LastActivityAt) {
-				return a.LastActivityAt.After(b.LastActivityAt)
+				if a.LastActivityAt.After(b.LastActivityAt) {
+					return -1
+				}
+				return 1
 			}
-			return a.Key.Name < b.Key.Name
+			if a.Key.Name < b.Key.Name {
+				return -1
+			}
+			if a.Key.Name > b.Key.Name {
+				return 1
+			}
+			return 0
 		})
 	}
 

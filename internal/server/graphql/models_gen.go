@@ -222,11 +222,6 @@ type Health struct {
 	Status string `json:"status"`
 	// Uptime in seconds since daemon started.
 	UptimeS int64 `json:"uptimeS"`
-	// Fleet-manifest ingestion status. Reflects the last attempt the daemon
-	// made to load `$FLEET_MANIFEST` (default `~/.claude/references/fleet-manifest.yaml`).
-	// Parse errors are surfaced here rather than crashing the daemon —
-	// consumers should fall back to live-fleet data when `loaded=false`.
-	Manifest *ManifestStatus `json:"manifest"`
 }
 
 // A machine that orchard reflects. Identity is the OS-issued machine id
@@ -247,9 +242,7 @@ type Host struct {
 	Address *string `json:"address,omitempty"`
 	// True when the daemon last heard from this host. v1: always true for local host.
 	Reachable bool `json:"reachable"`
-	// RFC 3339 timestamp of the last successful read. For manifest-only
-	// hosts the daemon has never reached, this is the empty string
-	// (`""`); pair with `reachable=false` to detect "never seen live".
+	// RFC 3339 timestamp of the last contact. Empty string when the daemon has never reached this host; pair with `reachable=false` to detect 'never seen live'.
 	LastSeenAt string `json:"lastSeenAt"`
 	// Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands.
 	ResourceLoad *ResourceLoad `json:"resourceLoad,omitempty"`
@@ -265,25 +258,8 @@ type Host struct {
 	Processes []*Process `json:"processes"`
 	// Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json.
 	HostServices []*HostService `json:"hostServices"`
-	// Free-form description from the fleet manifest — what this host is for.
-	// Null when the host is not present in the manifest.
+	// Free-form description of what this host is for. Set via the daemon config.
 	Purpose *string `json:"purpose,omitempty"`
-	// Role the manifest assigns to this host. Null when the host is not
-	// present in the manifest.
-	Role *HostRole `json:"role,omitempty"`
-	// Which orchardist (`local_orchardist`, `boxd_orchardist`, `shared`)
-	// owns this host's spawn decisions. Null when not in the manifest.
-	OwnerOrchardist *string `json:"ownerOrchardist,omitempty"`
-	// Condition under which this host may be decommissioned. Null when not in the manifest.
-	DecommissionSignal *string `json:"decommissionSignal,omitempty"`
-	// Last date a human (or `fleet-verify.sh`) confirmed the host was alive
-	// and serving its stated purpose. ISO date (`YYYY-MM-DD`) or the literal
-	// string `\"unknown\"`. Null when the host is not in the manifest.
-	LastVerified *string `json:"lastVerified,omitempty"`
-	// True when the host appears in the fleet manifest (`$FLEET_MANIFEST`).
-	// False is a drift signal: the host is reachable / a configured peer but
-	// has not yet been catalogued.
-	InManifest bool `json:"inManifest"`
 }
 
 func (Host) IsNode() {}
@@ -394,21 +370,6 @@ type Label struct {
 	// The label's short description, as set on the repository's labels
 	// page. Empty string when no description is set.
 	Description string `json:"description"`
-}
-
-// Status of the fleet-manifest ingestion. Updated each time the daemon
-// re-reads the manifest file.
-type ManifestStatus struct {
-	// Absolute path the daemon attempted to read.
-	Path string `json:"path"`
-	// True when the last read succeeded and parsed cleanly.
-	Loaded bool `json:"loaded"`
-	// RFC 3339 timestamp of the last successful parse. Null when never loaded.
-	LastLoadedAt *string `json:"lastLoadedAt,omitempty"`
-	// Number of host entries currently held from the manifest.
-	HostCount int64 `json:"hostCount"`
-	// Human-readable error message from the last failed read. Null when loaded=true.
-	Error *string `json:"error,omitempty"`
 }
 
 // Provenance and freshness envelope used to disambiguate "valid empty"
@@ -1027,84 +988,6 @@ func (e *ContractStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e ContractStatus) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-// Roles a host can play in the orchard fleet. Drawn from the manifest
-// file at `~/.claude/references/fleet-manifest.yaml`. `external` covers
-// hosts present in the manifest but outside the orchardist hierarchy.
-type HostRole string
-
-const (
-	// Drew's primary workstation. Hosts the local orchardist.
-	HostRoleLocalOrchardist HostRole = "local_orchardist"
-	// Always-on VM that hosts the boxd orchardist + federation broker.
-	HostRoleBoxdOrchardist HostRole = "boxd_orchardist"
-	// Shared federation worker that runs grinder sessions.
-	HostRoleFederationWorker HostRole = "federation_worker"
-	// Generic grinder VM, registered as an orchard daemon peer.
-	HostRoleGrinderPool HostRole = "grinder_pool"
-	// Long-lived grinder VM dedicated to one repo/workstream.
-	HostRoleDedicatedGrinder HostRole = "dedicated_grinder"
-	// Per-issue boxd fork, decommissioned when the issue closes.
-	HostRoleForkPerIssue HostRole = "fork_per_issue"
-	// Plain orchard daemon peer with no other manifest role.
-	HostRoleDaemonPeer HostRole = "daemon_peer"
-	// Host catalogued in the manifest but outside the orchardist hierarchy.
-	HostRoleExternal HostRole = "external"
-)
-
-var AllHostRole = []HostRole{
-	HostRoleLocalOrchardist,
-	HostRoleBoxdOrchardist,
-	HostRoleFederationWorker,
-	HostRoleGrinderPool,
-	HostRoleDedicatedGrinder,
-	HostRoleForkPerIssue,
-	HostRoleDaemonPeer,
-	HostRoleExternal,
-}
-
-func (e HostRole) IsValid() bool {
-	switch e {
-	case HostRoleLocalOrchardist, HostRoleBoxdOrchardist, HostRoleFederationWorker, HostRoleGrinderPool, HostRoleDedicatedGrinder, HostRoleForkPerIssue, HostRoleDaemonPeer, HostRoleExternal:
-		return true
-	}
-	return false
-}
-
-func (e HostRole) String() string {
-	return string(e)
-}
-
-func (e *HostRole) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = HostRole(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid HostRole", str)
-	}
-	return nil
-}
-
-func (e HostRole) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *HostRole) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e HostRole) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

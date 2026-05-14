@@ -24,10 +24,14 @@ import (
 // queries and WSS for subscriptions, and verifies certs against the
 // system trust store. Default false preserves the original plaintext
 // transport for trusted-LAN deployments.
+//
+// Purpose is a free-form human description surfaced as `Host.purpose`
+// for any host matched via the alias chain in purposeForLocalHost.
 type PeerConfig struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
 	TLS     bool   `json:"tls,omitempty"`
+	Purpose string `json:"purpose,omitempty"`
 }
 
 // FederationConfig is the slice of the daemon's on-disk config that
@@ -95,6 +99,7 @@ func (f FederationConfig) normalise() FederationConfig {
 			Name:    name,
 			Address: host,
 			TLS:     p.TLS || tls,
+			Purpose: p.Purpose,
 		})
 	}
 	return out

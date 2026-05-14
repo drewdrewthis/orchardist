@@ -16,7 +16,6 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/manifest"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
@@ -49,7 +48,6 @@ type Resolver struct {
 	GH                     *gh.Provider
 	PeerProxy              *peerproxy.Provider
 	LocalEvents            *peerproxy.LocalInvalidator
-	Manifest               *manifest.Provider
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -147,16 +145,6 @@ func (r *Resolver) WithPeerProxy(p *peerproxy.Provider) *Resolver {
 // subscribe to via their peerproxy adapter.
 func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 	r.LocalEvents = l
-	return r
-}
-
-// WithManifest wires the fleet-manifest provider. When set, the
-// `Query.hosts` resolver merges manifest entries with live-fleet data
-// and the `Query.health` resolver exposes the manifest ingestion status.
-// Leaving it unset is allowed — a daemon running without manifest
-// awareness keeps the pre-#584 behaviour (local host + peers only).
-func (r *Resolver) WithManifest(m *manifest.Provider) *Resolver {
-	r.Manifest = m
 	return r
 }
 

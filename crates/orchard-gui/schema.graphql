@@ -305,14 +305,6 @@ type DaemonState {
 }
 
 type Health {
-  """
-  Fleet-manifest ingestion status. Reflects the last attempt the daemon
-  made to load `$FLEET_MANIFEST` (default `~/.claude/references/fleet-manifest.yaml`).
-  Parse errors are surfaced here rather than crashing the daemon —
-  consumers should fall back to live-fleet data when `loaded=false`.
-  """
-  manifest: ManifestStatus!
-
   """Daemon health status — 'ok' when serving."""
   status: String!
 
@@ -332,11 +324,6 @@ type Host implements Node {
   address: String
 
   """
-  Condition under which this host may be decommissioned. Null when not in the manifest.
-  """
-  decommissionSignal: String
-
-  """
   Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json.
   """
   hostServices: [HostService!]!
@@ -348,42 +335,20 @@ type Host implements Node {
   id: ID!
 
   """
-  True when the host appears in the fleet manifest (`$FLEET_MANIFEST`).
-  False is a drift signal: the host is reachable / a configured peer but
-  has not yet been catalogued.
-  """
-  inManifest: Boolean!
-
-  """
   Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable.
   """
   kernel: String
 
   """
-  RFC 3339 timestamp of the last successful read. For manifest-only
-  hosts the daemon has never reached, this is the empty string
-  (`""`); pair with `reachable=false` to detect "never seen live".
+  RFC 3339 timestamp of the last contact. Empty string when the daemon has never reached this host; pair with `reachable=false` to detect 'never seen live'.
   """
   lastSeenAt: String!
-
-  """
-  Last date a human (or `fleet-verify.sh`) confirmed the host was alive
-  and serving its stated purpose. ISO date (`YYYY-MM-DD`) or the literal
-  string `\"unknown\"`. Null when the host is not in the manifest.
-  """
-  lastVerified: String
 
   """OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID."""
   machineId: String!
 
   """Operating system family — 'darwin', 'linux', etc."""
   os: String!
-
-  """
-  Which orchardist (`local_orchardist`, `boxd_orchardist`, `shared`)
-  owns this host's spawn decisions. Null when not in the manifest.
-  """
-  ownerOrchardist: String
 
   """
   Peer hosts this daemon federates with. v1: always empty; Workstream F populates.
@@ -394,8 +359,7 @@ type Host implements Node {
   processes(filter: ProcessFilter): [Process!]!
 
   """
-  Free-form description from the fleet manifest — what this host is for.
-  Null when the host is not present in the manifest.
+  Free-form description of what this host is for. Set via the daemon config.
   """
   purpose: String
 
@@ -410,12 +374,6 @@ type Host implements Node {
   resourceLoad: ResourceLoad
 
   """
-  Role the manifest assigns to this host. Null when the host is not
-  present in the manifest.
-  """
-  role: HostRole
-
-  """
   Daemon binary version running on this host. Set at build time via
   -ldflags -X main.version=<semver>; `dev` for plain `go build`.
   Non-null on the local host (always at least "dev"). Null for a peer
@@ -423,37 +381,6 @@ type Host implements Node {
   null rather than an error so dashboards can render partial information.
   """
   version: String
-}
-
-"""
-Roles a host can play in the orchard fleet. Drawn from the manifest
-file at `~/.claude/references/fleet-manifest.yaml`. `external` covers
-hosts present in the manifest but outside the orchardist hierarchy.
-"""
-enum HostRole {
-  """Always-on VM that hosts the boxd orchardist + federation broker."""
-  boxd_orchardist
-
-  """Plain orchard daemon peer with no other manifest role."""
-  daemon_peer
-
-  """Long-lived grinder VM dedicated to one repo/workstream."""
-  dedicated_grinder
-
-  """Host catalogued in the manifest but outside the orchardist hierarchy."""
-  external
-
-  """Shared federation worker that runs grinder sessions."""
-  federation_worker
-
-  """Per-issue boxd fork, decommissioned when the issue closes."""
-  fork_per_issue
-
-  """Generic grinder VM, registered as an orchard daemon peer."""
-  grinder_pool
-
-  """Drew's primary workstation. Hosts the local orchardist."""
-  local_orchardist
 }
 
 """
@@ -549,6 +476,19 @@ enum InstanceState {
 """An issue on a GitHub repository. Pull requests are excluded."""
 type Issue implements Node {
   authorLogin: String!
+
+  """
+  Issues that block this one (#563). Mirrors GitHub's
+  `Issue.blockedByIssues` connection, fetched via the preview-gated
+  GraphQL features `issue_types,sub_issues`. Empty list when none.
+  """
+  blockedByIssues: [Issue!]!
+
+  """
+  Issues this one blocks (#563). The inverse of `blockedByIssues`.
+  Empty list when none.
+  """
+  blockingIssues: [Issue!]!
   body: String!
   comments: [IssueComment!]
   createdAt: String!
@@ -561,9 +501,21 @@ type Issue implements Node {
   """
   labels: [Label!]!
   number: Int!
+
+  """
+  Parent tracker issue when this issue is itself a sub-issue (#563).
+  Null when this issue has no parent.
+  """
+  parentIssue: Issue
   repoName: String!
   repoOwner: String!
   state: IssueState!
+
+  """
+  Sub-issues nested under this issue when it acts as a tracker (#563).
+  Empty list when this issue is a leaf, not a tracker.
+  """
+  subIssues: [Issue!]!
   title: String!
   updatedAt: String!
   url: String!
@@ -613,31 +565,6 @@ type Label {
 
   """The label's textual name (e.g. `bug`, `P0`)."""
   name: String!
-}
-
-"""
-Status of the fleet-manifest ingestion. Updated each time the daemon
-re-reads the manifest file.
-"""
-type ManifestStatus {
-  """
-  Human-readable error message from the last failed read. Null when loaded=true.
-  """
-  error: String
-
-  """Number of host entries currently held from the manifest."""
-  hostCount: Int!
-
-  """
-  RFC 3339 timestamp of the last successful parse. Null when never loaded.
-  """
-  lastLoadedAt: String
-
-  """True when the last read succeeded and parsed cleanly."""
-  loaded: Boolean!
-
-  """Absolute path the daemon attempted to read."""
-  path: String!
 }
 
 """
