@@ -362,6 +362,28 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 	if s.claudeInstance != nil {
+		// Run the sidecar janitor BEFORE the first provider sweep so any
+		// orphan files left by the old hook are removed before we read the
+		// heartbeat directory. liveSessions reads the tmux snapshot which is
+		// already populated above (tmuxProv.Start completed). Errors are
+		// non-blocking — the janitor logs and continues.
+		janitor := claudeinstance.NewSidecarJanitor(
+			claudeinstance.ResolveDir(),
+			func(_ context.Context) (map[string]bool, error) {
+				if s.tmuxProv == nil {
+					return map[string]bool{}, nil
+				}
+				snap := s.tmuxProv.Snapshot()
+				live := make(map[string]bool, len(snap.Sessions))
+				for k := range snap.Sessions {
+					live[k.Name] = true
+				}
+				return live, nil
+			},
+			s.logger,
+		)
+		_ = janitor.Sweep(ctx)
+
 		if err := s.claudeInstance.Start(ctx); err != nil {
 			return fmt.Errorf("start claudeinstance provider: %w", err)
 		}
