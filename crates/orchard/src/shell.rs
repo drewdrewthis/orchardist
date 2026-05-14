@@ -91,7 +91,7 @@ const MARKER_START: &str = "# >>> orchard >>>";
 const MARKER_END: &str = "# <<< orchard <<<";
 
 /// Total number of wizard steps — update when adding or removing steps.
-const TOTAL_STEPS: usize = 9;
+const TOTAL_STEPS: usize = 8;
 
 /// Runs the interactive `orchard init` wizard.
 ///
@@ -102,8 +102,8 @@ const TOTAL_STEPS: usize = 9;
 ///  4. Configuring the tmux keybinding
 ///  5. Optionally adding a status bar segment
 ///  6. Reloading tmux config
-///  7. Installing Claude Code hooks
-///  8. Selecting the terminal app for notifications (macOS only)
+///  7. Selecting the terminal app for notifications (macOS only)
+///  8. Configuring a shepherd tmux session (optional)
 ///
 /// Persists the chosen terminal app to `~/.orchard/config.json`.
 pub fn run_init_wizard() -> Result<(), String> {
@@ -124,15 +124,10 @@ pub fn run_init_wizard() -> Result<(), String> {
     // Step 6: Reload tmux config.
     reload_tmux_config_step(&home);
 
-    // Step 7: Install Claude Code hooks.
-    if let Err(e) = install_claude_hooks(&home) {
-        eprintln!("  {YELLOW}Warning: could not install Claude hooks: {e}{RESET}");
-    }
-
-    // Step 8: Select terminal app for notifications (macOS only).
+    // Step 7: Select terminal app for notifications (macOS only).
     let terminal_app = select_terminal_app_step();
 
-    // Step 9: Offer shepherd session setup.
+    // Step 8: Offer shepherd session setup.
     let shepherd_config = suggest_shepherd_session_step();
 
     // Persist choices to global config.
@@ -475,7 +470,7 @@ pub fn prompt_key(question: &str, default: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal app selection (Step 8, macOS only)
+// Terminal app selection (Step 7, macOS only)
 // ---------------------------------------------------------------------------
 
 /// Known terminal options presented in the wizard menu.
@@ -507,7 +502,7 @@ pub fn parse_terminal_selection(input: &str) -> Option<String> {
     Some(TERMINAL_OPTIONS[n - 1].1.to_string())
 }
 
-/// Step 8: Prompt the user to select their preferred terminal app.
+/// Step 7: Prompt the user to select their preferred terminal app.
 ///
 /// On non-macOS platforms this step is skipped and the default is returned.
 fn select_terminal_app_step() -> String {
@@ -515,15 +510,15 @@ fn select_terminal_app_step() -> String {
         return "com.apple.Terminal".to_string();
     }
 
-    eprintln!("{BOLD}{CYAN}[8/{TOTAL_STEPS}] Terminal app for notifications{RESET}");
+    eprintln!("{BOLD}{CYAN}[7/{TOTAL_STEPS}] Terminal app for notifications{RESET}");
     prompt_terminal_app()
 }
 
-/// Step 9: Offer to configure a shepherd tmux session.
+/// Step 8: Offer to configure a shepherd tmux session.
 ///
 /// Returns `Some(StandaloneConfig)` if the user accepts, `None` if declined.
 fn suggest_shepherd_session_step() -> Option<crate::session::StandaloneConfig> {
-    eprintln!("{BOLD}{CYAN}[9/{TOTAL_STEPS}] Shepherd session (optional){RESET}");
+    eprintln!("{BOLD}{CYAN}[8/{TOTAL_STEPS}] Shepherd session (optional){RESET}");
     eprintln!("  A shepherd is a persistent tmux session for cross-repo orchestration.");
     eprintln!("  It can run a Claude agent that monitors all your repos via Telegram/Discord.");
     eprintln!();
@@ -645,123 +640,6 @@ pub fn inject_config_block(existing: &str, content: &str) -> String {
     } else {
         format!("{existing}\n{new_block}\n")
     }
-}
-
-// ---------------------------------------------------------------------------
-// Claude Code hook installation
-// ---------------------------------------------------------------------------
-
-const HOOK_EVENTS: &[&str] = &[
-    "PreToolUse",
-    "PostToolUse",
-    "Stop",
-    "Notification",
-    "SessionStart",
-    "SessionEnd",
-];
-
-const HOOK_SCRIPT_CONTENT: &str = include_str!("../hooks/orchard-state.sh");
-
-/// Installs the orchard Claude Code hook script and registers it in settings.json.
-///
-/// Idempotent: re-running will update the script and avoid duplicate hook entries.
-pub fn install_claude_hooks(home: &Path) -> Result<(), String> {
-    eprintln!("{BOLD}{CYAN}[7/{TOTAL_STEPS}] Installing Claude Code hooks{RESET}");
-
-    let hooks_dir = home.join(".claude/hooks");
-    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("creating ~/.claude/hooks: {e}"))?;
-
-    // Install the hook script.
-    let script_path = hooks_dir.join("orchard-state.sh");
-    std::fs::write(&script_path, HOOK_SCRIPT_CONTENT)
-        .map_err(|e| format!("writing {}: {e}", script_path.display()))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script_path)
-            .map_err(|e| format!("stat {}: {e}", script_path.display()))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms)
-            .map_err(|e| format!("chmod {}: {e}", script_path.display()))?;
-    }
-
-    eprintln!("  Installed ~/.claude/hooks/orchard-state.sh");
-
-    // Register hooks in settings.json.
-    let settings_path = home.join(".claude/settings.json");
-    let hook_command = "~/.claude/hooks/orchard-state.sh";
-    register_claude_hooks(&settings_path, hook_command)?;
-
-    eprintln!("  Registered hooks in ~/.claude/settings.json");
-    Ok(())
-}
-
-/// Merges orchard hook registrations into ~/.claude/settings.json.
-///
-/// Reads the existing JSON, adds any missing hook event entries, and writes
-/// back atomically. Does not duplicate entries that already exist.
-pub fn register_claude_hooks(settings_path: &Path, hook_command: &str) -> Result<(), String> {
-    let existing = if settings_path.exists() {
-        std::fs::read_to_string(settings_path)
-            .map_err(|e| format!("reading {}: {e}", settings_path.display()))?
-    } else {
-        "{}".to_string()
-    };
-
-    let mut settings: serde_json::Value =
-        serde_json::from_str(&existing).unwrap_or_else(|_| serde_json::json!({}));
-
-    let hooks_obj = settings
-        .as_object_mut()
-        .ok_or_else(|| "settings.json root is not an object".to_string())?
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| "hooks field is not an object".to_string())?;
-
-    // Ensure all required hook events are registered without duplicating.
-    for &event in HOOK_EVENTS {
-        let event_hooks = hooks_obj
-            .entry(event)
-            .or_insert_with(|| serde_json::json!([]))
-            .as_array_mut()
-            .ok_or_else(|| format!("hooks.{event} is not an array"))?;
-
-        let already_registered = event_hooks.iter().any(|entry| {
-            entry
-                .get("hooks")
-                .and_then(|h| h.as_array())
-                .map(|arr| {
-                    arr.iter().any(|hook| {
-                        hook.get("command").and_then(|c| c.as_str()) == Some(hook_command)
-                    })
-                })
-                .unwrap_or(false)
-        });
-
-        if !already_registered {
-            event_hooks.push(serde_json::json!({
-                "hooks": [{ "type": "command", "command": hook_command }]
-            }));
-        }
-    }
-
-    // Write atomically via temp file.
-    let dir = settings_path
-        .parent()
-        .ok_or_else(|| "settings.json has no parent dir".to_string())?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-
-    let tmp_path = settings_path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("serializing settings: {e}"))?;
-    std::fs::write(&tmp_path, &json).map_err(|e| format!("writing {}: {e}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, settings_path)
-        .map_err(|e| format!("renaming to {}: {e}", settings_path.display()))?;
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -925,90 +803,6 @@ mod tests {
         assert!(!result.contains("first"));
         assert!(!result.contains("second"));
         assert!(result.contains("middle"));
-    }
-
-    #[test]
-    fn register_claude_hooks_creates_settings_from_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-
-        register_claude_hooks(&settings_path, "~/.claude/hooks/orchard-state.sh").unwrap();
-
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-
-        assert!(settings["hooks"]["PreToolUse"].is_array());
-        assert!(settings["hooks"]["Stop"].is_array());
-        assert!(settings["hooks"]["SessionEnd"].is_array());
-    }
-
-    #[test]
-    fn register_claude_hooks_does_not_duplicate() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-
-        register_claude_hooks(&settings_path, "~/.claude/hooks/orchard-state.sh").unwrap();
-        register_claude_hooks(&settings_path, "~/.claude/hooks/orchard-state.sh").unwrap();
-
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-
-        let pre_tool_hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre_tool_hooks.len(), 1, "should not duplicate hook entries");
-    }
-
-    #[test]
-    fn register_claude_hooks_merges_with_existing_hooks() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-
-        // Pre-populate with an existing hook for PreToolUse
-        let existing = serde_json::json!({
-            "hooks": {
-                "PreToolUse": [{"hooks": [{"type": "command", "command": "other-hook.sh"}]}]
-            }
-        });
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&existing).unwrap(),
-        )
-        .unwrap();
-
-        register_claude_hooks(&settings_path, "~/.claude/hooks/orchard-state.sh").unwrap();
-
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-
-        let pre_tool_hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(
-            pre_tool_hooks.len(),
-            2,
-            "should preserve existing hook and add new one"
-        );
-    }
-
-    #[test]
-    fn register_claude_hooks_registers_all_required_events() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-
-        register_claude_hooks(&settings_path, "~/.claude/hooks/orchard-state.sh").unwrap();
-
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-
-        for event in &[
-            "PreToolUse",
-            "PostToolUse",
-            "Stop",
-            "Notification",
-            "SessionEnd",
-        ] {
-            assert!(
-                settings["hooks"][event].is_array(),
-                "expected hook for event: {event}"
-            );
-        }
     }
 
     // -----------------------------------------------------------------------

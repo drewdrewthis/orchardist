@@ -1,16 +1,15 @@
-//! Claude hook-state types.
+//! Types used by the TUI to project daemon-derived ClaudeInstance state.
 //!
-//! Defines `ClaudeStateFile` (shape-compatible with the JSON written by the
-//! orchard-state.sh hook) and `ClaudeState` (working/idle/input enum).
-//! `ClaudeStateFile` is now populated exclusively by
-//! `daemon::work_view_adapter::claude_instance_to_state_file` from daemon
-//! GraphQL output — no local disk reads remain in this module.
+//! Defines `ClaudeStateFile` (the data shape projected from the daemon's
+//! `ClaudeInstance` GraphQL type) and `ClaudeState` (working/idle/input enum).
+//! `ClaudeStateFile` is populated exclusively by
+//! `daemon::work_view_adapter::claude_instance_to_state_file` — no disk reads.
 use serde::{Deserialize, Serialize};
 
-/// State written by the orchard-state.sh hook script.
+/// Projected state for a Claude instance, derived from daemon GraphQL output.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClaudeStateFile {
-    /// Raw state string from the hook script: `"working"`, `"idle"`, or `"input"`.
+    /// Raw state string: `"working"`, `"idle"`, or `"input"`.
     pub state: String,
     /// Unique Claude session identifier.
     pub session_id: String,
@@ -18,20 +17,20 @@ pub struct ClaudeStateFile {
     pub tmux_session: String,
     /// Working directory of the Claude process.
     pub cwd: String,
-    /// Hook event that triggered the state write (e.g. `"Stop"`, `"PreToolUse"`).
+    /// The hook event that produced this state (e.g. `"Stop"`, `"PreToolUse"`).
     pub event: String,
     /// ISO 8601 timestamp of the last state write.
     pub timestamp: String,
-    /// Model identifier in use (e.g. `"claude-opus-4-6"`), written by `SessionStart`.
+    /// Model identifier in use (e.g. `"claude-opus-4-6"`).
     #[serde(default)]
     pub model: Option<String>,
-    /// Last tool invoked, written by `PreToolUse` (cleared on `Stop`).
+    /// Last tool invoked (cleared when idle).
     #[serde(default)]
     pub last_tool: Option<String>,
-    /// First line of the last user prompt, truncated to 80 chars. Written by `UserPromptSubmit`.
+    /// First line of the last user prompt, truncated to 80 chars.
     #[serde(default)]
     pub current_task: Option<String>,
-    /// Unix epoch seconds when the session started. Written by `SessionStart`.
+    /// Unix epoch seconds when the session started.
     #[serde(default)]
     pub session_start_ts: Option<u64>,
     /// Total input tokens from the most recent assistant message.
@@ -54,8 +53,7 @@ pub struct ClaudeStateFile {
     pub stop_reason: Option<String>,
     /// Number of in-flight tool calls at the time this state was written.
     ///
-    /// Maintained by the hook script via the `inflight.json` sidecar. Non-zero
-    /// during `PreToolUse`/`PostToolUse`/`PostToolUseFailure` events.
+    /// Non-zero during tool-execution events.
     #[serde(default)]
     pub inflight_tool_count: Option<u32>,
     /// ISO 8601 timestamp when the state last transitioned.
@@ -101,11 +99,9 @@ pub fn state_for_session<'a>(
     states.iter().find(|s| s.tmux_session == tmux_session)
 }
 
-/// Telemetry data written by the Claude Code status line script.
+/// Telemetry data for the Claude Code status line.
 ///
-/// Read from `$TMPDIR/orchard-statusline-<session>.json`. Merged with
-/// `ClaudeStateFile` (hook data) on read — the two files are separate
-/// channels with no coordination protocol.
+/// Merged with `ClaudeStateFile` state in the TUI display layer.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StatusLineFile {
     /// The tmux session name this status line belongs to.
