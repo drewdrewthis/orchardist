@@ -24,6 +24,9 @@ import (
 // queries and WSS for subscriptions, and verifies certs against the
 // system trust store. Default false preserves the original plaintext
 // transport for trusted-LAN deployments.
+//
+// Purpose is a free-form human description surfaced as `Host.purpose`
+// for any host matched via the alias chain in purposeForLocalHost.
 type PeerConfig struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`

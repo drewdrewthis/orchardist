@@ -344,10 +344,8 @@ func (r *queryResolver) Hosts(ctx context.Context) ([]*graphql1.Host, error) {
 			return nil, err
 		}
 		hosts = append(hosts, peers...)
-		if local.Purpose == nil {
-			if p := purposeForLocalHost(local, r.PeerProxy.Peers()); p != "" {
-				local.Purpose = &p
-			}
+		if p := purposeForLocalHost(local, r.PeerProxy.Peers()); p != "" {
+			local.Purpose = &p
 		}
 	}
 	return hosts, nil

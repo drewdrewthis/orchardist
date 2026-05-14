@@ -135,16 +135,15 @@ func resolveLocalNode(r *queryResolver, id string) (graphql1.Node, error) {
 	}
 }
 
-// purposeForLocalHost returns the `Purpose` of the first peer config that
+// purposeForLocalHost returns the Purpose of the first peer config that
 // matches the local host via the alias chain:
 //
 //	cfg.Name == local.MachineID || cfg.Name == local.Hostname ||
 //	cfg.Address == local.MachineID || cfg.Address == local.Hostname ||
 //	stripSSHUser(cfg.Address) == local.Hostname
 //
-// Returns "" when no peer matches or when the matched peer carries no Purpose.
-// Used by the Hosts resolver to enrich the local host before the manifest
-// layer runs (manifest overrides if present; step 3 removes the manifest path).
+// Earliest entry in cfgs wins on overlap. Returns "" when no peer matches
+// or when the matched peer carries no Purpose.
 func purposeForLocalHost(local *graphql1.Host, cfgs []peerproxy.PeerConfig) string {
 	if local == nil {
 		return ""
