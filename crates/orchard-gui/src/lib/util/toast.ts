@@ -10,11 +10,19 @@ function extractMessage(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	if (typeof err === "string") return err;
 	try {
-		return JSON.stringify(err);
+		const json = JSON.stringify(err);
+		// JSON.stringify returns "{}" for plain objects with only non-enumerable
+		// or symbol keys; fall through so the user sees something more useful.
+		if (json && json !== "{}") return json;
 	} catch {
-		// intentional swallow: circular-reference or non-serialisable object; fall back to String coercion
-		return String(err);
+		// intentional swallow: circular-reference or non-serialisable object; fall through to descriptor
 	}
+	if (err && typeof err === "object") {
+		const ctor = (err as { constructor?: { name?: string } }).constructor?.name;
+		const keys = Object.keys(err as object).slice(0, 5).join(",");
+		return `${ctor ?? "Object"}{${keys}}`;
+	}
+	return String(err);
 }
 
 export const toast = {

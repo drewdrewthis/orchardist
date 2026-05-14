@@ -188,7 +188,7 @@
 				const enc = new TextEncoder();
 				term.onData((data) => {
 					// intentional swallow: keystrokes may arrive after PTY exits; drop silently
-				if (ptyId != null) writePty(ptyId, enc.encode(data)).catch(() => {});
+					if (ptyId != null) writePty(ptyId, enc.encode(data)).catch(() => {});
 				});
 
 				resizeObserver = new ResizeObserver(() => {
