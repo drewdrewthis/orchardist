@@ -3,6 +3,7 @@ package claudeinstance
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -81,22 +82,26 @@ func (OSLivenessChecker) IsAlive(pid int) bool {
 // Stateless on purpose — every Compose call goes back through its
 // dependencies. Caching belongs to the Provider above us.
 type Composer struct {
-	hostID    string
-	panes     PaneFinder
-	procs     ProcessFinder
-	accounts  AccountFinder
-	liveness  LivenessChecker
-	jsonl     JsonlReader
-	clock     func() time.Time
+	hostID     string
+	panes      PaneFinder
+	procs      ProcessFinder
+	accounts   AccountFinder
+	liveness   LivenessChecker
+	jsonl      JsonlReader
+	shadow     *ShadowClassifier
+	clock      func() time.Time
 	staleAfter time.Duration
 }
 
 // NewComposer constructs a Composer with the production
-// LivenessChecker, JsonlReader, and wall clock. Pass nil for any sibling
-// that has not yet shipped a real provider — v1 leaves those edges null
-// and the composer behaves as if no match was found.
+// LivenessChecker, JsonlReader, ShadowClassifier, and wall clock. Pass
+// nil for any sibling that has not yet shipped a real provider — v1
+// leaves those edges null and the composer behaves as if no match was
+// found.
 func NewComposer(hostID string, panes PaneFinder, procs ProcessFinder, accounts AccountFinder) *Composer {
-	return NewComposerWith(hostID, panes, procs, accounts, OSLivenessChecker{}, NewFsJsonlReader(""), time.Now, HeartbeatStaleAfter)
+	c := NewComposerWith(hostID, panes, procs, accounts, OSLivenessChecker{}, NewFsJsonlReader(""), time.Now, HeartbeatStaleAfter)
+	c.shadow = NewShadowClassifier("", slog.Default())
+	return c
 }
 
 // NewComposerWith is the test-friendly constructor — accepts injected
@@ -108,6 +113,9 @@ func NewComposer(hostID string, panes PaneFinder, procs ProcessFinder, accounts 
 // The jsonl reader may be nil — the composer falls back to the
 // heartbeat's last_activity field (and from there to the pane's
 // session-level lastActivityAt) when no reader is wired.
+//
+// Shadow mode is disabled by default. Use WithShadow to enable it in
+// production; tests that do not test shadow behavior leave it nil.
 func NewComposerWith(
 	hostID string,
 	panes PaneFinder,
@@ -139,6 +147,13 @@ func NewComposerWith(
 	}
 }
 
+// WithShadow attaches a ShadowClassifier to the composer, enabling Phase 1
+// shadow-mode comparison logging. Returns the same *Composer for chaining.
+func (c *Composer) WithShadow(s *ShadowClassifier) *Composer {
+	c.shadow = s
+	return c
+}
+
 // Compose folds the heartbeats into ClaudeInstances. The order follows
 // the input slice (which the adapter sorts by tmux session for
 // deterministic test output).
@@ -164,6 +179,12 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 	proc := c.findProcess(ctx, pid)
 	account := c.findAccount(ctx)
 	state := c.deriveState(hb, pid, pane)
+
+	// Shadow mode: classify from jsonl and log disagreements. Does not
+	// affect state returned to callers — Phase 2 will flip the resolver.
+	if c.shadow != nil {
+		c.shadow.CompareAndLog(hb, state, c.clock())
+	}
 
 	id := buildID(c.hostID, pid, hb.TmuxSession)
 	inst := &graphql.ClaudeInstance{
