@@ -4,7 +4,6 @@
   Channels (chat rooms from chat-core) are rendered above the lens content.
 -->
 <script lang="ts">
-	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import SidebarItem from "./SidebarItem.svelte";
 	import ChannelRow from "./ChannelRow.svelte";
@@ -39,17 +38,13 @@
 	const store = getStore();
 	const lens = $derived(store.lens);
 
-	// Houdini stores: kick off CacheAndNetwork fetches on mount; the
-	// component subscribes via the `$<storeName>` reactive contract.
-	// Subsequent push events into the daemon (subscribeAll → cache patch)
-	// re-render the sidebar without an explicit re-fetch.
-	onMount(() => {
-		attentionStore.fetch();
-		recentStore.fetch();
-		tmuxStore.fetch();
-		issueStore.fetch();
-		worktreeStore.fetch();
-	});
+	// Per-lens $effect: re-fetches the active lens store on every lens entry.
+	// CacheAndNetwork policy (houdini.config.js) serves cache instantly then revalidates.
+	$effect(() => { if (lens === "attention") attentionStore.fetch(); });
+	$effect(() => { if (lens === "recent") recentStore.fetch(); });
+	$effect(() => { if (lens === "tmux") tmuxStore.fetch(); });
+	$effect(() => { if (lens === "issue") issueStore.fetch(); });
+	$effect(() => { if (lens === "worktree") worktreeStore.fetch(); });
 
 	// All four lenses produce the same shape per #540 B0/B1: sections
 	// of `SidebarItem[]`. The lens decides the grouping axis; the item
