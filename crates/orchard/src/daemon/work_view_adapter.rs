@@ -434,7 +434,7 @@ pub(crate) fn claude_instance_to_state_file(ci: &ClaudeInstance) -> Option<Claud
             .last_activity_at
             .clone()
             .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-        model: None,
+        model: ci.model.clone(),
         last_tool: None,
         current_task: None,
         session_start_ts: None,
@@ -443,7 +443,7 @@ pub(crate) fn claude_instance_to_state_file(ci: &ClaudeInstance) -> Option<Claud
         cache_creation_input_tokens: None,
         cache_read_input_tokens: None,
         stop_reason: None,
-        inflight_tool_count: None,
+        inflight_tool_count: u32::try_from(ci.inflight_tool_count).ok(),
         state_changed_at: None,
     })
 }
@@ -605,6 +605,8 @@ mod tests {
                 session_uuid: Some(uuid.to_string()),
                 rc_enabled: false,
                 last_activity_at: Some(now),
+                model: None,
+                inflight_tool_count: 0,
             });
             self
         }

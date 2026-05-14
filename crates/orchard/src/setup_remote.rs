@@ -257,5 +257,4 @@ mod tests {
         // Smoke test: should not panic.
         print_summary(&results);
     }
-
 }

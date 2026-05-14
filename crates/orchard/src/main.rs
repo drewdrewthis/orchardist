@@ -233,10 +233,9 @@ fn handle_heal(fix: bool, json: bool) {
         })
         .collect();
 
-    // Phase 4: sidecar readers removed — daemon-side janitor (Phase 6) will
-    // handle stale file cleanup. Heal receives an empty claude_states slice;
-    // the StaleClaudeState check category is preserved for the transition period.
-    let claude_states: Vec<orchard::heal::HealClaudeState> = Vec::new();
+    // Sidecar cleanup is handled daemon-side (the SidecarJanitor in
+    // `internal/server/providers/claudeinstance/janitor.go` sweeps at every
+    // daemon boot). Heal no longer touches `$TMPDIR/orchard-claude-*.json`.
     let cache_files = heal::gather_cache_files();
     let known_slugs: Vec<String> = config.repos.iter().map(|r| r.slug.clone()).collect();
 
@@ -246,7 +245,6 @@ fn handle_heal(fix: bool, json: bool) {
     let report = heal::diagnose(&heal::HealInput {
         sessions: &sessions,
         worktrees: &worktrees,
-        claude_states: &claude_states,
         cache_files: &cache_files,
         known_repo_slugs: &known_slugs,
         current_session: current_session.as_deref(),
