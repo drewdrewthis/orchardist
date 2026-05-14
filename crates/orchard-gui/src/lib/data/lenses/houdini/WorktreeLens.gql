@@ -5,8 +5,8 @@ query WorktreeLens {
 			slug
 			worktrees {
 				...WorktreeEnrichment
-				claudeInstances {
-					...SessionCard
+				tmuxPanes {
+					...PaneCard
 				}
 			}
 		}

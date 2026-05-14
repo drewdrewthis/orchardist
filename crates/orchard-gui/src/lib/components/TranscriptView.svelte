@@ -125,6 +125,7 @@
 		if (!stickToBottom || len === 0 || len === lastScrolledLen) return;
 		lastScrolledLen = len;
 		setTimeout(() => {
+			// intentional swallow: virtualizer may not be mounted yet during fast turn bursts; scroll retried on next tick
 			try { $virtualizer.scrollToIndex(len - 1, { align: "end" }); } catch {}
 		}, 0);
 	});

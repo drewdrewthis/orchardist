@@ -85,6 +85,7 @@ class TauriBackend implements ChatBackend {
 				memberCount: r.member_count,
 			}));
 		} catch {
+			// intentional swallow: chat-core IPC unavailable (daemon not running or non-Tauri env); caller degrades to empty list
 			return [];
 		}
 	}
@@ -114,6 +115,7 @@ class TauriBackend implements ChatBackend {
 			await invoke("chat_list_rooms");
 			return true;
 		} catch {
+			// intentional swallow: reachability probe — failure means unreachable, callers receive false
 			return false;
 		}
 	}
@@ -175,6 +177,7 @@ export async function getSelfHandle(): Promise<string | null> {
 		if (!inTauri) return null;
 		_selfHandle = await invoke<string>("chat_self_handle");
 	} catch {
+		// intentional swallow: handle discovery is best-effort; null means messages render without a self-attribution
 		_selfHandle = null;
 	}
 	return _selfHandle;

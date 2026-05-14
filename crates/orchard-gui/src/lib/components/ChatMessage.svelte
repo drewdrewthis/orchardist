@@ -41,10 +41,12 @@
 	const showActions = $derived(!msg.typing);
 
 	async function doCopy() {
-		if (msg.text) {
-			try {
-				await navigator.clipboard.writeText(msg.text);
-			} catch {}
+		if (!msg.text) return;
+		try {
+			await navigator.clipboard.writeText(msg.text);
+		} catch {
+			// intentional swallow: clipboard write denied (no user gesture or permission blocked); copy action silently no-ops
+			return;
 		}
 		copied = true;
 		setTimeout(() => (copied = false), 1100);

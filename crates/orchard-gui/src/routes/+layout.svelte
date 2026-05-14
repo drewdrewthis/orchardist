@@ -4,6 +4,7 @@
 	import "$lib/styles/layout.css";
 	import { getStore } from "$lib/store.svelte";
 	import { onMount } from "svelte";
+	import { Toaster } from "svelte-sonner";
 
 	// Houdini's client at `src/client.ts` is wired by the houdini-svelte
 	// plugin (see `houdini.config.js:client`); it's lazy-imported the
@@ -28,10 +29,12 @@
 
 		return () => {
 			stopTick();
+			// intentional swallow: cleanup-time unsubscribe; if the promise never resolved the subscription was never established
 			subPromise.then((u) => u()).catch(() => {});
 			store.teardown();
 		};
 	});
 </script>
 
+<Toaster richColors />
 {@render children?.()}

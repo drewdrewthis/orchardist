@@ -24,6 +24,7 @@
 		PTY_UNSUPPORTED,
 	} from "$lib/data/pty";
 	import type { UnlistenFn } from "@tauri-apps/api/event";
+	import { toast } from "$lib/util/toast";
 
 	type Props = {
 		argv: string[];
@@ -59,15 +60,20 @@
 	async function killCurrentPty() {
 		try {
 			unsubData?.();
-		} catch {}
+		} catch {
+			// intentional swallow: pty already dead during cleanup; unsub throws harmlessly
+		}
 		try {
 			unsubExit?.();
-		} catch {}
+		} catch {
+			// intentional swallow: pty already dead during cleanup; unsub throws harmlessly
+		}
 		unsubData = null;
 		unsubExit = null;
 		if (ptyId != null) {
 			const old = ptyId;
 			ptyId = null;
+			// intentional swallow: pty already dead during cleanup
 			killPty(old).catch(() => {});
 		}
 	}
@@ -90,6 +96,7 @@
 		try {
 			const handle = await spawnPty(currentArgv, { cwd, cols, rows });
 			if (cancelled || lastArgvKey !== argvKey(currentArgv)) {
+				// intentional swallow: stale PTY spawned after argv changed; kill is best-effort
 				killPty(handle.id).catch(() => {});
 				return;
 			}
@@ -139,18 +146,55 @@
 				});
 				fitAddon = new fit.FitAddon();
 				term.loadAddon(fitAddon);
-				term.loadAddon(new links.WebLinksAddon());
+				try {
+					// Detect macOS: cmd-click is the platform convention; other
+					// platforms use a plain click.
+					const isMac =
+						typeof navigator !== "undefined" &&
+						navigator.platform.toUpperCase().includes("MAC");
+
+					/**
+					 * Open a URL using the Tauri shell opener when running inside
+					 * the desktop app, falling back to window.open for browser dev.
+					 */
+					async function openUrl(uri: string): Promise<void> {
+						if (inTauri) {
+							const { openUrl: tauriOpen } = await import(
+								"@tauri-apps/plugin-opener"
+							);
+							await tauriOpen(uri);
+						} else {
+							window.open(uri, "_blank", "noopener,noreferrer");
+						}
+					}
+
+					/**
+					 * activateCallback for WebLinksAddon.
+					 * On macOS, only activate on cmd-click (metaKey).
+					 * On other platforms, activate on a plain click.
+					 */
+					function handleLink(event: MouseEvent, uri: string): void {
+						if (isMac && !event.metaKey) return;
+						openUrl(uri).catch(toast.error);
+					}
+
+					term.loadAddon(new links.WebLinksAddon(handleLink));
+				} catch (err) {
+					toast.error(err);
+				}
 				term.open(host);
 				fitAddon.fit();
 
 				const enc = new TextEncoder();
 				term.onData((data) => {
+					// intentional swallow: keystrokes may arrive after PTY exits; drop silently
 					if (ptyId != null) writePty(ptyId, enc.encode(data)).catch(() => {});
 				});
 
 				resizeObserver = new ResizeObserver(() => {
 					try {
 						fitAddon?.fit();
+						// intentional swallow: PTY may have exited between resize check and IPC call
 						if (ptyId != null && term) resizePty(ptyId, term.cols, term.rows).catch(() => {});
 					} catch {
 						// Window not visible / 0-sized — skip silently.

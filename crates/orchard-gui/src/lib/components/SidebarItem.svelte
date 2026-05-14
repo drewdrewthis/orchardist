@@ -79,6 +79,13 @@
 	const cwdBase = $derived(
 		cwdFull ? cwdFull.split("/").filter(Boolean).pop() || cwdFull : null,
 	);
+
+	// Repo chip (#550): last path segment of "owner/repo" form, or the value
+	// as-is when no slash. Null when the worktree carries no repo metadata.
+	const repo = $derived(item.worktree?.repo ?? null);
+	const repoSlug = $derived(
+		repo ? (repo.includes("/") ? repo.split("/").pop()! : repo) : null,
+	);
 </script>
 
 <div
@@ -97,10 +104,17 @@
 	tabindex="0"
 >
 	<div class="fleet-item-main">
-		<span
-			class="pip {item.state === 'working' ? 'ok' : 'idle'}"
-			title={stateLabel}
-		></span>
+		{#if item.state !== 'no_claude'}
+			<span class="state-pill state-pill--{item.state}" title={stateLabel}>
+				{#if item.state === 'working'}● working
+				{:else if item.state === 'idle'}· idle
+				{:else if item.state === 'input'}→ input
+				{:else if item.state === 'stalled'}⚠ stalled
+				{:else if item.state === 'dead'}✕ dead
+				{:else}{item.state}
+				{/if}
+			</span>
+		{/if}
 		<div class="fleet-item-body">
 			<div class="fleet-item-title-row">
 				<span class="fleet-item-title">{item.title}</span>
@@ -135,6 +149,12 @@
 						<span>{item.worktree.branch}</span>
 					</span>
 				{/if}
+				{#if repoSlug}
+					<span class="meta-chip mono dimer" title={repo ?? undefined}>
+						<Icon name="git-fork" size={11} />
+						<span>{repoSlug}</span>
+					</span>
+				{/if}
 				{#if item.worktree?.pr}
 					<span class="mono dimer">PR #{item.worktree.pr.number}</span>
 					<span class="dimest">·</span>
@@ -156,7 +176,6 @@
 					<span class="mono dimest" style:font-size="10.5px" title="claude pid">{item.pid}</span>
 					<span class="dimest">·</span>
 				{/if}
-				<span class="dimer mono" style:font-size="11px">{stateLabel}</span>
 				{#if item.lastActivityMs > 0}
 					<span class="dimest">·</span>
 					<span class="dimer mono" style:font-size="11px">{relTime(item.lastActivityMs, now)}</span>
@@ -187,6 +206,52 @@
 </div>
 
 <style>
+	/* State pill (#553) — replaces the binary pip. 6-way visual distinction. */
+	.state-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		font-size: 10px;
+		padding: 1px 5px;
+		border-radius: 3px;
+		white-space: nowrap;
+		font-family: var(--font-mono, monospace);
+		flex: none;
+		align-self: center;
+	}
+	/* working — green */
+	.state-pill--working {
+		background: rgba(110, 211, 145, 0.14);
+		color: #6fd391;
+		border: 0.5px solid rgba(110, 211, 145, 0.32);
+	}
+	/* idle — muted grey */
+	.state-pill--idle {
+		background: rgba(160, 160, 160, 0.10);
+		color: #888;
+		border: 0.5px solid rgba(160, 160, 160, 0.22);
+	}
+	/* input — high-contrast amber/orange; bold per #553 L160 */
+	.state-pill--input {
+		background: rgba(255, 160, 50, 0.20);
+		color: #ffaa33;
+		border: 0.5px solid rgba(255, 160, 50, 0.50);
+		font-weight: 700;
+	}
+	/* stalled — red/warning */
+	.state-pill--stalled {
+		background: rgba(255, 100, 100, 0.14);
+		color: #ff7272;
+		border: 0.5px solid rgba(255, 100, 100, 0.32);
+	}
+	/* dead — dark muted */
+	.state-pill--dead {
+		background: rgba(100, 100, 100, 0.10);
+		color: #666;
+		border: 0.5px solid rgba(100, 100, 100, 0.22);
+		text-decoration: line-through;
+	}
+
 	.meta-chip {
 		display: inline-flex;
 		align-items: center;

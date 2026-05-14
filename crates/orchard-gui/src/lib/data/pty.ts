@@ -79,6 +79,7 @@ export async function listenData(
 		try {
 			onChunk(decodeBase64(e.payload.b64));
 		} catch (err) {
+			// intentional swallow: malformed PTY data chunk; warn to console but don't interrupt the terminal stream
 			console.warn("[pty] decode failed:", err);
 		}
 	});

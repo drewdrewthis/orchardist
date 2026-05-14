@@ -4,11 +4,11 @@
   Channels (chat rooms from chat-core) are rendered above the lens content.
 -->
 <script lang="ts">
-	import { onMount } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import SidebarItem from "./SidebarItem.svelte";
 	import ChannelRow from "./ChannelRow.svelte";
 	import { getStore } from "$lib/store.svelte";
+	import { toast } from "$lib/util/toast";
 	import {
 		attentionStore,
 		buildAttentionSections,
@@ -38,17 +38,13 @@
 	const store = getStore();
 	const lens = $derived(store.lens);
 
-	// Houdini stores: kick off CacheAndNetwork fetches on mount; the
-	// component subscribes via the `$<storeName>` reactive contract.
-	// Subsequent push events into the daemon (subscribeAll → cache patch)
-	// re-render the sidebar without an explicit re-fetch.
-	onMount(() => {
-		attentionStore.fetch();
-		recentStore.fetch();
-		tmuxStore.fetch();
-		issueStore.fetch();
-		worktreeStore.fetch();
-	});
+	// Per-lens $effect: re-fetches the active lens store on every lens entry.
+	// CacheAndNetwork policy (houdini.config.js) serves cache instantly then revalidates.
+	$effect(() => { if (lens === "attention") attentionStore.fetch(); });
+	$effect(() => { if (lens === "recent") recentStore.fetch(); });
+	$effect(() => { if (lens === "tmux") tmuxStore.fetch(); });
+	$effect(() => { if (lens === "issue") issueStore.fetch(); });
+	$effect(() => { if (lens === "worktree") worktreeStore.fetch(); });
 
 	// All four lenses produce the same shape per #540 B0/B1: sections
 	// of `SidebarItem[]`. The lens decides the grouping axis; the item
@@ -60,6 +56,22 @@
 		attentionSections.reduce((n, s) => n + s.items.length, 0),
 	);
 	const attentionLoading = $derived($attentionStore.fetching);
+
+	// Surface attention-lens fetch errors via toast so the user isn't left
+	// with a silently empty sidebar (Scenario L208 / #600). Track the
+	// last-shown message so the effect doesn't re-fire the same toast every
+	// time another reactive read in scope changes.
+	let lastAttentionError: string | null = null;
+	$effect(() => {
+		const msg = $attentionStore.errors?.[0]?.message?.trim() ?? "";
+		if (!msg) {
+			lastAttentionError = null;
+			return;
+		}
+		if (msg === lastAttentionError) return;
+		lastAttentionError = msg;
+		toast.error(msg);
+	});
 
 	const recentItems = $derived(buildRecentItems($recentStore.data));
 	const recentLoading = $derived($recentStore.fetching);
@@ -105,42 +117,180 @@
 	// Channels (chat rooms from chat-core) live across all lenses at the
 	// top — their relevance is independent of the lens filter.
 	const channelRooms = $derived(store.chatRooms);
+
+	// ── Collapsible sections ────────────────────────────────────────────
+	// Single localStorage key stores all collapsed states as a JSON object.
+	// Key schema: "<lens>:<section-id>", e.g. "attention:blocked".
+	// Special singles: "recent:recent", "channels:channels".
+	// Tauri SPA — no SSR, so localStorage is always available synchronously.
+	const LS_KEY = "orchard:sidebar:collapsed";
+
+	function hydrateCollapsed(): Record<string, boolean> {
+		try {
+			const raw = localStorage.getItem(LS_KEY);
+			if (raw) return JSON.parse(raw) as Record<string, boolean>;
+		} catch {
+			// Malformed JSON — start fresh.
+		}
+		return {};
+	}
+
+	let collapsed: Record<string, boolean> = $state(hydrateCollapsed());
+
+	$effect(() => {
+		// Write the current collapsed map back to localStorage whenever it changes.
+		localStorage.setItem(LS_KEY, JSON.stringify(collapsed));
+	});
+
+	function toggleCollapse(key: string): void {
+		collapsed = { ...collapsed, [key]: !collapsed[key] };
+	}
 </script>
 
 <div class="fleet-list">
 	{#if channelRooms.length > 0}
+		{@const channelsKey = "channels:channels"}
 		<div class="fleet-group" data-kind="channels">
-			<div class="group-header">
+			<button
+				class="group-header group-header--btn"
+				aria-expanded={!collapsed[channelsKey]}
+				onclick={() => toggleCollapse(channelsKey)}
+			>
 				<span style="display: inline-flex; align-items: center; gap: 6px;">
 					<Icon name="message" size={11} />
 					<span>Channels</span>
 				</span>
-				<span class="count">{channelRooms.length}</span>
-			</div>
-			{#each channelRooms as ch (ch.id)}
-				<ChannelRow
-					roomId={ch.id}
-					memberCount={ch.memberCount}
-					selected={rowSelected({ channelId: ch.id })}
-					{density}
-					{surface}
-					onSelect={(ev) => onSelect({ kind: "channel", roomId: ch.id }, ev)}
-				/>
-			{/each}
+				<span style="display: inline-flex; align-items: center; gap: 4px;">
+					<span class="count">{channelRooms.length}</span>
+					<Icon name={collapsed[channelsKey] ? "chevron-right" : "chevron-down"} size={11} />
+				</span>
+			</button>
+			{#if !collapsed[channelsKey]}
+				{#each channelRooms as ch (ch.id)}
+					<ChannelRow
+						roomId={ch.id}
+						memberCount={ch.memberCount}
+						selected={rowSelected({ channelId: ch.id })}
+						{density}
+						{surface}
+						onSelect={(ev) => onSelect({ kind: "channel", roomId: ch.id }, ev)}
+					/>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 
 	{#if lens === "attention"}
 		{#each attentionSections as section (section.id)}
 			{#if section.items.length > 0}
+				{@const attnKey = "attention:" + section.id}
 				<div class="fleet-group" data-kind={section.id}>
-					<div class="group-header" class:attn={section.id === "blocked"}>
+					<button
+						class="group-header group-header--btn"
+						class:attn={section.id === "blocked"}
+						aria-expanded={!collapsed[attnKey]}
+						onclick={() => toggleCollapse(attnKey)}
+					>
 						<span style="display: inline-flex; align-items: center; gap: 6px;">
 							<Icon name={section.id === "blocked" ? "alert" : section.id === "waiting" ? "clock" : "spark"} size={11} />
 							<span>{section.label}</span>
 						</span>
+						<span style="display: inline-flex; align-items: center; gap: 4px;">
+							<span class="count">{section.items.length}</span>
+							<Icon name={collapsed[attnKey] ? "chevron-right" : "chevron-down"} size={11} />
+						</span>
+					</button>
+					{#if !collapsed[attnKey]}
+						{#each section.items as item (item.id)}
+							<SidebarItem
+								{item}
+								{now}
+								{density}
+								{surface}
+								here={isHere(item.session.pane?.paneId)}
+								selected={rowSelected({
+									paneId: item.session.pane?.paneId,
+									sessionUuid: item.session.sessionUuid,
+								})}
+								onSelect={(_id, ev) => onSelect({
+									kind: "session",
+									paneId: item.session.pane?.paneId,
+									sessionUuid: item.session.sessionUuid,
+								}, ev)}
+							/>
+						{/each}
+					{/if}
+				</div>
+			{/if}
+		{/each}
+		{#if attentionTotal === 0}
+			<div class="empty-lens">
+				<span class="dimer">{attentionLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
+			</div>
+		{/if}
+	{:else if lens === "recent"}
+		<!-- Recent activity is the only flat lens — no grouping axis (#540 B0). -->
+		{@const recentKey = "recent:recent"}
+		<div class="fleet-group" data-kind="recent">
+			<button
+				class="group-header group-header--btn"
+				aria-expanded={!collapsed[recentKey]}
+				onclick={() => toggleCollapse(recentKey)}
+			>
+				<span style="display: inline-flex; align-items: center; gap: 6px;">
+					<Icon name="clock" size={11} />
+					<span>Recent</span>
+				</span>
+				<span style="display: inline-flex; align-items: center; gap: 4px;">
+					<span class="count">{recentItems.length}</span>
+					<Icon name={collapsed[recentKey] ? "chevron-right" : "chevron-down"} size={11} />
+				</span>
+			</button>
+			{#if !collapsed[recentKey]}
+				{#each recentItems as item (item.id)}
+					<SidebarItem
+						{item}
+						{now}
+						{density}
+						{surface}
+						here={isHere(item.session.pane?.paneId)}
+						selected={rowSelected({
+							paneId: item.session.pane?.paneId,
+							sessionUuid: item.session.sessionUuid,
+						})}
+						onSelect={(_id, ev) => onSelect({
+							kind: "session",
+							paneId: item.session.pane?.paneId,
+							sessionUuid: item.session.sessionUuid,
+						}, ev)}
+					/>
+				{/each}
+			{/if}
+		</div>
+		{#if recentItems.length === 0}
+			<div class="empty-lens">
+				<span class="dimer">{recentLoading ? "Loading…" : "No Claude sessions known."}</span>
+			</div>
+		{/if}
+	{:else if lens === "tmux"}
+		{#each tmuxSections as section (section.id)}
+			{@const tmuxKey = "tmux:" + section.id}
+			<div class="fleet-group" data-kind={section.id}>
+				<button
+					class="group-header group-header--btn"
+					aria-expanded={!collapsed[tmuxKey]}
+					onclick={() => toggleCollapse(tmuxKey)}
+				>
+					<span style="display: inline-flex; align-items: center; gap: 6px;">
+						<Icon name="terminal" size={11} />
+						<span>{section.label}</span>
+					</span>
+					<span style="display: inline-flex; align-items: center; gap: 4px;">
 						<span class="count">{section.items.length}</span>
-					</div>
+						<Icon name={collapsed[tmuxKey] ? "chevron-right" : "chevron-down"} size={11} />
+					</span>
+				</button>
+				{#if !collapsed[tmuxKey]}
 					{#each section.items as item (item.id)}
 						<SidebarItem
 							{item}
@@ -159,76 +309,7 @@
 							}, ev)}
 						/>
 					{/each}
-				</div>
-			{/if}
-		{/each}
-		{#if attentionTotal === 0}
-			<div class="empty-lens">
-				<span class="dimer">{attentionLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
-			</div>
-		{/if}
-	{:else if lens === "recent"}
-		<!-- Recent activity is the only flat lens — no grouping axis (#540 B0). -->
-		<div class="fleet-group" data-kind="recent">
-			<div class="group-header">
-				<span style="display: inline-flex; align-items: center; gap: 6px;">
-					<Icon name="clock" size={11} />
-					<span>Recent</span>
-				</span>
-				<span class="count">{recentItems.length}</span>
-			</div>
-			{#each recentItems as item (item.id)}
-				<SidebarItem
-					{item}
-					{now}
-					{density}
-					{surface}
-					here={isHere(item.session.pane?.paneId)}
-					selected={rowSelected({
-						paneId: item.session.pane?.paneId,
-						sessionUuid: item.session.sessionUuid,
-					})}
-					onSelect={(_id, ev) => onSelect({
-						kind: "session",
-						paneId: item.session.pane?.paneId,
-						sessionUuid: item.session.sessionUuid,
-					}, ev)}
-				/>
-			{/each}
-		</div>
-		{#if recentItems.length === 0}
-			<div class="empty-lens">
-				<span class="dimer">{recentLoading ? "Loading…" : "No Claude sessions known."}</span>
-			</div>
-		{/if}
-	{:else if lens === "tmux"}
-		{#each tmuxSections as section (section.id)}
-			<div class="fleet-group" data-kind={section.id}>
-				<div class="group-header">
-					<span style="display: inline-flex; align-items: center; gap: 6px;">
-						<Icon name="terminal" size={11} />
-						<span>{section.label}</span>
-					</span>
-					<span class="count">{section.items.length}</span>
-				</div>
-				{#each section.items as item (item.id)}
-					<SidebarItem
-						{item}
-						{now}
-						{density}
-						{surface}
-						here={isHere(item.session.pane?.paneId)}
-						selected={rowSelected({
-							paneId: item.session.pane?.paneId,
-							sessionUuid: item.session.sessionUuid,
-						})}
-						onSelect={(_id, ev) => onSelect({
-							kind: "session",
-							paneId: item.session.pane?.paneId,
-							sessionUuid: item.session.sessionUuid,
-						}, ev)}
-					/>
-				{/each}
+				{/if}
 			</div>
 		{/each}
 		{#if tmuxSections.length === 0}
@@ -246,56 +327,23 @@
 		{/if}
 	{:else if lens === "issue"}
 		{#each issueSections as section (section.id)}
+			{@const issueKey = "issue:" + section.id}
 			<div class="fleet-group" data-kind={section.id}>
-				<div class="group-header">
+				<button
+					class="group-header group-header--btn"
+					aria-expanded={!collapsed[issueKey]}
+					onclick={() => toggleCollapse(issueKey)}
+				>
 					<span style="display: inline-flex; align-items: center; gap: 6px;">
 						<Icon name="issue" size={11} />
 						<span>{section.label}</span>
 					</span>
-					<span class="count">{section.items.length}</span>
-				</div>
-				{#each section.items as item (item.id)}
-					<SidebarItem
-						{item}
-						{now}
-						{density}
-						{surface}
-						here={isHere(item.session.pane?.paneId)}
-						selected={rowSelected({
-							paneId: item.session.pane?.paneId,
-							sessionUuid: item.session.sessionUuid,
-						})}
-						onSelect={(_id, ev) => onSelect({
-							kind: "session",
-							paneId: item.session.pane?.paneId,
-							sessionUuid: item.session.sessionUuid,
-						}, ev)}
-					/>
-				{/each}
-			</div>
-		{/each}
-		{#if issueTotal === 0}
-			<div class="empty-lens">
-				<span class="dimer">
-					{issueLoading ? "Loading…" : "No issues with open PRs in scope."}
-				</span>
-			</div>
-		{/if}
-	{:else if lens === "worktree"}
-		{#each worktreeSections as section (section.id)}
-			<div class="fleet-group" data-kind={section.id}>
-				<div class="group-header">
-					<span style="display: inline-flex; align-items: center; gap: 6px;">
-						<Icon name="git-branch" size={11} />
-						<span>{section.label}</span>
+					<span style="display: inline-flex; align-items: center; gap: 4px;">
+						<span class="count">{section.items.length}</span>
+						<Icon name={collapsed[issueKey] ? "chevron-right" : "chevron-down"} size={11} />
 					</span>
-					<span class="count">{section.items.length}</span>
-				</div>
-				{#if section.items.length === 0}
-					<div class="empty-section">
-						<span class="dimer">No active sessions in this repo.</span>
-					</div>
-				{:else}
+				</button>
+				{#if !collapsed[issueKey]}
 					{#each section.items as item (item.id)}
 						<SidebarItem
 							{item}
@@ -314,6 +362,59 @@
 							}, ev)}
 						/>
 					{/each}
+				{/if}
+			</div>
+		{/each}
+		{#if issueTotal === 0}
+			<div class="empty-lens">
+				<span class="dimer">
+					{issueLoading ? "Loading…" : "No issues with open PRs in scope."}
+				</span>
+			</div>
+		{/if}
+	{:else if lens === "worktree"}
+		{#each worktreeSections as section (section.id)}
+			{@const worktreeKey = "worktree:" + section.id}
+			<div class="fleet-group" data-kind={section.id}>
+				<button
+					class="group-header group-header--btn"
+					aria-expanded={!collapsed[worktreeKey]}
+					onclick={() => toggleCollapse(worktreeKey)}
+				>
+					<span style="display: inline-flex; align-items: center; gap: 6px;">
+						<Icon name="git-branch" size={11} />
+						<span>{section.label}</span>
+					</span>
+					<span style="display: inline-flex; align-items: center; gap: 4px;">
+						<span class="count">{section.items.length}</span>
+						<Icon name={collapsed[worktreeKey] ? "chevron-right" : "chevron-down"} size={11} />
+					</span>
+				</button>
+				{#if !collapsed[worktreeKey]}
+					{#if section.items.length === 0}
+						<div class="empty-section">
+							<span class="dimer">No active sessions in this repo.</span>
+						</div>
+					{:else}
+						{#each section.items as item (item.id)}
+							<SidebarItem
+								{item}
+								{now}
+								{density}
+								{surface}
+								here={isHere(item.session.pane?.paneId)}
+								selected={rowSelected({
+									paneId: item.session.pane?.paneId,
+									sessionUuid: item.session.sessionUuid,
+								})}
+								onSelect={(_id, ev) => onSelect({
+									kind: "session",
+									paneId: item.session.pane?.paneId,
+									sessionUuid: item.session.sessionUuid,
+								}, ev)}
+							/>
+						{/each}
+					{/if}
 				{/if}
 			</div>
 		{/each}
@@ -336,5 +437,25 @@
 	.empty-section {
 		padding: 8px 16px;
 		font-size: 11.5px;
+	}
+	/* Section headers are now <button> elements for a11y (click + Enter/Space). */
+	.group-header--btn {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		background: none;
+		border: none;
+		padding: 0;
+		margin: 0;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+		text-align: left;
+	}
+	.group-header--btn:focus-visible {
+		outline: 2px solid var(--color-accent, #6366f1);
+		outline-offset: -2px;
+		border-radius: 2px;
 	}
 </style>

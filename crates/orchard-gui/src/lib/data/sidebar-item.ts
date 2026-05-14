@@ -16,7 +16,7 @@
  * No more pane-id-as-title in the tmux lens; no more lens-specific
  * label divergence.
  */
-import type { SessionCardT, WorktreeEnrichment } from "./lenses/fragments";
+import type { PaneCardT, SessionCardT, WorktreeEnrichment } from "./lenses/fragments";
 
 /**
  * One sidebar section — a label plus the items that belong to it.
@@ -183,6 +183,60 @@ export function buildSidebarItem(
 		state: session.state,
 		lastActivityMs,
 		reasons,
+	};
+}
+
+/**
+ * Build a sidebar row for a tmux pane that has no attached Claude session.
+ * Keyed by the pane's `paneId` so that two panes on the same worktree each
+ * get their own row. Title comes from pane.title → pane.currentCommand →
+ * pane.paneId. `state="no_claude"` drives the renderer (no state pill).
+ *
+ * @param pane - the tmux pane (PaneCard shape)
+ * @param worktree - resolved worktree for the pane's process, if any
+ * @param lastActivityMs - activity timestamp; 0 when not known
+ */
+export function buildTmuxOnlyPaneItem(
+	pane: PaneCardT,
+	worktree: WorktreeEnrichment | null,
+	lastActivityMs: number = 0,
+): SidebarItem {
+	const title = pane.title || pane.currentCommand || pane.paneId;
+	return {
+		id: `pane:${pane.paneId}`,
+		// Synthetic placeholder so the existing SidebarItem component renders
+		// the row uniformly; no live Claude session exists for this pane.
+		session: {
+			id: `pane:${pane.paneId}`,
+			sessionUuid: "",
+			state: "no_claude",
+			startedAt: null,
+			lastActivityAt: null,
+			rcEnabled: false,
+			account: null,
+			pane: {
+				paneId: pane.paneId,
+				title: pane.title,
+				currentCommand: pane.currentCommand,
+				window: pane.window,
+			},
+			process: pane.process ? { pid: pane.process.pid, cwd: pane.process.cwd } : null,
+			worktree: worktree ?? null,
+			conversation: null,
+		} as unknown as SessionCardT,
+		title,
+		worktree,
+		tmuxAddress: (() => {
+			const w = pane.window;
+			const sessionName = w?.session?.name;
+			const windowIndex = w?.index;
+			if (sessionName == null || windowIndex == null) return pane.paneId;
+			return `${sessionName}:${windowIndex}.${pane.paneId.replace("%", "")}`;
+		})(),
+		pid: pane.process?.pid ?? null,
+		state: "no_claude",
+		lastActivityMs,
+		reasons: [],
 	};
 }
 
