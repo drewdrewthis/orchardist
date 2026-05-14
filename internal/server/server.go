@@ -370,8 +370,14 @@ func (s *Server) Run(ctx context.Context) error {
 		janitor := claudeinstance.NewSidecarJanitor(
 			claudeinstance.ResolveDir(),
 			func(_ context.Context) (map[string]bool, error) {
+				// If tmux isn't wired we cannot enumerate live sessions, and
+				// returning an empty set would tell the janitor every sidecar
+				// is orphaned — which would delete files for sessions that are
+				// genuinely alive. Surface the unavailability as an error so
+				// the janitor's existing error path skips the sweep.
+				// (https://github.com/drewdrewthis/git-orchard-rs/pull/606#discussion_r3243103673)
 				if s.tmuxProv == nil {
-					return map[string]bool{}, nil
+					return nil, errors.New("tmux provider unavailable; skipping sidecar sweep")
 				}
 				snap := s.tmuxProv.Snapshot()
 				live := make(map[string]bool, len(snap.Sessions))

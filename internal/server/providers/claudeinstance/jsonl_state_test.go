@@ -225,15 +225,25 @@ func TestClassifyState_OrphanedToolUseBeforeBoundary(t *testing.T) {
 	}
 }
 
-// TestClassifyState_EmptyFile: no records at all. State must be idle.
+// TestClassifyState_EmptyFile: no records at all. State must be idle AND
+// LastActivityAt must be the zero value (regression for PR #606 review
+// comment r3243103664 — returning `now` here would manufacture a false
+// fresh-activity signal that ticks the subscription on every refresh
+// for sessions whose transcripts haven't been written yet).
 func TestClassifyState_EmptyFile(t *testing.T) {
 	snap := ClassifyState(nil, testNow)
 	if snap.State != graphql.InstanceStateIdle {
 		t.Errorf("state = %s, want idle for empty records", snap.State)
 	}
+	if !snap.LastActivityAt.IsZero() {
+		t.Errorf("LastActivityAt = %v, want zero (empty transcript has no real activity)", snap.LastActivityAt)
+	}
 	snap2 := ClassifyState([]Record{}, testNow)
 	if snap2.State != graphql.InstanceStateIdle {
 		t.Errorf("state = %s, want idle for empty slice", snap2.State)
+	}
+	if !snap2.LastActivityAt.IsZero() {
+		t.Errorf("LastActivityAt = %v, want zero (empty slice has no real activity)", snap2.LastActivityAt)
 	}
 }
 

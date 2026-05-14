@@ -18,8 +18,13 @@ import (
 //
 // Tolerances:
 //   - Missing file: returns (nil, nil) — caller treats as "no data".
-//   - Partial trailing line (mid-write): scanner skips it automatically.
-//   - Lines > 1 MB: skipped silently; content snapshots can be large.
+//   - Partial trailing line (mid-write): silently dropped (no terminating
+//     newline) — the next read picks it up.
+//   - Lines > 1 MB: that single line is discarded; the loop continues with
+//     the next line. We use bufio.Reader rather than bufio.Scanner because
+//     Scanner.Scan() halts permanently on a token over the buffer cap,
+//     dropping every record after the oversized one (verified against
+//     pkg.go.dev/bufio docs).
 //   - Malformed JSON: line skipped, scan continues.
 func readRecordsFromPath(projectsDir, cwd, sessionUUID string) ([]Record, error) {
 	path := filepath.Join(projectsDir, encodeCwd(cwd), sessionUUID+".jsonl")
@@ -33,25 +38,31 @@ func readRecordsFromPath(projectsDir, cwd, sessionUUID string) ([]Record, error)
 	defer func() { _ = f.Close() }()
 
 	const maxLine = 1024 * 1024
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), maxLine)
+	reader := bufio.NewReader(f)
 
 	var records []Record
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
+	for {
+		line, err := reader.ReadBytes('\n')
+		// ReadBytes returns the line up through '\n' (or whatever was buffered
+		// at EOF). Process what we got before checking the error so a missing
+		// trailing newline at EOF still gets seen.
+		if len(line) > 0 && len(line) <= maxLine {
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) > 0 {
+				if r, ok := decodeLine(trimmed); ok && !r.IsSidechain {
+					records = append(records, r)
+				}
+			}
 		}
-		r, ok := decodeLine(line)
-		if !ok || r.IsSidechain {
-			continue
+		// len(line) > maxLine: discard that one line and keep reading.
+
+		if err == io.EOF {
+			return records, nil
 		}
-		records = append(records, r)
+		if err != nil {
+			return records, err // partial result is still usable
+		}
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		return records, err // partial result is still usable
-	}
-	return records, nil
 }
 
 // decodeLine parses one jsonl line into a Record. Returns (zero, false)

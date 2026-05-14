@@ -111,10 +111,13 @@ func ClassifyState(records []Record, now time.Time) JsonlStateSnapshot {
 	const orphanLookback = 100
 
 	if len(records) == 0 {
+		// LastActivityAt stays zero — an empty transcript has no activity to
+		// report. Setting it to `now` would manufacture a false fresh-activity
+		// signal that ticks the subscription every refresh
+		// (https://github.com/drewdrewthis/git-orchard-rs/pull/606#discussion_r3243103664).
 		return JsonlStateSnapshot{
 			State:          graphql.InstanceStateIdle,
 			StateChangedAt: now,
-			LastActivityAt: now,
 		}
 	}
 
