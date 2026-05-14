@@ -119,7 +119,7 @@ func TestPurposeForLocalHost(t *testing.T) {
 	}
 }
 
-func TestLocalStripSSHUser(t *testing.T) {
+func TestStripSSHUser(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string
@@ -132,9 +132,9 @@ func TestLocalStripSSHUser(t *testing.T) {
 		{"", ""},
 	}
 	for _, tc := range cases {
-		got := localStripSSHUser(tc.in)
+		got := stripSSHUser(tc.in)
 		if got != tc.want {
-			t.Errorf("localStripSSHUser(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("stripSSHUser(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

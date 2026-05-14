@@ -140,7 +140,7 @@ func resolveLocalNode(r *queryResolver, id string) (graphql1.Node, error) {
 //
 //	cfg.Name == local.MachineID || cfg.Name == local.Hostname ||
 //	cfg.Address == local.MachineID || cfg.Address == local.Hostname ||
-//	localStripSSHUser(cfg.Address) == local.Hostname
+//	stripSSHUser(cfg.Address) == local.Hostname
 //
 // Returns "" when no peer matches or when the matched peer carries no Purpose.
 // Used by the Hosts resolver to enrich the local host before the manifest
@@ -154,17 +154,16 @@ func purposeForLocalHost(local *graphql1.Host, cfgs []peerproxy.PeerConfig) stri
 			cfg.Name == local.Hostname ||
 			cfg.Address == local.MachineID ||
 			cfg.Address == local.Hostname ||
-			localStripSSHUser(cfg.Address) == local.Hostname {
+			stripSSHUser(cfg.Address) == local.Hostname {
 			return cfg.Purpose
 		}
 	}
 	return ""
 }
 
-// localStripSSHUser returns the host portion of a `user@host` style address.
-// `boxd@orchard.boxd.sh` → `orchard.boxd.sh`. Defined locally so this file
-// does not depend on manifest_merge.go (which will be deleted in step 3).
-func localStripSSHUser(raw string) string {
+// stripSSHUser returns the host portion of a `user@host` style address.
+// `boxd@orchard.boxd.sh` → `orchard.boxd.sh`.
+func stripSSHUser(raw string) string {
 	if idx := strings.LastIndexByte(raw, '@'); idx >= 0 {
 		return raw[idx+1:]
 	}
