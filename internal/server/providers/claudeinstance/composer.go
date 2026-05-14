@@ -88,18 +88,20 @@ type Composer struct {
 	accounts   AccountFinder
 	liveness   LivenessChecker
 	jsonl      JsonlReader
+	snapshot   SnapshotReader
 	shadow     *ShadowClassifier
 	clock      func() time.Time
 	staleAfter time.Duration
 }
 
 // NewComposer constructs a Composer with the production
-// LivenessChecker, JsonlReader, ShadowClassifier, and wall clock. Pass
-// nil for any sibling that has not yet shipped a real provider — v1
-// leaves those edges null and the composer behaves as if no match was
-// found.
+// LivenessChecker, JsonlReader, SnapshotReader, ShadowClassifier, and
+// wall clock. Pass nil for any sibling that has not yet shipped a real
+// provider — v1 leaves those edges null and the composer behaves as if
+// no match was found.
 func NewComposer(hostID string, panes PaneFinder, procs ProcessFinder, accounts AccountFinder) *Composer {
 	c := NewComposerWith(hostID, panes, procs, accounts, OSLivenessChecker{}, NewFsJsonlReader(""), time.Now, HeartbeatStaleAfter)
+	c.snapshot = NewFsSnapshotReader("")
 	c.shadow = NewShadowClassifier("", slog.Default())
 	return c
 }
@@ -147,6 +149,14 @@ func NewComposerWith(
 	}
 }
 
+// WithSnapshot attaches a SnapshotReader to the composer, enabling Phase 2
+// jsonl-derived state derivation. Returns the same *Composer for chaining.
+// When nil, the composer falls back to the hook-derived state (no-jsonl path).
+func (c *Composer) WithSnapshot(s SnapshotReader) *Composer {
+	c.snapshot = s
+	return c
+}
+
 // WithShadow attaches a ShadowClassifier to the composer, enabling Phase 1
 // shadow-mode comparison logging. Returns the same *Composer for chaining.
 func (c *Composer) WithShadow(s *ShadowClassifier) *Composer {
@@ -173,27 +183,46 @@ func (c *Composer) Compose(ctx context.Context, heartbeats []Heartbeat) []*graph
 
 // composeOne builds a single ClaudeInstance from one Heartbeat. Pure
 // in the sense that all I/O is delegated to the injected interfaces.
+//
+// Phase 2: when the jsonl snapshot reader has records for this session AND
+// the pid liveness check confirms the process is alive (or unknown), the
+// jsonl-derived state wins. When pid is confirmed dead, no_claude is forced
+// regardless. hb.State is no longer used for the resolver's state output;
+// it is preserved for the shadow log only.
+//
+// When no jsonl is found the session has no observable transcript state;
+// we emit idle rather than trusting the hook's potentially-fabricated value.
+// Dead pid still forces no_claude regardless.
 func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.ClaudeInstance {
 	pane := c.findPane(ctx, hb)
 	pid := c.resolvePid(hb, pane)
 	proc := c.findProcess(ctx, pid)
 	account := c.findAccount(ctx)
-	state := c.deriveState(hb, pid, pane)
+	hookState := c.deriveState(hb, pid, pane) // used only for shadow log
 
-	// Shadow mode: classify from jsonl and log disagreements. Does not
-	// affect state returned to callers — Phase 2 will flip the resolver.
+	// Phase 2: derive state from jsonl. Falls back to idle (not hook value)
+	// when no jsonl exists so we never surface fabricated hook input events.
+	state, snap := c.deriveStateFromJsonl(ctx, hb, pid, pane)
+
+	// Shadow log: now that jsonl is authoritative, log when it diverges from
+	// the hook-derived value so production surprises remain observable.
 	if c.shadow != nil {
-		c.shadow.CompareAndLog(hb, state, c.clock())
+		c.shadow.CompareAndLog(hb, hookState, c.clock())
 	}
 
 	id := buildID(c.hostID, pid, hb.TmuxSession)
 	inst := &graphql.ClaudeInstance{
-		ID:        id,
-		Pane:      pane,
-		Process:   proc,
-		Account:   account,
-		State:     state,
-		RcEnabled: hb.RcEnabled,
+		ID:                id,
+		Pane:              pane,
+		Process:           proc,
+		Account:           account,
+		State:             state,
+		RcEnabled:         hb.RcEnabled,
+		InflightToolCount: int64(snap.InflightToolCount),
+	}
+	if snap.Model != "" {
+		v := snap.Model
+		inst.Model = &v
 	}
 	if hb.RcURL != "" {
 		v := hb.RcURL
@@ -209,20 +238,26 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 	}
 	// Resolve LastActivityAt in priority order:
 	//
-	//  1. Jsonl tail — the timestamp on the last line of the session's
-	//     transcript. Authoritative because claude appends on every step,
-	//     unlike the hook which only fires on lifecycle events. Used when
-	//     both the cwd and session uuid are known.
-	//  2. Heartbeat last_activity — the hook's recorded activity timestamp.
-	//     Today's hook does not write this field, so this branch only
-	//     fires for forward-compatible heartbeats; preserved as a layer in
-	//     case the hook starts emitting it.
-	//  3. Pane session fallback — the tmux session's lastActivityAt, used
-	//     when nothing more specific is available. Coarse but better than
-	//     null for the GUI's "needs attention" lens.
-	if c.jsonl != nil && hb.Cwd != "" && hb.SessionID != "" {
+	//  1. Jsonl classifier snapshot — LastActivityAt is the max timestamp
+	//     of the last N records; authoritative because claude appends on
+	//     every assistant/user/system step. Quantized to 1-second resolution
+	//     to prevent subscription thrash during streaming.
+	//  2. Heartbeat last_activity — hook's recorded activity timestamp.
+	//     Today's hook does not write this field; preserved as a fallback.
+	//  3. Pane session fallback — coarse tmux session lastActivityAt.
+	if !snap.LastActivityAt.IsZero() {
+		// Quantize to 1s resolution to prevent subscription thrash when
+		// the assistant is streaming (each token causes a new fsnotify event
+		// and a new lastActivityAt, but a 1-second granularity is sufficient
+		// for the dashboard's "needs attention" lens).
+		quantized := snap.LastActivityAt.UTC().Truncate(time.Second)
+		v := quantized.Format(time.RFC3339)
+		inst.LastActivityAt = &v
+	}
+	if inst.LastActivityAt == nil && c.jsonl != nil && hb.Cwd != "" && hb.SessionID != "" {
 		if t, ok := c.jsonl.LastActivityAt(ctx, hb.Cwd, hb.SessionID); ok {
-			v := t.UTC().Format(time.RFC3339Nano)
+			quantized := t.UTC().Truncate(time.Second)
+			v := quantized.Format(time.RFC3339)
 			inst.LastActivityAt = &v
 		}
 	}
@@ -237,6 +272,56 @@ func (c *Composer) composeOne(ctx context.Context, hb Heartbeat) *graphql.Claude
 		inst.LastActivityAt = &v
 	}
 	return inst
+}
+
+// deriveStateFromJsonl reads the jsonl snapshot for this heartbeat and
+// returns the classified state plus the full snapshot. When no jsonl is
+// found the state falls back to idle for confirmed-alive pids (not the
+// hook's value). When pid is confirmed dead, no_claude is forced.
+// When pid is unknown (no pid from any source), staleness determines:
+// stale → no_claude (conservative), fresh → idle.
+//
+// Returns (no_claude, zero-snap) when pid is confirmed dead OR
+//
+//	when pid is unknown AND heartbeat is stale.
+//
+// Returns (idle, zero-snap) when no jsonl found and pid is alive/unknown-fresh.
+// Returns (snap.State, snap) when jsonl is available and pid is alive/unknown-fresh.
+func (c *Composer) deriveStateFromJsonl(ctx context.Context, hb Heartbeat, pid int, pane *graphql.TmuxPane) (graphql.InstanceState, JsonlStateSnapshot) {
+	alive := c.aliveSignal(pid, pane)
+	now := c.clock()
+
+	// Dead pid always wins — the session is genuinely gone.
+	if alive == alivenessDead {
+		return graphql.InstanceStateNoClaude, JsonlStateSnapshot{}
+	}
+
+	// When pid is completely unknown (no pid in heartbeat, no pane), fall
+	// back to heartbeat freshness as the only remaining liveness signal.
+	// Stale + unknown → conservative no_claude; fresh + unknown → continue.
+	if alive == alivenessUnknown {
+		stamp := hb.LastHeartbeatAt
+		if stamp.IsZero() {
+			stamp = hb.Timestamp
+		}
+		fresh := !stamp.IsZero() && now.Sub(stamp) <= c.staleAfter
+		if !fresh {
+			return graphql.InstanceStateNoClaude, JsonlStateSnapshot{}
+		}
+	}
+
+	// No jsonl available (no cwd, no session id, or file not found):
+	// fall back to idle rather than trusting the hook's fabricated value.
+	if c.snapshot == nil || hb.Cwd == "" || hb.SessionID == "" {
+		return graphql.InstanceStateIdle, JsonlStateSnapshot{}
+	}
+	records, ok := c.snapshot.ReadSnapshot(ctx, hb.Cwd, hb.SessionID)
+	if !ok {
+		return graphql.InstanceStateIdle, JsonlStateSnapshot{}
+	}
+
+	snap := ClassifyState(records, c.clock())
+	return snap.State, snap
 }
 
 // findPane delegates to PaneFinder using whichever match key the

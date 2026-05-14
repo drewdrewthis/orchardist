@@ -12,9 +12,10 @@ package claudeinstance
 // `idle` state where the hook would otherwise go stale.
 //
 // Layout: ~/.claude/projects/<encoded-cwd>/<session_uuid>.jsonl, where
-// encoded-cwd swaps every '/' for '-'. encodeCwd here mirrors that exact
-// transform; nothing else canonicalises the path so the function stays a
-// pure string operation.
+// encoded-cwd swaps every '/' AND every '.' for '-' (so worktree paths
+// like /repo/.worktrees/foo become -repo--worktrees-foo). encodeCwd here
+// mirrors that exact transform; nothing else canonicalises the path so
+// the function stays a pure string operation.
 //
 // I/O profile: one os.Open + one bounded reverse-scan per call. We read the
 // last 64 KiB at most so a multi-GB transcript stays cheap; the most recent
@@ -44,6 +45,51 @@ type JsonlReader interface {
 	// unreadable, or the last line has no parseable timestamp. Errors are
 	// silently swallowed — this is a fallback path, not a critical one.
 	LastActivityAt(ctx context.Context, cwd, sessionUUID string) (time.Time, bool)
+}
+
+// SnapshotReader reads all non-sidechain records from a session jsonl and
+// returns them for ClassifyState. Separate from JsonlReader so the composer
+// can read full records for state derivation without duplicating the
+// decode logic. Tests inject a stub; production uses FsSnapshotReader.
+type SnapshotReader interface {
+	// ReadSnapshot returns decoded non-sidechain records for the session
+	// identified by cwd + sessionUUID. Returns (nil, false) when the file
+	// does not exist; returns (records, true) even for an empty file.
+	// Errors in individual lines are silently skipped per readRecordsFromPath.
+	ReadSnapshot(ctx context.Context, cwd, sessionUUID string) ([]Record, bool)
+}
+
+// FsSnapshotReader is the production SnapshotReader. Resolves files under
+// projectsDir (default ~/.claude/projects) on demand.
+type FsSnapshotReader struct {
+	projectsDir string
+}
+
+// NewFsSnapshotReader constructs a reader rooted at projectsDir. When
+// empty, it resolves to ~/.claude/projects. Returns nil when the home
+// directory is unresolvable.
+func NewFsSnapshotReader(projectsDir string) *FsSnapshotReader {
+	if projectsDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		projectsDir = filepath.Join(home, ".claude", "projects")
+	}
+	return &FsSnapshotReader{projectsDir: projectsDir}
+}
+
+// ReadSnapshot reads and decodes all non-sidechain records for the given
+// cwd+sessionUUID. Returns (nil, false) when the file does not exist.
+func (r *FsSnapshotReader) ReadSnapshot(_ context.Context, cwd, sessionUUID string) ([]Record, bool) {
+	if r == nil || cwd == "" || sessionUUID == "" {
+		return nil, false
+	}
+	records, err := readRecordsFromPath(r.projectsDir, cwd, sessionUUID)
+	if err != nil || records == nil {
+		return nil, false
+	}
+	return records, true
 }
 
 // FsJsonlReader is the production JsonlReader. Resolves the project root
@@ -84,10 +130,14 @@ func (r *FsJsonlReader) LastActivityAt(ctx context.Context, cwd, sessionUUID str
 }
 
 // encodeCwd applies claude's project-directory naming convention: every
-// '/' in the absolute cwd becomes '-'. Pure string operation; we do NOT
-// resolve symlinks or normalise the path because claude itself does not.
+// '/' AND every '.' in the absolute cwd becomes '-'. Verified empirically
+// against ~/.claude/projects on a live host: paths containing `/.` (e.g.
+// `/repo/.worktrees/foo` → `-repo--worktrees-foo`) produce a double-dash
+// at the boundary because both characters map to '-'. Pure string
+// operation; we do NOT resolve symlinks or normalise the path because
+// claude itself does not.
 func encodeCwd(cwd string) string {
-	return strings.ReplaceAll(cwd, "/", "-")
+	return strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
 }
 
 // tailWindow is the maximum number of trailing bytes we read from the

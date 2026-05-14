@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
-// TestEncodeCwd_SwapsSlashes locks in claude's project-directory naming
-// transform: every '/' becomes '-'. This is the only canonicalisation —
-// no symlink resolution, no normalization. Pure string replacement.
-func TestEncodeCwd_SwapsSlashes(t *testing.T) {
+// TestEncodeCwd_SwapsSlashesAndDots locks in claude's project-directory
+// naming transform: every '/' AND every '.' becomes '-'. Verified
+// empirically against ~/.claude/projects directory names — e.g. a path
+// containing `/.claude/` lands at `--claude-` (two dashes from the `/.`).
+// Pure string replacement, no symlink resolution.
+func TestEncodeCwd_SwapsSlashesAndDots(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
@@ -20,7 +22,8 @@ func TestEncodeCwd_SwapsSlashes(t *testing.T) {
 		{"/", "-"},
 		{"", ""},
 		{"/foo", "-foo"},
-		{"/home/user/.claude/projects", "-home-user-.claude-projects"},
+		{"/home/user/.claude/projects", "-home-user--claude-projects"},
+		{"/repo/.worktrees/issue603", "-repo--worktrees-issue603"},
 	}
 	for _, c := range cases {
 		if got := encodeCwd(c.in); got != c.want {

@@ -20,6 +20,20 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
 
+// stubSnapshotReader implements claudeinstance.SnapshotReader for E2E tests.
+// Keys are "cwd|sessionID".
+type stubSnapshotReader struct {
+	byKey map[string][]claudeinstance.Record
+}
+
+func (s *stubSnapshotReader) ReadSnapshot(_ context.Context, cwd, sessionID string) ([]claudeinstance.Record, bool) {
+	if s.byKey == nil {
+		return nil, false
+	}
+	recs, ok := s.byKey[cwd+"|"+sessionID]
+	return recs, ok
+}
+
 // fakePaneFinder is the in-package fake the e2e test injects through
 // claudeinstance.PaneFinder. Returns a stubbed pane for matching pids.
 type fakePaneFinder struct {
@@ -83,6 +97,7 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 		"state":           "working",
 		"timestamp":       freshTimestamp,
 		"claudePid":       10042,
+		"cwd":             "/workspace/alpha",
 		"rcUrl":           "https://claude.ai/code/session_alpha",
 		"rcEnabled":       true,
 		"lastHeartbeatAt": freshTimestamp,
@@ -93,6 +108,7 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 		"state":           "idle",
 		"timestamp":       freshTimestamp,
 		"claudePid":       10099,
+		"cwd":             "/workspace/bravo",
 		"rcEnabled":       false,
 		"lastHeartbeatAt": freshTimestamp,
 	})
@@ -115,7 +131,40 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 	}
 	liveness := fakeLiveness{alive: map[int]bool{10042: true, 10099: true}}
 
-	composer := claudeinstance.NewComposerWith("local", panes, procs, accts, liveness, nil, clock, claudeinstance.HeartbeatStaleAfter)
+	// Snapshot reader: alpha has open tool_use (working), bravo is ended (idle).
+	snaps := &stubSnapshotReader{byKey: map[string][]claudeinstance.Record{
+		"/workspace/alpha|uuid-alpha": {
+			{
+				Timestamp: now.Add(-3 * time.Second),
+				Type:      "user",
+				Message:   &claudeinstance.Message{},
+			},
+			{
+				Timestamp: now.Add(-2 * time.Second),
+				Type:      "assistant",
+				Message: &claudeinstance.Message{
+					StopReason: "tool_use",
+					Content: []claudeinstance.ContentItem{
+						{Type: "tool_use", ID: "bash_1", Name: "Bash"},
+					},
+				},
+			},
+		},
+		"/workspace/bravo|uuid-bravo": {
+			{
+				Timestamp: now.Add(-3 * time.Second),
+				Type:      "user",
+				Message:   &claudeinstance.Message{},
+			},
+			{
+				Timestamp: now.Add(-2 * time.Second),
+				Type:      "assistant",
+				Message: &claudeinstance.Message{StopReason: "end_turn"},
+			},
+		},
+	}}
+
+	composer := claudeinstance.NewComposerWith("local", panes, procs, accts, liveness, nil, clock, claudeinstance.HeartbeatStaleAfter).WithSnapshot(snaps)
 	reader := claudeinstance.NewFileReader(heartbeatDir)
 	provider := claudeinstance.NewWith("local", reader, composer, clock)
 
@@ -187,9 +236,9 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 
 	// -------- Phase 2: touch alpha heartbeat backward but keep pid alive.
 	// Hook is event-driven so an idle session legitimately stops
-	// heartbeating; as long as the tracked pid is alive, the dashboard
-	// must keep showing the last-known state (working) — NOT collapse to
-	// no_claude. Cf. #421, #501.
+	// heartbeating; as long as the tracked pid is alive and the jsonl shows
+	// working (open tool_use), the dashboard must keep showing working —
+	// NOT collapse to no_claude. Cf. #421, #501.
 	staleTimestamp := now.Add(-2 * time.Minute).Format(time.RFC3339)
 	writeHeartbeat(t, heartbeatDir, "alpha", map[string]any{
 		"tmux_session":    "alpha",
@@ -197,6 +246,7 @@ func TestClaudeInstance_E2E_TwoFreshInstances(t *testing.T) {
 		"state":           "working",
 		"timestamp":       staleTimestamp,
 		"claudePid":       10042,
+		"cwd":             "/workspace/alpha",
 		"rcUrl":           "https://claude.ai/code/session_alpha",
 		"rcEnabled":       true,
 		"lastHeartbeatAt": staleTimestamp,

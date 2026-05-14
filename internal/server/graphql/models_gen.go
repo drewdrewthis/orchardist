@@ -82,6 +82,14 @@ type ClaudeInstance struct {
 	// derived from the heartbeat's last_activity field, falling back to
 	// TmuxPane.lastActivityAt, falling back to null when neither is available.
 	LastActivityAt *string `json:"lastActivityAt,omitempty"`
+	// Claude model used by this session — from the last non-sidechain
+	// assistant record's message.model field (e.g. \"claude-opus-4-7\").
+	// Null when no jsonl has been observed yet for this session.
+	Model *string `json:"model,omitempty"`
+	// Number of tool_use calls open (sent by assistant, no matching tool_result)
+	// in the current turn. Derived from the jsonl classifier. 0 when no jsonl
+	// is found.
+	InflightToolCount int64 `json:"inflightToolCount"`
 	// Worktree this Claude REPL is operating in — the deepest worktree whose
 	// `path` contains the resolved process cwd. Server-side join over the
 	// ps + git providers; null when no process can be matched or no worktree

@@ -128,6 +128,20 @@ type ClaudeInstance implements Node {
   lastActivityAt: String
 
   """
+  Claude model used by this session — from the last non-sidechain
+  assistant record's message.model field (e.g. \"claude-opus-4-7\").
+  Null when no jsonl has been observed yet for this session.
+  """
+  model: String
+
+  """
+  Number of tool_use calls open (sent by assistant, no matching tool_result)
+  in the current turn. Derived from the jsonl classifier. 0 when no jsonl
+  is found.
+  """
+  inflightToolCount: Int!
+
+  """
   Worktree this Claude REPL is operating in — the deepest worktree whose
   `path` contains the resolved process cwd. Server-side join over the
   ps + git providers; null when no process can be matched or no worktree
