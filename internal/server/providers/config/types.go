@@ -87,14 +87,14 @@ type RemoteEntry struct {
 // PeerRow mirrors a peer entry. The peerproxy provider owns the rich
 // type; this struct exists so File can round-trip the array on write.
 //
-// `omitempty` on `tls` matches `peerproxy.PeerConfig.TLS` so add-repo
-// and add-peer round-trip identically — without this, every add-repo
-// invocation would re-emit `"tls": false` for peers that were
-// originally written without the key.
+// `omitempty` on `tls` and `purpose` keeps round-trips clean: without
+// it, every add-repo or add-peer invocation would re-emit `"tls": false`
+// and `"purpose": ""` for peers originally written without those keys.
 type PeerRow struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
 	TLS     bool   `json:"tls,omitempty"`
+	Purpose string `json:"purpose,omitempty"`
 }
 
 // Normalise fills in missing fields per ADR-015's identity rules.
