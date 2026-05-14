@@ -34,7 +34,7 @@ Feature: Collapse fleet-manifest into orchard config (peers[].purpose)
     Given the orchard daemon loads `peers[]` from `~/.orchard/config.json` at startup
     And the PeerRow struct lives in `internal/server/providers/config/types.go`
     And the Host GraphQL type is generated via gqlgen from `schema.graphql`
-    And the manifest subsystem (introduced in #584/#586) currently enriches Host.purpose
+    And `Host.purpose` is sourced from `peers[].purpose` via the alias-chain match (no manifest subsystem)
     And the daemon already exposes a working `Host` type with `hostname`, `address`, `reachable`, `lastSeenAt`
 
   # =======================================================================
@@ -92,16 +92,18 @@ Feature: Collapse fleet-manifest into orchard config (peers[].purpose)
     And the match succeeds via address-host-portion stripping
 
   @unit
-  Scenario: Host.purpose returns empty string when no peer matches
+  Scenario: Host.purpose is null when no peer matches
     Given no peer config entry matches the host by any alias
-    When the `Host.purpose` field is resolved
-    Then the resolver returns `""` (empty string, not nil)
+    When the `Host.purpose` field is resolved on the wire
+    Then the GraphQL response carries `purpose: null`
+    # `purposeForLocalHost` returns `""`; the resolver only assigns
+    # `host.Purpose = &p` when `p != ""`, so the wire value is null.
 
   @unit
-  Scenario: Host.purpose returns empty string when the matched peer has no `purpose`
+  Scenario: Host.purpose is null when the matched peer has no `purpose`
     Given a peer config entry that matches the host but has no `purpose` field set
-    When the `Host.purpose` field is resolved
-    Then the resolver returns `""`
+    When the `Host.purpose` field is resolved on the wire
+    Then the GraphQL response carries `purpose: null`
 
   @integration
   Scenario: Manifest provider is no longer wired into daemon bootstrap
@@ -275,78 +277,14 @@ Feature: Collapse fleet-manifest into orchard config (peers[].purpose)
     # ADR-016/017/018: the daemon owns state. Clients call GraphQL.
 
   # =======================================================================
-  # AC 7 — Codex cleanup commit (separate repo, post-merge)
+  # AC 7 — Codex cleanup (separate repo, out of this PR's scope)
   # =======================================================================
   #
-  # The codex cleanup lands on `drewdrewthis/orchard-codex` main as a separate
-  # commit after the daemon PR merges and the rebuilt binary is running. These
-  # scenarios are part of the contract — the work is not "done" until the codex
-  # consumers have been rewritten or deleted — but they are validated against
-  # the post-merge daemon, not inside this PR.
-
-  @unit
-  Scenario: Manifest reference files are deleted from the codex
-    Given the codex cleanup commit
-    Then `~/.claude/references/fleet-manifest.yaml` does not exist
-    And `~/.claude/references/fleet-manifest.md` does not exist
-    And `~/.claude/references/manifests.md` does not exist
-
-  @unit
-  Scenario: `fleet-verify.sh` script is deleted from the codex
-    Given the codex cleanup commit
-    Then `~/.claude/scripts/fleet-verify.sh` does not exist
-    # Its purpose (auto-bumping `last_verified`) dies with the manifest.
-
-  @e2e
-  Scenario: `/fleet-list` skill queries the daemon for hosts and renders correctly
-    Given the post-merge daemon is running on 127.0.0.1:7777
-    And the rewritten `/fleet-list` skill
-    When the orchardist invokes `/fleet-list`
-    Then the skill issues `{ hosts { hostname purpose reachable lastSeenAt } }` via daemon GraphQL
-    And does NOT read `~/.claude/references/fleet-manifest.yaml`
-    And does NOT regex-parse any `decommission_signal` string
-    And renders rows grouped or ordered by `reachable` and `lastSeenAt`, not by role
-    And does NOT include an owner column
-
-  @e2e
-  Scenario: `/codex-sync-status` skill enumerates hosts via the daemon
-    Given the post-merge daemon is running
-    And the rewritten `/codex-sync-status` skill
-    When the orchardist invokes `/codex-sync-status`
-    Then the skill enumerates hosts via `{ hosts { hostname } }` (daemon GraphQL)
-    And does NOT read `~/.claude/references/fleet-manifest.yaml`
-
-  @e2e
-  Scenario: `/migrate-session` skill drops role + decommission + last_verified ceremony
-    Given the rewritten `/migrate-session` skill
-    When the orchardist invokes `/migrate-session`
-    Then the skill does NOT perform a role-spec lookup (the previous step 8)
-    And the skill does NOT gate on `decommissionSignal != never`
-    And the skill does NOT bump any `last_verified` field (the previous step 11)
-    And VM existence + reachability come from daemon `Host.reachable` and `Host.lastSeenAt`
-
-  @e2e
-  Scenario: `/install-hooks` and `/install-post-merge-hook` enumerate fed hosts without YAML
-    Given the rewritten `/install-hooks` and `/install-post-merge-hook` skills
-    When either skill enumerates fed hosts
-    Then it sources host list from either daemon GraphQL (peers + recently-seen hosts) or a hand-maintained `~/.claude/orchardist/config/fed-hosts.txt`
-    And it does NOT read `~/.claude/references/fleet-manifest.yaml`
-    # Implementer's choice between the two options; both unblock the rewrite.
-
-  @e2e
-  Scenario: `/orchard-doctor` skill no longer calls fleet-verify.sh
-    Given the rewritten `/orchard-doctor` skill
-    When the orchardist invokes `/orchard-doctor`
-    Then section 6 (the prior `fleet-verify.sh` call) is gone
-    And the skill does not shell out to any deleted manifest tooling
-
-  @unit
-  Scenario: Codex docs and memory entries pointing at the manifest are updated or removed
-    Given the codex cleanup commit
-    Then `MEMORY.md` no longer indexes `reference_fleet_manifest.md`
-    And `reference_fleet_manifest.md` does not exist
-    And `~/.claude/research/042-2026-05-13-north-star-phone-first-orchardist.md` no longer cites manifest entries in Component 3 scoring
-    And `~/.claude/plans/fed-worker-hook-bootstrap-2026-05-13.md` replaces the `yq '.hosts[].address'` loop with a daemon-source equivalent
+  # AC 7 is explicitly OUT-OF-PR scope: it lands as a separate commit on
+  # `drewdrewthis/orchard-codex` main after this PR merges and the rebuilt
+  # daemon is running. Its scenarios live in that repo's feature spec, not
+  # here — this daemon repo cannot satisfy or test changes that target
+  # `~/.claude/` files.
 
   # =======================================================================
   # Proof scenarios (per issue "Proof" section)
@@ -383,8 +321,8 @@ Feature: Collapse fleet-manifest into orchard config (peers[].purpose)
   #   -> @unit "Host.purpose returns the matched peer's purpose by hostname"
   #   -> @unit "Host.purpose returns the matched peer's purpose by machine ID"
   #   -> @unit "Host.purpose matches when peer address has a `boxd@` SSH-user prefix"
-  #   -> @unit "Host.purpose returns empty string when no peer matches"
-  #   -> @unit "Host.purpose returns empty string when the matched peer has no `purpose`"
+  #   -> @unit "Host.purpose is null when no peer matches"
+  #   -> @unit "Host.purpose is null when the matched peer has no `purpose`"
   #   -> @integration "Manifest provider is no longer wired into daemon bootstrap"
   #   -> @integration "Regression test asserts `Host.purpose` is populated from peer config"
   #
@@ -416,12 +354,6 @@ Feature: Collapse fleet-manifest into orchard config (peers[].purpose)
   #   -> @unit "No new client-side enrichment of Host.purpose is introduced anywhere in the clients"
   #   -> @unit "ADR-016/017/018 compliance check — no client-side joins for fleet data"
   #
-  # AC 7 "Codex cleanup (separate commit on orchard-codex main): delete manifest references, delete fleet-verify.sh, rewrite 6 skills (/fleet-list, /codex-sync-status, /migrate-session, /install-hooks, /install-post-merge-hook, /orchard-doctor), update MEMORY.md, research, plans"
-  #   -> @unit "Manifest reference files are deleted from the codex"
-  #   -> @unit "`fleet-verify.sh` script is deleted from the codex"
-  #   -> @e2e "`/fleet-list` skill queries the daemon for hosts and renders correctly"
-  #   -> @e2e "`/codex-sync-status` skill enumerates hosts via the daemon"
-  #   -> @e2e "`/migrate-session` skill drops role + decommission + last_verified ceremony"
-  #   -> @e2e "`/install-hooks` and `/install-post-merge-hook` enumerate fed hosts without YAML"
-  #   -> @e2e "`/orchard-doctor` skill no longer calls fleet-verify.sh"
-  #   -> @unit "Codex docs and memory entries pointing at the manifest are updated or removed"
+  # AC 7 "Codex cleanup (separate commit on orchard-codex main)"
+  #   -> OUT-OF-PR-SCOPE — validated against the post-merge daemon in the
+  #      orchard-codex repo's own feature spec, not in this daemon repo.
