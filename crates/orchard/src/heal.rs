@@ -8,7 +8,7 @@
 //! - `diagnose()` is a pure function that computes a `HealReport` from its inputs.
 //! - `apply_fixes()` performs the actual I/O side effects.
 //! - `format_report()` formats a human-readable text output.
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -710,29 +710,6 @@ fn severity_icon(severity: &Severity) -> &'static str {
 // ---------------------------------------------------------------------------
 // I/O helpers for gathering heal inputs
 // ---------------------------------------------------------------------------
-
-/// Reads all Claude state files from `/tmp` and returns them as `HealClaudeState` entries.
-pub fn gather_claude_states() -> Vec<HealClaudeState> {
-    let tmp = PathBuf::from("/tmp");
-    let pattern = format!("{}/orchard-claude-*.json", tmp.display());
-    let mut results = Vec::new();
-
-    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
-        if path.to_string_lossy().contains(".tmp.") {
-            continue;
-        }
-        if let Ok(data) = std::fs::read(&path)
-            && let Ok(state) = serde_json::from_slice::<crate::claude_state::ClaudeStateFile>(&data)
-        {
-            results.push(HealClaudeState {
-                path: path.to_string_lossy().to_string(),
-                tmux_session: state.tmux_session,
-            });
-        }
-    }
-
-    results
-}
 
 /// Reads all files from the orchard cache directory and returns their filenames.
 pub fn gather_cache_files() -> Vec<String> {

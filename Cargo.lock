@@ -3156,7 +3156,6 @@ dependencies = [
  "crossterm",
  "ctrlc",
  "dirs",
- "glob",
  "globset",
  "hex",
  "hmac",

@@ -1567,18 +1567,9 @@ pub fn refresh_worktrees(config: &RepoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Sentinel string that separates tmux session list output from Claude state JSON
-/// in the batched SSH command used for remote hosts.
-pub const CLAUDE_STATE_SENTINEL: &str = "---CLAUDE_STATE---";
-
 /// Fetches tmux sessions (local or remote) and writes to the tmux sessions cache.
 ///
 /// Pass `None` for local sessions, or `Some("user@host")` for remote sessions.
-///
-/// For remote hosts, a single batched SSH command fetches both the tmux session
-/// list and any Claude hook state files (from `$TMPDIR/orchard-claude-*.json`),
-/// separated by a `---CLAUDE_STATE---` sentinel line. The parsed Claude states
-/// are stored in `CachedTmuxSession::claude_state_raw` for each matching session.
 ///
 /// On failure the error is logged and the existing cache is left intact.
 pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
@@ -1601,15 +1592,10 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         }
     }
 
-    // For remote hosts, batch the tmux list-panes and Claude state cat into
-    // a single SSH call to minimise round-trips.
     let sessions_out = match host {
         None => run_local("tmux", &["list-panes", "-a", "-F", TMUX_SESSION_FORMAT]),
         Some(h) => {
-            let cmd = format!(
-                "tmux list-panes -a -F '{}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-                TMUX_SESSION_FORMAT, CLAUDE_STATE_SENTINEL
-            );
+            let cmd = format!("tmux list-panes -a -F '{}'", TMUX_SESSION_FORMAT);
             remote::ssh_exec(h, &cmd)
         }
     };
@@ -1625,18 +1611,8 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         Ok(s) => s,
     };
 
-    // For remote output, split on the sentinel to separate tmux output from
-    // Claude state JSON. For local output, there is no sentinel.
-    let (sessions_output, claude_state_raw) = if host.is_some() {
-        split_batched_output(&raw_output)
-    } else {
-        (raw_output.as_str(), "")
-    };
-
-    let remote_claude_states = crate::claude_state::parse_remote_state_output(claude_state_raw);
-
-    let mut sessions = parse_tmux_sessions_from_panes(
-        sessions_output,
+    let sessions = parse_tmux_sessions_from_panes(
+        raw_output.as_str(),
         host,
         |session_name| {
             // -s lists panes across ALL windows in the session.
@@ -1677,14 +1653,6 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
         },
     );
 
-    // Attach fetched Claude state files to their matching sessions.
-    for session in &mut sessions {
-        session.claude_state_raw = remote_claude_states
-            .iter()
-            .find(|cs| cs.tmux_session == session.name)
-            .cloned();
-    }
-
     cache::write_cache_if_nonempty(&cache_path, &sessions)?;
     LOG.info(&format!(
         "cache_sources: refresh_tmux_sessions(host={:?}): wrote {} entries",
@@ -1693,25 +1661,6 @@ pub fn refresh_tmux_sessions(host: Option<&str>) -> anyhow::Result<()> {
     ));
 
     Ok(())
-}
-
-/// Splits batched SSH output on the `CLAUDE_STATE_SENTINEL` line.
-///
-/// Returns `(tmux_output, claude_json)`. If the sentinel is not present, returns
-/// the full output as tmux output and an empty string for the Claude JSON part.
-fn split_batched_output(raw: &str) -> (&str, &str) {
-    let sentinel_line = CLAUDE_STATE_SENTINEL;
-    // Find the sentinel as a whole line (preceded by newline or start, followed
-    // by newline or end).
-    if let Some(pos) = raw.find(sentinel_line) {
-        let before = &raw[..pos];
-        let after_start = pos + sentinel_line.len();
-        // Skip the newline that follows the sentinel, if present.
-        let after = raw[after_start..].trim_start_matches('\n');
-        (before, after)
-    } else {
-        (raw, "")
-    }
 }
 
 /// Fetches worktrees from a single remote via the appropriate `RemoteAdapter`
@@ -2895,57 +2844,6 @@ mod tests {
         assert_eq!(result[0].last_output_lines, vec!["line1", "line2"]);
     }
 
-    // -- SSH command construction and sentinel splitting ----------------------
-
-    #[test]
-    fn remote_ssh_command_includes_sentinel() {
-        // The batched command must contain the sentinel string.
-        let cmd = format!(
-            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-            CLAUDE_STATE_SENTINEL
-        );
-        assert!(cmd.contains(CLAUDE_STATE_SENTINEL));
-    }
-
-    #[test]
-    fn remote_ssh_command_uses_single_quoted_tmpdir() {
-        // The TMPDIR variable must be single-quoted so it expands on the remote shell.
-        let cmd = format!(
-            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-            CLAUDE_STATE_SENTINEL
-        );
-        assert!(
-            cmd.contains("'${TMPDIR:-/tmp}'"),
-            "expected single-quoted TMPDIR expansion, got: {cmd}"
-        );
-    }
-
-    #[test]
-    fn remote_ssh_command_uses_shell_variable_not_literal_path() {
-        // The command must use '${TMPDIR:-/tmp}' (a shell variable for the remote
-        // to expand) rather than a hardcoded local path like `/var/folders/...`.
-        // On Linux CI, std::env::temp_dir() == "/tmp" which legitimately appears
-        // in the fallback, so we check for the shell variable pattern instead.
-        let cmd = format!(
-            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-            CLAUDE_STATE_SENTINEL
-        );
-        assert!(
-            cmd.contains("'${TMPDIR:-/tmp}'"),
-            "command should use shell variable expansion, got: {cmd}"
-        );
-    }
-
-    #[test]
-    fn remote_ssh_command_ends_with_semicolon_true() {
-        // The "; true" suffix ensures cat failure (no files) doesn't fail the overall command.
-        let cmd = format!(
-            "tmux list-panes -a -F '#{{session_name}}\t#{{pane_active}}\t#{{pane_current_path}}\t#{{session_created}}\t#{{session_activity}}' && echo '{}' && cat '${{TMPDIR:-/tmp}}'/orchard-claude-*.json 2>/dev/null; true",
-            CLAUDE_STATE_SENTINEL
-        );
-        assert!(cmd.ends_with("; true"), "command must end with '; true'");
-    }
-
     #[test]
     fn local_and_remote_parse_identically_except_for_host() {
         // AC #5: local and remote fetch paths feed identical raw output shape
@@ -2972,35 +2870,6 @@ mod tests {
                 .iter()
                 .all(|s| s.host.as_deref() == Some("user@host"))
         );
-    }
-
-    #[test]
-    fn split_batched_output_separates_tmux_and_claude_parts() {
-        let tmux_part = "session-a:/path/a\nsession-b:/path/b\n";
-        let claude_part = r#"{"state":"working","session_id":"s1","tmux_session":"session-a","cwd":"/workspace","event":"Stop","timestamp":"2026-03-28T10:00:00Z"}"#;
-        let raw = format!("{tmux_part}{CLAUDE_STATE_SENTINEL}\n{claude_part}");
-
-        let (tmux, claude) = split_batched_output(&raw);
-        assert_eq!(tmux, tmux_part);
-        assert_eq!(claude, claude_part);
-    }
-
-    #[test]
-    fn split_batched_output_empty_claude_part_when_no_files() {
-        let tmux_part = "session-a:/path/a\n";
-        let raw = format!("{tmux_part}{CLAUDE_STATE_SENTINEL}\n");
-
-        let (tmux, claude) = split_batched_output(&raw);
-        assert_eq!(tmux, tmux_part);
-        assert!(claude.is_empty());
-    }
-
-    #[test]
-    fn split_batched_output_no_sentinel_returns_all_as_tmux() {
-        let raw = "session-a:/path/a\nsession-b:/path/b\n";
-        let (tmux, claude) = split_batched_output(raw);
-        assert_eq!(tmux, raw);
-        assert!(claude.is_empty());
     }
 
     #[test]

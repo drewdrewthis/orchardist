@@ -1,10 +1,10 @@
-//! Claude hook-state types and reader.
+//! Claude hook-state types.
 //!
-//! Defines `ClaudeStateFile` (the JSON written by the orchard-state.sh hook)
-//! and `ClaudeState` (the parsed working/idle/input enum). Provides helpers to
-//! read all state files from a directory and look up state by tmux session name.
-use std::path::Path;
-
+//! Defines `ClaudeStateFile` (shape-compatible with the JSON written by the
+//! orchard-state.sh hook) and `ClaudeState` (working/idle/input enum).
+//! `ClaudeStateFile` is now populated exclusively by
+//! `daemon::work_view_adapter::claude_instance_to_state_file` from daemon
+//! GraphQL output — no local disk reads remain in this module.
 use serde::{Deserialize, Serialize};
 
 /// State written by the orchard-state.sh hook script.
@@ -93,38 +93,6 @@ impl std::str::FromStr for ClaudeState {
     }
 }
 
-/// Reads all orchard hook state files from the given directory.
-///
-/// Only files matching `{dir}/orchard-claude-*.json` are read.
-/// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
-pub fn read_all_state_files(dir: &Path) -> Vec<ClaudeStateFile> {
-    let pattern = format!("{}/orchard-claude-*.json", dir.display());
-    let mut results = Vec::new();
-
-    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
-        // Skip .tmp files (in-progress atomic writes)
-        if path.to_string_lossy().contains(".tmp.") {
-            continue;
-        }
-        if let Ok(data) = std::fs::read(&path)
-            && let Ok(state) = serde_json::from_slice::<ClaudeStateFile>(&data)
-        {
-            results.push(state);
-        }
-    }
-
-    results
-}
-
-/// Convenience for reading the standard local hook directory; non-test callers should prefer this.
-///
-/// Reads all Claude hook state files from `std::env::temp_dir()` (the standard location
-/// written by the orchard-state.sh hook script). Equivalent to
-/// `read_all_state_files(&std::env::temp_dir())`.
-pub fn read_local_state_files() -> Vec<ClaudeStateFile> {
-    read_all_state_files(&std::env::temp_dir())
-}
-
 /// Finds the state for a specific tmux session name.
 pub fn state_for_session<'a>(
     states: &'a [ClaudeStateFile],
@@ -165,99 +133,12 @@ pub struct StatusLineFile {
     pub rate_limit_seven_day_resets_at: Option<String>,
 }
 
-/// Reads all orchard status line telemetry files from the given directory.
-///
-/// Only files matching `{dir}/orchard-statusline-*.json` are read.
-/// Malformed files and in-progress writes (`.tmp.`) are silently skipped.
-pub fn read_all_statusline_files(dir: &Path) -> Vec<StatusLineFile> {
-    let pattern = format!("{}/orchard-statusline-*.json", dir.display());
-    let mut results = Vec::new();
-
-    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
-        if path.to_string_lossy().contains(".tmp.") {
-            continue;
-        }
-        if let Ok(data) = std::fs::read(&path)
-            && let Ok(sl) = serde_json::from_slice::<StatusLineFile>(&data)
-        {
-            results.push(sl);
-        }
-    }
-
-    results
-}
-
 /// Finds the status line telemetry for a specific tmux session name.
 pub fn statusline_for_session<'a>(
     files: &'a [StatusLineFile],
     tmux_session: &str,
 ) -> Option<&'a StatusLineFile> {
     files.iter().find(|s| s.tmux_session == tmux_session)
-}
-
-/// Parses concatenated Claude state JSON from batched SSH output.
-///
-/// The input is the portion of SSH output after the `---CLAUDE_STATE---` sentinel —
-/// typically the result of `cat ${TMPDIR:-/tmp}/orchard-claude-*.json`. Multiple
-/// JSON objects may be concatenated without newlines (e.g. `{}{}`), so this uses
-/// `serde_json::StreamDeserializer` rather than line-splitting.
-///
-/// Malformed JSON fragments are silently skipped: when parsing fails, the function
-/// scans forward to the next `{` character and retries from there. If multiple
-/// entries share the same `tmux_session`, the one with the most recent `timestamp`
-/// is kept.
-pub fn parse_remote_state_output(raw: &str) -> Vec<ClaudeStateFile> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Vec::new();
-    }
-
-    // Deduplicate by tmux_session, keeping the most recent timestamp.
-    let mut by_session: std::collections::HashMap<String, ClaudeStateFile> =
-        std::collections::HashMap::new();
-
-    // We may need to skip past malformed fragments. We work with byte slices and
-    // advance past the current failed position by seeking to the next '{'.
-    let bytes = trimmed.as_bytes();
-    let mut pos = 0usize;
-
-    while pos < bytes.len() {
-        // Skip whitespace and non-JSON characters until we find a '{'.
-        let Some(start) = bytes[pos..].iter().position(|&b| b == b'{') else {
-            break;
-        };
-        pos += start;
-
-        let slice = &trimmed[pos..];
-        let mut stream = serde_json::Deserializer::from_str(slice).into_iter::<ClaudeStateFile>();
-
-        match stream.next() {
-            Some(Ok(entry)) => {
-                // Advance position by the number of bytes consumed.
-                pos += stream.byte_offset();
-
-                use std::collections::hash_map::Entry;
-                match by_session.entry(entry.tmux_session.clone()) {
-                    Entry::Vacant(slot) => {
-                        slot.insert(entry);
-                    }
-                    Entry::Occupied(mut slot) => {
-                        // Keep the entry with the more recent timestamp (lexicographic
-                        // comparison is correct for ISO 8601 timestamps).
-                        if entry.timestamp > slot.get().timestamp {
-                            *slot.get_mut() = entry;
-                        }
-                    }
-                }
-            }
-            Some(Err(_)) | None => {
-                // Skip past this '{' to avoid an infinite loop.
-                pos += 1;
-            }
-        }
-    }
-
-    by_session.into_values().collect()
 }
 
 #[cfg(test)]
@@ -327,19 +208,7 @@ mod tests {
         assert!(found.is_none());
     }
 
-    #[test]
-    fn read_all_state_files_skips_malformed() {
-        // Write a malformed file and verify it doesn't panic
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("orchard-claude-test.json");
-        std::fs::write(&path, b"not json").unwrap();
-        // We can't easily test the glob pattern directly (it's hardcoded to /tmp),
-        // but we can verify serde handles bad data gracefully
-        let result = serde_json::from_slice::<ClaudeStateFile>(b"not json");
-        assert!(result.is_err());
-    }
-
-    // -- StatusLineFile / read_all_statusline_files / statusline_for_session ---
+    // -- StatusLineFile / statusline_for_session ---
 
     fn make_statusline_file(tmux_session: &str) -> StatusLineFile {
         StatusLineFile {
@@ -352,49 +221,6 @@ mod tests {
             rate_limit_seven_day_used_pct: Some(5.0),
             rate_limit_seven_day_resets_at: Some("2026-04-18T00:00:00Z".to_string()),
         }
-    }
-
-    #[test]
-    fn read_all_statusline_files_reads_matching_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let sl = make_statusline_file("repo_47_claude");
-        let json = serde_json::to_string(&sl).unwrap();
-        std::fs::write(dir.path().join("orchard-statusline-abc.json"), &json).unwrap();
-
-        let results = read_all_statusline_files(dir.path());
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].tmux_session, "repo_47_claude");
-        assert_eq!(results[0].context_window_pct, Some(42.5));
-        assert_eq!(results[0].cost_usd, Some(0.25));
-    }
-
-    #[test]
-    fn read_all_statusline_files_skips_malformed_json() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("orchard-statusline-bad.json"), b"not json").unwrap();
-        let results = read_all_statusline_files(dir.path());
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn read_all_statusline_files_skips_tmp_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let sl = make_statusline_file("repo_47_claude");
-        let json = serde_json::to_string(&sl).unwrap();
-        std::fs::write(dir.path().join("orchard-statusline-.tmp.abc.json"), &json).unwrap();
-        let results = read_all_statusline_files(dir.path());
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn read_all_statusline_files_non_matching_files_ignored() {
-        let dir = tempfile::tempdir().unwrap();
-        let sl = make_statusline_file("repo_47_claude");
-        let json = serde_json::to_string(&sl).unwrap();
-        // Write a file with a different prefix — should not be picked up.
-        std::fs::write(dir.path().join("orchard-claude-abc.json"), &json).unwrap();
-        let results = read_all_statusline_files(dir.path());
-        assert!(results.is_empty());
     }
 
     #[test]
@@ -453,104 +279,6 @@ mod tests {
         assert_eq!(sf.session_start_ts, Some(1700000000));
         assert_eq!(sf.input_tokens, Some(1000));
         assert_eq!(sf.output_tokens, Some(50));
-    }
-
-    // -- parse_remote_state_output -------------------------------------------
-
-    fn now_iso() -> String {
-        chrono::Utc::now().to_rfc3339()
-    }
-
-    fn make_json(state: &str, session: &str, ts: &str) -> String {
-        format!(
-            r#"{{"state":"{state}","session_id":"s1","tmux_session":"{session}","cwd":"/workspace","event":"Stop","timestamp":"{ts}"}}"#
-        )
-    }
-
-    #[test]
-    fn parse_remote_state_output_parses_two_fresh_entries() {
-        let ts = now_iso();
-        let raw = format!(
-            "{}\n{}",
-            make_json("working", "repo_47_claude", &ts),
-            make_json("idle", "repo_48_main", &ts)
-        );
-        let result = parse_remote_state_output(&raw);
-        assert_eq!(result.len(), 2);
-        let working = result.iter().find(|s| s.tmux_session == "repo_47_claude");
-        assert!(working.is_some());
-        assert_eq!(working.unwrap().state, "working");
-        let idle = result.iter().find(|s| s.tmux_session == "repo_48_main");
-        assert!(idle.is_some());
-        assert_eq!(idle.unwrap().state, "idle");
-    }
-
-    #[test]
-    fn parse_remote_state_output_handles_concatenated_without_newlines() {
-        let ts = now_iso();
-        let raw = format!(
-            "{}{}",
-            make_json("working", "repo_47_claude", &ts),
-            make_json("idle", "repo_48_main", &ts)
-        );
-        let result = parse_remote_state_output(&raw);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn parse_remote_state_output_skips_malformed_entries() {
-        let ts = now_iso();
-        let raw = format!(
-            "{}\nnot valid json\n{}",
-            make_json("working", "repo_47_claude", &ts),
-            make_json("idle", "repo_48_main", &ts)
-        );
-        let result = parse_remote_state_output(&raw);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn parse_remote_state_output_empty_input_returns_empty() {
-        let result = parse_remote_state_output("");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn parse_remote_state_output_whitespace_only_returns_empty() {
-        let result = parse_remote_state_output("   \n  ");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn parse_remote_state_output_deduplicates_keeping_newest_timestamp() {
-        let older_ts = "2026-03-28T10:00:00Z";
-        let newer_ts = "2026-03-28T10:00:30Z";
-        // Older entry first, newer entry second — should keep newer.
-        let raw = format!(
-            "{}\n{}",
-            make_json("idle", "repo_47_claude", older_ts),
-            make_json("working", "repo_47_claude", newer_ts)
-        );
-        let result = parse_remote_state_output(&raw);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].tmux_session, "repo_47_claude");
-        assert_eq!(result[0].state, "working");
-        assert_eq!(result[0].timestamp, newer_ts);
-    }
-
-    #[test]
-    fn parse_remote_state_output_deduplicates_keeping_newest_when_older_comes_last() {
-        let older_ts = "2026-03-28T10:00:00Z";
-        let newer_ts = "2026-03-28T10:00:30Z";
-        // Newer entry first, older entry second — should still keep newer.
-        let raw = format!(
-            "{}\n{}",
-            make_json("working", "repo_47_claude", newer_ts),
-            make_json("idle", "repo_47_claude", older_ts)
-        );
-        let result = parse_remote_state_output(&raw);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].state, "working");
     }
 
     #[test]
