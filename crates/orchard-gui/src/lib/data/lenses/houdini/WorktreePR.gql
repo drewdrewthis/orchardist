@@ -1,0 +1,10 @@
+fragment WorktreePR on Worktree {
+	pr {
+		number
+		state
+		statusCheckRollup
+		reviewDecision
+		mergeable
+		mergeStateStatus
+	}
+}
