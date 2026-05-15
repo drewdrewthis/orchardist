@@ -1,7 +1,7 @@
 <!--
-  Refined section header used across every lens. Lowercase label, normal
-  weight, dim leader to the count. Color is reserved for state semantics
-  (blocked tier uses `attn`); ordinary headers stay neutral.
+  Section header — a clear visual chapter break between rows. Quiet
+  typography (mono, small, dim), but with a top hairline divider so the
+  eye reads the sidebar as discrete sections.
 -->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
@@ -24,12 +24,12 @@
 	onclick={onToggle}
 >
 	<span class="section-header__lhs">
-		<Icon name={icon} size={11} />
+		<Icon name={icon} size={10} />
 		<span class="section-header__label">{label.toLowerCase()}</span>
 	</span>
 	<span class="section-header__rhs">
 		<span class="section-header__count">{count}</span>
-		<Icon name={collapsed ? "chevron-right" : "chevron-down"} size={10} />
+		<Icon name={collapsed ? "chevron-right" : "chevron-down"} size={9} />
 	</span>
 </button>
 
@@ -41,16 +41,23 @@
 		width: 100%;
 		background: none;
 		border: none;
-		padding: 6px 12px 4px;
+		border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.04));
+		padding: 10px 14px 6px 14px;
 		margin: 0;
 		font: inherit;
-		color: var(--color-text-muted, #9ca0a8);
+		color: var(--color-text-dim, #797d86);
 		cursor: pointer;
 		text-align: left;
-		font-size: 10.5px;
-		letter-spacing: 0.04em;
-		text-transform: none;
+		font-family: "Geist Mono", ui-monospace, monospace;
+		font-size: 9.5px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
 		font-weight: 500;
+	}
+	/* First section in a list shouldn't have the top rule. */
+	:global(.sidebar-list > section:first-of-type) > .section-header,
+	:global(.sidebar-list > section.sidebar-group:first-child) > .section-header {
+		border-top: none;
 	}
 	.section-header:hover {
 		color: var(--color-text, #d4d7dc);
@@ -67,7 +74,6 @@
 		min-width: 0;
 	}
 	.section-header__label {
-		font-variant: tabular-nums;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -76,15 +82,14 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		color: var(--color-text-dim, #6c707a);
+		color: var(--color-text-dimmer, #5f6370);
 	}
 	.section-header__count {
-		font-family: var(--font-mono, ui-monospace, monospace);
-		font-size: 10px;
+		font-size: 9.5px;
 		min-width: 1.25em;
 		text-align: right;
 	}
-	/* attn tier (blocked) — restrained amber accent, label only */
+	/* Attn (blocked) tier — subtle amber tint, no shout. */
 	.section-header.attn {
 		color: #d99a55;
 	}

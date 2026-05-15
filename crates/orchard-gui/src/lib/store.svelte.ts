@@ -72,17 +72,34 @@ export interface ChatRoomSummary {
 
 const MAX_PANES = 3;
 
+/**
+ * Synchronous localStorage hydration helper. Tauri/SPA only — no SSR, so
+ * `localStorage` is always defined at module load time. Wrapped in
+ * try/catch because Safari can throw `SecurityError` in private-browsing.
+ */
+function hydrateLocalStorage(key: string, fallback: string): string {
+	try {
+		return localStorage.getItem(key) ?? fallback;
+	} catch {
+		return fallback;
+	}
+}
+
 export class AppStore {
 	chatRooms: ChatRoomSummary[] = $state([]);
 	chatRoomCache: Record<string, Conversation> = $state({});
 	/** Tick used by the few components that render relative timestamps. */
 	now = $state(Date.now());
 
-	theme: Theme = $state("dark");
+	// Hydrate theme + a few other UI preferences from localStorage at boot
+	// so they survive reloads. SPA-only (Tauri / browser), no SSR.
+	theme: Theme = $state(hydrateLocalStorage("orchard:ui:theme", "dark") as Theme);
 	surface: Surface = $state("desktop");
-	accentHue = $state(215);
-	density: "comfortable" | "compact" = $state("comfortable");
-	lens: Lens = $state("attention");
+	accentHue = $state(Number(hydrateLocalStorage("orchard:ui:accent-hue", "215")) || 215);
+	density: "comfortable" | "compact" = $state(
+		hydrateLocalStorage("orchard:ui:density", "comfortable") as "comfortable" | "compact",
+	);
+	lens: Lens = $state(hydrateLocalStorage("orchard:ui:lens", "attention") as Lens);
 	sidebarCollapsed = $state(false);
 	sidebarWidth = $state(320);
 

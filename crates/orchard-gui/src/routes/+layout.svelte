@@ -20,6 +20,16 @@
 	$effect(() => {
 		document.documentElement.dataset.theme = store.theme;
 		document.documentElement.style.setProperty("--accent-hue", String(store.accentHue));
+		// Persist UI prefs across reloads. localStorage writes are cheap; the
+		// $effect only re-runs when one of the tracked reactive reads changes.
+		try {
+			localStorage.setItem("orchard:ui:theme", store.theme);
+			localStorage.setItem("orchard:ui:accent-hue", String(store.accentHue));
+			localStorage.setItem("orchard:ui:density", store.density);
+			localStorage.setItem("orchard:ui:lens", store.lens);
+		} catch {
+			// Safari private mode — ignore.
+		}
 	});
 
 	onMount(() => {
