@@ -100,6 +100,7 @@
 					fullscreen={null}
 					conversation={store.visibleConversation || { itemId: '', recap: '', isChannel: true, messages: [] }}
 					now={store.now}
+					surface="mobile"
 					composeText={store.composeText}
 					setComposeText={(s) => (store.composeText = s)}
 					onSend={() => store.send()}

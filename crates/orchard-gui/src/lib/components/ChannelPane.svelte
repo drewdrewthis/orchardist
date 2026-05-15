@@ -21,6 +21,7 @@
 		fullscreen: boolean | null;
 		conversation: Conversation;
 		now: number;
+		surface?: "desktop" | "mobile";
 		statusVariant?: "ticks" | "dots" | "minimal" | "text";
 		composeText: string;
 		setComposeText: (s: string) => void;
@@ -42,6 +43,7 @@
 		fullscreen,
 		conversation,
 		now,
+		surface = "desktop",
 		statusVariant = "ticks",
 		composeText,
 		setComposeText,
@@ -69,10 +71,14 @@
 	onmousedown={onActivate}
 	role="region"
 >
-	{#if paneCount > 1}
+	{#if paneCount > 1 || surface === "mobile"}
 		<div class="pane-header-bar">
-			<button class="pane-close iconbtn" onclick={(e) => { e.stopPropagation(); onClose(); }} aria-label="Close pane">
-				<Icon name="close" size={11} />
+			<button
+				class="pane-close iconbtn"
+				onclick={(e) => { e.stopPropagation(); onClose(); }}
+				aria-label={surface === "mobile" ? "Back to sidebar" : "Close pane"}
+			>
+				<Icon name={surface === "mobile" ? "arrow-left" : "close"} size={surface === "mobile" ? 14 : 11} />
 			</button>
 			{#if isLast && onToggleFullscreen}
 				<button
