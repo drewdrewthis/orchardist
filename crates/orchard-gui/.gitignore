@@ -3,6 +3,7 @@ node_modules
 /build
 /.svelte-kit
 /$houdini
+/.houdini
 /package
 .env
 .env.*
