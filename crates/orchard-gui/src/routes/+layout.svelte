@@ -25,9 +25,19 @@
 	// hydrate at boot BEFORE the lens stores fetch. The CacheAndNetwork
 	// policy means we still revalidate on network — we just paint instantly
 	// from the snapshot first.
-	const CACHE_KEY = "orchard:houdini:cache:v1";
+	// Bump the version suffix whenever the GraphQL fragment surface
+	// changes shape. Old snapshots from a previous schema can confuse
+	// Houdini's hydrate (records reference fields the runtime no longer
+	// asks for, or vice-versa). Bumping the key effectively flushes the
+	// stale snapshot for every connected client.
+	const CACHE_KEY = "orchard:houdini:cache:v2";
+	const STALE_CACHE_KEYS = ["orchard:houdini:cache:v1"];
 
 	function hydrateHoudiniCache() {
+		// Always purge known stale keys first — defensive cleanup.
+		try {
+			for (const k of STALE_CACHE_KEYS) localStorage.removeItem(k);
+		} catch {}
 		try {
 			const raw = localStorage.getItem(CACHE_KEY);
 			if (!raw) return;
