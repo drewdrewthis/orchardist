@@ -22,6 +22,16 @@ Clients call daemon GraphQL. No client-side `git`/`gh`/`tmux` exec. No client-si
 
 Exception: title fallback chain (`agentName → customTitle → branch → cwd → uuid`) stays client-side; GraphQL doesn't fluent-coalesce.
 
+### Data + graph modeling (ADR-022)
+
+Before any new resolver, provider method, fragment, or dataloader, run the 3-step gate:
+
+1. **Name the node.** `Pane`, `Worktree`, `Conversation`, `ClaudeInstance`, `PullRequest`, ... If none fits, the first deliverable is naming a new one — not a wrapper around an old one.
+2. **Name the lookup axes.** `ByID`, `ByCwd`, `ByCommand`, `BySession`. Arity in the name (`PaneByID` → one, `PanesByCommand` → many).
+3. **Wire provider → dataloader → resolver.** Provider exposes typed by-axis methods that build indices on its snapshot. Loader batches per request. Resolver is a thin `Load(key)` + projection.
+
+Smells (stop, redesign): `*Seeder` / `*Synthesizer` / `*Adapter` that emits type X to fit a reader of type Y; resolver bodies with `for` loops over provider snapshots; provider methods named `For<SpecificCaller>` instead of `By<Axis>`; the same data served through two paths.
+
 ### Tmux session ≠ Claude session
 
 | Concept | Type | Identity | Lifetime |
