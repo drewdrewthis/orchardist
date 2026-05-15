@@ -41,12 +41,16 @@
 	function persistHoudiniCache() {
 		try {
 			const json = houdiniCache.serialize();
-			// Cap snapshot size (~256KB) so a runaway cache doesn't blow
-			// localStorage's 5MB ceiling.
-			if (json.length > 256 * 1024) return;
+			// Cap at 2MB — well below localStorage's 5MB ceiling on every
+			// major browser, comfortably over typical orchard cache size
+			// (210KB at 363 conversations, scales linearly).
+			if (json.length > 2 * 1024 * 1024) return;
 			localStorage.setItem(CACHE_KEY, json);
 		} catch {
-			// localStorage may be full or denied (Safari private mode).
+			// Quota exceeded or denied (Safari private mode). Drop the
+			// stale snapshot so future loads don't try to hydrate corrupt
+			// half-written data.
+			try { localStorage.removeItem(CACHE_KEY); } catch {}
 		}
 	}
 
@@ -74,19 +78,25 @@
 		const subPromise = store.subscribeChat();
 
 		// Persist cache when the page is about to be hidden or unloaded.
-		// `visibilitychange:hidden` fires reliably on mobile (lock screen,
-		// tab swap); `beforeunload` is the desktop / reload path. Also
-		// periodic flush every 30s so we don't lose recent state if the
-		// page is killed without firing either hook (mobile Safari can).
+		// Multiple hooks because each browser/platform fires a different
+		// subset reliably:
+		//   - pagehide: most reliable on iOS Safari (incl. back/forward cache)
+		//   - visibilitychange:hidden: backgrounding, tab swap, lock screen
+		//   - beforeunload: desktop reload / close
+		//   - flushIv: backstop every 10s in case all three are missed
 		const onHide = () => { if (document.visibilityState === "hidden") persistHoudiniCache(); };
 		document.addEventListener("visibilitychange", onHide);
 		window.addEventListener("beforeunload", persistHoudiniCache);
-		const flushIv = window.setInterval(persistHoudiniCache, 30_000);
+		window.addEventListener("pagehide", persistHoudiniCache);
+		// Tighter flush (10s, not 30s) so a user who reloads quickly still
+		// gets the most recent data on the cold path.
+		const flushIv = window.setInterval(persistHoudiniCache, 10_000);
 
 		return () => {
 			stopTick();
 			document.removeEventListener("visibilitychange", onHide);
 			window.removeEventListener("beforeunload", persistHoudiniCache);
+			window.removeEventListener("pagehide", persistHoudiniCache);
 			window.clearInterval(flushIv);
 			// One last flush on teardown so dev HMR reload doesn't lose recent state.
 			persistHoudiniCache();

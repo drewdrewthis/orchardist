@@ -212,13 +212,15 @@ export class AppStore {
 	) => {
 		if (!key.paneId && !key.sessionUuid) return;
 
-		// Default view rule: live pane → terminal; no pane → chat (the
-		// jsonl is the only thing to show). Live tmux is the substrate
-		// when present, but a dormant session has nothing to attach to,
-		// so transcript history is the right landing surface. Drew
-		// (2026-05-10): "if no tmux sessions still okay, right, we have
+		// Default view rule:
+		//   - mobile: always chat (browser can't host a PTY, terminal view
+		//     would just show "desktop app required").
+		//   - desktop + live pane: terminal (the substrate when attached).
+		//   - desktop + no pane: chat (the jsonl is the only thing to show).
+		// Drew (2026-05-10): "if no tmux sessions still okay, right, we have
 		// the jsonl."
-		const defaultView: ConvView = key.paneId ? "terminal" : "chat";
+		const defaultView: ConvView =
+			this.surface === "mobile" ? "chat" : key.paneId ? "terminal" : "chat";
 
 		// Mobile: always single-tab.
 		if (this.surface === "mobile") {

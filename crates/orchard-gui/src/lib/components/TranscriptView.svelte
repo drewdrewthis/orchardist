@@ -22,6 +22,7 @@
 		type TranscriptBlock,
 	} from "$lib/data/transcript";
 	import { subscribeConversation } from "$lib/data/daemon";
+	import { renderMarkdown } from "$lib/util/markdown";
 
 	type Props = {
 		path: string;
@@ -221,11 +222,13 @@
 						</div>
 						{#each turn.blocks as block, i (i)}
 							{#if block.kind === "text"}
-								<div class="text-[13px] leading-[1.55] whitespace-pre-wrap break-words text-fg">{block.text}</div>
+								<!-- Markdown rendered via marked + DOMPurify. The `prose` class
+								     adds spacing for headings/lists/code; defined in tailwind.css. -->
+								<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat">{@html renderMarkdown(block.text)}</div>
 							{:else if block.kind === "thinking"}
 								<details class="text-[12.5px] open:pl-2 open:border-l open:border-dashed open:border-line">
 									<summary class="dimer mono cursor-pointer text-[11px] py-0.5">thinking</summary>
-									<div class="text-[13px] leading-[1.55] whitespace-pre-wrap break-words text-fg">{block.text}</div>
+									<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat">{@html renderMarkdown(block.text)}</div>
 								</details>
 							{:else if block.kind === "tool_use"}
 								<div class="rounded-md bg-surface-2 border-[0.5px] border-line overflow-hidden">

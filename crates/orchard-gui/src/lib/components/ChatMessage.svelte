@@ -4,6 +4,7 @@
 	import Avatar from "$lib/icons/Avatar.svelte";
 	import SendStatus from "$lib/icons/SendStatus.svelte";
 	import { shortTime } from "$lib/util/format";
+	import { renderMarkdown } from "$lib/util/markdown";
 	import type { Message } from "$lib/data/types";
 
 	type Props = {
@@ -116,7 +117,7 @@
 					<i class="w-[5px] h-[5px] rounded-full bg-fg-3 animate-typing [animation-delay:0.3s]"></i>
 				</span>
 			{:else}
-				{@html linkify(msg.text)}
+				<div class="prose-chat">{@html renderMarkdown(msg.text)}</div>
 			{/if}
 			{#if msg.tools && msg.tools.length > 0}
 				<div class="inline-flex gap-1 flex-wrap mt-1.5">

@@ -75,7 +75,7 @@
 			<Icon name="plus" size={22} />
 		</button>
 	{:else}
-		<div style:flex="1" style:min-height="0">
+		<div style:flex="1" style:min-height="0" style:display="flex" style:flex-direction="column">
 			{#if tab.kind === "session"}
 				<SessionPane
 					paneId={tab.paneId}
