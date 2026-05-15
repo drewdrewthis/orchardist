@@ -24,6 +24,19 @@
 	let sending = $state(false);
 	let error = $state<string | null>(null);
 	let textarea: HTMLTextAreaElement | undefined = $state();
+	// Lightweight clock for the "sent" badge fade. 500ms tick is plenty —
+	// the badge only flips once after 2.5s.
+	let now = $state(Date.now());
+	/** "sent" badge state — visible for 2.5s after a successful send. */
+	let lastSentAt = $state<number | null>(null);
+	const sentBadgeVisible = $derived(
+		lastSentAt != null && now - lastSentAt < 2500,
+	);
+	$effect(() => {
+		if (!sentBadgeVisible) return;
+		const t = setInterval(() => (now = Date.now()), 500);
+		return () => clearInterval(t);
+	});
 
 	async function send() {
 		const t = text.trim();
@@ -34,6 +47,8 @@
 			await tmuxSendText(paneId, t);
 			text = "";
 			autosize();
+			lastSentAt = Date.now();
+			now = Date.now();
 		} catch (err) {
 			error = (err as Error)?.message ?? String(err);
 			toast.error(err);
@@ -89,19 +104,121 @@
 			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[16px] leading-[1.4] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
 		></textarea>
 		<button
-			class="inline-flex items-center justify-center w-9 h-9 border-0 bg-fg text-bg rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+			class="send-btn"
+			class:sending
 			onclick={send}
 			disabled={sending || !text.trim()}
 			title="Send (Enter) · Shift+Enter for newline"
+			aria-label="Send"
 		>
 			{#if sending}
-				…
+				<span class="send-spinner" aria-hidden="true"></span>
+				<span class="sr-only">Sending…</span>
 			{:else}
-				<Icon name="send" size={13} />
+				<Icon name="send" size={14} />
 			{/if}
 		</button>
 	</div>
-	<div class="mono dimer text-[10.5px]">
-		Sent via tmux send-keys → {paneId} · Enter to send · Shift+Enter for newline
+	<div class="composer-status mono">
+		{#if sending}
+			<span class="status-pill status-pill--sending">
+				<span class="send-spinner" aria-hidden="true"></span>
+				sending to {paneId}…
+			</span>
+		{:else if sentBadgeVisible}
+			<span class="status-pill status-pill--sent">
+				<Icon name="check" size={9} /> delivered to {paneId}
+			</span>
+		{:else}
+			<span class="dimer">↵ send · ⇧↵ newline · {paneId}</span>
+		{/if}
 	</div>
 </div>
+
+<style>
+	.send-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 38px;
+		height: 38px;
+		border: none;
+		border-radius: 10px;
+		background: var(--color-accent, #6366f1);
+		color: white;
+		cursor: pointer;
+		transition: background 100ms ease, transform 80ms ease;
+		flex: none;
+	}
+	.send-btn:hover:not(:disabled) {
+		background: color-mix(in oklab, var(--color-accent, #6366f1) 90%, white);
+	}
+	.send-btn:active:not(:disabled) {
+		transform: scale(0.95);
+	}
+	.send-btn:disabled {
+		background: color-mix(in oklab, var(--color-fg, #888) 15%, transparent);
+		color: color-mix(in oklab, var(--color-fg, #888) 40%, transparent);
+		cursor: not-allowed;
+	}
+	.send-btn.sending {
+		background: color-mix(in oklab, var(--color-accent, #6366f1) 60%, transparent);
+	}
+	.send-spinner {
+		display: inline-block;
+		width: 12px;
+		height: 12px;
+		border: 1.5px solid currentColor;
+		border-right-color: transparent;
+		border-radius: 50%;
+		animation: send-spin 700ms linear infinite;
+	}
+	@keyframes send-spin {
+		to { transform: rotate(360deg); }
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	.composer-status {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 10.5px;
+		min-height: 14px;
+		padding: 0 2px;
+	}
+	.status-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 1px 6px;
+		border-radius: 8px;
+		font-size: 10px;
+		animation: status-fade 200ms ease-out;
+	}
+	.status-pill--sending {
+		color: var(--color-accent, #6366f1);
+		background: color-mix(in oklab, var(--color-accent, #6366f1) 12%, transparent);
+	}
+	.status-pill--sent {
+		color: #6fd391;
+		background: color-mix(in oklab, #6fd391 12%, transparent);
+		animation: status-fade-out 2500ms ease-out;
+	}
+	@keyframes status-fade {
+		from { opacity: 0; transform: translateY(2px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+	@keyframes status-fade-out {
+		0%, 70% { opacity: 1; }
+		100% { opacity: 0.3; }
+	}
+</style>

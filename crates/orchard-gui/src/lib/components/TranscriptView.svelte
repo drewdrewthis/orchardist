@@ -157,6 +157,24 @@
 		return m;
 	}
 
+	/**
+	 * Should the role header (role · model · time) be shown for this turn?
+	 * Suppressed when this turn is from the same role as the previous one
+	 * AND within a 5-minute window — gives the transcript a chat-grouped
+	 * shape instead of a flat log.
+	 */
+	function showRoleHeader(idx: number): boolean {
+		if (idx === 0) return true;
+		const cur = turns[idx];
+		const prev = turns[idx - 1];
+		if (!cur || !prev) return true;
+		if (cur.role !== prev.role) return true;
+		if (cur.timestamp && prev.timestamp) {
+			if (cur.timestamp - prev.timestamp > 5 * 60_000) return true;
+		}
+		return false;
+	}
+
 	function blockSummary(b: TranscriptBlock): string {
 		if (b.kind === "text" || b.kind === "thinking") return "";
 		if (b.kind === "tool_use") {
@@ -199,7 +217,7 @@
 		</div>
 	{:else}
 		<div
-			class="flex-1 min-h-0 overflow-y-auto px-3.5 pt-3 pb-6"
+			class="transcript-scroll flex-1 min-h-0 overflow-y-auto px-3.5 pt-3 pb-6"
 			bind:this={scrollHost}
 			onscroll={onScroll}
 		>
@@ -213,36 +231,36 @@
 					{@const turn = turns[vRow.index]}
 					{#if turn}
 					<div
-						class="flex flex-col gap-1.5 absolute top-0 left-0 right-0 pl-2 pb-3 border-l-2"
+						class="turn absolute top-0 left-0 right-0"
 						class:opacity-65={turn.toolFeedback}
-						class:border-l-[color-mix(in_oklab,var(--color-accent)_60%,transparent)]={turn.role === "user"}
-						class:border-l-[color-mix(in_oklab,var(--color-ok-fg)_35%,transparent)]={turn.role === "assistant"}
-						class:border-l-transparent={turn.role !== "user" && turn.role !== "assistant"}
+						class:turn--user={turn.role === "user"}
+						class:turn--assistant={turn.role === "assistant"}
+						class:turn--grouped={!showRoleHeader(vRow.index)}
 						data-role={turn.role}
 						data-index={vRow.index}
 						use:$virtualizer.measureElement
 						style="transform: translateY({vRow.start}px);"
 					>
-						<div class="flex items-center gap-1.5 mono text-[10.5px] text-fg-3 tracking-[0.02em]">
-							<span class="lowercase font-medium text-fg-2">{turn.role}</span>
-							{#if turn.model}
-								<span class="dimest">·</span>
-								<span class="dimer">{modelLabel(turn.model)}</span>
-							{/if}
-							{#if turn.timestamp}
-								<span class="dimest">·</span>
-								<span class="dimer">{timeStr(turn.timestamp)}</span>
-							{/if}
-						</div>
+						{#if showRoleHeader(vRow.index)}
+							<div class="turn-header mono">
+								<span class="turn-header__role">{turn.role}</span>
+								{#if turn.model}
+									<span class="dimest">·</span>
+									<span class="dimer">{modelLabel(turn.model)}</span>
+								{/if}
+								{#if turn.timestamp}
+									<span class="dimest">·</span>
+									<span class="dimer">{timeStr(turn.timestamp)}</span>
+								{/if}
+							</div>
+						{/if}
 						{#each turn.blocks as block, i (i)}
 							{#if block.kind === "text"}
-								<!-- Markdown rendered via marked + DOMPurify. The `prose` class
-								     adds spacing for headings/lists/code; defined in tailwind.css. -->
-								<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat">{@html renderMarkdown(block.text)}</div>
+								<div class="turn-bubble prose-chat">{@html renderMarkdown(block.text)}</div>
 							{:else if block.kind === "thinking"}
-								<details class="text-[12.5px] open:pl-2 open:border-l open:border-dashed open:border-line">
+								<details class="turn-thinking text-[12.5px]">
 									<summary class="dimer mono cursor-pointer text-[11px] py-0.5">thinking</summary>
-									<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat">{@html renderMarkdown(block.text)}</div>
+									<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat pt-1">{@html renderMarkdown(block.text)}</div>
 								</details>
 							{:else if block.kind === "tool_use"}
 								<div class="rounded-md bg-surface-2 border-[0.5px] border-line overflow-hidden">
@@ -288,3 +306,93 @@
 	{/if}
 </div>
 
+
+<style>
+	/* Fluid scroll on mobile + desktop:
+	   - -webkit-overflow-scrolling:touch enables iOS momentum scrolling
+	   - overscroll-behavior:contain prevents the page-level rubber-band
+	     from fighting the transcript scroll
+	   - scroll-behavior:smooth makes programmatic scrolls (stick-to-bottom)
+	     glide instead of teleport
+	   - scrollbar-gutter:stable avoids width-shift on macOS Safari */
+	.transcript-scroll {
+		-webkit-overflow-scrolling: touch;
+		overscroll-behavior: contain;
+		scroll-behavior: smooth;
+		scrollbar-gutter: stable;
+	}
+
+	/* Chat-shaped turn layout. User turns right-align with an accent
+	   bubble; assistant turns left-align without a bubble (more
+	   conversational). Consecutive same-role turns inside a 5min window
+	   are grouped — only the first shows the role header, the rest sit
+	   tighter beneath it. */
+	.turn {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		padding-bottom: 10px;
+	}
+	.turn--grouped {
+		padding-top: 0;
+		margin-top: -4px;
+	}
+
+	.turn-header {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 10px;
+		color: var(--color-fg-3, #6c707a);
+		letter-spacing: 0.04em;
+		padding: 6px 0 1px;
+	}
+	.turn-header__role {
+		text-transform: lowercase;
+		font-weight: 500;
+		color: var(--color-fg-2, #aab0bb);
+	}
+	.turn--user .turn-header {
+		justify-content: flex-end;
+	}
+
+	.turn-bubble {
+		font-size: 14px;
+		line-height: 1.5;
+		word-break: break-word;
+		color: var(--color-fg, #e4e6eb);
+	}
+
+	/* USER turns: right-aligned bubble with accent background. */
+	.turn--user {
+		align-items: flex-end;
+	}
+	.turn--user .turn-bubble {
+		background: color-mix(in oklab, var(--color-accent, #6366f1) 14%, transparent);
+		border: 0.5px solid color-mix(in oklab, var(--color-accent, #6366f1) 30%, transparent);
+		border-radius: 14px 14px 4px 14px;
+		padding: 8px 12px;
+		max-width: 85%;
+	}
+
+	/* ASSISTANT turns: left-aligned, no bubble. */
+	.turn--assistant {
+		align-items: flex-start;
+	}
+	.turn--assistant .turn-bubble {
+		max-width: 95%;
+		padding: 2px 0;
+	}
+
+	/* System / tool-result-only turns: flat. */
+	.turn:not(.turn--user):not(.turn--assistant) .turn-bubble {
+		opacity: 0.85;
+		font-size: 12.5px;
+	}
+
+	.turn-thinking {
+		opacity: 0.75;
+		padding-left: 6px;
+		border-left: 1px dashed var(--color-line, rgba(255,255,255,0.08));
+	}
+</style>
