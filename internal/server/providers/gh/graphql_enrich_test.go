@@ -147,9 +147,9 @@ func newEnrichProvider(t *testing.T, body []byte, clock func() time.Time) (*gh.P
 	return p, &count
 }
 
-// TestEnrichPullRequest_Caches60s asserts that two EnrichPullRequest calls
+// TestEnrichPullRequest_CachesWithinTTL asserts that two EnrichPullRequest calls
 // within the 60-second enrichment TTL share one HTTP round-trip.
-func TestEnrichPullRequest_Caches60s(t *testing.T) {
+func TestEnrichPullRequest_CachesWithinTTL(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{t: now}
 
@@ -173,8 +173,8 @@ func TestEnrichPullRequest_Caches60s(t *testing.T) {
 		t.Fatalf("expected 1 HTTP call after first enrich, got %d", c)
 	}
 
-	// Advance clock by 30s — still within 60s TTL.
-	clock.advance(30 * time.Second)
+	// Advance clock by 2 min — still within 5min enrichmentTTL.
+	clock.advance(2 * time.Minute)
 
 	// Second call — must use the cache (no new HTTP call).
 	pr2, err := p.EnrichPullRequest(context.Background(), key)
@@ -188,8 +188,8 @@ func TestEnrichPullRequest_Caches60s(t *testing.T) {
 		t.Errorf("cached result differs: %+v vs %+v", pr1, pr2)
 	}
 
-	// Advance past TTL.
-	clock.advance(35 * time.Second)
+	// Advance past enrichmentTTL (5min).
+	clock.advance(4 * time.Minute)
 
 	// Third call — TTL expired, must re-fetch.
 	_, err = p.EnrichPullRequest(context.Background(), key)

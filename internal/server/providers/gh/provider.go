@@ -515,6 +515,7 @@ var (
 	_ = (*Provider)(nil).GetWorkflowRun
 	_ = (*Provider)(nil).GetRepository
 	_ = (*Provider)(nil).EnrichPullRequest
+	_ = (*Provider)(nil).BatchEnrichPullRequests
 )
 
 // errNoGitDir / errNoOriginRemote differentiate "no .git" from "no

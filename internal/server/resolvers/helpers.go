@@ -11,6 +11,7 @@ import (
 	"time"
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
@@ -27,6 +28,22 @@ func prKeyFromGraphQL(r *Resolver, obj *graphql1.PullRequest) (gh.PullRequestKey
 		return gh.PullRequestKey{}, false
 	}
 	return gh.PullRequestKey{Owner: owner, Name: name, Number: number}, true
+}
+
+// enrichPR fetches the five enrichment fields for a PR, routing through the
+// PullRequestEnrichment dataloader when one is available in ctx (batching all
+// enrichment calls within one GraphQL operation into one HTTP request per
+// repo). Falls back to the direct EnrichPullRequest call when no loader is
+// present (e.g. subscription emissions that bypass the HTTP middleware).
+func enrichPR(ctx context.Context, r *Resolver, key gh.PullRequestKey) (gh.PullRequest, error) {
+	if l := loaders.FromContext(ctx); l != nil && l.PullRequestEnrichment != nil {
+		pr, err := l.PullRequestEnrichment.Load(ctx, key)()
+		if err != nil {
+			return gh.PullRequest{}, err
+		}
+		return pr, nil
+	}
+	return r.GH.EnrichPullRequest(ctx, key)
 }
 
 func (r *subscriptionResolver) streamLocalEvents(ctx context.Context) (<-chan graphql1.Node, error) {

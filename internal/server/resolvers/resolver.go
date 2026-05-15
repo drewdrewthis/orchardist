@@ -153,10 +153,11 @@ func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 // Loaders is on the context (e.g. internal subscription emissions).
 func (r *Resolver) LoaderBundle() *loaders.ProvidersBundle {
 	return &loaders.ProvidersBundle{
-		Host:  r.HostProvider,
-		Git:   r.Git,
-		Ps:    r.PS,
-		Repos: r.ReposProvider,
-		GH:    r.GH,
+		Host:       r.HostProvider,
+		Git:        r.Git,
+		Ps:         r.PS,
+		Repos:      r.ReposProvider,
+		GH:         r.GH,
+		GHEnricher: r.GH,
 	}
 }

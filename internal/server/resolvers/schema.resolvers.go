@@ -229,13 +229,15 @@ func (r *processResolver) ClaudeInstance(ctx context.Context, obj *graphql1.Proc
 	return nil, nil
 }
 
-// Mergeable is the resolver for the pullRequest.mergeable field. Calls EnrichPullRequest (cached, single GraphQL round-trip shared across the five enrichment fields).
+// Mergeable is the resolver for the pullRequest.mergeable field. Routes
+// through the PullRequestEnrichment dataloader so all enrichment calls
+// within one GraphQL request coalesce into one HTTP call per repository.
 func (r *pullRequestResolver) Mergeable(ctx context.Context, obj *graphql1.PullRequest) (graphql1.MergeableState, error) {
 	key, ok := prKeyFromGraphQL(r.Resolver, obj)
 	if !ok {
 		return graphql1.MergeableStateUnknown, nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	pr, err := enrichPR(ctx, r.Resolver, key)
 	if err != nil {
 		return graphql1.MergeableStateUnknown, err
 	}
@@ -248,7 +250,7 @@ func (r *pullRequestResolver) MergeStateStatus(ctx context.Context, obj *graphql
 	if !ok {
 		return "", nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	pr, err := enrichPR(ctx, r.Resolver, key)
 	if err != nil {
 		return "", err
 	}
@@ -261,7 +263,7 @@ func (r *pullRequestResolver) ReviewDecision(ctx context.Context, obj *graphql1.
 	if !ok {
 		return nil, nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	pr, err := enrichPR(ctx, r.Resolver, key)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +276,7 @@ func (r *pullRequestResolver) StatusCheckRollup(ctx context.Context, obj *graphq
 	if !ok {
 		return graphql1.CiStatusUnknown, nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	pr, err := enrichPR(ctx, r.Resolver, key)
 	if err != nil {
 		return graphql1.CiStatusUnknown, err
 	}
@@ -287,7 +289,7 @@ func (r *pullRequestResolver) Labels(ctx context.Context, obj *graphql1.PullRequ
 	if !ok {
 		return []*graphql1.Label{}, nil
 	}
-	pr, err := r.GH.EnrichPullRequest(ctx, key)
+	pr, err := enrichPR(ctx, r.Resolver, key)
 	if err != nil {
 		return nil, err
 	}

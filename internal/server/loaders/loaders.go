@@ -39,6 +39,13 @@ type GHPullRequestLister interface {
 	ListPullRequests(ctx context.Context, owner, name string, state ghprovider.PullRequestState) ([]ghprovider.PullRequest, error)
 }
 
+// GHPREnricher is the narrow gh surface the PullRequestEnrichment loader
+// needs. *gh.Provider satisfies this automatically. Tests can inject a
+// stub without standing up HTTP.
+type GHPREnricher interface {
+	BatchEnrichPullRequests(ctx context.Context, keys []ghprovider.PullRequestKey) (map[ghprovider.PullRequestKey]ghprovider.PullRequest, error)
+}
+
 // ProvidersBundle is the read-side surface the loaders need from the
 // resolver root. A struct (not an interface) because the loaders only
 // ever read pointers off it and tests can swap individual fields
@@ -52,6 +59,9 @@ type ProvidersBundle struct {
 	// *gh.Provider satisfies GHPullRequestLister automatically; tests
 	// can inject a stub without standing up HTTP.
 	GH GHPullRequestLister
+	// GHEnricher is the narrow gh surface the PullRequestEnrichment loader
+	// needs. *gh.Provider satisfies GHPREnricher automatically.
+	GHEnricher GHPREnricher
 }
 
 // loaderKey is the private context key for the per-request loaders.
@@ -62,16 +72,18 @@ type loaderKey struct{}
 // emission). Every dataloader instance holds its own batched promise
 // state.
 type Loaders struct {
-	Host                *dataloader.Loader[string, *graphql1.Host]
-	WorktreeForCwd      *dataloader.Loader[string, *graphql1.Worktree]
-	Process             *dataloader.Loader[ProcessKey, *graphql1.Process]
-	PullRequestsForRepo *dataloader.Loader[RepoKey, []*graphql1.PullRequest]
+	Host                  *dataloader.Loader[string, *graphql1.Host]
+	WorktreeForCwd        *dataloader.Loader[string, *graphql1.Worktree]
+	Process               *dataloader.Loader[ProcessKey, *graphql1.Process]
+	PullRequestsForRepo   *dataloader.Loader[RepoKey, []*graphql1.PullRequest]
+	PullRequestEnrichment *dataloader.Loader[ghprovider.PullRequestKey, ghprovider.PullRequest]
 
 	// metrics — provider call counts, used by the n+1 detector test.
-	hostBatches     *batchCounter
-	worktreeBatches *batchCounter
-	processBatches  *batchCounter
-	prBatches       *batchCounter
+	hostBatches           *batchCounter
+	worktreeBatches       *batchCounter
+	processBatches        *batchCounter
+	prBatches             *batchCounter
+	prEnrichmentBatches   *batchCounter
 }
 
 // RepoKey is the composite key for the PullRequestsForRepo loader.
@@ -110,6 +122,7 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	worktreeBatches := &batchCounter{}
 	processBatches := &batchCounter{}
 	prBatches := &batchCounter{}
+	prEnrichmentBatches := &batchCounter{}
 
 	hostBatch := func(_ context.Context, ids []string) []*dataloader.Result[*graphql1.Host] {
 		hostBatches.inc()
@@ -126,6 +139,10 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	prBatch := func(ctx context.Context, keys []RepoKey) []*dataloader.Result[[]*graphql1.PullRequest] {
 		prBatches.inc()
 		return loadPullRequestsForRepo(ctx, providers, keys)
+	}
+	prEnrichmentBatch := func(ctx context.Context, keys []ghprovider.PullRequestKey) []*dataloader.Result[ghprovider.PullRequest] {
+		prEnrichmentBatches.inc()
+		return loadPullRequestEnrichments(ctx, providers, keys)
 	}
 
 	hostOpts := []dataloader.Option[string, *graphql1.Host]{
@@ -144,16 +161,22 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 		dataloader.WithWait[RepoKey, []*graphql1.PullRequest](1 * time.Millisecond),
 		dataloader.WithCache[RepoKey, []*graphql1.PullRequest](&dataloader.NoCache[RepoKey, []*graphql1.PullRequest]{}),
 	}
+	prEnrichmentOpts := []dataloader.Option[ghprovider.PullRequestKey, ghprovider.PullRequest]{
+		dataloader.WithWait[ghprovider.PullRequestKey, ghprovider.PullRequest](1 * time.Millisecond),
+		dataloader.WithCache[ghprovider.PullRequestKey, ghprovider.PullRequest](&dataloader.NoCache[ghprovider.PullRequestKey, ghprovider.PullRequest]{}),
+	}
 
 	return &Loaders{
-		Host:                dataloader.NewBatchedLoader(hostBatch, hostOpts...),
-		WorktreeForCwd:      dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
-		Process:             dataloader.NewBatchedLoader(processBatch, processOpts...),
-		PullRequestsForRepo: dataloader.NewBatchedLoader(prBatch, prOpts...),
-		hostBatches:         hostBatches,
-		worktreeBatches:     worktreeBatches,
-		processBatches:      processBatches,
-		prBatches:           prBatches,
+		Host:                  dataloader.NewBatchedLoader(hostBatch, hostOpts...),
+		WorktreeForCwd:        dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
+		Process:               dataloader.NewBatchedLoader(processBatch, processOpts...),
+		PullRequestsForRepo:   dataloader.NewBatchedLoader(prBatch, prOpts...),
+		PullRequestEnrichment: dataloader.NewBatchedLoader(prEnrichmentBatch, prEnrichmentOpts...),
+		hostBatches:           hostBatches,
+		worktreeBatches:       worktreeBatches,
+		processBatches:        processBatches,
+		prBatches:             prBatches,
+		prEnrichmentBatches:   prEnrichmentBatches,
 	}
 }
 
@@ -172,6 +195,10 @@ func (l *Loaders) ProcessBatchCount() int { return l.processBatches.value() }
 // PullRequestsForRepoBatchCount returns the number of PR-loader batch
 // invocations since this Loaders was constructed. Used by n+1 tests.
 func (l *Loaders) PullRequestsForRepoBatchCount() int { return l.prBatches.value() }
+
+// PullRequestEnrichmentBatchCount returns the number of PR enrichment
+// loader batch invocations since this Loaders was constructed.
+func (l *Loaders) PullRequestEnrichmentBatchCount() int { return l.prEnrichmentBatches.value() }
 
 // Middleware wraps an http.Handler to attach a fresh *Loaders to the
 // request context. Mount it once around the GraphQL handler.
@@ -500,6 +527,47 @@ func mapPullRequestState(s ghprovider.PullRequestState) graphql1.PullRequestStat
 	default:
 		return graphql1.PullRequestStateOpen
 	}
+}
+
+// loadPullRequestEnrichments is the DataLoader batch function for the
+// PullRequestEnrichment loader. It collapses all concurrent requests for
+// enrichment fields (mergeable, mergeStateStatus, reviewDecision,
+// statusCheckRollup, labels) into one BatchEnrichPullRequests call per
+// batch window, which in turn fires one HTTP request per unique repository.
+//
+// When providers.GHEnricher is nil (e.g. gh auth is not configured), every
+// position returns a zero PullRequest so the resolver falls back to its
+// empty-field defaults without a hard error.
+func loadPullRequestEnrichments(ctx context.Context, providers *ProvidersBundle, keys []ghprovider.PullRequestKey) []*dataloader.Result[ghprovider.PullRequest] {
+	out := make([]*dataloader.Result[ghprovider.PullRequest], len(keys))
+	enricher := providers.GHEnricher
+	if enricher == nil {
+		for i := range out {
+			out[i] = &dataloader.Result[ghprovider.PullRequest]{Data: ghprovider.PullRequest{}}
+		}
+		return out
+	}
+
+	results, err := enricher.BatchEnrichPullRequests(ctx, keys)
+	if err != nil {
+		// Partial failure: BatchEnrichPullRequests returns stale values for
+		// keys it couldn't fetch. We surface the error per-key only when the
+		// map has no entry for that key (total failure path).
+		for i, k := range keys {
+			if pr, ok := results[k]; ok {
+				out[i] = &dataloader.Result[ghprovider.PullRequest]{Data: pr}
+			} else {
+				out[i] = &dataloader.Result[ghprovider.PullRequest]{Error: err}
+			}
+		}
+		return out
+	}
+
+	for i, k := range keys {
+		pr := results[k]
+		out[i] = &dataloader.Result[ghprovider.PullRequest]{Data: pr}
+	}
+	return out
 }
 
 // projectProcess mirrors the resolver-layer projection so the loader
