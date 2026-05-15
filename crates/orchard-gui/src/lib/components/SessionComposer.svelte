@@ -81,7 +81,12 @@
 			placeholder={sessionLabel ? `Message ${sessionLabel}…` : "Message session…"}
 			rows="1"
 			disabled={sending}
-			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[13px] leading-[1.45] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
+			autocapitalize="sentences"
+			autocomplete="off"
+			autocorrect="on"
+			spellcheck="true"
+			enterkeyhint="send"
+			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[16px] leading-[1.4] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
 		></textarea>
 		<button
 			class="inline-flex items-center justify-center w-9 h-9 border-0 bg-fg text-bg rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"

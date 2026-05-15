@@ -919,13 +919,22 @@
 	background: transparent;
 	resize: none;
 	font: inherit;
-	font-size: 13.5px;
+	/* 16px is the iOS Safari auto-zoom threshold — anything smaller and
+	   focusing the input zooms the page. Keep at 16px on mobile, scale
+	   down on desktop where there's no auto-zoom. */
+	font-size: 16px;
 	color: var(--fg);
 	outline: none;
 	padding: 8px 0;
 	min-height: 36px;
 	max-height: 140px;
-	line-height: 1.45;
+	line-height: 1.4;
+}
+
+@media (min-width: 768px) and (pointer: fine) {
+	.composer-ta {
+		font-size: 13.5px;
+	}
 }
 
 .composer-ta::placeholder {
@@ -1271,6 +1280,11 @@
 	background: var(--bg);
 	overflow: hidden;
 	position: relative;
+	/* iOS safe-area: keep content out of the notch / home indicator. */
+	padding-top: env(safe-area-inset-top, 0);
+	padding-bottom: env(safe-area-inset-bottom, 0);
+	padding-left: env(safe-area-inset-left, 0);
+	padding-right: env(safe-area-inset-right, 0);
 }
 
 /* Above 900px viewport the shell becomes a centered phone-card; cap height. */
