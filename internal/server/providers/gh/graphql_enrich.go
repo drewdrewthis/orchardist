@@ -23,8 +23,17 @@ import (
 	"time"
 )
 
-// enrichmentTTL is shorter than CacheTTL because mergeable + CI flap fast.
-const enrichmentTTL = 60 * time.Second
+// enrichmentTTL governs how often we re-fetch PR enrichment from GitHub's
+// GraphQL API. PR state doesn't change second-to-second; longer TTL means
+// fewer GraphQL calls and graceful behaviour under user-level rate limits
+// (5000/hr shared across all gh CLI + scripts).
+const enrichmentTTL = 5 * time.Minute
+
+// staleEnrichmentTTL is how long we'll serve a stale enrichment when the
+// network call fails (rate limit, network blip). Far longer than the
+// freshness TTL — the user's choice is "slightly stale data" vs "broken
+// sidebar", and slightly-stale always wins.
+const staleEnrichmentTTL = 1 * time.Hour
 
 // enrichPRQuery is the GitHub GraphQL query that fetches the five
 // enrichment fields. The statusCheckRollup is read from the head
@@ -119,16 +128,35 @@ func (p *Provider) EnrichPullRequest(ctx context.Context, key PullRequestKey) (P
 	p.prMu.RLock()
 	entry, ok := p.prs[key]
 	enrichedAt, hasEnriched := p.enrichAt[key]
+	rateLimitedUntil := p.rateLimitedUntil
 	p.prMu.RUnlock()
 
 	if ok && hasEnriched && p.clock().Sub(enrichedAt) < enrichmentTTL {
 		return entry.value, nil
 	}
 
+	// serveStale returns the last-known-good enrichment when the network
+	// call fails. Falls back to a hard error only when we have nothing
+	// cached at all. Keeps the sidebar populated through rate-limit
+	// windows + transient network blips.
+	serveStale := func(reason error) (PullRequest, error) {
+		if ok && hasEnriched && p.clock().Sub(enrichedAt) < staleEnrichmentTTL {
+			return entry.value, nil
+		}
+		return PullRequest{}, reason
+	}
+
+	// Rate-limit cooldown: if we're inside the cooldown window, skip the
+	// network call entirely. Saves us from hammering GitHub when we
+	// already know it'll refuse. Serves stale when we have it.
+	if !rateLimitedUntil.IsZero() && p.clock().Before(rateLimitedUntil) {
+		return serveStale(fmt.Errorf("EnrichPullRequest: rate limit cooldown until %s", rateLimitedUntil.Format(time.RFC3339)))
+	}
+
 	// --- fetch ---
 	c, err := p.httpClient(ctx)
 	if err != nil {
-		return PullRequest{}, err
+		return serveStale(err)
 	}
 
 	variables := map[string]any{
@@ -138,20 +166,35 @@ func (p *Provider) EnrichPullRequest(ctx context.Context, key PullRequestKey) (P
 	}
 	raw, err := c.GraphQL(ctx, enrichPRQuery, variables)
 	if err != nil {
-		return PullRequest{}, fmt.Errorf("EnrichPullRequest graphql: %w", err)
+		return serveStale(fmt.Errorf("EnrichPullRequest graphql: %w", err))
 	}
 
 	var envelope enrichRaw
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return PullRequest{}, fmt.Errorf("EnrichPullRequest decode: %w", err)
+		return serveStale(fmt.Errorf("EnrichPullRequest decode: %w", err))
 	}
 	if len(envelope.Errors) > 0 {
 		msgs := make([]string, 0, len(envelope.Errors))
 		for _, e := range envelope.Errors {
 			msgs = append(msgs, e.Message)
 		}
-		return PullRequest{}, fmt.Errorf("EnrichPullRequest graphql errors: %s", strings.Join(msgs, "; "))
+		joined := strings.Join(msgs, "; ")
+		// Detect rate-limit and set a cooldown so we stop hammering. GitHub
+		// resets the limit hourly; default to a 5-minute cooldown which is
+		// short enough to recover quickly if the user invoked a one-off
+		// burst, long enough to avoid waste if we're truly throttled.
+		if strings.Contains(strings.ToLower(joined), "rate limit") {
+			p.prMu.Lock()
+			p.rateLimitedUntil = p.clock().Add(5 * time.Minute)
+			p.prMu.Unlock()
+		}
+		return serveStale(fmt.Errorf("EnrichPullRequest graphql errors: %s", joined))
 	}
+
+	// Successful fetch — clear the cooldown.
+	p.prMu.Lock()
+	p.rateLimitedUntil = time.Time{}
+	p.prMu.Unlock()
 
 	wire := envelope.Data.Repository.PullRequest
 

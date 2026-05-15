@@ -215,7 +215,15 @@
 		{/each}
 		{#if attentionTotal === 0}
 			<div class="empty-lens">
-				<span>{attentionLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
+				<span>
+					{#if attentionLoading}
+						Loading…
+					{:else if $attentionStore.errors && $attentionStore.errors.length > 0}
+						Daemon couldn't fetch this lens. Try another lens or check the daemon logs.
+					{:else}
+						No Claude sessions reported by the daemon.
+					{/if}
+				</span>
 			</div>
 		{/if}
 	{:else if lens === "recent"}
