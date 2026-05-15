@@ -263,7 +263,7 @@
 									<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat pt-1">{@html renderMarkdown(block.text)}</div>
 								</details>
 							{:else if block.kind === "tool_use"}
-								<div class="rounded-md bg-surface-2 border-[0.5px] border-line overflow-hidden">
+								<div class="rounded-md bg-surface-2 border-[0.5px] border-line overflow-hidden min-w-0 w-full">
 									<button
 										class="mono flex items-center gap-1.5 w-full px-2 py-1 bg-transparent border-0 text-[11.5px] text-left cursor-pointer text-fg hover:bg-fg/[0.04]"
 										onclick={() => toggleTool(block.toolId || `${turn.uuid}-tu-${i}`)}
@@ -279,7 +279,7 @@
 								</div>
 							{:else if block.kind === "tool_result"}
 								<div
-									class="rounded-md bg-surface-2 border-[0.5px] overflow-hidden"
+									class="rounded-md bg-surface-2 border-[0.5px] overflow-hidden min-w-0 w-full"
 									class:border-line={!block.isError}
 									class:border-[color-mix(in_oklab,var(--color-bad-fg),50%,var(--color-line))]={block.isError}
 								>
@@ -326,12 +326,23 @@
 	   bubble; assistant turns left-align without a bubble (more
 	   conversational). Consecutive same-role turns inside a 5min window
 	   are grouped — only the first shows the role header, the rest sit
-	   tighter beneath it. */
+	   tighter beneath it.
+
+	   min-width:0 on the flex column AND its children is critical:
+	   tool-call blocks contain long single-line strings (Bash commands,
+	   file paths) that otherwise push the column wider than the
+	   transcript host. */
 	.turn {
 		display: flex;
 		flex-direction: column;
 		gap: 5px;
 		padding-bottom: 10px;
+		min-width: 0;
+		max-width: 100%;
+	}
+	.turn > * {
+		min-width: 0;
+		max-width: 100%;
 	}
 	.turn--grouped {
 		padding-top: 0;
