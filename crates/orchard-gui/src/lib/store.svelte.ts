@@ -50,6 +50,8 @@ export type Tab =
 			paneId?: string;
 			sessionUuid?: string;
 			view: ConvView;
+			/** Title from the sidebar row — displayed while OpenPanel loads. */
+			titleHint?: string;
 	  };
 
 export interface Filter {
@@ -207,7 +209,7 @@ export class AppStore {
 	 * Either paneId or sessionUuid must be supplied; both is fine.
 	 */
 	openSession = (
-		key: { paneId?: string; sessionUuid?: string },
+		key: { paneId?: string; sessionUuid?: string; titleHint?: string },
 		opts: { split?: boolean } = {},
 	) => {
 		if (!key.paneId && !key.sessionUuid) return;
@@ -225,7 +227,7 @@ export class AppStore {
 		// Mobile: always single-tab.
 		if (this.surface === "mobile") {
 			this.tabs = [
-				{ id: "m1", kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView },
+				{ id: "m1", kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView, titleHint: key.titleHint },
 			];
 			this.activeTabId = "m1";
 			this._resetPanelOnSwitch();
@@ -247,7 +249,7 @@ export class AppStore {
 		if (!opts.split && this.activeTab) {
 			this.tabs = this.tabs.map((t) =>
 				t.id === this.activeTabId
-					? { id: t.id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView }
+					? { id: t.id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView, titleHint: key.titleHint }
 					: t,
 			);
 			this._resetPanelOnSwitch();
@@ -255,7 +257,7 @@ export class AppStore {
 		}
 
 		const id = "t" + this.nextTabSeq++;
-		const tab: Tab = { id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView };
+		const tab: Tab = { id, kind: "session", paneId: key.paneId, sessionUuid: key.sessionUuid, view: defaultView, titleHint: key.titleHint };
 		const next = [...this.tabs];
 		if (next.length >= MAX_PANES) {
 			next.shift();

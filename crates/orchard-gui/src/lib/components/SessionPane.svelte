@@ -25,6 +25,8 @@
 	type Props = {
 		paneId?: string;
 		sessionUuid?: string;
+		/** Optimistic title from the sidebar row; rendered while OpenPanel loads. */
+		titleHint?: string;
 		active: boolean;
 		paneCount: number;
 		isLast: boolean;
@@ -40,6 +42,7 @@
 	let {
 		paneId,
 		sessionUuid,
+		titleHint,
 		active,
 		paneCount,
 		isLast,
@@ -82,6 +85,7 @@
 			worktree?.branch ||
 			conversation?.cwd ||
 			pane?.window.name ||
+			titleHint ||
 			session?.sessionUuid.slice(0, 8) ||
 			paneId ||
 			"session",

@@ -21,10 +21,16 @@
 
 	/**
 	 * Click target — what the panel needs to render this row. The sidebar
-	 * emits identity only (paneId + sessionUuid); the panel runs its own
-	 * query.
+	 * emits identity (paneId + sessionUuid) plus a `titleHint` so the
+	 * panel can render the title immediately while its OpenPanel query
+	 * is still in flight (avoids the "session / Loading…" interstitial).
 	 */
-	export type SelectTarget = { kind: "session"; paneId?: string; sessionUuid?: string };
+	export type SelectTarget = {
+		kind: "session";
+		paneId?: string;
+		sessionUuid?: string;
+		titleHint?: string;
+	};
 
 	type Props = {
 		now: number;
@@ -174,6 +180,7 @@
 				kind: "session",
 				paneId: item.session.pane?.paneId ?? undefined,
 				sessionUuid: item.session.sessionUuid ?? undefined,
+				titleHint: item.title,
 			},
 			ev,
 		);

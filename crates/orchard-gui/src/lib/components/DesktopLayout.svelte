@@ -87,7 +87,7 @@
 						surface="desktop"
 						onSelect={(target, ev) => {
 							const split = !!(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1));
-							store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid }, { split });
+							store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid, titleHint: target.titleHint }, { split });
 						}}
 					/>
 					<div

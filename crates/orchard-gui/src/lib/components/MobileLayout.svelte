@@ -67,7 +67,7 @@
 			density="compact"
 			surface="mobile"
 			onSelect={(target) => {
-				store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid });
+				store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid, titleHint: target.titleHint });
 			}}
 		/>
 
@@ -80,6 +80,7 @@
 				<SessionPane
 					paneId={tab.paneId}
 					sessionUuid={tab.sessionUuid}
+					titleHint={tab.titleHint}
 					active={true}
 					paneCount={1}
 					isLast={true}

@@ -143,6 +143,20 @@
 		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	}
 
+	/**
+	 * Shorten Anthropic model strings to a recognizable tag:
+	 *   claude-opus-4-7        → opus-4.7
+	 *   claude-sonnet-4-6      → sonnet-4.6
+	 *   claude-haiku-4-5-…     → haiku-4.5
+	 * Anything else passes through.
+	 */
+	function modelLabel(m: string | null | undefined): string {
+		if (!m) return "";
+		const match = m.match(/^claude-(opus|sonnet|haiku)-(\d)-(\d)(?:-|$)/i);
+		if (match) return `${match[1].toLowerCase()}-${match[2]}.${match[3]}`;
+		return m;
+	}
+
 	function blockSummary(b: TranscriptBlock): string {
 		if (b.kind === "text" || b.kind === "thinking") return "";
 		if (b.kind === "tool_use") {
@@ -199,7 +213,7 @@
 					{@const turn = turns[vRow.index]}
 					{#if turn}
 					<div
-						class="flex flex-col gap-1.5 absolute top-0 left-0 right-0 pl-1.5 border-l-2"
+						class="flex flex-col gap-1.5 absolute top-0 left-0 right-0 pl-2 pb-3 border-l-2"
 						class:opacity-65={turn.toolFeedback}
 						class:border-l-[color-mix(in_oklab,var(--color-accent)_60%,transparent)]={turn.role === "user"}
 						class:border-l-[color-mix(in_oklab,var(--color-ok-fg)_35%,transparent)]={turn.role === "assistant"}
@@ -209,11 +223,11 @@
 						use:$virtualizer.measureElement
 						style="transform: translateY({vRow.start}px);"
 					>
-						<div class="flex items-center gap-1.5 mono text-[11px] text-fg-3">
+						<div class="flex items-center gap-1.5 mono text-[10.5px] text-fg-3 tracking-[0.02em]">
 							<span class="lowercase font-medium text-fg-2">{turn.role}</span>
 							{#if turn.model}
 								<span class="dimest">·</span>
-								<span class="dimer">{turn.model}</span>
+								<span class="dimer">{modelLabel(turn.model)}</span>
 							{/if}
 							{#if turn.timestamp}
 								<span class="dimest">·</span>
