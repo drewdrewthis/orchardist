@@ -57,7 +57,13 @@ export function buildPanelData(
 	const panes = data.tmuxPanes as unknown as PaneCardT[];
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
 
-	const pane = panes[0] || null;
+	// Pick the pane that matches our row identity. When the caller has a
+	// paneId, find it in the filtered result; otherwise stay null —
+	// previously this took panes[0] which could be ANY pane (filter is
+	// off when paneId is null), and the panel would mis-render the title.
+	const pane = paneId
+		? panes.find((p) => p.paneId === paneId) || null
+		: null;
 
 	let session: SessionCardT | null = null;
 	if (sessionUuid) {
