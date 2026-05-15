@@ -375,6 +375,14 @@
 	.sidebar-list {
 		display: flex;
 		flex-direction: column;
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow-y: auto;
+		overflow-x: hidden;
+		/* Momentum scroll on mobile Safari/Chrome. */
+		-webkit-overflow-scrolling: touch;
+		/* Reserve space for mobile FAB so the last row isn't trapped under it. */
+		padding-bottom: 80px;
 	}
 	.sidebar-group {
 		display: flex;

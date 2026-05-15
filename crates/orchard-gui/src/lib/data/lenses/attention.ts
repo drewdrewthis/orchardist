@@ -135,6 +135,14 @@ export function buildAttentionSections(
 
 	// Sort each tier by activity desc; dormant rows naturally sink (ms=0).
 	rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
-	for (const r of rows) sections[r.tier].items.push(r.item);
+	// Defensive dedup — the daemon can attach one ClaudeInstance to multiple
+	// repos when a session's cwd matches more than one (langwatch-saas vs
+	// langwatch/langwatch share parent dirs). Keep first occurrence.
+	const seen = new Set<string>();
+	for (const r of rows) {
+		if (seen.has(r.item.id)) continue;
+		seen.add(r.item.id);
+		sections[r.tier].items.push(r.item);
+	}
 	return order.map((t) => sections[t]);
 }

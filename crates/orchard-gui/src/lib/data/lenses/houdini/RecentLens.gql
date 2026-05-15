@@ -1,11 +1,22 @@
 query RecentLens {
-	claudeInstances {
-		...SessionCard
-	}
+	# Every Claude conversation known to the daemon (incl. dead/dormant
+	# ones that no longer have a live process). 363+ in a typical fleet —
+	# this is the substrate Recent shows.
 	conversations {
+		id
 		sessionUuid
+		agentName
+		customTitle
+		cwd
+		firstSeenAt
+		lastSeenAt
 		messageCount
 		open
 		recap
+	}
+	# Live Claude REPLs — enrichment overlay. Match by sessionUuid; when
+	# present, lift the row's state/process/pane/worktree from here.
+	claudeInstances {
+		...SessionCard
 	}
 }
