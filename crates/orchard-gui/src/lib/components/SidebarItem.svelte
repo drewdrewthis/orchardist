@@ -1,23 +1,20 @@
 <!--
-  SidebarItem — the unified row used by every sidebar lens.
+  SidebarItem — the uniform row used by every sidebar lens (#540 B1).
 
-  Per #540 B1: "All lenses must use the same `Item` component". Each
-  lens projects its native data into `SidebarItem` (see
-  `data/sidebar-item.ts`); this component is pure rendering.
+  Layout shape (single source of truth across lenses):
 
-  The row carries (per B5):
-    - derived title (from `deriveItemTitle`)
-    - branch / host / repo / PR / issue (from worktree)
-    - tmux address (session:window.pane) as secondary metadata
-    - pid + lifecycle state
-    - lastActivityAt as "12m" relative time
-    - PR status indicators (per B6: CI block, conflicts, review,
-      pr state)
-    - lens-supplied reason chips
+    ┌─────────────────────────────────────────────┐
+    │ [state] title                here  [badges] │  ← title row
+    │           branch · #PR · 12m   [reasons]    │  ← meta row
+    └─────────────────────────────────────────────┘
+
+  The state pill anchors INLINE in the title row — no more floating. Long
+  branches truncate with ellipsis (tooltip carries the full string). Host /
+  pid / tmux address fold into the row's `title` attribute on hover; they
+  do not eat real estate.
 -->
 <script lang="ts">
 	import HostGlyph from "$lib/icons/HostGlyph.svelte";
-	import Icon from "$lib/icons/Icon.svelte";
 	import { relTime } from "$lib/util/format";
 	import type { SidebarItem } from "$lib/data/sidebar-item";
 
@@ -37,16 +34,18 @@
 	};
 	let { item, now, density, surface, selected, here = false, onSelect }: Props = $props();
 
-	const isHere = $derived(here);
-
 	const stateLabel = $derived(
 		item.state === "no_claude" ? "no claude" : item.state,
 	);
+	const stateGlyph = $derived(
+		item.state === "working" ? "●"
+			: item.state === "idle" ? "·"
+			: item.state === "input" ? "→"
+			: item.state === "stalled" ? "⚠"
+			: item.state === "dead" ? "✕"
+			: "",
+	);
 
-	// Per-PR status flags (B6). Derived once; rendered as chips.
-	// We surface MORE signals than the original strict-FAILURE rules so
-	// the user sees real PR state at a glance — PENDING CI matters,
-	// REVIEW_REQUIRED matters, BLOCKED merges matter.
 	const ci = $derived(item.worktree?.pr?.statusCheckRollup ?? null);
 	const ciBad = $derived(ci === "FAILURE" || ci === "ERROR");
 	const ciPending = $derived(ci === "PENDING" || ci === "EXPECTED");
@@ -59,40 +58,51 @@
 	const conflict = $derived(
 		mergeable === "CONFLICTING" || mergeState === "DIRTY",
 	);
-	// BLOCKED = mergeable in principle but blocked by required checks /
-	// review / branch protection. Distinct from a hard conflict.
 	const blocked = $derived(mergeState === "BLOCKED" && !conflict);
 	const prState = $derived(item.worktree?.pr?.state?.toUpperCase() ?? null);
-	// `state` carries DRAFT; the underlying schema's `draft` boolean isn't
-	// exposed via the WorktreeEnrichment fragment so we rely on state only.
 	const isDraft = $derived(prState === "DRAFT");
 	const issueClosed = $derived(
 		item.worktree?.issue?.state?.toUpperCase() === "CLOSED",
 	);
 
-	// Directory chip: prefer worktree.path (canonical), fall back to the
-	// session's recorded cwd. Render only the basename to keep the row
-	// short — full path is in the title attribute.
+	// Branch wins over cwd for meta-row identity. Both fall back through the
+	// title (which already follows agentName → customTitle → branch → cwd).
+	const branch = $derived(item.worktree?.branch ?? null);
 	const cwdFull = $derived(
 		item.worktree?.path ?? item.session?.process?.cwd ?? null,
 	);
 	const cwdBase = $derived(
 		cwdFull ? cwdFull.split("/").filter(Boolean).pop() || cwdFull : null,
 	);
+	const metaPath = $derived(
+		branch && branch !== item.title ? branch
+			: cwdBase && cwdBase !== item.title ? cwdBase
+			: null,
+	);
 
-	// Repo chip (#550): last path segment of "owner/repo" form, or the value
-	// as-is when no slash. Null when the worktree carries no repo metadata.
 	const repo = $derived(item.worktree?.repo ?? null);
-	const repoSlug = $derived(
-		repo ? (repo.includes("/") ? repo.split("/").pop()! : repo) : null,
+
+	// Hover tooltip — the secondary metadata folded out of the visible row.
+	const hoverTitle = $derived(
+		[
+			item.worktree?.host,
+			repo,
+			item.pid != null ? `pid ${item.pid}` : null,
+			item.tmuxAddress,
+			cwdFull && cwdFull !== branch ? cwdFull : null,
+		]
+			.filter(Boolean)
+			.join(" · "),
 	);
 </script>
 
 <div
-	class="fleet-item"
+	class="sidebar-item"
 	data-selected={selected}
 	data-density={density}
-	data-here={isHere}
+	data-here={here}
+	data-state={item.state}
+	title={hoverTitle}
 	onclick={(e) => onSelect(item.id, e)}
 	onkeydown={(e) => {
 		if (e.key === "Enter" || e.key === " ") {
@@ -103,200 +113,251 @@
 	role="button"
 	tabindex="0"
 >
-	<div class="fleet-item-main">
-		{#if item.state !== 'no_claude'}
+	<div class="sidebar-item__title-row">
+		{#if item.state !== "no_claude"}
 			<span class="state-pill state-pill--{item.state}" title={stateLabel}>
-				{#if item.state === 'working'}● working
-				{:else if item.state === 'idle'}· idle
-				{:else if item.state === 'input'}→ input
-				{:else if item.state === 'stalled'}⚠ stalled
-				{:else if item.state === 'dead'}✕ dead
-				{:else}{item.state}
-				{/if}
+				<span class="state-pill__glyph" aria-hidden="true">{stateGlyph}</span>
+				<span class="state-pill__label">{item.state}</span>
 			</span>
 		{/if}
-		<div class="fleet-item-body">
-			<div class="fleet-item-title-row">
-				<span class="fleet-item-title">{item.title}</span>
-				{#if isHere}
-					<span class="here-badge mono" title="A tmux client is currently watching this pane">here</span>
-				{/if}
-				{#if isDraft}
-					<span class="badge draft mono" title="Draft PR">draft</span>
-				{:else if prState === "MERGED"}
-					<span class="badge merged mono" title="PR merged">merged</span>
-				{:else if prState === "CLOSED"}
-					<span class="badge closed mono" title="PR closed">closed</span>
-				{/if}
-			</div>
-			<div class="fleet-item-sub">
-				{#if item.worktree}
-					<HostGlyph host={item.worktree.host} size={12} />
-					{#if surface !== "mobile"}
-						<span class="mono dimer">{item.worktree.host}</span>
-						<span class="dimest">·</span>
-					{/if}
-				{/if}
-				{#if cwdBase && cwdBase !== item.title}
-					<span class="meta-chip mono dimer" title={cwdFull}>
-						<Icon name="folder" size={11} />
-						<span>{cwdBase}</span>
-					</span>
-				{/if}
-				{#if item.worktree?.branch && item.worktree.branch !== item.title}
-					<span class="meta-chip mono dimer" title="Branch">
-						<Icon name="git-branch" size={11} />
-						<span>{item.worktree.branch}</span>
-					</span>
-				{/if}
-				{#if repoSlug}
-					<span class="meta-chip mono dimer" title={repo ?? undefined}>
-						<Icon name="git-fork" size={11} />
-						<span>{repoSlug}</span>
-					</span>
-				{/if}
-				{#if item.worktree?.pr}
-					<span class="mono dimer">PR #{item.worktree.pr.number}</span>
-					<span class="dimest">·</span>
-				{/if}
-				{#if item.worktree?.issue}
-					<span class="mono dimer">
-						#{item.worktree.issue.number}
-						{#if issueClosed}
-							<span class="reason-chip mono red" style:margin-left="3px" title="Issue closed">closed</span>
-						{/if}
-					</span>
-					<span class="dimest">·</span>
-				{/if}
-				{#if item.tmuxAddress && surface !== "mobile"}
-					<span class="mono dimest" style:font-size="10.5px" title="tmux address">{item.tmuxAddress}</span>
-					<span class="dimest">·</span>
-				{/if}
-				{#if item.pid != null && surface !== "mobile"}
-					<span class="mono dimest" style:font-size="10.5px" title="claude pid">{item.pid}</span>
-					<span class="dimest">·</span>
-				{/if}
-				{#if item.lastActivityMs > 0}
-					<span class="dimest">·</span>
-					<span class="dimer mono" style:font-size="11px">{relTime(item.lastActivityMs, now)}</span>
-				{/if}
-				{#if ciBad}
-					<span class="reason-chip mono red" title="CI failing">CI</span>
-				{:else if ciPending}
-					<span class="reason-chip mono amber" title="CI in progress">CI…</span>
-				{/if}
-				{#if reviewBad}
-					<span class="reason-chip mono red" title="Review changes requested">changes requested</span>
-				{:else if reviewNeeded}
-					<span class="reason-chip mono amber" title="Awaiting review">needs review</span>
-				{:else if reviewApproved}
-					<span class="reason-chip mono green" title="Review approved">approved</span>
-				{/if}
-				{#if conflict}
-					<span class="reason-chip mono red" title="Merge conflict">conflict</span>
-				{:else if blocked}
-					<span class="reason-chip mono amber" title="Merge blocked (required checks / branch protection)">blocked</span>
-				{/if}
-				{#each item.reasons as r}
-					<span class="reason-chip mono amber" title={r}>{r}</span>
-				{/each}
-			</div>
-		</div>
+		<span class="sidebar-item__title">{item.title}</span>
+		{#if here}
+			<span class="badge badge--here" title="A tmux client is currently watching this pane">here</span>
+		{/if}
+		{#if isDraft}
+			<span class="badge badge--draft" title="Draft PR">draft</span>
+		{:else if prState === "MERGED"}
+			<span class="badge badge--merged" title="PR merged">merged</span>
+		{:else if prState === "CLOSED"}
+			<span class="badge badge--closed" title="PR closed">closed</span>
+		{/if}
+	</div>
+
+	<div class="sidebar-item__meta-row">
+		{#if surface !== "mobile" && item.worktree?.host}
+			<HostGlyph host={item.worktree.host} size={10} />
+		{/if}
+		{#if metaPath}
+			<span class="meta-path mono" title={cwdFull ?? branch ?? undefined}>{metaPath}</span>
+		{/if}
+		{#if item.worktree?.pr}
+			<span class="meta-sep" aria-hidden="true">·</span>
+			<span class="mono meta-ref">#{item.worktree.pr.number}</span>
+		{/if}
+		{#if item.worktree?.issue}
+			<span class="meta-sep" aria-hidden="true">·</span>
+			<span class="mono meta-ref">
+				#{item.worktree.issue.number}{#if issueClosed}<span class="chip chip--red" title="Issue closed">closed</span>{/if}
+			</span>
+		{/if}
+		{#if item.lastActivityMs > 0}
+			<span class="meta-sep" aria-hidden="true">·</span>
+			<span class="mono meta-age">{relTime(item.lastActivityMs, now)}</span>
+		{/if}
+
+		{#if ciBad}
+			<span class="chip chip--red" title="CI failing">CI</span>
+		{:else if ciPending}
+			<span class="chip chip--amber" title="CI in progress">CI…</span>
+		{/if}
+		{#if reviewBad}
+			<span class="chip chip--red" title="Review changes requested">changes</span>
+		{:else if reviewNeeded}
+			<span class="chip chip--amber" title="Awaiting review">review</span>
+		{:else if reviewApproved}
+			<span class="chip chip--green" title="Review approved">approved</span>
+		{/if}
+		{#if conflict}
+			<span class="chip chip--red" title="Merge conflict">conflict</span>
+		{:else if blocked}
+			<span class="chip chip--amber" title="Merge blocked (required checks / branch protection)">blocked</span>
+		{/if}
+		{#each item.reasons as r}
+			<span class="chip chip--amber" title={r}>{r}</span>
+		{/each}
 	</div>
 </div>
 
 <style>
-	/* State pill (#553) — replaces the binary pip. 6-way visual distinction. */
+	.sidebar-item {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: 7px 12px 7px 14px;
+		border-left: 2px solid transparent;
+		cursor: pointer;
+		min-width: 0;
+		transition: background-color 80ms ease, border-color 80ms ease;
+	}
+	.sidebar-item[data-density="compact"] {
+		padding: 5px 12px 5px 14px;
+	}
+	.sidebar-item:hover {
+		background: var(--color-surface-2, rgba(255, 255, 255, 0.025));
+	}
+	.sidebar-item[data-selected="true"] {
+		background: var(--color-surface-2, rgba(255, 255, 255, 0.04));
+	}
+	.sidebar-item[data-here="true"] {
+		border-left-color: rgba(110, 211, 145, 0.55);
+	}
+	.sidebar-item[data-selected="true"][data-here="false"] {
+		border-left-color: var(--color-accent, #6366f1);
+	}
+
+	.sidebar-item__title-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+	}
+	.sidebar-item__title {
+		flex: 1 1 auto;
+		min-width: 0;
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--color-text, #e4e6eb);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.sidebar-item__meta-row {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		min-width: 0;
+		font-size: 11px;
+		color: var(--color-text-dim, #797d86);
+		overflow: hidden;
+		padding-left: 0;
+	}
+	.meta-path {
+		min-width: 0;
+		flex: 1 1 auto;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 10.5px;
+	}
+	.meta-ref {
+		font-size: 10.5px;
+		flex: none;
+	}
+	.meta-age {
+		font-size: 10.5px;
+		flex: none;
+		color: var(--color-text-dim, #6c707a);
+	}
+	.meta-sep {
+		color: var(--color-text-dimmer, #4f535b);
+		flex: none;
+	}
+	.mono {
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	}
+
+	/* State pill anchored inline with the title — no float. */
 	.state-pill {
 		display: inline-flex;
 		align-items: center;
-		gap: 2px;
-		font-size: 10px;
+		gap: 3px;
+		font-size: 9.5px;
 		padding: 1px 5px;
 		border-radius: 3px;
-		white-space: nowrap;
-		font-family: var(--font-mono, monospace);
 		flex: none;
-		align-self: center;
+		font-family: var(--font-mono, ui-monospace, monospace);
+		line-height: 1.4;
+		text-transform: lowercase;
+		letter-spacing: 0.02em;
 	}
-	/* working — green */
+	.state-pill__glyph {
+		font-size: 10px;
+		line-height: 1;
+	}
 	.state-pill--working {
-		background: rgba(110, 211, 145, 0.14);
-		color: #6fd391;
-		border: 0.5px solid rgba(110, 211, 145, 0.32);
+		background: rgba(110, 211, 145, 0.10);
+		color: #7bd99c;
+		border: 0.5px solid rgba(110, 211, 145, 0.28);
 	}
-	/* idle — muted grey */
 	.state-pill--idle {
-		background: rgba(160, 160, 160, 0.10);
-		color: #888;
-		border: 0.5px solid rgba(160, 160, 160, 0.22);
+		background: rgba(160, 160, 160, 0.06);
+		color: #8e9098;
+		border: 0.5px solid rgba(160, 160, 160, 0.18);
 	}
-	/* input — high-contrast amber/orange; bold per #553 L160 */
 	.state-pill--input {
-		background: rgba(255, 160, 50, 0.20);
-		color: #ffaa33;
-		border: 0.5px solid rgba(255, 160, 50, 0.50);
-		font-weight: 700;
+		background: rgba(255, 170, 50, 0.16);
+		color: #ffb451;
+		border: 0.5px solid rgba(255, 170, 50, 0.40);
+		font-weight: 600;
 	}
-	/* stalled — red/warning */
 	.state-pill--stalled {
-		background: rgba(255, 100, 100, 0.14);
-		color: #ff7272;
-		border: 0.5px solid rgba(255, 100, 100, 0.32);
+		background: rgba(255, 100, 100, 0.10);
+		color: #ff8585;
+		border: 0.5px solid rgba(255, 100, 100, 0.28);
 	}
-	/* dead — dark muted */
 	.state-pill--dead {
-		background: rgba(100, 100, 100, 0.10);
-		color: #666;
-		border: 0.5px solid rgba(100, 100, 100, 0.22);
+		background: rgba(100, 100, 100, 0.08);
+		color: #6a6d76;
+		border: 0.5px solid rgba(100, 100, 100, 0.20);
 		text-decoration: line-through;
 	}
 
-	.meta-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
-		font-size: 11px;
-	}
-	.reason-chip {
-		font-size: 10.5px;
-		padding: 1px 5px;
+	/* Chips for reasons and PR/CI signals. Compact, color carries meaning. */
+	.chip {
+		font-size: 9.5px;
+		padding: 0 5px;
 		border-radius: 3px;
+		flex: none;
+		font-family: var(--font-mono, ui-monospace, monospace);
+		line-height: 1.5;
+		text-transform: lowercase;
 	}
-	.reason-chip.amber {
-		background: rgba(255, 180, 80, 0.14);
+	.chip--amber {
+		background: rgba(255, 180, 80, 0.10);
 		color: #ffb851;
-		border: 0.5px solid rgba(255, 180, 80, 0.32);
+		border: 0.5px solid rgba(255, 180, 80, 0.28);
 	}
-	.reason-chip.red {
-		background: rgba(255, 100, 100, 0.14);
-		color: #ff7272;
-		border: 0.5px solid rgba(255, 100, 100, 0.32);
+	.chip--red {
+		background: rgba(255, 100, 100, 0.10);
+		color: #ff8585;
+		border: 0.5px solid rgba(255, 100, 100, 0.28);
+		margin-left: 3px;
 	}
-	.reason-chip.green {
-		background: rgba(120, 200, 130, 0.14);
-		color: #6fd391;
-		border: 0.5px solid rgba(120, 200, 130, 0.32);
+	.chip--green {
+		background: rgba(120, 200, 130, 0.10);
+		color: #7bd99c;
+		border: 0.5px solid rgba(120, 200, 130, 0.28);
 	}
+
+	/* Title-row badges */
 	.badge {
-		font-size: 10px;
-		padding: 1px 5px;
+		font-size: 9.5px;
+		padding: 0 5px;
 		border-radius: 3px;
-		margin-left: 6px;
+		flex: none;
+		font-family: var(--font-mono, ui-monospace, monospace);
+		line-height: 1.5;
+		text-transform: lowercase;
+		letter-spacing: 0.02em;
 	}
-	.badge.draft {
-		background: rgba(140, 140, 140, 0.18);
-		color: #aaa;
-		border: 0.5px solid rgba(140, 140, 140, 0.32);
+	.badge--here {
+		background: rgba(110, 211, 145, 0.14);
+		color: #7bd99c;
+		border: 0.5px solid rgba(110, 211, 145, 0.38);
 	}
-	.badge.merged {
-		background: rgba(120, 80, 200, 0.18);
+	.badge--draft {
+		background: rgba(140, 140, 140, 0.12);
+		color: #9ea2aa;
+		border: 0.5px solid rgba(140, 140, 140, 0.26);
+	}
+	.badge--merged {
+		background: rgba(120, 80, 200, 0.14);
 		color: #b990ff;
-		border: 0.5px solid rgba(120, 80, 200, 0.32);
+		border: 0.5px solid rgba(120, 80, 200, 0.30);
 	}
-	.badge.closed {
-		background: rgba(255, 100, 100, 0.18);
-		color: #ff7272;
-		border: 0.5px solid rgba(255, 100, 100, 0.32);
+	.badge--closed {
+		background: rgba(255, 100, 100, 0.14);
+		color: #ff8585;
+		border: 0.5px solid rgba(255, 100, 100, 0.28);
 	}
 </style>

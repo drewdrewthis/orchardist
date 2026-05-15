@@ -67,8 +67,7 @@
 			density="comfortable"
 			surface="mobile"
 			onSelect={(target) => {
-				if (target.kind === "channel") store.openChannel(target.roomId);
-				else store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid });
+				store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid });
 			}}
 		/>
 

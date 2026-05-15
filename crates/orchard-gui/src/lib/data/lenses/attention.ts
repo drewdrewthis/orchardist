@@ -29,8 +29,10 @@ type Data = NonNullable<AttentionLens$result>;
 const FIVE_MIN_MS = 5 * 60_000;
 
 /**
- * Compute PR-driven blocking signals. Returns reason chips when the
- * PR genuinely needs human action; otherwise empty.
+ * Compute PR-driven blocking signals. Returns the tier-deciding reasons —
+ * the row component re-derives the user-facing chips from the PR fields
+ * directly (single source of truth), so this function is the tiering
+ * input only, not a duplicate emission.
  */
 function prBlockingReasons(worktree: WorktreeEnrichment | null): string[] {
 	if (!worktree?.pr) return [];
@@ -99,14 +101,15 @@ export function buildAttentionSections(
 			if (sessions.length === 0) {
 				// Dormant worktree. PR signal still tiers it into Blocked
 				// when actionable — otherwise Quiet, but always visible.
+				// The row derives PR chips from worktree.pr directly; we
+				// don't re-emit them as `reasons` here.
 				const blockReasons = prBlockingReasons(w);
 				const item = buildDormantWorktreeItem(w);
-				if (blockReasons.length > 0) {
-					item.reasons = blockReasons;
-					rows.push({ item, tier: "blocked", lastActivityMs: 0 });
-				} else {
-					rows.push({ item, tier: "quiet", lastActivityMs: 0 });
-				}
+				rows.push({
+					item,
+					tier: blockReasons.length > 0 ? "blocked" : "quiet",
+					lastActivityMs: 0,
+				});
 				continue;
 			}
 
@@ -115,10 +118,16 @@ export function buildAttentionSections(
 				const lastActivityMs =
 					parseTime(conv?.lastSeenAt) || parseTime(s.lastActivityAt);
 				const { tier, reasons } = classifyLive(s, w, lastActivityMs, now);
+				// `reasons` from classifyLive carries only the non-PR rationale
+				// (e.g. "idle 12m" for the waiting tier). PR signals are derived
+				// in the row component from worktree.pr fields — no duplication.
+				const lensSpecific = reasons.filter(
+					(r) => !r.startsWith("CI") && r !== "changes requested" && r !== "merge conflict" && r !== "merge blocked",
+				);
 				const hints = conv
 					? { agentName: conv.agentName ?? null, customTitle: conv.customTitle ?? null }
 					: null;
-				const item = buildSidebarItem(s, w, lastActivityMs, reasons, hints);
+				const item = buildSidebarItem(s, w, lastActivityMs, lensSpecific, hints);
 				rows.push({ item, tier, lastActivityMs });
 			}
 		}

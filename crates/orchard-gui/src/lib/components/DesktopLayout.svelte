@@ -87,11 +87,7 @@
 						surface="desktop"
 						onSelect={(target, ev) => {
 							const split = !!(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1));
-							if (target.kind === "channel") {
-								store.openChannel(target.roomId, { split });
-							} else {
-								store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid }, { split });
-							}
+							store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid }, { split });
 						}}
 					/>
 					<div

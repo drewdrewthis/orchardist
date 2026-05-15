@@ -77,12 +77,19 @@ export function buildWorktreeSections(
 			}
 		}
 		// Dormant rows have lastActivityMs=0 and naturally sink to the bottom
-		// of the activity-desc sort.
+		// of the activity-desc sort. Dedup by item.id so a paneId seen via
+		// two worktrees (daemon edge case) doesn't trip the keyed-each.
 		items.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+		const seen = new Set<string>();
+		const deduped = items.filter((it) => {
+			if (seen.has(it.id)) return false;
+			seen.add(it.id);
+			return true;
+		});
 		sections.push({
 			id: `repo-${repo.id}`,
 			label: repo.slug,
-			items,
+			items: deduped,
 		});
 	}
 	return sections;
