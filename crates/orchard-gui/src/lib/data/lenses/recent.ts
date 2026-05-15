@@ -53,6 +53,13 @@ function dormantSessionFromConversation(
 }
 
 /**
+ * Top-N cap on the Recent lens. Beyond ~100 conversations, the value of
+ * each additional row drops off — older ones are best reached through
+ * the command palette / search anyway. Keeps DOM small + scroll fast.
+ */
+const RECENT_CAP = 100;
+
+/**
  * Project all conversations into a flat, time-sorted SidebarItem[].
  * Pure — call inside `$derived` against `$recentStore.data`.
  */
@@ -100,6 +107,7 @@ export function buildRecentItems(
 		if (seen.has(id)) continue;
 		seen.add(id);
 		out.push({ ...it, id });
+		if (out.length >= RECENT_CAP) break;
 	}
 	return out;
 }

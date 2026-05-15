@@ -64,7 +64,7 @@
 
 		<LensSidebar
 			now={store.now}
-			density="comfortable"
+			density="compact"
 			surface="mobile"
 			onSelect={(target) => {
 				store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid });
