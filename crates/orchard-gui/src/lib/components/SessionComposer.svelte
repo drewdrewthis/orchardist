@@ -83,9 +83,9 @@
 			disabled={sending}
 			autocapitalize="sentences"
 			autocomplete="off"
-			autocorrect="on"
 			spellcheck="true"
 			enterkeyhint="send"
+			{...{ autocorrect: "on" }}
 			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[16px] leading-[1.4] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
 		></textarea>
 		<button
