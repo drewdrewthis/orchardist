@@ -31,7 +31,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/cli": "^2",
-    "houdini": "^1.5.10",
+    "houdini": "2.0.0-next.12",
     "houdini-svelte": "^2.1.20",
     "playwright": "^1.59.1",
     "svelte": "^5.0.0",
