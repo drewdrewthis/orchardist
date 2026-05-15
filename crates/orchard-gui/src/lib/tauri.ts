@@ -66,9 +66,38 @@ export async function pruneWorktrees(repoRoot: string): Promise<void> {
 
 /**
  * Type a chat message into a live tmux pane (the Claude REPL).
+ *
+ * Tauri path is preferred when available (no network hop, instant).
+ * Browser/mobile fall back to the daemon's `sendTextToPane` mutation —
+ * same `tmux send-keys` semantics, just routed through GraphQL so it
+ * works without Tauri's process privileges.
+ *
  * The pane id is what the daemon reports as `TmuxPane.paneId` (e.g. `%66`).
  */
 export async function tmuxSendText(paneId: string, text: string): Promise<void> {
-	requireTauri("tmuxSendText");
-	await invoke("tmux_send_text", { paneId, text });
+	if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+		await invoke("tmux_send_text", { paneId, text });
+		return;
+	}
+	// Browser dev / mobile: route through the daemon mutation via the
+	// Vite proxy (or the same-origin daemon HTTP endpoint in production).
+	const base =
+		typeof window !== "undefined" && window.location
+			? `${window.location.origin}/__daemon`
+			: "http://127.0.0.1:7777";
+	const res = await fetch(`${base}/graphql`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			query: `mutation($paneId: String!, $text: String!) { sendTextToPane(paneId: $paneId, text: $text) }`,
+			variables: { paneId, text },
+		}),
+	});
+	if (!res.ok) {
+		throw new Error(`sendTextToPane HTTP ${res.status}`);
+	}
+	const body = await res.json();
+	if (body.errors && body.errors.length > 0) {
+		throw new Error(body.errors[0].message ?? "sendTextToPane failed");
+	}
 }

@@ -619,6 +619,41 @@ type Meta {
 }
 
 """
+Mutations. Kept minimal and bounded by design.
+
+The daemon's policy (see Query.gh docstring) keeps GitHub mutations OUT
+of the schema so orchardist guardrails can't be bypassed. The mutations
+here are **local-only**: they act on resources the daemon already owns
+(tmux server, local Claude REPLs). They are NOT a general write surface.
+
+Every mutation MUST:
+  - Target a graph node already present in the schema (TmuxPane, etc.)
+  - Be scoped to local-host resources (no remote calls, no GitHub)
+  - Be reversible or idempotent where reasonable
+"""
+type Mutation {
+  """
+  Send literal text to a tmux pane, followed by an Enter keypress.
+  
+  Targets the live Claude REPL hosted by the named pane. The daemon
+  invokes `tmux send-keys -t <paneId> -l <text>` to write the text
+  literally (no shell interpretation), waits briefly for tmux to
+  flush, then sends a separate Enter keypress. The two-step pattern
+  matches the desktop app's Tauri command and avoids the race where
+  a combined send can submit before the text is fully written.
+  
+  Returns true on success. paneId is the tmux pane id (e.g. "%15"),
+  the same value surfaced by `tmuxPanes.paneId` queries. Returns an
+  error when the pane cannot be reached or tmux exits non-zero.
+  
+  Use case: browser / mobile / federated clients sending chat input
+  to a Claude REPL when they can't invoke tmux directly. Desktop
+  clients prefer the Tauri command since it stays local.
+  """
+  sendTextToPane(paneId: String!, text: String!): Boolean!
+}
+
+"""
 A node in the orchard graph. Every node has a globally-unique id so
 clients can fetch it via Query.node(id) regardless of which concrete
 type it is.

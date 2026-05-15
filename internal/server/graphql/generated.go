@@ -31,6 +31,7 @@ type ResolverRoot interface {
 	ClaudeInstance() ClaudeInstanceResolver
 	Host() HostResolver
 	Issue() IssueResolver
+	Mutation() MutationResolver
 	Process() ProcessResolver
 	PullRequest() PullRequestResolver
 	Query() QueryResolver
@@ -191,6 +192,10 @@ type ComplexityRoot struct {
 		FailureReason         func(childComplexity int) int
 		LastSuccessfulFetchAt func(childComplexity int) int
 		Provider              func(childComplexity int) int
+	}
+
+	Mutation struct {
+		SendTextToPane func(childComplexity int, paneID string, text string) int
 	}
 
 	Process struct {
@@ -428,6 +433,9 @@ type IssueResolver interface {
 	BlockingIssues(ctx context.Context, obj *Issue) ([]*Issue, error)
 	SubIssues(ctx context.Context, obj *Issue) ([]*Issue, error)
 	ParentIssue(ctx context.Context, obj *Issue) (*Issue, error)
+}
+type MutationResolver interface {
+	SendTextToPane(ctx context.Context, paneID string, text string) (bool, error)
 }
 type ProcessResolver interface {
 	Host(ctx context.Context, obj *Process) (*Host, error)
@@ -1218,6 +1226,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Meta.Provider(childComplexity), true
+
+	case "Mutation.sendTextToPane":
+		if e.ComplexityRoot.Mutation.SendTextToPane == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_sendTextToPane_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SendTextToPane(childComplexity, args["paneId"].(string), args["text"].(string)), true
 
 	case "Process.args":
 		if e.ComplexityRoot.Process.Args == nil {
@@ -2428,6 +2448,21 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 			}
 
 			return &response
+		}
+	case ast.Mutation:
+		return func(ctx context.Context) *graphql.Response {
+			if !first {
+				return nil
+			}
+			first = false
+			ctx = graphql.WithUnmarshalerMap(ctx, inputUnmarshalMap)
+			data := ec._Mutation(ctx, opCtx.Operation.SelectionSet)
+			var buf bytes.Buffer
+			data.MarshalGQL(&buf)
+
+			return &graphql.Response{
+				Data: buf.Bytes(),
+			}
 		}
 	case ast.Subscription:
 		next := ec._Subscription(ctx, opCtx.Operation.SelectionSet)
@@ -3857,6 +3892,41 @@ type WorkflowRun implements Node {
   createdAt: String!
   updatedAt: String!
 }
+
+"""
+Mutations. Kept minimal and bounded by design.
+
+The daemon's policy (see Query.gh docstring) keeps GitHub mutations OUT
+of the schema so orchardist guardrails can't be bypassed. The mutations
+here are **local-only**: they act on resources the daemon already owns
+(tmux server, local Claude REPLs). They are NOT a general write surface.
+
+Every mutation MUST:
+  - Target a graph node already present in the schema (TmuxPane, etc.)
+  - Be scoped to local-host resources (no remote calls, no GitHub)
+  - Be reversible or idempotent where reasonable
+"""
+type Mutation {
+  """
+  Send literal text to a tmux pane, followed by an Enter keypress.
+
+  Targets the live Claude REPL hosted by the named pane. The daemon
+  invokes ` + "`" + `tmux send-keys -t <paneId> -l <text>` + "`" + ` to write the text
+  literally (no shell interpretation), waits briefly for tmux to
+  flush, then sends a separate Enter keypress. The two-step pattern
+  matches the desktop app's Tauri command and avoids the race where
+  a combined send can submit before the text is fully written.
+
+  Returns true on success. paneId is the tmux pane id (e.g. "%15"),
+  the same value surfaced by ` + "`" + `tmuxPanes.paneId` + "`" + ` queries. Returns an
+  error when the pane cannot be reached or tmux exits non-zero.
+
+  Use case: browser / mobile / federated clients sending chat input
+  to a Claude REPL when they can't invoke tmux directly. Desktop
+  clients prefer the Tauri command since it stays local.
+  """
+  sendTextToPane(paneId: String!, text: String!): Boolean!
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -4638,6 +4708,28 @@ func (ec *executionContext) field_Host_processes_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["filter"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_sendTextToPane_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "paneId",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paneId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "text",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["text"] = arg1
 	return args, nil
 }
 
@@ -7771,6 +7863,50 @@ func (ec *executionContext) _Meta_failureReason(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_Meta_failureReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Meta", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Mutation_sendTextToPane(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_sendTextToPane(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SendTextToPane(ctx, fc.Args["paneId"].(string), fc.Args["text"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_sendTextToPane(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_sendTextToPane_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Process_id(ctx context.Context, field graphql.CollectedField, obj *Process) (ret graphql.Marshaler) {
@@ -15303,6 +15439,55 @@ func (ec *executionContext) _Meta(ctx context.Context, sel ast.SelectionSet, obj
 			out.Values[i] = ec._Meta_lastSuccessfulFetchAt(ctx, field, obj)
 		case "failureReason":
 			out.Values[i] = ec._Meta_failureReason(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mutationImplementors = []string{"Mutation"}
+
+func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mutationImplementors)
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+	})
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		innerCtx := graphql.WithRootFieldContext(ctx, &graphql.RootFieldContext{
+			Object: field.Name,
+			Field:  field,
+		})
+
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Mutation")
+		case "sendTextToPane":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_sendTextToPane(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

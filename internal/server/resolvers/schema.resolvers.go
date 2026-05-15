@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"slices"
 	"sort"
 	"strings"
@@ -183,6 +184,32 @@ func (r *issueResolver) ParentIssue(ctx context.Context, obj *graphql1.Issue) (*
 	}
 	out := issueRefToGraphQL(*deps.Parent)
 	return out, nil
+}
+
+// SendTextToPane is the resolver for the sendTextToPane field.
+//
+// Two-step `tmux send-keys`: first `-l <text>` writes the chat message
+// literally (no shell interpretation, safe with backticks / magic
+// strings); then a separate `Enter` keypress submits. Mirrors the
+// desktop app's Tauri command in crates/orchard-gui/src-tauri/src/commands.rs.
+// A 50ms gap between the two keeps long messages from racing Enter.
+func (r *mutationResolver) SendTextToPane(ctx context.Context, paneID string, text string) (bool, error) {
+	if paneID == "" {
+		return false, fmt.Errorf("paneId is empty")
+	}
+	if text == "" {
+		return false, fmt.Errorf("text is empty")
+	}
+	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", paneID, "-l", text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("tmux send-keys (text): %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	time.Sleep(50 * time.Millisecond)
+	cmd = exec.CommandContext(ctx, "tmux", "send-keys", "-t", paneID, "Enter")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("tmux send-keys (Enter): %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return true, nil
 }
 
 // Host is the resolver for the process.host field.
@@ -1746,6 +1773,9 @@ func (r *Resolver) Host() graphql1.HostResolver { return &hostResolver{r} }
 // Issue returns graphql1.IssueResolver implementation.
 func (r *Resolver) Issue() graphql1.IssueResolver { return &issueResolver{r} }
 
+// Mutation returns graphql1.MutationResolver implementation.
+func (r *Resolver) Mutation() graphql1.MutationResolver { return &mutationResolver{r} }
+
 // Process returns graphql1.ProcessResolver implementation.
 func (r *Resolver) Process() graphql1.ProcessResolver { return &processResolver{r} }
 
@@ -1782,6 +1812,7 @@ func (r *Resolver) Worktree() graphql1.WorktreeResolver { return &worktreeResolv
 type claudeInstanceResolver struct{ *Resolver }
 type hostResolver struct{ *Resolver }
 type issueResolver struct{ *Resolver }
+type mutationResolver struct{ *Resolver }
 type processResolver struct{ *Resolver }
 type pullRequestResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
