@@ -10,11 +10,6 @@ directive @defer(
 ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
 
 """
-Indicates exactly one field must be supplied and this field must not be `null`.
-"""
-directive @oneOf on INPUT_OBJECT
-
-"""
 Aggregated CI status across all check runs and statuses on the PR head sha.
 """
 enum CiStatus {

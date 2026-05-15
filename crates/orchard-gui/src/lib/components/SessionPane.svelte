@@ -79,6 +79,44 @@
 	// off by LensSidebar; the cache means this is free).
 	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 
+	// Fallback pane derivation: when the OpenPanel resolver can't attach
+	// a pane (most often because daemon.claudeInstances doesn't include
+	// this session — see ADR-022's note on the claudeinstance subsystem
+	// rewrite), find a pane in the live tmux snapshot whose process cwd
+	// matches the conversation's cwd AND whose currentCommand is claude.
+	// The pane id is enough for the SessionComposer's mutation; we don't
+	// need to fully synthesise a TmuxPane object.
+	const fallbackPaneId = $derived.by((): string | null => {
+		if (pane?.paneId) return null; // OpenPanel already resolved one
+		const cwd = conversation?.cwd;
+		if (!cwd) return null;
+		for (const s of tmuxSnapshot.sessions) {
+			for (const w of s.windows ?? []) {
+				for (const p of w.panes ?? []) {
+					if (p.process?.cwd !== cwd) continue;
+					const cmd = (p.process?.command ?? "").toLowerCase();
+					if (!cmd.includes("claude")) continue;
+					return p.paneId;
+				}
+			}
+		}
+		return null;
+	});
+
+	const effectivePaneId = $derived(pane?.paneId ?? fallbackPaneId);
+	const effectiveSessionLabel = $derived.by((): string | null => {
+		if (pane?.window?.session?.name) return pane.window.session.name;
+		if (!fallbackPaneId) return null;
+		for (const s of tmuxSnapshot.sessions) {
+			for (const w of s.windows ?? []) {
+				for (const p of w.panes ?? []) {
+					if (p.paneId === fallbackPaneId) return s.name;
+				}
+			}
+		}
+		return null;
+	});
+
 	const title = $derived(
 		conversation?.agentName ||
 			conversation?.customTitle ||
@@ -270,8 +308,8 @@
 		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
 			<div class="flex-1 min-h-0 flex flex-col">
 				<TranscriptView path={conversation.jsonlPath} sessionUuid={conversation.sessionUuid} />
-				{#if pane?.paneId}
-					<SessionComposer paneId={pane.paneId} sessionLabel={pane.window.session.name} />
+				{#if effectivePaneId}
+					<SessionComposer paneId={effectivePaneId} sessionLabel={effectiveSessionLabel ?? undefined} />
 				{:else}
 					<div class="mono dimer text-center text-[11.5px] px-3.5 py-2.5 border-t-[0.5px] border-line bg-surface">
 						No live tmux pane — open Terminal view to attach a fresh client.

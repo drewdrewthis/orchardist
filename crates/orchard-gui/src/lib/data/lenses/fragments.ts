@@ -163,6 +163,7 @@ export interface PaneCardT {
 	process: {
 		pid: number;
 		cwd: string | null;
+		command?: string | null;
 		worktree?: WorktreeEnrichment | null;
 	} | null;
 }

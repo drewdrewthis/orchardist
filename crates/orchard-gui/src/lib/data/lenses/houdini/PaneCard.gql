@@ -22,6 +22,10 @@ fragment PaneCard on TmuxPane {
 	process {
 		pid
 		cwd
+		# `command` is the basename ps reports (e.g. "claude", "zsh"). More
+		# reliable than `TmuxPane.currentCommand` which on macOS can be the
+		# `claude --version` string instead of the executable name.
+		command
 		worktree {
 			...WorktreeEnrichment
 		}
