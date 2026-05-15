@@ -57,20 +57,47 @@
 	const attentionLoading = $derived($attentionStore.fetching);
 
 	// Surface attention-lens fetch errors via toast so the user isn't left
-	// with a silently empty sidebar (Scenario L208 / #600). Track the
-	// last-shown message so the effect doesn't re-fire the same toast every
-	// time another reactive read in scope changes.
+	// with a silently empty sidebar (Scenario L208 / #600). Filter out
+	// developer-facing daemon strings (e.g. "use GetPull instead",
+	// "EnrichPullRequest graphql errors: ...") — show a friendly message
+	// to the user and log the raw daemon detail to console for debugging.
+	// Track last-shown so the effect doesn't re-toast on every reactive
+	// read in scope.
 	let lastAttentionError: string | null = null;
 	$effect(() => {
-		const msg = $attentionStore.errors?.[0]?.message?.trim() ?? "";
-		if (!msg) {
+		const raw = $attentionStore.errors?.[0]?.message?.trim() ?? "";
+		if (!raw) {
 			lastAttentionError = null;
 			return;
 		}
-		if (msg === lastAttentionError) return;
-		lastAttentionError = msg;
-		toast.error(msg);
+		if (raw === lastAttentionError) return;
+		lastAttentionError = raw;
+		console.error("[orchard] attention lens daemon error:", raw);
+		const userMsg = friendlyDaemonError(raw);
+		if (userMsg) toast.error(userMsg);
 	});
+
+	/**
+	 * Map raw daemon error strings to user-friendly toasts. Returns null
+	 * when the error is purely developer noise that shouldn't reach the
+	 * user (it stays in the console log above). Keep the mapping small —
+	 * unmapped messages get a generic fallback so the user knows something
+	 * is wrong but doesn't see internals.
+	 */
+	function friendlyDaemonError(raw: string): string | null {
+		if (raw.includes("rate limit")) {
+			return "GitHub rate limit reached — PR data will catch up shortly.";
+		}
+		if (raw.includes("use GetPull") || raw.includes("is a pull request")) {
+			// Daemon-internal API misuse — don't surface to user, just log.
+			return null;
+		}
+		if (raw.includes("EnrichPullRequest")) {
+			return "Couldn't refresh PR status — showing the last known state.";
+		}
+		// Generic fallback — terse, doesn't leak internals.
+		return "Sidebar data is incomplete.";
+	}
 
 	const recentItems = $derived(buildRecentItems($recentStore.data));
 	const recentLoading = $derived($recentStore.fetching);
