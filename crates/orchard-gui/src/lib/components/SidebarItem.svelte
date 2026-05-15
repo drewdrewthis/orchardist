@@ -250,9 +250,11 @@
 		background: transparent;
 		border: 1.5px solid #4f535b;
 	}
+	/* no_claude = conversation with no live ClaudeInstance. Don't render
+	   a state dot — the conversation IS just metadata, claiming a state
+	   would be misleading. Gutter stays reserved for column alignment. */
 	.state-dot--no_claude {
-		background: transparent;
-		border: 1px dashed rgba(120, 124, 134, 0.35);
+		display: none;
 	}
 	@keyframes pulse-green {
 		0%, 100% { opacity: 1; }

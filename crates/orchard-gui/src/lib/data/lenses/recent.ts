@@ -30,13 +30,21 @@ type Data = NonNullable<RecentLens$result>;
 function dormantSessionFromConversation(
 	conv: NonNullable<Data["conversations"]>[number],
 ): SessionCardT {
+	// Conversation is jsonl metadata, not the live REPL. State belongs
+	// to a ClaudeInstance (which requires a daemon-visible pid, usually
+	// in tmux). When there's no instance, `conv.open` IS the liveness
+	// signal — the schema says it's true when the JSONL was written
+	// within the heartbeat window (default 60s). Treat open=true as
+	// "live, just not pane-resolved" (idle); open=false as no_claude
+	// (renderer hides the state dot entirely for that case).
+	const state = conv.open ? "idle" : "no_claude";
 	return {
 		// Conversation has no real ClaudeInstance id; use a synthetic id so
 		// keyed-each stays stable. Prefix with `conv:` to avoid colliding
 		// with live ClaudeInstance ids.
 		id: `conv:${conv.sessionUuid}`,
 		sessionUuid: conv.sessionUuid,
-		state: "no_claude",
+		state,
 		lastActivityAt: conv.lastSeenAt ?? null,
 		startedAt: conv.firstSeenAt ?? null,
 		rcEnabled: false,
