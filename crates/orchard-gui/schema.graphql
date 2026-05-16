@@ -1222,6 +1222,11 @@ type TmuxPane implements Node {
 """Filter for `Query.tmuxPanes`. AND-combined when multiple are set."""
 input TmuxPaneFilter {
   """
+  Only include panes whose foreground-process command basename contains this substring, case-insensitive (ADR-022 PanesByCommand axis).
+  """
+  command: String
+
+  """
   Only include panes whose `currentCommand` is in this list.
   
   Note: `currentCommand` is the raw tmux `pane_current_command` value,
@@ -1232,6 +1237,11 @@ input TmuxPaneFilter {
   `TmuxPane.currentCommand` for the full caveat.
   """
   currentCommandIn: [String!]
+
+  """
+  Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis).
+  """
+  cwd: String
 
   """Only include dead (or non-dead) panes."""
   dead: Boolean

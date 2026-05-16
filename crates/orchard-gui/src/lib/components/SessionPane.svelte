@@ -21,6 +21,7 @@
 	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { relTime } from "$lib/util/format";
 	import { getStore } from "$lib/store.svelte";
+	import { enablePushNotifications } from "$lib/notifications";
 	import type { ConvView } from "$lib/data/types";
 
 	type Props = {
@@ -223,6 +224,56 @@
 		dead:       "dead",
 		derived:    "",
 	};
+
+	/**
+	 * REPL pill pulse — toggled on when a "reply-seen" event bubbles up from
+	 * TranscriptView. Resets after 600ms to allow re-triggering.
+	 */
+	let replPillPulsing = $state(false);
+	let _pulseTimeout: ReturnType<typeof setTimeout> | null = null;
+	let convEl: HTMLDivElement | undefined = $state();
+
+	// Listen for the custom event bubbled from TranscriptView via pulseReplPill().
+	// We use $effect + addEventListener because Svelte 5's on<name> attribute
+	// doesn't support colons in event names.
+	$effect(() => {
+		if (!convEl) return;
+		const el = convEl;
+		el.addEventListener("orchard:reply-seen", onReplySeen);
+		return () => el.removeEventListener("orchard:reply-seen", onReplySeen);
+	});
+
+	function onReplySeen() {
+		if (_pulseTimeout) clearTimeout(_pulseTimeout);
+		replPillPulsing = true;
+		_pulseTimeout = setTimeout(() => {
+			replPillPulsing = false;
+			_pulseTimeout = null;
+		}, 600);
+	}
+
+	/**
+	 * Notify toggle: request permission + subscribe to push if user enables.
+	 * If permission is denied, surfaces a one-time browser-settings hint via
+	 * the store toast (swallowed silently otherwise — the toggle stays off).
+	 */
+	let notifyDeniedHint = $state(false);
+
+	async function toggleNotify() {
+		if (store.chatNotify) {
+			// Turn off — no permission dialog needed.
+			store.setChatNotify(false);
+			notifyDeniedHint = false;
+			return;
+		}
+		const { permission } = await enablePushNotifications();
+		if (permission === "granted") {
+			store.setChatNotify(true);
+			notifyDeniedHint = false;
+		} else if (permission === "denied") {
+			notifyDeniedHint = true;
+		}
+	}
 </script>
 
 <div
@@ -254,13 +305,20 @@
 		</div>
 	{/if}
 
-	<div class="conv">
+	<!-- orchard:reply-seen bubbles up from TranscriptView → pulses REPL pill ($effect listener) -->
+	<div class="conv" bind:this={convEl}>
 		<div class="conv-header">
 			<div class="conv-header-row">
 				<div class="conv-title-block">
 					<div class="conv-title-row">
-						<!-- REPL state pill -->
-						<span class="repl-pill repl-pill--{replState}" title="REPL state: {replState}" data-repl-state={replState}>
+						<!-- REPL state pill — pulses briefly when a reply arrives -->
+						<span
+							class="repl-pill repl-pill--{replState}"
+							class:repl-pill--pulsing={replPillPulsing}
+							title="REPL state: {replState}"
+							data-repl-state={replState}
+							data-pulsing={replPillPulsing || undefined}
+						>
 							<span class="repl-dot"></span>
 							{#if replLabel[replState]}
 								<span class="repl-label">{replLabel[replState]}</span>
@@ -271,7 +329,31 @@
 							<span class="here-badge mono">here</span>
 						{/if}
 						{#if pane || hasTranscript}
-							<span class="ml-auto">
+							<span class="ml-auto flex items-center gap-1">
+								<!-- Mute toggle: suppress audio/pulse when on -->
+								<button
+									class="iconbtn notif-btn"
+									class:notif-btn--active={!store.chatMute}
+									onclick={store.toggleChatMute}
+									title={store.chatMute ? "Unmute reply ping" : "Mute reply ping"}
+									aria-label={store.chatMute ? "Unmute reply ping" : "Mute reply ping"}
+									aria-pressed={!store.chatMute}
+									data-testid="chat-mute-toggle"
+								>
+									<Icon name={store.chatMute ? "bell-off" : "bell"} size={12} />
+								</button>
+								<!-- Notify toggle: opt in to Web Notifications -->
+								<button
+									class="iconbtn notif-btn"
+									class:notif-btn--active={store.chatNotify}
+									onclick={toggleNotify}
+									title={store.chatNotify ? "Disable background notifications" : "Enable background notifications"}
+									aria-label={store.chatNotify ? "Disable background notifications" : "Enable background notifications"}
+									aria-pressed={store.chatNotify}
+									data-testid="chat-notify-toggle"
+								>
+									<Icon name="wifi" size={12} />
+								</button>
 								<ViewSwitcher
 									value={view}
 									onChange={(v) => onSetView(v)}
@@ -280,6 +362,11 @@
 							</span>
 						{/if}
 					</div>
+					{#if notifyDeniedHint}
+						<div class="mono dimer mt-1 text-[11px]" data-testid="notify-denied-hint">
+							Notifications denied — enable in browser/OS settings.
+						</div>
+					{/if}
 					<div class="conv-sub mono dimer">
 						{#if worktree}
 							<span class="conv-chip" title="Host">
@@ -379,6 +466,7 @@
 					path={conversation.jsonlPath}
 					sessionUuid={conversation.sessionUuid}
 					sessionKey={sessionKey || undefined}
+					sessionTitle={title}
 					bind:turnsLength={transcriptTurnsLength}
 				/>
 				{#if effectivePaneId}
@@ -538,5 +626,42 @@
 	@keyframes repl-pulse-amber {
 		0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, #f5c94e 50%, transparent); }
 		50%       { box-shadow: 0 0 0 4px transparent; }
+	}
+
+	/**
+	 * Reply-seen pulse — brief scale+opacity flash on the REPL pill when
+	 * a "Claude responded" event fires. Skipped when prefers-reduced-motion.
+	 */
+	@media (prefers-reduced-motion: no-preference) {
+		.repl-pill--pulsing {
+			animation: repl-reply-pulse 600ms ease-out forwards;
+		}
+		.repl-pill--pulsing .repl-dot {
+			animation: repl-dot-reply-pulse 600ms ease-out forwards;
+		}
+	}
+	@keyframes repl-reply-pulse {
+		0%   { transform: scale(1);    opacity: 1; }
+		20%  { transform: scale(1.18); opacity: 1; }
+		100% { transform: scale(1);    opacity: 1; }
+	}
+	@keyframes repl-dot-reply-pulse {
+		0%   { box-shadow: 0 0 0 0 color-mix(in oklab, #6fd391 70%, transparent); }
+		40%  { box-shadow: 0 0 0 6px color-mix(in oklab, #6fd391 10%, transparent); }
+		100% { box-shadow: 0 0 0 0 transparent; }
+	}
+
+	/** Notification toggle buttons in the conv title row. */
+	.notif-btn {
+		color: var(--color-fg-3, #6c707a);
+		opacity: 0.6;
+		transition: opacity 120ms ease, color 120ms ease;
+	}
+	.notif-btn:hover {
+		opacity: 1;
+	}
+	.notif-btn--active {
+		color: var(--color-accent, #6366f1);
+		opacity: 1;
 	}
 </style>

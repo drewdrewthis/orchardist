@@ -32,6 +32,7 @@
 	import { subscribeConversation } from "$lib/data/daemon";
 	import { renderMarkdown } from "$lib/util/markdown";
 	import { getStore, type PendingTurn } from "$lib/store.svelte";
+	import { playPing, pulseReplPill, fireWebNotification } from "$lib/notifications";
 
 	type Props = {
 		path: string;
@@ -43,8 +44,13 @@
 		 * the current count to SessionComposer as `turnsLengthAtSend`.
 		 */
 		turnsLength?: number;
+		/**
+		 * Human-readable session title for Web Notification body heading.
+		 * Falls back to sessionUuid prefix when absent.
+		 */
+		sessionTitle?: string;
 	};
-	let { path, sessionUuid, sessionKey, turnsLength = $bindable(0) }: Props = $props();
+	let { path, sessionUuid, sessionKey, turnsLength = $bindable(0), sessionTitle }: Props = $props();
 
 	const store = getStore();
 
@@ -165,11 +171,41 @@
 			);
 			if (assistantAfter) {
 				store.patchPendingTurn(key, p.id, "seen");
+				// Fire "Claude responded" notifications — Flavor 1 + 2.
+				_onReplySeen(assistantAfter);
 				// Fade out "seen" bubbles after 2s — they've served their purpose.
 				setTimeout(() => {
 					store.removePendingTurn(key, p.id);
 				}, 2000);
 			}
+		}
+	}
+
+	/**
+	 * Fire the "Claude responded" ping when a pending turn transitions to "seen".
+	 *
+	 * Flavor 1: audio tick + REPL pill pulse (foreground, unless muted).
+	 * Flavor 2: Web Notification (backgrounded tab, if chatNotify opted in).
+	 */
+	function _onReplySeen(assistantTurn: TranscriptTurn): void {
+		if (!store.chatMute) {
+			// Flavor 1a: audio tick.
+			playPing();
+			// Flavor 1b: pulse the REPL pill via a bubbling DOM event.
+			pulseReplPill(scrollHost);
+		}
+
+		if (store.chatNotify) {
+			// Flavor 2: Web Notification when tab is backgrounded.
+			// Extract text from the first text block of the assistant turn.
+			const textBlock = assistantTurn.blocks.find((b): b is { kind: "text"; text: string } => b.kind === "text");
+			const body = textBlock ? textBlock.text : "";
+			const notifTitle = sessionTitle ?? sessionUuid?.slice(0, 8) ?? "Claude";
+			fireWebNotification({
+				sessionUuid: sessionUuid ?? "unknown",
+				title: notifTitle,
+				body,
+			});
 		}
 	}
 

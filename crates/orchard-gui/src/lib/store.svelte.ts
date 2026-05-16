@@ -125,6 +125,18 @@ export class AppStore {
 	sidebarCollapsed = $state(false);
 	sidebarWidth = $state(320);
 
+	/**
+	 * Mute the in-app audio tick. Persists in localStorage.
+	 * When true, playPing() and the REPL pill pulse are suppressed.
+	 */
+	chatMute = $state(hydrateLocalStorage("orchard:ui:chat-mute", "false") === "true");
+
+	/**
+	 * Web Notification opt-in. Persists in localStorage.
+	 * When true (and permission granted), fireWebNotification() fires on background tabs.
+	 */
+	chatNotify = $state(hydrateLocalStorage("orchard:ui:chat-notify", "false") === "true");
+
 	tabs: Tab[] = $state([]);
 	activeTabId: string | null = $state(null);
 	/**
@@ -422,6 +434,22 @@ export class AppStore {
 		const next = { ...this.pendingTurns };
 		delete next[sessionKey];
 		this.pendingTurns = next;
+	};
+
+	/** Toggle in-app audio ping mute. Persists to localStorage. */
+	toggleChatMute = () => {
+		this.chatMute = !this.chatMute;
+		try {
+			localStorage.setItem("orchard:ui:chat-mute", String(this.chatMute));
+		} catch { /* private browsing */ }
+	};
+
+	/** Toggle Web Notification opt-in. Persists to localStorage. */
+	setChatNotify = (value: boolean) => {
+		this.chatNotify = value;
+		try {
+			localStorage.setItem("orchard:ui:chat-notify", String(value));
+		} catch { /* private browsing */ }
 	};
 
 	toggleSidebar = () => {

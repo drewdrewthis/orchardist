@@ -57,6 +57,57 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// ── Push: show a notification from the daemon's Web Push payload ────────────
+//
+// Payload shape (JSON):
+//   { title: string, body: string, sessionUuid: string }
+//
+// The daemon sends this when an assistant turn arrives for a subscribed session.
+// The SW must NOT touch GraphQL or cache here — just show the notification.
+// coalesces by sessionUuid via `tag` so a fast-responding session doesn't stack.
+self.addEventListener("push", (event: PushEvent) => {
+  if (!event.data) return;
+
+  let title = "Claude responded";
+  let body = "";
+  let tag = "orchard";
+
+  try {
+    const payload = event.data.json() as { title?: string; body?: string; sessionUuid?: string };
+    if (payload.title) title = payload.title;
+    if (payload.body) body = payload.body.slice(0, 120);
+    if (payload.sessionUuid) tag = payload.sessionUuid;
+  } catch {
+    body = event.data.text().slice(0, 120);
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: "/icon-192.png",
+      tag,
+      renotify: true,
+    }),
+  );
+});
+
+// ── Notification click: focus the app tab ────────────────────────────────────
+self.addEventListener("notificationclick", (event: NotificationEvent) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clientList) => {
+        // Focus any already-open tab.
+        for (const client of clientList) {
+          if ("focus" in client) return (client as WindowClient).focus();
+        }
+        // No open tab — open the root URL.
+        return self.clients.openWindow("/");
+      }),
+  );
+});
+
 // ── Fetch: cache-first for static assets; network-only for everything else ──
 self.addEventListener("fetch", (event) => {
   const { request } = event;
