@@ -35,6 +35,26 @@ export type { ForkPreview } from "./data/types";
 export type Unsub = () => void;
 
 /**
+ * State of an in-flight or recently-resolved user message in the iMessage
+ * indicator model:
+ *   sending  — optimistic insert, mutation not yet returned
+ *   sent     — mutation returned true (tmux ack)
+ *   received — conversationChanged subscription fired + turns.length grew
+ *   seen     — first assistant turn appeared after this message
+ *   stalled  — 90s elapsed in "sent" without receiving
+ */
+export type PendingTurnStatus = "sending" | "sent" | "received" | "seen" | "stalled";
+
+export interface PendingTurn {
+	id: string;
+	text: string;
+	sentAt: number;
+	/** turns.length at send time — used to match the earliest new turn. */
+	turnsLengthAtSend: number;
+	status: PendingTurnStatus;
+}
+
+/**
  * Tab identity. Two flavours:
  *   - "channel": chat-room conversation (chat-core)
  *   - "session": claude/tmux session — keyed by paneId and/or sessionUuid.
@@ -107,6 +127,11 @@ export class AppStore {
 
 	tabs: Tab[] = $state([]);
 	activeTabId: string | null = $state(null);
+	/**
+	 * Pending user messages keyed by sessionUuid (or paneId when no uuid
+	 * is known yet). Each entry is an ordered list of in-flight bubbles.
+	 */
+	pendingTurns: Record<string, PendingTurn[]> = $state({});
 	paneSizes: number[] = $state([]);
 	fullscreen = $state(false);
 	private nextTabSeq = 1;
@@ -360,6 +385,43 @@ export class AppStore {
 
 	toggleView = () => {
 		this.setView(this.view === "terminal" ? "chat" : "terminal");
+	};
+
+	/**
+	 * Add an optimistic pending turn for a session. Called synchronously
+	 * before the mutation fires so the bubble appears instantly.
+	 */
+	addPendingTurn = (sessionKey: string, turn: PendingTurn) => {
+		const existing = this.pendingTurns[sessionKey] ?? [];
+		this.pendingTurns = { ...this.pendingTurns, [sessionKey]: [...existing, turn] };
+	};
+
+	/**
+	 * Patch the status of a specific pending turn by id.
+	 */
+	patchPendingTurn = (sessionKey: string, id: string, status: PendingTurnStatus) => {
+		const list = this.pendingTurns[sessionKey];
+		if (!list) return;
+		const next = list.map((t) => (t.id === id ? { ...t, status } : t));
+		this.pendingTurns = { ...this.pendingTurns, [sessionKey]: next };
+	};
+
+	/**
+	 * Remove a pending turn once it's fully resolved (seen state displayed
+	 * for a moment, then fades). Callers handle the fade timing before calling.
+	 */
+	removePendingTurn = (sessionKey: string, id: string) => {
+		const list = this.pendingTurns[sessionKey];
+		if (!list) return;
+		const next = list.filter((t) => t.id !== id);
+		this.pendingTurns = { ...this.pendingTurns, [sessionKey]: next };
+	};
+
+	/** Clear all pending turns for a session (e.g. when tab is closed). */
+	clearPendingTurns = (sessionKey: string) => {
+		const next = { ...this.pendingTurns };
+		delete next[sessionKey];
+		this.pendingTurns = next;
 	};
 
 	toggleSidebar = () => {

@@ -2,6 +2,7 @@ fragment SessionCard on ClaudeInstance {
 	id
 	sessionUuid
 	state
+	inflightToolCount
 	startedAt
 	lastActivityAt
 	rcEnabled

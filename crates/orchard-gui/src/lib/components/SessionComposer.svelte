@@ -3,64 +3,71 @@
   the message into the pane via `tmux send-keys -t <paneId> -l <text>`
   followed by `Enter` (Tauri command `tmux_send_text` in commands.rs).
 
-  No optimistic UI — the transcript view subscribes to
-  `Subscription.conversationChanged(sessionUuid:)` and re-loads the
-  JSONL when the daemon's fsnotify watcher fires. The new turn shows
-  up the moment Claude writes it, no client-side polling.
+  Optimistic UI: the input clears INSTANTLY on Enter and a pending bubble
+  appears in the transcript view. State machine tracks Sent → Received →
+  Seen (iMessage style). The 2.5s "delivered" badge has been removed —
+  replaced by per-bubble indicators that are actually honest.
 -->
 <script lang="ts">
 	import Icon from "$lib/icons/Icon.svelte";
 	import { tmuxSendText } from "$lib/tauri";
 	import { toast } from "$lib/util/toast";
+	import { getStore, type PendingTurn } from "$lib/store.svelte";
 
 	type Props = {
 		paneId: string;
 		/** Display label used in error messages (e.g. tmux session name). */
 		sessionLabel?: string;
+		/**
+		 * Key used to bucket pending turns in the store. Use sessionUuid when
+		 * available; fall back to paneId so the composer can always write.
+		 */
+		sessionKey: string;
+		/** Current transcript turns.length — captured at send time. */
+		turnsLength: number;
 	};
-	let { paneId, sessionLabel }: Props = $props();
+	let { paneId, sessionLabel, sessionKey, turnsLength }: Props = $props();
+
+	const store = getStore();
 
 	let text = $state("");
-	let sending = $state(false);
 	let error = $state<string | null>(null);
 	let textarea: HTMLTextAreaElement | undefined = $state();
-	// Lightweight clock for the "sent" badge fade. 500ms tick is plenty —
-	// the badge only flips once after 2.5s.
-	let now = $state(Date.now());
-	/** "sent" badge state — visible for 2.5s after a successful send. */
-	let lastSentAt = $state<number | null>(null);
-	const sentBadgeVisible = $derived(
-		lastSentAt != null && now - lastSentAt < 2500,
-	);
-	$effect(() => {
-		if (!sentBadgeVisible) return;
-		const t = setInterval(() => (now = Date.now()), 500);
-		return () => clearInterval(t);
-	});
 
 	async function send() {
 		const t = text.trim();
-		if (!t || sending) return;
-		sending = true;
-		error = null;
+		if (!t) return;
+
+		// --- INSTANT clear: input empties before any async work ---
+		text = "";
+		autosize();
+		queueMicrotask(() => textarea?.focus());
+
+		// Optimistic insert
+		const id = "pending-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+		const pending: PendingTurn = {
+			id,
+			text: t,
+			sentAt: Date.now(),
+			turnsLengthAtSend: turnsLength,
+			status: "sending",
+		};
+		store.addPendingTurn(sessionKey, pending);
+
+		// Fire the mutation
 		try {
 			await tmuxSendText(paneId, t);
-			text = "";
-			autosize();
-			lastSentAt = Date.now();
-			now = Date.now();
+			store.patchPendingTurn(sessionKey, id, "sent");
 		} catch (err) {
 			error = (err as Error)?.message ?? String(err);
 			toast.error(err);
-		} finally {
-			sending = false;
-			queueMicrotask(() => textarea?.focus());
+			// On mutation failure, remove the optimistic bubble — message was never sent.
+			store.removePendingTurn(sessionKey, id);
 		}
 	}
 
 	function onKeydown(e: KeyboardEvent) {
 		// Enter (without shift/cmd) sends. Shift+Enter inserts a newline.
-		// Cmd/Ctrl+Enter also sends, matching ChatView's existing shortcut.
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			send();
@@ -95,7 +102,6 @@
 			onkeydown={onKeydown}
 			placeholder={sessionLabel ? `Message ${sessionLabel}…` : "Message session…"}
 			rows="1"
-			disabled={sending}
 			autocapitalize="sentences"
 			autocomplete="off"
 			spellcheck="true"
@@ -105,33 +111,16 @@
 		></textarea>
 		<button
 			class="send-btn"
-			class:sending
 			onclick={send}
-			disabled={sending || !text.trim()}
+			disabled={!text.trim()}
 			title="Send (Enter) · Shift+Enter for newline"
 			aria-label="Send"
 		>
-			{#if sending}
-				<span class="send-spinner" aria-hidden="true"></span>
-				<span class="sr-only">Sending…</span>
-			{:else}
-				<Icon name="send" size={14} />
-			{/if}
+			<Icon name="send" size={14} />
 		</button>
 	</div>
 	<div class="composer-status mono">
-		{#if sending}
-			<span class="status-pill status-pill--sending">
-				<span class="send-spinner" aria-hidden="true"></span>
-				sending to {paneId}…
-			</span>
-		{:else if sentBadgeVisible}
-			<span class="status-pill status-pill--sent">
-				<Icon name="check" size={9} /> delivered to {paneId}
-			</span>
-		{:else}
-			<span class="dimer">↵ send · ⇧↵ newline · {paneId}</span>
-		{/if}
+		<span class="dimer">↵ send · ⇧↵ newline · {paneId}</span>
 	</div>
 </div>
 
@@ -161,32 +150,6 @@
 		color: color-mix(in oklab, var(--color-fg, #888) 40%, transparent);
 		cursor: not-allowed;
 	}
-	.send-btn.sending {
-		background: color-mix(in oklab, var(--color-accent, #6366f1) 60%, transparent);
-	}
-	.send-spinner {
-		display: inline-block;
-		width: 12px;
-		height: 12px;
-		border: 1.5px solid currentColor;
-		border-right-color: transparent;
-		border-radius: 50%;
-		animation: send-spin 700ms linear infinite;
-	}
-	@keyframes send-spin {
-		to { transform: rotate(360deg); }
-	}
-	.sr-only {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
-		border: 0;
-	}
 	.composer-status {
 		display: flex;
 		align-items: center;
@@ -194,31 +157,5 @@
 		font-size: 10.5px;
 		min-height: 14px;
 		padding: 0 2px;
-	}
-	.status-pill {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 1px 6px;
-		border-radius: 8px;
-		font-size: 10px;
-		animation: status-fade 200ms ease-out;
-	}
-	.status-pill--sending {
-		color: var(--color-accent, #6366f1);
-		background: color-mix(in oklab, var(--color-accent, #6366f1) 12%, transparent);
-	}
-	.status-pill--sent {
-		color: #6fd391;
-		background: color-mix(in oklab, #6fd391 12%, transparent);
-		animation: status-fade-out 2500ms ease-out;
-	}
-	@keyframes status-fade {
-		from { opacity: 0; transform: translateY(2px); }
-		to { opacity: 1; transform: translateY(0); }
-	}
-	@keyframes status-fade-out {
-		0%, 70% { opacity: 1; }
-		100% { opacity: 0.3; }
 	}
 </style>

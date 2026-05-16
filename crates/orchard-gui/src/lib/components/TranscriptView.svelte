@@ -8,10 +8,18 @@
   `Subscription.conversationChanged(sessionUuid:)` on the daemon and
   re-loads when the fsnotify watcher fires. No polling.
 
+  Pending turns (from SessionComposer's optimistic inserts) are rendered
+  below real turns with iMessage-style status indicators:
+    sending…  — mutation in flight
+    sent ✓    — tmux ack received
+    received ✓✓ — subscription fired + turns grew
+    seen      — first assistant turn appeared after this message
+    ·waiting  — 90s elapsed in sent/sending without advancing (opacity-dim)
+
   Browser dev preview shows a placeholder.
 -->
 <script lang="ts">
-	import { onMount, untrack } from "svelte";
+	import { untrack } from "svelte";
 	import Icon from "$lib/icons/Icon.svelte";
 	import { createVirtualizer } from "@tanstack/svelte-virtual";
 	import {
@@ -23,12 +31,22 @@
 	} from "$lib/data/transcript";
 	import { subscribeConversation } from "$lib/data/daemon";
 	import { renderMarkdown } from "$lib/util/markdown";
+	import { getStore, type PendingTurn } from "$lib/store.svelte";
 
 	type Props = {
 		path: string;
 		sessionUuid?: string;
+		/** Session key used to look up (and mutate) pending turns in the store. */
+		sessionKey?: string;
+		/**
+		 * Bindable: updated whenever `turns` changes so SessionPane can pass
+		 * the current count to SessionComposer as `turnsLengthAtSend`.
+		 */
+		turnsLength?: number;
 	};
-	let { path, sessionUuid }: Props = $props();
+	let { path, sessionUuid, sessionKey, turnsLength = $bindable(0) }: Props = $props();
+
+	const store = getStore();
 
 	let turns = $state<TranscriptTurn[]>([]);
 	let totalSize = $state(0);
@@ -38,6 +56,11 @@
 	let scrollHost: HTMLDivElement | undefined = $state();
 	let stickToBottom = $state(true);
 	let expandedTools = $state<Set<string>>(new Set());
+
+	/** Pending turns from the store for this session. */
+	const pendingTurns = $derived(
+		sessionKey ? (store.pendingTurns[sessionKey] ?? []) : [],
+	);
 
 	// Virtualizer — @tanstack/svelte-virtual store. count is captured at
 	// setOptions() call time (it's spread, not a getter), so we must call
@@ -102,32 +125,112 @@
 		load();
 	});
 
+	// Keep turnsLength bindable prop in sync so SessionPane can thread it
+	// into SessionComposer as turnsLengthAtSend.
+	$effect(() => {
+		turnsLength = turns.length;
+	});
+
+	/**
+	 * Advance pending turn states when a subscription push arrives.
+	 *
+	 * Resolution rules (iMessage model):
+	 *   1. Walk pending turns oldest-first.
+	 *   2. For each "sent" turn where newTurns.length > turnsLengthAtSend:
+	 *      flip to "received". Assign the earliest new user turn to oldest pending.
+	 *   3. Once "received", look for the first assistant turn AFTER that send
+	 *      time in the latest turns array → flip to "seen".
+	 *
+	 * The subscription fires after `turns` is updated by `load()`, so we
+	 * always compare against the fresh array.
+	 */
+	function advancePendingStates(key: string, freshTurns: TranscriptTurn[]) {
+		const pending = store.pendingTurns[key];
+		if (!pending || pending.length === 0) return;
+
+		// Count new turns since each send (multi-send within one tick: walk oldest first).
+		for (const p of pending) {
+			if (p.status === "sent" && freshTurns.length > p.turnsLengthAtSend) {
+				store.patchPendingTurn(key, p.id, "received");
+			}
+		}
+
+		// After patching to "received", look for first assistant turn after sentAt.
+		const refreshed = store.pendingTurns[key] ?? [];
+		for (const p of refreshed) {
+			if (p.status !== "received") continue;
+			// Find the first assistant turn whose timestamp >= sentAt.
+			const assistantAfter = freshTurns.find(
+				(t) => t.role === "assistant" && t.timestamp >= p.sentAt,
+			);
+			if (assistantAfter) {
+				store.patchPendingTurn(key, p.id, "seen");
+				// Fade out "seen" bubbles after 2s — they've served their purpose.
+				setTimeout(() => {
+					store.removePendingTurn(key, p.id);
+				}, 2000);
+			}
+		}
+	}
+
 	$effect(() => {
 		// Subscribe to conversationChanged for this session — the daemon
 		// fsnotify watcher already debounces fs events, so each push
 		// corresponds to a real JSONL append. No polling.
 		if (!sessionUuid) return;
+		const key = sessionKey ?? sessionUuid;
 		const unsub = subscribeConversation(
 			sessionUuid,
-			() => load(),
+			async () => {
+				await load();
+				// After load() updates `turns`, advance pending states.
+				advancePendingStates(key, turns);
+			},
 			(err) => console.warn("[transcript] subscription error:", err),
 		);
 		return () => unsub();
 	});
 
+	/** 90s stall timer — fires for each pending turn in "sent" state. */
+	$effect(() => {
+		const key = sessionKey;
+		if (!key) return;
+		const pending = store.pendingTurns[key] ?? [];
+		const sentTurns = pending.filter((p) => p.status === "sent" || p.status === "sending");
+		if (sentTurns.length === 0) return;
+
+		const timers: ReturnType<typeof setTimeout>[] = [];
+		for (const p of sentTurns) {
+			const elapsed = Date.now() - p.sentAt;
+			const remaining = 90_000 - elapsed;
+			if (remaining <= 0) {
+				// Already past 90s — mark stalled now.
+				store.patchPendingTurn(key, p.id, "stalled");
+			} else {
+				const t = setTimeout(() => {
+					// Only stall if still in sent/sending (not yet received/seen).
+					const current = (store.pendingTurns[key] ?? []).find((x) => x.id === p.id);
+					if (current && (current.status === "sent" || current.status === "sending")) {
+						store.patchPendingTurn(key, p.id, "stalled");
+					}
+				}, remaining);
+				timers.push(t);
+			}
+		}
+		return () => timers.forEach((t) => clearTimeout(t));
+	});
+
 	let lastScrolledLen = $state(0);
 	$effect(() => {
-		// Scroll to bottom only when turn count actually grows AND the user
-		// is anchored. Reading turns.length is fine; we DO NOT call into the
-		// virtualizer store inside this effect — scrollToIndex is fired off
-		// the reactive frame via setTimeout to avoid re-triggering measure
-		// pass writes during the same flush.
-		const len = turns.length;
+		// Scroll to bottom when turn count grows OR pending turns appear/resolve.
+		const len = turns.length + pendingTurns.length;
 		if (!stickToBottom || len === 0 || len === lastScrolledLen) return;
 		lastScrolledLen = len;
 		setTimeout(() => {
 			// intentional swallow: virtualizer may not be mounted yet during fast turn bursts; scroll retried on next tick
-			try { $virtualizer.scrollToIndex(len - 1, { align: "end" }); } catch {}
+			try { $virtualizer.scrollToIndex(turns.length - 1, { align: "end" }); } catch {}
+			// Also scroll the host directly to bottom to catch pending turns below the virtualizer.
+			if (scrollHost) scrollHost.scrollTop = scrollHost.scrollHeight;
 		}, 0);
 	});
 
@@ -193,6 +296,16 @@
 		return "";
 	}
 
+	/** Human-readable indicator label for a pending turn status. */
+	function pendingIndicator(p: PendingTurn): string {
+		switch (p.status) {
+			case "sending":  return "sending…";
+			case "sent":     return "sent ✓";
+			case "received": return "received ✓✓";
+			case "seen":     return "seen";
+			case "stalled":  return "·waiting";
+		}
+	}
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col bg-surface">
@@ -211,7 +324,7 @@
 			<div class="text-[13px] text-bad-fg">Transcript failed to load.</div>
 			<div class="dimer mono text-[11.5px] mt-1">{errMsg}</div>
 		</div>
-	{:else if status === "empty"}
+	{:else if status === "empty" && pendingTurns.length === 0}
 		<div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
 			<span class="dimer">No conversation turns parsed from {path}</span>
 		</div>
@@ -302,6 +415,28 @@
 					{/if}
 				{/each}
 			</div>
+
+			<!-- Pending turns rendered BELOW the real virtualizer list -->
+			{#if pendingTurns.length > 0}
+				<div class="pending-turns-section">
+					{#each pendingTurns as p (p.id)}
+						<div
+							class="turn turn--user turn--pending"
+							class:turn--stalled={p.status === "stalled"}
+							data-pending-id={p.id}
+							data-pending-status={p.status}
+						>
+							<div class="turn-header mono">
+								<span class="turn-header__role">user</span>
+							</div>
+							<div class="turn-bubble prose-chat">{p.text}</div>
+							<div class="pending-indicator mono" data-status={p.status}>
+								{pendingIndicator(p)}
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -405,5 +540,58 @@
 		opacity: 0.75;
 		padding-left: 6px;
 		border-left: 1px dashed var(--color-line, rgba(255,255,255,0.08));
+	}
+
+	/* Pending turn section — floats below the virtualizer. */
+	.pending-turns-section {
+		padding-top: 4px;
+	}
+
+	/* Pending turn: same shape as a real user turn, but not positioned
+	   absolute (it's in flow, below the virtualizer container). */
+	.turn--pending {
+		position: relative;
+	}
+
+	/* Stalled turns dim to signal they might not have landed. */
+	.turn--stalled {
+		opacity: 0.6;
+	}
+
+	/**
+	 * iMessage-style indicator below the last pending bubble.
+	 * Small grey text, right-aligned under the bubble.
+	 */
+	.pending-indicator {
+		font-size: 10px;
+		color: var(--color-fg-3, #6c707a);
+		letter-spacing: 0.02em;
+		padding-right: 2px;
+		animation: indicator-in 150ms ease-out;
+	}
+	.pending-indicator[data-status="sending"] {
+		color: var(--color-fg-3, #6c707a);
+	}
+	.pending-indicator[data-status="sent"] {
+		color: var(--color-fg-2, #aab0bb);
+	}
+	.pending-indicator[data-status="received"] {
+		color: #6fd391;
+	}
+	.pending-indicator[data-status="seen"] {
+		color: #6fd391;
+		animation: indicator-fade-out 1800ms ease-out forwards;
+	}
+	.pending-indicator[data-status="stalled"] {
+		color: var(--color-fg-3, #6c707a);
+		font-style: italic;
+	}
+	@keyframes indicator-in {
+		from { opacity: 0; transform: translateY(2px); }
+		to   { opacity: 1; transform: translateY(0); }
+	}
+	@keyframes indicator-fade-out {
+		0%, 50% { opacity: 1; }
+		100%    { opacity: 0; }
 	}
 </style>
