@@ -58,12 +58,13 @@ export function buildPanelData(
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
 
 	// Pick the pane that matches our row identity. When the caller has a
-	// paneId, find it in the filtered result; otherwise stay null —
-	// previously this took panes[0] which could be ANY pane (filter is
-	// off when paneId is null), and the panel would mis-render the title.
+	// paneId, find it in the filtered result directly. When no paneId is
+	// known but a cwd filter was used, the daemon narrows the list to the
+	// matching claude pane — take panes[0] (ADR-022 Phase 6: daemon resolves
+	// by cwd+command, client no longer walks the tmux snapshot).
 	const pane = paneId
 		? panes.find((p) => p.paneId === paneId) || null
-		: null;
+		: panes[0] ?? null;
 
 	let session: SessionCardT | null = null;
 	if (sessionUuid) {

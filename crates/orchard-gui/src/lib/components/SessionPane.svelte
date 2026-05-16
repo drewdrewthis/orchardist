@@ -65,8 +65,12 @@
 	// filter narrows the daemon's pane snapshot to this row.
 	const panelStore = createPanelStore();
 
+	// Two-pass fetch: first pass resolves by paneId (if known). When the
+	// conversation resolves but no pane attached, the cwd triggers a
+	// second pass via the daemon's cwd+command filter (ADR-022 Phase 6).
 	$effect(() => {
-		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null } });
+		const cwd = !pane && conversation?.cwd ? conversation.cwd : null;
+		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null, cwd } });
 	});
 
 	const data = $derived(
@@ -99,48 +103,10 @@
 	 */
 	let transcriptTurnsLength = $state(0);
 
-	// `here` flag still needs the tmux server's client → currentPane
-	// map. Read straight from the tmux Houdini store (already kicked
-	// off by LensSidebar; the cache means this is free).
+	// `here` flag needs the tmux server's client → currentPane map. Read
+	// straight from the tmux Houdini store (already kicked off by
+	// LensSidebar; the cache means this is free).
 	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
-
-	// Fallback pane derivation: when the OpenPanel resolver can't attach
-	// a pane (most often because daemon.claudeInstances doesn't include
-	// this session — see ADR-022's note on the claudeinstance subsystem
-	// rewrite), find a pane in the live tmux snapshot whose process cwd
-	// matches the conversation's cwd AND whose currentCommand is claude.
-	// The pane id is enough for the SessionComposer's mutation; we don't
-	// need to fully synthesise a TmuxPane object.
-	const fallbackPaneId = $derived.by((): string | null => {
-		if (pane?.paneId) return null; // OpenPanel already resolved one
-		const cwd = conversation?.cwd;
-		if (!cwd) return null;
-		for (const s of tmuxSnapshot.sessions) {
-			for (const w of s.windows ?? []) {
-				for (const p of w.panes ?? []) {
-					if (p.process?.cwd !== cwd) continue;
-					const cmd = (p.process?.command ?? "").toLowerCase();
-					if (!cmd.includes("claude")) continue;
-					return p.paneId;
-				}
-			}
-		}
-		return null;
-	});
-
-	const effectivePaneId = $derived(pane?.paneId ?? fallbackPaneId);
-	const effectiveSessionLabel = $derived.by((): string | null => {
-		if (pane?.window?.session?.name) return pane.window.session.name;
-		if (!fallbackPaneId) return null;
-		for (const s of tmuxSnapshot.sessions) {
-			for (const w of s.windows ?? []) {
-				for (const p of w.panes ?? []) {
-					if (p.paneId === fallbackPaneId) return s.name;
-				}
-			}
-		}
-		return null;
-	});
 
 	const title = $derived(
 		conversation?.agentName ||
@@ -469,10 +435,10 @@
 					sessionTitle={title}
 					bind:turnsLength={transcriptTurnsLength}
 				/>
-				{#if effectivePaneId}
+				{#if pane?.paneId}
 					<SessionComposer
-						paneId={effectivePaneId}
-						sessionLabel={effectiveSessionLabel ?? undefined}
+						paneId={pane.paneId}
+						sessionLabel={pane.window?.session?.name}
 						sessionKey={sessionKey}
 						turnsLength={transcriptTurnsLength}
 					/>

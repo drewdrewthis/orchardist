@@ -1,5 +1,5 @@
-query OpenPanel($paneIds: [String!]) {
-	tmuxPanes(filter: { paneIdIn: $paneIds }) {
+query OpenPanel($paneIds: [String!], $cwd: String) {
+	tmuxPanes(filter: { paneIdIn: $paneIds, cwd: $cwd, command: "claude" }) {
 		...PaneCard
 	}
 	claudeInstances {
