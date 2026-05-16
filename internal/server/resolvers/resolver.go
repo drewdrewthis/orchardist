@@ -156,6 +156,7 @@ func (r *Resolver) LoaderBundle() *loaders.ProvidersBundle {
 		Host:       r.HostProvider,
 		Git:        r.Git,
 		Ps:         r.PS,
+		Tmux:       r.Tmux,
 		Repos:      r.ReposProvider,
 		GH:         r.GH,
 		GHEnricher: r.GH,

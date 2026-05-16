@@ -681,6 +681,10 @@ type TmuxPaneFilter struct {
 	TitleContains *string `json:"titleContains,omitempty"`
 	// Only include dead (or non-dead) panes.
 	Dead *bool `json:"dead,omitempty"`
+	// Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis).
+	Cwd *string `json:"cwd,omitempty"`
+	// Only include panes whose foreground-process command basename contains this substring (case-insensitive, ADR-022 PanesByCommand axis).
+	Command *string `json:"command,omitempty"`
 }
 
 // The tmux daemon process on a host. v1 surfaces the local tmux only;

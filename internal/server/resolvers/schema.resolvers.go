@@ -432,10 +432,69 @@ func (r *queryResolver) TmuxSessions(ctx context.Context, filter *graphql1.TmuxS
 }
 
 // TmuxPanes is the resolver for the tmuxPanes field.
+//
+// When filter.Cwd or filter.Command are set, the resolver dispatches to the
+// PanesByCwd / PanesByCommand dataloaders (ADR-022 axis accessors) and then
+// applies remaining filter predicates. When neither is set it falls back to
+// the snapshot walk for the cheap, always-available filter axes (paneIdIn,
+// currentCommandIn, sessionIn, titleContains, dead).
 func (r *queryResolver) TmuxPanes(ctx context.Context, filter *graphql1.TmuxPaneFilter) ([]*graphql1.TmuxPane, error) {
 	if r.Tmux == nil {
 		return []*graphql1.TmuxPane{}, nil
 	}
+
+	host := string(r.Tmux.Host())
+	l := loaders.FromContext(ctx)
+
+	// ADR-022 axis: PanesByCwd — delegate to loader when cwd filter is set.
+	if filter != nil && filter.Cwd != nil && *filter.Cwd != "" {
+		if l != nil {
+			result, err := l.PanesByCwd.Load(ctx, loaders.CwdKey{HostID: host, Cwd: *filter.Cwd})()
+			if err != nil {
+				return nil, err
+			}
+			// Apply remaining cheap filters.
+			var out []*graphql1.TmuxPane
+			for _, pn := range result {
+				if paneGraphQLMatchesFilter(pn, filter) {
+					out = append(out, pn)
+				}
+			}
+			if out == nil {
+				return []*graphql1.TmuxPane{}, nil
+			}
+			return out, nil
+		}
+		// No loader context — fallback to provider direct call.
+		panePsGetter := newResolverPanePsGetter(r.PS)
+		raw := r.Tmux.PanesByCwd(host, *filter.Cwd, panePsGetter)
+		return projectPanesWithFilter(raw, filter), nil
+	}
+
+	// ADR-022 axis: PanesByCommand — delegate to loader when command filter is set.
+	if filter != nil && filter.Command != nil && *filter.Command != "" {
+		if l != nil {
+			result, err := l.PanesByCommand.Load(ctx, loaders.CommandKey{HostID: host, Command: *filter.Command})()
+			if err != nil {
+				return nil, err
+			}
+			var out []*graphql1.TmuxPane
+			for _, pn := range result {
+				if paneGraphQLMatchesFilter(pn, filter) {
+					out = append(out, pn)
+				}
+			}
+			if out == nil {
+				return []*graphql1.TmuxPane{}, nil
+			}
+			return out, nil
+		}
+		panePsGetter := newResolverPanePsGetter(r.PS)
+		raw := r.Tmux.PanesByCommand(host, *filter.Command, panePsGetter)
+		return projectPanesWithFilter(raw, filter), nil
+	}
+
+	// Default: snapshot walk for cheap filter axes.
 	snap := r.Tmux.Snapshot()
 	out := make([]*graphql1.TmuxPane, 0, len(snap.Panes))
 	for _, p := range snap.Panes {
@@ -531,9 +590,39 @@ func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.Contract
 }
 
 // ClaudeInstances is the resolver for the claudeInstances field.
+//
+// ADR-022 Phase 4: reimplemented as a view over Pane nodes filtered by command
+// "claude". Uses the PanesByCommand dataloader and projectPanesToClaudeInstances
+// to derive state from jsonl without going through the heartbeat subsystem.
+//
+// Falls back to the legacy heartbeat provider when Tmux is not wired (allows
+// incremental rollout: daemon can run with either path active).
 func (r *queryResolver) ClaudeInstances(ctx context.Context) ([]*graphql1.ClaudeInstance, error) {
+	if r.Tmux != nil {
+		host := string(r.Tmux.Host())
+		l := loaders.FromContext(ctx)
+		var panes []*graphql1.TmuxPane
+		if l != nil {
+			result, err := l.PanesByCommand.Load(ctx, loaders.CommandKey{HostID: host, Command: "claude"})()
+			if err != nil {
+				return nil, fmt.Errorf("claudeInstances: panes by command: %w", err)
+			}
+			panes = result
+		} else {
+			// No loader context — use provider directly (e.g. subscription emissions).
+			panePsGetter := newResolverPanePsGetter(r.PS)
+			raw := r.Tmux.PanesByCommand(host, "claude", panePsGetter)
+			panes = make([]*graphql1.TmuxPane, len(raw))
+			for i, pn := range raw {
+				panes[i] = projectPaneRich(pn)
+			}
+		}
+		return r.projectPanesToClaudeInstances(ctx, panes), nil
+	}
+
+	// Legacy heartbeat path — kept for deployments where Tmux is not yet wired.
 	if r.ClaudeInstanceProvider == nil {
-		return nil, fmt.Errorf("claudeinstance provider not initialised")
+		return []*graphql1.ClaudeInstance{}, nil
 	}
 	return r.ClaudeInstanceProvider.List(ctx)
 }

@@ -3481,6 +3481,12 @@ input TmuxPaneFilter {
 
   "Only include dead (or non-dead) panes."
   dead: Boolean
+
+  "Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis)."
+  cwd: String
+
+  "Only include panes whose foreground-process command basename contains this substring, case-insensitive (ADR-022 PanesByCommand axis)."
+  command: String
 }
 
 """
@@ -14051,7 +14057,7 @@ func (ec *executionContext) unmarshalInputTmuxPaneFilter(ctx context.Context, ob
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"paneIdIn", "currentCommandIn", "sessionIn", "titleContains", "dead"}
+	fieldsInOrder := [...]string{"paneIdIn", "currentCommandIn", "sessionIn", "titleContains", "dead", "cwd", "command"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -14093,6 +14099,20 @@ func (ec *executionContext) unmarshalInputTmuxPaneFilter(ctx context.Context, ob
 				return it, err
 			}
 			it.Dead = data
+		case "cwd":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("cwd"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Cwd = data
+		case "command":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("command"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Command = data
 		}
 	}
 	return it, nil

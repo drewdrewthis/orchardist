@@ -972,6 +972,23 @@ input TmuxPaneFilter {
 
   "Only include dead (or non-dead) panes."
   dead: Boolean
+
+  """
+  Only include panes whose foreground-process cwd equals `cwd` exactly or has
+  `cwd + '/'` as a prefix (server-side join via the ps provider, same path as
+  Worktree.tmuxPanes). Requires ps provider to be wired; panes whose cwd cannot
+  be resolved are silently skipped. ADR-022 axis: PanesByCwd.
+  """
+  cwd: String
+
+  """
+  Only include panes whose foreground-process command basename contains this
+  substring (case-insensitive). Uses the ps provider for the real command name
+  so node-wrapped CLIs (e.g. `node /usr/local/bin/claude`) resolve correctly;
+  falls back to `currentCommand` when ps is unavailable. ADR-022 axis:
+  PanesByCommand.
+  """
+  command: String
 }
 
 """

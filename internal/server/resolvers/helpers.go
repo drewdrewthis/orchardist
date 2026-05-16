@@ -281,6 +281,22 @@ func projectPane(p tmux.Pane) *graphql1.TmuxPane {
 	}
 }
 
+// projectPaneRich extends projectPane with CurrentCommand and CurrentPid,
+// and does not walk the window/session tree (the loaders path returns richer
+// objects; this variant is for the no-loader-context fallback).
+func projectPaneRich(p tmux.Pane) *graphql1.TmuxPane {
+	out := &graphql1.TmuxPane{
+		ID:             "TmuxPane:" + string(p.Key.Host) + ":" + p.Key.PaneID,
+		PaneID:         p.Key.PaneID,
+		CurrentCommand: p.CurrentCommand,
+	}
+	if p.CurrentPid > 0 {
+		pid := int64(p.CurrentPid)
+		out.CurrentPid = &pid
+	}
+	return out
+}
+
 func projectClient(c tmux.Client) *graphql1.TmuxClient {
 	return &graphql1.TmuxClient{
 		ID: "TmuxClient:" + string(c.Key.Host) + ":" + c.Key.ClientName,
@@ -339,6 +355,72 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// projectPanesWithFilter projects a []tmux.Pane to []*graphql1.TmuxPane and
+// applies the cheap scalar filters (paneIdIn, currentCommandIn, sessionIn,
+// titleContains, dead). Used by TmuxPanes after the cwd/command axis returns
+// a pre-filtered result set.
+func projectPanesWithFilter(raw []tmux.Pane, filter *graphql1.TmuxPaneFilter) []*graphql1.TmuxPane {
+	out := make([]*graphql1.TmuxPane, 0, len(raw))
+	for _, p := range raw {
+		if !paneMatchesFilter(p, filter) {
+			continue
+		}
+		out = append(out, projectPane(p))
+	}
+	if out == nil {
+		return []*graphql1.TmuxPane{}
+	}
+	return out
+}
+
+// paneGraphQLMatchesFilter applies cheap scalar predicates to an already-projected
+// *graphql1.TmuxPane — used after cwd/command axis loading returns gql-typed results.
+// The cwd/command fields are intentionally NOT re-checked here (they were already
+// the dispatch key).
+func paneGraphQLMatchesFilter(p *graphql1.TmuxPane, f *graphql1.TmuxPaneFilter) bool {
+	if f == nil || p == nil {
+		return true
+	}
+	if ids := f.PaneIDIn; len(ids) > 0 && !contains(ids, p.PaneID) {
+		return false
+	}
+	if cmds := f.CurrentCommandIn; len(cmds) > 0 && !contains(cmds, p.CurrentCommand) {
+		return false
+	}
+	return true
+}
+
+// resolverPanePsGetter adapts *ps.Provider to tmux.PanePsGetter for use in
+// TmuxPanes when no loader context is available (e.g. subscription emissions).
+type resolverPanePsGetter struct {
+	ps *ps.Provider
+}
+
+// newResolverPanePsGetter returns nil when ps is nil — PanesByCwd /
+// PanesByCommand handle a nil getter by falling back to CurrentCommand.
+func newResolverPanePsGetter(p *ps.Provider) tmux.PanePsGetter {
+	if p == nil {
+		return nil
+	}
+	return &resolverPanePsGetter{ps: p}
+}
+
+func (g *resolverPanePsGetter) CwdForPid(_ string, pid int) string {
+	cwd, err := g.ps.LoadCwd(context.Background(), pid)
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
+func (g *resolverPanePsGetter) CommandForPid(host string, pid int) string {
+	proc, _, err := g.ps.Get(context.Background(), ps.ProcessID{Host: host, PID: pid})
+	if err != nil {
+		return ""
+	}
+	return proc.Command
 }
 
 func (r *tmuxClientResolver) lookupClient(id string) (tmux.Client, bool) {
