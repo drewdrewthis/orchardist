@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -196,6 +198,131 @@ func (p *Provider) Server() ServerInfo {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.server
+}
+
+// ----------------------------------------------------------------------
+// Typed secondary-axis accessors (ADR-022: Pane is the node, one
+// snapshot read per accessor, no N+1 in the callers).
+// ----------------------------------------------------------------------
+
+// PaneByID returns the pane whose stable pane id (e.g. "%26") matches on
+// the given host, or (Pane{}, false) when not found.
+func (p *Provider) PaneByID(host, paneID string) (Pane, bool) {
+	snap := p.panes.Snapshot()
+	key := PaneKey{Host: HostID(host), PaneID: paneID}
+	pn, ok := snap[key]
+	return pn, ok
+}
+
+// PanesByCwd returns every pane on host whose foreground-process cwd
+// equals cwd exactly or has cwd+"/" as a prefix. The cwd is resolved via
+// the supplied psGetter; panes whose cwd cannot be resolved are silently
+// skipped. Returns [] (never nil).
+//
+// The psGetter is a narrow interface satisfied by *psprovider.Provider
+// via a thin adapter; it is passed in rather than stored on Provider to
+// keep the tmux package free of a ps import.
+func (p *Provider) PanesByCwd(host, cwd string, ps PanePsGetter) []Pane {
+	if cwd == "" {
+		return []Pane{}
+	}
+	snap := p.panes.Snapshot()
+	var out []Pane
+	for _, pn := range snap {
+		if string(pn.Key.Host) != host {
+			continue
+		}
+		if pn.CurrentPid <= 0 {
+			continue
+		}
+		paneCwd := ps.CwdForPid(host, pn.CurrentPid)
+		if paneCwd == "" {
+			continue
+		}
+		if paneCwd != cwd && !strings.HasPrefix(paneCwd, cwd+"/") {
+			continue
+		}
+		out = append(out, pn)
+	}
+	if out == nil {
+		return []Pane{}
+	}
+	return out
+}
+
+// PanesByCommand returns every pane on host whose foreground command
+// basename contains basenameContains (case-insensitive). The command is
+// cross-checked via the supplied psGetter so node-wrapped CLIs (e.g.
+// `node /usr/local/bin/claude`) resolve to their real basename instead of
+// the raw tmux pane_current_command string. Returns [] (never nil).
+func (p *Provider) PanesByCommand(host, basenameContains string, ps PanePsGetter) []Pane {
+	if basenameContains == "" {
+		return []Pane{}
+	}
+	needle := strings.ToLower(basenameContains)
+	snap := p.panes.Snapshot()
+	var out []Pane
+	for _, pn := range snap {
+		if string(pn.Key.Host) != host {
+			continue
+		}
+		if paneCommandMatchesClaude(pn, host, ps, needle) {
+			out = append(out, pn)
+		}
+	}
+	if out == nil {
+		return []Pane{}
+	}
+	return out
+}
+
+// PanesBySession returns every pane whose tmux session name equals
+// sessionName on the given host. Returns [] (never nil).
+func (p *Provider) PanesBySession(host, sessionName string) []Pane {
+	if sessionName == "" {
+		return []Pane{}
+	}
+	snap := p.panes.Snapshot()
+	var out []Pane
+	for _, pn := range snap {
+		if string(pn.Key.Host) != host {
+			continue
+		}
+		if pn.WindowKey.Session != sessionName {
+			continue
+		}
+		out = append(out, pn)
+	}
+	if out == nil {
+		return []Pane{}
+	}
+	return out
+}
+
+// paneCommandMatchesClaude checks whether a pane's foreground command
+// (by ps basename) contains needle (lower-case). Falls back to the raw
+// tmux CurrentCommand when ps cannot resolve the pid.
+func paneCommandMatchesClaude(pn Pane, host string, ps PanePsGetter, needle string) bool {
+	if ps != nil && pn.CurrentPid > 0 {
+		cmd := ps.CommandForPid(host, pn.CurrentPid)
+		if cmd != "" {
+			return strings.Contains(strings.ToLower(filepath.Base(cmd)), needle)
+		}
+	}
+	// Fallback to tmux pane_current_command (may be version string on macOS).
+	return strings.Contains(strings.ToLower(filepath.Base(pn.CurrentCommand)), needle)
+}
+
+// PanePsGetter is the narrow ps surface the secondary-axis accessors need.
+// *psprovider.Provider satisfies this via a thin adapter (see loaders package).
+// Tests implement it inline.
+type PanePsGetter interface {
+	// CwdForPid returns the working directory of the process with the given
+	// pid on the host, or "" when unavailable.
+	CwdForPid(host string, pid int) string
+	// CommandForPid returns the command basename (e.g. "claude") for the
+	// given pid on the host, or "" when unavailable.
+	CommandForPid(host string, pid int) string
 }
 
 // CapturePane shells out via the adapter; not cached. The schema docs
