@@ -591,40 +591,32 @@ func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.Contract
 
 // ClaudeInstances is the resolver for the claudeInstances field.
 //
-// ADR-022 Phase 4: reimplemented as a view over Pane nodes filtered by command
-// "claude". Uses the PanesByCommand dataloader and projectPanesToClaudeInstances
-// to derive state from jsonl without going through the heartbeat subsystem.
-//
-// Falls back to the legacy heartbeat provider when Tmux is not wired (allows
-// incremental rollout: daemon can run with either path active).
+// ADR-022 Phase 4/5: pane-first path — a view over Pane nodes filtered by
+// command "claude". Uses the PanesByCommand dataloader and
+// projectPanesToClaudeInstances to derive state from jsonl snapshots.
 func (r *queryResolver) ClaudeInstances(ctx context.Context) ([]*graphql1.ClaudeInstance, error) {
-	if r.Tmux != nil {
-		host := string(r.Tmux.Host())
-		l := loaders.FromContext(ctx)
-		var panes []*graphql1.TmuxPane
-		if l != nil {
-			result, err := l.PanesByCommand.Load(ctx, loaders.CommandKey{HostID: host, Command: "claude"})()
-			if err != nil {
-				return nil, fmt.Errorf("claudeInstances: panes by command: %w", err)
-			}
-			panes = result
-		} else {
-			// No loader context — use provider directly (e.g. subscription emissions).
-			panePsGetter := newResolverPanePsGetter(r.PS)
-			raw := r.Tmux.PanesByCommand(host, "claude", panePsGetter)
-			panes = make([]*graphql1.TmuxPane, len(raw))
-			for i, pn := range raw {
-				panes[i] = projectPaneRich(pn)
-			}
-		}
-		return r.projectPanesToClaudeInstances(ctx, panes), nil
-	}
-
-	// Legacy heartbeat path — kept for deployments where Tmux is not yet wired.
-	if r.ClaudeInstanceProvider == nil {
+	if r.Tmux == nil {
 		return []*graphql1.ClaudeInstance{}, nil
 	}
-	return r.ClaudeInstanceProvider.List(ctx)
+	host := string(r.Tmux.Host())
+	l := loaders.FromContext(ctx)
+	var panes []*graphql1.TmuxPane
+	if l != nil {
+		result, err := l.PanesByCommand.Load(ctx, loaders.CommandKey{HostID: host, Command: "claude"})()
+		if err != nil {
+			return nil, fmt.Errorf("claudeInstances: panes by command: %w", err)
+		}
+		panes = result
+	} else {
+		// No loader context — use provider directly (e.g. subscription emissions).
+		panePsGetter := newResolverPanePsGetter(r.PS)
+		raw := r.Tmux.PanesByCommand(host, "claude", panePsGetter)
+		panes = make([]*graphql1.TmuxPane, len(raw))
+		for i, pn := range raw {
+			panes[i] = projectPaneRich(pn)
+		}
+	}
+	return r.projectPanesToClaudeInstances(ctx, panes), nil
 }
 
 // Peers is the resolver for the peers field.
@@ -808,7 +800,7 @@ func (r *queryResolver) DaemonState(ctx context.Context) (*graphql1.DaemonState,
 		{Name: "tmux", Configured: r.Tmux != nil},
 		{Name: "claudeProjects", Configured: r.ClaudeProjects != nil},
 		{Name: "claudeAccount", Configured: r.ClaudeAccount != nil},
-		{Name: "claudeInstance", Configured: r.ClaudeInstanceProvider != nil},
+		{Name: "claudeInstance", Configured: r.Tmux != nil},
 		{Name: "hostService", Configured: r.HostServiceProvider != nil},
 		{Name: "contracts", Configured: r.ContractsProvider != nil},
 		{Name: "gh", Configured: r.GH != nil},
@@ -1317,21 +1309,22 @@ func (r *tmuxPaneResolver) Process(ctx context.Context, obj *graphql1.TmuxPane) 
 	return projectProcess(&proc, host), nil
 }
 
-// ClaudeInstance resolves the ClaudeInstance running inside this pane (nil when the provider is unwired or no tracked instance matches obj.ID). O(N) walk over cached instances; typically <10 per host so no dataloader.
+// ClaudeInstance resolves the ClaudeInstance running inside this pane.
+// Pane-first path (ADR-022 Phase 5): builds the instance directly from the
+// pane when the pane's command is "claude". Returns nil when Tmux is not
+// wired or the pane is not a claude pane.
 func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.TmuxPane) (*graphql1.ClaudeInstance, error) {
-	if r.Resolver.ClaudeInstanceProvider == nil {
+	if r.Tmux == nil || obj == nil {
 		return nil, nil
 	}
-	instances, err := r.Resolver.ClaudeInstanceProvider.List(ctx)
-	if err != nil {
-		return nil, err
+	// Only project panes running claude.
+	if obj.CurrentCommand != "claude" {
+		return nil, nil
 	}
-	for _, inst := range instances {
-		if inst.Pane != nil && inst.Pane.ID == obj.ID {
-			return inst, nil
-		}
-	}
-	return nil, nil
+	host := string(r.Tmux.Host())
+	qr := &queryResolver{r.Resolver}
+	inst := qr.buildClaudeInstanceFromPane(ctx, obj, host, nil, nil)
+	return inst, nil
 }
 
 // Content is the resolver for tmuxPane.content.

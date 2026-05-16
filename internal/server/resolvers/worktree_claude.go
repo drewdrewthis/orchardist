@@ -2,9 +2,9 @@
 // (#540): server-side join of Claude REPL process cwd against worktree
 // path so clients don't repeat the cwd→path matching work.
 //
-// Mirrors worktree_tmux.go in shape: the resolver methods themselves
-// live in schema.resolvers.go (gqlgen owns that file); the helpers stay
-// here.
+// ADR-022 Phase 5: uses the pane-first path (Query.claudeInstances via
+// projectPanesToClaudeInstances) instead of the heartbeat provider.
+// Mirrors worktree_tmux.go in shape.
 
 package resolvers
 
@@ -15,27 +15,16 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
-// matchClaudeInstancesForWorktree enumerates every ClaudeInstance the
-// daemon knows about and keeps only those whose resolved process cwd
-// equals obj.Path exactly OR starts with obj.Path+"/". Same matching
-// rule as matchPanesForWorktree (worktree_tmux.go) — the worktree path
-// is the canonical anchor.
+// matchClaudeInstancesForWorktree returns every ClaudeInstance whose
+// resolved process cwd lies under obj.Path. Uses the pane-first
+// Query.claudeInstances path (ADR-022 Phase 5).
 //
-// Resolves cwd via the ps provider (LoadCwd by pid) when the
-// ClaudeInstance carries a non-zero process pid. Instances whose pid is
-// unknown OR whose cwd cannot be resolved are silently skipped — same
-// contract as the tmux side.
-//
-// Returns the matching instances in deterministic id-ascending order.
-// Never returns nil.
+// Returns [] (never nil).
 func matchClaudeInstancesForWorktree(ctx context.Context, r *worktreeResolver, obj *graphql1.Worktree) ([]*graphql1.ClaudeInstance, error) {
-	if r.ClaudeInstanceProvider == nil {
-		return []*graphql1.ClaudeInstance{}, nil
-	}
-
-	all, err := r.ClaudeInstanceProvider.List(ctx)
+	// Re-use the resolver-level ClaudeInstances which is already pane-first.
+	all, err := r.Query().ClaudeInstances(ctx)
 	if err != nil {
-		return nil, err
+		return []*graphql1.ClaudeInstance{}, nil
 	}
 
 	out := make([]*graphql1.ClaudeInstance, 0, len(all))
@@ -44,8 +33,7 @@ func matchClaudeInstancesForWorktree(ctx context.Context, r *worktreeResolver, o
 			continue
 		}
 		// Federation attribution: instance must live on the same host
-		// as the worktree. Worktree.Host is set by toGraphQLWorktree
-		// (currently "local"; ws-F populates per-peer).
+		// as the worktree.
 		if inst.Process != nil && inst.Process.Host != nil &&
 			inst.Process.Host.ID != obj.Host {
 			continue
@@ -67,8 +55,7 @@ func matchClaudeInstancesForWorktree(ctx context.Context, r *worktreeResolver, o
 
 // loadInstanceCwd returns the cwd for a ClaudeInstance, preferring the
 // already-resolved process cwd when present and falling back to a fresh
-// ps lookup by pid. Returns "" when no cwd can be derived (no process,
-// no pid, or ps provider unwired).
+// ps lookup by pid. Returns "" when no cwd can be derived.
 func loadInstanceCwd(ctx context.Context, r *worktreeResolver, inst *graphql1.ClaudeInstance) string {
 	if inst.Process == nil {
 		return ""
@@ -91,10 +78,6 @@ func loadInstanceCwd(ctx context.Context, r *worktreeResolver, inst *graphql1.Cl
 // cwd). Used by ClaudeInstance.worktree (the inverse of
 // matchClaudeInstancesForWorktree). Returns (nil, nil) when no worktree
 // contains cwd.
-//
-// "Deepest" matters because nested worktrees share a prefix — given
-// `/repo` and `/repo/.worktrees/feat`, a cwd of `/repo/.worktrees/feat/src`
-// must match the inner worktree, not the outer one.
 func findWorktreeForCwd(ctx context.Context, r *Resolver, cwd string) (*graphql1.Worktree, error) {
 	if r.Git == nil || cwd == "" {
 		return nil, nil

@@ -78,7 +78,6 @@ type Server struct {
 	tmuxProv       *tmux.Provider
 	claudeProjects *claudeprojects.Provider
 	claudeAccount  *claudeaccount.Provider
-	claudeInstance *claudeinstance.Provider
 	hostService    *hostservice.Provider
 	contracts      *contracts.Provider
 	gh             *gh.Provider
@@ -158,15 +157,6 @@ func WithClaudeAccount(p *claudeaccount.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.claudeAccount = p
 		r.WithClaudeAccount(p)
-	}
-}
-
-// WithClaudeInstance attaches a claudeinstance provider. Run() starts
-// the provider (initial heartbeat sweep) and the fsnotify+poll watcher.
-func WithClaudeInstance(p *claudeinstance.Provider) Option {
-	return func(s *Server, r *resolvers.Resolver) {
-		s.claudeInstance = p
-		r.WithClaudeInstance(p)
 	}
 }
 
@@ -348,44 +338,26 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("start gh provider: %w", err)
 		}
 	}
-	if s.claudeInstance != nil {
-		// Run the sidecar janitor BEFORE the first provider sweep so any
-		// orphan files left by the old hook are removed before we read the
-		// heartbeat directory. liveSessions reads the tmux snapshot which is
-		// already populated above (tmuxProv.Start completed). Errors are
-		// non-blocking — the janitor logs and continues.
-		janitor := claudeinstance.NewSidecarJanitor(
-			claudeinstance.ResolveDir(),
-			func(_ context.Context) (map[string]bool, error) {
-				// If tmux isn't wired we cannot enumerate live sessions, and
-				// returning an empty set would tell the janitor every sidecar
-				// is orphaned — which would delete files for sessions that are
-				// genuinely alive. Surface the unavailability as an error so
-				// the janitor's existing error path skips the sweep.
-				// (https://github.com/drewdrewthis/git-orchard-rs/pull/606#discussion_r3243103673)
-				if s.tmuxProv == nil {
-					return nil, errors.New("tmux provider unavailable; skipping sidecar sweep")
-				}
-				snap := s.tmuxProv.Snapshot()
-				live := make(map[string]bool, len(snap.Sessions))
-				for k := range snap.Sessions {
-					live[k.Name] = true
-				}
-				return live, nil
-			},
-			s.logger,
-		)
-		_ = janitor.Sweep(ctx)
+	// Run the sidecar janitor at startup to remove orphaned heartbeat files
+	// left by the old hook script. Errors are non-blocking — the janitor
+	// logs and continues.
+	janitor := claudeinstance.NewSidecarJanitor(
+		claudeinstance.ResolveDir(),
+		func(_ context.Context) (map[string]bool, error) {
+			if s.tmuxProv == nil {
+				return nil, errors.New("tmux provider unavailable; skipping sidecar sweep")
+			}
+			snap := s.tmuxProv.Snapshot()
+			live := make(map[string]bool, len(snap.Sessions))
+			for k := range snap.Sessions {
+				live[k.Name] = true
+			}
+			return live, nil
+		},
+		s.logger,
+	)
+	_ = janitor.Sweep(ctx)
 
-		if err := s.claudeInstance.Start(ctx); err != nil {
-			return fmt.Errorf("start claudeinstance provider: %w", err)
-		}
-		// The watcher drives Refresh on fsnotify + 5s poll. Errors are
-		// non-fatal — the watcher itself logs and falls back to poll-only
-		// — so we ignore the Run return.
-		watcher := claudeinstance.NewWatcher(s.claudeInstance, s.logger)
-		go func() { _ = watcher.Run(ctx) }()
-	}
 	if s.peerProxy != nil {
 		if err := s.peerProxy.Start(ctx); err != nil {
 			return fmt.Errorf("peerproxy start: %w", err)
@@ -413,9 +385,6 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		if s.claudeProjects != nil {
 			_ = s.claudeProjects.Stop()
-		}
-		if s.claudeInstance != nil {
-			_ = s.claudeInstance.Stop()
 		}
 		s.logger.Info("orchard daemon stopped")
 		return nil

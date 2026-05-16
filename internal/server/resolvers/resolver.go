@@ -8,7 +8,6 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
@@ -41,11 +40,10 @@ type Resolver struct {
 	PS                     *ps.Provider
 	Tmux                   *tmux.Provider
 	ClaudeProjects         *claudeprojects.Provider
-	ClaudeAccount          *claudeaccount.Provider
-	HostServiceProvider    *hostservice.Provider
-	ContractsProvider      *contracts.Provider
-	ClaudeInstanceProvider *claudeinstance.Provider
-	GH                     *gh.Provider
+	ClaudeAccount       *claudeaccount.Provider
+	HostServiceProvider *hostservice.Provider
+	ContractsProvider   *contracts.Provider
+	GH                  *gh.Provider
 	PeerProxy              *peerproxy.Provider
 	LocalEvents            *peerproxy.LocalInvalidator
 }
@@ -121,14 +119,6 @@ func (r *Resolver) WithContracts(p *contracts.Provider) *Resolver {
 // WithGH wires the gh provider.
 func (r *Resolver) WithGH(p *gh.Provider) *Resolver {
 	r.GH = p
-	return r
-}
-
-// WithClaudeInstance wires the claudeinstance provider. The field is named
-// ClaudeInstanceProvider to disambiguate from gqlgen's auto-generated
-// ClaudeInstance() resolver-getter method.
-func (r *Resolver) WithClaudeInstance(p *claudeinstance.Provider) *Resolver {
-	r.ClaudeInstanceProvider = p
 	return r
 }
 
