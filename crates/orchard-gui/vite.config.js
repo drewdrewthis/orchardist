@@ -31,8 +31,19 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` AND `tests/`.
+      // Without `tests/**` in the ignore list, Vite's file watcher
+      // picks up Playwright spec edits + test-results writes during a
+      // suite run and pushes HMR / page-reload events to the running
+      // test browser, which then races against Houdini's WS subscription
+      // through the Vite proxy and wedges into EPIPE. The proxy goes
+      // bad, the next test's lens fetch hangs as `Loading…` forever.
+      ignored: [
+        "**/src-tauri/**",
+        "**/tests/**",
+        "**/playwright-report/**",
+        "**/test-results/**",
+      ],
     },
     // Proxy daemon GraphQL through Vite during browser dev so the GUI can be
     // smoke-tested in a regular browser without Tauri's CORS-bypass. In Tauri,

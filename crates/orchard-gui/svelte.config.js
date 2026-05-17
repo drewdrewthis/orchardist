@@ -16,7 +16,8 @@ const config = {
       // The houdini-svelte plugin injects the same alias via Vite, but
       // SvelteKit's tsconfig generator only picks aliases up from
       // `kit.alias`. Register here so svelte-check / IDE resolve `$houdini`.
-      $houdini: "./$houdini",
+      $houdini: "./.houdini",
+      "$houdini/*": "./.houdini/*",
     },
   },
 };
