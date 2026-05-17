@@ -11,3 +11,5 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .claude/ralph-loop.local.md
+/test-results
+/playwright-report
