@@ -82,7 +82,7 @@
 	}
 </script>
 
-<div class="flex flex-col gap-1 px-3 py-2.5 border-t-[0.5px] border-line bg-surface">
+<div class="composer-wrap flex flex-col gap-1 px-3 pt-2.5 border-t-[0.5px] border-line bg-surface">
 	{#if error}
 		<div class="mono flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-bad-fg rounded-md bg-[color-mix(in_oklab,var(--color-bad-fg)_10%,transparent)] border-[0.5px] border-[color-mix(in_oklab,var(--color-bad-fg)_30%,var(--color-line))]">
 			<Icon name="alert" size={11} />
@@ -107,6 +107,13 @@
 			spellcheck="true"
 			enterkeyhint="send"
 			{...{ autocorrect: "on" }}
+			onfocus={() => {
+				// iOS Safari with position:fixed shell won't auto-scroll the
+				// textarea above the keyboard. Manually nudge it into view on
+				// focus — small timeout lets the keyboard animation start so
+				// scrollIntoView lands on the post-keyboard viewport.
+				setTimeout(() => textarea?.scrollIntoView({ block: "end", behavior: "smooth" }), 100);
+			}}
 			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[16px] leading-[1.4] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
 		></textarea>
 		<button
@@ -157,5 +164,12 @@
 		font-size: 10.5px;
 		min-height: 14px;
 		padding: 0 2px;
+	}
+	/* iOS safe-area bottom — owned by the composer, not the outer shell.
+	   max(10px, env(...)) gives a consistent breathing room on non-notched
+	   screens while honoring the home-indicator on iPhone X+. Without this,
+	   the textarea was being clipped past the bottom of the viewport. */
+	.composer-wrap {
+		padding-bottom: max(10px, env(safe-area-inset-bottom, 0));
 	}
 </style>

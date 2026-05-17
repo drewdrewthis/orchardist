@@ -99,18 +99,53 @@
 		expandedTools = next;
 	}
 
+	// Staged load: a quick first-paint window, escalating to wider windows
+	// if the parser sees no turns yet. Claude Code re-appends metadata
+	// records (agent-name / permission-mode / pr-link / summary) on every
+	// session resume — those are filtered by `parseTranscript`, so a thin
+	// lastN can land entirely inside the metadata footer and look empty
+	// even on an active session. Escalate through 20 → 60 → 200 → 1000
+	// until we either find turns or hit the cap.
+	let loadToken = 0;
+	const WINDOWS = [20, 60, 200, 1000];
 	async function load() {
+		const myToken = ++loadToken;
 		try {
-			// Pass sessionUuid so the reader can hit the daemon's /v1/conversations/<uuid>/jsonl?lastN=
-			// endpoint directly — skips the Tauri filesystem round-trip and works in the
-			// browser dev preview through the Vite proxy.
-			const chunk = await readTranscript(path, undefined, sessionUuid);
-			const parsed = parseTranscript(chunk.text);
-			turns = parsed;
-			totalSize = chunk.size;
-			truncated = chunk.truncated;
-			status = parsed.length === 0 ? "empty" : "ok";
+			let foundTurns = false;
+			for (const n of WINDOWS) {
+				const chunk = await readTranscript(path, undefined, sessionUuid, n);
+				if (myToken !== loadToken) return;
+				const parsed = parseTranscript(chunk.text);
+				totalSize = chunk.size;
+				truncated = chunk.truncated;
+				if (parsed.length > 0) {
+					turns = parsed;
+					status = "ok";
+					foundTurns = true;
+					if (n < 200) {
+						void (async () => {
+							try {
+								const wide = await readTranscript(path, undefined, sessionUuid, 200);
+								if (myToken !== loadToken) return;
+								const wideTurns = parseTranscript(wide.text);
+								if (wideTurns.length > turns.length) {
+									turns = wideTurns;
+									totalSize = wide.size;
+									truncated = wide.truncated;
+								}
+							} catch {}
+						})();
+					}
+					break;
+				}
+				if (!chunk.truncated) break;
+			}
+			if (!foundTurns) {
+				turns = [];
+				status = "empty";
+			}
 		} catch (err) {
+			if (myToken !== loadToken) return;
 			if ((err as Error)?.message === TRANSCRIPT_UNSUPPORTED) {
 				status = "unsupported";
 			} else {
@@ -120,9 +155,16 @@
 		}
 	}
 
+	// Only treat sessionUuid as the row-identity key. `path` is often
+	// `""` on first mount (before Conversation resolves jsonlPath) and
+	// then upgrades to the real path on the same uuid — that's a SAME
+	// session, NOT a reason to wipe turns and re-fetch from scratch.
+	let lastLoadedUuid: string | undefined;
 	$effect(() => {
-		void path;
-		void sessionUuid;
+		const uuidKey = sessionUuid ?? path; // fall back to path when no uuid (rare)
+		void path; // still track path so a uuid-less call re-fires on path change
+		if (uuidKey === lastLoadedUuid) return;
+		lastLoadedUuid = uuidKey;
 		status = "loading";
 		turns = [];
 		errMsg = null;
@@ -210,21 +252,40 @@
 	}
 
 	$effect(() => {
-		// Subscribe to conversationChanged for this session — the daemon
-		// fsnotify watcher already debounces fs events, so each push
-		// corresponds to a real JSONL append. No polling.
+		// Subscribe to conversationChanged for this session. The daemon
+		// fsnotify watcher debounces fs events, but when the user is
+		// VIEWING this session in the PWA while Claude is actively writing
+		// (e.g. opening "this chat"), the push rate can still be very
+		// high — every token write triggers a JSONL append → push →
+		// load() → fetch + parse. Without an extra client-side guard the
+		// renderer burns CPU on the parse/virtualizer loop and Chrome
+		// closes the page. Coalesce bursts with a small trailing debounce.
 		if (!sessionUuid) return;
 		const key = sessionKey ?? sessionUuid;
+		let pending = false;
+		let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+		const runReload = async () => {
+			if (pending) return;
+			pending = true;
+			try {
+				await load();
+				advancePendingStates(key, turns);
+			} finally {
+				pending = false;
+			}
+		};
 		const unsub = subscribeConversation(
 			sessionUuid,
-			async () => {
-				await load();
-				// After load() updates `turns`, advance pending states.
-				advancePendingStates(key, turns);
+			() => {
+				if (debounceTimer) clearTimeout(debounceTimer);
+				debounceTimer = setTimeout(runReload, 350);
 			},
 			(err) => console.warn("[transcript] subscription error:", err),
 		);
-		return () => unsub();
+		return () => {
+			if (debounceTimer) clearTimeout(debounceTimer);
+			unsub();
+		};
 	});
 
 	/** 90s stall timer — fires for each pending turn in "sent" state. */
@@ -375,6 +436,73 @@
 					… earlier turns omitted ({(totalSize / 1024).toFixed(0)}KB total)
 				</div>
 			{/if}
+			<!-- For short transcripts (< 60 turns) render directly without the
+				 virtualizer. The virtualizer race on `bind:this={scrollHost}`
+				 in some Svelte 5 render orderings leaves the container empty
+				 even after `turns` is populated. Direct rendering is fine at
+				 this scale and survives the race. -->
+			{#if turns.length < 60}
+				{#each turns as turn, idx (turn.uuid + ":" + idx)}
+				<div
+					class="turn relative w-full"
+					class:opacity-65={turn.toolFeedback}
+					class:turn--user={turn.role === "user"}
+					class:turn--assistant={turn.role === "assistant"}
+					class:turn--grouped={!showRoleHeader(idx)}
+					data-role={turn.role}
+					data-index={idx}
+				>
+					{#if showRoleHeader(idx)}
+						<div class="turn-header mono">
+							<span class="turn-header__role">{turn.role}</span>
+							{#if turn.model}
+								<span class="dimest">·</span>
+								<span class="dimer">{modelLabel(turn.model)}</span>
+							{/if}
+							{#if turn.timestamp}
+								<span class="dimest">·</span>
+								<span class="dimer">{timeStr(turn.timestamp)}</span>
+							{/if}
+						</div>
+					{/if}
+					{#each turn.blocks as block, i (i)}
+						{#if block.kind === "text"}
+							<div class="turn-bubble prose-chat">{@html renderMarkdown(block.text)}</div>
+						{:else if block.kind === "thinking"}
+							<details class="turn-thinking text-[12.5px]">
+								<summary class="dimer mono cursor-pointer text-[11px] py-0.5">thinking</summary>
+								<div class="text-[13px] leading-[1.55] break-words text-fg prose-chat pt-1">{@html renderMarkdown(block.text)}</div>
+							</details>
+						{:else if block.kind === "tool_use"}
+							<div class="rounded-md bg-surface-2 border-[0.5px] border-line overflow-hidden min-w-0 w-full">
+								<button
+									class="mono flex items-center gap-1.5 w-full px-2 py-1 bg-transparent border-0 text-[11.5px] text-left cursor-pointer text-fg"
+									onclick={() => toggleTool(block.toolId || `${turn.uuid}-tu-${i}`)}
+								>
+									<Icon name="terminal" size={11} />
+									<span class="font-medium">{block.name}</span>
+									<span class="dimer flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{blockSummary(block)}</span>
+									<span class="dimer text-[10px]">{expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`) ? "▾" : "▸"}</span>
+								</button>
+								{#if expandedTools.has(block.toolId || `${turn.uuid}-tu-${i}`)}
+									<pre class="mono m-0 px-2.5 py-2 text-[11.5px] leading-[1.5] max-h-80 overflow-auto bg-surface border-t-[0.5px] border-line whitespace-pre-wrap break-words">{JSON.stringify(block.input, null, 2)}</pre>
+								{/if}
+							</div>
+						{:else if block.kind === "tool_result"}
+							<div
+								class="rounded-md bg-surface-2 border-[0.5px] overflow-hidden min-w-0 w-full"
+								class:border-line={!block.isError}
+							>
+								<div class="mono flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-fg">
+									<Icon name="check" size={11} />
+									<span class="dimer">{block.text.slice(0, 80).replace(/\s+/g, " ")}</span>
+								</div>
+							</div>
+						{/if}
+					{/each}
+				</div>
+				{/each}
+			{:else}
 			<div class="relative w-full" style="height: {$virtualizer.getTotalSize()}px;">
 				{#each $virtualizer.getVirtualItems() as vRow (vRow.key)}
 					{@const turn = turns[vRow.index]}
@@ -451,6 +579,7 @@
 					{/if}
 				{/each}
 			</div>
+			{/if}
 
 			<!-- Pending turns rendered BELOW the real virtualizer list -->
 			{#if pendingTurns.length > 0}

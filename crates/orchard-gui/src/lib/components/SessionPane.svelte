@@ -83,6 +83,18 @@
 	const worktree = $derived(data?.worktree ?? null);
 
 	/**
+	 * The pane id we trust for chat sends. Prefer the daemon-resolved
+	 * `pane.paneId` (carries full pane metadata), but fall back to the
+	 * `paneId` prop the sidebar passed — that one is known the moment
+	 * the row is tapped, so the composer renders without waiting for
+	 * the OpenPanel round-trip. Same reasoning for `effectiveSessionUuid`.
+	 */
+	const effectivePaneId = $derived(pane?.paneId ?? paneId ?? null);
+	const effectiveSessionUuid = $derived(
+		conversation?.sessionUuid ?? session?.sessionUuid ?? sessionUuid ?? null,
+	);
+
+	/**
 	 * Stable session key for pending turns. Prefer sessionUuid (stable
 	 * across pane respawns); fall back to paneId when no uuid is known.
 	 */
@@ -424,21 +436,21 @@
 			</div>
 		</div>
 
-		{#if loading && !data}
+		{#if loading && !data && !effectiveSessionUuid && !effectivePaneId}
 			<div class="conv-empty"><span class="dimer">Loading…</span></div>
-		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
+		{:else if view === "chat" && (effectiveSessionUuid || effectivePaneId)}
 			<div class="flex-1 min-h-0 flex flex-col">
 				<TranscriptView
-					path={conversation.jsonlPath}
-					sessionUuid={conversation.sessionUuid}
+					path={conversation?.jsonlPath ?? ""}
+					sessionUuid={(conversation?.sessionUuid ?? effectiveSessionUuid) ?? undefined}
 					sessionKey={sessionKey || undefined}
 					sessionTitle={title}
 					bind:turnsLength={transcriptTurnsLength}
 				/>
-				{#if pane?.paneId}
+				{#if effectivePaneId}
 					<SessionComposer
-						paneId={pane.paneId}
-						sessionLabel={pane.window?.session?.name}
+						paneId={effectivePaneId}
+						sessionLabel={pane?.window?.session?.name}
 						sessionKey={sessionKey}
 						turnsLength={transcriptTurnsLength}
 					/>

@@ -116,7 +116,24 @@ export class AppStore {
 	// Hydrate theme + a few other UI preferences from localStorage at boot
 	// so they survive reloads. SPA-only (Tauri / browser), no SSR.
 	theme: Theme = $state(hydrateLocalStorage("orchard:ui:theme", "dark") as Theme);
-	surface: Surface = $state("desktop");
+	// Initial guess at construct time — `+page.svelte`'s resize listener
+	// will correct this on mount. Without this guess, the store boots as
+	// "desktop" on phones too, so a fast first tap can race ahead of the
+	// listener and produce a desktop-shaped tab (view="terminal" when a
+	// paneId is present), which then renders the "no tmux pane" empty
+	// state because the browser can't host a PTY.
+	surface: Surface = $state(
+		typeof window !== "undefined" && window.innerWidth < 768 ? "mobile" : "desktop",
+	);
+	/**
+	 * Browser-reported online flag. `+page.svelte` arms `online`/`offline`
+	 * listeners on mount; the layouts surface this as an obvious banner so
+	 * the user knows when the daemon is unreachable (vs. just slow).
+	 */
+	online: boolean = $state(
+		typeof navigator !== "undefined" ? navigator.onLine : true,
+	);
+	setOnline = (v: boolean) => { this.online = v; };
 	accentHue = $state(Number(hydrateLocalStorage("orchard:ui:accent-hue", "215")) || 215);
 	density: "comfortable" | "compact" = $state(
 		hydrateLocalStorage("orchard:ui:density", "comfortable") as "comfortable" | "compact",

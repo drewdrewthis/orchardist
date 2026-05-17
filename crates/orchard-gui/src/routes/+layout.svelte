@@ -30,8 +30,8 @@
 	// Houdini's hydrate (records reference fields the runtime no longer
 	// asks for, or vice-versa). Bumping the key effectively flushes the
 	// stale snapshot for every connected client.
-	const CACHE_KEY = "orchard:houdini:cache:v2";
-	const STALE_CACHE_KEYS = ["orchard:houdini:cache:v1"];
+	const CACHE_KEY = "orchard:houdini:cache:v3";
+	const STALE_CACHE_KEYS = ["orchard:houdini:cache:v1", "orchard:houdini:cache:v2"];
 
 	function hydrateHoudiniCache() {
 		// Always purge known stale keys first — defensive cleanup.
@@ -86,6 +86,36 @@
 		const stopTick = store.startNowTick();
 		store.hydrateChatRooms();
 		const subPromise = store.subscribeChat();
+
+		// PWA self-update: on standalone iOS the browser doesn't auto-check
+		// for SW updates, so a deployed fix can sit dormant while users see
+		// the old bundle from disk cache. Force an update check on every
+		// boot + on every visibility-restored. When a new SW *replaces an
+		// existing controller*, reload so the new bundle takes effect.
+		//
+		// First-install guard: `controllerchange` ALSO fires when a freshly
+		// registered SW claims an uncontrolled page (no prior controller).
+		// Reloading there → next boot registers SW → first install → reload
+		// → infinite loop ("black on reload"). Skip reload unless the page
+		// HAD a controller before this update, captured BEFORE registration.
+		let swReloading = false;
+		if ("serviceWorker" in navigator) {
+			const hadControllerAtBoot = navigator.serviceWorker.controller !== null;
+			navigator.serviceWorker.getRegistration().then((reg) => {
+				if (!reg) return;
+				reg.update().catch(() => {});
+				const onVis = () => {
+					if (document.visibilityState === "visible") reg.update().catch(() => {});
+				};
+				document.addEventListener("visibilitychange", onVis);
+				navigator.serviceWorker.addEventListener("controllerchange", () => {
+					if (swReloading) return;
+					if (!hadControllerAtBoot) return; // first-install claim, not an update
+					swReloading = true;
+					window.location.reload();
+				});
+			}).catch(() => {});
+		}
 
 		// Persist cache when the page is about to be hidden or unloaded.
 		// Multiple hooks because each browser/platform fires a different

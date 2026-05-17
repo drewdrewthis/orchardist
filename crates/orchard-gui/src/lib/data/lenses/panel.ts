@@ -57,21 +57,32 @@ export function buildPanelData(
 	const panes = data.tmuxPanes as unknown as PaneCardT[];
 	const sessions = data.claudeInstances as unknown as SessionCardT[];
 
-	// Pick the pane that matches our row identity. When the caller has a
-	// paneId, find it in the filtered result directly. When no paneId is
-	// known but a cwd filter was used, the daemon narrows the list to the
-	// matching claude pane — take panes[0] (ADR-022 Phase 6: daemon resolves
-	// by cwd+command, client no longer walks the tmux snapshot).
-	const pane = paneId
-		? panes.find((p) => p.paneId === paneId) || null
-		: panes[0] ?? null;
-
+	// Resolve session first when we have a sessionUuid — it tells us which
+	// pane to look for, so we don't have to guess `panes[0]`.
 	let session: SessionCardT | null = null;
 	if (sessionUuid) {
 		session = sessions.find((s) => s.sessionUuid === sessionUuid) || null;
 	}
+
+	// Pick the pane:
+	//   1. By explicit paneId from the row identity, if given.
+	//   2. By the resolved session's paneId (daemon-joined ClaudeInstance.pane).
+	//   3. As a last resort, the only pane the daemon returned (cwd+command
+	//      filter narrowed it to one).
+	let pane: PaneCardT | null = null;
+	if (paneId) {
+		pane = panes.find((p) => p.paneId === paneId) || null;
+	}
+	if (!pane && session?.pane?.paneId) {
+		pane = panes.find((p) => p.paneId === session!.pane!.paneId) || null;
+	}
+	if (!pane && panes.length === 1) {
+		pane = panes[0];
+	}
+
+	// Backfill session from pane when we didn't have a uuid up front.
 	if (!session && pane?.claudeInstance) {
-		session = sessions.find((s) => s.id === pane.claudeInstance!.id) || null;
+		session = sessions.find((s) => s.id === pane!.claudeInstance!.id) || null;
 	}
 	if (!session && paneId) {
 		session = sessions.find((s) => s.pane?.paneId === paneId) || null;
