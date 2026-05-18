@@ -1,6 +1,6 @@
 # Orchard Repo Constitution
 
-The 74 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
+The 76 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
 
 This is not a style guide. It is the contract.
 
@@ -16,6 +16,7 @@ Rules are numbered with category prefixes so they can be cited in code review, a
 |---|---|---|
 | **L1** | **Operations live as scripts.** Anything that does an external-world effect (tmux, git, gh, fs) is implemented as a script in `scripts/`. CLI and daemon are both wrappers; neither re-implements the operation. | One source of truth. Bug-fix once. Both consumers pick it up from disk. |
 | **L2** | **Scripts have `--json` machine output.** Every script the daemon or CLI execs supports a `--json` flag, with stdout shape `{"ok": bool, "data": <op-specific>?, "error": {"code": str, "message": str}?}`. `ok: true` requires `data` (or an explicit `null`); `ok: false` requires `error`. Scripts exit 0 on `ok: true`, non-zero on `ok: false`. Stderr is free-form for human readers; daemon/CLI parse stdout only. | Wrappers need stable parseable output. A fixed envelope means daemon and CLI share one decoder per script. |
+| **L2c** | **Scripts live at `scripts/<domain>/<op>.sh`.** The script-side directory layout mirrors `daemon/<domain>/` — domain first, operation second. Top-level scripts (non-domain-scoped operational helpers such as `orchard-decide.sh`, `ac9-federated-orchard-e2e.sh`) stay at `scripts/<op>.sh`. Bats tests live alongside their script as `scripts/<domain>/<op>.bats`. | Mirrors the daemon's module-first layout (R1). A `scripts/git-worktree-create.sh` flat name makes the domain invisible and the op unsortable; `scripts/git/worktree-create.sh` mirrors `daemon/git/` and sorts by domain naturally. |
 | **L3** | **Scripts pick the right language.** Bash, Python, Rust, Go — whatever's clearest/fastest for the job. Independently executable via shebang. | No language religion. The script's contract is its interface, not its implementation language. |
 | **L4** | **Queries are daemon-owned and in-process.** GraphQL reads resolve via the daemon's providers/caches in Go. **No CLI/script exec in field-resolver hot paths.** | Subprocess latency is fatal for per-field reads. 60-second lens loads are the failure mode. |
 | **L5** | **Mutations exec scripts.** All GraphQL writes exec the corresponding `scripts/<op>` and project its `--json` output as the response. Daemon does not re-implement mutation logic. | Mutation logic lives once (script); daemon is a thin façade. |
@@ -123,6 +124,7 @@ Rules are numbered with category prefixes so they can be cited in code review, a
 | **T5** | **Loader coalescing is verified by counting underlying fetches.** A loader test runs N parallel `Load(key)` calls against a service whose adapter records call count; assert ≤1 call per request. | "We have a loader" without "the loader actually batches" is the O1/R3 failure mode. |
 | **T6** | **Subscription tests assert "emit after write, not before" (R16).** Test fires a mutation, observes the subscription, asserts the subscriber sees the post-mutation state in its first emission — not the pre-state. | Catches the race R16 forbids. |
 | **T7** | **Pass-through tests assert L4 guards (S16b).** Test that pass-through (a) refuses nesting via static gqlgen rejection, (b) honors the timeout, (c) honors the concurrency cap. | Without guard tests, the guards rot. |
+| **T8** | **Every consumer lens has an e2e feature test (queries+subscriptions+mutations).** Every GraphQL operation that the GUI or TUI consumes has a Gherkin scenario under `daemon/features/` with step definitions in `daemon/features_test/` that: (a) asserts response shape against the consumer's expectation, (b) asserts latency budget (default <100ms for queries, <500ms for subscription deltas, <200ms for mutation→subscription emit), (c) asserts coalescing budget (each query causes ≤N underlying provider calls, measured via instrumented counters). The test runs against the LIVE daemon with real fixtures, NOT mocks (per T4). | The "GraphQL+dataloaders coalesce" claim is otherwise unverified; T8 makes it a measured guarantee per lens. Pairs with M2 (consumer write surface) — together they ensure the daemon covers what consumers actually need. |
 
 ---
 

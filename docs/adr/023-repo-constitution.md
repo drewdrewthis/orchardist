@@ -23,7 +23,7 @@ The deeper observation: the daemon, CLI, GUI, and TUI grew without a shared depe
 Adopt two repo-level documents as **authoritative**:
 
 1. **[docs/architecture.md](../architecture.md)** — describes the ecosystem (CLI, daemon, GUI, TUI, scripts), the dependency invariants, and each daemon domain.
-2. **[RULES.md](../../RULES.md)** — the 74-rule constitution: 11 layer rules (L1–L11), 17 code patterns (R1–R17), 20 schema rules (S1–S14 + S15a/b/c + S16a/b/c), 12 optimization rules (O1–O12), 7 mutation-coverage rules (M1–M7), 7 testing rules (T1–T7). Rules are numbered with stable IDs for citation.
+2. **[RULES.md](../../RULES.md)** — the 76-rule constitution: 12 layer rules (L1–L11 + L2c), 17 code patterns (R1–R17), 20 schema rules (S1–S14 + S15a/b/c + S16a/b/c), 12 optimization rules (O1–O12), 7 mutation-coverage rules (M1–M7), 8 testing rules (T1–T8). Rules are numbered with stable IDs for citation.
 
 These documents are **load-bearing**, not aspirational. Every PR is reviewed against them. Architectural changes cite the relevant rule IDs. Domain refactors must demonstrate conformance.
 
@@ -73,7 +73,7 @@ GraphQL mutation semantics carry their own contract: mutations return affected n
 ## References
 
 - [docs/architecture.md](../architecture.md) — the ecosystem and domain descriptions
-- [RULES.md](../../RULES.md) — the 74-rule constitution
+- [RULES.md](../../RULES.md) — the 76-rule constitution
 - #743 — daemon module refactor (the first major application of these rules)
 - #740 — sidebar redesign PR; `/review` of it surfaced the patterns this ADR codifies
 - ADR-013 — orchard CLI ecosystem (predecessor; defined the multi-binary `orchard` shape)
