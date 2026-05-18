@@ -91,30 +91,78 @@ The ecosystem model + script-as-canonical pattern collapses all three: one home 
 
 ## Daemon module domains
 
-The daemon owns the following domains. Each domain becomes a module under `daemon/<name>/` (see [RULES.md R1, R2](../RULES.md)). Today they live under `internal/server/providers/<name>/`; migration is tracked in #613.
+The daemon owns the following domains. Each domain becomes a module under `daemon/<name>/` (see [RULES.md R1, R2](../RULES.md)). Today they live under `internal/server/providers/<name>/` and `internal/server/resolvers/`; migration is tracked in #613.
 
-| Domain | Owns | Current path | Status |
+**Subdomains are allowed.** A domain may have sibling sub-modules (e.g. `daemon/claude/{jsonls,instance,account}/`) when the concerns are related-but-not-coupled. Subdomains avoid premature merging while keeping a single namespace.
+
+### Domain table
+
+| Domain | Subdomain | Owns | Current path | Notes |
+|---|---|---|---|---|
+| **tmux** | — | Sessions, windows, panes, clients across tmux servers (local + federated). Send-keys mutation. Pane content streaming. | `internal/server/providers/tmux/` | Known smell: `Snapshot()` hot path (#612). |
+| **git** | — | Worktree set, branch state, ahead/behind, remote heads. Mutations: worktree create / remove / move (some gaps). | `internal/server/providers/git/` | |
+| **gh** | — | Repos, issues, pull requests, PR enrichment (mergeable, status checks, labels). Mutations: PR review / label / comment (gap). | `internal/server/providers/gh/` | Known smell: single+batch enrichment divergence (#615). |
+| **claude** | **jsonls** | Reads & parses Claude Code session JSONLs at `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl`. Owns base record parsing AND companion records from Conversation/Contracts plugins (they share the same JSONL stream; surface as enriched fields). Surfaces `Conversation`, `Message`, `Recap`, `ContractEvent` types. | `internal/server/providers/claudeprojects/` | Rename pending. Current name is a leftover from Claude Code's directory convention and obscures what the module does: read session JSONLs. |
+| **claude** | **instance** | Pane-first Claude REPL state derivation from JSONL tail. No provider — pure `DeriveInstanceState` + `SidecarJanitor`. | `internal/server/providers/claudeinstance/` | Post-ADR-022 Phase 5 shape. |
+| **claude** | **account** | `claude auth status` shellout. | `internal/server/providers/claudeaccount/` | |
+| **ps** | — | Process metadata (cwd, pid, parent, command) for currently-running processes. Read-only. | `internal/server/providers/ps/` | |
+| **host** | **identity** | Machine identity + resource load (CPU/mem/disk/loadavg, 5s TTL). | `internal/server/providers/host/` | |
+| **host** | **services** | Launchd/systemd unit watchlist (from `~/.orchard/config.json`). Surfaces `HostService` type. Different fetch path + OS adapters from identity. | `internal/server/providers/hostservice/` | |
+| **contracts** | — | Contracts engine (durable delivery primitive). Currently exposed via MCP; daemon GraphQL mutation surface is sparse. | `internal/server/providers/contracts/` | |
+| **repo** | — | Owns `type Repo implements Node`. Feeds `Query.repos`. Upstream of `repodiscovery` and `worktree`. | `internal/server/providers/config/` (today misnamed `config`) | **Rename `config/` → `repo/` is the first thing the migration PR does.** Today's directory name is a 6-year-old leftover; the module is the Repo node provider, NOT daemon configuration. |
+| **repodiscovery** | — | Discovers orchard-managed repositories on disk. Depends on `repo` (storage backend), `claude-jsonls` (discovers repos from conversation cwds), and `tmux` (`source_tmux.go`). | `internal/server/providers/repodiscovery/` | |
+| **worktree** | — | Composite domain: joins git worktree + tmux sessions/panes + claude instances + gh PR into the `Worktree.*` resolver chain. Also owns `WorkView` (the cross-domain rollup that joins repos + tmux + claude into the dashboard view). Depends on `git + tmux + claude + gh + ps + host`. | `internal/server/resolvers/worktree_*.go` + `WorkView` resolvers in `schema.resolvers.go` | New module. Cross-domain consumer; never reverse — other domains don't import worktree. |
+| **daemon-self** | — | Daemon's own introspection surface: `DaemonState`, `Health`, `ProviderHealth`, `version`, `schemaSdl`, `Meta`, `ResourceLoad`. The "daemon talking about itself" types currently scattered in `schema.resolvers.go`. | `internal/server/resolvers/schema.resolvers.go` (scattered) | New module. Without this, the introspection resolvers orphan into the daemon shell after extraction. |
+| **node** | — | `node(id: ID!)` dispatcher. Routes 14 Node id prefixes (`Host:`, `Conversation:`, `ClaudeInstance:`, `TmuxPane:`, `PullRequest:`, etc.) to the owning domain's resolver. Also feeds `subscription.peer` (Node-change streaming over federation). | `internal/server/resolvers/node.resolvers.go` (535 lines, imports 8 providers) | New module. Implementation pattern: each domain registers its prefix + resolver; the `node` module is the registry + dispatcher, not the resolution itself. |
+
+### Daemon shell (not domains)
+
+These live in `daemon/` at the top level, not as domains. They are infrastructure that *enables* domains, not data the daemon serves.
+
+| Shell concern | Owns | Current path | Notes |
 |---|---|---|---|
-| **tmux** | Sessions, windows, panes, clients across tmux servers (local + federated). Send-keys mutation. Pane content streaming. | `internal/server/providers/tmux/` | Live. Audit + migration pending. Known smell: `Snapshot()` hot path (#612). |
-| **git** | Worktree set, branch state, ahead/behind, remote heads. Mutations: worktree create / remove / move. | `internal/server/providers/git/` | Live. Audit + migration pending. |
-| **gh** | Repos, issues, pull requests, PR enrichment (mergeable, status checks, labels). Mutations: PR review / label / comment (gap). | `internal/server/providers/gh/` | Live. Audit + migration pending. Known smell: single+batch enrichment divergence (#615). |
-| **claude** | Claude Code sessions (running REPLs), conversation jsonl, project on disk, active account. **Collapses today's `claudeprojects/` + `claudeinstance/` + `claudeaccount/`** — they're three faces of one domain. Mutations: send-text-to-pane (today), start/stop session (gap). | `internal/server/providers/{claudeprojects,claudeinstance,claudeaccount}/` | Live. ADR-022 pane-first refactor landed; module collapse + audit pending. |
-| **ps** | Process metadata (cwd, pid, parent, command) for currently-running processes. Read-only. | `internal/server/providers/ps/` | Live. Audit + migration pending. |
-| **host** | Host identity, federation peer info. **Collapses today's `host/` + `hostservice/`** — adjacent concerns. | `internal/server/providers/{host,hostservice}/` | Live. Audit + migration pending. |
-| **contracts** | Contracts engine (durable delivery primitive — see [references/contracts.md](https://github.com/drewdrewthis/orchard-codex)). Currently exposed via MCP, not GraphQL. | `internal/server/providers/contracts/` | Live. Mutation surface in daemon GraphQL is sparse — audit may surface gaps. |
-| **peerproxy** | Federation control plane: proxy queries to peer daemons, route based on host. | `internal/server/providers/peerproxy/` | Live. Audit + migration pending. |
-| **worktree** | Composite domain: joins git worktree + tmux sessions/panes + claude instances + gh PR into the `Worktree.*` resolver chain. Cross-module consumer; depends on tmux + git + claude + gh services. | `internal/server/resolvers/worktree_*.go` | Today: scattered across resolver files. After migration: new `daemon/worktree/` module owning these resolvers, consuming sibling-module services. |
-| **repodiscovery** | Discovers orchard-managed repositories on disk. | `internal/server/providers/repodiscovery/` | Live. Audit + migration pending. |
-| **config** | Daemon configuration. Read-only at runtime (config writes are CLI-only per existing rule). | `internal/server/providers/config/` | Live. Likely thin; audit may collapse into `host` or `daemon-self`. |
+| `daemon/server.go` | HTTP / WebSocket / handler wiring. Composes per-domain resolvers into the aggregate `Resolver`. Origin gating (`checkGUIOrigin`). | `internal/server/server.go` | |
+| `daemon/transport/` (federation) | Peer-daemon proxy: turns a remote orchard daemon into a backend like git/tmux/ps. WebSocket subprotocol negotiation. Peer config from `~/.orchard/config.json`. `LocalInvalidator` for cross-process cache invalidation. **Not a domain — it's the transport layer.** | `internal/server/providers/peerproxy/` | The provider name is a misnomer; this is daemon plumbing. Moves to shell. |
+| `daemon/loaders.go` (composer) | Thin aggregate that holds per-domain loaders + a few cross-domain loaders that can't cleanly belong to one domain (e.g. `loadPanesByCwd` consumes tmux+ps, `loadWorktreesForCwds` consumes git+ps+tmux). Cross-domain loaders are named and owned here explicitly. | `internal/server/loaders/loaders.go` (30KB, today undifferentiated) | Per-domain loader code moves into `daemon/<name>/loaders.go`; cross-domain loaders stay at the shell with named ownership. |
+| `daemon/graphql/` | gqlgen-generated code. Not authored. | `internal/server/graphql/` | Wholesale move in Phase 0. |
 
-**Domains explicitly NOT in scope for the module-refactor:**
+### Mutation ownership convention
+
+Each domain owns its mutations in `daemon/<name>/mutations.go`. The aggregate `mutationResolver` in `daemon/server.go` composes them. Per L5, every mutation execs a `scripts/<op>` and projects its `--json` output. No domain implements mutation logic in Go beyond input validation + script-exec wrapping.
+
+`daemon-self` mutations (e.g. `Mutation.daemonReload`, manual cache rebuild) live in `daemon/daemon-self/mutations.go`. These are the rare exception to "every mutation execs a script" — they affect daemon-internal state, not external truth.
+
+### Domains explicitly NOT in scope for the module-refactor
 
 - **chat** (`internal/server/providers/chat/`) — being deleted (#616). Skip.
-- **gqlgen-generated code** (`internal/server/graphql/`) — moves wholesale to `daemon/graphql/` in Phase 0; not a domain.
-- **loaders aggregate** (`internal/server/loaders/`) — splits per domain; the remaining cross-module composer lives at `daemon/loaders.go` (thin).
-- **server.go** — moves to `daemon/server.go`; the composer that wires modules into the aggregate Resolver.
+- **gqlgen-generated code** (`internal/server/graphql/`) — daemon shell concern; moves wholesale in Phase 0.
 
-Each domain gets its own refactor PR following [RULES.md](../RULES.md) and producing a per-module `AUDIT.md`. See #613 for the swarm dispatch plan.
+### Dependency graph (summary)
+
+Built from the table above:
+
+```
+              repo
+                 ▲
+                 │
+        ┌────────┴──────────┐
+        │                   │
+   repodiscovery         worktree
+        │              ┌────┴──┬────┬──────┬────┬────┐
+        │              ▼       ▼    ▼      ▼    ▼    ▼
+        ▼            tmux    git  claude  gh   ps  host
+   claude-jsonls   (peers)               (auth)
+        ▲
+        │
+     tmux ─────────┐
+                   │
+       repodiscovery also consumes
+       tmux + claude-jsonls
+```
+
+`worktree` is the heaviest consumer (6 sibling domains). `daemon-self`, `node`, `contracts`, and the host subdomains have no cross-domain deps.
+
+Each domain (and subdomain) gets its own refactor PR following [RULES.md](../RULES.md) and producing a per-module `AUDIT.md`. See #613 for the swarm dispatch plan.
 
 ## Guiding Principles
 
