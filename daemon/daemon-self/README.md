@@ -1,45 +1,39 @@
 # `daemon/daemon-self/`
 
-The daemon's own state and introspection.
+Daemon liveness, version, schema bytes, and the node-id dispatcher entry.
 
 ## Owns
 
-- **Types:** `Health`, `DaemonState`, `ProviderHealth`, `Meta`, `WorkView`
-- **Queries:** `health`, `daemonState`, `version`, `schemaSDL`, `workView`, `node`
-- **Mutations** (to be added in #613, the rare exception per [L5](../../RULES.md)):
-  `daemonReload`, manual cache rebuild — these affect daemon-internal state, not external truth
-- **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
+- **Types:** `Health`
+- **Queries:** `health`, `version`, `schemaSDL`, `node`
+- **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15a](../../RULES.md)
 
-## Why this exists as a domain
+## What this used to own (now elsewhere)
 
-The other 8 domains all reflect external truth (git, gh, tmux, ps, etc.). This domain is **the daemon talking about itself**: its health, its loaded config, its registered providers' freshness counters, the federation-aware node dispatcher entrypoint, the schema bytes baked into the binary.
+Per devils-advocate review of PR #618, the original `daemon-self` was bundling concerns that belong in their own domains:
 
-Per the design call:
+| Concern | Now in |
+|---|---|
+| `DaemonState`, `ProviderHealth`, `Meta`, `daemonReload` | [`daemon-meta`](../daemon-meta/) |
+| `WorkView`, composite views | [`views`](../views/) |
+| `Query.gh` pass-through | [`daemon/gh/`](../gh/) (per [S16b](../../RULES.md)) |
 
-> "loaded config (the watched-projects list and peer list from `~/.orchard/config.json`), cache statistics, peer-connection status — that all has an owner. Call it `daemon-self`."
+What remains here is the irreducible liveness + introspection surface:
+- **`Health`** — the one true "is this daemon serving?"
+- **`version`** — what binary is running
+- **`schemaSDL`** — bytes of the schema the binary was built against
+- **`Query.node(id)`** — generic Node lookup, dispatched through the prefix registry in `daemon/node.go`
 
-## `Query.node` lives here
+## `Query.node` placement
 
-`Query.node(id)` is the prefix-registry dispatcher that any domain registers its `<Type>:` prefix into. It is not a `Node`-domain field — there is no Node domain — so it lives here with the other daemon-shell-shaped queries.
-
-(`Query.gh` was originally listed here. Under S16 it is the gh domain's pass-through escape hatch and now lives in [`daemon/gh/`](../gh/).)
-
-## Cross-domain consumption
-
-`WorkView` is a **composite view** that pre-walks every other domain's graph in a single round trip — per [O2](../../RULES.md), this is "eager join saving round trips," but the underlying field resolvers are the same per-type resolvers, so it doesn't violate lazy-by-default.
-
-`Meta` is a **provenance envelope** returned alongside list/composite fields, disambiguating "valid empty" from "data unavailable."
+`Query.node` is the prefix-registry dispatcher that every domain registers its `<Type>:` prefix into. The registry itself lives at the shell (`daemon/node.go`), not in any domain. We surface `Query.node` here because it isn't a Node-domain field — it's the entrypoint to the dispatcher, and dispatch is daemon-self's level of abstraction.
 
 ## Current source location (pre-refactor)
 
-- `internal/server/resolvers/schema.resolvers.go` (DaemonState/Health/WorkView scattered in the 1800-line god-file)
-- `internal/server/resolvers/node.resolvers.go` (the `node(id)` dispatcher — 535 lines with 14 hard-coded prefix branches → becomes a tiny prefix registry that each domain registers into)
-- `internal/server/server.go` (HTTP/WebSocket wiring — moves to `daemon/server.go`)
+- `internal/server/server.go` (Health, version, schemaSDL)
+- `internal/server/resolvers/node.resolvers.go` (current 535-line file with 14 hard-coded prefix branches → becomes a tiny registry that each domain registers into)
 
 ## Constitution citations
 
-- [L8](../../RULES.md): mutations here are the rare exception ("affect daemon-internal state, not external truth"). Most domains' mutations exec scripts per L5.
-- [L10](../../RULES.md): operations about the daemon itself live under `orchard daemon ...` in the CLI
-- [R6, R7](../../RULES.md): the current `schema.resolvers.go` god-file is the canonical SRP violation. The refactor decomposes it.
-- [O4](../../RULES.md): cache hit attribution is surfaced HERE via `DaemonState.providers[]`
-- [O5](../../RULES.md): cold start cost is measured via `DaemonState.startedAt` + per-provider `lastSuccessfulRefresh`
+- [L10](../../RULES.md): operations about the daemon itself live under `orchard daemon ...`
+- [R6](../../RULES.md): one type per file; `schema.resolvers.go`'s 1800-line god-file is the failure mode this domain split addresses

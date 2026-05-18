@@ -14,16 +14,24 @@ daemon/
 ├── loaders.go                      ← cross-domain dataloader composer
 ├── graphql/                        ← gqlgen-generated; not authored
 │
-├── git/                            ← Local git: Repo, Worktree, Branch
-├── gh/                             ← GitHub API: PullRequest, Issue, WorkflowRun, gh-passthrough
+├── git/                            ← Local git: Repo, Worktree
+├── gh/                             ← GitHub API: PullRequest, Issue, WorkflowRun, gh pass-through
 ├── tmux/                           ← tmux server: TmuxServer, TmuxSession, TmuxWindow, TmuxPane, TmuxClient
-├── claude-jsonls/                  ← Claude Code JSONLs: Conversation, ClaudeInstance, Contract
-├── claude-account/                 ← `claude auth status`: ClaudeAccount
 ├── ps/                             ← OS process table: Process
 ├── host-identity/                  ← Machine identity + resource load: Host, ResourceLoad
 ├── host-services/                  ← launchd/systemd watchlist: HostService
-└── daemon-self/                    ← Health, DaemonState, ProviderHealth, WorkView, Meta
+├── claude-jsonls/                  ← Claude Code JSONLs (raw): Conversation
+├── claude-instance/                ← Live REPL derivation (jsonl + tmux + ps): ClaudeInstance
+├── claude-account/                 ← `claude auth status`: ClaudeAccount
+├── contracts/                      ← Agent delivery commitments: Contract
+├── daemon-self/                    ← Liveness, version, schemaSDL, node-id dispatcher
+├── daemon-meta/                    ← Provider rollup, freshness counters, Meta envelope
+└── views/                          ← Composite views (delegating per S14): WorkView
 ```
+
+**13 domains total.** Previous 9-domain shape (#618 first draft) split per devils-advocate review:
+- `claude-jsonls` → `claude-jsonls` + `claude-instance` + `contracts` (three independent lifecycles)
+- `daemon-self` → `daemon-self` + `daemon-meta` + `views` (R6 god-module split)
 
 ## Canonical per-domain layout
 

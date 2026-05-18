@@ -1,24 +1,15 @@
-# daemon-self — daemon's own state, health, and composite views.
+# daemon-self — daemon liveness, version, schema bytes, node-id dispatcher.
 #
-# Owns: Health, DaemonState, ProviderHealth, Meta, WorkView.
-# Owns: Query.{health, daemonState, version, schemaSDL, workView, node}.
-# Constitution: L10 (daemon-self under `orchard daemon ...`),
-#               L8/M2 (daemonReload/manual rebuild are the rare mutations affecting
-#               daemon-internal state, not external truth).
+# Owns: Health.
+# Owns: Query.{health, version, schemaSDL, node}.
 #
-# NOTE: Query.gh (pass-through) lives in `daemon/gh/` per S16 — it is the gh
-# domain's pass-through escape hatch, not daemon plumbing.
+# Health-of-providers + freshness counters live in `daemon-meta`.
+# The composite workView lives in `views`.
+# `Query.gh` (pass-through) lives in `daemon/gh/` per S16b.
 
 extend type Query {
   "Liveness probe — returns daemon health and uptime."
   health: Health!
-
-  """
-  Daemon-side health surface for diagnosing "is it me or the daemon"
-  (#469 F9). Reports per-provider refresh state and a daemon-wide
-  meta envelope. Cheap — reads in-memory counters, no I/O.
-  """
-  daemonState: DaemonState!
 
   "Daemon binary version. Set at build time via -ldflags -X main.version=<semver>; `dev` for plain `go build`."
   version: String!
@@ -33,19 +24,14 @@ extend type Query {
   schemaSDL: String!
 
   """
-  Composite "what's running, where, on what branch?" view (#469 F6).
-  Walks the local repos → worktrees graph and joins each worktree
-  to its open PR, linked issue, processes, and tmux sessions in a
-  single round trip. The fields underneath reuse existing resolvers,
-  so semantics match per-field queries.
-  """
-  workView: WorkView!
-
-  """
   Generic node lookup by globally-unique id. Returns the node if it
   resides on the local daemon; ids whose host prefix matches a configured
   peer are transparently proxied through the peerproxy surface
   (federation transport). Unknown hosts return null.
+
+  Implemented as a prefix-registry dispatcher — each domain registers
+  its `<Type>:` prefix + lookup. The registry lives in `daemon/node.go`
+  at the shell, not in a domain.
   """
   node(id: ID!): Node
 }
@@ -56,85 +42,4 @@ type Health {
 
   "Uptime in seconds since daemon started."
   uptimeS: Int!
-}
-
-"""
-Daemon-wide health/diagnostic snapshot. v1 returns provider-level
-counters and the global startedAt / uptime; future versions can grow
-subscription/connection counts.
-"""
-type DaemonState {
-  "RFC3339 timestamp the daemon started serving."
-  startedAt: String!
-
-  "Daemon uptime in seconds."
-  uptimeS: Int!
-
-  "Per-provider freshness/error rollup."
-  providers: [ProviderHealth!]!
-}
-
-"""
-A daemon provider's health snapshot — what its most recent refresh
-did, when, and how it ended.
-"""
-type ProviderHealth {
-  "Stable provider name (e.g. \"tmux\", \"git\", \"gh\", \"ps\")."
-  name: String!
-
-  "True when the provider has been wired into this daemon."
-  configured: Boolean!
-
-  "RFC3339 timestamp of the last successful refresh; null until first success."
-  lastSuccessfulRefresh: String
-
-  "Reason for the most recent failure; null when none observed since startup."
-  lastFailureReason: String
-
-  "Total successful refreshes since daemon boot."
-  refreshCount: Int!
-
-  "Total refresh failures since daemon boot."
-  failureCount: Int!
-}
-
-"""
-Provenance and freshness envelope used to disambiguate "valid empty"
-from "data unavailable" (#469 F1). Returned alongside list/composite
-fields whose underlying providers can fail or be uninitialised.
-
-`provider` is a stable label (e.g. "tmux", "git", "gh"). `failureReason`
-is non-null when the most recent refresh did not succeed.
-`lastSuccessfulFetchAt` is the RFC3339 timestamp of the most recent
-provider refresh that completed cleanly; null when no successful
-refresh has happened yet.
-"""
-type Meta {
-  "Provider this envelope describes. Matches the labels in DaemonState.providers[]."
-  provider: String!
-
-  "RFC3339 timestamp of the most recent successful refresh; null when never observed."
-  lastSuccessfulFetchAt: String
-
-  "Human-readable reason the most recent refresh failed; null when healthy or never attempted."
-  failureReason: String
-}
-
-"""
-Top-level composite view that the orchardist dashboard asks for first.
-Returns the same data the per-type resolvers return, joined into a
-single tree to save round trips.
-"""
-type WorkView {
-  "Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
-  repos: [Repo!]!
-
-  "Tmux sessions on the local host — same as Query.tmuxSessions with no filter."
-  tmuxSessions: [TmuxSession!]!
-
-  "Live Claude instances — same shape as Query.claudeInstances."
-  claudeInstances: [ClaudeInstance!]!
-
-  "Meta envelope describing freshness/availability for this view."
-  meta: Meta!
 }

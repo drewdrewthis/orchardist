@@ -1,36 +1,33 @@
 # `daemon/claude-jsonls/`
 
-Claude Code session JSONLs at `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl`.
-
-This domain owns base record parsing AND companion records from the Conversation/Contracts plugins, which share the same JSONL stream and surface as enriched fields on the same records.
+Raw record parsing of Claude Code session JSONLs at `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl`.
 
 ## Owns
 
-- **Types:** `Conversation`, `ClaudeInstance`, `Contract`, `ContractQuestion`
-- **Enums + inputs:** `InstanceState`, `ContractStatus`, `ContractFilter`
-- **Queries:** `conversations`, `conversation`, `contract`, `contracts`, `claudeInstances`
+- **Types:** `Conversation`
+- **Queries:** `conversations`, `conversation`
 - **Subscriptions:** `nodeChanged`, `peer`, `conversationChanged`
-- **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
+- **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15a](../../RULES.md)
 
-## ClaudeInstance is derived, not primary
+## What this used to own (now elsewhere)
 
-A `ClaudeInstance` is the **join** of a live JSONL tail with a matching live pane process. Most JSONLs are historical (no live REPL). The instance set is:
+Per devils-advocate review of PR #618, the original `claude-jsonls` was bundling three independent lifecycles:
 
-> "JSONLs whose heartbeat is fresh AND there is a tmux pane whose process is `claude` with the matching sessionUuid in its working state."
+| Concern | Now in |
+|---|---|
+| `ClaudeInstance` derivation, `InstanceState` | [`claude-instance`](../claude-instance/) |
+| `Contract`, `ContractStatus`, `ContractQuestion` | [`contracts`](../contracts/) |
 
-Per the user's call: "a jsonl might not have a running instance. most don't. there is a chance that there are two instances for the same jsonl (although problematic, via /resume) but no, probably not. it's probably tmuxPane.process.isClaude or something like that."
+What remains here is the **lowest layer**: parse JSONLs into `Conversation` nodes. Higher layers (claude-instance, contracts) CONSUME this domain's service.
 
-`Conversation.liveInstances: [ClaudeInstance!]!` returns 0, 1, or 2+ matching live panes (the rare /resume edge case) — per the user, "graphs can return arrays."
+## Higher-layer consumers
+
+- [`claude-instance`](../claude-instance/) — derives live REPLs from jsonl tail freshness + matching pane processes
+- [`contracts`](../contracts/) — parses Contracts-plugin records that ride on the same JSONL stream
 
 ## Cross-domain back-edges (resolved here)
 
-| Field | Owning domain |
-|---|---|
-| `ClaudeInstance.pane` | [`tmux`](../tmux/) |
-| `ClaudeInstance.process` | [`ps`](../ps/) |
-| `ClaudeInstance.account` | [`claude-account`](../claude-account/) |
-| `ClaudeInstance.worktree` | [`git`](../git/) |
-| `ClaudeInstance.conversation` | self (same file) |
+- `Conversation.liveInstances: [ClaudeInstance!]!` — declared here, resolved by calling [`claude-instance`](../claude-instance/)'s service.
 
 ## Heavy fields excluded
 
@@ -38,14 +35,13 @@ Per [S10](../../RULES.md) and [ADR-016](../../docs/adr/016-daemon-as-protocol.md
 
 ## Current source location (pre-refactor)
 
-- `internal/server/providers/claudeprojects/` (Conversation)
-- `internal/server/providers/claudeinstance/` (instance derivation — folds in as the consumer of jsonl tail data)
-- `internal/server/providers/contracts/` (Contracts engine — its records ride on the same jsonl stream)
+- `internal/server/providers/claudeprojects/`
 
 ## Constitution citations
 
 - [L4](../../RULES.md): jsonl tails cache in-process; field resolvers don't shell out
-- [R3](../../RULES.md): instance derivation goes through `ConversationsBySessionUuid` loader, not `Snapshot()`
+- [L9](../../RULES.md): Conversation state is a projection of the jsonl file on disk
+- [R3](../../RULES.md): conversation reads go through `ConversationByID` + `ConversationsBySessionUuid` loaders
 - [S10, ADR-016](../../RULES.md): transcripts are an out-of-band REST endpoint, not a GraphQL field
-- [O8](../../RULES.md): per-session memory bounded — 100MB jsonl uses tail-window, not memory growth
-- [O3](../../RULES.md): `conversationChanged` subscription emits small deltas, not 50KB re-queries
+- [O8](../../RULES.md): per-session memory bounded — 100MB jsonl uses tail-window, not full-file load
+- [O3, R16](../../RULES.md): `conversationChanged` emits delta after cache write

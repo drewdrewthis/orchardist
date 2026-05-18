@@ -1,0 +1,42 @@
+# views — composite views that traverse multiple domains for round-trip economy.
+#
+# Owns: WorkView.
+# Owns: Query.workView.
+#
+# Composite views are a thin layer on top of every other domain.
+# Per S14, they DELEGATE to the per-type resolvers — they do NOT re-implement
+# any join. The reason this is its own module (and not a part of daemon-self
+# or daemon-meta) is R6 + R7: composite views touch every domain, so they
+# would force every domain refactor to also edit `daemon-self/`. Pulling
+# them out keeps daemon-self read-only re: domain churn.
+
+extend type Query {
+  """
+  Composite "what's running, where, on what branch?" view (#469 F6).
+  Walks the local repos → worktrees graph and joins each worktree
+  to its open PR, linked issue, processes, and tmux sessions in a
+  single round trip. The fields underneath REUSE existing resolvers
+  per S14 — semantics match per-field queries.
+  """
+  workView: WorkView!
+}
+
+"""
+Top-level composite view that the orchardist dashboard asks for first.
+Returns the same data the per-type resolvers return, joined into a
+single tree to save round trips (O2 lazy-by-default still applies —
+clients only pay for the fields they select).
+"""
+type WorkView {
+  "Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
+  repos: [Repo!]!
+
+  "Tmux sessions on the local host — same as Query.tmuxSessions with no filter."
+  tmuxSessions: [TmuxSession!]!
+
+  "Live Claude instances — same shape as Query.claudeInstances."
+  claudeInstances: [ClaudeInstance!]!
+
+  "Meta envelope describing freshness/availability for this view."
+  meta: Meta!
+}

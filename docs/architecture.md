@@ -93,7 +93,7 @@ The ecosystem model + script-as-canonical pattern collapses all three: one home 
 
 The daemon owns the following domains. Each domain is a flat module under [`daemon/<name>/`](../daemon/) (see [RULES.md R1, R2](../RULES.md)). The directory skeleton + per-domain schema partials + per-domain READMEs are checked in; the Go code migration from `internal/server/providers/<name>/` and `internal/server/resolvers/` is tracked in #613.
 
-> **Skeleton status:** `daemon/` exists with one directory per domain. Each contains a `schema.graphql` partial (S15) and a `README.md` linking the domain to its current source location and the relevant [RULES.md](../RULES.md) citations. Go files (`service.go`, `provider.go`, `resolver.go`, `loaders.go`, `mutations.go`) are not yet authored — that is the per-domain migration work in #613. See [`daemon/README.md`](../daemon/README.md) for the canonical per-domain layout.
+> **Skeleton status:** `daemon/` exists with one directory per domain (13 total). Each contains a `schema.graphql` partial (S15a) and a `README.md` linking the domain to its current source location and the relevant [RULES.md](../RULES.md) citations. Go files (`service.go`, `provider.go`, `resolver_*.go`, `loaders.go`, `mutations.go`) are not yet authored — that is the per-domain migration work in #613. See [`daemon/README.md`](../daemon/README.md) for the canonical per-domain layout.
 
 **Flat, not nested.** Earlier drafts grouped related domains under parent directories (`daemon/claude/{jsonls,instance,account}/`). After review the decision is to keep modules flat — `daemon/claude-jsonls/`, `daemon/claude-account/`, etc. Hyphenated names group by prefix without forcing a nested taxonomy that pretends modules with different sources / cadences / failure modes are "really one thing." When two modules genuinely become indistinguishable, they merge; until then they stay separate.
 
@@ -107,19 +107,25 @@ Three categories of things that look like domains but aren't:
 
 ### Domain table
 
-9 flat domains. Each becomes `daemon/<name>/` with the canonical layout (`service.go` / `provider.go` / `adapter.go` / `resolver.go` / `loaders.go` / `mutations.go` / `subscriptions.go` / `schema.graphql` — omit files that don't apply).
+13 flat domains. Each becomes `daemon/<name>/` with the canonical layout (`service.go` / `provider.go` / `adapter.go` / `resolver_*.go` per type / `loaders.go` / `mutations.go` / `subscriptions.go` / `schema.graphql` — omit files that don't apply).
+
+The 9-domain initial draft (#618 first commit) was split per devils-advocate review: `claude-jsonls` carried 3 lifecycles, `daemon-self` was a god-module.
 
 | Domain | Sources | Consumes (per service contract) | Current path | Schema partial |
 |---|---|---|---|---|
-| **[git](../daemon/git/)** | Local git repos: worktrees, branches, refs, status, ahead/behind, remote heads. Owns `Repo` (local view), `Worktree`, `Branch` types. Mutations: worktree create/rm/mv, fetch/pull/push. Repo discovery (walk the watched-projects list + known dirs to find git repos) is a startup routine inside this domain, not its own domain. | — | `internal/server/providers/git/` + `internal/server/providers/config/` (Repo node provider; misnamed today) + `internal/server/providers/repodiscovery/` (startup routine; folds in) | [`daemon/git/schema.graphql`](../daemon/git/schema.graphql) |
-| **[gh](../daemon/gh/)** | GitHub API: repos (the github-side view), issues, pull requests, workflow runs. Owns `PullRequest`, `Issue`, `WorkflowRun` types. Mutations: PR review/label/comment, issue create. | — | `internal/server/providers/gh/` | [`daemon/gh/schema.graphql`](../daemon/gh/schema.graphql) |
-| **[tmux](../daemon/tmux/)** | tmux server: sessions, windows, panes, clients. Owns `TmuxSession`, `TmuxWindow`, `TmuxPane`, `TmuxClient` types. Owns the cross-domain join `TmuxPane.claudeInstance: ClaudeInstance` (a pane whose process is `claude` has a live instance derived from the matching jsonl tail). Mutations: send-keys, kill-pane, new-window. | `ps` (for pane process command/cwd), `claude-jsonls` (for the instance derivation on Claude-owning panes) | `internal/server/providers/tmux/` | [`daemon/tmux/schema.graphql`](../daemon/tmux/schema.graphql) |
-| **[claude-jsonls](../daemon/claude-jsonls/)** | Claude Code session JSONLs at `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl`. Owns base record parsing AND companion records from Conversation/Contracts plugins (which share the same JSONL stream and surface as enriched fields on the same records). Owns `Conversation`, `Message`, `Recap`, `ContractEvent` types. **Most jsonls have no live REPL** — they're historical. `Conversation.liveInstances: [ClaudeInstance!]!` returns 0, 1, or 2+ matching live panes (the rare /resume edge case). | — | `internal/server/providers/claudeprojects/` + `internal/server/providers/claudeinstance/` (instance derivation lives here as the consumer of jsonl tail data) + `internal/server/providers/contracts/` (contracts engine — its records ride on the same jsonl stream as Conversation plugin records) | [`daemon/claude-jsonls/schema.graphql`](../daemon/claude-jsonls/schema.graphql) |
-| **[claude-account](../daemon/claude-account/)** | `claude auth status` shellout. Owns `ClaudeAccount` type. | — | `internal/server/providers/claudeaccount/` | [`daemon/claude-account/schema.graphql`](../daemon/claude-account/schema.graphql) |
-| **[ps](../daemon/ps/)** | OS process table (pid, ppid, cwd, command, args). Owns `Process` type. Read-only domain. | — | `internal/server/providers/ps/` | [`daemon/ps/schema.graphql`](../daemon/ps/schema.graphql) |
-| **[host-identity](../daemon/host-identity/)** | Machine identity + resource load (CPU/mem/disk/loadavg, 5s TTL). Owns `Host`, `ResourceLoad` types. | — | `internal/server/providers/host/` | [`daemon/host-identity/schema.graphql`](../daemon/host-identity/schema.graphql) |
-| **[host-services](../daemon/host-services/)** | launchd/systemd unit watchlist (watchlist is config-driven). Owns `HostService` type. Different fetch path and OS adapters from `host-identity`; sharing a prefix is the only thing they have in common. | — | `internal/server/providers/hostservice/` | [`daemon/host-services/schema.graphql`](../daemon/host-services/schema.graphql) |
-| **[daemon-self](../daemon/daemon-self/)** | Daemon's own state and introspection: health, version, schema introspection, loaded config (the watched-projects list and peer list from `~/.orchard/config.json`), cache statistics, peer-connection status. Owns `Health`, `DaemonState`, `ProviderHealth`, `Settings`, `Meta` types. Mutations: `daemonReload`, manual cache rebuild — the rare exception to "every mutation execs a script" because these affect daemon-internal state, not external truth. | — | `internal/server/resolvers/schema.resolvers.go` (DaemonState/Health/etc. scattered here) | [`daemon/daemon-self/schema.graphql`](../daemon/daemon-self/schema.graphql) |
+| **[git](../daemon/git/)** | Local git repos: worktrees, branches, refs, status, ahead/behind, remote heads. Owns `Repo` (local view), `Worktree`. Mutations: worktree create/rm/mv, fetch/pull/push. Repo discovery folds in. | — | `internal/server/providers/git/` + `internal/server/providers/config/` (Repo node provider, misnamed) + `internal/server/providers/repodiscovery/` | [`schema.graphql`](../daemon/git/schema.graphql) |
+| **[gh](../daemon/gh/)** | GitHub API: pull requests, issues, workflow runs. Owns `PullRequest`, `Issue`, `WorkflowRun`, `Label`. Mutations: PR review/label/comment, issue create. Owns the `Query.gh(query, variables): JSON` pass-through per S16b. | — | `internal/server/providers/gh/` | [`schema.graphql`](../daemon/gh/schema.graphql) |
+| **[tmux](../daemon/tmux/)** | tmux server: sessions, windows, panes, clients. Owns `TmuxSession`, `TmuxWindow`, `TmuxPane`, `TmuxClient`. Mutations: send-keys, kill-pane, new-window. | `ps` (pane process), `claude-instance` (TmuxPane.claudeInstance back-edge) | `internal/server/providers/tmux/` | [`schema.graphql`](../daemon/tmux/schema.graphql) |
+| **[ps](../daemon/ps/)** | OS process table (pid, ppid, cwd, command, args). Owns `Process`. Read-only. | — | `internal/server/providers/ps/` | [`schema.graphql`](../daemon/ps/schema.graphql) |
+| **[host-identity](../daemon/host-identity/)** | Machine identity + resource load (CPU/mem/disk/loadavg, 5s TTL). Owns `Host`, `ResourceLoad`. | — | `internal/server/providers/host/` | [`schema.graphql`](../daemon/host-identity/schema.graphql) |
+| **[host-services](../daemon/host-services/)** | launchd/systemd unit watchlist (config-driven). Owns `HostService`, `HostServiceState`. | — | `internal/server/providers/hostservice/` | [`schema.graphql`](../daemon/host-services/schema.graphql) |
+| **[claude-jsonls](../daemon/claude-jsonls/)** | Raw Claude Code JSONL parsing. Owns `Conversation` only. | — | `internal/server/providers/claudeprojects/` | [`schema.graphql`](../daemon/claude-jsonls/schema.graphql) |
+| **[claude-instance](../daemon/claude-instance/)** | Live Claude REPL — JOIN of jsonl tail freshness + matching pane process. Owns `ClaudeInstance`, `InstanceState`. | `claude-jsonls`, `tmux`, `ps` | `internal/server/providers/claudeinstance/` | [`schema.graphql`](../daemon/claude-instance/schema.graphql) |
+| **[claude-account](../daemon/claude-account/)** | `claude auth status` + `ccusage` shellout. Owns `ClaudeAccount`. | — | `internal/server/providers/claudeaccount/` | [`schema.graphql`](../daemon/claude-account/schema.graphql) |
+| **[contracts](../daemon/contracts/)** | Agent delivery commitments parsed from Contracts-plugin records (ride on the same JSONL stream as conversations). State machine: 9 statuses. Owns `Contract`, `ContractStatus`, `ContractQuestion`. | `claude-jsonls` | `internal/server/providers/contracts/` | [`schema.graphql`](../daemon/contracts/schema.graphql) |
+| **[daemon-self](../daemon/daemon-self/)** | Daemon liveness, version, schema bytes, node-id dispatcher entrypoint. Owns `Health`. | — | `internal/server/server.go` + `internal/server/resolvers/node.resolvers.go` | [`schema.graphql`](../daemon/daemon-self/schema.graphql) |
+| **[daemon-meta](../daemon/daemon-meta/)** | Provider freshness counters + per-field provenance envelope. Owns `DaemonState`, `ProviderHealth`, `Meta`. Mutations: `daemonReload` (L5 carve-out for daemon-internal state). | — | `internal/server/resolvers/schema.resolvers.go` (scattered) | [`schema.graphql`](../daemon/daemon-meta/schema.graphql) |
+| **[views](../daemon/views/)** | Composite views that delegate (per S14) to per-type resolvers for round-trip economy. Owns `WorkView`. | (every domain that contributes a field) | `internal/server/resolvers/schema.resolvers.go` (scattered) | [`schema.graphql`](../daemon/views/schema.graphql) |
 
 ### Daemon shell (not domains)
 
@@ -137,9 +143,9 @@ These live in `daemon/` at the top level, not as domains. They are infrastructur
 
 Each domain owns `daemon/<name>/schema.graphql`. The root [`daemon/schema.graphql`](../daemon/schema.graphql) declares the shared `Node` interface, the `Time` and `JSON` scalars, and the empty `Query` / `Mutation` / `Subscription` shells. Domain partials use `extend type Query`, `extend type Mutation`, `extend type Subscription` to add their fields. gqlgen globs all partials into one composed schema at build time — there is no monolithic schema file to edit.
 
-The schema is the contract (RULES.md S11). The partial is the contract per domain. The partials checked in at `daemon/*/schema.graphql` carve up today's monolithic `schema.graphql` along the 9-domain boundary; the domain owns the types and fields it declares.
+The schema is the contract (RULES.md S11). The partial is the contract per domain (S15a). The partials checked in at `daemon/*/schema.graphql` carve up today's monolithic `schema.graphql` along the 13-domain boundary; the domain owns the types and fields it declares.
 
-Cross-domain types: when domain A's type has a field whose return type lives in domain B (e.g. `TmuxPane.claudeInstance: ClaudeInstance` where `ClaudeInstance` is `claude-jsonls`-owned), the field is declared in A's partial via `extend type` or by referencing B's type symbol. The resolver lives in A and calls B's service via its interface (RULES.md R5). gqlgen's multi-file schema composition resolves the cross-file references at build time.
+Cross-domain types are governed by RULES.md [S15b](../RULES.md): when domain A adds a field to a type owned by domain B, both the `extend type` AND the resolver live in A. A imports B's service interface (R5), not B's provider.
 
 ### Mutation ownership convention
 
@@ -155,36 +161,38 @@ Each domain owns its mutations in `daemon/<name>/mutations.go`. The aggregate `m
 ### Dependency graph (north star, not current state)
 
 ```
-                  worktree-shaped joins happen at the GraphQL
-                  graph level via field resolution. No domain
-                  is "the worktree domain" — Worktree is a type
-                  in `git` with cross-domain fields.
+   Leaves (no domain deps — read external truth directly):
+     git, gh, tmux, ps, host-identity, host-services,
+     claude-jsonls, claude-account, daemon-self
 
-   tmux ────────────►  claude-jsonls
-     │                       ▲
-     │                       │
-     └────►  ps              │   (used by tmux for the
-                             │    Pane→Process→jsonl join)
-   tmux ────►  ps  ──────────┘
+   Join domains (CONSUME 2+ leaves):
+     claude-instance  →  claude-jsonls, tmux, ps
+     contracts        →  claude-jsonls
+     views (WorkView) →  delegates to every contributing leaf per S14
+     daemon-meta      →  reads each provider's freshness counters
 
-   leaves (no domain deps):
-     git, gh, claude-jsonls, claude-account, ps,
-     host-identity, host-services, daemon-self
-
-   only edges in the north star:
-     tmux  → ps
-     tmux  → claude-jsonls
+   Cross-domain `extend type` back-edges (S15b — declared in CONSUMER):
+     git extends Worktree.{tmuxPanes, tmuxSession}    (consumer: git)
+     git extends Worktree.claudeInstances             (consumer: git)
+     git extends Worktree.{pr, issue}                 (consumer: git)
+     git extends Worktree.processes                   (consumer: git)
+     tmux extends TmuxPane.process                    (consumer: tmux)
+     tmux extends TmuxPane.claudeInstance             (consumer: tmux)
+     ps extends Host.processes                        (consumer: ps)
+     host-services extends Host.hostServices          (consumer: host-services)
 ```
 
-`tmux` is the only domain with cross-domain dependencies in the north star. Every other domain reads its source-of-truth directly with zero coupling. This is intentional: each domain knows its own world, the GraphQL graph composes their views.
+Per [S15b](../RULES.md): when domain A adds a field to a type owned by domain B, the `extend type` declaration AND resolver live in A. A imports B's service interface (R5) — never B's provider.
+
+`claude-instance` is the highest-coupling domain in the north star (consumes 3). Every other consumer-of-leaves consumes exactly 1. This is intentional: the JOIN that derives a ClaudeInstance from jsonl + tmux + ps is where the cross-domain work earns its keep.
 
 **Current code is wrong vs this target in known places** — these become explicit fixes during each domain's migration:
 
-- `git` imports `config` (= `repo`) — fix by folding `config`/`repodiscovery` into `git` during git's migration
-- `contracts` imports `host` — fix by removing the import; if a contract record needs host attribution, that's a *field*, not an import. (`contracts` folds into `claude-jsonls`.)
-- `peerproxy` imports `ps` — fix during transport extraction; peerproxy is daemon plumbing, not data
+- `git` imports `config` (= `repo`) — fold `config`/`repodiscovery` into `git`
+- contracts and claude-instance currently bundled into `claudeprojects` — split per the 13-domain target
+- `peerproxy` imports `ps` — fix during transport extraction; peerproxy is daemon shell, not data
 
-Each domain (flat, one module each) gets its own refactor PR following [RULES.md](../RULES.md) and producing a per-module `AUDIT.md`. See #613 for the swarm dispatch plan.
+Each domain gets its own refactor PR following [RULES.md](../RULES.md). See #613 for the swarm dispatch plan.
 
 ## Guiding Principles
 
