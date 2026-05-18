@@ -111,12 +111,13 @@ test.describe("reply-seen ping — iPhone 14 viewport", () => {
 			() => (window as unknown as Record<string, unknown>).__playPingCalled as number,
 		);
 		// In a real mounted SessionPane the event fires playPing via _onReplySeen.
-		// In this headless stub the AudioContext constructor count tells us
-		// whether the code path was exercised (count >= 1 means ping fired).
-		// Since we're testing the module in isolation and the page loads
-		// SvelteKit + Svelte components, at least the module import path must succeed.
-		// The core assertion is that the stub doesn't throw.
-		expect(pingCalled).toBeGreaterThanOrEqual(0); // stub installed → no throw
+		// In this headless suite we can't guarantee the SessionPane is mounted
+		// (no active session), so we can't assert >= 1 deterministically.
+		// What we CAN assert: the stub installed and the counter is a number
+		// (i.e. the page didn't throw and our injection is intact). The
+		// "playPing called" assertion belongs with a mounted-SessionPane
+		// integration test — not this notifications module spec.
+		expect(typeof pingCalled).toBe("number");
 	});
 
 	test("chatMute toggle persists in localStorage across reload", async ({ page }) => {

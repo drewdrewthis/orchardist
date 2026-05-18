@@ -195,24 +195,9 @@ func TestPanesByCommand_EmptyNeedle(t *testing.T) {
 	}
 }
 
-// TestPanesByCommand_SnapshotReadOnce verifies that a single logical call to
-// PanesByCommand reads the snapshot exactly once (no N+1). We use a
-// snapshotCountingProvider that wraps the real store and counts calls.
-func TestPanesByCommand_SnapshotReadOnce(t *testing.T) {
-	// Call PanesByCommand with two candidate panes — if the implementation
-	// reads the snapshot once and scans, the store.Snapshot call count is 1.
-	panes := []Pane{
-		{Key: PaneKey{Host: "local", PaneID: "%1"}, CurrentPid: 1, CurrentCommand: "claude"},
-		{Key: PaneKey{Host: "local", PaneID: "%2"}, CurrentPid: 2, CurrentCommand: "zsh"},
-	}
-	p := buildTestProvider(panes)
-
-	// We can't intercept store.Snapshot without modifying the store, so we
-	// verify the functional outcome: both panes exist, only the claude one is
-	// returned, and it doesn't blow up.
-	ps := &stubPsGetter{commands: map[int]string{1: "claude", 2: "zsh"}}
-	got := p.PanesByCommand("local", "claude", ps)
-	if len(got) != 1 {
-		t.Errorf("want 1 claude pane, got %d", len(got))
-	}
-}
+// (TestPanesByCommand_SnapshotReadOnce was removed — the body only
+// duplicated TestPanesByCommand_BasenameMatch's coverage (count of
+// returned matches) without actually verifying snapshot-read count.
+// To genuinely assert N+1-free reads we'd need a counting wrapper around
+// store.Snapshot — that belongs with the broader daemon module refactor
+// where the tmux service exposes typed lookups instead of full snapshots.)

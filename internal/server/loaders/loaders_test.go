@@ -528,23 +528,35 @@ func TestPullRequestEnrichment_ServesStaleOnRateLimit(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Load the stale key — should succeed with stale data despite the error.
+	// Contract (loadPullRequestEnrichments): when BatchEnrichPullRequests
+	// returns partial results + error, the loader surfaces stale data with
+	// NO error for keys present in the map. Surfacing an error here would
+	// regress the partial-failure contract.
 	pr, err := l.PullRequestEnrichment.Load(ctx, staleKey)()
 	if err != nil {
-		// The error is acceptable here — the test checks that stale data is
-		// available. When the batch function returns partial results AND an
-		// error, the loader fills the result from the map (no error for keys
-		// present in the map) and errors for keys absent from the map.
-		// Accept a zero-value PR with an error as an alternative valid path.
-		t.Logf("got error (acceptable stale-path): %v", err)
-	} else {
-		// No error path: the loader served stale data.
-		if pr.Number != staleValue.Number {
-			t.Errorf("stale PR number = %d, want %d", pr.Number, staleValue.Number)
-		}
-		if pr.Mergeable != staleValue.Mergeable {
-			t.Errorf("stale Mergeable = %q, want %q", pr.Mergeable, staleValue.Mergeable)
-		}
+		t.Fatalf("stale-key load returned error %v; loader must serve stale data without error when batch returns map[key]=stale", err)
+	}
+	if pr.Number != staleValue.Number {
+		t.Errorf("stale PR number = %d, want %d", pr.Number, staleValue.Number)
+	}
+	if pr.Mergeable != staleValue.Mergeable {
+		t.Errorf("stale Mergeable = %q, want %q", pr.Mergeable, staleValue.Mergeable)
+	}
+
+	// Conversely, a key NOT in the stale map gets the error (total-failure
+	// path). Verifies the loader's per-key error-vs-data branch.
+	freshKey := ghprovider.PullRequestKey{Owner: "bob", Name: "repo", Number: 99}
+	stub2 := &prEnrichStub{
+		rateLimitOnCall: 1,
+		staleData: map[ghprovider.PullRequestKey]ghprovider.PullRequest{
+			staleKey: staleValue,
+		},
+	}
+	bundle2 := &loaders.ProvidersBundle{GHEnricher: stub2}
+	l2 := loaders.NewLoaders(bundle2)
+	_, err2 := l2.PullRequestEnrichment.Load(ctx, freshKey)()
+	if err2 == nil {
+		t.Errorf("non-stale-key load returned no error during rate-limit; loader must surface error for keys absent from partial results")
 	}
 
 	// Exactly one batch invocation occurred.
