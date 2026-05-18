@@ -6,6 +6,24 @@
 //!
 //! The binary is named `orchard-tui` so it can coexist with the Go daemon's
 //! `orchard` CLI on the same `$PATH`.
+//!
+//! # Domain subcommands (L1 / L6)
+//!
+//! Per the repo constitution L1 (operations live as scripts) and L6 (CLI is
+//! standalone), `orchard-tui <domain> <op>` wraps the corresponding
+//! `scripts/<domain>-<op>.sh --json` without requiring the daemon:
+//!
+//! ```text
+//! orchard-tui gh            <op>  [flags]
+//! orchard-tui git           <op>  [flags]
+//! orchard-tui tmux          <op>  [flags]
+//! orchard-tui ps            <op>  [flags]
+//! orchard-tui host-services <op>  [flags]
+//! orchard-tui claude-account <op> [flags]
+//! orchard-tui daemon        <op>
+//! ```
+//!
+//! Each domain also exposes a `raw [-- <args...>]` pass-through per S16b.
 use std::env;
 use std::io::IsTerminal;
 
@@ -19,6 +37,7 @@ use orchard::chat;
 use orchard::federation;
 use orchard::global_config;
 use orchard::heal;
+use orchard::cli;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::restore;
@@ -38,6 +57,50 @@ fn main() {
     }
 
     let args: Vec<String> = env::args().collect();
+
+    // ---------------------------------------------------------------------------
+    // Domain subcommand dispatch (L1 / L6 — standalone, no daemon required).
+    //
+    // If the first positional argument (args[1]) is a domain name, hand off
+    // everything after it to the domain handler. All domain `run()` functions
+    // call `std::process::exit` on every code path (success, error, or unknown
+    // subcommand / usage), so this block never falls through.
+    // ---------------------------------------------------------------------------
+    if let Some(domain) = args.get(1).map(|s| s.as_str()) {
+        let domain_args: Vec<String> = args.get(2..).unwrap_or(&[]).to_vec();
+        match domain {
+            "gh" => {
+                cli::gh::run(&domain_args);
+                unreachable!("gh::run always exits");
+            }
+            "git" => {
+                cli::git::run(&domain_args);
+                unreachable!("git::run always exits");
+            }
+            "tmux" => {
+                cli::tmux_cmd::run(&domain_args);
+                unreachable!("tmux_cmd::run always exits");
+            }
+            "ps" => {
+                cli::ps::run(&domain_args);
+                unreachable!("ps::run always exits");
+            }
+            "host-services" => {
+                cli::host_services::run(&domain_args);
+                unreachable!("host_services::run always exits");
+            }
+            "claude-account" => {
+                cli::claude_account::run(&domain_args);
+                unreachable!("claude_account::run always exits");
+            }
+            "daemon" => {
+                cli::daemon_cmd::run(&domain_args);
+                unreachable!("daemon_cmd::run always exits");
+            }
+            // Not a domain name — fall through to the existing handler below.
+            _ => {}
+        }
+    }
 
     let mut json_flag = false;
     let mut schema_flag = false;
@@ -704,6 +767,18 @@ fn print_usage() {
   orchard-tui restore                Reconstruct dead tmux sessions from the local
                                        cache. Read paths never resurrect killed
                                        sessions — this is the only deliberate path.
+
+Domain subcommands (L1/L6 — standalone, no daemon required):
+  orchard-tui gh            <op> [flags]  GitHub operations (gh CLI wrapper)
+  orchard-tui git           <op> [flags]  Git operations (worktree-create/remove/move, fetch, pull, push)
+  orchard-tui tmux          <op> [flags]  tmux operations (send-text)
+  orchard-tui ps            <op> [flags]  Process table operations
+  orchard-tui host-services <op> [flags]  Service lifecycle (start/stop/restart/status)
+  orchard-tui claude-account <op> [flags] Claude CLI / ccusage operations
+  orchard-tui daemon        <op>           Daemon lifecycle (start/stop/status/reload)
+
+  Each domain also accepts `raw [-- <tool-args...>]` as a pass-through escape hatch (S16b).
+  Run `orchard-tui <domain>` with no subcommand for domain-specific usage.
 
 Options:
   --version, -V  Print version and exit
