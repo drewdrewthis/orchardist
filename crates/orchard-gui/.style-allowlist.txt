@@ -12,3 +12,6 @@
 # reader can audit.
 
 TerminalAttach.svelte  # hosts xterm.js DOM via :global(.xterm) selectors
+SessionPane.svelte  # REPL-state pill state machine: 8 variants + 4 named @keyframes (pulse-green, pulse-amber, reply-pulse, dot-reply-pulse) + prefers-reduced-motion guard. Inlining as Tailwind arbitrary values loses the named-state readability.
+SidebarSectionHeader.svelte  # :global(.sidebar-list > section:first-of-type) > .section-header — first-child border rule reaching across component boundary; not expressible in child-only Tailwind utilities.
+TranscriptView.svelte  # [data-status] attribute-driven status indicator (sending/sent/received/seen/stalled) with named @keyframes (indicator-in, indicator-fade-out) plus turn-bubble flow rules. Attribute selectors + named keyframes do not map cleanly to Tailwind.

@@ -30,8 +30,12 @@
 
 <div class="mobile-shell">
 	{#if !store.online}
-		<div class="offline-bar mono" role="status" aria-live="polite">
-			<span class="offline-dot"></span>
+		<div
+			class="mono flex items-center justify-center gap-2 py-2 px-3.5 text-[12.5px] font-semibold text-white bg-[repeating-linear-gradient(-45deg,#dc2626_0_12px,#b91c1c_12px_24px)] border-b border-black/30 [text-shadow:0_1px_0_rgba(0,0,0,0.3)] flex-none z-50"
+			role="status"
+			aria-live="polite"
+		>
+			<span class="inline-block w-2 h-2 rounded-full bg-white animate-pulse"></span>
 			<span>Offline — daemon unreachable. Reconnect to send.</span>
 		</div>
 	{/if}
@@ -124,40 +128,3 @@
 	{/if}
 </div>
 
-<style>
-	/* Offline banner — hard to miss. Stripes + red, sticks above everything
-	   else in the shell so the user always sees it. */
-	.offline-bar {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 8px;
-		padding: 8px 14px;
-		font-size: 12.5px;
-		font-weight: 600;
-		color: #fff;
-		background: repeating-linear-gradient(
-			-45deg,
-			#dc2626,
-			#dc2626 12px,
-			#b91c1c 12px,
-			#b91c1c 24px
-		);
-		border-bottom: 1px solid rgba(0, 0, 0, 0.3);
-		text-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
-		flex: 0 0 auto;
-		z-index: 50;
-	}
-	.offline-dot {
-		display: inline-block;
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: #fff;
-		animation: offline-pulse 1.2s ease-in-out infinite;
-	}
-	@keyframes offline-pulse {
-		0%, 100% { opacity: 1; transform: scale(1); }
-		50% { opacity: 0.4; transform: scale(0.7); }
-	}
-</style>

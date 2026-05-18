@@ -82,7 +82,7 @@
 	}
 </script>
 
-<div class="composer-wrap flex flex-col gap-1 px-3 pt-2.5 border-t-[0.5px] border-line bg-surface">
+<div class="flex flex-col gap-1 px-3 pt-2.5 pb-[max(10px,env(safe-area-inset-bottom,0px))] border-t-[0.5px] border-line bg-surface">
 	{#if error}
 		<div class="mono flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-bad-fg rounded-md bg-[color-mix(in_oklab,var(--color-bad-fg)_10%,transparent)] border-[0.5px] border-[color-mix(in_oklab,var(--color-bad-fg)_30%,var(--color-line))]">
 			<Icon name="alert" size={11} />
@@ -117,7 +117,7 @@
 			class="flex-1 min-h-[36px] max-h-[200px] resize-none border-[0.5px] border-line bg-surface-2 text-fg rounded-lg px-2.5 py-2 text-[16px] leading-[1.4] outline-none focus:border-[color-mix(in_oklab,var(--color-accent)_60%,var(--color-line))]"
 		></textarea>
 		<button
-			class="send-btn"
+			class="inline-flex items-center justify-center w-[38px] h-[38px] border-none rounded-[10px] bg-accent text-white cursor-pointer flex-none transition-[background,transform] duration-100 ease-out hover:enabled:bg-[color-mix(in_oklab,var(--color-accent)_90%,white)] active:enabled:scale-95 disabled:bg-[color-mix(in_oklab,var(--color-fg)_15%,transparent)] disabled:text-[color-mix(in_oklab,var(--color-fg)_40%,transparent)] disabled:cursor-not-allowed"
 			onclick={send}
 			disabled={!text.trim()}
 			title="Send (Enter) · Shift+Enter for newline"
@@ -126,50 +126,7 @@
 			<Icon name="send" size={14} />
 		</button>
 	</div>
-	<div class="composer-status mono">
+	<div class="mono flex items-center gap-1.5 text-[10.5px] min-h-[14px] px-[2px]">
 		<span class="dimer">↵ send · ⇧↵ newline · {paneId}</span>
 	</div>
 </div>
-
-<style>
-	.send-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 38px;
-		height: 38px;
-		border: none;
-		border-radius: 10px;
-		background: var(--color-accent, #6366f1);
-		color: white;
-		cursor: pointer;
-		transition: background 100ms ease, transform 80ms ease;
-		flex: none;
-	}
-	.send-btn:hover:not(:disabled) {
-		background: color-mix(in oklab, var(--color-accent, #6366f1) 90%, white);
-	}
-	.send-btn:active:not(:disabled) {
-		transform: scale(0.95);
-	}
-	.send-btn:disabled {
-		background: color-mix(in oklab, var(--color-fg, #888) 15%, transparent);
-		color: color-mix(in oklab, var(--color-fg, #888) 40%, transparent);
-		cursor: not-allowed;
-	}
-	.composer-status {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 10.5px;
-		min-height: 14px;
-		padding: 0 2px;
-	}
-	/* iOS safe-area bottom — owned by the composer, not the outer shell.
-	   max(10px, env(...)) gives a consistent breathing room on non-notched
-	   screens while honoring the home-indicator on iPhone X+. Without this,
-	   the textarea was being clipped past the bottom of the viewport. */
-	.composer-wrap {
-		padding-bottom: max(10px, env(safe-area-inset-bottom, 0));
-	}
-</style>
