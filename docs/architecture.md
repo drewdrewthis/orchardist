@@ -2,9 +2,105 @@
 
 ## Overview
 
-Orchard is a TUI dashboard for managing git worktrees, tmux sessions, and their
-associated GitHub issues and PRs. It aggregates data from multiple external
-sources into a single unified view.
+Orchard is a development command center for managing git worktrees, tmux sessions, GitHub issues/PRs, and Claude Code sessions across multiple repositories. It surfaces as:
+
+- a **TUI** dashboard (Rust + Ratatui)
+- a **GUI** (SvelteKit + Houdini)
+- a **GraphQL daemon** (Go, on `localhost:7777`) that federates state across local machine and remote SSH peers
+- a **CLI** (`orchard <verb>`) that exposes operations as standalone scripts
+
+The TUI and GUI are read-and-write consumers of the daemon. The daemon and CLI are sibling actors over the same external truth (tmux server, git repo, GitHub API, claude jsonl, filesystem); neither persists its own state.
+
+> **The repo's design rules live in [RULES.md](../RULES.md) (top-level).** This doc describes the architecture; RULES.md says what good looks like inside it.
+
+## Ecosystem model
+
+Orchard is **four ecosystems**, each with its own identity, contract, and ownership boundary:
+
+```
+                       External truth
+        (tmux server, git, gh, claude jsonl, filesystem)
+                       ▲              ▲
+                       │              │
+                  ┌────┴────┐    ┌────┴────┐
+                  │ scripts/│    │         │
+                  │ (canon- │    │         │
+                  │ ical    │    │         │
+                  │ ops)    │    │         │
+                  └────┬────┘    │         │
+                       │         │         │
+                       │    exec │         │ in-process
+                       │         │         │ (queries)
+                  ┌────▼────┐  ┌─▼─────────▼─┐
+                  │   CLI   │  │   Daemon    │
+                  │ (Rust;  │  │ (Go; GraphQL│
+                  │ stand-  │  │ on :7777)   │
+                  │ alone)  │  │             │
+                  └─────────┘  └──────┬──────┘
+                                      │ GraphQL
+                                      │
+                              ┌───────┴───────┐
+                              │               │
+                         ┌────▼───┐      ┌────▼────┐
+                         │  GUI   │      │  TUI    │
+                         │(Svelte)│      │(Ratatui)│
+                         └────────┘      └─────────┘
+```
+
+### Layer responsibilities
+
+| Layer | Owns | Consumes |
+|---|---|---|
+| `scripts/` | Canonical operations (tmux send-keys, worktree create, etc.). Each script is independently executable with `--json` output. Picks the right language for the job (bash/python/rust/go). | External truth directly. |
+| **CLI** (`orchard <verb>`) | User-facing command surface. **Standalone — works without the daemon.** Thin Rust wrappers that exec scripts. | `scripts/`, external truth via scripts. |
+| **Daemon** (`internal/server/`, becoming `daemon/`) | GraphQL service at `localhost:7777`. **Queries** resolve in-process from cached projections of external truth. **Mutations** exec the corresponding `scripts/<op>` and project its `--json` output as the response. **Daemon-self commands** (start/stop/status/introspect) live under `orchard daemon <verb>`. | `scripts/` (mutations), external truth (queries, polling), `orchard daemon ...` sub-CLI (self-management). |
+| **GUI** (`crates/orchard-gui/`) | Consumer. SvelteKit + Houdini normalized cache. | **Daemon only**, via GraphQL queries/mutations/subscriptions. Never execs scripts, never imports CLI crates, never touches external truth directly. |
+| **TUI** (`crates/orchard/`) | Consumer. Rust + Ratatui. | **Daemon only**, via GraphQL. Same constraints as GUI. |
+
+### Dependency invariants (enforced by RULES.md L1–L10)
+
+- **CLI is the foundation.** Standalone. Knows nothing about the daemon.
+- **Daemon stands sibling to CLI.** Both operate over external truth independently. Neither needs the other to function; they coordinate via the shared `scripts/` library, not via cross-process state.
+- **GUI and TUI stand above the daemon.** They never reach past it. Anything they need is a daemon query, mutation, or subscription.
+- **No persisted daemon state.** Restart re-observes from scratch. Caches are rebuildable.
+- **Mutation pattern: write via daemon mutation, see the change via subscription (or via mutation response).** No "cache invalidate" logic in the daemon — GraphQL's mutation-response + subscription contract handles it.
+
+### Why this shape
+
+The original architecture grew the daemon as a **categorically-organized** Go tree (`internal/server/{providers,resolvers,loaders,graphql}/`) with the TUI and CLI bypassing it for any write. That produced three failure modes:
+
+1. **No module-level ownership** — surgical edits to one provider/resolver pair drift; nobody owns "the tmux concept" end-to-end.
+2. **Duplicate logic across consumers** — every client re-implemented `tmux send-keys` style operations.
+3. **Daemon was read-only in practice** — its mutation surface was thin because writes happened in client code.
+
+The ecosystem model + script-as-canonical pattern collapses all three: one home per operation, one consumer-facing write API (daemon mutations), one module per domain end-to-end. See [ADR-023](adr/023-repo-constitution.md).
+
+## Daemon module domains
+
+The daemon owns the following domains. Each domain becomes a module under `daemon/<name>/` (see [RULES.md R1, R2](../RULES.md)). Today they live under `internal/server/providers/<name>/`; migration is tracked in #613.
+
+| Domain | Owns | Current path | Status |
+|---|---|---|---|
+| **tmux** | Sessions, windows, panes, clients across tmux servers (local + federated). Send-keys mutation. Pane content streaming. | `internal/server/providers/tmux/` | Live. Audit + migration pending. Known smell: `Snapshot()` hot path (#612). |
+| **git** | Worktree set, branch state, ahead/behind, remote heads. Mutations: worktree create / remove / move. | `internal/server/providers/git/` | Live. Audit + migration pending. |
+| **gh** | Repos, issues, pull requests, PR enrichment (mergeable, status checks, labels). Mutations: PR review / label / comment (gap). | `internal/server/providers/gh/` | Live. Audit + migration pending. Known smell: single+batch enrichment divergence (#615). |
+| **claude** | Claude Code sessions (running REPLs), conversation jsonl, project on disk, active account. **Collapses today's `claudeprojects/` + `claudeinstance/` + `claudeaccount/`** — they're three faces of one domain. Mutations: send-text-to-pane (today), start/stop session (gap). | `internal/server/providers/{claudeprojects,claudeinstance,claudeaccount}/` | Live. ADR-022 pane-first refactor landed; module collapse + audit pending. |
+| **ps** | Process metadata (cwd, pid, parent, command) for currently-running processes. Read-only. | `internal/server/providers/ps/` | Live. Audit + migration pending. |
+| **host** | Host identity, federation peer info. **Collapses today's `host/` + `hostservice/`** — adjacent concerns. | `internal/server/providers/{host,hostservice}/` | Live. Audit + migration pending. |
+| **contracts** | Contracts engine (durable delivery primitive — see [references/contracts.md](https://github.com/drewdrewthis/orchard-codex)). Currently exposed via MCP, not GraphQL. | `internal/server/providers/contracts/` | Live. Mutation surface in daemon GraphQL is sparse — audit may surface gaps. |
+| **peerproxy** | Federation control plane: proxy queries to peer daemons, route based on host. | `internal/server/providers/peerproxy/` | Live. Audit + migration pending. |
+| **worktree** | Composite domain: joins git worktree + tmux sessions/panes + claude instances + gh PR into the `Worktree.*` resolver chain. Cross-module consumer; depends on tmux + git + claude + gh services. | `internal/server/resolvers/worktree_*.go` | Today: scattered across resolver files. After migration: new `daemon/worktree/` module owning these resolvers, consuming sibling-module services. |
+| **repodiscovery** | Discovers orchard-managed repositories on disk. | `internal/server/providers/repodiscovery/` | Live. Audit + migration pending. |
+| **config** | Daemon configuration. Read-only at runtime (config writes are CLI-only per existing rule). | `internal/server/providers/config/` | Live. Likely thin; audit may collapse into `host` or `daemon-self`. |
+
+**Domains explicitly NOT in scope for the module-refactor:**
+
+- **chat** (`internal/server/providers/chat/`) — being deleted (#616). Skip.
+- **gqlgen-generated code** (`internal/server/graphql/`) — moves wholesale to `daemon/graphql/` in Phase 0; not a domain.
+- **loaders aggregate** (`internal/server/loaders/`) — splits per domain; the remaining cross-module composer lives at `daemon/loaders.go` (thin).
+- **server.go** — moves to `daemon/server.go`; the composer that wires modules into the aggregate Resolver.
+
+Each domain gets its own refactor PR following [RULES.md](../RULES.md) and producing a per-module `AUDIT.md`. See #613 for the swarm dispatch plan.
 
 ## Guiding Principles
 
