@@ -16,20 +16,20 @@ Local git: repos, worktrees, branches, refs, status, ahead/behind, remote heads.
 
 Walking the watched-projects list + known dirs to find git repos is a **startup routine** inside this domain — not its own domain. The data it populates (the set of `Repo` nodes) belongs to `git`.
 
-## Cross-domain fields on Worktree (resolved here)
+## Cross-domain fields on Worktree (S15b: declared in the producing domain)
 
-These fields are declared in this domain's partial; the resolver lives here and calls the owning domain's service:
+Per [S15b](../../RULES.md), cross-domain `extend type` blocks and their resolvers live in the domain that **produces** the data — NOT in the type owner (`git`). Worktree is owned here; the cross-domain fields live elsewhere:
 
-| Field | Owning domain |
+| Field | Producing domain (schema + resolver) |
 |---|---|
 | `Worktree.processes` | [`ps`](../ps/) |
 | `Worktree.tmuxPanes` | [`tmux`](../tmux/) |
 | `Worktree.tmuxSession` | [`tmux`](../tmux/) |
-| `Worktree.claudeInstances` | [`claude-jsonls`](../claude-jsonls/) |
+| `Worktree.claudeInstances` | [`claude-instance`](../claude-instance/) |
 | `Worktree.pr` | [`gh`](../gh/) |
 | `Worktree.issue` | [`gh`](../gh/) |
 
-The cross-domain join IS the GraphQL graph; per [R5](../../RULES.md), the resolver here imports the consumer's service interface and does not reach into another domain's provider.
+Each producing domain imports only a narrow service interface from `git` (per [R4, R5](../../RULES.md)) to look up the Worktree's `path` and `branch` — never the `git` provider directly.
 
 ## Current source location (pre-refactor)
 

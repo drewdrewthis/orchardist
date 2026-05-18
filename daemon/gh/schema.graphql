@@ -11,6 +11,10 @@
 # (`pullRequests`, `issue`, `workflowRuns`, etc.). The pass-through escape
 # hatch is `Query.gh(query, variables): JSON` — opaque, uncached, returns
 # whatever GitHub returns.
+#
+# Cross-domain `extend type Worktree` (S15b: gh is the data producer):
+#   Worktree.pr    — PR whose headRef matches the worktree branch
+#   Worktree.issue — Issue linked from the worktree branch name
 
 extend type Query {
   """
@@ -259,4 +263,33 @@ type WorkflowRun implements Node {
   url: String!
   createdAt: String!
   updatedAt: String!
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — gh produces PR/issue data.
+# The resolver lives in daemon/gh/ and calls the gh service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  PR whose headRef matches this worktree's branch.
+
+  Selection precedence (#489): an OPEN PR is returned when one exists;
+  otherwise the most-recent CLOSED/MERGED PR with the matching headRef is
+  returned so the TUI stale-fade UX can render the post-merge cleanup
+  affordance. The `state` field on the returned PullRequest disambiguates
+  between live and post-merge.
+
+  Null when no PR has ever existed for this branch in any state, when the
+  branch is detached, or when the branch is the project's default branch.
+  Resolver calls the gh service (S15b: producer domain owns the field).
+  """
+  pr: PullRequest
+
+  """
+  Issue linked from the worktree's branch (issue<N>/... convention).
+  Null when the branch name does not match the convention.
+  Resolver calls the gh service (S15b: producer domain owns the field).
+  """
+  issue: Issue
 }
