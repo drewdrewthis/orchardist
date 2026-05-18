@@ -42,6 +42,10 @@ generate:
 	# Mirror schema.graphql into the resolvers package so go:embed can
 	# bake it into the daemon binary for Query.schemaSDL (#469 F10).
 	cp schema.graphql internal/server/resolvers/schema.graphql
+	# Concatenate root partial + per-domain partials into the combined
+	# embedded schema for daemon/daemon-self (Query.schemaSDL post-refactor).
+	# daemon/daemon-self/resolver_health.go embeds this file at build time.
+	cat daemon/schema.graphql daemon/*/schema.graphql > daemon/daemon-self/schema_combined.graphql
 
 # Rust release builds — one target per crate.
 rust: dispatcher
