@@ -1,0 +1,151 @@
+# daemon-self — daemon's own state, health, and composite views.
+#
+# Owns: Health, DaemonState, ProviderHealth, Meta, WorkView.
+# Owns: Query.{health, daemonState, version, schemaSDL, workView, node, gh-passthrough}.
+# Constitution: L10 (daemon-self under `orchard daemon ...`),
+#               L8/M2 (daemonReload/manual rebuild are the rare mutations affecting
+#               daemon-internal state, not external truth).
+
+extend type Query {
+  "Liveness probe — returns daemon health and uptime."
+  health: Health!
+
+  """
+  Daemon-side health surface for diagnosing "is it me or the daemon"
+  (#469 F9). Reports per-provider refresh state and a daemon-wide
+  meta envelope. Cheap — reads in-memory counters, no I/O.
+  """
+  daemonState: DaemonState!
+
+  "Daemon binary version. Set at build time via -ldflags -X main.version=<semver>; `dev` for plain `go build`."
+  version: String!
+
+  """
+  Returns the daemon's embedded schema.graphql contents as a single
+  string. Lets agents on remote/fresh boxes self-describe even when
+  introspection is gated (#469 F10). The bytes are baked into the
+  daemon binary at build time via go:embed; they reflect whatever
+  schema the running daemon was built against.
+  """
+  schemaSDL: String!
+
+  """
+  Composite "what's running, where, on what branch?" view (#469 F6).
+  Walks the local repos → worktrees graph and joins each worktree
+  to its open PR, linked issue, processes, and tmux sessions in a
+  single round trip. The fields underneath reuse existing resolvers,
+  so semantics match per-field queries.
+  """
+  workView: WorkView!
+
+  """
+  Generic node lookup by globally-unique id. Returns the node if it
+  resides on the local daemon; ids whose host prefix matches a configured
+  peer are transparently proxied through the peerproxy surface
+  (federation transport). Unknown hosts return null.
+  """
+  node(id: ID!): Node
+
+  """
+  Forward an arbitrary GraphQL query to GitHub's API using the daemon's
+  configured gh credentials. Pass-through is read-only by design: it is
+  exposed as a Query field, not a Mutation, so callers cannot bypass
+  orchardist guardrails by routing mutations through the daemon. Auth,
+  rate limiting, and base URL come from the gh provider; callers do not
+  pass tokens.
+
+  Federation: peers can call `gh` through the peerproxy surface. The
+  result is opaque JSON on the orchard side — the consumer typechecks
+  against GitHub's schema directly.
+  """
+  gh(query: String!, variables: JSON): JSON
+}
+
+type Health {
+  "Daemon health status — 'ok' when serving."
+  status: String!
+
+  "Uptime in seconds since daemon started."
+  uptimeS: Int!
+}
+
+"""
+Daemon-wide health/diagnostic snapshot. v1 returns provider-level
+counters and the global startedAt / uptime; future versions can grow
+subscription/connection counts.
+"""
+type DaemonState {
+  "RFC3339 timestamp the daemon started serving."
+  startedAt: String!
+
+  "Daemon uptime in seconds."
+  uptimeS: Int!
+
+  "Per-provider freshness/error rollup."
+  providers: [ProviderHealth!]!
+}
+
+"""
+A daemon provider's health snapshot — what its most recent refresh
+did, when, and how it ended.
+"""
+type ProviderHealth {
+  "Stable provider name (e.g. \"tmux\", \"git\", \"gh\", \"ps\")."
+  name: String!
+
+  "True when the provider has been wired into this daemon."
+  configured: Boolean!
+
+  "RFC3339 timestamp of the last successful refresh; null until first success."
+  lastSuccessfulRefresh: String
+
+  "Reason for the most recent failure; null when none observed since startup."
+  lastFailureReason: String
+
+  "Total successful refreshes since daemon boot."
+  refreshCount: Int!
+
+  "Total refresh failures since daemon boot."
+  failureCount: Int!
+}
+
+"""
+Provenance and freshness envelope used to disambiguate "valid empty"
+from "data unavailable" (#469 F1). Returned alongside list/composite
+fields whose underlying providers can fail or be uninitialised.
+
+`provider` is a stable label (e.g. "tmux", "git", "gh"). `failureReason`
+is non-null when the most recent refresh did not succeed.
+`lastSuccessfulFetchAt` is the RFC3339 timestamp of the most recent
+provider refresh that completed cleanly; null when no successful
+refresh has happened yet.
+"""
+type Meta {
+  "Provider this envelope describes. Matches the labels in DaemonState.providers[]."
+  provider: String!
+
+  "RFC3339 timestamp of the most recent successful refresh; null when never observed."
+  lastSuccessfulFetchAt: String
+
+  "Human-readable reason the most recent refresh failed; null when healthy or never attempted."
+  failureReason: String
+}
+
+"""
+Top-level composite view that the orchardist dashboard asks for first.
+Returns the same data the per-type resolvers return, joined into a
+single tree to save round trips.
+"""
+type WorkView {
+  "Repos in this daemon's config, with worktrees, sessions, claude, and PR/issue joins eagerly walked."
+  repos: [Repo!]!
+
+  "Tmux sessions on the local host — same as Query.tmuxSessions with no filter."
+  tmuxSessions: [TmuxSession!]!
+
+  "Live Claude instances — same shape as Query.claudeInstances."
+  claudeInstances: [ClaudeInstance!]!
+
+  "Meta envelope describing freshness/availability for this view."
+  meta: Meta!
+}

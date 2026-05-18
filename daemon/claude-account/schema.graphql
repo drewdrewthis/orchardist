@@ -1,0 +1,53 @@
+# claude-account — `claude auth status` + ccusage quota scraping.
+#
+# Owns: ClaudeAccount.
+# Owns: Query.claudeAccounts.
+#
+# Cross-domain back-edge:
+#   ClaudeAccount.host      → host-identity
+#   ClaudeAccount.instances → claude-jsonls (live REPLs running under this account)
+
+extend type Query {
+  "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account `claude auth status` reports for; later versions may surface additional accounts."
+  claudeAccounts: [ClaudeAccount!]!
+}
+
+"""
+A Claude CLI account. v1 surfaces the single account `claude auth
+status` reports for the local user.
+
+`quotaUsed`, `quotaCap`, and `quotaResetsAt` are scraped from
+`ccusage`. They are nullable because:
+  - `claude` may be installed without `ccusage`, in which case the
+    fields are unknown rather than zero.
+  - `ccusage` itself may not yet have observed any traffic for the
+    current quota window, in which case the cap is unknown.
+
+When the numbers come from `ccusage` (the only source v1 supports),
+`quotaEstimated` is true.
+"""
+type ClaudeAccount implements Node {
+  "Stable orchard id — \"ClaudeAccount:<host>:<email>\"."
+  id: ID!
+
+  "Email address `claude auth status` reports for the active session."
+  email: String!
+
+  "Quota consumed in the current window. Null when ccusage has not been able to report a number."
+  quotaUsed: Float
+
+  "Quota cap for the current window. Null when ccusage cannot determine the cap (e.g. fresh install with no traffic)."
+  quotaCap: Float
+
+  "True when the quota numbers are estimated by `ccusage` rather than reported by a first-party API. Always true in v1."
+  quotaEstimated: Boolean!
+
+  "When the current quota window resets. Null when ccusage cannot determine the next reset."
+  quotaResetsAt: Time
+
+  "The host this account is scoped to. Cross-domain join into `host-identity`."
+  host: Host!
+
+  "Claude REPLs currently running under this account. Cross-domain join into `claude-jsonls`."
+  instances: [ClaudeInstance!]!
+}

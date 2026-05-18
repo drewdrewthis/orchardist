@@ -1,0 +1,87 @@
+# ps — OS process table.
+#
+# Owns: Process, ProcessFilter.
+# Cross-domain: extend Host with processes(filter), extend Subscription with processes.
+# Note: Process.{worktree, claudeInstance} are cross-domain back-edges; declared here,
+#       resolved here by calling into git's and claude-jsonls' services respectively.
+
+extend type Query {
+  # No top-level process queries today — processes are reached via Host.processes(filter).
+  # Listed here for completeness so the partial doesn't pretend Query is empty for ps.
+  _psPartialAnchor: Boolean
+}
+
+extend type Subscription {
+  "Receive a snapshot of every cached process whenever the ps provider invalidates."
+  processes: [Process!]!
+}
+
+extend type Host {
+  "Processes visible to this host's `ps` adapter, optionally filtered."
+  processes(filter: ProcessFilter): [Process!]!
+}
+
+"Process is an OS-level process surfaced via the `ps` adapter."
+type Process implements Node {
+  "Stable id formatted as `<host>:<pid>`."
+  id: ID!
+
+  "Host this process is running on."
+  host: Host!
+
+  "Process id."
+  pid: Int!
+
+  "Parent process id (0 for kernel/launchd-rooted processes)."
+  ppid: Int!
+
+  "Command basename (e.g. 'sleep', 'claude'). Cheap, always populated."
+  command: String!
+
+  "Full argv. Slow path — opt-in (separate `ps -wwax -o pid,args` lookup)."
+  args: [String!]
+
+  """
+  Current working directory.
+
+  Slow path — `lsof` on macOS, `/proc/<pid>/cwd` on Linux (Linux fallback
+  not yet implemented; returns null silently). Resolution only fires when
+  this field is in the selection set; the `cwdLoader` coalesces concurrent
+  calls into a single batched `lsof -p <pids> -F n` shellout per request.
+
+  The de-facto opt-in path from a tmux pane is `pane.process.cwd` — there
+  is no separate flag or argument; selecting `cwd` IS the opt-in.
+  """
+  cwd: String
+
+  "Process start time (RFC3339 if parseable, otherwise the raw `lstart` field)."
+  startedAt: String!
+
+  "CPU percent as reported by ps."
+  cpuPercent: Float!
+
+  "Resident memory in bytes (RSS * 1024 from ps)."
+  memBytes: Int!
+
+  "Controlling terminal, or null if none."
+  tty: String
+
+  "Worktree this process is running inside, derived from cwd. Cross-domain join into `git`."
+  worktree: Worktree
+
+  "Claude instance back-edge — populated when this pid is the foreground claude pid. Cross-domain join into `claude-jsonls`."
+  claudeInstance: ClaudeInstance
+}
+
+# ProcessFilter is applied at the resolver layer over the cached process
+# list. Multiple filters are AND-combined.
+input ProcessFilter {
+  "Match processes whose command basename is in this list."
+  commandIn: [String!]
+
+  "Match processes whose cwd starts with this prefix. Forces cwd resolution."
+  cwdPrefix: String
+
+  "Match processes by pid."
+  pidIn: [Int!]
+}

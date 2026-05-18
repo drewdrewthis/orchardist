@@ -1,0 +1,300 @@
+# claude-jsonls — Claude Code session JSONLs.
+#
+# Owns: Conversation, ClaudeInstance, InstanceState.
+# Owns: Contract, ContractStatus, ContractQuestion, ContractFilter.
+# Owns: Query.{conversations, conversation, contract, contracts, claudeInstances}.
+# Owns: Subscription.{nodeChanged, peer, conversationChanged}.
+#
+# Architecturally, the JSONL stream is the source of truth for both regular
+# conversations AND companion records from Conversation/Contracts plugins
+# (which share the same JSONL). ClaudeInstance is derived from a JSONL whose
+# tail is recent enough to be considered "live" AND has a matching live pane
+# process. Most JSONLs are historical and have no live instance.
+#
+# Cross-domain back-edges (resolved here):
+#   ClaudeInstance.pane         → tmux
+#   ClaudeInstance.process      → ps
+#   ClaudeInstance.account      → claude-account
+#   ClaudeInstance.worktree     → git
+#   ClaudeInstance.conversation → self (same file)
+
+extend type Query {
+  "Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt."
+  conversations: [Conversation!]!
+
+  "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
+  conversation(id: ID!): Conversation
+
+  "A single Contract by id. Returns null if the id is unknown."
+  contract(id: ID!): Contract
+
+  "Every Contract the daemon currently knows about, optionally filtered."
+  contracts(filter: ContractFilter): [Contract!]!
+
+  "All live Claude instances the daemon is tracking — derived from JSONLs with live process matches."
+  claudeInstances: [ClaudeInstance!]!
+}
+
+extend type Subscription {
+  "Receive the freshly-loaded node value each time its provider's invalidation channel fires for that id."
+  nodeChanged(id: ID!): Node!
+
+  """
+  Tunnel a subscription to a remote peer. The daemon opens (or reuses) a
+  websocket to the named peer and re-emits node updates locally.
+  Returns the touched Node on each remote invalidation. Unknown peers
+  raise an error and close the stream.
+  """
+  peer(host: String!): Node
+
+  """
+  Push-on-change for one Claude Code conversation, keyed by sessionUuid.
+  Emits the freshly-loaded Conversation every time the claude-jsonls
+  provider's fsnotify watcher fires for the matching JSONL. Use this
+  to rerender a transcript view without polling. Returns null when the
+  watcher reports the file was removed.
+  """
+  conversationChanged(sessionUuid: String!): Conversation
+}
+
+"""
+A Claude Code conversation, backed by the JSONL transcript that the
+Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
+
+The provider derives every field from the JSONL on disk — there is no
+sidecar metadata. Heavy fields (full transcripts, message bodies)
+deliberately do not surface here (RULES.md S10, ADR-016); the v1 contract
+is metadata + a single live signal (`open`) and an optional plugin-populated
+`recap`. For transcript bodies see `GET /v1/conversations/<uuid>/jsonl`.
+
+`open` is a heartbeat: true when the JSONL was written within the last
+N seconds (default 60s, see provider.HeartbeatThreshold).
+"""
+type Conversation implements Node {
+  "Stable orchard id — \"Conversation:<sessionUuid>\"."
+  id: ID!
+
+  "The session UUID embedded in the JSONL filename — globally unique across Claude Code."
+  sessionUuid: String!
+
+  "Working directory recorded in the JSONL when the session was created. Null when not yet observed."
+  cwd: String
+
+  "RFC 3339 timestamp of the first record in the JSONL."
+  firstSeenAt: Time
+
+  "RFC 3339 timestamp of the last record in the JSONL."
+  lastSeenAt: Time
+
+  "Number of newline-terminated JSON records in the JSONL."
+  messageCount: Int!
+
+  "Heartbeat: true when the JSONL was last written within the heartbeat threshold."
+  open: Boolean!
+
+  "Plugin-populated short summary. Always null in v1."
+  recap: String
+
+  """
+  Absolute path to the JSONL transcript on the daemon's host.
+  Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
+  """
+  jsonlPath: String!
+
+  "User-set title from the JSONL `type: \"custom-title\"` record. Null when the session has not yet recorded one."
+  customTitle: String
+
+  "Sub-agent name from the JSONL `type: \"agent-name\"` record. Null when the session has not yet recorded one."
+  agentName: String
+
+  """
+  Live REPL instances currently bound to this JSONL — typically 0 (historical
+  jsonl) or 1 (running session). 2+ is the rare /resume case where two REPL
+  processes share the same sessionUuid.
+  """
+  liveInstances: [ClaudeInstance!]!
+}
+
+"""
+A live Claude Code session running on a host. Derived — NOT a primary
+resource: a ClaudeInstance is the join of a live JSONL tail with a matching
+live pane process. Identity is the foreground claude pid scoped to a host.
+
+Most JSONLs have no instance; the instance set is "JSONLs whose heartbeat
+is fresh AND there is a tmux pane whose process is `claude` with the matching
+sessionUuid in its working state."
+"""
+type ClaudeInstance implements Node {
+  "Stable orchard id — \"ClaudeInstance:<host>:<claudePid>\"."
+  id: ID!
+
+  "Tmux pane hosting this Claude process. Null if no pane could be matched. Cross-domain join into `tmux`."
+  pane: TmuxPane
+
+  "OS-level process. Null until the process can be matched by pid. Cross-domain join into `ps`."
+  process: Process
+
+  "Claude CLI account this session is authenticated under. Cross-domain join into `claude-account`."
+  account: ClaudeAccount
+
+  "Lifecycle state derived from the heartbeat file plus pid liveness."
+  state: InstanceState!
+
+  "claude.ai Remote Control URL when the session has it enabled."
+  rcUrl: String
+
+  "True when remote-control is enabled for this session."
+  rcEnabled: Boolean!
+
+  "Claude session UUID. Mirrors the heartbeat's session_id field."
+  sessionUuid: String
+
+  "RFC3339 timestamp the session was started."
+  startedAt: String
+
+  """
+  ISO8601 timestamp of the most recent activity for this Claude instance —
+  derived from the heartbeat's last_activity field, falling back to
+  TmuxPane.lastActivityAt, falling back to null when neither is available.
+  """
+  lastActivityAt: String
+
+  """
+  Claude model used by this session — from the last non-sidechain
+  assistant record's message.model field (e.g. \"claude-opus-4-7\").
+  Null when no jsonl has been observed yet for this session.
+  """
+  model: String
+
+  """
+  Number of tool_use calls open (sent by assistant, no matching tool_result)
+  in the current turn. Derived from the jsonl classifier. 0 when no jsonl
+  is found.
+  """
+  inflightToolCount: Int!
+
+  """
+  Worktree this Claude REPL is operating in — the deepest worktree whose
+  `path` contains the resolved process cwd. Server-side join over the
+  ps + git providers; null when no process can be matched or no worktree
+  contains the cwd. Cross-domain join into `git`.
+  """
+  worktree: Worktree
+
+  """
+  Conversation node for this Claude session — looked up by `sessionUuid`
+  in the claude-jsonls provider. Null when the Claude REPL has not yet
+  written a JSONL record (or `sessionUuid` is null). Lets clients pull
+  customTitle / agentName / lastSeenAt without a separate `conversations`
+  query + uuid map.
+  """
+  conversation: Conversation
+}
+
+"Lifecycle states for a Claude instance."
+enum InstanceState {
+  "Claude is actively executing a tool or generating a response."
+  working
+  "Claude has finished its turn and is waiting for the next prompt."
+  idle
+  "Claude is paused and waiting for user input."
+  input
+  "The session has been alive but is no longer answering heartbeats."
+  stalled
+  "Tracked but the underlying process is gone."
+  dead
+  "No Claude session has ever been observed for this pane/process."
+  no_claude
+}
+
+"""
+A commitment an agent has made to deliver something. Contracts are
+authored exclusively by the claude-contracts plugin; orchard reads
+them via the contracts provider and never writes. Contract records
+ride on the same JSONL stream as Conversation/Message records, so
+contracts are an enrichment of the same data this domain owns.
+"""
+type Contract implements Node {
+  "Stable orchard id — \"Contract:<contract_id>\"."
+  id: ID!
+
+  "The contract id as written by the plugin."
+  contractId: ID!
+
+  "What the owner committed to deliver."
+  statement: String!
+
+  "Owner session id (Claude session UUID) recorded at creation time."
+  ownerSessionId: String!
+
+  "Owner agent name."
+  ownerAgentName: String!
+
+  "Routing target for status updates and question answers."
+  reportsTo: String
+
+  "Parent contract id when filed under a management contract."
+  parentContractId: ID
+
+  "Folded current status."
+  status: ContractStatus!
+
+  "RFC 3339 timestamp the contract was first created."
+  createdAt: String!
+
+  "RFC 3339 timestamp the contract was last touched."
+  updatedAt: String!
+
+  "Acceptance criteria added via `criterion_added` events, in original order."
+  criteria: [String!]!
+
+  "Questions awaiting an answer. Empty when nothing is pending."
+  openQuestions: [ContractQuestion!]!
+
+  "RFC 3339 timestamp of the most recent event affecting this contract."
+  lastEventAt: String!
+}
+
+"Lifecycle states for Contract."
+enum ContractStatus {
+  OPEN
+  DELIVERED_PENDING_VALIDATION
+  DELIVERED_PENDING_PARENT_VALIDATION
+  PENDING_DREW_APPROVAL
+  AWAITING_CANCEL_ACK
+  WAITING_EXTERNAL
+  SATISFIED
+  CANCELLED
+  JUDGE_REJECTED_TERMINAL
+}
+
+"A blocking question recorded against a Contract."
+type ContractQuestion {
+  "Question id as written by the plugin."
+  questionId: ID!
+
+  "The question text."
+  text: String!
+
+  "Agent that asked the question."
+  askedBy: String!
+
+  "RFC 3339 timestamp the question was asked."
+  askedAt: String!
+
+  "RFC 3339 deadline after which the question times out."
+  deadline: String
+
+  "Whether this question blocks contract close while open."
+  blocksClose: Boolean!
+}
+
+"""
+Filter for `Query.contracts`. All fields are optional.
+"""
+input ContractFilter {
+  statuses: [ContractStatus!]
+  ownerSessionId: String
+  ownerAgentName: String
+  parentContractId: ID
+}
