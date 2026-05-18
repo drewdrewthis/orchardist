@@ -1323,7 +1323,7 @@ func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.Tmu
 	}
 	host := string(r.Tmux.Host())
 	qr := &queryResolver{r.Resolver}
-	inst := qr.buildClaudeInstanceFromPane(ctx, obj, host, nil, nil)
+	inst := qr.buildClaudeInstanceFromPane(ctx, obj, host, nil, nil, nil)
 	return inst, nil
 }
 

@@ -48,12 +48,34 @@ func (r *queryResolver) projectPanesToClaudeInstances(ctx context.Context, panes
 	// Build a production SnapshotReader for jsonl state derivation.
 	snapshotReader := claudeinstance.NewFsSnapshotReader("")
 
+	// Build cwd→sessionUUID index ONCE for the whole request — previously
+	// every pane re-fetched the conversation list and re-scanned linearly
+	// (N panes × M conversations). On a busy host this was ~10×500 = 5,000
+	// compares per request; now it's one fetch + one O(M) pass.
+	//
+	// "Deepest match" mattered to the inverse lookup (findWorktreeForCwd in
+	// worktree_claude.go); for pane→conversation the cwd is the conversation's
+	// own cwd, so an exact equality index is correct. Last-wins on duplicate
+	// cwds, mirroring the old "first hit, break" behavior in slice order
+	// (sliceorder isn't stable here anyway, so the contract is "some matching
+	// conversation," not a specific one).
+	cwdToSession := make(map[string]string)
+	if r.ClaudeProjects != nil {
+		if convs, err := r.ClaudeProjects.List(ctx); err == nil {
+			for _, conv := range convs {
+				if conv.Cwd != nil && *conv.Cwd != "" {
+					cwdToSession[*conv.Cwd] = conv.ID.SessionUUID
+				}
+			}
+		}
+	}
+
 	out := make([]*graphql1.ClaudeInstance, 0, len(panes))
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
-		inst := r.buildClaudeInstanceFromPane(ctx, pane, host, account, snapshotReader)
+		inst := r.buildClaudeInstanceFromPane(ctx, pane, host, account, snapshotReader, cwdToSession)
 		out = append(out, inst)
 	}
 
@@ -63,12 +85,16 @@ func (r *queryResolver) projectPanesToClaudeInstances(ctx context.Context, panes
 }
 
 // buildClaudeInstanceFromPane constructs one ClaudeInstance from a TmuxPane.
+// cwdToSession is a pre-built index from projectPanesToClaudeInstances; it
+// turns the conversation lookup into an O(1) map hit instead of a per-pane
+// linear scan over r.ClaudeProjects.List(ctx).
 func (r *queryResolver) buildClaudeInstanceFromPane(
 	ctx context.Context,
 	pane *graphql1.TmuxPane,
 	host string,
 	account *graphql1.ClaudeAccount,
 	snapshotReader claudeinstance.SnapshotReader,
+	cwdToSession map[string]string,
 ) *graphql1.ClaudeInstance {
 	var pid int
 	if pane.CurrentPid != nil {
@@ -103,14 +129,23 @@ func (r *queryResolver) buildClaudeInstanceFromPane(
 		}
 	}
 
-	// Find the deepest matching conversation by cwd for state derivation.
+	// Look up the matching conversation by cwd.
+	//   - cwdToSession != nil: hot-path caller (projectPanesToClaudeInstances)
+	//     pre-built the index once; we hit it in O(1).
+	//   - cwdToSession == nil: single-pane caller (tmuxPane.claudeInstance
+	//     resolver) only needs one cwd; linear scan is fine and cheaper
+	//     than allocating a map of every conversation in the project tree.
 	var sessionUUID string
-	if cwd != "" && r.ClaudeProjects != nil {
-		if convs, err := r.ClaudeProjects.List(ctx); err == nil {
-			for _, conv := range convs {
-				if conv.Cwd != nil && *conv.Cwd == cwd {
-					sessionUUID = conv.ID.SessionUUID
-					break
+	if cwd != "" {
+		if cwdToSession != nil {
+			sessionUUID = cwdToSession[cwd]
+		} else if r.ClaudeProjects != nil {
+			if convs, err := r.ClaudeProjects.List(ctx); err == nil {
+				for _, conv := range convs {
+					if conv.Cwd != nil && *conv.Cwd == cwd {
+						sessionUUID = conv.ID.SessionUUID
+						break
+					}
 				}
 			}
 		}
