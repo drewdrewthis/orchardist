@@ -10,11 +10,6 @@ directive @defer(
 ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
 
 """
-Indicates exactly one field must be supplied and this field must not be `null`.
-"""
-directive @oneOf on INPUT_OBJECT
-
-"""
 Aggregated CI status across all check runs and statuses on the PR head sha.
 """
 enum CiStatus {
@@ -97,11 +92,25 @@ type ClaudeInstance implements Node {
   id: ID!
 
   """
+  Number of tool_use calls open (sent by assistant, no matching tool_result)
+  in the current turn. Derived from the jsonl classifier. 0 when no jsonl
+  is found.
+  """
+  inflightToolCount: Int!
+
+  """
   ISO8601 timestamp of the most recent activity for this Claude instance —
   derived from the heartbeat's last_activity field, falling back to
   TmuxPane.lastActivityAt, falling back to null when neither is available.
   """
   lastActivityAt: String
+
+  """
+  Claude model used by this session — from the last non-sidechain
+  assistant record's message.model field (e.g. \"claude-opus-4-7\").
+  Null when no jsonl has been observed yet for this session.
+  """
+  model: String
 
   """
   Tmux pane hosting this Claude process. Null if no pane could be matched.
@@ -602,6 +611,41 @@ type Meta {
   Provider this envelope describes. Matches the labels in DaemonState.providers[].
   """
   provider: String!
+}
+
+"""
+Mutations. Kept minimal and bounded by design.
+
+The daemon's policy (see Query.gh docstring) keeps GitHub mutations OUT
+of the schema so orchardist guardrails can't be bypassed. The mutations
+here are **local-only**: they act on resources the daemon already owns
+(tmux server, local Claude REPLs). They are NOT a general write surface.
+
+Every mutation MUST:
+  - Target a graph node already present in the schema (TmuxPane, etc.)
+  - Be scoped to local-host resources (no remote calls, no GitHub)
+  - Be reversible or idempotent where reasonable
+"""
+type Mutation {
+  """
+  Send literal text to a tmux pane, followed by an Enter keypress.
+  
+  Targets the live Claude REPL hosted by the named pane. The daemon
+  invokes `tmux send-keys -t <paneId> -l <text>` to write the text
+  literally (no shell interpretation), waits briefly for tmux to
+  flush, then sends a separate Enter keypress. The two-step pattern
+  matches the desktop app's Tauri command and avoids the race where
+  a combined send can submit before the text is fully written.
+  
+  Returns true on success. paneId is the tmux pane id (e.g. "%15"),
+  the same value surfaced by `tmuxPanes.paneId` queries. Returns an
+  error when the pane cannot be reached or tmux exits non-zero.
+  
+  Use case: browser / mobile / federated clients sending chat input
+  to a Claude REPL when they can't invoke tmux directly. Desktop
+  clients prefer the Tauri command since it stays local.
+  """
+  sendTextToPane(paneId: String!, text: String!): Boolean!
 }
 
 """
@@ -1178,6 +1222,11 @@ type TmuxPane implements Node {
 """Filter for `Query.tmuxPanes`. AND-combined when multiple are set."""
 input TmuxPaneFilter {
   """
+  Only include panes whose foreground-process command basename contains this substring, case-insensitive (ADR-022 PanesByCommand axis).
+  """
+  command: String
+
+  """
   Only include panes whose `currentCommand` is in this list.
   
   Note: `currentCommand` is the raw tmux `pane_current_command` value,
@@ -1188,6 +1237,11 @@ input TmuxPaneFilter {
   `TmuxPane.currentCommand` for the full caveat.
   """
   currentCommandIn: [String!]
+
+  """
+  Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis).
+  """
+  cwd: String
 
   """Only include dead (or non-dead) panes."""
   dead: Boolean

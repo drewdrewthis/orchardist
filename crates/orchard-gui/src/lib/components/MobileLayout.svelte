@@ -29,6 +29,16 @@
 </script>
 
 <div class="mobile-shell">
+	{#if !store.online}
+		<div
+			class="mono flex items-center justify-center gap-2 py-2 px-3.5 text-[12.5px] font-semibold text-white bg-[repeating-linear-gradient(-45deg,#dc2626_0_12px,#b91c1c_12px_24px)] border-b border-black/30 [text-shadow:0_1px_0_rgba(0,0,0,0.3)] flex-none z-50"
+			role="status"
+			aria-live="polite"
+		>
+			<span class="inline-block w-2 h-2 rounded-full bg-white animate-pulse"></span>
+			<span>Offline — daemon unreachable. Reconnect to send.</span>
+		</div>
+	{/if}
 	{#if !tab}
 		<div class="mobile-top">
 			<div class="mobile-top-row">
@@ -64,11 +74,10 @@
 
 		<LensSidebar
 			now={store.now}
-			density="comfortable"
+			density="compact"
 			surface="mobile"
 			onSelect={(target) => {
-				if (target.kind === "channel") store.openChannel(target.roomId);
-				else store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid });
+				store.openSession({ paneId: target.paneId, sessionUuid: target.sessionUuid, titleHint: target.titleHint });
 			}}
 		/>
 
@@ -76,11 +85,12 @@
 			<Icon name="plus" size={22} />
 		</button>
 	{:else}
-		<div style:flex="1" style:min-height="0">
+		<div style:flex="1" style:min-height="0" style:display="flex" style:flex-direction="column">
 			{#if tab.kind === "session"}
 				<SessionPane
 					paneId={tab.paneId}
 					sessionUuid={tab.sessionUuid}
+					titleHint={tab.titleHint}
 					active={true}
 					paneCount={1}
 					isLast={true}
@@ -101,6 +111,7 @@
 					fullscreen={null}
 					conversation={store.visibleConversation || { itemId: '', recap: '', isChannel: true, messages: [] }}
 					now={store.now}
+					surface="mobile"
 					composeText={store.composeText}
 					setComposeText={(s) => (store.composeText = s)}
 					onSend={() => store.send()}
@@ -116,3 +127,4 @@
 		</div>
 	{/if}
 </div>
+

@@ -38,6 +38,8 @@ function transcriptURL(sessionUuid: string, lastN?: number): string {
 /**
  * Read the last N records of a transcript via the daemon HTTP endpoint.
  * Default lastN=200 keeps the renderer responsive on huge transcripts.
+ * Pass `lastN` explicitly for a smaller first-paint window (e.g. 3) before
+ * a follow-up upgrade fetch.
  *
  * Falls back to the Tauri filesystem reader when the daemon is unreachable
  * AND we're inside Tauri. Browser dev with no daemon → throws.
@@ -46,9 +48,11 @@ export async function readTranscript(
 	pathOrSession: string,
 	maxBytes?: number,
 	sessionUuid?: string,
+	lastN: number = 200,
 ): Promise<TranscriptChunk> {
-	const lastN = 200;
 	const uuid = sessionUuid ?? guessUUIDFromPath(pathOrSession);
+	const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
 	if (uuid) {
 		try {
 			const url = transcriptURL(uuid, lastN);
@@ -64,12 +68,27 @@ export async function readTranscript(
 					text,
 				};
 			}
+			// Daemon says no file yet (404) — empty transcript is the right answer
+			// in browser. We don't want to error out and force the user back to a
+			// desktop-only view; the chat composer is the point, the transcript
+			// streams in as the jsonl grows.
+			if (res.status === 404 && !inTauri) {
+				return { path: pathOrSession, size: 0, truncated: false, text: "" };
+			}
 		} catch {
-			// Network/proxy down — fall through to Tauri.
+			// Network/proxy down — fall through to Tauri if available, else
+			// return empty so the chat shell still renders.
+			if (!inTauri) {
+				return { path: pathOrSession, size: 0, truncated: false, text: "" };
+			}
 		}
+	} else if (!inTauri) {
+		// No uuid AND not in Tauri — nothing to read, return empty so the
+		// SessionPane chat view still renders the composer.
+		return { path: pathOrSession, size: 0, truncated: false, text: "" };
 	}
-	// Last-resort Tauri fallback (dev shell with daemon down).
-	const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+	// Last-resort Tauri fallback (desktop shell with daemon down).
 	if (!inTauri) throw new Error(TRANSCRIPT_UNSUPPORTED);
 	const raw = await invoke<{
 		path: string;

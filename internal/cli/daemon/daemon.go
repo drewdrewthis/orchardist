@@ -33,7 +33,6 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
@@ -177,19 +176,6 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 
 	claudeAccountProvider := claudeaccount.New("local", logger)
 
-	psAdapter := &psInputAdapter{p: psProvider}
-	claudeInstanceProvider := claudeinstance.New(
-		"local",
-		claudeinstance.NewComposer(
-			"local",
-			claudeinstance.NewPaneFinder(
-				newTmuxInputAdapter(tmuxProvider, psProvider),
-			),
-			claudeinstance.NewProcessFinder(psAdapter),
-			claudeinstance.NewAccountFinder(&acctInputAdapter{p: claudeAccountProvider}),
-		),
-	)
-
 	hsvc, hsvcErr := buildHostServiceProvider(ctx)
 	if hsvcErr != nil {
 		fmt.Fprintf(os.Stderr, "orchard: hostservice unavailable: %v\n", hsvcErr)
@@ -236,7 +222,6 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithConversationsJSONL(claudeProjectsProvider, claudeProjectsRoot),
 		server.WithClaudeAccount(claudeAccountProvider),
-		server.WithClaudeInstance(claudeInstanceProvider),
 		server.WithContracts(contracts.New(logger)),
 		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),

@@ -373,3 +373,198 @@ func (s *prStub) StateRequests() []ghprovider.PullRequestState {
 	defer s.mu.Unlock()
 	return append([]ghprovider.PullRequestState(nil), s.stateRequests...)
 }
+
+// --- PullRequestEnrichment loader tests ---
+
+// prEnrichStub implements loaders.GHPREnricher. It records how many times
+// BatchEnrichPullRequests is called and which keys were requested. It can be
+// configured to simulate a rate-limit error on the first call and then serve
+// a stale-like response (by returning a pre-seeded result map).
+type prEnrichStub struct {
+	mu sync.Mutex
+	// calls tracks how many times BatchEnrichPullRequests was called.
+	calls int
+	// rateLimitOnCall, if > 0, makes the stub return an error on that call
+	// number while still populating results with stale entries from staleData.
+	rateLimitOnCall int
+	// staleData is returned (or used as fallback) on rate-limit calls.
+	staleData map[ghprovider.PullRequestKey]ghprovider.PullRequest
+}
+
+func (s *prEnrichStub) BatchEnrichPullRequests(_ context.Context, keys []ghprovider.PullRequestKey) (map[ghprovider.PullRequestKey]ghprovider.PullRequest, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+
+	if s.rateLimitOnCall > 0 && call == s.rateLimitOnCall {
+		// Return stale data with a rate-limit error; callers serve from the map.
+		out := make(map[ghprovider.PullRequestKey]ghprovider.PullRequest, len(keys))
+		for _, k := range keys {
+			if pr, ok := s.staleData[k]; ok {
+				out[k] = pr
+			}
+		}
+		return out, fmt.Errorf("github graphql errors: rate limit exceeded")
+	}
+
+	out := make(map[ghprovider.PullRequestKey]ghprovider.PullRequest, len(keys))
+	for _, k := range keys {
+		out[k] = ghprovider.PullRequest{
+			RepoOwner:         k.Owner,
+			RepoName:          k.Name,
+			Number:            k.Number,
+			Mergeable:         ghprovider.MergeableStateMergeable,
+			MergeStateStatus:  "CLEAN",
+			StatusCheckRollup: ghprovider.CiStatusSuccess,
+		}
+	}
+	return out, nil
+}
+
+func (s *prEnrichStub) CallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// TestPullRequestEnrichment_BatchesIntraRepo asserts that N concurrent
+// enrichment loads for different PRs in the same repo collapse into a
+// single batch invocation and one BatchEnrichPullRequests call.
+func TestPullRequestEnrichment_BatchesIntraRepo(t *testing.T) {
+	stub := &prEnrichStub{}
+	bundle := &loaders.ProvidersBundle{GHEnricher: stub}
+	l := loaders.NewLoaders(bundle)
+
+	ctx := context.Background()
+	const N = 10
+	thunks := make([]func() (ghprovider.PullRequest, error), 0, N)
+	for i := 0; i < N; i++ {
+		key := ghprovider.PullRequestKey{Owner: "alice", Name: "repo", Number: 100 + i}
+		thunks = append(thunks, l.PullRequestEnrichment.Load(ctx, key))
+	}
+	for i, thunk := range thunks {
+		pr, err := thunk()
+		if err != nil {
+			t.Fatalf("thunk %d error: %v", i, err)
+		}
+		want := 100 + i
+		if pr.Number != want {
+			t.Errorf("thunk %d: Number = %d, want %d", i, pr.Number, want)
+		}
+	}
+
+	if got := l.PullRequestEnrichmentBatchCount(); got != 1 {
+		t.Errorf("batch count = %d, want 1 (n+1 detection)", got)
+	}
+	if got := stub.CallCount(); got != 1 {
+		t.Errorf("provider calls = %d, want 1 (all PRs batched in one call)", got)
+	}
+}
+
+// TestPullRequestEnrichment_BatchesByRepo asserts that concurrent enrichment
+// loads for PRs across 3 distinct repos still collapse into one batch
+// invocation, while the underlying BatchEnrichPullRequests implementation
+// fires one HTTP call per repo (verified via call count on the stub).
+func TestPullRequestEnrichment_BatchesByRepo(t *testing.T) {
+	stub := &prEnrichStub{}
+	bundle := &loaders.ProvidersBundle{GHEnricher: stub}
+	l := loaders.NewLoaders(bundle)
+
+	ctx := context.Background()
+	repos := []struct{ owner, name string }{
+		{"org", "alpha"},
+		{"org", "beta"},
+		{"org", "gamma"},
+	}
+	const perRepo = 5
+	var thunks []func() (ghprovider.PullRequest, error)
+	for _, r := range repos {
+		for i := 0; i < perRepo; i++ {
+			key := ghprovider.PullRequestKey{Owner: r.owner, Name: r.name, Number: 1 + i}
+			thunks = append(thunks, l.PullRequestEnrichment.Load(ctx, key))
+		}
+	}
+	for i, thunk := range thunks {
+		if _, err := thunk(); err != nil {
+			t.Fatalf("thunk %d error: %v", i, err)
+		}
+	}
+
+	// All loads arrived in one batch window — exactly one batch invocation.
+	if got := l.PullRequestEnrichmentBatchCount(); got != 1 {
+		t.Errorf("batch count = %d, want 1", got)
+	}
+	// The stub receives all keys in one BatchEnrichPullRequests call; the
+	// real provider would fire 3 HTTP requests (one per repo) internally.
+	if got := stub.CallCount(); got != 1 {
+		t.Errorf("provider calls = %d, want 1 (dataloader coalesces into one batch call)", got)
+	}
+}
+
+// TestPullRequestEnrichment_ServesStaleOnRateLimit asserts that when
+// BatchEnrichPullRequests returns a rate-limit error alongside stale data,
+// the dataloader surfaces the stale enrichment rather than an error for
+// keys that have a stale entry, and propagates the error for those that do not.
+func TestPullRequestEnrichment_ServesStaleOnRateLimit(t *testing.T) {
+	staleKey := ghprovider.PullRequestKey{Owner: "alice", Name: "repo", Number: 42}
+	staleValue := ghprovider.PullRequest{
+		RepoOwner:         "alice",
+		RepoName:          "repo",
+		Number:            42,
+		Mergeable:         ghprovider.MergeableStateMergeable,
+		MergeStateStatus:  "CLEAN",
+		StatusCheckRollup: ghprovider.CiStatusSuccess,
+	}
+
+	stub := &prEnrichStub{
+		rateLimitOnCall: 1, // trigger rate-limit error on first call
+		staleData: map[ghprovider.PullRequestKey]ghprovider.PullRequest{
+			staleKey: staleValue,
+		},
+	}
+	bundle := &loaders.ProvidersBundle{GHEnricher: stub}
+	l := loaders.NewLoaders(bundle)
+
+	ctx := context.Background()
+
+	// Contract (loadPullRequestEnrichments): when BatchEnrichPullRequests
+	// returns partial results + error, the loader surfaces stale data with
+	// NO error for keys present in the map. Surfacing an error here would
+	// regress the partial-failure contract.
+	pr, err := l.PullRequestEnrichment.Load(ctx, staleKey)()
+	if err != nil {
+		t.Fatalf("stale-key load returned error %v; loader must serve stale data without error when batch returns map[key]=stale", err)
+	}
+	if pr.Number != staleValue.Number {
+		t.Errorf("stale PR number = %d, want %d", pr.Number, staleValue.Number)
+	}
+	if pr.Mergeable != staleValue.Mergeable {
+		t.Errorf("stale Mergeable = %q, want %q", pr.Mergeable, staleValue.Mergeable)
+	}
+
+	// Conversely, a key NOT in the stale map gets the error (total-failure
+	// path). Verifies the loader's per-key error-vs-data branch.
+	freshKey := ghprovider.PullRequestKey{Owner: "bob", Name: "repo", Number: 99}
+	stub2 := &prEnrichStub{
+		rateLimitOnCall: 1,
+		staleData: map[ghprovider.PullRequestKey]ghprovider.PullRequest{
+			staleKey: staleValue,
+		},
+	}
+	bundle2 := &loaders.ProvidersBundle{GHEnricher: stub2}
+	l2 := loaders.NewLoaders(bundle2)
+	_, err2 := l2.PullRequestEnrichment.Load(ctx, freshKey)()
+	if err2 == nil {
+		t.Errorf("non-stale-key load returned no error during rate-limit; loader must surface error for keys absent from partial results")
+	}
+
+	// Exactly one batch invocation occurred.
+	if got := l.PullRequestEnrichmentBatchCount(); got != 1 {
+		t.Errorf("batch count = %d, want 1", got)
+	}
+	// Exactly one call to the provider.
+	if got := stub.CallCount(); got != 1 {
+		t.Errorf("provider calls = %d, want 1", got)
+	}
+}

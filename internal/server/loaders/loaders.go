@@ -30,6 +30,7 @@ import (
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	tmuxprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
 )
 
 // GHPullRequestLister is the narrow gh surface the PullRequestsForRepo
@@ -37,6 +38,13 @@ import (
 // an interface so tests can inject a stub without standing up HTTP.
 type GHPullRequestLister interface {
 	ListPullRequests(ctx context.Context, owner, name string, state ghprovider.PullRequestState) ([]ghprovider.PullRequest, error)
+}
+
+// GHPREnricher is the narrow gh surface the PullRequestEnrichment loader
+// needs. *gh.Provider satisfies this automatically. Tests can inject a
+// stub without standing up HTTP.
+type GHPREnricher interface {
+	BatchEnrichPullRequests(ctx context.Context, keys []ghprovider.PullRequestKey) (map[ghprovider.PullRequestKey]ghprovider.PullRequest, error)
 }
 
 // ProvidersBundle is the read-side surface the loaders need from the
@@ -47,11 +55,15 @@ type ProvidersBundle struct {
 	Host  *hostprovider.Provider
 	Git   *gitprovider.Provider
 	Ps    *psprovider.Provider
+	Tmux  *tmuxprovider.Provider
 	Repos configprovider.Lister
 	// GH is the narrow gh surface the PullRequestsForRepo loader needs.
 	// *gh.Provider satisfies GHPullRequestLister automatically; tests
 	// can inject a stub without standing up HTTP.
 	GH GHPullRequestLister
+	// GHEnricher is the narrow gh surface the PullRequestEnrichment loader
+	// needs. *gh.Provider satisfies GHPREnricher automatically.
+	GHEnricher GHPREnricher
 }
 
 // loaderKey is the private context key for the per-request loaders.
@@ -62,16 +74,26 @@ type loaderKey struct{}
 // emission). Every dataloader instance holds its own batched promise
 // state.
 type Loaders struct {
-	Host                *dataloader.Loader[string, *graphql1.Host]
-	WorktreeForCwd      *dataloader.Loader[string, *graphql1.Worktree]
-	Process             *dataloader.Loader[ProcessKey, *graphql1.Process]
-	PullRequestsForRepo *dataloader.Loader[RepoKey, []*graphql1.PullRequest]
+	Host                  *dataloader.Loader[string, *graphql1.Host]
+	WorktreeForCwd        *dataloader.Loader[string, *graphql1.Worktree]
+	Process               *dataloader.Loader[ProcessKey, *graphql1.Process]
+	PullRequestsForRepo   *dataloader.Loader[RepoKey, []*graphql1.PullRequest]
+	PullRequestEnrichment *dataloader.Loader[ghprovider.PullRequestKey, ghprovider.PullRequest]
+
+	// Pane loaders (ADR-022): one node, three lookup axes.
+	PaneByID       *dataloader.Loader[PaneKey, *graphql1.TmuxPane]
+	PanesByCwd     *dataloader.Loader[CwdKey, []*graphql1.TmuxPane]
+	PanesByCommand *dataloader.Loader[CommandKey, []*graphql1.TmuxPane]
 
 	// metrics — provider call counts, used by the n+1 detector test.
-	hostBatches     *batchCounter
-	worktreeBatches *batchCounter
-	processBatches  *batchCounter
-	prBatches       *batchCounter
+	hostBatches           *batchCounter
+	worktreeBatches       *batchCounter
+	processBatches        *batchCounter
+	prBatches             *batchCounter
+	prEnrichmentBatches   *batchCounter
+	paneByIDBatches       *batchCounter
+	panesByCwdBatches     *batchCounter
+	panesByCommandBatches *batchCounter
 }
 
 // RepoKey is the composite key for the PullRequestsForRepo loader.
@@ -100,6 +122,29 @@ func (k ProcessKey) String() string {
 	return psprovider.ProcessID{Host: k.HostID, PID: k.Pid}.String()
 }
 
+// PaneKey is the composite key for the PaneByID loader.
+type PaneKey struct {
+	HostID string
+	PaneID string
+}
+
+// String renders a PaneKey as the canonical TmuxPane node id.
+func (k PaneKey) String() string {
+	return fmt.Sprintf("TmuxPane:%s:%s", k.HostID, k.PaneID)
+}
+
+// CwdKey is the composite key for the PanesByCwd loader.
+type CwdKey struct {
+	HostID string
+	Cwd    string
+}
+
+// CommandKey is the composite key for the PanesByCommand loader.
+type CommandKey struct {
+	HostID  string
+	Command string // case-insensitive basename substring
+}
+
 // NewLoaders builds a fresh bundle of loaders bound to the given
 // providers. The 1ms wait window matches the gqlgen handler tick —
 // short enough that a query asking for many edges still feels
@@ -110,6 +155,14 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	worktreeBatches := &batchCounter{}
 	processBatches := &batchCounter{}
 	prBatches := &batchCounter{}
+	prEnrichmentBatches := &batchCounter{}
+	paneByIDBatches := &batchCounter{}
+	panesByCwdBatches := &batchCounter{}
+	panesByCommandBatches := &batchCounter{}
+
+	// Build the narrow PanePsGetter adapter once — shared across all pane
+	// loaders inside this request. Nil when ps provider is not wired.
+	panePsGetter := newPanePsGetterAdapter(providers.Ps)
 
 	hostBatch := func(_ context.Context, ids []string) []*dataloader.Result[*graphql1.Host] {
 		hostBatches.inc()
@@ -126,6 +179,22 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	prBatch := func(ctx context.Context, keys []RepoKey) []*dataloader.Result[[]*graphql1.PullRequest] {
 		prBatches.inc()
 		return loadPullRequestsForRepo(ctx, providers, keys)
+	}
+	prEnrichmentBatch := func(ctx context.Context, keys []ghprovider.PullRequestKey) []*dataloader.Result[ghprovider.PullRequest] {
+		prEnrichmentBatches.inc()
+		return loadPullRequestEnrichments(ctx, providers, keys)
+	}
+	paneByIDBatch := func(_ context.Context, keys []PaneKey) []*dataloader.Result[*graphql1.TmuxPane] {
+		paneByIDBatches.inc()
+		return loadPanesByID(providers, keys)
+	}
+	panesByCwdBatch := func(_ context.Context, keys []CwdKey) []*dataloader.Result[[]*graphql1.TmuxPane] {
+		panesByCwdBatches.inc()
+		return loadPanesByCwd(providers, keys, panePsGetter)
+	}
+	panesByCommandBatch := func(_ context.Context, keys []CommandKey) []*dataloader.Result[[]*graphql1.TmuxPane] {
+		panesByCommandBatches.inc()
+		return loadPanesByCommand(providers, keys, panePsGetter)
 	}
 
 	hostOpts := []dataloader.Option[string, *graphql1.Host]{
@@ -144,16 +213,40 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 		dataloader.WithWait[RepoKey, []*graphql1.PullRequest](1 * time.Millisecond),
 		dataloader.WithCache[RepoKey, []*graphql1.PullRequest](&dataloader.NoCache[RepoKey, []*graphql1.PullRequest]{}),
 	}
+	prEnrichmentOpts := []dataloader.Option[ghprovider.PullRequestKey, ghprovider.PullRequest]{
+		dataloader.WithWait[ghprovider.PullRequestKey, ghprovider.PullRequest](1 * time.Millisecond),
+		dataloader.WithCache[ghprovider.PullRequestKey, ghprovider.PullRequest](&dataloader.NoCache[ghprovider.PullRequestKey, ghprovider.PullRequest]{}),
+	}
+	paneByIDOpts := []dataloader.Option[PaneKey, *graphql1.TmuxPane]{
+		dataloader.WithWait[PaneKey, *graphql1.TmuxPane](1 * time.Millisecond),
+		dataloader.WithCache[PaneKey, *graphql1.TmuxPane](&dataloader.NoCache[PaneKey, *graphql1.TmuxPane]{}),
+	}
+	panesByCwdOpts := []dataloader.Option[CwdKey, []*graphql1.TmuxPane]{
+		dataloader.WithWait[CwdKey, []*graphql1.TmuxPane](1 * time.Millisecond),
+		dataloader.WithCache[CwdKey, []*graphql1.TmuxPane](&dataloader.NoCache[CwdKey, []*graphql1.TmuxPane]{}),
+	}
+	panesByCommandOpts := []dataloader.Option[CommandKey, []*graphql1.TmuxPane]{
+		dataloader.WithWait[CommandKey, []*graphql1.TmuxPane](1 * time.Millisecond),
+		dataloader.WithCache[CommandKey, []*graphql1.TmuxPane](&dataloader.NoCache[CommandKey, []*graphql1.TmuxPane]{}),
+	}
 
 	return &Loaders{
-		Host:                dataloader.NewBatchedLoader(hostBatch, hostOpts...),
-		WorktreeForCwd:      dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
-		Process:             dataloader.NewBatchedLoader(processBatch, processOpts...),
-		PullRequestsForRepo: dataloader.NewBatchedLoader(prBatch, prOpts...),
-		hostBatches:         hostBatches,
-		worktreeBatches:     worktreeBatches,
-		processBatches:      processBatches,
-		prBatches:           prBatches,
+		Host:                  dataloader.NewBatchedLoader(hostBatch, hostOpts...),
+		WorktreeForCwd:        dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
+		Process:               dataloader.NewBatchedLoader(processBatch, processOpts...),
+		PullRequestsForRepo:   dataloader.NewBatchedLoader(prBatch, prOpts...),
+		PullRequestEnrichment: dataloader.NewBatchedLoader(prEnrichmentBatch, prEnrichmentOpts...),
+		PaneByID:              dataloader.NewBatchedLoader(paneByIDBatch, paneByIDOpts...),
+		PanesByCwd:            dataloader.NewBatchedLoader(panesByCwdBatch, panesByCwdOpts...),
+		PanesByCommand:        dataloader.NewBatchedLoader(panesByCommandBatch, panesByCommandOpts...),
+		hostBatches:           hostBatches,
+		worktreeBatches:       worktreeBatches,
+		processBatches:        processBatches,
+		prBatches:             prBatches,
+		prEnrichmentBatches:   prEnrichmentBatches,
+		paneByIDBatches:       paneByIDBatches,
+		panesByCwdBatches:     panesByCwdBatches,
+		panesByCommandBatches: panesByCommandBatches,
 	}
 }
 
@@ -172,6 +265,19 @@ func (l *Loaders) ProcessBatchCount() int { return l.processBatches.value() }
 // PullRequestsForRepoBatchCount returns the number of PR-loader batch
 // invocations since this Loaders was constructed. Used by n+1 tests.
 func (l *Loaders) PullRequestsForRepoBatchCount() int { return l.prBatches.value() }
+
+// PullRequestEnrichmentBatchCount returns the number of PR enrichment
+// loader batch invocations since this Loaders was constructed.
+func (l *Loaders) PullRequestEnrichmentBatchCount() int { return l.prEnrichmentBatches.value() }
+
+// PaneByIDBatchCount returns the number of PaneByID loader batch invocations.
+func (l *Loaders) PaneByIDBatchCount() int { return l.paneByIDBatches.value() }
+
+// PanesByCwdBatchCount returns the number of PanesByCwd loader batch invocations.
+func (l *Loaders) PanesByCwdBatchCount() int { return l.panesByCwdBatches.value() }
+
+// PanesByCommandBatchCount returns the number of PanesByCommand loader batch invocations.
+func (l *Loaders) PanesByCommandBatchCount() int { return l.panesByCommandBatches.value() }
 
 // Middleware wraps an http.Handler to attach a fresh *Loaders to the
 // request context. Mount it once around the GraphQL handler.
@@ -502,6 +608,47 @@ func mapPullRequestState(s ghprovider.PullRequestState) graphql1.PullRequestStat
 	}
 }
 
+// loadPullRequestEnrichments is the DataLoader batch function for the
+// PullRequestEnrichment loader. It collapses all concurrent requests for
+// enrichment fields (mergeable, mergeStateStatus, reviewDecision,
+// statusCheckRollup, labels) into one BatchEnrichPullRequests call per
+// batch window, which in turn fires one HTTP request per unique repository.
+//
+// When providers.GHEnricher is nil (e.g. gh auth is not configured), every
+// position returns a zero PullRequest so the resolver falls back to its
+// empty-field defaults without a hard error.
+func loadPullRequestEnrichments(ctx context.Context, providers *ProvidersBundle, keys []ghprovider.PullRequestKey) []*dataloader.Result[ghprovider.PullRequest] {
+	out := make([]*dataloader.Result[ghprovider.PullRequest], len(keys))
+	enricher := providers.GHEnricher
+	if enricher == nil {
+		for i := range out {
+			out[i] = &dataloader.Result[ghprovider.PullRequest]{Data: ghprovider.PullRequest{}}
+		}
+		return out
+	}
+
+	results, err := enricher.BatchEnrichPullRequests(ctx, keys)
+	if err != nil {
+		// Partial failure: BatchEnrichPullRequests returns stale values for
+		// keys it couldn't fetch. We surface the error per-key only when the
+		// map has no entry for that key (total failure path).
+		for i, k := range keys {
+			if pr, ok := results[k]; ok {
+				out[i] = &dataloader.Result[ghprovider.PullRequest]{Data: pr}
+			} else {
+				out[i] = &dataloader.Result[ghprovider.PullRequest]{Error: err}
+			}
+		}
+		return out
+	}
+
+	for i, k := range keys {
+		pr := results[k]
+		out[i] = &dataloader.Result[ghprovider.PullRequest]{Data: pr}
+	}
+	return out
+}
+
 // projectProcess mirrors the resolver-layer projection so the loader
 // returns a fully-formed Process value. Kept here so loaders is
 // self-contained.
@@ -523,6 +670,146 @@ func projectProcess(p *psprovider.Process, hostID string) *graphql1.Process {
 	}
 	if tty != "" {
 		out.Tty = &tty
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Pane loaders (ADR-022 Phase 2): PaneByID, PanesByCwd, PanesByCommand.
+// ---------------------------------------------------------------------------
+
+// panePsGetterAdapter bridges *psprovider.Provider to the narrow
+// tmuxprovider.PanePsGetter interface. Nil when ps is not wired.
+type panePsGetterAdapter struct {
+	ps *psprovider.Provider
+}
+
+// newPanePsGetterAdapter returns nil when ps is nil so callers can
+// pass it to PanesByCommand / PanesByCwd without checking.
+func newPanePsGetterAdapter(ps *psprovider.Provider) tmuxprovider.PanePsGetter {
+	if ps == nil {
+		return nil
+	}
+	return &panePsGetterAdapter{ps: ps}
+}
+
+func (a *panePsGetterAdapter) CwdForPid(host string, pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	cwd, err := a.ps.LoadCwd(context.Background(), pid)
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
+func (a *panePsGetterAdapter) CommandForPid(host string, pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	proc, _, err := a.ps.Get(context.Background(), psprovider.ProcessID{Host: host, PID: pid})
+	if err != nil {
+		return ""
+	}
+	return proc.Command
+}
+
+// loadPanesByID is the DataLoader batch function for the PaneByID loader.
+// A single tmux snapshot read serves all keys in the batch.
+func loadPanesByID(providers *ProvidersBundle, keys []PaneKey) []*dataloader.Result[*graphql1.TmuxPane] {
+	out := make([]*dataloader.Result[*graphql1.TmuxPane], len(keys))
+	tp := providers.Tmux
+	if tp == nil {
+		for i := range out {
+			out[i] = &dataloader.Result[*graphql1.TmuxPane]{Data: nil}
+		}
+		return out
+	}
+	for i, k := range keys {
+		pn, ok := tp.PaneByID(k.HostID, k.PaneID)
+		if !ok {
+			out[i] = &dataloader.Result[*graphql1.TmuxPane]{Data: nil}
+			continue
+		}
+		out[i] = &dataloader.Result[*graphql1.TmuxPane]{Data: projectLoaderPane(pn)}
+	}
+	return out
+}
+
+// loadPanesByCwd is the DataLoader batch function for the PanesByCwd loader.
+// Groups keys by (host, cwd) and calls PanesByCwd once per unique pair.
+func loadPanesByCwd(providers *ProvidersBundle, keys []CwdKey, ps tmuxprovider.PanePsGetter) []*dataloader.Result[[]*graphql1.TmuxPane] {
+	out := make([]*dataloader.Result[[]*graphql1.TmuxPane], len(keys))
+	tp := providers.Tmux
+	if tp == nil {
+		for i := range out {
+			out[i] = &dataloader.Result[[]*graphql1.TmuxPane]{Data: []*graphql1.TmuxPane{}}
+		}
+		return out
+	}
+	// Deduplicate: same key may appear multiple times in one batch.
+	type result struct{ panes []*graphql1.TmuxPane }
+	cache := make(map[CwdKey]*result, len(keys))
+	for _, k := range keys {
+		if _, seen := cache[k]; seen {
+			continue
+		}
+		raw := tp.PanesByCwd(k.HostID, k.Cwd, ps)
+		gql := make([]*graphql1.TmuxPane, len(raw))
+		for i, pn := range raw {
+			gql[i] = projectLoaderPane(pn)
+		}
+		cache[k] = &result{panes: gql}
+	}
+	for i, k := range keys {
+		out[i] = &dataloader.Result[[]*graphql1.TmuxPane]{Data: cache[k].panes}
+	}
+	return out
+}
+
+// loadPanesByCommand is the DataLoader batch function for the PanesByCommand loader.
+// Groups keys by (host, command) and calls PanesByCommand once per unique pair.
+func loadPanesByCommand(providers *ProvidersBundle, keys []CommandKey, ps tmuxprovider.PanePsGetter) []*dataloader.Result[[]*graphql1.TmuxPane] {
+	out := make([]*dataloader.Result[[]*graphql1.TmuxPane], len(keys))
+	tp := providers.Tmux
+	if tp == nil {
+		for i := range out {
+			out[i] = &dataloader.Result[[]*graphql1.TmuxPane]{Data: []*graphql1.TmuxPane{}}
+		}
+		return out
+	}
+	type result struct{ panes []*graphql1.TmuxPane }
+	cache := make(map[CommandKey]*result, len(keys))
+	for _, k := range keys {
+		if _, seen := cache[k]; seen {
+			continue
+		}
+		raw := tp.PanesByCommand(k.HostID, k.Command, ps)
+		gql := make([]*graphql1.TmuxPane, len(raw))
+		for i, pn := range raw {
+			gql[i] = projectLoaderPane(pn)
+		}
+		cache[k] = &result{panes: gql}
+	}
+	for i, k := range keys {
+		out[i] = &dataloader.Result[[]*graphql1.TmuxPane]{Data: cache[k].panes}
+	}
+	return out
+}
+
+// projectLoaderPane projects a tmuxprovider.Pane onto *graphql1.TmuxPane.
+// Mirrors loader_bridge.go:projectTmuxPane — kept here so the loaders
+// package is self-contained.
+func projectLoaderPane(pn tmuxprovider.Pane) *graphql1.TmuxPane {
+	out := &graphql1.TmuxPane{
+		ID:             "TmuxPane:" + string(pn.Key.Host) + ":" + pn.Key.PaneID,
+		PaneID:         pn.Key.PaneID,
+		CurrentCommand: pn.CurrentCommand,
+	}
+	if pn.CurrentPid > 0 {
+		pid := int64(pn.CurrentPid)
+		out.CurrentPid = &pid
 	}
 	return out
 }

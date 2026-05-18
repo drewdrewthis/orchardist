@@ -398,6 +398,20 @@ type Meta struct {
 	FailureReason *string `json:"failureReason,omitempty"`
 }
 
+// Mutations. Kept minimal and bounded by design.
+//
+// The daemon's policy (see Query.gh docstring) keeps GitHub mutations OUT
+// of the schema so orchardist guardrails can't be bypassed. The mutations
+// here are **local-only**: they act on resources the daemon already owns
+// (tmux server, local Claude REPLs). They are NOT a general write surface.
+//
+// Every mutation MUST:
+//   - Target a graph node already present in the schema (TmuxPane, etc.)
+//   - Be scoped to local-host resources (no remote calls, no GitHub)
+//   - Be reversible or idempotent where reasonable
+type Mutation struct {
+}
+
 type Process struct {
 	// Stable id formatted as `<host>:<pid>`.
 	ID string `json:"id"`
@@ -667,6 +681,10 @@ type TmuxPaneFilter struct {
 	TitleContains *string `json:"titleContains,omitempty"`
 	// Only include dead (or non-dead) panes.
 	Dead *bool `json:"dead,omitempty"`
+	// Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis).
+	Cwd *string `json:"cwd,omitempty"`
+	// Only include panes whose foreground-process command basename contains this substring (case-insensitive, ADR-022 PanesByCommand axis).
+	Command *string `json:"command,omitempty"`
 }
 
 // The tmux daemon process on a host. v1 surfaces the local tmux only;

@@ -25,7 +25,6 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/server"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
@@ -110,31 +109,20 @@ func TestDaemonWiring_Worktrees(t *testing.T) {
 	}
 }
 
-// TestDaemonWiring_ClaudeInstances is the AC-3 regression.
-// `{ claudeInstances { id state } }` must resolve cleanly to an empty
-// list when no heartbeats exist, rather than failing with "claudeinstance
-// provider not initialised".
+// TestDaemonWiring_ClaudeInstances verifies that claudeInstances resolves
+// cleanly to an empty list when the tmux provider has no claude panes.
+// ADR-022 Phase 5: instances are derived from panes, not heartbeat files.
 func TestDaemonWiring_ClaudeInstances(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	_ = ctx // httptest server manages its own lifecycle
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	heartbeatDir := t.TempDir()
-	provider := claudeinstance.NewWith(
-		"local",
-		claudeinstance.NewFileReader(heartbeatDir),
-		claudeinstance.NewComposer("local", nil, nil, nil),
-		nil,
-	)
-	t.Cleanup(func() { _ = provider.Stop() })
-
-	srv := server.New("", logger, server.WithClaudeInstance(provider))
-	if err := provider.Start(ctx); err != nil {
-		t.Fatalf("claudeinstance Start: %v", err)
-	}
+	tmuxProvider := tmux.New(tmux.NewAdapter("local"), logger)
+	srv := server.New("", logger, server.WithTmux(tmuxProvider))
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
 
@@ -147,7 +135,7 @@ func TestDaemonWiring_ClaudeInstances(t *testing.T) {
 		t.Fatalf("claudeInstances payload not a list: %T (%+v)", resp.Data["claudeInstances"], resp.Data)
 	}
 	if len(instances) != 0 {
-		t.Errorf("expected 0 instances when no heartbeats exist, got %d (%+v)", len(instances), instances)
+		t.Errorf("expected 0 instances when no claude panes exist, got %d (%+v)", len(instances), instances)
 	}
 }
 
@@ -185,18 +173,6 @@ func TestDaemonWiring_AllProvidersBoot(t *testing.T) {
 	}
 	t.Cleanup(gitProvider.Stop)
 
-	heartbeatDir := t.TempDir()
-	claudeInstance := claudeinstance.NewWith(
-		"local",
-		claudeinstance.NewFileReader(heartbeatDir),
-		claudeinstance.NewComposer("local", nil, nil, nil),
-		nil,
-	)
-	t.Cleanup(func() { _ = claudeInstance.Stop() })
-	if err := claudeInstance.Start(ctx); err != nil {
-		t.Fatalf("claudeinstance Start: %v", err)
-	}
-
 	psProvider := ps.New(ps.NewAdapter("local"), logger)
 	tmuxProvider := tmux.New(tmux.NewAdapter("local"), logger)
 	claudeProjectsProvider := claudeprojects.New(t.TempDir(), "local", logger)
@@ -215,7 +191,6 @@ func TestDaemonWiring_AllProvidersBoot(t *testing.T) {
 		server.WithTmux(tmuxProvider),
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithClaudeAccount(claudeaccount.New("local", logger)),
-		server.WithClaudeInstance(claudeInstance),
 		server.WithContracts(contracts.New(logger)),
 		server.WithPeerProxy(peerProvider),
 		server.WithLocalEvents(localEvents),

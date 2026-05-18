@@ -8,7 +8,6 @@ import (
 
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
@@ -34,20 +33,19 @@ type Resolver struct {
 	// Version) to avoid shadowing the Query.Version resolver method on
 	// the embedded queryResolver. Defaults to "dev" when no ldflags
 	// were used (plain `go build`).
-	DaemonVersion          string
-	HostProvider           *host.Provider
-	ReposProvider          ReposLister
-	Git                    *gitprovider.Provider
-	PS                     *ps.Provider
-	Tmux                   *tmux.Provider
-	ClaudeProjects         *claudeprojects.Provider
-	ClaudeAccount          *claudeaccount.Provider
-	HostServiceProvider    *hostservice.Provider
-	ContractsProvider      *contracts.Provider
-	ClaudeInstanceProvider *claudeinstance.Provider
-	GH                     *gh.Provider
-	PeerProxy              *peerproxy.Provider
-	LocalEvents            *peerproxy.LocalInvalidator
+	DaemonVersion       string
+	HostProvider        *host.Provider
+	ReposProvider       ReposLister
+	Git                 *gitprovider.Provider
+	PS                  *ps.Provider
+	Tmux                *tmux.Provider
+	ClaudeProjects      *claudeprojects.Provider
+	ClaudeAccount       *claudeaccount.Provider
+	HostServiceProvider *hostservice.Provider
+	ContractsProvider   *contracts.Provider
+	GH                  *gh.Provider
+	PeerProxy           *peerproxy.Provider
+	LocalEvents         *peerproxy.LocalInvalidator
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -124,14 +122,6 @@ func (r *Resolver) WithGH(p *gh.Provider) *Resolver {
 	return r
 }
 
-// WithClaudeInstance wires the claudeinstance provider. The field is named
-// ClaudeInstanceProvider to disambiguate from gqlgen's auto-generated
-// ClaudeInstance() resolver-getter method.
-func (r *Resolver) WithClaudeInstance(p *claudeinstance.Provider) *Resolver {
-	r.ClaudeInstanceProvider = p
-	return r
-}
-
 // WithPeerProxy wires the federation provider that backs Host.peers,
 // Subscription.peer, and the node-id forwarder behind Query.node.
 func (r *Resolver) WithPeerProxy(p *peerproxy.Provider) *Resolver {
@@ -153,10 +143,12 @@ func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 // Loaders is on the context (e.g. internal subscription emissions).
 func (r *Resolver) LoaderBundle() *loaders.ProvidersBundle {
 	return &loaders.ProvidersBundle{
-		Host:  r.HostProvider,
-		Git:   r.Git,
-		Ps:    r.PS,
-		Repos: r.ReposProvider,
-		GH:    r.GH,
+		Host:       r.HostProvider,
+		Git:        r.Git,
+		Ps:         r.PS,
+		Tmux:       r.Tmux,
+		Repos:      r.ReposProvider,
+		GH:         r.GH,
+		GHEnricher: r.GH,
 	}
 }

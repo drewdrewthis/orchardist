@@ -47,6 +47,11 @@
 			onkeydown={onKey}
 			{placeholder}
 			rows="1"
+			autocapitalize="sentences"
+			autocomplete="off"
+			spellcheck="true"
+			enterkeyhint="send"
+			{...{ autocorrect: "on" }}
 		></textarea>
 		<div class="composer-actions">
 			<button

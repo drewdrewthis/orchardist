@@ -2,6 +2,7 @@
   Session pane — given a row identity (paneId and/or sessionUuid), runs
   its own OpenPanel query against the daemon and renders:
     - Header with worktree breadcrumb + PR/issue chips + pane chips
+    - REPL state pill (idle / working / responding / thinking / stalled / dead)
     - Live attached terminal (when a tmux pane exists)
     - Empty placeholder when only a sessionUuid is known and the pane
       has been killed.
@@ -16,15 +17,18 @@
 	import TranscriptView from "./TranscriptView.svelte";
 	import SessionComposer from "./SessionComposer.svelte";
 	import ViewSwitcher from "./ViewSwitcher.svelte";
-	import { onMount } from "svelte";
 	import { createPanelStore, buildPanelData } from "$lib/data/lenses/panel";
 	import { tmuxStore, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { relTime } from "$lib/util/format";
+	import { getStore } from "$lib/store.svelte";
+	import { enablePushNotifications } from "$lib/notifications";
 	import type { ConvView } from "$lib/data/types";
 
 	type Props = {
 		paneId?: string;
 		sessionUuid?: string;
+		/** Optimistic title from the sidebar row; rendered while OpenPanel loads. */
+		titleHint?: string;
 		active: boolean;
 		paneCount: number;
 		isLast: boolean;
@@ -40,6 +44,7 @@
 	let {
 		paneId,
 		sessionUuid,
+		titleHint,
 		active,
 		paneCount,
 		isLast,
@@ -53,13 +58,19 @@
 		onToggleFullscreen,
 	}: Props = $props();
 
+	const store = getStore();
+
 	// One Houdini panel store per open pane. The tab identity
 	// (paneId, sessionUuid) feeds the query variables; the `paneIds`
 	// filter narrows the daemon's pane snapshot to this row.
 	const panelStore = createPanelStore();
 
+	// Two-pass fetch: first pass resolves by paneId (if known). When the
+	// conversation resolves but no pane attached, the cwd triggers a
+	// second pass via the daemon's cwd+command filter (ADR-022 Phase 6).
 	$effect(() => {
-		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null } });
+		const cwd = !pane && conversation?.cwd ? conversation.cwd : null;
+		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null, cwd } });
 	});
 
 	const data = $derived(
@@ -71,9 +82,42 @@
 	const conversation = $derived(data?.conversation ?? null);
 	const worktree = $derived(data?.worktree ?? null);
 
-	// `here` flag still needs the tmux server's client → currentPane
-	// map. Read straight from the tmux Houdini store (already kicked
-	// off by LensSidebar; the cache means this is free).
+	/**
+	 * The pane id we trust for chat sends. Prefer the daemon-resolved
+	 * `pane.paneId` (carries full pane metadata), but fall back to the
+	 * `paneId` prop the sidebar passed — that one is known the moment
+	 * the row is tapped, so the composer renders without waiting for
+	 * the OpenPanel round-trip. Same reasoning for `effectiveSessionUuid`.
+	 */
+	const effectivePaneId = $derived(pane?.paneId ?? paneId ?? null);
+	const effectiveSessionUuid = $derived(
+		conversation?.sessionUuid ?? session?.sessionUuid ?? sessionUuid ?? null,
+	);
+
+	/**
+	 * Stable session key for pending turns. Prefer sessionUuid (stable
+	 * across pane respawns); fall back to paneId when no uuid is known.
+	 */
+	const sessionKey = $derived(
+		conversation?.sessionUuid ?? session?.sessionUuid ?? sessionUuid ?? paneId ?? "",
+	);
+
+	/**
+	 * Pending turns count — used to pass current turnsLength to the composer
+	 * so it can capture turnsLengthAtSend correctly.
+	 * TranscriptView owns the real turns array; we proxy via the store's
+	 * pendingTurns count only as a length hint. The real count comes from
+	 * the transcript loaded inside TranscriptView.
+	 *
+	 * We thread `turnsLength` as a reactive prop into TranscriptView via
+	 * a binding — but since Svelte 5 doesn't have two-way primitive bindings
+	 * for state derived inside child components, we use a shared ref.
+	 */
+	let transcriptTurnsLength = $state(0);
+
+	// `here` flag needs the tmux server's client → currentPane map. Read
+	// straight from the tmux Houdini store (already kicked off by
+	// LensSidebar; the cache means this is free).
 	const tmuxSnapshot = $derived(buildTmuxSnapshot($tmuxStore.data));
 
 	const title = $derived(
@@ -82,6 +126,7 @@
 			worktree?.branch ||
 			conversation?.cwd ||
 			pane?.window.name ||
+			titleHint ||
 			session?.sessionUuid.slice(0, 8) ||
 			paneId ||
 			"session",
@@ -119,6 +164,94 @@
 		"text-[10px] px-1.5 py-px rounded-[3px] font-[var(--font-mono)] border-[0.5px]";
 	const signalBadgeRed =
 		"bg-[rgba(255,100,100,0.14)] text-[#ff7272] border-[rgba(255,100,100,0.32)]";
+
+	/**
+	 * REPL state pill derivation.
+	 *
+	 * Maps daemon ClaudeInstance fields to a human label + visual variant:
+	 *   idle       — green dot. state === "idle"
+	 *   working    — pulsing green. state === "working" AND inflightToolCount === 0
+	 *   responding — pulsing amber. state === "working" AND inflightToolCount > 0
+	 *   thinking   — slow amber. state === "input" (Claude waiting on user)
+	 *   stalled    — red dot. state === "stalled"
+	 *   dead       — grey line-through. state === "dead" or "no_claude"
+	 *   derived    — grey dot, no label. no live claudeInstance
+	 */
+	type ReplState = "idle" | "working" | "responding" | "thinking" | "stalled" | "dead" | "derived";
+
+	const replState = $derived.by((): ReplState => {
+		if (!session) return "derived";
+		const st = session.state;
+		if (st === "dead" || st === "no_claude") return "dead";
+		if (st === "stalled") return "stalled";
+		if (st === "input") return "thinking";
+		if (st === "working") {
+			return (session.inflightToolCount ?? 0) > 0 ? "responding" : "working";
+		}
+		if (st === "idle") return "idle";
+		// Unknown state — treat as derived.
+		return "derived";
+	});
+
+	const replLabel: Record<ReplState, string> = {
+		idle:       "idle",
+		working:    "working",
+		responding: "responding",
+		thinking:   "thinking",
+		stalled:    "stalled",
+		dead:       "dead",
+		derived:    "",
+	};
+
+	/**
+	 * REPL pill pulse — toggled on when a "reply-seen" event bubbles up from
+	 * TranscriptView. Resets after 600ms to allow re-triggering.
+	 */
+	let replPillPulsing = $state(false);
+	let _pulseTimeout: ReturnType<typeof setTimeout> | null = null;
+	let convEl: HTMLDivElement | undefined = $state();
+
+	// Listen for the custom event bubbled from TranscriptView via pulseReplPill().
+	// We use $effect + addEventListener because Svelte 5's on<name> attribute
+	// doesn't support colons in event names.
+	$effect(() => {
+		if (!convEl) return;
+		const el = convEl;
+		el.addEventListener("orchard:reply-seen", onReplySeen);
+		return () => el.removeEventListener("orchard:reply-seen", onReplySeen);
+	});
+
+	function onReplySeen() {
+		if (_pulseTimeout) clearTimeout(_pulseTimeout);
+		replPillPulsing = true;
+		_pulseTimeout = setTimeout(() => {
+			replPillPulsing = false;
+			_pulseTimeout = null;
+		}, 600);
+	}
+
+	/**
+	 * Notify toggle: request permission + subscribe to push if user enables.
+	 * If permission is denied, surfaces a one-time browser-settings hint via
+	 * the store toast (swallowed silently otherwise — the toggle stays off).
+	 */
+	let notifyDeniedHint = $state(false);
+
+	async function toggleNotify() {
+		if (store.chatNotify) {
+			// Turn off — no permission dialog needed.
+			store.setChatNotify(false);
+			notifyDeniedHint = false;
+			return;
+		}
+		const { permission } = await enablePushNotifications();
+		if (permission === "granted") {
+			store.setChatNotify(true);
+			notifyDeniedHint = false;
+		} else if (permission === "denied") {
+			notifyDeniedHint = true;
+		}
+	}
 </script>
 
 <div
@@ -129,10 +262,14 @@
 	onmousedown={onActivate}
 	role="region"
 >
-	{#if paneCount > 1}
+	{#if paneCount > 1 || surface === "mobile"}
 		<div class="pane-header-bar">
-			<button class="pane-close iconbtn" onclick={(e) => { e.stopPropagation(); onClose(); }} aria-label="Close pane">
-				<Icon name="close" size={11} />
+			<button
+				class="pane-close iconbtn"
+				onclick={(e) => { e.stopPropagation(); onClose(); }}
+				aria-label={surface === "mobile" ? "Back to sidebar" : "Close pane"}
+			>
+				<Icon name={surface === "mobile" ? "arrow-left" : "close"} size={surface === "mobile" ? 14 : 11} />
 			</button>
 			{#if isLast && onToggleFullscreen}
 				<button
@@ -146,18 +283,55 @@
 		</div>
 	{/if}
 
-	<div class="conv">
+	<!-- orchard:reply-seen bubbles up from TranscriptView → pulses REPL pill ($effect listener) -->
+	<div class="conv" bind:this={convEl}>
 		<div class="conv-header">
 			<div class="conv-header-row">
 				<div class="conv-title-block">
 					<div class="conv-title-row">
-						<span class="pip {session?.state === 'working' ? 'ok' : 'idle'}"></span>
+						<!-- REPL state pill — pulses briefly when a reply arrives -->
+						<span
+							class="repl-pill repl-pill--{replState}"
+							class:repl-pill--pulsing={replPillPulsing}
+							title="REPL state: {replState}"
+							data-repl-state={replState}
+							data-pulsing={replPillPulsing || undefined}
+						>
+							<span class="repl-dot"></span>
+							{#if replLabel[replState]}
+								<span class="repl-label">{replLabel[replState]}</span>
+							{/if}
+						</span>
 						<span class="conv-title">{title}</span>
 						{#if isHere}
 							<span class="here-badge mono">here</span>
 						{/if}
 						{#if pane || hasTranscript}
-							<span class="ml-auto">
+							<span class="ml-auto flex items-center gap-1">
+								<!-- Mute toggle: suppress audio/pulse when on -->
+								<button
+									class="iconbtn notif-btn"
+									class:notif-btn--active={!store.chatMute}
+									onclick={store.toggleChatMute}
+									title={store.chatMute ? "Unmute reply ping" : "Mute reply ping"}
+									aria-label={store.chatMute ? "Unmute reply ping" : "Mute reply ping"}
+									aria-pressed={!store.chatMute}
+									data-testid="chat-mute-toggle"
+								>
+									<Icon name={store.chatMute ? "bell-off" : "bell"} size={12} />
+								</button>
+								<!-- Notify toggle: opt in to Web Notifications -->
+								<button
+									class="iconbtn notif-btn"
+									class:notif-btn--active={store.chatNotify}
+									onclick={toggleNotify}
+									title={store.chatNotify ? "Disable background notifications" : "Enable background notifications"}
+									aria-label={store.chatNotify ? "Disable background notifications" : "Enable background notifications"}
+									aria-pressed={store.chatNotify}
+									data-testid="chat-notify-toggle"
+								>
+									<Icon name="wifi" size={12} />
+								</button>
 								<ViewSwitcher
 									value={view}
 									onChange={(v) => onSetView(v)}
@@ -166,6 +340,11 @@
 							</span>
 						{/if}
 					</div>
+					{#if notifyDeniedHint}
+						<div class="mono dimer mt-1 text-[11px]" data-testid="notify-denied-hint">
+							Notifications denied — enable in browser/OS settings.
+						</div>
+					{/if}
 					<div class="conv-sub mono dimer">
 						{#if worktree}
 							<span class="conv-chip" title="Host">
@@ -257,13 +436,24 @@
 			</div>
 		</div>
 
-		{#if loading && !data}
+		{#if loading && !data && !effectiveSessionUuid && !effectivePaneId}
 			<div class="conv-empty"><span class="dimer">Loading…</span></div>
-		{:else if view === "chat" && hasTranscript && conversation?.jsonlPath}
+		{:else if view === "chat" && (effectiveSessionUuid || effectivePaneId)}
 			<div class="flex-1 min-h-0 flex flex-col">
-				<TranscriptView path={conversation.jsonlPath} sessionUuid={conversation.sessionUuid} />
-				{#if pane?.paneId}
-					<SessionComposer paneId={pane.paneId} sessionLabel={pane.window.session.name} />
+				<TranscriptView
+					path={conversation?.jsonlPath ?? ""}
+					sessionUuid={(conversation?.sessionUuid ?? effectiveSessionUuid) ?? undefined}
+					sessionKey={sessionKey || undefined}
+					sessionTitle={title}
+					bind:turnsLength={transcriptTurnsLength}
+				/>
+				{#if effectivePaneId}
+					<SessionComposer
+						paneId={effectivePaneId}
+						sessionLabel={pane?.window?.session?.name}
+						sessionKey={sessionKey}
+						turnsLength={transcriptTurnsLength}
+					/>
 				{:else}
 					<div class="mono dimer text-center text-[11.5px] px-3.5 py-2.5 border-t-[0.5px] border-line bg-surface">
 						No live tmux pane — open Terminal view to attach a fresh client.
@@ -302,3 +492,154 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	/**
+	 * REPL state pill — sits at the left of the title row in the conv header.
+	 * Small inline indicator with a colored dot and a label.
+	 */
+	.repl-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 1px 6px 1px 4px;
+		border-radius: 8px;
+		font-size: 10px;
+		font-family: var(--font-mono, monospace);
+		letter-spacing: 0.02em;
+		border: 0.5px solid transparent;
+		flex: none;
+	}
+	.repl-dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		flex: none;
+	}
+	.repl-label {
+		line-height: 1;
+	}
+
+	/* idle — green dot */
+	.repl-pill--idle {
+		color: #6fd391;
+		background: color-mix(in oklab, #6fd391 10%, transparent);
+		border-color: color-mix(in oklab, #6fd391 25%, transparent);
+	}
+	.repl-pill--idle .repl-dot {
+		background: #6fd391;
+	}
+
+	/* working — pulsing green */
+	.repl-pill--working {
+		color: #6fd391;
+		background: color-mix(in oklab, #6fd391 10%, transparent);
+		border-color: color-mix(in oklab, #6fd391 25%, transparent);
+	}
+	.repl-pill--working .repl-dot {
+		background: #6fd391;
+		animation: repl-pulse-green 1.6s ease-in-out infinite;
+	}
+
+	/* responding — pulsing amber */
+	.repl-pill--responding {
+		color: #f5c94e;
+		background: color-mix(in oklab, #f5c94e 10%, transparent);
+		border-color: color-mix(in oklab, #f5c94e 25%, transparent);
+	}
+	.repl-pill--responding .repl-dot {
+		background: #f5c94e;
+		animation: repl-pulse-amber 1.6s ease-in-out infinite;
+	}
+
+	/* thinking — slow amber pulse */
+	.repl-pill--thinking {
+		color: #f5c94e;
+		background: color-mix(in oklab, #f5c94e 8%, transparent);
+		border-color: color-mix(in oklab, #f5c94e 20%, transparent);
+	}
+	.repl-pill--thinking .repl-dot {
+		background: #f5c94e;
+		animation: repl-pulse-amber 3s ease-in-out infinite;
+	}
+
+	/* stalled — red dot */
+	.repl-pill--stalled {
+		color: #ff7272;
+		background: color-mix(in oklab, #ff7272 10%, transparent);
+		border-color: color-mix(in oklab, #ff7272 25%, transparent);
+	}
+	.repl-pill--stalled .repl-dot {
+		background: #ff7272;
+	}
+
+	/* dead — grey, label gets line-through */
+	.repl-pill--dead {
+		color: var(--color-fg-3, #6c707a);
+		background: transparent;
+		border-color: color-mix(in oklab, var(--color-fg-3, #6c707a) 20%, transparent);
+	}
+	.repl-pill--dead .repl-dot {
+		background: var(--color-fg-3, #6c707a);
+	}
+	.repl-pill--dead .repl-label {
+		text-decoration: line-through;
+	}
+
+	/* derived — grey dot only, no label shown */
+	.repl-pill--derived {
+		color: var(--color-fg-4, #44484f);
+		background: transparent;
+		border-color: transparent;
+		padding-right: 4px;
+	}
+	.repl-pill--derived .repl-dot {
+		background: var(--color-fg-4, #44484f);
+	}
+
+	@keyframes repl-pulse-green {
+		0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, #6fd391 50%, transparent); }
+		50%       { box-shadow: 0 0 0 4px transparent; }
+	}
+	@keyframes repl-pulse-amber {
+		0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, #f5c94e 50%, transparent); }
+		50%       { box-shadow: 0 0 0 4px transparent; }
+	}
+
+	/**
+	 * Reply-seen pulse — brief scale+opacity flash on the REPL pill when
+	 * a "Claude responded" event fires. Skipped when prefers-reduced-motion.
+	 */
+	@media (prefers-reduced-motion: no-preference) {
+		.repl-pill--pulsing {
+			animation: repl-reply-pulse 600ms ease-out forwards;
+		}
+		.repl-pill--pulsing .repl-dot {
+			animation: repl-dot-reply-pulse 600ms ease-out forwards;
+		}
+	}
+	@keyframes repl-reply-pulse {
+		0%   { transform: scale(1);    opacity: 1; }
+		20%  { transform: scale(1.18); opacity: 1; }
+		100% { transform: scale(1);    opacity: 1; }
+	}
+	@keyframes repl-dot-reply-pulse {
+		0%   { box-shadow: 0 0 0 0 color-mix(in oklab, #6fd391 70%, transparent); }
+		40%  { box-shadow: 0 0 0 6px color-mix(in oklab, #6fd391 10%, transparent); }
+		100% { box-shadow: 0 0 0 0 transparent; }
+	}
+
+	/** Notification toggle buttons in the conv title row. */
+	.notif-btn {
+		color: var(--color-fg-3, #6c707a);
+		opacity: 0.6;
+		transition: opacity 120ms ease, color 120ms ease;
+	}
+	.notif-btn:hover {
+		opacity: 1;
+	}
+	.notif-btn--active {
+		color: var(--color-accent, #6366f1);
+		opacity: 1;
+	}
+</style>

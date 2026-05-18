@@ -4,14 +4,11 @@ fragment WorktreeEnrichment on Worktree {
 	branch
 	host
 	repo
-	pr {
-		number
-		state
-		statusCheckRollup
-		reviewDecision
-		mergeable
-		mergeStateStatus
-	}
+	# NO `pr {…}` here — fetching it triggers PullRequestsForRepo (one
+	# REST list call per repo, ~12s on a fleet with many open PRs in
+	# langwatch/langwatch). Lens queries need to be FAST. PR fields are
+	# fetched separately by the panel via WorktreePR when a row is
+	# actively viewed.
 	issue {
 		number
 		state

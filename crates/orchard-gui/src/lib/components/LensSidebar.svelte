@@ -1,12 +1,12 @@
 <!--
-  Lens-anchored sidebar. Each of the four lenses has its own Houdini store
-  with its own row layout — there is no shared Item[] that gets reshuffled.
-  Channels (chat rooms from chat-core) are rendered above the lens content.
+  Lens-anchored sidebar. Every lens has its own Houdini store; the row
+  component is uniform. All five lens stores prefetch on mount so swapping
+  lenses is pure render against warm cache.
 -->
 <script lang="ts">
-	import Icon from "$lib/icons/Icon.svelte";
+	import { onMount } from "svelte";
 	import SidebarItem from "./SidebarItem.svelte";
-	import ChannelRow from "./ChannelRow.svelte";
+	import SidebarSectionHeader from "./SidebarSectionHeader.svelte";
 	import { getStore } from "$lib/store.svelte";
 	import { toast } from "$lib/util/toast";
 	import {
@@ -17,15 +17,20 @@
 	import { tmuxStore, buildTmuxSections, buildTmuxSnapshot } from "$lib/data/lenses/tmux";
 	import { issueStore, buildIssueSections } from "$lib/data/lenses/issue";
 	import { worktreeStore, buildWorktreeSections } from "$lib/data/lenses/worktree";
+	import type { SidebarItem as SidebarItemT, SidebarSection } from "$lib/data/sidebar-item";
 
 	/**
-	 * Click target — what the panel needs to render this row. Either a
-	 * channel roomId or a session keyed by paneId + sessionUuid. The
-	 * sidebar emits identity only; the panel runs its own query.
+	 * Click target — what the panel needs to render this row. The sidebar
+	 * emits identity (paneId + sessionUuid) plus a `titleHint` so the
+	 * panel can render the title immediately while its OpenPanel query
+	 * is still in flight (avoids the "session / Loading…" interstitial).
 	 */
-	export type SelectTarget =
-		| { kind: "channel"; roomId: string }
-		| { kind: "session"; paneId?: string; sessionUuid?: string };
+	export type SelectTarget = {
+		kind: "session";
+		paneId?: string;
+		sessionUuid?: string;
+		titleHint?: string;
+	};
 
 	type Props = {
 		now: number;
@@ -38,17 +43,17 @@
 	const store = getStore();
 	const lens = $derived(store.lens);
 
-	// Per-lens $effect: re-fetches the active lens store on every lens entry.
-	// CacheAndNetwork policy (houdini.config.js) serves cache instantly then revalidates.
-	$effect(() => { if (lens === "attention") attentionStore.fetch(); });
-	$effect(() => { if (lens === "recent") recentStore.fetch(); });
-	$effect(() => { if (lens === "tmux") tmuxStore.fetch(); });
-	$effect(() => { if (lens === "issue") issueStore.fetch(); });
-	$effect(() => { if (lens === "worktree") worktreeStore.fetch(); });
+	// Prefetch all five lenses at mount, in parallel. Lens swap then becomes
+	// pure render against the Houdini cache — no spinner-or-empty interstitial.
+	// CacheAndNetwork policy revalidates each on subscription updates.
+	onMount(() => {
+		attentionStore.fetch();
+		recentStore.fetch();
+		tmuxStore.fetch();
+		issueStore.fetch();
+		worktreeStore.fetch();
+	});
 
-	// All four lenses produce the same shape per #540 B0/B1: sections
-	// of `SidebarItem[]`. The lens decides the grouping axis; the item
-	// component is uniform.
 	const attentionSections = $derived(
 		buildAttentionSections($attentionStore.data, now),
 	);
@@ -58,20 +63,47 @@
 	const attentionLoading = $derived($attentionStore.fetching);
 
 	// Surface attention-lens fetch errors via toast so the user isn't left
-	// with a silently empty sidebar (Scenario L208 / #600). Track the
-	// last-shown message so the effect doesn't re-fire the same toast every
-	// time another reactive read in scope changes.
+	// with a silently empty sidebar (Scenario L208 / #600). Filter out
+	// developer-facing daemon strings (e.g. "use GetPull instead",
+	// "EnrichPullRequest graphql errors: ...") — show a friendly message
+	// to the user and log the raw daemon detail to console for debugging.
+	// Track last-shown so the effect doesn't re-toast on every reactive
+	// read in scope.
 	let lastAttentionError: string | null = null;
 	$effect(() => {
-		const msg = $attentionStore.errors?.[0]?.message?.trim() ?? "";
-		if (!msg) {
+		const raw = $attentionStore.errors?.[0]?.message?.trim() ?? "";
+		if (!raw) {
 			lastAttentionError = null;
 			return;
 		}
-		if (msg === lastAttentionError) return;
-		lastAttentionError = msg;
-		toast.error(msg);
+		if (raw === lastAttentionError) return;
+		lastAttentionError = raw;
+		console.error("[orchard] attention lens daemon error:", raw);
+		const userMsg = friendlyDaemonError(raw);
+		if (userMsg) toast.error(userMsg);
 	});
+
+	/**
+	 * Map raw daemon error strings to user-friendly toasts. Returns null
+	 * when the error is purely developer noise that shouldn't reach the
+	 * user (it stays in the console log above). Keep the mapping small —
+	 * unmapped messages get a generic fallback so the user knows something
+	 * is wrong but doesn't see internals.
+	 */
+	function friendlyDaemonError(raw: string): string | null {
+		if (raw.includes("rate limit")) {
+			return "GitHub rate limit reached — PR data will catch up shortly.";
+		}
+		if (raw.includes("use GetPull") || raw.includes("is a pull request")) {
+			// Daemon-internal API misuse — don't surface to user, just log.
+			return null;
+		}
+		if (raw.includes("EnrichPullRequest")) {
+			return "Couldn't refresh PR status — showing the last known state.";
+		}
+		// Generic fallback — terse, doesn't leak internals.
+		return "Sidebar data is incomplete.";
+	}
 
 	const recentItems = $derived(buildRecentItems($recentStore.data));
 	const recentLoading = $derived($recentStore.fetching);
@@ -92,36 +124,26 @@
 	);
 	const worktreeLoading = $derived($worktreeStore.fetching);
 
-	// "here" derivation lifted out of `<SidebarItem>` so the row stays a
-	// pure renderer (no global store coupling). Reads the same tmux
-	// snapshot the lens already loaded for the tmux lens.
+	/**
+	 * "here" derivation lifted out of <SidebarItem> so the row stays a
+	 * pure renderer. Reads the same tmux snapshot the lens already loaded.
+	 */
 	function isHere(paneId: string | undefined | null): boolean {
 		return !!paneId && tmuxSnapshot.activePaneIds.has(paneId);
 	}
 
-	/**
-	 * A sidebar row matches the active tab if EITHER its paneId or its
-	 * sessionUuid is in the active tab's selection keys. Different lens
-	 * snapshots populate different handles for the same conversation.
-	 */
 	const sel = $derived(store.selection);
-	function rowSelected(keys: { paneId?: string | null; sessionUuid?: string | null; channelId?: string | null }) {
-		if (!sel) return false;
-		if (sel.kind === "channel") return !!keys.channelId && keys.channelId === sel.roomId;
-		const sessionKeyMatch =
+	function rowSelected(keys: { paneId?: string | null; sessionUuid?: string | null }) {
+		if (!sel || sel.kind !== "session") return false;
+		return (
 			(!!keys.paneId && !!sel.paneId && keys.paneId === sel.paneId) ||
-			(!!keys.sessionUuid && !!sel.sessionUuid && keys.sessionUuid === sel.sessionUuid);
-		return sessionKeyMatch;
+			(!!keys.sessionUuid && !!sel.sessionUuid && keys.sessionUuid === sel.sessionUuid)
+		);
 	}
-
-	// Channels (chat rooms from chat-core) live across all lenses at the
-	// top — their relevance is independent of the lens filter.
-	const channelRooms = $derived(store.chatRooms);
 
 	// ── Collapsible sections ────────────────────────────────────────────
 	// Single localStorage key stores all collapsed states as a JSON object.
 	// Key schema: "<lens>:<section-id>", e.g. "attention:blocked".
-	// Special singles: "recent:recent", "channels:channels".
 	// Tauri SPA — no SSR, so localStorage is always available synchronously.
 	const LS_KEY = "orchard:sidebar:collapsed";
 
@@ -138,69 +160,48 @@
 	let collapsed: Record<string, boolean> = $state(hydrateCollapsed());
 
 	$effect(() => {
-		// Write the current collapsed map back to localStorage whenever it changes.
 		localStorage.setItem(LS_KEY, JSON.stringify(collapsed));
 	});
 
 	function toggleCollapse(key: string): void {
 		collapsed = { ...collapsed, [key]: !collapsed[key] };
 	}
+
+	function attentionIcon(id: string): string {
+		if (id === "blocked") return "alert";
+		if (id === "waiting") return "clock";
+		if (id === "active") return "bolt";
+		return "dot";
+	}
+
+	function emitSelect(item: SidebarItemT, ev?: MouseEvent) {
+		onSelect(
+			{
+				kind: "session",
+				paneId: item.session.pane?.paneId ?? undefined,
+				sessionUuid: item.session.sessionUuid ?? undefined,
+				titleHint: item.title,
+			},
+			ev,
+		);
+	}
 </script>
 
-<div class="fleet-list">
-	{#if channelRooms.length > 0}
-		{@const channelsKey = "channels:channels"}
-		<div class="fleet-group" data-kind="channels">
-			<button
-				class="group-header group-header--btn"
-				aria-expanded={!collapsed[channelsKey]}
-				onclick={() => toggleCollapse(channelsKey)}
-			>
-				<span style="display: inline-flex; align-items: center; gap: 6px;">
-					<Icon name="message" size={11} />
-					<span>Channels</span>
-				</span>
-				<span style="display: inline-flex; align-items: center; gap: 4px;">
-					<span class="count">{channelRooms.length}</span>
-					<Icon name={collapsed[channelsKey] ? "chevron-right" : "chevron-down"} size={11} />
-				</span>
-			</button>
-			{#if !collapsed[channelsKey]}
-				{#each channelRooms as ch (ch.id)}
-					<ChannelRow
-						roomId={ch.id}
-						memberCount={ch.memberCount}
-						selected={rowSelected({ channelId: ch.id })}
-						{density}
-						{surface}
-						onSelect={(ev) => onSelect({ kind: "channel", roomId: ch.id }, ev)}
-					/>
-				{/each}
-			{/if}
-		</div>
-	{/if}
-
+<div class="sidebar-list">
 	{#if lens === "attention"}
 		{#each attentionSections as section (section.id)}
 			{#if section.items.length > 0}
-				{@const attnKey = "attention:" + section.id}
-				<div class="fleet-group" data-kind={section.id}>
-					<button
-						class="group-header group-header--btn"
-						class:attn={section.id === "blocked"}
-						aria-expanded={!collapsed[attnKey]}
-						onclick={() => toggleCollapse(attnKey)}
-					>
-						<span style="display: inline-flex; align-items: center; gap: 6px;">
-							<Icon name={section.id === "blocked" ? "alert" : section.id === "waiting" ? "clock" : "spark"} size={11} />
-							<span>{section.label}</span>
-						</span>
-						<span style="display: inline-flex; align-items: center; gap: 4px;">
-							<span class="count">{section.items.length}</span>
-							<Icon name={collapsed[attnKey] ? "chevron-right" : "chevron-down"} size={11} />
-						</span>
-					</button>
-					{#if !collapsed[attnKey]}
+				{@const key = "attention:" + section.id}
+				<section class="sidebar-group" data-kind={section.id}>
+					<SidebarSectionHeader
+						icon={attentionIcon(section.id)}
+						label={section.label}
+						count={section.items.length}
+						collapsed={!!collapsed[key]}
+						attn={section.id === "blocked"}
+						onToggle={() => toggleCollapse(key)}
+					/>
+					{#if !collapsed[key]}
 						{#each section.items as item (item.id)}
 							<SidebarItem
 								{item}
@@ -212,86 +213,39 @@
 									paneId: item.session.pane?.paneId,
 									sessionUuid: item.session.sessionUuid,
 								})}
-								onSelect={(_id, ev) => onSelect({
-									kind: "session",
-									paneId: item.session.pane?.paneId,
-									sessionUuid: item.session.sessionUuid,
-								}, ev)}
+								onSelect={(_id, ev) => emitSelect(item, ev)}
 							/>
 						{/each}
 					{/if}
-				</div>
+				</section>
 			{/if}
 		{/each}
 		{#if attentionTotal === 0}
 			<div class="empty-lens">
-				<span class="dimer">{attentionLoading ? "Loading…" : "No Claude sessions reported by the daemon."}</span>
+				<span>
+					{#if attentionLoading}
+						Loading…
+					{:else if $attentionStore.errors && $attentionStore.errors.length > 0}
+						Daemon couldn't fetch this lens. Try another lens or check the daemon logs.
+					{:else}
+						No Claude sessions reported by the daemon.
+					{/if}
+				</span>
 			</div>
 		{/if}
 	{:else if lens === "recent"}
-		<!-- Recent activity is the only flat lens — no grouping axis (#540 B0). -->
-		{@const recentKey = "recent:recent"}
-		<div class="fleet-group" data-kind="recent">
-			<button
-				class="group-header group-header--btn"
-				aria-expanded={!collapsed[recentKey]}
-				onclick={() => toggleCollapse(recentKey)}
-			>
-				<span style="display: inline-flex; align-items: center; gap: 6px;">
-					<Icon name="clock" size={11} />
-					<span>Recent</span>
-				</span>
-				<span style="display: inline-flex; align-items: center; gap: 4px;">
-					<span class="count">{recentItems.length}</span>
-					<Icon name={collapsed[recentKey] ? "chevron-right" : "chevron-down"} size={11} />
-				</span>
-			</button>
-			{#if !collapsed[recentKey]}
-				{#each recentItems as item (item.id)}
-					<SidebarItem
-						{item}
-						{now}
-						{density}
-						{surface}
-						here={isHere(item.session.pane?.paneId)}
-						selected={rowSelected({
-							paneId: item.session.pane?.paneId,
-							sessionUuid: item.session.sessionUuid,
-						})}
-						onSelect={(_id, ev) => onSelect({
-							kind: "session",
-							paneId: item.session.pane?.paneId,
-							sessionUuid: item.session.sessionUuid,
-						}, ev)}
-					/>
-				{/each}
-			{/if}
-		</div>
-		{#if recentItems.length === 0}
-			<div class="empty-lens">
-				<span class="dimer">{recentLoading ? "Loading…" : "No Claude sessions known."}</span>
-			</div>
-		{/if}
-	{:else if lens === "tmux"}
-		{#each tmuxSections as section (section.id)}
-			{@const tmuxKey = "tmux:" + section.id}
-			<div class="fleet-group" data-kind={section.id}>
-				<button
-					class="group-header group-header--btn"
-					aria-expanded={!collapsed[tmuxKey]}
-					onclick={() => toggleCollapse(tmuxKey)}
-				>
-					<span style="display: inline-flex; align-items: center; gap: 6px;">
-						<Icon name="terminal" size={11} />
-						<span>{section.label}</span>
-					</span>
-					<span style="display: inline-flex; align-items: center; gap: 4px;">
-						<span class="count">{section.items.length}</span>
-						<Icon name={collapsed[tmuxKey] ? "chevron-right" : "chevron-down"} size={11} />
-					</span>
-				</button>
-				{#if !collapsed[tmuxKey]}
-					{#each section.items as item (item.id)}
+		{#if recentItems.length > 0}
+			{@const key = "recent:recent"}
+			<section class="sidebar-group" data-kind="recent">
+				<SidebarSectionHeader
+					icon="clock"
+					label="recent"
+					count={recentItems.length}
+					collapsed={!!collapsed[key]}
+					onToggle={() => toggleCollapse(key)}
+				/>
+				{#if !collapsed[key]}
+					{#each recentItems as item (item.id)}
 						<SidebarItem
 							{item}
 							{now}
@@ -302,19 +256,51 @@
 								paneId: item.session.pane?.paneId,
 								sessionUuid: item.session.sessionUuid,
 							})}
-							onSelect={(_id, ev) => onSelect({
-								kind: "session",
-								paneId: item.session.pane?.paneId,
-								sessionUuid: item.session.sessionUuid,
-							}, ev)}
+							onSelect={(_id, ev) => emitSelect(item, ev)}
 						/>
 					{/each}
 				{/if}
-			</div>
-		{/each}
-		{#if tmuxSections.length === 0}
+			</section>
+		{/if}
+		{#if recentItems.length === 0}
 			<div class="empty-lens">
-				<span class="dimer">
+				<span>{recentLoading ? "Loading…" : "No Claude sessions known."}</span>
+			</div>
+		{/if}
+	{:else if lens === "tmux"}
+		{#each tmuxSections as section (section.id)}
+			{#if section.items.length > 0}
+				{@const key = "tmux:" + section.id}
+				<section class="sidebar-group" data-kind={section.id}>
+					<SidebarSectionHeader
+						icon="terminal"
+						label={section.label}
+						count={section.items.length}
+						collapsed={!!collapsed[key]}
+						onToggle={() => toggleCollapse(key)}
+					/>
+					{#if !collapsed[key]}
+						{#each section.items as item (item.id)}
+							<SidebarItem
+								{item}
+								{now}
+								{density}
+								{surface}
+								here={isHere(item.session.pane?.paneId)}
+								selected={rowSelected({
+									paneId: item.session.pane?.paneId,
+									sessionUuid: item.session.sessionUuid,
+								})}
+								onSelect={(_id, ev) => emitSelect(item, ev)}
+							/>
+						{/each}
+					{/if}
+				</section>
+			{/if}
+		{/each}
+		{#if tmuxSections.every((s) => s.items.length === 0)}
+			<div class="empty-lens">
+				<span>
 					{#if !tmuxSnapshot.alive && !tmuxLoading}
 						No tmux server reachable.
 					{:else if tmuxLoading}
@@ -327,75 +313,17 @@
 		{/if}
 	{:else if lens === "issue"}
 		{#each issueSections as section (section.id)}
-			{@const issueKey = "issue:" + section.id}
-			<div class="fleet-group" data-kind={section.id}>
-				<button
-					class="group-header group-header--btn"
-					aria-expanded={!collapsed[issueKey]}
-					onclick={() => toggleCollapse(issueKey)}
-				>
-					<span style="display: inline-flex; align-items: center; gap: 6px;">
-						<Icon name="issue" size={11} />
-						<span>{section.label}</span>
-					</span>
-					<span style="display: inline-flex; align-items: center; gap: 4px;">
-						<span class="count">{section.items.length}</span>
-						<Icon name={collapsed[issueKey] ? "chevron-right" : "chevron-down"} size={11} />
-					</span>
-				</button>
-				{#if !collapsed[issueKey]}
-					{#each section.items as item (item.id)}
-						<SidebarItem
-							{item}
-							{now}
-							{density}
-							{surface}
-							here={isHere(item.session.pane?.paneId)}
-							selected={rowSelected({
-								paneId: item.session.pane?.paneId,
-								sessionUuid: item.session.sessionUuid,
-							})}
-							onSelect={(_id, ev) => onSelect({
-								kind: "session",
-								paneId: item.session.pane?.paneId,
-								sessionUuid: item.session.sessionUuid,
-							}, ev)}
-						/>
-					{/each}
-				{/if}
-			</div>
-		{/each}
-		{#if issueTotal === 0}
-			<div class="empty-lens">
-				<span class="dimer">
-					{issueLoading ? "Loading…" : "No issues with open PRs in scope."}
-				</span>
-			</div>
-		{/if}
-	{:else if lens === "worktree"}
-		{#each worktreeSections as section (section.id)}
-			{@const worktreeKey = "worktree:" + section.id}
-			<div class="fleet-group" data-kind={section.id}>
-				<button
-					class="group-header group-header--btn"
-					aria-expanded={!collapsed[worktreeKey]}
-					onclick={() => toggleCollapse(worktreeKey)}
-				>
-					<span style="display: inline-flex; align-items: center; gap: 6px;">
-						<Icon name="git-branch" size={11} />
-						<span>{section.label}</span>
-					</span>
-					<span style="display: inline-flex; align-items: center; gap: 4px;">
-						<span class="count">{section.items.length}</span>
-						<Icon name={collapsed[worktreeKey] ? "chevron-right" : "chevron-down"} size={11} />
-					</span>
-				</button>
-				{#if !collapsed[worktreeKey]}
-					{#if section.items.length === 0}
-						<div class="empty-section">
-							<span class="dimer">No active sessions in this repo.</span>
-						</div>
-					{:else}
+			{#if section.items.length > 0}
+				{@const key = "issue:" + section.id}
+				<section class="sidebar-group" data-kind={section.id}>
+					<SidebarSectionHeader
+						icon="issue"
+						label={section.label}
+						count={section.items.length}
+						collapsed={!!collapsed[key]}
+						onToggle={() => toggleCollapse(key)}
+					/>
+					{#if !collapsed[key]}
 						{#each section.items as item (item.id)}
 							<SidebarItem
 								{item}
@@ -407,55 +335,79 @@
 									paneId: item.session.pane?.paneId,
 									sessionUuid: item.session.sessionUuid,
 								})}
-								onSelect={(_id, ev) => onSelect({
-									kind: "session",
-									paneId: item.session.pane?.paneId,
-									sessionUuid: item.session.sessionUuid,
-								}, ev)}
+								onSelect={(_id, ev) => emitSelect(item, ev)}
 							/>
 						{/each}
 					{/if}
-				{/if}
-			</div>
+				</section>
+			{/if}
 		{/each}
-		{#if worktreeSections.length === 0}
+		{#if issueTotal === 0}
 			<div class="empty-lens">
-				<span class="dimer">
-					{worktreeLoading ? "Loading…" : "No repos in config — run `orchard config init`."}
-				</span>
+				<span>{issueLoading ? "Loading…" : "No issues with open PRs in scope."}</span>
+			</div>
+		{/if}
+	{:else if lens === "worktree"}
+		{#each worktreeSections as section (section.id)}
+			{#if section.items.length > 0}
+				{@const key = "worktree:" + section.id}
+				<section class="sidebar-group" data-kind={section.id}>
+					<SidebarSectionHeader
+						icon="git-branch"
+						label={section.label}
+						count={section.items.length}
+						collapsed={!!collapsed[key]}
+						onToggle={() => toggleCollapse(key)}
+					/>
+					{#if !collapsed[key]}
+						{#each section.items as item (item.id)}
+							<SidebarItem
+								{item}
+								{now}
+								{density}
+								{surface}
+								here={isHere(item.session.pane?.paneId)}
+								selected={rowSelected({
+									paneId: item.session.pane?.paneId,
+									sessionUuid: item.session.sessionUuid,
+								})}
+								onSelect={(_id, ev) => emitSelect(item, ev)}
+							/>
+						{/each}
+					{/if}
+				</section>
+			{/if}
+		{/each}
+		{#if worktreeTotal === 0}
+			<div class="empty-lens">
+				<span>{worktreeLoading ? "Loading…" : "No repos in config — run `orchard config init`."}</span>
 			</div>
 		{/if}
 	{/if}
 </div>
 
 <style>
-	.empty-lens {
-		padding: 36px 16px;
-		text-align: center;
-		font-size: 13px;
-	}
-	.empty-section {
-		padding: 8px 16px;
-		font-size: 11.5px;
-	}
-	/* Section headers are now <button> elements for a11y (click + Enter/Space). */
-	.group-header--btn {
+	.sidebar-list {
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		width: 100%;
-		background: none;
-		border: none;
-		padding: 0;
-		margin: 0;
-		font: inherit;
-		color: inherit;
-		cursor: pointer;
-		text-align: left;
+		flex-direction: column;
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow-y: auto;
+		overflow-x: hidden;
+		/* Momentum scroll on mobile Safari/Chrome. */
+		-webkit-overflow-scrolling: touch;
+		/* Reserve space for mobile FAB so the last row isn't trapped under it. */
+		padding-bottom: 80px;
 	}
-	.group-header--btn:focus-visible {
-		outline: 2px solid var(--color-accent, #6366f1);
-		outline-offset: -2px;
-		border-radius: 2px;
+	.sidebar-group {
+		display: flex;
+		flex-direction: column;
+		padding-bottom: 4px;
+	}
+	.empty-lens {
+		padding: 32px 16px;
+		text-align: center;
+		font-size: 12px;
+		color: var(--color-text-dim, #6c707a);
 	}
 </style>

@@ -49,6 +49,11 @@ type Provider struct {
 	prs      map[PullRequestKey]prEntry
 	enrichAt map[PullRequestKey]time.Time // when EnrichPullRequest last populated the enrichment fields
 
+	// Rate-limit cooldown: when set, EnrichPullRequest skips the GraphQL
+	// call entirely and serves stale (or returns nil). Cleared on each
+	// successful response. Protected by prMu.
+	rateLimitedUntil time.Time
+
 	issueMu   sync.RWMutex
 	issues    map[IssueKey]issueEntry
 	issueDeps map[IssueKey]issueDepsEntry // per-issue dependency snapshot (#563); shorter TTL than issues
@@ -510,6 +515,7 @@ var (
 	_ = (*Provider)(nil).GetWorkflowRun
 	_ = (*Provider)(nil).GetRepository
 	_ = (*Provider)(nil).EnrichPullRequest
+	_ = (*Provider)(nil).BatchEnrichPullRequests
 )
 
 // errNoGitDir / errNoOriginRemote differentiate "no .git" from "no

@@ -8,7 +8,6 @@ import (
 
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	claudeinstanceprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
@@ -273,19 +272,12 @@ func resolveClaudeAccountNode(ctx context.Context, r *Resolver, id string) (grap
 }
 
 func resolveClaudeInstanceNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {
-	if r.ClaudeInstanceProvider == nil {
-		return nil, fmt.Errorf("claudeinstance provider not configured")
-	}
-	host, pid, ok := parseClaudeInstanceID(id)
-	if !ok {
-		// Session-keyed id — fall through to a List+match.
-		return findClaudeInstanceByID(ctx, r.ClaudeInstanceProvider, id)
-	}
-	inst, _, err := r.ClaudeInstanceProvider.Get(ctx, claudeinstanceprovider.InstanceID{HostID: host, ClaudePid: pid})
-	if err != nil || inst == nil {
+	if r.Tmux == nil {
 		return nil, nil
 	}
-	return *inst, nil
+	// Use the pane-first path: enumerate all instances and find the matching id.
+	qr := &queryResolver{r}
+	return findClaudeInstanceByID(ctx, qr, id)
 }
 
 func resolveHostServiceNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {
@@ -494,10 +486,10 @@ func parseClaudeInstanceID(id string) (host string, pid int, ok bool) {
 	return rest[:idx], n, true
 }
 
-// findClaudeInstanceByID is the fallback for session-keyed claude
-// instance ids — it scans the provider's cache for an exact id match.
-func findClaudeInstanceByID(ctx context.Context, p *claudeinstanceprovider.Provider, id string) (graphql1.Node, error) {
-	rows, err := p.List(ctx)
+// findClaudeInstanceByID scans Query.claudeInstances for an exact id match.
+// Used by the node resolver when resolving a ClaudeInstance by id.
+func findClaudeInstanceByID(ctx context.Context, r *queryResolver, id string) (graphql1.Node, error) {
+	rows, err := r.ClaudeInstances(ctx)
 	if err != nil {
 		return nil, err
 	}

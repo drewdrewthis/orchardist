@@ -14,7 +14,6 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	claudeinstanceprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
@@ -156,21 +155,15 @@ func subscribeClaudeAccountChanged(ctx context.Context, r *Resolver, id string) 
 }
 
 func subscribeClaudeInstanceChanged(ctx context.Context, r *Resolver, id string) (<-chan graphql1.Node, error) {
-	if r.ClaudeInstanceProvider == nil {
-		return nil, fmt.Errorf("claudeinstance provider not configured")
+	if r.Tmux == nil {
+		return nil, fmt.Errorf("claudeinstance: tmux provider not configured")
 	}
-	host, pid, isPidKeyed := parseClaudeInstanceID(id)
-	src := r.ClaudeInstanceProvider.Subscribe(ctx)
-	matcher := func(ev adapter.InvalidationEvent[claudeinstanceprovider.InstanceID]) bool {
-		if isPidKeyed {
-			return ev.Key.HostID == host && ev.Key.ClaudePid == pid
-		}
-		// Session-keyed id: re-resolve on every event from this host
-		// since the briefing's "session-<name>" form doesn't carry pid
-		// info up front.
-		return ev.Key.HostID == host
-	}
-	return relayInvalidations(ctx, src, matcher, func(c context.Context) (graphql1.Node, error) {
+	// ADR-022 Phase 5: ClaudeInstance is a view over panes. Subscribe to the
+	// Tmux panes invalidation channel and re-resolve on every pane change.
+	src := r.Tmux.Panes().Subscribe(ctx)
+	return relayInvalidations(ctx, src, func(_ adapter.InvalidationEvent[tmuxprovider.PaneKey]) bool {
+		return true
+	}, func(c context.Context) (graphql1.Node, error) {
 		return resolveClaudeInstanceNode(c, r, id)
 	}), nil
 }

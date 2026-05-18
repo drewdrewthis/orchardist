@@ -21,6 +21,7 @@ export const SESSION_CARD_FRAGMENT = gql`
 		id
 		sessionUuid
 		state
+		inflightToolCount
 		startedAt
 		lastActivityAt
 		rcEnabled
@@ -104,6 +105,7 @@ export interface SessionCardT {
 	id: string;
 	sessionUuid: string;
 	state: ClaudeStateRaw;
+	inflightToolCount: number;
 	// `startedAt` is `String` in the schema (nullable); the previous
 	// non-null declaration was a TS lie that broke synthetic-card
 	// construction in the tmux lens projection.
@@ -163,6 +165,7 @@ export interface PaneCardT {
 	process: {
 		pid: number;
 		cwd: string | null;
+		command?: string | null;
 		worktree?: WorktreeEnrichment | null;
 	} | null;
 }

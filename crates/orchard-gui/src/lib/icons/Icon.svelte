@@ -67,6 +67,8 @@
 		<rect x="6" y="6" width="12" height="12" rx="1.5" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" />
 	{:else if name === "bell"}
 		<path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z" /><path d="M10 20a2 2 0 0 0 4 0" />
+	{:else if name === "bell-off"}
+		<path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z" /><path d="M10 20a2 2 0 0 0 4 0" /><path d="M3 3l18 18" />
 	{:else if name === "filter"}
 		<path d="M3 5h18l-7 8v6l-4-2v-4Z" />
 	{:else if name === "layers"}

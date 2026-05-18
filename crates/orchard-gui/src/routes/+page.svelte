@@ -30,6 +30,13 @@
 		onResize();
 		window.addEventListener("resize", onResize);
 
+		// Track online/offline so the UI can surface an obvious banner when
+		// the device is offline (PWA over flaky 5G is the motivating case).
+		const onOnline = () => store.setOnline(true);
+		const onOffline = () => store.setOnline(false);
+		window.addEventListener("online", onOnline);
+		window.addEventListener("offline", onOffline);
+
 		// Palette consumes hosts + worktrees; pre-fetch so ⌘K is instant.
 		hostsStore.fetch();
 		worktreesStore.fetch();
@@ -81,6 +88,8 @@
 		return () => {
 			window.removeEventListener("resize", onResize);
 			window.removeEventListener("keydown", onKey);
+			window.removeEventListener("online", onOnline);
+			window.removeEventListener("offline", onOffline);
 		};
 	});
 
