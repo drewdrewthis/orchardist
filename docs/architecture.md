@@ -91,29 +91,33 @@ The ecosystem model + script-as-canonical pattern collapses all three: one home 
 
 ## Daemon module domains
 
-The daemon owns the following domains. Each domain becomes a module under `daemon/<name>/` (see [RULES.md R1, R2](../RULES.md)). Today they live under `internal/server/providers/<name>/` and `internal/server/resolvers/`; migration is tracked in #613.
+The daemon owns the following domains. Each domain becomes a flat module under `daemon/<name>/` (see [RULES.md R1, R2](../RULES.md)). Today they live under `internal/server/providers/<name>/` and `internal/server/resolvers/`; migration is tracked in #613.
 
-**Subdomains are allowed.** A domain may have sibling sub-modules (e.g. `daemon/claude/{jsonls,instance,account}/`) when the concerns are related-but-not-coupled. Subdomains avoid premature merging while keeping a single namespace.
+**Flat, not nested.** Earlier drafts grouped related domains under parent directories (`daemon/claude/{jsonls,instance,account}/`). After review the decision is to keep modules flat — `daemon/claude-jsonls/`, `daemon/claude-account/`, etc. Hyphenated names group by prefix without forcing a nested taxonomy that pretends modules with different sources / cadences / failure modes are "really one thing." When two modules genuinely become indistinguishable, they merge; until then they stay separate.
+
+### What is NOT a domain
+
+Three categories of things that look like domains but aren't:
+
+- **GraphQL join types** (e.g. today's `Worktree` with its `.tmuxSessions` / `.claudeInstance` / `.pr` fields) are not domains. They are types owned by the most-responsible domain (`Worktree` lives in `git`; its cross-domain fields resolve via sibling domain services through GraphQL field resolution). The cross-domain join IS the GraphQL graph; we don't need a separate domain for it.
+- **Startup tasks / one-shot work** (e.g. discovering repos at boot) are not domains. They are bootstrap routines that populate a domain's data and then go away. The data they populate belongs to whichever domain owns the storage (repos → `git`).
+- **Daemon plumbing** (federation transport, the `node(id)` id-prefix dispatcher, the gqlgen runtime) is not a domain. It is the daemon's shell — see "Daemon shell" below.
 
 ### Domain table
 
-| Domain | Subdomain | Owns | Current path | Notes |
+9 flat domains. Each becomes `daemon/<name>/` with the canonical layout (`service.go` / `provider.go` / `adapter.go` / `resolver.go` / `loaders.go` / `mutations.go` / `subscriptions.go` / `schema.graphql` — omit files that don't apply).
+
+| Domain | Sources | Consumes (per service contract) | Current path | Schema partial |
 |---|---|---|---|---|
-| **tmux** | — | Sessions, windows, panes, clients across tmux servers (local + federated). Send-keys mutation. Pane content streaming. | `internal/server/providers/tmux/` | Known smell: `Snapshot()` hot path (#612). |
-| **git** | — | Worktree set, branch state, ahead/behind, remote heads. Mutations: worktree create / remove / move (some gaps). | `internal/server/providers/git/` | |
-| **gh** | — | Repos, issues, pull requests, PR enrichment (mergeable, status checks, labels). Mutations: PR review / label / comment (gap). | `internal/server/providers/gh/` | Known smell: single+batch enrichment divergence (#615). |
-| **claude** | **jsonls** | Reads & parses Claude Code session JSONLs at `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl`. Owns base record parsing AND companion records from Conversation/Contracts plugins (they share the same JSONL stream; surface as enriched fields). Surfaces `Conversation`, `Message`, `Recap`, `ContractEvent` types. | `internal/server/providers/claudeprojects/` | Rename pending. Current name is a leftover from Claude Code's directory convention and obscures what the module does: read session JSONLs. |
-| **claude** | **instance** | Pane-first Claude REPL state derivation from JSONL tail. No provider — pure `DeriveInstanceState` + `SidecarJanitor`. | `internal/server/providers/claudeinstance/` | Post-ADR-022 Phase 5 shape. |
-| **claude** | **account** | `claude auth status` shellout. | `internal/server/providers/claudeaccount/` | |
-| **ps** | — | Process metadata (cwd, pid, parent, command) for currently-running processes. Read-only. | `internal/server/providers/ps/` | |
-| **host** | **identity** | Machine identity + resource load (CPU/mem/disk/loadavg, 5s TTL). | `internal/server/providers/host/` | |
-| **host** | **services** | Launchd/systemd unit watchlist (from `~/.orchard/config.json`). Surfaces `HostService` type. Different fetch path + OS adapters from identity. | `internal/server/providers/hostservice/` | |
-| **contracts** | — | Contracts engine (durable delivery primitive). Currently exposed via MCP; daemon GraphQL mutation surface is sparse. | `internal/server/providers/contracts/` | |
-| **repo** | — | Owns `type Repo implements Node`. Feeds `Query.repos`. Upstream of `repodiscovery` and `worktree`. | `internal/server/providers/config/` (today misnamed `config`) | **Rename `config/` → `repo/` is the first thing the migration PR does.** Today's directory name is a 6-year-old leftover; the module is the Repo node provider, NOT daemon configuration. |
-| **repodiscovery** | — | Discovers orchard-managed repositories on disk. Depends on `repo` (storage backend), `claude-jsonls` (discovers repos from conversation cwds), and `tmux` (`source_tmux.go`). | `internal/server/providers/repodiscovery/` | |
-| **worktree** | — | Composite domain: joins git worktree + tmux sessions/panes + claude instances + gh PR into the `Worktree.*` resolver chain. Also owns `WorkView` (the cross-domain rollup that joins repos + tmux + claude into the dashboard view). Depends on `git + tmux + claude + gh + ps + host`. | `internal/server/resolvers/worktree_*.go` + `WorkView` resolvers in `schema.resolvers.go` | New module. Cross-domain consumer; never reverse — other domains don't import worktree. |
-| **daemon-self** | — | Daemon's own introspection surface: `DaemonState`, `Health`, `ProviderHealth`, `version`, `schemaSdl`, `Meta`, `ResourceLoad`. The "daemon talking about itself" types currently scattered in `schema.resolvers.go`. | `internal/server/resolvers/schema.resolvers.go` (scattered) | New module. Without this, the introspection resolvers orphan into the daemon shell after extraction. |
-| **node** | — | `node(id: ID!)` dispatcher. Routes 14 Node id prefixes (`Host:`, `Conversation:`, `ClaudeInstance:`, `TmuxPane:`, `PullRequest:`, etc.) to the owning domain's resolver. Also feeds `subscription.peer` (Node-change streaming over federation). | `internal/server/resolvers/node.resolvers.go` (535 lines, imports 8 providers) | New module. Implementation pattern: each domain registers its prefix + resolver; the `node` module is the registry + dispatcher, not the resolution itself. |
+| **git** | Local git repos: worktrees, branches, refs, status, ahead/behind, remote heads. Owns `Repo` (local view), `Worktree`, `Branch` types. Mutations: worktree create/rm/mv, fetch/pull/push. Repo discovery (walk the watched-projects list + known dirs to find git repos) is a startup routine inside this domain, not its own domain. | — | `internal/server/providers/git/` + `internal/server/providers/config/` (Repo node provider; misnamed today) + `internal/server/providers/repodiscovery/` (startup routine; folds in) | `daemon/git/schema.graphql` |
+| **gh** | GitHub API: repos (the github-side view), issues, pull requests, workflow runs. Owns `PullRequest`, `Issue`, `WorkflowRun` types. Mutations: PR review/label/comment, issue create. | — | `internal/server/providers/gh/` | `daemon/gh/schema.graphql` |
+| **tmux** | tmux server: sessions, windows, panes, clients. Owns `TmuxSession`, `TmuxWindow`, `TmuxPane`, `TmuxClient` types. Owns the cross-domain join `TmuxPane.claudeInstance: ClaudeInstance` (a pane whose process is `claude` has a live instance derived from the matching jsonl tail). Mutations: send-keys, kill-pane, new-window. | `ps` (for pane process command/cwd), `claude-jsonls` (for the instance derivation on Claude-owning panes) | `internal/server/providers/tmux/` | `daemon/tmux/schema.graphql` |
+| **claude-jsonls** | Claude Code session JSONLs at `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl`. Owns base record parsing AND companion records from Conversation/Contracts plugins (which share the same JSONL stream and surface as enriched fields on the same records). Owns `Conversation`, `Message`, `Recap`, `ContractEvent` types. **Most jsonls have no live REPL** — they're historical. `Conversation.liveInstances: [ClaudeInstance!]!` returns 0, 1, or 2+ matching live panes (the rare /resume edge case). | — | `internal/server/providers/claudeprojects/` + `internal/server/providers/claudeinstance/` (instance derivation lives here as the consumer of jsonl tail data) + `internal/server/providers/contracts/` (contracts engine — its records ride on the same jsonl stream as Conversation plugin records) | `daemon/claude-jsonls/schema.graphql` |
+| **claude-account** | `claude auth status` shellout. Owns `ClaudeAccount` type. | — | `internal/server/providers/claudeaccount/` | `daemon/claude-account/schema.graphql` |
+| **ps** | OS process table (pid, ppid, cwd, command, args). Owns `Process` type. Read-only domain. | — | `internal/server/providers/ps/` | `daemon/ps/schema.graphql` |
+| **host-identity** | Machine identity + resource load (CPU/mem/disk/loadavg, 5s TTL). Owns `Host`, `ResourceLoad` types. | — | `internal/server/providers/host/` | `daemon/host-identity/schema.graphql` |
+| **host-services** | launchd/systemd unit watchlist (watchlist is config-driven). Owns `HostService` type. Different fetch path and OS adapters from `host-identity`; sharing a prefix is the only thing they have in common. | — | `internal/server/providers/hostservice/` | `daemon/host-services/schema.graphql` |
+| **daemon-self** | Daemon's own state and introspection: health, version, schema introspection, loaded config (the watched-projects list and peer list from `~/.orchard/config.json`), cache statistics, peer-connection status. Owns `Health`, `DaemonState`, `ProviderHealth`, `Settings`, `Meta` types. Mutations: `daemonReload`, manual cache rebuild — the rare exception to "every mutation execs a script" because these affect daemon-internal state, not external truth. | — | `internal/server/resolvers/schema.resolvers.go` (DaemonState/Health/etc. scattered here) | `daemon/daemon-self/schema.graphql` |
 
 ### Daemon shell (not domains)
 
@@ -121,10 +125,19 @@ These live in `daemon/` at the top level, not as domains. They are infrastructur
 
 | Shell concern | Owns | Current path | Notes |
 |---|---|---|---|
-| `daemon/server.go` | HTTP / WebSocket / handler wiring. Composes per-domain resolvers into the aggregate `Resolver`. Origin gating (`checkGUIOrigin`). | `internal/server/server.go` | |
-| `daemon/transport/` (federation) | Peer-daemon proxy: turns a remote orchard daemon into a backend like git/tmux/ps. WebSocket subprotocol negotiation. Peer config from `~/.orchard/config.json`. `LocalInvalidator` for cross-process cache invalidation. **Not a domain — it's the transport layer.** | `internal/server/providers/peerproxy/` | The provider name is a misnomer; this is daemon plumbing. Moves to shell. |
-| `daemon/loaders.go` (composer) | Thin aggregate that holds per-domain loaders + a few cross-domain loaders that can't cleanly belong to one domain (e.g. `loadPanesByCwd` consumes tmux+ps, `loadWorktreesForCwds` consumes git+ps+tmux). Cross-domain loaders are named and owned here explicitly. | `internal/server/loaders/loaders.go` (30KB, today undifferentiated) | Per-domain loader code moves into `daemon/<name>/loaders.go`; cross-domain loaders stay at the shell with named ownership. |
+| `daemon/server.go` | HTTP / WebSocket / handler wiring. Composes per-domain resolvers into the aggregate `Resolver`. Origin gating (`checkGUIOrigin`). gqlgen schema composition (globs `daemon/*/schema.graphql` into one schema). | `internal/server/server.go` | |
+| `daemon/transport/` (federation) | Peer-daemon proxy: turns a remote orchard daemon into a backend like git/tmux/ps. WebSocket subprotocol negotiation. Peer list comes from `daemon-self`'s loaded settings. `LocalInvalidator` for cross-process cache invalidation. **Not a domain — it's the transport layer.** | `internal/server/providers/peerproxy/` | Provider name is a misnomer; this is daemon plumbing. Moves to shell. |
+| `daemon/loaders.go` (composer) | Thin aggregate that holds per-domain loaders + a few cross-domain loaders that can't cleanly belong to one domain (e.g. `loadPanesByCwd` consumes tmux+ps). Cross-domain loaders are named and owned here explicitly. | `internal/server/loaders/loaders.go` (30KB, today undifferentiated) | Per-domain loader code moves into `daemon/<name>/loaders.go`; cross-domain loaders stay at the shell with named ownership. |
+| `daemon/node.go` | The `node(id: ID!)` id-prefix dispatcher. **Not a domain — it's a registry.** Each domain registers its prefix (`Host:`, `TmuxPane:`, `Conversation:`, ...) and the lookup function. `daemon/node.go` is the registry + the `Query.node` resolver. | `internal/server/resolvers/node.resolvers.go` | Current 535-line file with 14 hard-coded prefix branches becomes a tiny registry; each domain owns its prefix and lookup. |
 | `daemon/graphql/` | gqlgen-generated code. Not authored. | `internal/server/graphql/` | Wholesale move in Phase 0. |
+
+### Schema partials
+
+Each domain owns `daemon/<name>/schema.graphql`. The gqlgen config globs these into one composed schema at build time. There is no monolithic `schema.graphql` to edit; touching a domain's types means touching that domain's partial.
+
+The schema is the contract (RULES.md S11). The partial is the contract per domain. The constitution does not include a schema sketch — the per-domain agent writes their partial against the constitution rules (Node interface S2, Relay connections S1, error unions S9, input types S4, mutation responses S8, etc.) as the migration deliverable.
+
+Cross-domain types: when domain A's type has a field whose return type lives in domain B (e.g. `TmuxPane.claudeInstance: ClaudeInstance` where `ClaudeInstance` is `claude-jsonls`-owned), the field is declared in A's partial via gqlgen's `extend type` or by importing B's type symbol; the resolver lives in A and calls B's service. The shape works with gqlgen's multi-file schema composition.
 
 ### Mutation ownership convention
 
@@ -137,32 +150,39 @@ Each domain owns its mutations in `daemon/<name>/mutations.go`. The aggregate `m
 - **chat** (`internal/server/providers/chat/`) — being deleted (#616). Skip.
 - **gqlgen-generated code** (`internal/server/graphql/`) — daemon shell concern; moves wholesale in Phase 0.
 
-### Dependency graph (summary)
-
-Built from the table above:
+### Dependency graph (north star, not current state)
 
 ```
-              repo
-                 ▲
-                 │
-        ┌────────┴──────────┐
-        │                   │
-   repodiscovery         worktree
-        │              ┌────┴──┬────┬──────┬────┬────┐
-        │              ▼       ▼    ▼      ▼    ▼    ▼
-        ▼            tmux    git  claude  gh   ps  host
-   claude-jsonls   (peers)               (auth)
-        ▲
-        │
-     tmux ─────────┐
-                   │
-       repodiscovery also consumes
-       tmux + claude-jsonls
+                  worktree-shaped joins happen at the GraphQL
+                  graph level via field resolution. No domain
+                  is "the worktree domain" — Worktree is a type
+                  in `git` with cross-domain fields.
+
+   tmux ────────────►  claude-jsonls
+     │                       ▲
+     │                       │
+     └────►  ps              │   (used by tmux for the
+                             │    Pane→Process→jsonl join)
+   tmux ────►  ps  ──────────┘
+
+   leaves (no domain deps):
+     git, gh, claude-jsonls, claude-account, ps,
+     host-identity, host-services, daemon-self
+
+   only edges in the north star:
+     tmux  → ps
+     tmux  → claude-jsonls
 ```
 
-`worktree` is the heaviest consumer (6 sibling domains). `daemon-self`, `node`, `contracts`, and the host subdomains have no cross-domain deps.
+`tmux` is the only domain with cross-domain dependencies in the north star. Every other domain reads its source-of-truth directly with zero coupling. This is intentional: each domain knows its own world, the GraphQL graph composes their views.
 
-Each domain (and subdomain) gets its own refactor PR following [RULES.md](../RULES.md) and producing a per-module `AUDIT.md`. See #613 for the swarm dispatch plan.
+**Current code is wrong vs this target in known places** — these become explicit fixes during each domain's migration:
+
+- `git` imports `config` (= `repo`) — fix by folding `config`/`repodiscovery` into `git` during git's migration
+- `contracts` imports `host` — fix by removing the import; if a contract record needs host attribution, that's a *field*, not an import. (`contracts` folds into `claude-jsonls`.)
+- `peerproxy` imports `ps` — fix during transport extraction; peerproxy is daemon plumbing, not data
+
+Each domain (flat, one module each) gets its own refactor PR following [RULES.md](../RULES.md) and producing a per-module `AUDIT.md`. See #613 for the swarm dispatch plan.
 
 ## Guiding Principles
 
