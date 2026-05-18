@@ -103,3 +103,44 @@ input HostServiceFilter {
   "Lifecycle state."
   state: HostServiceState
 }
+
+"""
+Input for service lifecycle mutations. Single input object per S4.
+"""
+input ServiceLifecycleInput {
+  "machineId of the host owning the service. v1: must be the local machine."
+  host: String!
+
+  "Service name as written in config (e.g. \"com.gitorchard.orchard\")."
+  name: String!
+}
+
+extend type Mutation {
+  """
+  Start a watched service. Idempotent — starting an already-running service
+  is a no-op per launchctl/systemctl. Execs `scripts/host-service-start.sh
+  --json` per L5.
+  """
+  serviceStart(input: ServiceLifecycleInput!): HostService!
+
+  """
+  Stop a watched service. Execs `scripts/host-service-stop.sh --json`
+  per L5. Returns the affected node per L8.
+  """
+  serviceStop(input: ServiceLifecycleInput!): HostService!
+
+  """
+  Restart a watched service. Execs `scripts/host-service-restart.sh --json`
+  per L5. Returns the affected node per L8.
+  """
+  serviceRestart(input: ServiceLifecycleInput!): HostService!
+}
+
+extend type Subscription {
+  """
+  Fires after each poll-refresh of any watched service. Emits the updated
+  HostService node so clients update their normalized cache without a
+  follow-up query. Per R16, emissions happen AFTER the cache write.
+  """
+  hostServiceChanged: HostService!
+}
