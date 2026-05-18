@@ -23,7 +23,7 @@ The deeper observation: the daemon, CLI, GUI, and TUI grew without a shared depe
 Adopt two repo-level documents as **authoritative**:
 
 1. **[docs/architecture.md](../architecture.md)** — describes the ecosystem (CLI, daemon, GUI, TUI, scripts), the dependency invariants, and each daemon domain.
-2. **[RULES.md](../../RULES.md)** — the 55-rule constitution: 10 layer rules (L1–L10), 16 code patterns (R1–R16), 14 schema rules (S1–S14), 12 optimization rules (O1–O12), 7 mutation-coverage rules (M1–M7). Rules are numbered with stable IDs for citation.
+2. **[RULES.md](../../RULES.md)** — the 59-rule constitution: 10 layer rules (L1–L10), 16 code patterns (R1–R16), 14 schema rules (S1–S14), 12 optimization rules (O1–O12), 7 mutation-coverage rules (M1–M7). Rules are numbered with stable IDs for citation.
 
 These documents are **load-bearing**, not aspirational. Every PR is reviewed against them. Architectural changes cite the relevant rule IDs. Domain refactors must demonstrate conformance.
 
@@ -43,14 +43,14 @@ GraphQL mutation semantics carry their own contract: mutations return affected n
 **Positive:**
 
 - New PRs have a fixed rubric to be reviewed against. "This violates R3 (no Snapshot in field resolvers)" is faster than "this looks wrong."
-- The daemon module refactor (#613) has a concrete spec: bring each domain up to constitution conformance. The 55 rules ARE the acceptance criteria.
+- The daemon module refactor (#613) has a concrete spec: bring each domain up to constitution conformance. The 59 rules ARE the acceptance criteria.
 - Cross-cutting smells get a name and a stable citation. Audits compose: if `tmux` violates R3, `gh` might too, and the fix shape is the same.
 - The 4-citizen model collapses the "where does this logic live?" question. Scripts. Always scripts. CLI and daemon wrap.
 - GUI/TUI duplication eliminated by construction (they consume daemon-only).
 
 **Negative / costs:**
 
-- 55 rules is a lot to internalize. Mitigated by stable IDs and category structure: most PRs only touch ~5 relevant rules at a time.
+- 59 rules is a lot to internalize. Mitigated by stable IDs and category structure: most PRs only touch ~5 relevant rules at a time.
 - The script-as-canonical pattern requires extracting current inline logic into standalone scripts. That's its own refactor, parallel to #613.
 - "No persisted daemon state" rules out some optimizations (warm-start caches). Cold start cost becomes load-bearing (O5).
 - Future schema or layer changes that need to evolve a rule require an ADR + RULES.md amendment in the same PR. More ceremony for architectural changes.
@@ -62,7 +62,7 @@ GraphQL mutation semantics carry their own contract: mutations return affected n
 
 ## Alternatives considered
 
-1. **Document patterns informally in CLAUDE.md.** Rejected: CLAUDE.md is loaded into every Claude session — adding 55 rules bloats every conversation's context. Rules belong in `RULES.md` (loaded on demand), cited from CLAUDE.md.
+1. **Document patterns informally in CLAUDE.md.** Rejected: CLAUDE.md is loaded into every Claude session — adding 59 rules bloats every conversation's context. Rules belong in `RULES.md` (loaded on demand), cited from CLAUDE.md.
 
 2. **Per-domain rules in each module.** Rejected: cross-cutting rules are cross-cutting. A repo-level constitution is the right scope; per-module specs (`.feature` files, `AUDIT.md`) layer ON TOP of the constitution.
 
@@ -73,7 +73,7 @@ GraphQL mutation semantics carry their own contract: mutations return affected n
 ## References
 
 - [docs/architecture.md](../architecture.md) — the ecosystem and domain descriptions
-- [RULES.md](../../RULES.md) — the 55-rule constitution
+- [RULES.md](../../RULES.md) — the 59-rule constitution
 - #613 — daemon module refactor (the first major application of these rules)
 - #610 — sidebar redesign PR; `/review` of it surfaced the patterns this ADR codifies
 - ADR-013 — orchard CLI ecosystem (predecessor; defined the multi-binary `orchard` shape)

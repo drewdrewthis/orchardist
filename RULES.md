@@ -1,6 +1,6 @@
 # Orchard Repo Constitution
 
-The 55 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
+The 59 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
 
 This is not a style guide. It is the contract.
 
