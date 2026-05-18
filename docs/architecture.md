@@ -18,25 +18,32 @@ The TUI and GUI are read-and-write consumers of the daemon. The daemon and CLI a
 Orchard is **four ecosystems**, each with its own identity, contract, and ownership boundary:
 
 ```
-                       External truth
-        (tmux server, git, gh, claude jsonl, filesystem)
-                       ▲              ▲
-                       │              │
-                  ┌────┴────┐    ┌────┴────┐
-                  │ scripts/│    │         │
-                  │ (canon- │    │         │
-                  │ ical    │    │         │
-                  │ ops)    │    │         │
-                  └────┬────┘    │         │
-                       │         │         │
-                       │    exec │         │ in-process
-                       │         │         │ (queries)
-                  ┌────▼────┐  ┌─▼─────────▼─┐
-                  │   CLI   │  │   Daemon    │
-                  │ (Rust;  │  │ (Go; GraphQL│
-                  │ stand-  │  │ on :7777)   │
-                  │ alone)  │  │             │
-                  └─────────┘  └──────┬──────┘
+                            External truth
+            (tmux server, git, gh, claude jsonl, filesystem)
+                       ▲                       ▲
+                       │ writes via script     │ daemon polls /
+                       │                       │ observes
+                       │                       │
+                  ┌────┴────┐                  │
+                  │scripts/ │                  │
+                  │canonical│                  │
+                  │   ops   │                  │
+                  └────▲────┘                  │
+                       │                       │
+              ┌────────┴────────┐              │
+              │ exec            │ exec         │
+              │                 │              │
+         ┌────┴────┐       ┌────┴──────────────┴─┐
+         │   CLI   │       │       Daemon        │
+         │ (Rust)  │       │ (Go; GraphQL :7777) │
+         │standalone│      │                     │
+         │         │       │  • queries:         │
+         │exec     │       │      in-process     │
+         │scripts  │       │  • mutations:       │
+         │directly │       │      exec scripts   │
+         │         │       │  • subscriptions:   │
+         │         │       │      emit deltas    │
+         └─────────┘       └──────────┬──────────┘
                                       │ GraphQL
                                       │
                               ┌───────┴───────┐
@@ -46,6 +53,13 @@ Orchard is **four ecosystems**, each with its own identity, contract, and owners
                          │(Svelte)│      │(Ratatui)│
                          └────────┘      └─────────┘
 ```
+
+**Daemon edges, explicit:**
+- **Queries** — in-process Go. The daemon polls / observes external truth, caches projections, and serves field resolvers from those caches. No script exec on the read path (L4).
+- **Mutations** — exec the matching `scripts/<op>` and project its `--json` output as the GraphQL response (L5). The script writes to external truth; the daemon's next poll picks up the change; subscribers see deltas; the mutation response also carries the affected node so the client cache updates immediately (L8).
+- **Subscriptions** — in-process Go, emitting deltas as the cache notices external-truth changes (R16, S7).
+
+Both CLI and daemon end up at `scripts/` for writes. Scripts are the single source of truth for "how to do this operation"; CLI and daemon are wrappers with different surfaces (CLI = user-facing args; daemon = GraphQL mutation resolver).
 
 ### Layer responsibilities
 
