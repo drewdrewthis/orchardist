@@ -5,7 +5,8 @@ Local git: repos, worktrees, branches, refs, status, ahead/behind, remote heads.
 ## Owns
 
 - **Types:** `Repo`, `Worktree`
-- **Queries:** `Query.repos`
+- **Queries (typed core):** `Query.repos`
+- **Query (pass-through, S16):** `git(worktreeId, args): JSON` — arbitrary `git` invocation against a known worktree
 - **Subscriptions:** `Subscription.worktreeChanged`
 - **Mutations** (to be added in #613, each execs a script per [L5](../../RULES.md)):
   `worktreeCreate`, `worktreeRemove`, `worktreeMove`, `fetch`, `pull`, `push`

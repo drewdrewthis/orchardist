@@ -8,7 +8,8 @@ The watchlist is config-driven — `services` in `~/.orchard/config.json`. Watch
 
 - **Types:** `HostService`
 - **Enums + inputs:** `HostServiceState`, `HostServiceFilter`
-- **Queries:** `hostServices`
+- **Queries (typed core):** `hostServices`
+- **Query (pass-through, S16):** `hostServiceCtl(host, args): JSON` — arbitrary `launchctl`/`systemctl` invocation
 - **Field extensions on:** `Host.hostServices`
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
 

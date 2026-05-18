@@ -1,10 +1,13 @@
 # daemon-self — daemon's own state, health, and composite views.
 #
 # Owns: Health, DaemonState, ProviderHealth, Meta, WorkView.
-# Owns: Query.{health, daemonState, version, schemaSDL, workView, node, gh-passthrough}.
+# Owns: Query.{health, daemonState, version, schemaSDL, workView, node}.
 # Constitution: L10 (daemon-self under `orchard daemon ...`),
 #               L8/M2 (daemonReload/manual rebuild are the rare mutations affecting
 #               daemon-internal state, not external truth).
+#
+# NOTE: Query.gh (pass-through) lives in `daemon/gh/` per S16 — it is the gh
+# domain's pass-through escape hatch, not daemon plumbing.
 
 extend type Query {
   "Liveness probe — returns daemon health and uptime."
@@ -45,20 +48,6 @@ extend type Query {
   (federation transport). Unknown hosts return null.
   """
   node(id: ID!): Node
-
-  """
-  Forward an arbitrary GraphQL query to GitHub's API using the daemon's
-  configured gh credentials. Pass-through is read-only by design: it is
-  exposed as a Query field, not a Mutation, so callers cannot bypass
-  orchardist guardrails by routing mutations through the daemon. Auth,
-  rate limiting, and base URL come from the gh provider; callers do not
-  pass tokens.
-
-  Federation: peers can call `gh` through the peerproxy surface. The
-  result is opaque JSON on the orchard side — the consumer typechecks
-  against GitHub's schema directly.
-  """
-  gh(query: String!, variables: JSON): JSON
 }
 
 type Health {

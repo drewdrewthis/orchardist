@@ -6,7 +6,8 @@ tmux server: sessions, windows, panes, clients.
 
 - **Types:** `TmuxServer`, `TmuxSession`, `TmuxWindow`, `TmuxPane`, `TmuxClient`
 - **Enums + inputs:** `TmuxSessionSort`, `TmuxSessionFilter`, `TmuxPaneFilter`
-- **Queries:** `tmuxServer`, `tmuxSessions`, `tmuxPanes`
+- **Queries (typed core):** `tmuxServer`, `tmuxSessions`, `tmuxPanes`
+- **Query (pass-through, S16):** `tmux(args): JSON` — arbitrary `tmux ...` subcommand
 - **Subscriptions:** `tmuxSessionsChanged`
 - **Mutations:** `sendTextToPane` (per [L5](../../RULES.md), execs `scripts/tmux-send-text.sh`)
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)

@@ -10,6 +10,27 @@
 extend type Query {
   "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account `claude auth status` reports for; later versions may surface additional accounts."
   claudeAccounts: [ClaudeAccount!]!
+
+  """
+  Pass-through (S16): run an arbitrary `claude` CLI subcommand or
+  `ccusage` invocation and return stdout/stderr/exit code as opaque
+  JSON. Used when the typed core does not yet cover a call shape
+  (e.g. `claude config get`, `ccusage --since YYYY-MM-DD`).
+
+  Read-only by design — the typed account surface is the canonical
+  read; this pass-through is for ad-hoc inspection. Account-mutating
+  operations (login/logout) go through typed mutations that exec
+  `scripts/claude-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  claudeCli(tool: ClaudeCliTool!, args: [String!]!): JSON
+}
+
+"Which Claude-account-domain CLI the pass-through invokes."
+enum ClaudeCliTool {
+  claude
+  ccusage
 }
 
 """

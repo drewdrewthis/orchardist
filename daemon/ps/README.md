@@ -7,6 +7,7 @@ OS process table — read-only. (pid, ppid, cwd, command, args.)
 - **Types:** `Process`
 - **Inputs:** `ProcessFilter`
 - **Subscriptions:** `processes` (snapshot fan-out on invalidation)
+- **Query (pass-through, S16):** `ps(tool: PsTool!, args): JSON` — arbitrary `ps` or `lsof` invocation
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
 
 ## Field extensions

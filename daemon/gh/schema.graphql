@@ -2,15 +2,37 @@
 #
 # Owns: PullRequest, PullRequestReview, Issue, Label, IssueComment, WorkflowRun.
 # Owns: MergeableState, ReviewDecisionEnum, CiStatus, PullRequestState, IssueState.
-# Owns: Query.{pullRequests, openPullRequests, issues, issue, pullRequest, workflowRuns}.
+# Owns: Query.{gh, pullRequests, openPullRequests, issues, issue, pullRequest, workflowRuns}.
 # Owns: Subscription.{pullRequestChanged, runChanged}.
 #
 # Mutations (to be added in #613): PR review/label/comment, issue create. All exec `scripts/<op>`.
 #
-# Note: the gh-passthrough (`Query.gh(query, variables): JSON`) lives in daemon-self because
-# it is a federation-aware escape hatch, not a typed gh field.
+# S16 (typed core + pass-through): the typed core is the queries below
+# (`pullRequests`, `issue`, `workflowRuns`, etc.). The pass-through escape
+# hatch is `Query.gh(query, variables): JSON` — opaque, uncached, returns
+# whatever GitHub returns.
 
 extend type Query {
+  """
+  Pass-through (S16): forward an arbitrary GraphQL query to GitHub's API
+  using the daemon's configured gh credentials. The `query` argument is a
+  GitHub-schema GraphQL document; the returned JSON is GitHub's full
+  envelope including the `data` and any `errors` keys.
+
+  Pass-through is read-only by design: it is exposed as a Query field,
+  not a Mutation, so callers cannot bypass orchardist guardrails by
+  routing mutations through the daemon. Auth, rate limiting, and base
+  URL come from the gh provider; callers do not pass tokens.
+
+  Federation: peers can call `gh` through the peerproxy surface. The
+  result is opaque JSON on the orchard side — the consumer typechecks
+  against GitHub's schema directly.
+
+  When a pass-through call shape becomes load-bearing, file an issue to
+  promote it to the typed core.
+  """
+  gh(query: String!, variables: JSON): JSON
+
   "Pull requests on a GitHub repository. `repo` is `owner/name`."
   pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
 

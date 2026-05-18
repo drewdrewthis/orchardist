@@ -5,7 +5,8 @@
 ## Owns
 
 - **Types:** `ClaudeAccount`
-- **Queries:** `claudeAccounts`
+- **Queries (typed core):** `claudeAccounts`
+- **Query (pass-through, S16):** `claudeCli(tool: ClaudeCliTool!, args): JSON` — arbitrary `claude` or `ccusage` invocation
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
 
 ## Why this is its own domain

@@ -6,15 +6,16 @@ GitHub API: repos (github-side view), issues, pull requests, workflow runs.
 
 - **Types:** `PullRequest`, `PullRequestReview`, `Issue`, `Label`, `IssueComment`, `WorkflowRun`
 - **Enums:** `MergeableState`, `ReviewDecisionEnum`, `CiStatus`, `PullRequestState`, `IssueState`
-- **Queries:** `pullRequests`, `openPullRequests`, `issues`, `issue`, `pullRequest`, `workflowRuns`
+- **Queries (typed core):** `pullRequests`, `openPullRequests`, `issues`, `issue`, `pullRequest`, `workflowRuns`
+- **Query (pass-through, S16):** `gh(query: String!, variables: JSON): JSON` — forwards arbitrary GitHub GraphQL with the daemon's credentials
 - **Subscriptions:** `pullRequestChanged`, `runChanged`
 - **Mutations** (to be added in #613, each execs a script per [L5](../../RULES.md)):
   PR review/label/comment, issue create
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
 
-## Note: gh-passthrough lives in daemon-self
+## S16: typed core + pass-through
 
-`Query.gh(query, variables): JSON` is the federation-aware passthrough escape hatch. It lives in [`daemon-self`](../daemon-self/), not here, because it is plumbing (proxies arbitrary GitHub GraphQL through orchard) rather than a typed gh field.
+The typed core covers the hot path with full optimization (cache, loaders, R3-clean, subscriptions). `Query.gh(query, variables): JSON` is the **pass-through escape hatch** — opaque JSON, no cache, no Node interface, no loader. Use it when the typed core doesn't (yet) cover a call shape; when a pass-through call becomes load-bearing, promote it to typed via an issue.
 
 ## Current source location (pre-refactor)
 

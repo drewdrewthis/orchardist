@@ -6,9 +6,25 @@
 #       resolved here by calling into git's and claude-jsonls' services respectively.
 
 extend type Query {
-  # No top-level process queries today — processes are reached via Host.processes(filter).
-  # Listed here for completeness so the partial doesn't pretend Query is empty for ps.
-  _psPartialAnchor: Boolean
+  """
+  Pass-through (S16): run an arbitrary `ps` / `lsof` invocation and return
+  stdout/stderr/exit code as opaque JSON. Used when the typed core does
+  not yet cover a call shape (e.g. exotic ps output formats, `lsof -i`
+  socket inspection).
+
+  Read-only by design — there are no write paths to processes in this
+  domain (signal-sending lives in a future `process` mutation if needed,
+  per L5 via a script).
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  ps(tool: PsTool!, args: [String!]!): JSON
+}
+
+"Which OS process-table tool the `ps` pass-through invokes."
+enum PsTool {
+  ps
+  lsof
 }
 
 extend type Subscription {

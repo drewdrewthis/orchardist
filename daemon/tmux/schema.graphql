@@ -21,6 +21,20 @@ extend type Query {
 
   "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
   tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
+
+  """
+  Pass-through (S16): run an arbitrary `tmux ...` subcommand and return
+  stdout/stderr/exit code as opaque JSON. Used when the typed core does
+  not yet cover a call shape (e.g. `tmux show-options -g`,
+  `tmux list-buffers`).
+
+  Read-only by design — exposed as a Query field, not a Mutation.
+  Writes (`send-keys`, `kill-pane`, `new-window`) go through typed
+  mutations that each exec `scripts/tmux-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  tmux(args: [String!]!): JSON
 }
 
 extend type Subscription {

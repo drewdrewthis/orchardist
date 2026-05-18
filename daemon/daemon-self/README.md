@@ -5,7 +5,7 @@ The daemon's own state and introspection.
 ## Owns
 
 - **Types:** `Health`, `DaemonState`, `ProviderHealth`, `Meta`, `WorkView`
-- **Queries:** `health`, `daemonState`, `version`, `schemaSDL`, `workView`, `node`, `gh` (passthrough)
+- **Queries:** `health`, `daemonState`, `version`, `schemaSDL`, `workView`, `node`
 - **Mutations** (to be added in #613, the rare exception per [L5](../../RULES.md)):
   `daemonReload`, manual cache rebuild — these affect daemon-internal state, not external truth
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15](../../RULES.md)
@@ -18,11 +18,11 @@ Per the design call:
 
 > "loaded config (the watched-projects list and peer list from `~/.orchard/config.json`), cache statistics, peer-connection status — that all has an owner. Call it `daemon-self`."
 
-## `Query.gh` belongs here, not in `gh`
+## `Query.node` lives here
 
-The `gh` domain owns typed GitHub fields (`PullRequest`, `Issue`, etc.) populated by the daemon's gh provider. `Query.gh(query, variables): JSON` is a different beast: it forwards an **arbitrary** GitHub GraphQL document with the daemon's credentials and returns opaque JSON. This is federation-aware infrastructure for callers who want to bypass orchard's typed surface — that's plumbing, not a typed `gh` field. So it lives here.
+`Query.node(id)` is the prefix-registry dispatcher that any domain registers its `<Type>:` prefix into. It is not a `Node`-domain field — there is no Node domain — so it lives here with the other daemon-shell-shaped queries.
 
-Same reason `Query.node(id)` lives here: it's the prefix-registry dispatcher that any domain registers into, not a `Node`-domain field.
+(`Query.gh` was originally listed here. Under S16 it is the gh domain's pass-through escape hatch and now lives in [`daemon/gh/`](../gh/).)
 
 ## Cross-domain consumption
 

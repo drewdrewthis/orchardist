@@ -16,6 +16,20 @@
 extend type Query {
   "All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`."
   repos: [Repo!]!
+
+  """
+  Pass-through (S16): run an arbitrary git command in the named worktree
+  and return its stdout, stderr, and exit code as opaque JSON. Used when
+  the typed core does not yet cover a call shape (e.g. `git blame`,
+  `git stash list`, `git log --pretty=...`).
+
+  Read-only by design — exposed as a Query field, not a Mutation. Writes
+  (commit, push, pull, fetch, worktree create/rm) go through typed
+  mutations that each exec `scripts/git-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  git(worktreeId: ID!, args: [String!]!): JSON
 }
 
 extend type Subscription {

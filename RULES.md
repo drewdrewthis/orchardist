@@ -1,6 +1,6 @@
 # Orchard Repo Constitution
 
-The 60 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
+The 61 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
 
 This is not a style guide. It is the contract.
 
@@ -69,6 +69,7 @@ Rules are numbered with category prefixes so they can be cited in code review, a
 | **S13** | **Naming consistency.** Mutations are verbs (`createX`, `sendY`); queries are nouns; subscriptions are present-tense. PascalCase types, camelCase fields. | Inconsistent naming = inconsistent ergonomics. |
 | **S14** | **One thing, one place.** Same data accessible via exactly one path. No `worktree.pr.checks` AND `worktree.checks` returning the same data differently. | Two paths to the same data = two cache entries = two bugs. |
 | **S15** | **Schema partials per domain.** Each domain owns `daemon/<name>/schema.graphql`. gqlgen globs them into one composed schema at build time. There is no monolithic schema file; touching a domain's types means touching that domain's partial. Cross-domain types are declared via `extend type` in the consuming domain's partial; the resolver lives there too. | The schema IS the domain contract; it belongs with the domain. Monolithic schemas drift; per-domain partials are reviewed together with their resolvers/services. |
+| **S16** | **Typed core + pass-through escape hatch.** Every shellout-fronting domain (a domain whose source-of-truth is an external CLI: `gh`, `git`, `tmux`, `ps`, `host-services`, `claude-account`) exposes BOTH a typed core (cached, loader-batched, R3-clean Node-typed fields for the 80% case) AND a `Query.<domain>(...): JSON` pass-through that forwards an arbitrary call to the underlying CLI/API and returns opaque JSON. Pass-through is uncached, no Node interface, no loader, no subscription. When a pass-through field becomes load-bearing in practice, file an issue to promote it to the typed core. | Closes the M2 coverage gap permanently — clients never need to bypass the daemon and shell out themselves. Typed core covers the hot path with all the optimization rules; pass-through covers the long tail without forcing schema growth on every new ask. Same shape `Query.gh` already shipped — generalize it across every shellout domain. |
 
 ---
 

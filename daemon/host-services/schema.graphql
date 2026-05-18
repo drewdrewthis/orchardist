@@ -15,6 +15,20 @@ extend type Query {
   `Host.hostServices`.
   """
   hostServices(filter: HostServiceFilter): [HostService!]!
+
+  """
+  Pass-through (S16): run an arbitrary launchctl / systemctl invocation
+  on the named host and return stdout/stderr/exit code as opaque JSON.
+  Used when the typed core does not yet cover a call shape (e.g.
+  `launchctl print`, `systemctl --user show <unit>`).
+
+  Read-only by design. Service lifecycle writes (start/stop/restart)
+  go through typed mutations that each exec `scripts/service-<op>.sh
+  --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  hostServiceCtl(host: String!, args: [String!]!): JSON
 }
 
 extend type Host {

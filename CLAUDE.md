@@ -12,7 +12,7 @@ See @docs/architecture.md. Enforce:
 - `OrchardState` = single data model (TUI + `--json`)
 - ADRs in `docs/adr/`
 
-**Repo constitution: [RULES.md](RULES.md).** 60 numbered rules (L/R/S/O/M). Read before any architectural change. Cite rule IDs in PR review (e.g. `R3 violation`). Codified in ADR-023.
+**Repo constitution: [RULES.md](RULES.md).** 61 numbered rules (L/R/S/O/M). Read before any architectural change. Cite rule IDs in PR review (e.g. `R3 violation`). Codified in ADR-023.
 
 Coordination: @AGENTS.md
 
