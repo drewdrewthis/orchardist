@@ -422,10 +422,30 @@ func healthHandler(startedAt time.Time) http.HandlerFunc {
 
 // graphqlHandlerFor wires the gqlgen executable schema with an already-constructed Resolver root.
 //
-// The websocket transport carries Subscription operations (Workstream F);
-// the upgrader trusts any origin because the daemon is intended to bind
-// to localhost or a trusted LAN. Production deployments tighten this with
-// a reverse proxy that enforces origin/IP rules.
+// The websocket transport carries Subscription operations (Workstream F).
+//
+// Origin policy & write-mutation perimeter
+// ----------------------------------------
+// The daemon binds 127.0.0.1:7777. Cross-host reachability is delegated
+// to Tailscale (tailnet identity + ACL — see "Peer authentication is
+// delegated to the transport" above). The daemon itself does NOT hold a
+// bearer secret; the transport is the perimeter.
+//
+// That contract held when subscriptions were read-only. The introduction
+// of Mutation.sendTextToPane (writes into a tmux pane) widens the surface:
+// a browser on a tailnet-paired device can reach :7777, and without origin
+// gating any webpage that browser loads could fetch the daemon via JS and
+// drive tmux. CSRF, not auth bypass.
+//
+// CheckOrigin therefore allowlists the GUI's served origins (Tauri's
+// tauri://localhost, the desktop dev origin, and the configured PWA
+// origins) rather than `return true`. A non-GUI origin is refused.
+//
+// For new write mutations: keep the perimeter Tailscale-shaped, and make
+// sure the GUI origin allowlist covers any new served surface that needs
+// to call them. If a non-GUI client legitimately needs to drive a write
+// mutation, gate that mutation explicitly (capability token, pane
+// allowlist) — don't loosen CheckOrigin.
 func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 	cfg := gql.Config{Resolvers: res}
 	srv := handler.New(gql.NewExecutableSchema(cfg))
@@ -436,7 +456,7 @@ func graphqlHandlerFor(res *resolvers.Resolver) http.Handler {
 		Upgrader: gqlws.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
-			CheckOrigin:     func(*http.Request) bool { return true },
+			CheckOrigin:     checkGUIOrigin,
 			Subprotocols:    []string{"graphql-transport-ws", "graphql-ws"},
 		},
 	})
@@ -464,4 +484,69 @@ func introspectionEnabled() bool {
 	default:
 		return true
 	}
+}
+
+// checkGUIOrigin gates websocket upgrades by Origin header. See the
+// graphqlHandlerFor doc-comment for the rationale; tl;dr Tailscale is the
+// auth perimeter but CheckOrigin closes the CSRF gap that opened when
+// sendTextToPane (a write mutation) shipped.
+//
+// Allowed origins:
+//   - missing Origin header (native clients: Tauri webview, curl, codegen)
+//   - tauri://localhost (Tauri's served origin)
+//   - http(s)://localhost:* and http(s)://127.0.0.1:* (dev servers,
+//     vite preview, Playwright runs)
+//
+// Operators can extend the allowlist with ORCHARD_ALLOWED_ORIGINS (comma-
+// separated; exact match against the Origin header). Use for tunneled
+// dev surfaces (e.g. https://orchard.example.trycloudflare.com) the GUI
+// is actually served from. Tailnet hostnames don't need entries — they
+// reach the daemon over the tunnel but the served GUI's origin is what
+// the browser sends.
+func checkGUIOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	if origin == "tauri://localhost" {
+		return true
+	}
+	// localhost / 127.0.0.1 on any port.
+	for _, scheme := range []string{"http://localhost", "https://localhost", "http://127.0.0.1", "https://127.0.0.1"} {
+		if origin == scheme || (len(origin) > len(scheme)+1 && origin[:len(scheme)+1] == scheme+":") {
+			return true
+		}
+	}
+	if extra := os.Getenv("ORCHARD_ALLOWED_ORIGINS"); extra != "" {
+		for _, allowed := range splitAndTrim(extra, ',') {
+			if origin == allowed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// splitAndTrim splits s on sep and trims ASCII whitespace from each part.
+// Empty parts are dropped.
+func splitAndTrim(s string, sep byte) []string {
+	out := make([]string, 0, 4)
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == sep {
+			part := s[start:i]
+			// trim
+			for len(part) > 0 && (part[0] == ' ' || part[0] == '\t') {
+				part = part[1:]
+			}
+			for len(part) > 0 && (part[len(part)-1] == ' ' || part[len(part)-1] == '\t') {
+				part = part[:len(part)-1]
+			}
+			if len(part) > 0 {
+				out = append(out, part)
+			}
+			start = i + 1
+		}
+	}
+	return out
 }
