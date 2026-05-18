@@ -93,7 +93,7 @@ The ecosystem model + script-as-canonical pattern collapses all three: one home 
 
 The daemon owns the following domains. Each domain is a flat module under [`daemon/<name>/`](../daemon/) (see [RULES.md R1, R2](../RULES.md)). The directory skeleton + per-domain schema partials + per-domain READMEs are checked in; the Go code migration from `internal/server/providers/<name>/` and `internal/server/resolvers/` is tracked in #613.
 
-> **Skeleton status:** `daemon/` exists with one directory per domain (13 total). Each contains a `schema.graphql` partial (S15a) and a `README.md` linking the domain to its current source location and the relevant [RULES.md](../RULES.md) citations. **Phase-0 gqlgen composition spike VERIFIED 2026-05-18** — the 13 partials compose to ~24K lines of generated code on first try and are idempotent on rerun. Go files (`service.go`, `provider.go`, `resolver_*.go`, `loaders.go`, `mutations.go`) are not yet authored — that is the per-domain migration work in #613. The proven `gqlgen.yml` composition shape lives at `/tmp/gqlgen-shape.txt` for the swarm. See [`daemon/README.md`](../daemon/README.md) for the canonical per-domain layout.
+> **Skeleton status:** `daemon/` exists with one directory per domain (12 total). Each contains a `schema.graphql` partial (S15a) and a `README.md` linking the domain to its current source location and the relevant [RULES.md](../RULES.md) citations. **Phase-0 gqlgen composition spike VERIFIED 2026-05-18** — the 12 partials compose cleanly. Go files (`service.go`, `provider.go`, `resolver_*.go`, `loaders.go`, `mutations.go`) are not yet authored — that is the per-domain migration work in #613. The proven `gqlgen.yml` composition shape lives at `/tmp/gqlgen-shape.txt` for the swarm. See [`daemon/README.md`](../daemon/README.md) for the canonical per-domain layout.
 
 **Flat, not nested.** Earlier drafts grouped related domains under parent directories (`daemon/claude/{jsonls,instance,account}/`). After review the decision is to keep modules flat — `daemon/claude-jsonls/`, `daemon/claude-account/`, etc. Hyphenated names group by prefix without forcing a nested taxonomy that pretends modules with different sources / cadences / failure modes are "really one thing." When two modules genuinely become indistinguishable, they merge; until then they stay separate.
 
@@ -107,9 +107,9 @@ Three categories of things that look like domains but aren't:
 
 ### Domain table
 
-13 flat domains. Each becomes `daemon/<name>/` with the canonical layout (`service.go` / `provider.go` / `adapter.go` / `resolver_*.go` per type / `loaders.go` / `mutations.go` / `subscriptions.go` / `schema.graphql` — omit files that don't apply).
+12 flat domains. Each becomes `daemon/<name>/` with the canonical layout (`service.go` / `provider.go` / `adapter.go` / `resolver_*.go` per type / `loaders.go` / `mutations.go` / `subscriptions.go` / `schema.graphql` — omit files that don't apply).
 
-The 9-domain initial draft (#618 first commit) was split per devils-advocate review: `claude-jsonls` carried 3 lifecycles, `daemon-self` was a god-module.
+The 9-domain initial draft (#618 first commit) was split per devils-advocate review: `claude-jsonls` carried 3 lifecycles, `daemon-self` was a god-module. A 13-domain interim also added `views/` for composite WorkView; removed — GraphQL + dataloaders coalesce cross-domain reads without a composite delegator.
 
 | Domain | Sources | Consumes (per service contract) | Current path | Schema partial |
 |---|---|---|---|---|
@@ -125,7 +125,6 @@ The 9-domain initial draft (#618 first commit) was split per devils-advocate rev
 | **[contracts](../daemon/contracts/)** | Agent delivery commitments parsed from Contracts-plugin records (ride on the same JSONL stream as conversations). State machine: 9 statuses. Owns `Contract`, `ContractStatus`, `ContractQuestion`. | `claude-jsonls` | `internal/server/providers/contracts/` | [`schema.graphql`](../daemon/contracts/schema.graphql) |
 | **[daemon-self](../daemon/daemon-self/)** | Daemon liveness, version, schema bytes, node-id dispatcher entrypoint. Owns `Health`. | — | `internal/server/server.go` + `internal/server/resolvers/node.resolvers.go` | [`schema.graphql`](../daemon/daemon-self/schema.graphql) |
 | **[daemon-meta](../daemon/daemon-meta/)** | Provider freshness counters + per-field provenance envelope. Owns `DaemonState`, `ProviderHealth`, `Meta`. Mutations: `daemonReload` (L5 carve-out for daemon-internal state). | — | `internal/server/resolvers/schema.resolvers.go` (scattered) | [`schema.graphql`](../daemon/daemon-meta/schema.graphql) |
-| **[views](../daemon/views/)** | Composite views that delegate (per S14) to per-type resolvers for round-trip economy. Owns `WorkView`. | (every domain that contributes a field) | `internal/server/resolvers/schema.resolvers.go` (scattered) | [`schema.graphql`](../daemon/views/schema.graphql) |
 
 ### Daemon shell (not domains)
 
@@ -143,7 +142,7 @@ These live in `daemon/` at the top level, not as domains. They are infrastructur
 
 Each domain owns `daemon/<name>/schema.graphql`. The root [`daemon/schema.graphql`](../daemon/schema.graphql) declares the shared `Node` interface, the `Time` and `JSON` scalars, and the empty `Query` / `Mutation` / `Subscription` shells. Domain partials use `extend type Query`, `extend type Mutation`, `extend type Subscription` to add their fields. gqlgen globs all partials into one composed schema at build time — there is no monolithic schema file to edit.
 
-The schema is the contract (RULES.md S11). The partial is the contract per domain (S15a). The partials checked in at `daemon/*/schema.graphql` carve up today's monolithic `schema.graphql` along the 13-domain boundary; the domain owns the types and fields it declares.
+The schema is the contract (RULES.md S11). The partial is the contract per domain (S15a). The partials checked in at `daemon/*/schema.graphql` carve up today's monolithic `schema.graphql` along the 12-domain boundary; the domain owns the types and fields it declares.
 
 Cross-domain types are governed by RULES.md [S15b](../RULES.md): when domain A adds a field to a type owned by domain B, both the `extend type` AND the resolver live in A. A imports B's service interface (R5), not B's provider.
 
@@ -168,7 +167,6 @@ Each domain owns its mutations in `daemon/<name>/mutations.go`. The aggregate `m
    Join domains (CONSUME 2+ leaves):
      claude-instance  →  claude-jsonls, tmux, ps
      contracts        →  claude-jsonls
-     views (WorkView) →  delegates to every contributing leaf per S14
      daemon-meta      →  reads each provider's freshness counters
 
    Cross-domain `extend type` back-edges (S15b — declared in CONSUMER):
@@ -189,7 +187,7 @@ Per [S15b](../RULES.md): when domain A adds a field to a type owned by domain B,
 **Current code is wrong vs this target in known places** — these become explicit fixes during each domain's migration:
 
 - `git` imports `config` (= `repo`) — fold `config`/`repodiscovery` into `git`
-- contracts and claude-instance currently bundled into `claudeprojects` — split per the 13-domain target
+- contracts and claude-instance currently bundled into `claudeprojects` — split per the 12-domain target
 - `peerproxy` imports `ps` — fix during transport extraction; peerproxy is daemon shell, not data
 
 Each domain gets its own refactor PR following [RULES.md](../RULES.md). See #613 for the swarm dispatch plan.

@@ -15,7 +15,6 @@ Per devils-advocate review of PR #618, the original `daemon-self` was bundling c
 | Concern | Now in |
 |---|---|
 | `DaemonState`, `ProviderHealth`, `Meta`, `daemonReload` | [`daemon-meta`](../daemon-meta/) |
-| `WorkView`, composite views | [`views`](../views/) |
 | `Query.gh` pass-through | [`daemon/gh/`](../gh/) (per [S16b](../../RULES.md)) |
 
 What remains here is the irreducible liveness + introspection surface:

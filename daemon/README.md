@@ -25,13 +25,14 @@ daemon/
 ├── claude-account/                 ← `claude auth status`: ClaudeAccount
 ├── contracts/                      ← Agent delivery commitments: Contract
 ├── daemon-self/                    ← Liveness, version, schemaSDL, node-id dispatcher
-├── daemon-meta/                    ← Provider rollup, freshness counters, Meta envelope
-└── views/                          ← Composite views (delegating per S14): WorkView
+└── daemon-meta/                    ← Provider rollup, freshness counters, Meta envelope
 ```
 
-**13 domains total.** Previous 9-domain shape (#618 first draft) split per devils-advocate review:
+**12 domains total.** Previous 9-domain shape (#618 first draft) split per devils-advocate review:
 - `claude-jsonls` → `claude-jsonls` + `claude-instance` + `contracts` (three independent lifecycles)
-- `daemon-self` → `daemon-self` + `daemon-meta` + `views` (R6 god-module split)
+- `daemon-self` → `daemon-self` + `daemon-meta` (R6 god-module split)
+
+> 13-domain interim split also created `views/` for composite WorkView; subsequently deleted — GraphQL + dataloaders already provide round-trip coalescing without a composite delegator.
 
 ## Canonical per-domain layout
 

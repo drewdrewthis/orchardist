@@ -4,7 +4,6 @@
 # Owns: Query.{health, version, schemaSDL, node}.
 #
 # Health-of-providers + freshness counters live in `daemon-meta`.
-# The composite workView lives in `views`.
 # `Query.gh` (pass-through) lives in `daemon/gh/` per S16b.
 
 extend type Query {

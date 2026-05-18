@@ -11,11 +11,10 @@ Provider freshness counters + per-field provenance envelope.
 
 ## Why this exists
 
-Per devils-advocate review of PR #618: `daemon-self` was a god-module (Health + DaemonState + WorkView + ProviderHealth + Meta + node-dispatcher + schemaSDL + daemonReload). That violates [R6](../../RULES.md). Split into three:
+Per devils-advocate review of PR #618: `daemon-self` was a god-module (Health + DaemonState + ProviderHealth + Meta + node-dispatcher + schemaSDL + daemonReload). That violates [R6](../../RULES.md). Split into two:
 
 - `daemon-self/` — liveness only (Health, version, schemaSDL, node-dispatcher)
 - `daemon-meta/` — **this domain** — provider rollup, freshness counters, the Meta provenance envelope
-- `views/` — composite views (WorkView and any future cross-domain projection)
 
 ## Cross-domain back-edges
 
