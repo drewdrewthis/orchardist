@@ -80,10 +80,10 @@ func assertL2Envelope(t *testing.T, raw []byte, expectOK bool) map[string]interf
 }
 
 // TestGitWorktreeCreateEnvelopeFailureMissingRepo verifies that calling
-// git-worktree-create.sh --json with a missing repo returns ok:false with
+// scripts/git/worktree-create.sh --json with a missing repo returns ok:false with
 // the correct L2 error envelope (T2: failure path).
 func TestGitWorktreeCreateEnvelopeFailureMissingRepo(t *testing.T) {
-	out, exitCode := runScript(t, "git-worktree-create.sh",
+	out, exitCode := runScript(t, "git/worktree-create.sh",
 		"--repo", "nonexistent-repo",
 		"--branch", "test-branch",
 		"--json",
@@ -97,7 +97,7 @@ func TestGitWorktreeCreateEnvelopeFailureMissingRepo(t *testing.T) {
 // TestGitWorktreeCreateEnvelopeFailureMissingBranch verifies the branch
 // validation failure path (T2).
 func TestGitWorktreeCreateEnvelopeFailureMissingBranch(t *testing.T) {
-	out, exitCode := runScript(t, "git-worktree-create.sh",
+	out, exitCode := runScript(t, "git/worktree-create.sh",
 		"--repo", "some-repo",
 		// no --branch
 		"--json",
@@ -110,7 +110,7 @@ func TestGitWorktreeCreateEnvelopeFailureMissingBranch(t *testing.T) {
 
 // TestGitWorktreeRemoveEnvelopeFailureMissingID verifies remove failure path (T2).
 func TestGitWorktreeRemoveEnvelopeFailureMissingID(t *testing.T) {
-	out, exitCode := runScript(t, "git-worktree-remove.sh",
+	out, exitCode := runScript(t, "git/worktree-remove.sh",
 		// no --worktree-id
 		"--json",
 	)
@@ -122,7 +122,7 @@ func TestGitWorktreeRemoveEnvelopeFailureMissingID(t *testing.T) {
 
 // TestGitWorktreeMoveEnvelopeFailureMissingNewPath verifies move failure (T2).
 func TestGitWorktreeMoveEnvelopeFailureMissingNewPath(t *testing.T) {
-	out, exitCode := runScript(t, "git-worktree-move.sh",
+	out, exitCode := runScript(t, "git/worktree-move.sh",
 		"--worktree-id", "proj:main",
 		// no --new-path
 		"--json",
@@ -135,7 +135,7 @@ func TestGitWorktreeMoveEnvelopeFailureMissingNewPath(t *testing.T) {
 
 // TestGitFetchEnvelopeFailureMissingID verifies fetch failure path (T2).
 func TestGitFetchEnvelopeFailureMissingID(t *testing.T) {
-	out, exitCode := runScript(t, "git-fetch.sh",
+	out, exitCode := runScript(t, "git/fetch.sh",
 		// no --worktree-id
 		"--json",
 	)
@@ -147,7 +147,7 @@ func TestGitFetchEnvelopeFailureMissingID(t *testing.T) {
 
 // TestGitPullEnvelopeFailureMissingID verifies pull failure path (T2).
 func TestGitPullEnvelopeFailureMissingID(t *testing.T) {
-	out, exitCode := runScript(t, "git-pull.sh",
+	out, exitCode := runScript(t, "git/pull.sh",
 		// no --worktree-id
 		"--json",
 	)
@@ -159,7 +159,7 @@ func TestGitPullEnvelopeFailureMissingID(t *testing.T) {
 
 // TestGitPushEnvelopeFailureMissingID verifies push failure path (T2).
 func TestGitPushEnvelopeFailureMissingID(t *testing.T) {
-	out, exitCode := runScript(t, "git-push.sh",
+	out, exitCode := runScript(t, "git/push.sh",
 		// no --worktree-id
 		"--json",
 	)
