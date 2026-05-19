@@ -24,7 +24,8 @@
 
 .PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
         install install-daemon install-dispatcher install-tui install-worktree-cli \
-        test test-go test-rust
+        test test-go test-rust \
+        check-feature-parity check-feature-parity-daemon check-feature-parity-tui check-feature-parity-gui
 
 VERSION ?= dev
 
@@ -83,3 +84,16 @@ test-go:
 
 test-rust:
 	cargo test
+
+# Feature parity checks — verify scenario↔test annotation coverage.
+# See docs/testing-philosophy.md for the zero-tolerance policy.
+check-feature-parity: check-feature-parity-daemon check-feature-parity-tui check-feature-parity-gui
+
+check-feature-parity-daemon:
+	@bash scripts/check-feature-parity-daemon.sh
+
+check-feature-parity-tui:
+	@bash scripts/check-feature-parity-tui.sh
+
+check-feature-parity-gui:
+	@bash scripts/check-feature-parity-gui.sh

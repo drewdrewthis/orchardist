@@ -1,6 +1,6 @@
 # Orchard Repo Constitution
 
-The 74 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
+The 75 rules below are **load-bearing**: every PR is reviewed against them, every architectural change cites them by ID, every domain refactor must demonstrate conformance.
 
 This is not a style guide. It is the contract.
 
@@ -123,6 +123,7 @@ Rules are numbered with category prefixes so they can be cited in code review, a
 | **T5** | **Loader coalescing is verified by counting underlying fetches.** A loader test runs N parallel `Load(key)` calls against a service whose adapter records call count; assert ≤1 call per request. | "We have a loader" without "the loader actually batches" is the O1/R3 failure mode. |
 | **T6** | **Subscription tests assert "emit after write, not before" (R16).** Test fires a mutation, observes the subscription, asserts the subscriber sees the post-mutation state in its first emission — not the pre-state. | Catches the race R16 forbids. |
 | **T7** | **Pass-through tests assert L4 guards (S16b).** Test that pass-through (a) refuses nesting via static gqlgen rejection, (b) honors the timeout, (c) honors the concurrency cap. | Without guard tests, the guards rot. |
+| **T8** | **Hard scenario↔test parity, no opt-out.** Every scenario in `daemon/features/**/*.feature`, `crates/orchard/features/**/*.feature`, and `crates/orchard-gui/features/**/*.feature` has at least one test annotated `// @scenario <verbatim title>`. Parity is CI-enforced via `make check-feature-parity`. There is no `@unimplemented` tag, no deny-list, no exceptions. Test naming is present-tense action-based (no "should"). Tests assert: response shape, latency budget (where specified), coalescing budget (where T5 applies). Daemon tests run against live daemon with real fixtures per T4 — not mocks. See `docs/testing-philosophy.md`. | Unimplemented scenarios are silent lies about test coverage. Annotated annotations that resolve to nothing are stale contracts. Zero tolerance keeps both honest. |
 
 ---
 
