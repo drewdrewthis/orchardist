@@ -1,0 +1,16 @@
+{
+  "name": "orchard",
+  "owner": {
+    "name": "drewdrewthis",
+    "email": "andrew@langwatch.ai"
+  },
+  "description": "Orchardclaude plugins consuming git-orchard-rs canonical scripts/<domain>/ interfaces",
+  "plugins": [
+    {
+      "name": "claude-contracts",
+      "source": "./plugins/contracts",
+      "description": "Track work commitments via /contracts:* skills and the contracts MCP server. Consumes scripts/contracts/.",
+      "version": "0.8.0"
+    }
+  ]
+}
