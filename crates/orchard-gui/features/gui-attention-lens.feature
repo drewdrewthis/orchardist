@@ -4,7 +4,7 @@ Feature: GUI attention lens — triage view anchored on worktrees
   So that the operator immediately sees what needs human intervention.
 
   Operation consumed:
-    AttentionLens → workView.repos[].worktrees[...WorktreeEnrichment + claudeInstances[...SessionCard]]
+    AttentionLens → repos[].worktrees[...WorktreeEnrichment + claudeInstances[...SessionCard]]
 
   Background:
     Given the daemon is running on 127.0.0.1:7777
@@ -13,7 +13,7 @@ Feature: GUI attention lens — triage view anchored on worktrees
   @integration
   Scenario: Every worktree appears in exactly one tier
     When the AttentionLens query runs
-    Then every worktree in workView appears as at least one sidebar row
+    Then every worktree in repos[].worktrees appears as at least one sidebar row
     And a worktree with zero claudeInstances appears as a single "dormant" row
     And a worktree with N live claudeInstances appears as N separate rows
     And no worktree appears in more than one tier section

@@ -4,11 +4,11 @@ Feature: GUI sidebar boot — all five lens prefetch
   So that lens switching is instant (pure cache render, no spinner interstitial).
 
   Operations consumed:
-    AttentionLens  — workView.repos[].worktrees[].claudeInstances[...SessionCard] + WorktreeEnrichment
+    AttentionLens  — repos[].worktrees[].claudeInstances[...SessionCard] + WorktreeEnrichment
     RecentLens     — conversations + claudeInstances[...SessionCard]
     TmuxLens       — tmuxServer.sessions[].windows[].panes[...PaneCard]
-    IssueLens      — claudeInstances[...SessionCard] + workView.repos[].worktrees[...WorktreeEnrichment + claudeInstances]
-    WorktreeLens   — workView.repos[].worktrees[...WorktreeEnrichment + tmuxPanes[...PaneCard]]
+    IssueLens      — claudeInstances[...SessionCard] + repos[].worktrees[...WorktreeEnrichment + claudeInstances]
+    WorktreeLens   — repos[].worktrees[...WorktreeEnrichment + tmuxPanes[...PaneCard]]
 
   Background:
     Given the daemon is running on 127.0.0.1:7777
@@ -24,8 +24,8 @@ Feature: GUI sidebar boot — all five lens prefetch
   @integration
   Scenario: Attention lens response shape
     When the AttentionLens query runs
-    Then the response root contains a workView field
-    And workView.repos is a list where each repo has id and slug
+    Then the response root contains a repos list
+    And repos is a list where each repo has id and slug
     And each repo has a worktrees list
     And each worktree includes the WorktreeEnrichment fields: id, path, branch, host, repo, issue{number,state,title}
     And each worktree includes a claudeInstances list of SessionCard nodes
@@ -39,7 +39,7 @@ Feature: GUI sidebar boot — all five lens prefetch
   @integration
   Scenario: Attention lens does NOT include pr in WorktreeEnrichment
     When the AttentionLens query runs
-    Then the worktree nodes in workView do NOT carry a pr field
+    Then the worktree nodes do NOT carry a pr field
     # PR data is deferred to the panel's WorktreePR fetch to avoid ~12s REST calls per repo
 
   @integration
@@ -65,13 +65,13 @@ Feature: GUI sidebar boot — all five lens prefetch
   Scenario: IssueLens response shape
     When the IssueLens query runs
     Then the response contains a top-level claudeInstances list spreading SessionCard
-    And the response contains a workView with repos and their worktrees spreading WorktreeEnrichment
+    And the response contains a repos list with worktrees spreading WorktreeEnrichment
     And each worktree in IssueLens carries a claudeInstances list spreading SessionCard
 
   @integration
   Scenario: WorktreeLens response shape
     When the WorktreeLens query runs
-    Then the response contains a workView with repos and their worktrees
+    Then the response contains a repos list with their worktrees
     And each worktree spreads WorktreeEnrichment
     And each worktree carries a tmuxPanes list spreading PaneCard
 

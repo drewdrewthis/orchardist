@@ -5,7 +5,7 @@ Feature: GUI new conversation modal — WorktreesList + HostsList
 
   Operations consumed:
     WorktreesListStore (WorktreesList query):
-      workView.repos[].worktrees { id, path, branch, bare, host, repo }
+      repos[].worktrees { id, path, branch, bare, host, repo }
 
     HostsListStore (HostsList query):
       hosts { id, hostname, os, reachable, resourceLoad{ cpuPercent } }
@@ -25,7 +25,7 @@ Feature: GUI new conversation modal — WorktreesList + HostsList
   @integration
   Scenario: WorktreesList response shape — bare worktrees excluded from picker
     When the WorktreesList query runs
-    Then workView.repos is a list of repos each with id, slug, and worktrees
+    Then repos is a list of repos each with id, slug, and worktrees
     And each worktree has: id, path, branch, bare, host, repo
     And buildWorktreePickerRows filters out worktrees where bare = true
     And the picker displays only non-bare worktrees

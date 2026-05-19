@@ -4,7 +4,7 @@ Feature: GUI worktree lens — all worktrees grouped by repo, anchored on tmuxPa
   So that the operator can see their full topology and act on dormant worktrees.
 
   Operation consumed:
-    WorktreeLens → workView.repos[].worktrees [...WorktreeEnrichment + tmuxPanes[...PaneCard]]
+    WorktreeLens → repos[].worktrees [...WorktreeEnrichment + tmuxPanes[...PaneCard]]
 
   Background:
     Given the daemon is running on 127.0.0.1:7777
@@ -14,7 +14,7 @@ Feature: GUI worktree lens — all worktrees grouped by repo, anchored on tmuxPa
   Scenario: Every worktree appears — including those with no tmux panes
     When the WorktreeLens query runs
     And buildWorktreeSections runs
-    Then every worktree in workView appears as at least one row
+    Then every worktree in repos[].worktrees appears as at least one row
     And worktrees with tmuxPanes = [] render as a single dormant row
     And worktrees with N panes render as N rows (one per pane)
 

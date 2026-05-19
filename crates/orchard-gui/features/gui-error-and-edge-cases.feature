@@ -34,16 +34,6 @@ Feature: GUI error and edge cases — resilience at the daemon boundary
     And the GUI degrades to an empty section rather than throwing
 
   @integration
-  Scenario: workView field missing from daemon schema — not yet in any domain partial
-    Given the GUI fires any of the five lens queries referencing workView
-    And workView is not present in the live daemon schema
-    Then the daemon returns a GraphQL error
-    And this is the most-likely gap to block lens rendering in a new daemon build
-    # workView is a synthetic read-model (WorkView type, Query.workView field) that lives
-    # in the live daemon schema but has no schema partial in daemon/<domain>/schema.graphql.
-    # This feature documents it as a known coverage gap for the constitution effort.
-
-  @integration
   Scenario: conversationChanged subscription — null payload on file removal
     Given TranscriptView is subscribed to conversationChanged for sessionUuid "abc123"
     When the matching JSONL file is deleted from disk

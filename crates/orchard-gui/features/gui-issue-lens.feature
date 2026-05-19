@@ -6,7 +6,7 @@ Feature: GUI issue lens — active PR/issue work grouped by GitHub issue
   Operation consumed:
     IssueLens:
       claudeInstances [...SessionCard]
-      workView.repos[].worktrees [...WorktreeEnrichment + claudeInstances[...SessionCard]]
+      repos[].worktrees [...WorktreeEnrichment + claudeInstances[...SessionCard]]
 
   Background:
     Given the daemon is running on 127.0.0.1:7777

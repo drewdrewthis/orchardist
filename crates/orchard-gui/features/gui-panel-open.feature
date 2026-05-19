@@ -8,7 +8,7 @@ Feature: GUI panel open — OpenPanel query
       — tmuxPanes(filter:{paneIdIn:$paneIds, cwd:$cwd, command:"claude"}) [...PaneCard]
       — claudeInstances [...SessionCard]
       — conversations {sessionUuid, lastSeenAt, firstSeenAt, messageCount, open, recap, cwd, jsonlPath, agentName, customTitle}
-      — workView.repos[].worktrees [...WorktreeEnrichment]
+      — repos[].worktrees [...WorktreeEnrichment]
 
   Background:
     Given the daemon is running on 127.0.0.1:7777
@@ -20,7 +20,7 @@ Feature: GUI panel open — OpenPanel query
     Then tmuxPanes returns the pane matching %26 spreading PaneCard
     And claudeInstances includes the SessionCard for the Claude process in that pane
     And conversations includes the Conversation whose sessionUuid matches the instance
-    And workView.repos[].worktrees includes a WorktreeEnrichment matching the session's process cwd
+    And repos[].worktrees includes a WorktreeEnrichment matching the session's process cwd
     And PanelData.pane, PanelData.session, PanelData.conversation, and PanelData.worktree are all non-null
 
   @integration
