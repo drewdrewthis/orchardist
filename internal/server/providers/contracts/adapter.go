@@ -24,11 +24,10 @@ import (
 //
 // File layout (written by the claude-contracts plugin):
 //
-//	<dir>/<contract-id>.jsonl
+//	<dir>/<contract-id>--<slug>.jsonl
 //
-// Each file is the append-only event log for a single contract. The
-// first event is always `kind: "contract"` (creation); subsequent
-// events are status_change, criterion_added, question_*, etc.
+// Each file is the append-only event log for a single contract. v0.7
+// events are flat (no `kind` discriminator); see [Event].
 type Adapter struct {
 	dir string
 
@@ -52,13 +51,6 @@ func (a *Adapter) Dir() string {
 	return a.dir
 }
 
-// Path is retained as an alias for [Dir] so existing diagnostics that
-// asked the adapter for its location continue to compile. Returns the
-// directory, not a file.
-func (a *Adapter) Path() string {
-	return a.dir
-}
-
 // Snapshot reads every `*.jsonl` file under the directory and returns
 // the union of all events plus a map of per-file byte offsets keyed
 // by file basename (e.g. `C-2026-04-27-0398e48e.jsonl` → 12345).
@@ -72,7 +64,7 @@ func (a *Adapter) Path() string {
 // offsets back to [FollowFromOffsets] to resume from where Snapshot
 // left off.
 //
-// Malformed lines (invalid JSON or events missing a kind field) are
+// Malformed lines (invalid JSON or events missing a contract_id) are
 // skipped silently per the JSONL append-only convention. Per-file
 // read failures are logged via the returned error but do not abort
 // the snapshot — events from other files are still returned.

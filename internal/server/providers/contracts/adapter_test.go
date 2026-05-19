@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
 // TestAdapter_Snapshot_DirectoryScan asserts the adapter reads every
@@ -15,7 +17,7 @@ import (
 // open (started), and open-then-delivered-in-sequence.
 func TestAdapter_Snapshot_DirectoryScan(t *testing.T) {
 	dir := t.TempDir()
-	t0 := mustTime(t, "2026-05-04T12:00:00Z")
+	t0 := mustParse(t, "2026-05-04T12:00:00Z")
 	t1 := t0.Add(time.Hour)
 
 	writeJSONL(t, filepath.Join(dir, "C-test-001.jsonl"),
@@ -43,11 +45,11 @@ func TestAdapter_Snapshot_DirectoryScan(t *testing.T) {
 
 	cases := []struct {
 		id     ContractID
-		status string
+		status graphql.ContractStatus
 	}{
-		{"C-test-001", "delivered"},
-		{"C-test-002", "started"},
-		{"C-test-003", "delivered"},
+		{"C-test-001", graphql.ContractStatusDelivered},
+		{"C-test-002", graphql.ContractStatusOpen},
+		{"C-test-003", graphql.ContractStatusDelivered},
 	}
 	for _, tc := range cases {
 		c, ok := state[tc.id]
@@ -55,7 +57,7 @@ func TestAdapter_Snapshot_DirectoryScan(t *testing.T) {
 			t.Fatalf("contract %s missing from fold", tc.id)
 		}
 		if c.Status != tc.status {
-			t.Errorf("%s status = %q, want %q", tc.id, c.Status, tc.status)
+			t.Errorf("%s status = %v, want %v", tc.id, c.Status, tc.status)
 		}
 	}
 
@@ -109,7 +111,7 @@ func TestAdapter_Snapshot_MissingDir(t *testing.T) {
 // while files unchanged stay quiet.
 func TestAdapter_FollowFromOffsets_ResumesPerFile(t *testing.T) {
 	dir := t.TempDir()
-	t0 := mustTime(t, "2026-05-04T12:00:00Z")
+	t0 := mustParse(t, "2026-05-04T12:00:00Z")
 	t1 := t0.Add(time.Minute)
 	t2 := t0.Add(2 * time.Minute)
 
@@ -164,7 +166,7 @@ func TestAdapter_FollowFromOffsets_ResumesPerFile(t *testing.T) {
 // adapter must read only the .jsonl files.
 func TestAdapter_Snapshot_IgnoresNonJSONLFiles(t *testing.T) {
 	dir := t.TempDir()
-	t0 := mustTime(t, "2026-05-04T12:00:00Z")
+	t0 := mustParse(t, "2026-05-04T12:00:00Z")
 	writeJSONL(t, filepath.Join(dir, "C-test-001.jsonl"),
 		v7CreationLine(t, "C-test-001", "alpha", "orchard:claude:session-alice", t0),
 	)
@@ -267,12 +269,3 @@ func v7UpdateLine(t *testing.T, contractID, status string, at time.Time) string 
 	return string(b)
 }
 
-// mustTime parses an RFC3339 timestamp or fails the test.
-func mustTime(t *testing.T, s string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		t.Fatalf("parse %q: %v", s, err)
-	}
-	return parsed
-}

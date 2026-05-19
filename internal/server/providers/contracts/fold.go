@@ -1,8 +1,9 @@
 package contracts
 
 import (
-	"log/slog"
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
 // Fold reduces an ordered list of v0.7 events into the current state of
@@ -53,56 +54,27 @@ func applyEvent(state map[ContractID]Contract, ev Event) {
 	// (criterion_added, question_asked, judge_run, cancel_requested,
 	// etc.). Drop silently — they carry no state we surface in v0.7.
 	if ev.Status == "" {
-		slog.Debug("contracts fold: skipping event with empty status",
-			"contract_id", id, "kind", ev.Kind)
 		return
 	}
 
 	t := eventTime(ev)
 
-	existing, exists := state[id]
-
+	c, exists := state[id]
 	if !exists {
-		// First event for this contract_id initialises the record.
-		c := Contract{
-			ID:          id,
-			Status:      normaliseStatus(ev.Status),
-			Reasoning:   ev.Reasoning,
-			CreatedBy:   ev.CreatedBy,
-			CreatedAt:   t,
-			UpdatedAt:   t,
-			LastEventAt: t,
-		}
-		if ev.Summary != nil {
-			c.Summary = *ev.Summary
-		}
-		if ev.Owner != nil {
-			c.OwnerSessionID = *ev.Owner
-		}
-		if ev.Source != nil {
-			c.Source = *ev.Source
-		}
-		state[id] = c
-		return
+		c = Contract{ID: id, CreatedAt: t}
 	}
 
-	// Subsequent event: update mutable fields.
-	c := existing
-
-	// Status always updates.
-	c.Status = normaliseStatus(ev.Status)
-
-	// Summary inherits when the event carries null.
+	c.Status = statusFromRaw(ev.Status)
+	if !t.IsZero() {
+		c.UpdatedAt = t
+		c.LastEventAt = t
+	}
 	if ev.Summary != nil {
 		c.Summary = *ev.Summary
 	}
-
-	// Owner: null means inherit; non-null means handoff.
 	if ev.Owner != nil {
 		c.OwnerSessionID = *ev.Owner
 	}
-
-	// Scalar fields update from most-recent non-empty value.
 	if ev.Reasoning != "" {
 		c.Reasoning = ev.Reasoning
 	}
@@ -113,27 +85,21 @@ func applyEvent(state map[ContractID]Contract, ev Event) {
 		c.Source = *ev.Source
 	}
 
-	// Timestamps: UpdatedAt and LastEventAt advance; CreatedAt is
-	// immutable.
-	if !t.IsZero() {
-		c.UpdatedAt = t
-		c.LastEventAt = t
-	}
-
 	state[id] = c
 }
 
-// normaliseStatus maps the plugin's write-path status strings to the
-// two-value open/closed model. Legacy "blocked" events fold as OPEN.
-// Unknown values default to "started" (open) for forward-compat.
-func normaliseStatus(s string) string {
-	switch s {
-	case "delivered":
-		return "delivered"
-	default:
-		// "started", "blocked" (legacy), any unknown future value → open.
-		return "started"
+// statusFromRaw maps the plugin's write-path status string directly to
+// the GraphQL enum. Legacy "blocked" events (v0.6) and any unknown
+// future value fold as OPEN — only "delivered" closes a contract.
+//
+// This is the single mapping point from raw status string to typed
+// enum. The internal Contract.Status field carries the enum value so
+// downstream callers (matches, toGraphQL) never re-switch on strings.
+func statusFromRaw(s string) graphql.ContractStatus {
+	if s == "delivered" {
+		return graphql.ContractStatusDelivered
 	}
+	return graphql.ContractStatusOpen
 }
 
 // eventTime returns the timestamp for an event. Returns zero when no
@@ -143,12 +109,4 @@ func eventTime(ev Event) time.Time {
 		return time.Time{}
 	}
 	return *ev.Timestamp
-}
-
-// zeroOr unwraps a *time.Time to a zero time.Time when nil.
-func zeroOr(t *time.Time) time.Time {
-	if t == nil {
-		return time.Time{}
-	}
-	return *t
 }

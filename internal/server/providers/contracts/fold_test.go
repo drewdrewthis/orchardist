@@ -3,6 +3,8 @@ package contracts
 import (
 	"testing"
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
 // strPtr returns a pointer to s.
@@ -48,8 +50,8 @@ func TestFold_V7_SingleCreationEvent(t *testing.T) {
 	if c.Summary != "Deliver foo" {
 		t.Errorf("Summary = %q, want %q", c.Summary, "Deliver foo")
 	}
-	if c.Status != "started" {
-		t.Errorf("Status = %q, want %q", c.Status, "started")
+	if c.Status != graphql.ContractStatusOpen {
+		t.Errorf("Status = %v, want OPEN", c.Status)
 	}
 	if c.OwnerSessionID != "orchard:claude:session-1" {
 		t.Errorf("OwnerSessionID = %q, want %q", c.OwnerSessionID, "orchard:claude:session-1")
@@ -98,8 +100,8 @@ func TestFold_V7_CreationPlusDelivered(t *testing.T) {
 	})
 
 	c := state["C-2026-05-04-bbbb2222"]
-	if c.Status != "delivered" {
-		t.Errorf("Status = %q, want delivered", c.Status)
+	if c.Status != graphql.ContractStatusDelivered {
+		t.Errorf("Status = %v, want DELIVERED", c.Status)
 	}
 	if !c.CreatedAt.Equal(t0) {
 		t.Errorf("CreatedAt = %v, want %v (creation is immutable)", c.CreatedAt, t0)
@@ -148,8 +150,8 @@ func TestFold_V7_LegacyBlockedFoldsAsOpen(t *testing.T) {
 	if !ok {
 		t.Fatalf("contract not in fold result")
 	}
-	if c.Status != "started" {
-		t.Errorf("Status = %q, want started (blocked folds as open)", c.Status)
+	if c.Status != graphql.ContractStatusOpen {
+		t.Errorf("Status = %v, want OPEN (blocked folds as open)", c.Status)
 	}
 }
 
@@ -237,19 +239,15 @@ func TestFold_V7_LegacyV6EventsDropped(t *testing.T) {
 			Owner:      strPtr("orchard:claude:session-6"),
 			CreatedBy:  "agent-6",
 		},
-		// Legacy v0.6 criterion_added — no status field, should be dropped.
+		// Legacy v0.6 event with no status — fold must skip.
 		{
 			Timestamp:  timePtr(t1),
 			ContractID: "C-2026-05-04-ffff6666",
-			Kind:       "criterion_added",
-			// Status is empty — fold must skip this event.
 		},
-		// Legacy v0.6 question_asked — no status field, should be dropped.
+		// Another legacy event — also no status, also dropped.
 		{
 			Timestamp:  timePtr(t1),
 			ContractID: "C-2026-05-04-ffff6666",
-			Kind:       "question_asked",
-			// Status is empty — fold must skip this event.
 		},
 	})
 
@@ -258,8 +256,8 @@ func TestFold_V7_LegacyV6EventsDropped(t *testing.T) {
 		t.Fatalf("contract missing from fold after legacy event processing")
 	}
 	// Status must not have changed due to the legacy events.
-	if c.Status != "started" {
-		t.Errorf("Status = %q, want started (legacy events should be no-ops)", c.Status)
+	if c.Status != graphql.ContractStatusOpen {
+		t.Errorf("Status = %v, want OPEN (legacy events should be no-ops)", c.Status)
 	}
 	// LastEventAt should still be t0 (legacy events are dropped, not applied).
 	if !c.LastEventAt.Equal(t0) {
@@ -304,12 +302,12 @@ func TestFold_V7_TwoContractsSameFile(t *testing.T) {
 	})
 
 	alpha := state["C-alpha"]
-	if alpha.Status != "delivered" {
-		t.Errorf("alpha status = %q, want delivered", alpha.Status)
+	if alpha.Status != graphql.ContractStatusDelivered {
+		t.Errorf("alpha status = %v, want DELIVERED", alpha.Status)
 	}
 	beta := state["C-beta"]
-	if beta.Status != "started" {
-		t.Errorf("beta status = %q, want started (independent of alpha)", beta.Status)
+	if beta.Status != graphql.ContractStatusOpen {
+		t.Errorf("beta status = %v, want OPEN (independent of alpha)", beta.Status)
 	}
 	if beta.Summary != "Beta contract" {
 		t.Errorf("beta summary = %q, want Beta contract", beta.Summary)
@@ -399,8 +397,8 @@ func TestFold_V7_MigratedDelivered(t *testing.T) {
 	if !ok {
 		t.Fatalf("contract not in fold result")
 	}
-	if c.Status != "delivered" {
-		t.Errorf("Status = %q, want delivered", c.Status)
+	if c.Status != graphql.ContractStatusDelivered {
+		t.Errorf("Status = %v, want DELIVERED", c.Status)
 	}
 	if c.Summary != "Deliver contracts plugin v0.5" {
 		t.Errorf("Summary = %q, want inherited summary", c.Summary)

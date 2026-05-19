@@ -189,11 +189,16 @@ func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 
 // List returns every cached Contract, sorted descending by
 // LastEventAt — most recently active contracts first. Optionally
-// filtered by [ContractFilter].
+// filtered by [ContractFilter]. The filter is applied on the internal
+// Contract shape before projection so excluded rows skip the GraphQL
+// allocation.
 func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*graphql.Contract, error) {
 	p.mu.RLock()
 	contracts := make([]Contract, 0, len(p.state))
 	for _, c := range p.state {
+		if filter != nil && !matches(c, filter) {
+			continue
+		}
 		contracts = append(contracts, c)
 	}
 	loaded := p.loaded
@@ -214,17 +219,14 @@ func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*g
 
 	out := make([]*graphql.Contract, 0, len(contracts))
 	for _, c := range contracts {
-		gc := toGraphQL(c)
-		if filter != nil && !matches(gc, filter) {
-			continue
-		}
-		out = append(out, gc)
+		out = append(out, toGraphQL(c))
 	}
 	return out, nil
 }
 
 // Subscribe returns a channel that receives one event per contract
-// whose folded value just changed.
+// whose folded value just changed. The channel closes when ctx is
+// cancelled OR when [Stop] runs, whichever fires first.
 func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEvent[ContractID] {
 	ch := make(chan adapter.InvalidationEvent[ContractID], 16)
 	p.subMu.Lock()
@@ -232,7 +234,13 @@ func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEve
 	p.subMu.Unlock()
 
 	go func() {
-		<-ctx.Done()
+		// Wake on either ctx cancel or provider Stop; whichever wakes
+		// first does the cleanup, the other path is a no-op via the
+		// map-membership check.
+		select {
+		case <-ctx.Done():
+		case <-p.stopCh:
+		}
 		p.subMu.Lock()
 		defer p.subMu.Unlock()
 		if _, ok := p.subs[ch]; ok {
@@ -298,12 +306,27 @@ func (p *Provider) refresh(ctx context.Context) {
 	if len(touched) == 0 {
 		return
 	}
+	// Snapshot subscribers once per refresh so each touched contract
+	// reuses the same slice rather than allocating per id × per
+	// subscriber.
+	p.subMu.Lock()
+	subs := make([]chan adapter.InvalidationEvent[ContractID], 0, len(p.subs))
+	for ch := range p.subs {
+		subs = append(subs, ch)
+	}
+	p.subMu.Unlock()
 	for id := range touched {
-		p.fanOut(adapter.InvalidationEvent[ContractID]{
+		ev := adapter.InvalidationEvent[ContractID]{
 			Key:    id,
 			Reason: "watcher-push",
 			At:     now,
-		})
+		}
+		for _, ch := range subs {
+			select {
+			case ch <- ev:
+			default:
+			}
+		}
 	}
 }
 
@@ -320,25 +343,13 @@ func offsetsEqual(a, b map[string]int64) bool {
 	return true
 }
 
-// fanOut broadcasts an invalidation event to every active subscriber.
-func (p *Provider) fanOut(ev adapter.InvalidationEvent[ContractID]) {
-	p.subMu.Lock()
-	subs := make([]chan adapter.InvalidationEvent[ContractID], 0, len(p.subs))
-	for ch := range p.subs {
-		subs = append(subs, ch)
-	}
-	p.subMu.Unlock()
-	for _, ch := range subs {
-		select {
-		case ch <- ev:
-		default:
-		}
-	}
-}
-
 // matches applies a ContractFilter to a single Contract. All filter
 // fields are AND-combined; nil/empty fields match everything.
-func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
+//
+// OwnerAgentName is unused in v0.7 — the plugin's owner field is a
+// flat string, not a structured Party. The schema field is kept as a
+// deprecated alias; this filter ignores it.
+func matches(c Contract, f *graphql.ContractFilter) bool {
 	if f == nil {
 		return true
 	}
@@ -357,9 +368,6 @@ func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
 	if f.OwnerSessionID != nil && *f.OwnerSessionID != "" && c.OwnerSessionID != *f.OwnerSessionID {
 		return false
 	}
-	if f.OwnerAgentName != nil && *f.OwnerAgentName != "" && c.OwnerAgentName != *f.OwnerAgentName {
-		return false
-	}
 	if f.OwnerContains != nil && *f.OwnerContains != "" {
 		if !strings.Contains(c.OwnerSessionID, *f.OwnerContains) {
 			return false
@@ -370,14 +378,18 @@ func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
 
 // toGraphQL projects an internal Contract onto the GraphQL shape. Pure;
 // the resolver layer calls it after every read.
+//
+// OwnerAgentName is served as "" — v0.7 doesn't carry agent name; the
+// field is a deprecated schema alias until the next gqlgen regen drops
+// it.
 func toGraphQL(c Contract) *graphql.Contract {
 	out := &graphql.Contract{
 		ID:             "Contract:" + string(c.ID),
 		ContractID:     string(c.ID),
 		Summary:        c.Summary,
 		OwnerSessionID: c.OwnerSessionID,
-		OwnerAgentName: c.OwnerAgentName,
-		Status:         mapStatus(c.Status),
+		OwnerAgentName: "",
+		Status:         c.Status,
 		Reasoning:      c.Reasoning,
 		CreatedBy:      c.CreatedBy,
 		CreatedAt:      formatTime(c.CreatedAt),
@@ -389,18 +401,6 @@ func toGraphQL(c Contract) *graphql.Contract {
 		out.Source = &s
 	}
 	return out
-}
-
-// mapStatus maps the plugin's raw status string to the 2-value schema
-// enum. "delivered" → DELIVERED; everything else (including legacy
-// "blocked" and "started") → OPEN.
-func mapStatus(s string) graphql.ContractStatus {
-	switch s {
-	case "delivered":
-		return graphql.ContractStatusDelivered
-	default:
-		return graphql.ContractStatusOpen
-	}
 }
 
 // formatTime renders a time as RFC 3339 with nanosecond precision.

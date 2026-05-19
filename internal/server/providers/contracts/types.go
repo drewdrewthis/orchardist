@@ -2,6 +2,8 @@ package contracts
 
 import (
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
 // ContractID is the cache key for the Contract provider. Equal to the
@@ -55,12 +57,6 @@ type Event struct {
 	// conversation:...). May be set on any event; the most recent
 	// non-empty value wins in the fold.
 	Source *string `json:"source,omitempty"`
-
-	// Kind is present only on legacy v0.6 events. It is accepted in the
-	// JSON decode so the struct does not reject those lines, but Fold
-	// does not use it as a dispatch key — the Status field drives
-	// everything.
-	Kind string `json:"kind,omitempty"`
 }
 
 // Contract is the folded state of one contract, in the daemon's
@@ -69,8 +65,7 @@ type Contract struct {
 	ID             ContractID
 	Summary        string
 	OwnerSessionID string
-	OwnerAgentName string // deprecated: empty for v0.7; best-effort for v0.6
-	Status         string // raw plugin status string; resolver maps to enum
+	Status         graphql.ContractStatus
 	Reasoning      string
 	CreatedBy      string
 	Source         string
