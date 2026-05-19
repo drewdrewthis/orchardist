@@ -28,7 +28,11 @@ pub fn run(args: &[String]) {
                 eprintln!("Usage: orchard claude-account raw <claude|ccusage> [-- <args...>]");
                 std::process::exit(1);
             }
-            let rest = if args.len() > 2 { &args[2..] } else { &[] as &[String] };
+            let rest = if args.len() > 2 {
+                &args[2..]
+            } else {
+                &[] as &[String]
+            };
             let rest = if rest.first().map(|s| s.as_str()) == Some("--") {
                 &rest[1..]
             } else {

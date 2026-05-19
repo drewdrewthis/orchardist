@@ -235,7 +235,7 @@ mod tests {
     fn scan_finds_matching_user_line_and_skips_others() {
         let td = tempfile::tempdir().expect("tempdir");
         let path = td.path().join("session.jsonl");
-        let lines = vec![
+        let lines = [
             r#"{"type":"summary","summary":"foo"}"#,
             r#"{"type":"assistant","message":{"role":"assistant","content":"hi"}}"#,
             r#"{"type":"user","message":{"role":"user","content":"intro"}}"#,

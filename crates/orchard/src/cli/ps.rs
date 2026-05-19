@@ -9,8 +9,8 @@
 //! schema level. A future `signal` mutation (send SIGTERM/SIGKILL) would be
 //! added here when specced.
 
-use super::{run_passthrough, script_not_found};
 use super::{emit_or_die, exec_script, resolve_script};
+use super::{run_passthrough, script_not_found};
 
 /// Dispatch `orchard ps <args>`.
 ///
@@ -29,7 +29,11 @@ pub fn run(args: &[String]) {
                 eprintln!("Usage: orchard ps raw <ps|lsof> [-- <args...>]");
                 std::process::exit(1);
             }
-            let rest = if args.len() > 2 { &args[2..] } else { &[] as &[String] };
+            let rest = if args.len() > 2 {
+                &args[2..]
+            } else {
+                &[] as &[String]
+            };
             let rest = if rest.first().map(|s| s.as_str()) == Some("--") {
                 &rest[1..]
             } else {

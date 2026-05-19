@@ -60,11 +60,11 @@ pub fn run(args: &[String]) {
 ///
 /// Returns `None` when the flag is absent or is the last element with no
 /// value following it.
-fn extract_flag<'a>(args: &'a [String], flag: &str) -> Option<String> {
+fn extract_flag(args: &[String], flag: &str) -> Option<String> {
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
         if arg.as_str() == flag {
-            return iter.next().map(|v| v.clone());
+            return iter.next().cloned();
         }
     }
     None
@@ -72,7 +72,11 @@ fn extract_flag<'a>(args: &'a [String], flag: &str) -> Option<String> {
 
 /// Strips a leading `--` separator (if present) and returns the remainder.
 fn passthrough_args(args: &[String]) -> &[String] {
-    let rest = if args.len() > 1 { &args[1..] } else { &[] as &[String] };
+    let rest = if args.len() > 1 {
+        &args[1..]
+    } else {
+        &[] as &[String]
+    };
     if rest.first().map(|s| s.as_str()) == Some("--") {
         &rest[1..]
     } else {
@@ -100,7 +104,12 @@ mod tests {
 
     #[test]
     fn extract_flag_present() {
-        let args: Vec<String> = vec!["--pane".into(), "%15".into(), "--text".into(), "hello".into()];
+        let args: Vec<String> = vec![
+            "--pane".into(),
+            "%15".into(),
+            "--text".into(),
+            "hello".into(),
+        ];
         assert_eq!(extract_flag(&args, "--pane"), Some("%15".to_string()));
         assert_eq!(extract_flag(&args, "--text"), Some("hello".to_string()));
     }

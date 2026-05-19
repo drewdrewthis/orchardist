@@ -89,7 +89,11 @@ pub fn run(args: &[String]) {
 /// Strips a leading `--` separator (if present) and returns the remaining slice.
 fn passthrough_args(args: &[String]) -> &[String] {
     // args[0] == "raw"; args[1] might be "--".
-    let rest = if args.len() > 1 { &args[1..] } else { &[] as &[String] };
+    let rest = if args.len() > 1 {
+        &args[1..]
+    } else {
+        &[] as &[String]
+    };
     if rest.first().map(|s| s.as_str()) == Some("--") {
         &rest[1..]
     } else {

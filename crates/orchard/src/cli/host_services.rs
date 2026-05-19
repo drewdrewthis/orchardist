@@ -67,10 +67,8 @@ fn platform_ctl_tool() -> &'static str {
 fn require_name_flag(args: &[String]) {
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
-        if arg.as_str() == "--name" {
-            if iter.peek().is_some() {
-                return; // valid
-            }
+        if arg.as_str() == "--name" && iter.peek().is_some() {
+            return; // valid
         }
     }
     eprintln!("error: --name <service> is required");
@@ -89,7 +87,11 @@ fn run_script_forwarding(name: &str, extra_args: &[String]) {
 }
 
 fn passthrough_args(args: &[String]) -> &[String] {
-    let rest = if args.len() > 1 { &args[1..] } else { &[] as &[String] };
+    let rest = if args.len() > 1 {
+        &args[1..]
+    } else {
+        &[] as &[String]
+    };
     if rest.first().map(|s| s.as_str()) == Some("--") {
         &rest[1..]
     } else {
@@ -124,7 +126,9 @@ mod tests {
         let args: Vec<String> = vec!["--name".into(), "com.gitorchard.orchard".into()];
         // If --name is present with a value, the function returns without panicking.
         // We test the predicate: does args contain ("--name", <value>)?
-        let has_name = args.windows(2).any(|w| w[0] == "--name" && !w[1].starts_with('-'));
+        let has_name = args
+            .windows(2)
+            .any(|w| w[0] == "--name" && !w[1].starts_with('-'));
         assert!(has_name);
     }
 

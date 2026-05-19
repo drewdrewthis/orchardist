@@ -157,13 +157,10 @@ pub fn emit_or_die(outcome: ScriptOutcome) -> ! {
         );
         std::process::exit(0);
     } else {
-        let err = outcome
-            .envelope
-            .error
-            .unwrap_or(ScriptError {
-                code: "unknown".to_string(),
-                message: "(no error message)".to_string(),
-            });
+        let err = outcome.envelope.error.unwrap_or(ScriptError {
+            code: "unknown".to_string(),
+            message: "(no error message)".to_string(),
+        });
         eprintln!("error [{}]: {}", err.code, err.message);
         std::process::exit(1);
     }

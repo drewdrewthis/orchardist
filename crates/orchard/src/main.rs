@@ -34,10 +34,10 @@ use crossterm::{
 use orchard::build_state;
 use orchard::cache;
 use orchard::chat;
+use orchard::cli;
 use orchard::federation;
 use orchard::global_config;
 use orchard::heal;
-use orchard::cli;
 use orchard::json_output::JsonOutput;
 use orchard::logger;
 use orchard::restore;
