@@ -4,6 +4,9 @@
 # Cross-domain: extend Host with processes(filter), extend Subscription with processes.
 # Note: Process.{worktree, claudeInstance} are cross-domain back-edges; declared here,
 #       resolved here by calling into git's and claude-jsonls' services respectively.
+#
+# Cross-domain `extend type Worktree` (S15b: ps is the data producer):
+#   Worktree.processes — processes whose cwd lies under the worktree path
 
 extend type Query {
   """
@@ -100,4 +103,17 @@ input ProcessFilter {
 
   "Match processes by pid."
   pidIn: [Int!]
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — ps produces process data.
+# The resolver lives in daemon/ps/ and calls the ps service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  Processes whose cwd lies under `path`.
+  Resolver calls the ps service (S15b: producer domain owns the field).
+  """
+  processes: [Process!]!
 }

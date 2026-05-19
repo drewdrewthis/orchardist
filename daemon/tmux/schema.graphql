@@ -6,6 +6,10 @@
 # Owns: Subscription.tmuxSessionsChanged.
 # Owns: Mutation.sendTextToPane (L5: execs `scripts/tmux-send-text.sh`).
 #
+# Cross-domain `extend type Worktree` (S15b: tmux is the data producer):
+#   Worktree.tmuxPanes    — panes whose cwd matches the worktree path
+#   Worktree.tmuxSession  — most-recently-active session among those panes
+#
 # Cross-domain consumers (per dependency-graph north star):
 #   ps             → TmuxPane.process needs the Process node.
 #   claude-jsonls  → TmuxPane.claudeInstance is derived from a Claude jsonl matching
@@ -375,4 +379,27 @@ input TmuxPaneFilter {
   PanesByCommand.
   """
   command: String
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — tmux produces pane data.
+# The resolver lives in daemon/tmux/ and calls the tmux service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  Tmux panes whose foreground-process cwd equals `path` exactly OR has `path + '/'`
+  as a prefix (#511). Derived from a server-side join of pane.process.cwd against
+  the worktree path. Ordered deterministically by paneId ascending.
+  Resolver calls the tmux service (S15b: producer domain owns the field).
+  """
+  tmuxPanes: [TmuxPane!]!
+
+  """
+  The most-recently-active tmux session among the panes returned by `tmuxPanes` (#511).
+  When two sessions tie on lastActivityAt, the session with the lexicographically-first
+  name wins. Null when no panes match the worktree path.
+  Resolver calls the tmux service (S15b: producer domain owns the field).
+  """
+  tmuxSession: TmuxSession
 }
