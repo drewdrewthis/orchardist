@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "drewdrewthis-git-orchard-rs",
-  "description": "Marketplace surface for git-orchard-rs companion plugins. Pinned plugins are fetched from upstream repos at a specific commit so fresh hosts can install without cloning the codex.",
+  "name": "orchard",
+  "description": "The orchard marketplace. Pinned companion plugins (claude-contracts, ...) are fetched from upstream repos at a specific commit so fresh hosts can install without cloning the codex.",
   "owner": {
     "name": "drewdrewthis",
     "url": "https://github.com/drewdrewthis"

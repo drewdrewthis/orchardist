@@ -1,6 +1,6 @@
-# `drewdrewthis-git-orchard-rs` marketplace
+# `orchard` marketplace
 
-The marketplace surface for plugins that ship alongside `git-orchard-rs`. Today this exists primarily to **pin the `claude-contracts` plugin at a specific commit** so that fresh hosts can install the contracts MCP server without first cloning `drewdrewthis/orchard-codex`.
+The orchard marketplace. Today this exists primarily to **pin the `claude-contracts` plugin at a specific commit** so that fresh hosts can install the contracts MCP server without first cloning `drewdrewthis/orchard-codex`.
 
 ## Install
 
@@ -8,7 +8,7 @@ From a Claude Code session on a fresh host:
 
 ```
 /plugin marketplace add drewdrewthis/git-orchard-rs
-/plugin install claude-contracts@drewdrewthis-git-orchard-rs
+/plugin install claude-contracts@orchard
 ```
 
 After install, the contracts MCP server (`add_contract`, `update_contract`, `list_contracts`, `get_contract` tools) is available in every Claude session on that host.
@@ -45,7 +45,7 @@ The marketplace pin solves these: the contracts plugin is fetched directly from 
 3. PR against this repo updating `marketplace.json` to:
    - Bump the plugin's `version` field.
    - Bump the `sha` to the codex commit that landed the change.
-4. Consumers install with `/plugin upgrade claude-contracts@drewdrewthis-git-orchard-rs`.
+4. Consumers install with `/plugin upgrade claude-contracts@orchard`.
 
 ## Daemon coordination
 
