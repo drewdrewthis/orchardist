@@ -17,7 +17,7 @@ The TUI and GUI are read-and-write consumers of the daemon. The daemon and CLI a
 
 Orchard is **four ecosystems**, each with its own identity, contract, and ownership boundary:
 
-```
+```text
                             External truth
             (tmux server, git, gh, claude jsonl, filesystem)
                        ▲                       ▲
@@ -159,7 +159,7 @@ Each domain owns its mutations in `daemon/<name>/mutations.go`. The aggregate `m
 
 ### Dependency graph (north star, not current state)
 
-```
+```text
    Leaves (no domain deps — read external truth directly):
      git, gh, tmux, ps, host-identity, host-services,
      claude-jsonls, claude-account, daemon-self
@@ -238,7 +238,7 @@ documentation stays correct or the build breaks.
 
 ## Data Flow
 
-```
+```text
 External Sources              Cache Files              Core Logic
 ─────────────────      ─────────────────────      ──────────────
 gh api (GraphQL)  ──→  {owner}_{repo}_prs.json
@@ -305,7 +305,7 @@ architecture.
 
 ## Module Structure (orchard crate)
 
-```
+```text
 src/
 ├── main.rs                # Entry point: CLI args, mode dispatch
 ├── lib.rs                 # Crate root: module declarations
@@ -387,7 +387,7 @@ src/
 `OrchardState` is the single source of truth. It contains everything orchard
 knows, fully joined and enriched.
 
-```
+```text
 OrchardState
 ├── repos: Vec<RepoState>
 │   ├── slug: "owner/repo"
@@ -486,7 +486,7 @@ local orchard proxies read-path discovery through `ssh host orchard-tui --json`
 rather than shelling out to raw `git worktree list --porcelain` + `tmux
 list-sessions` and re-running the join pipeline locally.
 
-```
+```text
                      Local orchard
                           │
              ┌────────────┼───────────────┐
