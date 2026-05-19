@@ -1149,23 +1149,26 @@ type Contract implements Node {
   "The contract id as written by the plugin."
   contractId: ID!
 
-  "What the owner committed to deliver."
-  statement: String!
+  "What the owner committed to deliver (was \"statement\" in v0.6)."
+  summary: String!
 
-  "Owner session id (Claude session UUID) recorded at creation time."
+  "Owner session id in `machine:project:session_id` form."
   ownerSessionId: String!
 
-  "Owner agent name."
+  "Agent-name component of the owner string when parseable; empty otherwise. Deprecated — prefer ownerSessionId."
   ownerAgentName: String!
 
-  "Routing target for status updates and question answers."
-  reportsTo: String
-
-  "Parent contract id when filed under a management contract."
-  parentContractId: ID
-
-  "Folded current status."
+  "OPEN or DELIVERED (open/closed model, 2026-05-19)."
   status: ContractStatus!
+
+  "Reasoning from the most-recent event."
+  reasoning: String!
+
+  "Identity of the agent that wrote the most-recent event."
+  createdBy: String!
+
+  "Optional commitment origin (issue:..., pr:..., conversation:...)."
+  source: String
 
   "RFC 3339 timestamp the contract was first created."
   createdAt: String!
@@ -1173,60 +1176,30 @@ type Contract implements Node {
   "RFC 3339 timestamp the contract was last touched."
   updatedAt: String!
 
-  "Acceptance criteria added via `criterion_added` events, in original order."
-  criteria: [String!]!
-
-  "Questions awaiting an answer. Empty when nothing is pending."
-  openQuestions: [ContractQuestion!]!
-
   "RFC 3339 timestamp of the most recent event affecting this contract."
   lastEventAt: String!
 }
 
 """
-Lifecycle states for Contract.
+Lifecycle states for Contract (open/closed model, 2026-05-19).
 """
 enum ContractStatus {
   OPEN
-  DELIVERED_PENDING_VALIDATION
-  DELIVERED_PENDING_PARENT_VALIDATION
-  PENDING_DREW_APPROVAL
-  AWAITING_CANCEL_ACK
-  WAITING_EXTERNAL
-  SATISFIED
-  CANCELLED
-  JUDGE_REJECTED_TERMINAL
-}
-
-"A blocking question recorded against a Contract."
-type ContractQuestion {
-  "Question id as written by the plugin."
-  questionId: ID!
-
-  "The question text."
-  text: String!
-
-  "Agent that asked the question."
-  askedBy: String!
-
-  "RFC 3339 timestamp the question was asked."
-  askedAt: String!
-
-  "RFC 3339 deadline after which the question times out."
-  deadline: String
-
-  "Whether this question blocks contract close while open."
-  blocksClose: Boolean!
+  DELIVERED
 }
 
 """
 Filter for `Query.contracts`. All fields are optional.
 """
 input ContractFilter {
+  "Match contracts whose folded status is one of these values."
   statuses: [ContractStatus!]
+  "Match by exact owner session id (the full `machine:project:session_id` string)."
   ownerSessionId: String
+  "Match by agent-name component (deprecated; prefer ownerSessionId)."
   ownerAgentName: String
-  parentContractId: ID
+  "Owner-string substring match — convenience for cross-machine queries."
+  ownerContains: String
 }
 
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."

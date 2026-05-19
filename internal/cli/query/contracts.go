@@ -8,46 +8,31 @@ import (
 )
 
 // contractsBaseQuery is the canonical projection of every Contract
-// node — every scalar plus the questions sub-list. Mirrors host.go's
-// "one canonical query const" pattern so a regression in the resolver
-// surfaces immediately in `orchard query contracts`.
+// node. Mirrors host.go's "one canonical query const" pattern so a
+// regression in the resolver surfaces immediately in `orchard query
+// contracts`.
 const contractsBaseQuery = `query Contracts($filter: ContractFilter) {
   contracts(filter: $filter) {
     id
     contractId
-    statement
+    summary
     ownerSessionId
     ownerAgentName
-    reportsTo
-    parentContractId
     status
+    reasoning
+    createdBy
+    source
     createdAt
     updatedAt
     lastEventAt
-    criteria
-    openQuestions {
-      questionId
-      text
-      askedBy
-      askedAt
-      deadline
-      blocksClose
-    }
   }
 }`
 
 // validStatuses lists the schema-recognised filter statuses, so we can
 // reject typos client-side without making a round-trip to the daemon.
 var validStatuses = map[string]string{
-	"open":                                "OPEN",
-	"delivered_pending_validation":        "DELIVERED_PENDING_VALIDATION",
-	"delivered_pending_parent_validation": "DELIVERED_PENDING_PARENT_VALIDATION",
-	"pending_drew_approval":               "PENDING_DREW_APPROVAL",
-	"awaiting_cancel_ack":                 "AWAITING_CANCEL_ACK",
-	"waiting_external":                    "WAITING_EXTERNAL",
-	"satisfied":                           "SATISFIED",
-	"cancelled":                           "CANCELLED",
-	"judge_rejected_terminal":             "JUDGE_REJECTED_TERMINAL",
+	"open":      "OPEN",
+	"delivered": "DELIVERED",
 }
 
 // contractsCmd returns the `orchard query contracts` subcommand.
@@ -60,7 +45,7 @@ func contractsCmd() *cobra.Command {
 	var statusFlag string
 	var ownerSession string
 	var ownerAgent string
-	var parentID string
+	var ownerContains string
 
 	c := &cobra.Command{
 		Use:   "contracts",
@@ -68,9 +53,10 @@ func contractsCmd() *cobra.Command {
 		Long: "Query the contracts provider for every contract folded from the\n" +
 			"claude-contracts JSONL log. Sorted descending by lastEventAt.",
 		Example: "  orchard query contracts\n" +
-			"  orchard query contracts --status open",
+			"  orchard query contracts --status open\n" +
+			"  orchard query contracts --owner-contains session-uuid",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			filter, err := buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID)
+			filter, err := buildFilterPayload(statusFlag, ownerSession, ownerAgent, ownerContains)
 			if err != nil {
 				return err
 			}
@@ -78,17 +64,17 @@ func contractsCmd() *cobra.Command {
 			return runRaw(cmd.Context(), cmd.OutOrStdout(), query)
 		},
 	}
-	c.Flags().StringVar(&statusFlag, "status", "", "filter by status (comma-separated)")
-	c.Flags().StringVar(&ownerSession, "owner-session", "", "filter by owner session id")
-	c.Flags().StringVar(&ownerAgent, "owner-agent", "", "filter by owner agent name")
-	c.Flags().StringVar(&parentID, "parent", "", "filter by parent contract id")
+	c.Flags().StringVar(&statusFlag, "status", "", "filter by status (open|delivered, comma-separated)")
+	c.Flags().StringVar(&ownerSession, "owner-session", "", "filter by exact owner session id")
+	c.Flags().StringVar(&ownerAgent, "owner-agent", "", "filter by agent-name component (deprecated; prefer --owner-session)")
+	c.Flags().StringVar(&ownerContains, "owner-contains", "", "filter by owner string substring (cross-machine convenience)")
 	return c
 }
 
 // buildFilterPayload converts user-provided flag values into the
 // ContractFilter literal embedded in the GraphQL query body. Empty
 // flags collapse to nil so the server applies no filter.
-func buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID string) (string, error) {
+func buildFilterPayload(statusFlag, ownerSession, ownerAgent, ownerContains string) (string, error) {
 	parts := []string{}
 	if statusFlag != "" {
 		statuses, err := parseStatuses(statusFlag)
@@ -103,8 +89,8 @@ func buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID string) (
 	if ownerAgent != "" {
 		parts = append(parts, fmt.Sprintf("ownerAgentName: %q", ownerAgent))
 	}
-	if parentID != "" {
-		parts = append(parts, fmt.Sprintf("parentContractId: %q", parentID))
+	if ownerContains != "" {
+		parts = append(parts, fmt.Sprintf("ownerContains: %q", ownerContains))
 	}
 	if len(parts) == 0 {
 		return "null", nil
@@ -112,8 +98,8 @@ func buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID string) (
 	return "{" + strings.Join(parts, ", ") + "}", nil
 }
 
-// parseStatuses turns "open,pending_drew_approval" into the SCREAMING
-// enum constants the schema expects. Unknown statuses produce a fast
+// parseStatuses turns "open,delivered" into the SCREAMING enum
+// constants the schema expects. Unknown statuses produce a fast
 // client-side error so the user never has to hit the daemon to find
 // out about a typo.
 func parseStatuses(raw string) ([]string, error) {
@@ -126,7 +112,7 @@ func parseStatuses(raw string) ([]string, error) {
 		}
 		val, ok := validStatuses[key]
 		if !ok {
-			return nil, fmt.Errorf("unknown status %q (try `orchard query contracts --help`)", p)
+			return nil, fmt.Errorf("unknown status %q — valid values: open, delivered", p)
 		}
 		out = append(out, val)
 	}

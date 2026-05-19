@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,26 +88,18 @@ func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provid
 	}
 }
 
-// LogPath returns the absolute path the Provider reads from. Surfaces
-// the resolved default for diagnostics (e.g. `orchard query contracts
-// --help`). The path points at a directory of per-contract jsonl
-// files, not a single aggregate file.
+// LogPath returns the absolute path the Provider reads from.
 func (p *Provider) LogPath() string {
 	return p.adapterIO.Dir()
 }
 
 // Start hydrates the cache from a Snapshot read, then launches the
 // watcher loop. Subsequent calls are no-ops.
-//
-// A missing log directory is not an error — Start returns nil and the
-// watcher waits for the directory to be created.
 func (p *Provider) Start(ctx context.Context) error {
 	var startErr error
 	p.startOnce.Do(func() {
 		events, offsets, err := p.adapterIO.Snapshot(ctx)
 		if err != nil {
-			// Surface the error but let the daemon continue — a
-			// transient read failure should not collapse boot.
 			p.logger.Warn("contracts provider: snapshot read failed",
 				"dir", p.adapterIO.Dir(), "err", err)
 		}
@@ -131,11 +124,6 @@ func (p *Provider) Start(ctx context.Context) error {
 
 // Stop tears down the watcher and closes every Subscribe channel.
 // Idempotent. Safe to call before Start (no-op).
-//
-// Closing the underlying fsnotify watcher closes its event channels,
-// which causes [Watcher.Run] to exit and the provider's done channel
-// to fire. We wait for that exit so callers can rely on no further
-// invalidation events after Stop returns.
 func (p *Provider) Stop() error {
 	p.stopOnce.Do(func() {
 		close(p.stopCh)
@@ -151,9 +139,7 @@ func (p *Provider) Stop() error {
 	return nil
 }
 
-// Get returns one contract by id. The fold is the source of truth;
-// the adapter is consulted only when the contract is not in the cache
-// (which only happens during a watcher tick that has not landed yet).
+// Get returns one contract by id.
 func (p *Provider) Get(_ context.Context, key ContractID) (*graphql.Contract, adapter.Freshness, error) {
 	p.mu.RLock()
 	c, ok := p.state[key]
@@ -190,8 +176,7 @@ func (p *Provider) GetMany(_ context.Context, keys []ContractID) (map[ContractID
 	return out, freshness, nil
 }
 
-// Keys returns every contract id currently in the cache. Cold boot
-// returns an empty slice until [Start] hydrates.
+// Keys returns every contract id currently in the cache.
 func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -205,9 +190,6 @@ func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 // List returns every cached Contract, sorted descending by
 // LastEventAt — most recently active contracts first. Optionally
 // filtered by [ContractFilter].
-//
-// Resolvers call this for `Query.contracts(filter)`. Returning the
-// graphql shape directly keeps the resolver layer trivial.
 func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*graphql.Contract, error) {
 	p.mu.RLock()
 	contracts := make([]Contract, 0, len(p.state))
@@ -242,12 +224,7 @@ func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*g
 }
 
 // Subscribe returns a channel that receives one event per contract
-// whose folded value just changed. The channel closes when ctx is
-// cancelled or [Stop] runs.
-//
-// Sends are non-blocking — a slow consumer drops events rather than
-// stalling the watcher. Callers re-fetch via [Get] or [List] in
-// response.
+// whose folded value just changed.
 func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEvent[ContractID] {
 	ch := make(chan adapter.InvalidationEvent[ContractID], 16)
 	p.subMu.Lock()
@@ -266,10 +243,7 @@ func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEve
 	return ch
 }
 
-// consume drives the fold loop. Each watcher tick triggers a tail read
-// from the saved offset; new events are merged into the existing state
-// (so the fold is incremental, not full-rebuild) and invalidations are
-// fanned out for whichever ids changed.
+// consume drives the fold loop. Each watcher tick triggers a tail read.
 func (p *Provider) consume(ctx context.Context) {
 	notifications := p.watcher.Notifications()
 	for {
@@ -288,9 +262,8 @@ func (p *Provider) consume(ctx context.Context) {
 }
 
 // refresh tails every jsonl in the dir from the saved per-file
-// offsets, applies new events to the in-memory state, advances the
-// offsets, and fans out InvalidationEvents for every id touched. Run
-// on every watcher poke.
+// offsets, applies new events to the in-memory state, and fans out
+// InvalidationEvents for every id touched.
 func (p *Provider) refresh(ctx context.Context) {
 	p.mu.RLock()
 	from := make(map[string]int64, len(p.offsets))
@@ -314,8 +287,8 @@ func (p *Provider) refresh(ctx context.Context) {
 	p.mu.Lock()
 	for _, ev := range events {
 		applyEvent(p.state, ev)
-		if ev.ID != "" {
-			touched[ContractID(ev.ID)] = struct{}{}
+		if ev.ContractID != "" {
+			touched[ContractID(ev.ContractID)] = struct{}{}
 		}
 	}
 	p.offsets = advanced
@@ -335,7 +308,6 @@ func (p *Provider) refresh(ctx context.Context) {
 }
 
 // offsetsEqual compares two per-file offset maps for exact equality.
-// A short-circuit "no change" check inside refresh.
 func offsetsEqual(a, b map[string]int64) bool {
 	if len(a) != len(b) {
 		return false
@@ -349,7 +321,6 @@ func offsetsEqual(a, b map[string]int64) bool {
 }
 
 // fanOut broadcasts an invalidation event to every active subscriber.
-// Sends are best-effort; a slow consumer drops events.
 func (p *Provider) fanOut(ev adapter.InvalidationEvent[ContractID]) {
 	p.subMu.Lock()
 	subs := make([]chan adapter.InvalidationEvent[ContractID], 0, len(p.subs))
@@ -389,8 +360,8 @@ func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
 	if f.OwnerAgentName != nil && *f.OwnerAgentName != "" && c.OwnerAgentName != *f.OwnerAgentName {
 		return false
 	}
-	if f.ParentContractID != nil && *f.ParentContractID != "" {
-		if c.ParentContractID == nil || *c.ParentContractID != *f.ParentContractID {
+	if f.OwnerContains != nil && *f.OwnerContains != "" {
+		if !strings.Contains(c.OwnerSessionID, *f.OwnerContains) {
 			return false
 		}
 	}
@@ -403,83 +374,36 @@ func toGraphQL(c Contract) *graphql.Contract {
 	out := &graphql.Contract{
 		ID:             "Contract:" + string(c.ID),
 		ContractID:     string(c.ID),
-		Statement:      c.Statement,
+		Summary:        c.Summary,
 		OwnerSessionID: c.OwnerSessionID,
 		OwnerAgentName: c.OwnerAgentName,
 		Status:         mapStatus(c.Status),
+		Reasoning:      c.Reasoning,
+		CreatedBy:      c.CreatedBy,
 		CreatedAt:      formatTime(c.CreatedAt),
 		UpdatedAt:      formatTime(c.UpdatedAt),
 		LastEventAt:    formatTime(c.LastEventAt),
-		Criteria:       append([]string{}, c.Criteria...),
-		OpenQuestions:  buildOpenQuestions(c.OpenQuestions),
 	}
-	if c.ReportsTo != "" {
-		s := c.ReportsTo
-		out.ReportsTo = &s
-	}
-	if c.ParentContractID != "" {
-		s := c.ParentContractID
-		out.ParentContractID = &s
+	if c.Source != "" {
+		s := c.Source
+		out.Source = &s
 	}
 	return out
 }
 
-// buildOpenQuestions copies the internal OpenQuestion list onto the
-// generated graphql.ContractQuestion slice. We allocate a fresh slice
-// so callers cannot mutate the cache by editing the response.
-func buildOpenQuestions(qs []OpenQuestion) []*graphql.ContractQuestion {
-	if len(qs) == 0 {
-		return []*graphql.ContractQuestion{}
-	}
-	out := make([]*graphql.ContractQuestion, 0, len(qs))
-	for _, q := range qs {
-		gq := &graphql.ContractQuestion{
-			QuestionID:  q.QuestionID,
-			Text:        q.Text,
-			AskedBy:     q.AskedBy,
-			AskedAt:     formatTime(q.AskedAt),
-			BlocksClose: q.BlocksClose,
-		}
-		if q.Deadline != nil {
-			d := formatTime(*q.Deadline)
-			gq.Deadline = &d
-		}
-		out = append(out, gq)
-	}
-	return out
-}
-
-// mapStatus maps the plugin's raw status string to the schema enum.
-// Unknown values fall through to OPEN — the safest default for a
-// future-tense enum addition.
+// mapStatus maps the plugin's raw status string to the 2-value schema
+// enum. "delivered" → DELIVERED; everything else (including legacy
+// "blocked" and "started") → OPEN.
 func mapStatus(s string) graphql.ContractStatus {
 	switch s {
-	case "open":
-		return graphql.ContractStatusOpen
-	case "delivered_pending_validation":
-		return graphql.ContractStatusDeliveredPendingValidation
-	case "delivered_pending_parent_validation":
-		return graphql.ContractStatusDeliveredPendingParentValidation
-	case "pending_drew_approval":
-		return graphql.ContractStatusPendingDrewApproval
-	case "awaiting_cancel_ack":
-		return graphql.ContractStatusAwaitingCancelAck
-	case "waiting_external":
-		return graphql.ContractStatusWaitingExternal
-	case "satisfied":
-		return graphql.ContractStatusSatisfied
-	case "cancelled":
-		return graphql.ContractStatusCancelled
-	case "judge_rejected_terminal":
-		return graphql.ContractStatusJudgeRejectedTerminal
+	case "delivered":
+		return graphql.ContractStatusDelivered
 	default:
 		return graphql.ContractStatusOpen
 	}
 }
 
 // formatTime renders a time as RFC 3339 with nanosecond precision.
-// Mirrors the Host provider's lastSeenAt format so clients get a
-// consistent timestamp shape across the schema.
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""

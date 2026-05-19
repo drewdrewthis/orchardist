@@ -1,0 +1,28 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "drewdrewthis-git-orchard-rs",
+  "description": "Marketplace surface for git-orchard-rs companion plugins. Pinned plugins are fetched from upstream repos at a specific commit so fresh hosts can install without cloning the codex.",
+  "owner": {
+    "name": "drewdrewthis",
+    "url": "https://github.com/drewdrewthis"
+  },
+  "plugins": [
+    {
+      "name": "claude-contracts",
+      "description": "Contract authoring + reading + Stop-hook reminder for any Claude session. Sessions cannot stop until their contracts are delivered. The canonical spec lives in `spec/` inside the plugin source.",
+      "author": {
+        "name": "drewdrewthis"
+      },
+      "category": "agent-orchestration",
+      "version": "0.7.0",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/drewdrewthis/orchard-codex.git",
+        "path": "plugin-sources/claude-contracts",
+        "ref": "main",
+        "sha": "ac1c6e98c621fcb6990f7d40d63a3fc8b659abaa"
+      },
+      "homepage": "https://github.com/drewdrewthis/orchard-codex/tree/main/plugin-sources/claude-contracts"
+    }
+  ]
+}

@@ -23,25 +23,22 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
 )
 
-// TestContracts_E2E_LifecycleAndMidTestCancel walks one synthetic
-// contract from creation through the full happy-path lifecycle into
-// `satisfied`, asserts the GraphQL surface returns the right status,
-// then appends a `cancelled` event and waits for the watcher to push
-// an invalidation. The follow-up GraphQL query must observe the new
-// status.
+// TestContracts_E2E_LifecycleAndMidTestDeliver walks one synthetic
+// contract from creation through delivery, asserts the GraphQL surface
+// returns the right status, then appends a second "delivered" event and
+// waits for the watcher to push an invalidation (idempotent re-delivery
+// confirms the watch loop still fires).
 //
 // All fixtures are generic: agent-1 / agent-2 / session-1 — no real
 // PII per the briefing's NO PII rule.
-func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
+func TestContracts_E2E_LifecycleAndMidTestDeliver(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dir := t.TempDir()
 	logPath := contractFilePath(dir, happyContractID)
 
-	// Seed the log with a happy-path lifecycle: created → judge_run
-	// (PASS) → status_change to delivered_pending_validation →
-	// status_change to satisfied. Mirrors the live plugin's JSONL.
+	// Seed the log with a happy-path lifecycle: created → delivered.
 	writeEvents(t, logPath, lifecycleHappyPathEvents()...)
 
 	provider := contracts.NewWithPath(dir, nil)
@@ -53,7 +50,7 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 	srv := newTestDaemon(t, provider)
 	defer srv.Close()
 
-	// AC: GraphQL returns the satisfied contract.
+	// AC: GraphQL returns the delivered contract.
 	resp := postQuery(t, srv.URL, fullContractQuery)
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors: %+v", resp.Errors)
@@ -62,46 +59,41 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 		t.Fatalf("contracts count = %d, want 1", got)
 	}
 	c := resp.Data.Contracts[0]
-	if c.Status != "SATISFIED" {
-		t.Errorf("status = %q, want SATISFIED", c.Status)
+	if c.Status != "DELIVERED" {
+		t.Errorf("status = %q, want DELIVERED", c.Status)
 	}
 	if c.ContractID != happyContractID {
 		t.Errorf("contractId = %q, want %q", c.ContractID, happyContractID)
 	}
-	if c.Statement != happyStatement {
-		t.Errorf("statement = %q, want %q", c.Statement, happyStatement)
+	if c.Summary != happySummary {
+		t.Errorf("summary = %q, want %q", c.Summary, happySummary)
 	}
-	if c.OwnerSessionID != "session-1" {
-		t.Errorf("ownerSessionId = %q, want session-1", c.OwnerSessionID)
-	}
-	if c.OwnerAgentName != "agent-1" {
-		t.Errorf("ownerAgentName = %q, want agent-1", c.OwnerAgentName)
+	if c.OwnerSessionID != "orchard:claude:session-1" {
+		t.Errorf("ownerSessionId = %q, want orchard:claude:session-1", c.OwnerSessionID)
 	}
 
-	// Subscribe so we can observe the post-cancel invalidation.
+	// Subscribe so we can observe a follow-up watcher push.
 	subCtx, subCancel := context.WithCancel(ctx)
 	defer subCancel()
 	sub := provider.Subscribe(subCtx)
 
-	// Append a cancel transition mid-test.
-	appendEvent(t, logPath, statusChangeEvent(happyContractID,
-		mustParseTime(t, "2026-05-04T13:30:00Z"),
-		"satisfied", "cancelled", "drew_cancel"))
+	// Append a re-deliver event mid-test to trigger the watcher.
+	appendEvent(t, logPath, v7UpdateEvent(happyContractID, "delivered",
+		mustParseTime(t, "2026-05-04T13:30:00Z")))
 
 	if err := waitForSubscriberEvent(sub, happyContractID, 5*time.Second); err != nil {
 		t.Fatalf("waiting for invalidation: %v", err)
 	}
 
-	// AC: GraphQL surfaces the cancelled status after the watcher tick.
-	if err := waitForStatus(t, srv.URL, happyContractID, "CANCELLED", 5*time.Second); err != nil {
-		t.Fatalf("status never moved to cancelled: %v", err)
+	// AC: GraphQL still shows DELIVERED after the re-deliver event.
+	if err := waitForStatus(t, srv.URL, happyContractID, "DELIVERED", 5*time.Second); err != nil {
+		t.Fatalf("status never stayed delivered: %v", err)
 	}
 }
 
 // TestContracts_E2E_MissingFileEmpty asserts the daemon answers a
 // `contracts {}` query with an empty list — and no error — when the
-// JSONL file does not exist yet. The watcher remains warm so a future
-// creation event would be picked up.
+// JSONL file does not exist yet.
 func TestContracts_E2E_MissingFileEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -127,28 +119,24 @@ func TestContracts_E2E_MissingFileEmpty(t *testing.T) {
 }
 
 // TestContracts_E2E_StatusFilter exercises Query.contracts(filter)
-// with a status filter — the AC `orchard query contracts --status
-// started` ultimately routes through this surface.
+// with a status filter. One OPEN contract, one DELIVERED contract.
 func TestContracts_E2E_StatusFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dir := t.TempDir()
 
-	// Two contracts: one open, one satisfied. Each lives in its own
-	// per-contract jsonl file under the directory.
 	openID := "C-2026-05-04-deadbeef"
-	satID := "C-2026-05-04-cafef00d"
+	deliveredID := "C-2026-05-04-cafef00d"
 	t0 := mustParseTime(t, "2026-05-04T12:00:00Z")
 	t1 := t0.Add(30 * time.Minute)
+
 	writeEvents(t, contractFilePath(dir, openID),
-		creationEvent(openID, "open thing", "agent-2", "session-2", t0),
+		v7CreationEvent(openID, "open thing", "orchard:claude:session-2", t0),
 	)
-	writeEvents(t, contractFilePath(dir, satID),
-		creationEvent(satID, "done thing", "agent-1", "session-1", t0),
-		judgeRunEvent(satID, t0.Add(5*time.Minute), "PASS"),
-		statusChangeEvent(satID, t0.Add(10*time.Minute), "open", "delivered_pending_validation", "owner_judge_pass"),
-		statusChangeEvent(satID, t1, "delivered_pending_validation", "satisfied", "drew_approve"),
+	writeEvents(t, contractFilePath(dir, deliveredID),
+		v7CreationEvent(deliveredID, "done thing", "orchard:claude:session-1", t0),
+		v7UpdateEvent(deliveredID, "delivered", t1),
 	)
 
 	provider := contracts.NewWithPath(dir, nil)
@@ -175,22 +163,40 @@ func TestContracts_E2E_StatusFilter(t *testing.T) {
 		t.Errorf("OPEN filter returned %q, want %q", openResp.Data.Contracts[0].ContractID, openID)
 	}
 
+	// Filter for DELIVERED only.
+	deliveredResp := postQuery(t, srv.URL, queryWithFilter(`{statuses: [DELIVERED]}`))
+	if got := len(deliveredResp.Data.Contracts); got != 1 {
+		t.Fatalf("DELIVERED filter count = %d, want 1", got)
+	}
+	if deliveredResp.Data.Contracts[0].ContractID != deliveredID {
+		t.Errorf("DELIVERED filter returned %q, want %q", deliveredResp.Data.Contracts[0].ContractID, deliveredID)
+	}
+
 	// Filter by owner session id.
-	ownerResp := postQuery(t, srv.URL, queryWithFilter(`{ownerSessionId: "session-1"}`))
+	ownerResp := postQuery(t, srv.URL, queryWithFilter(`{ownerSessionId: "orchard:claude:session-1"}`))
 	if got := len(ownerResp.Data.Contracts); got != 1 {
 		t.Fatalf("ownerSession filter count = %d, want 1", got)
 	}
-	if ownerResp.Data.Contracts[0].ContractID != satID {
-		t.Errorf("ownerSession filter returned %q, want %q", ownerResp.Data.Contracts[0].ContractID, satID)
+	if ownerResp.Data.Contracts[0].ContractID != deliveredID {
+		t.Errorf("ownerSession filter returned %q, want %q", ownerResp.Data.Contracts[0].ContractID, deliveredID)
+	}
+
+	// Filter by ownerContains substring.
+	containsResp := postQuery(t, srv.URL, queryWithFilter(`{ownerContains: "session-2"}`))
+	if got := len(containsResp.Data.Contracts); got != 1 {
+		t.Fatalf("ownerContains filter count = %d, want 1", got)
+	}
+	if containsResp.Data.Contracts[0].ContractID != openID {
+		t.Errorf("ownerContains filter returned %q, want %q", containsResp.Data.Contracts[0].ContractID, openID)
 	}
 
 	// Single-contract lookup by id.
-	one := postQuery(t, srv.URL, fmt.Sprintf(`query { contract(id: %q) { contractId status } }`, satID))
+	one := postQuery(t, srv.URL, fmt.Sprintf(`query { contract(id: %q) { contractId status } }`, deliveredID))
 	if one.Data.Contract == nil {
 		t.Fatalf("contract(id) returned nil for known id")
 	}
-	if one.Data.Contract.ContractID != satID {
-		t.Errorf("contract(id) returned %q, want %q", one.Data.Contract.ContractID, satID)
+	if one.Data.Contract.ContractID != deliveredID {
+		t.Errorf("contract(id) returned %q, want %q", one.Data.Contract.ContractID, deliveredID)
 	}
 
 	// Single-contract lookup with unknown id returns nil with no errors.
@@ -200,85 +206,50 @@ func TestContracts_E2E_StatusFilter(t *testing.T) {
 	}
 }
 
-// happyContractID and happyStatement back the happy-path fixtures so a
+// happyContractID and happySummary back the happy-path fixtures so a
 // single source of truth drives both the writer and the assertions.
 const (
 	happyContractID = "C-2026-05-04-aaaa1111"
-	happyStatement  = "Stand up provider X"
+	happySummary    = "Stand up provider X"
 )
 
-// lifecycleHappyPathEvents is the canonical happy-path series for
-// happyContractID: creation → judge_run PASS → status to
-// delivered_pending_validation → status to satisfied.
+// lifecycleHappyPathEvents is the canonical happy-path series:
+// creation → delivered.
 func lifecycleHappyPathEvents() []map[string]any {
 	t0, _ := time.Parse(time.RFC3339, "2026-05-04T12:00:00Z")
 	t1 := t0.Add(30 * time.Minute)
-	t2 := t1.Add(5 * time.Minute)
-	t3 := t2.Add(10 * time.Minute)
 	return []map[string]any{
-		creationEvent(happyContractID, happyStatement, "agent-1", "session-1", t0),
-		judgeRunEvent(happyContractID, t1, "PASS"),
-		statusChangeEvent(happyContractID, t2, "open", "delivered_pending_validation", "owner_judge_pass"),
-		statusChangeEvent(happyContractID, t3, "delivered_pending_validation", "satisfied", "drew_approve"),
+		v7CreationEvent(happyContractID, happySummary, "orchard:claude:session-1", t0),
+		v7UpdateEvent(happyContractID, "delivered", t1),
 	}
 }
 
-// creationEvent returns a `kind: contract` row matching the live JSONL
-// shape exactly (top-level fields embedded, owner / reports_to as
-// nested objects, drew as the reports_to so the routing field
-// surfaces).
-func creationEvent(id, statement, agentName, sessionID string, at time.Time) map[string]any {
+// v7CreationEvent returns a flat v0.7 creation event map.
+func v7CreationEvent(id, summary, owner string, at time.Time) map[string]any {
 	return map[string]any{
-		"kind":      "contract",
-		"id":        id,
-		"statement": statement,
-		"owner": map[string]any{
-			"session_id": sessionID,
-			"agent_name": agentName,
-			"vm_address": "test-host",
-		},
-		"reports_to": map[string]any{
-			"kind":       "drew",
-			"agent_name": nil,
-			"vm_address": nil,
-		},
-		"parent_contract_id": nil,
-		"child_contract_ids": []string{},
-		"created_on":         at.UTC().Format(time.RFC3339Nano),
-		"updated_on":         at.UTC().Format(time.RFC3339Nano),
-		"closed_on":          nil,
-		"closed_on_reason":   nil,
-		"status":             "open",
-		"judge_verdict":      nil,
-		"evidence":           nil,
+		"timestamp":   at.UTC().Format(time.RFC3339Nano),
+		"contract_id": id,
+		"status":      "started",
+		"summary":     summary,
+		"reasoning":   "contract filed",
+		"owner":       owner,
+		"created_by":  "test-agent",
+		"source":      nil,
 	}
 }
 
-// judgeRunEvent matches the live shape: by, evidence_links, kind,
-// reason, timestamp, verdict.
-func judgeRunEvent(id string, at time.Time, verdict string) map[string]any {
+// v7UpdateEvent returns a flat v0.7 update event map (null summary,
+// null owner — both inherit from prior state).
+func v7UpdateEvent(id, status string, at time.Time) map[string]any {
 	return map[string]any{
-		"kind":           "judge_run",
-		"timestamp":      at.UTC().Format(time.RFC3339Nano),
-		"by":             "judge",
-		"verdict":        verdict,
-		"reason":         "fixture run",
-		"evidence_links": []string{},
-		"id":             id,
-	}
-}
-
-// statusChangeEvent matches the system-generated row shape: by, from,
-// to, kind, timestamp, trigger.
-func statusChangeEvent(id string, at time.Time, from, to, trigger string) map[string]any {
-	return map[string]any{
-		"kind":      "status_change",
-		"timestamp": at.UTC().Format(time.RFC3339Nano),
-		"by":        "system",
-		"from":      from,
-		"to":        to,
-		"trigger":   trigger,
-		"id":        id,
+		"timestamp":   at.UTC().Format(time.RFC3339Nano),
+		"contract_id": id,
+		"status":      status,
+		"summary":     nil,
+		"reasoning":   "status updated",
+		"owner":       nil,
+		"created_by":  "test-agent",
+		"source":      nil,
 	}
 }
 
@@ -377,24 +348,16 @@ const fullContractQuery = `query {
   contracts {
     id
     contractId
-    statement
+    summary
     ownerSessionId
     ownerAgentName
-    reportsTo
-    parentContractId
     status
+    reasoning
+    createdBy
+    source
     createdAt
     updatedAt
     lastEventAt
-    criteria
-    openQuestions {
-      questionId
-      text
-      askedBy
-      askedAt
-      deadline
-      blocksClose
-    }
   }
 }`
 
@@ -408,10 +371,6 @@ func queryWithFilter(filterLiteral string) string {
 // newTestDaemon mirrors internal/server/server.go's GraphQL wiring with
 // a pre-started Provider so the e2e test can drive it without launching
 // the full HTTP server.
-//
-// We construct a host provider too because the resolver root requires
-// one to be non-nil — the host resolver is unused in this test but
-// satisfies the dependency.
 func newTestDaemon(t *testing.T, provider *contracts.Provider) *httptest.Server {
 	t.Helper()
 	hostProvider := host.New()
@@ -439,28 +398,18 @@ type graphqlResponse struct {
 }
 
 type contractNode struct {
-	ID               string             `json:"id"`
-	ContractID       string             `json:"contractId"`
-	Statement        string             `json:"statement"`
-	OwnerSessionID   string             `json:"ownerSessionId"`
-	OwnerAgentName   string             `json:"ownerAgentName"`
-	ReportsTo        *string            `json:"reportsTo,omitempty"`
-	ParentContractID *string            `json:"parentContractId,omitempty"`
-	Status           string             `json:"status"`
-	CreatedAt        string             `json:"createdAt"`
-	UpdatedAt        string             `json:"updatedAt"`
-	LastEventAt      string             `json:"lastEventAt"`
-	Criteria         []string           `json:"criteria"`
-	OpenQuestions    []contractQuestion `json:"openQuestions"`
-}
-
-type contractQuestion struct {
-	QuestionID  string  `json:"questionId"`
-	Text        string  `json:"text"`
-	AskedBy     string  `json:"askedBy"`
-	AskedAt     string  `json:"askedAt"`
-	Deadline    *string `json:"deadline,omitempty"`
-	BlocksClose bool    `json:"blocksClose"`
+	ID             string  `json:"id"`
+	ContractID     string  `json:"contractId"`
+	Summary        string  `json:"summary"`
+	OwnerSessionID string  `json:"ownerSessionId"`
+	OwnerAgentName string  `json:"ownerAgentName"`
+	Status         string  `json:"status"`
+	Reasoning      string  `json:"reasoning"`
+	CreatedBy      string  `json:"createdBy"`
+	Source         *string `json:"source,omitempty"`
+	CreatedAt      string  `json:"createdAt"`
+	UpdatedAt      string  `json:"updatedAt"`
+	LastEventAt    string  `json:"lastEventAt"`
 }
 
 func postQuery(t *testing.T, url, query string) graphqlResponse {
@@ -493,10 +442,7 @@ func postQuery(t *testing.T, url, query string) graphqlResponse {
 	return out
 }
 
-// mustParseTime is the test-side time parser. Unlike fold_test.go's
-// version (which is in package contracts), this one lives in
-// contracts_test so we don't pull internal helpers across package
-// boundaries.
+// mustParseTime is the test-side time parser.
 func mustParseTime(t *testing.T, s string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339Nano, s)

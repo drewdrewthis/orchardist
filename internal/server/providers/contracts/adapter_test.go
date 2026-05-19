@@ -11,23 +11,23 @@ import (
 
 // TestAdapter_Snapshot_DirectoryScan asserts the adapter reads every
 // per-contract jsonl file in the directory and returns the union of
-// their events. AC-1 fixture: three files, three distinct end-states
-// (delivered, accepted/open, cancelled).
+// their events. Three files with three distinct end-states: delivered,
+// open (started), and open-then-delivered-in-sequence.
 func TestAdapter_Snapshot_DirectoryScan(t *testing.T) {
 	dir := t.TempDir()
 	t0 := mustTime(t, "2026-05-04T12:00:00Z")
 	t1 := t0.Add(time.Hour)
 
 	writeJSONL(t, filepath.Join(dir, "C-test-001.jsonl"),
-		creationLine(t, "C-test-001", "deliver thing one", "alice@example", "session-alice", t0),
-		statusChangeLine(t, "C-test-001", t1, "open", "delivered_pending_validation", "owner_judge_pass"),
+		v7CreationLine(t, "C-test-001", "deliver thing one", "orchard:claude:session-alice", t0),
+		v7UpdateLine(t, "C-test-001", "delivered", t1),
 	)
 	writeJSONL(t, filepath.Join(dir, "C-test-002.jsonl"),
-		creationLine(t, "C-test-002", "thing two stays open", "bob@example", "session-bob", t0),
+		v7CreationLine(t, "C-test-002", "thing two stays open", "orchard:claude:session-bob", t0),
 	)
 	writeJSONL(t, filepath.Join(dir, "C-test-003.jsonl"),
-		creationLine(t, "C-test-003", "abandoned thing", "carol@example", "session-carol", t0),
-		statusChangeLine(t, "C-test-003", t1, "open", "cancelled", "drew_cancel"),
+		v7CreationLine(t, "C-test-003", "abandoned thing", "orchard:claude:session-carol", t0),
+		v7UpdateLine(t, "C-test-003", "delivered", t1),
 	)
 
 	adapter := NewAdapter(dir)
@@ -45,9 +45,9 @@ func TestAdapter_Snapshot_DirectoryScan(t *testing.T) {
 		id     ContractID
 		status string
 	}{
-		{"C-test-001", "delivered_pending_validation"},
-		{"C-test-002", "open"},
-		{"C-test-003", "cancelled"},
+		{"C-test-001", "delivered"},
+		{"C-test-002", "started"},
+		{"C-test-003", "delivered"},
 	}
 	for _, tc := range cases {
 		c, ok := state[tc.id]
@@ -114,10 +114,10 @@ func TestAdapter_FollowFromOffsets_ResumesPerFile(t *testing.T) {
 	t2 := t0.Add(2 * time.Minute)
 
 	writeJSONL(t, filepath.Join(dir, "C-test-aaa.jsonl"),
-		creationLine(t, "C-test-aaa", "alpha", "alice@example", "session-alice", t0),
+		v7CreationLine(t, "C-test-aaa", "alpha", "orchard:claude:session-alice", t0),
 	)
 	writeJSONL(t, filepath.Join(dir, "C-test-bbb.jsonl"),
-		creationLine(t, "C-test-bbb", "beta", "bob@example", "session-bob", t0),
+		v7CreationLine(t, "C-test-bbb", "beta", "orchard:claude:session-bob", t0),
 	)
 
 	adapter := NewAdapter(dir)
@@ -131,12 +131,12 @@ func TestAdapter_FollowFromOffsets_ResumesPerFile(t *testing.T) {
 
 	// Append a new event to one file only.
 	appendJSONL(t, filepath.Join(dir, "C-test-aaa.jsonl"),
-		statusChangeLine(t, "C-test-aaa", t1, "open", "delivered_pending_validation", "owner_judge_pass"),
+		v7UpdateLine(t, "C-test-aaa", "delivered", t1),
 	)
 
 	// And add a third file entirely.
 	writeJSONL(t, filepath.Join(dir, "C-test-ccc.jsonl"),
-		creationLine(t, "C-test-ccc", "gamma", "carol@example", "session-carol", t2),
+		v7CreationLine(t, "C-test-ccc", "gamma", "orchard:claude:session-carol", t2),
 	)
 
 	tail, advanced, err := adapter.FollowFromOffsets(context.Background(), offsets)
@@ -144,7 +144,7 @@ func TestAdapter_FollowFromOffsets_ResumesPerFile(t *testing.T) {
 		t.Fatalf("FollowFromOffsets: %v", err)
 	}
 	if got, want := len(tail), 2; got != want {
-		t.Fatalf("tail events = %d, want %d (status_change on aaa + creation of ccc)", got, want)
+		t.Fatalf("tail events = %d, want %d (update on aaa + creation of ccc)", got, want)
 	}
 	if advanced["C-test-bbb.jsonl"] != offsets["C-test-bbb.jsonl"] {
 		t.Errorf("bbb offset moved despite no new bytes: from %d to %d",
@@ -166,7 +166,7 @@ func TestAdapter_Snapshot_IgnoresNonJSONLFiles(t *testing.T) {
 	dir := t.TempDir()
 	t0 := mustTime(t, "2026-05-04T12:00:00Z")
 	writeJSONL(t, filepath.Join(dir, "C-test-001.jsonl"),
-		creationLine(t, "C-test-001", "alpha", "alice@example", "session-alice", t0),
+		v7CreationLine(t, "C-test-001", "alpha", "orchard:claude:session-alice", t0),
 	)
 	if err := os.WriteFile(filepath.Join(dir, "C-test-001.md"),
 		[]byte("# mirror file\n"), 0o644); err != nil {
@@ -226,51 +226,43 @@ func appendJSONL(t *testing.T, path string, lines ...string) {
 	}
 }
 
-// creationLine returns one `kind: contract` JSONL line. Synthetic ids
-// only — no real PII per the briefing.
-func creationLine(t *testing.T, id, statement, agentName, sessionID string, at time.Time) string {
+// v7CreationLine returns a flat v0.7 creation JSONL line.
+func v7CreationLine(t *testing.T, contractID, summary, owner string, at time.Time) string {
 	t.Helper()
 	row := map[string]any{
-		"kind":      "contract",
-		"id":        id,
-		"statement": statement,
-		"owner": map[string]any{
-			"session_id": sessionID,
-			"agent_name": agentName,
-			"vm_address": "test-host",
-		},
-		"reports_to": map[string]any{
-			"kind":       "drew",
-			"agent_name": nil,
-			"vm_address": nil,
-		},
-		"parent_contract_id": nil,
-		"created_on":         at.UTC().Format(time.RFC3339Nano),
-		"updated_on":         at.UTC().Format(time.RFC3339Nano),
-		"status":             "open",
+		"timestamp":   at.UTC().Format(time.RFC3339Nano),
+		"contract_id": contractID,
+		"status":      "started",
+		"summary":     summary,
+		"reasoning":   "contract filed",
+		"owner":       owner,
+		"created_by":  "test-agent",
+		"source":      nil,
 	}
 	b, err := json.Marshal(row)
 	if err != nil {
-		t.Fatalf("marshal creation: %v", err)
+		t.Fatalf("marshal v7 creation: %v", err)
 	}
 	return string(b)
 }
 
-// statusChangeLine returns one `kind: status_change` JSONL line.
-func statusChangeLine(t *testing.T, id string, at time.Time, from, to, trigger string) string {
+// v7UpdateLine returns a flat v0.7 update JSONL line (no summary, no
+// owner — inherits from prior state).
+func v7UpdateLine(t *testing.T, contractID, status string, at time.Time) string {
 	t.Helper()
 	row := map[string]any{
-		"kind":      "status_change",
-		"id":        id,
-		"timestamp": at.UTC().Format(time.RFC3339Nano),
-		"by":        "system",
-		"from":      from,
-		"to":        to,
-		"trigger":   trigger,
+		"timestamp":   at.UTC().Format(time.RFC3339Nano),
+		"contract_id": contractID,
+		"status":      status,
+		"summary":     nil,
+		"reasoning":   "status updated",
+		"owner":       nil,
+		"created_by":  "test-agent",
+		"source":      nil,
 	}
 	b, err := json.Marshal(row)
 	if err != nil {
-		t.Fatalf("marshal status_change: %v", err)
+		t.Fatalf("marshal v7 update: %v", err)
 	}
 	return string(b)
 }

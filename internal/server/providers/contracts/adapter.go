@@ -238,6 +238,11 @@ func readEvents(r io.Reader, start int64) ([]Event, int64, error) {
 // decodeLine parses one JSONL line into an Event. Empty lines and
 // undecodable lines return (Event{}, false) so the caller skips them
 // without aborting the whole snapshot.
+//
+// v0.7 events have no `kind` discriminator — the filter is now on
+// `contract_id` (empty → skip). v0.6 events that do carry `kind` are
+// also accepted here; Fold handles whether to process or drop them
+// based on the `status` field.
 func decodeLine(line []byte) (Event, bool) {
 	// Trim the trailing newline; bufio leaves it on.
 	if n := len(line); n > 0 && line[n-1] == '\n' {
@@ -250,7 +255,9 @@ func decodeLine(line []byte) (Event, bool) {
 	if err := json.Unmarshal(line, &ev); err != nil {
 		return Event{}, false
 	}
-	if ev.Kind == "" {
+	// Require a non-empty contract_id so malformed lines are dropped
+	// rather than cluttering the fold with empty-key events.
+	if ev.ContractID == "" {
 		return Event{}, false
 	}
 	return ev, true
