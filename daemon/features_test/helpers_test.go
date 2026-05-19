@@ -79,6 +79,9 @@ func startMinimalServer(t *testing.T) *httptest.Server {
 	t.Cleanup(cancel)
 
 	hp := host.New()
+	if err := hp.Start(ctx); err != nil {
+		t.Fatalf("host provider start: %v", err)
+	}
 
 	cpDir := t.TempDir()
 	cp := claudeprojects.New(cpDir, "test-host", nil)
@@ -112,6 +115,10 @@ func startServerWithRepo(t *testing.T) *httptest.Server {
 	t.Cleanup(gp.Stop)
 
 	hp := host.New()
+	if err := hp.Start(ctx); err != nil {
+		t.Fatalf("host provider start: %v", err)
+	}
+
 	cpDir := t.TempDir()
 	cp := claudeprojects.New(cpDir, "test-host", nil)
 	if err := cp.Start(ctx); err != nil {
@@ -144,6 +151,10 @@ func startServerWithClaudeProjects(t *testing.T, cpDir string) *httptest.Server 
 	t.Cleanup(cancel)
 
 	hp := host.New()
+	if err := hp.Start(ctx); err != nil {
+		t.Fatalf("host provider start: %v", err)
+	}
+
 	cp := claudeprojects.New(cpDir, "test-host", nil)
 	if err := cp.Start(ctx); err != nil {
 		t.Fatalf("claudeprojects start: %v", err)
