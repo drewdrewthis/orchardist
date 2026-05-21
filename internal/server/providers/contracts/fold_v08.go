@@ -49,8 +49,20 @@ func ApplySessionRecords(state map[ContractID]Contract, records []SessionRecord,
 }
 
 // applySessionRecord dispatches one SessionRecord into the fold state.
-// Only assistant-type records with tool_use content blocks are processed.
+//
+// Assistant records with tool_use content blocks are processed for
+// open_contract and close_contract events (the primary v0.8 path).
+//
+// System records are checked for exit/quit/bye local_command content;
+// when matched a virtual close of the open conversation contract is
+// synthesised in-memory (L2.11/L2.12).
 func applySessionRecord(state map[ContractID]Contract, rec SessionRecord, localSessionID string) {
+	// L2.11/L2.12: system/local_command exit records.
+	if rec.Type == "system" {
+		applyExitRecord(state, rec, localSessionID)
+		return
+	}
+
 	if rec.Type != "assistant" || rec.Message == nil {
 		return
 	}

@@ -6,9 +6,12 @@ import "encoding/json"
 // (~/.claude/projects/<encoded-cwd>/<uuid>.jsonl). Only the fields
 // relevant to ContractFold are decoded; everything else is ignored.
 //
-// The type discriminator is the `type` field. ContractFold cares about
-// records whose type is "assistant" and whose message.content includes
-// a tool_use entry with name "open_contract" or "close_contract".
+// The type discriminator is the `type` field. ContractFold cares about:
+//   - "assistant" records whose message.content includes a tool_use entry
+//     with name "open_contract" or "close_contract".
+//   - "system" records whose content matches the local_command pattern
+//     <command-name>/(exit|quit|bye)</command-name> — these trigger a
+//     virtual close of the open conversation contract for the session.
 type SessionRecord struct {
 	// Type is the record's kind ("assistant", "user", "system", etc.).
 	Type string `json:"type"`
@@ -20,6 +23,11 @@ type SessionRecord struct {
 	// Timestamp is the record's RFC 3339 timestamp. Used as a fallback
 	// for the contract's CreatedAt when the open_contract input omits it.
 	Timestamp string `json:"timestamp,omitempty"`
+
+	// Content carries the raw content string for system records (e.g.
+	// local_command records written when the user types /exit, /quit, /bye).
+	// Empty for assistant/user records, which use Message instead.
+	Content string `json:"content,omitempty"`
 
 	// Message is non-nil for "assistant" and "user" type records.
 	Message *SessionMessage `json:"message,omitempty"`
