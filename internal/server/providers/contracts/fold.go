@@ -124,6 +124,18 @@ func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentB
 		UpdatedAt:      createdAt,
 		LastEventAt:    createdAt,
 	}
+	// If a close arrived first (cross-jsonl, owner's file not yet scanned),
+	// state already holds a closed placeholder for this id. Hydrate the
+	// missing fields without resurrecting it to open — the close wins.
+	if existing, ok := state[id]; ok && existing.Status == "closed" {
+		existing.Statement = c.Statement
+		existing.OwnerSessionID = c.OwnerSessionID
+		if existing.CreatedAt.IsZero() {
+			existing.CreatedAt = c.CreatedAt
+		}
+		state[id] = existing
+		return
+	}
 	state[id] = c
 }
 

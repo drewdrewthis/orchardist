@@ -249,6 +249,45 @@ func TestFoldV08_CrossJsonlClose(t *testing.T) {
 	}
 }
 
+// TestFoldV08_CloseBeforeOpenInScanOrder verifies the close-before-open scan
+// order: when the non-owner's jsonl (with the close event) is scanned BEFORE
+// the owner's jsonl (with the open event), the contract still ends up CLOSED.
+// Reviewer #9: without the placeholder-hydration guard the open would
+// resurrect the contract back to OPEN.
+func TestFoldV08_CloseBeforeOpenInScanOrder(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	t1 := mustParse(t, "2026-05-21T11:00:00Z")
+
+	ownerSessionID := "S-OWNER-SCAN-001"
+	otherSessionID := "S-OTHER-SCAN-001"
+	contractID := "C-2026-05-21-CCCC0099"
+
+	recordsB := []SessionRecord{
+		mustDecodeSessionRecord(t, closeContractLine(contractID, "abandoned", otherSessionID, ownerSessionID, t1)),
+	}
+	recordsA := []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(contractID, "scan-order contract", ownerSessionID, t0)),
+	}
+
+	global := make(map[ContractID]Contract)
+	ApplySessionRecords(global, recordsB, otherSessionID) // close FIRST
+	ApplySessionRecords(global, recordsA, ownerSessionID) // open SECOND
+
+	c, ok := global[ContractID(contractID)]
+	if !ok {
+		t.Fatalf("contract %s missing from state", contractID)
+	}
+	if c.Status != "closed" {
+		t.Errorf("Status = %q, want closed — open must not resurrect a closed placeholder", c.Status)
+	}
+	if c.Statement != "scan-order contract" {
+		t.Errorf("Statement = %q, want hydrated from the open event", c.Statement)
+	}
+	if c.OwnerSessionID != ownerSessionID {
+		t.Errorf("OwnerSessionID = %q, want %q (hydrated from open)", c.OwnerSessionID, ownerSessionID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // L1.7 — ownerSessionId filter
 // ---------------------------------------------------------------------------
