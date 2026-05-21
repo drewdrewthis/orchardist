@@ -47,8 +47,9 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
-# Locate the MCP binary.
-if [[ -n "${CONTRACTS_MCP_BIN:-}" ]]; then
+# Locate the MCP binary. Require an executable file in both branches —
+# without the -x check we'd silently exec a stale or non-executable path.
+if [[ -n "${CONTRACTS_MCP_BIN:-}" ]] && [[ -x "${CONTRACTS_MCP_BIN}" ]]; then
     MCP_BIN="${CONTRACTS_MCP_BIN}"
 elif [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && [[ -x "${CLAUDE_PLUGIN_ROOT}/bin/contracts-mcp" ]]; then
     MCP_BIN="${CLAUDE_PLUGIN_ROOT}/bin/contracts-mcp"
@@ -66,10 +67,20 @@ INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 NOTIFY='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 CALL="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"open_contract\",\"arguments\":{\"deliverable\":\"${DELIVERABLE}\"}}}"
 
-# Pipe the three messages to the MCP binary. We discard stdout; all
-# observable side effects are the tool_use event written to the session
-# jsonl by the MCP server's handleOpenContract. Pass session_id + cwd via
-# env so the MCP server can resolve the target jsonl regardless of the
-# parent shell's env.
-printf '%s\n%s\n%s\n' "${INIT}" "${NOTIFY}" "${CALL}" \
-    | env CLAUDE_SESSION_ID="$SESSION_ID" PWD="$HOOK_CWD" HOME="$HOME" "${MCP_BIN}" > /dev/null 2>&1 || true
+# Pipe the three messages to the MCP binary. We swallow stdout (the
+# observable side effect is the tool_use event written to the session
+# jsonl by handleOpenContract) but capture stderr so a failure is visible
+# on the host's hook log instead of disappearing into /dev/null. Pass
+# session_id + cwd via env so the MCP server can resolve the target jsonl
+# regardless of the parent shell's env.
+mcp_stderr=$(
+    printf '%s\n%s\n%s\n' "${INIT}" "${NOTIFY}" "${CALL}" \
+        | env CLAUDE_SESSION_ID="$SESSION_ID" PWD="$HOOK_CWD" HOME="$HOME" "${MCP_BIN}" 2>&1 >/dev/null
+)
+mcp_rc=$?
+if [ "$mcp_rc" -ne 0 ]; then
+    echo "conversation-contracts plugin: MCP open_contract failed (exit ${mcp_rc}): ${mcp_stderr}" >&2
+    # Still exit 0 so the user's prompt is not blocked by a contract
+    # housekeeping failure — visibility, not blocking.
+fi
+exit 0
