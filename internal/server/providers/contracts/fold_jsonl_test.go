@@ -109,8 +109,8 @@ func openContractLine(contractID, deliverable, sessionID string, at time.Time) s
 // jsonl but references the owning session.
 func closeContractLine(contractID, closedReason, sessionID, aboutSessionID string, at time.Time) string {
 	input := map[string]any{
-		"id":          contractID,
-		"closedAt":    at.UTC().Format(time.RFC3339Nano),
+		"id":           contractID,
+		"closedAt":     at.UTC().Format(time.RFC3339Nano),
 		"closedReason": closedReason,
 	}
 	if aboutSessionID != "" {

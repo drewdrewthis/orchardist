@@ -92,8 +92,8 @@ func TestFoldExit_ExitSynthesizesVirtualClose(t *testing.T) {
 // all three exit verbs. Each verb must produce Status=closed, ClosedReason=delivered.
 func TestFoldExit_QuitAndByeSynthesizeVirtualClose(t *testing.T) {
 	type tc struct {
-		verb      string
-		sessionID string
+		verb       string
+		sessionID  string
 		contractID string
 	}
 	cases := []tc{

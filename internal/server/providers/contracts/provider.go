@@ -32,10 +32,10 @@ type Provider struct {
 	logger    *slog.Logger
 	clock     func() time.Time
 
-	mu         sync.RWMutex
-	foldState  *FoldState
-	loaded     bool
-	last       time.Time
+	mu        sync.RWMutex
+	foldState *FoldState
+	loaded    bool
+	last      time.Time
 
 	// offsets is the per-file byte position the Provider has folded up
 	// to. Keyed by absolute file path. Tail reads resume from these offsets.

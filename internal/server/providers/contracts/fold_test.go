@@ -165,8 +165,8 @@ func TestFoldV08_ContractHasNoRemovedFields(t *testing.T) {
 // TestFoldV08_MapStatus_KnownValues checks both expected status values.
 func TestFoldV08_MapStatus_KnownValues(t *testing.T) {
 	cases := []struct {
-		input    string
-		wantGQL  string
+		input   string
+		wantGQL string
 	}{
 		{"open", "SIGNED"},
 		{"closed", "CLOSED"},
