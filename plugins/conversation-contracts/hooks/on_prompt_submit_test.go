@@ -39,7 +39,7 @@ func buildMCPBinary(t *testing.T) string {
 	}
 
 	binDir := t.TempDir()
-	binPath := filepath.Join(binDir, "conversation-contracts-mcp")
+	binPath := filepath.Join(binDir, "contracts-mcp")
 
 	cmd := exec.Command("go", "build", "-o", binPath, ".")
 	cmd.Dir = mcpDir

@@ -25,11 +25,12 @@ DELIVERABLE="user agrees conversation has come to a close and there are no loose
 # Locate the MCP binary.
 if [[ -n "${CONTRACTS_MCP_BIN:-}" ]]; then
     MCP_BIN="${CONTRACTS_MCP_BIN}"
-elif [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && [[ -x "${CLAUDE_PLUGIN_ROOT}/mcp/conversation-contracts-mcp" ]]; then
-    MCP_BIN="${CLAUDE_PLUGIN_ROOT}/mcp/conversation-contracts-mcp"
+elif [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && [[ -x "${CLAUDE_PLUGIN_ROOT}/bin/contracts-mcp" ]]; then
+    MCP_BIN="${CLAUDE_PLUGIN_ROOT}/bin/contracts-mcp"
 else
-    # Binary not found. Exit silently so a missing build does not surface
-    # a noisy error on every prompt.
+    # Binary not found. Warn on stderr so the developer knows; still exit 0
+    # so the missing build does not block the user's prompt.
+    echo "conversation-contracts plugin: MCP binary not found at ${CLAUDE_PLUGIN_ROOT:-<CLAUDE_PLUGIN_ROOT unset>}/bin/contracts-mcp; conversation contract was NOT opened. Build with: make plugins-contracts-mcp" >&2
     exit 0
 fi
 

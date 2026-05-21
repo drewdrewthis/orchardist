@@ -162,8 +162,5 @@ if [ -z "$sections" ]; then
   exit 0
 fi
 
-# Trim trailing newline from sections for cleaner JSON.
-msg=$(printf '%s' "$sections" | sed 's/\\n$//')
-
 jq -n --arg msg "$(printf '%b' "$sections")" \
   '{"continue": true, "systemMessage": $msg}'
