@@ -236,6 +236,9 @@ func TestContractFilter_NoParentContractId(t *testing.T) {
 	if containsStr(fields, "parentContractId") {
 		t.Errorf("ContractFilter still has parentContractId (should be removed in v0.8)")
 	}
+	if !containsStr(fields, "closedReasons") {
+		t.Errorf("ContractFilter missing closedReasons (should be present in v0.8); got: %v", fields)
+	}
 }
 
 // min returns the smaller of a and b. Inlined to avoid importing math.
