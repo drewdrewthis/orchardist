@@ -276,14 +276,18 @@ func handleOpenContract(args openContractArgs, jsonlPath string, now time.Time) 
 	if err != nil {
 		return "", fmt.Errorf("open jsonl %s: %w", jsonlPath, err)
 	}
-	defer f.Close()
 
 	line, err := json.Marshal(record)
 	if err != nil {
+		_ = f.Close()
 		return "", fmt.Errorf("marshal record: %w", err)
 	}
 	if _, err := fmt.Fprintf(f, "%s\n", line); err != nil {
+		_ = f.Close()
 		return "", fmt.Errorf("write jsonl: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close jsonl %s: %w", jsonlPath, err)
 	}
 
 	return contractID, nil
@@ -354,14 +358,18 @@ func handleCloseContract(args closeContractArgs, jsonlPath string, now time.Time
 	if err != nil {
 		return fmt.Errorf("open jsonl %s: %w", jsonlPath, err)
 	}
-	defer f.Close()
 
 	line, err := json.Marshal(record)
 	if err != nil {
+		_ = f.Close()
 		return fmt.Errorf("marshal record: %w", err)
 	}
 	if _, err := fmt.Fprintf(f, "%s\n", line); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("write jsonl: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close jsonl %s: %w", jsonlPath, err)
 	}
 
 	return nil
