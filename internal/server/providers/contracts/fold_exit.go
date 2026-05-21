@@ -21,12 +21,14 @@ package contracts
 
 import "strings"
 
-// exitVerbs is the set of bare verbs that trigger a virtual conversation-
-// contract close when found inside a local_command content block.
-var exitVerbs = map[string]bool{
-	"exit": true,
-	"quit": true,
-	"bye":  true,
+// exitPatterns is the set of <command-name>…</command-name> needles that
+// identify an exit/quit/bye local_command record. Pre-built at package
+// init so isExitRecord does not allocate a fresh "<command-name>/…</…>"
+// string on every system record.
+var exitPatterns = []string{
+	"<command-name>/exit</command-name>",
+	"<command-name>/quit</command-name>",
+	"<command-name>/bye</command-name>",
 }
 
 // isExitRecord returns true when rec is a system record containing a
@@ -35,8 +37,8 @@ func isExitRecord(rec SessionRecord) bool {
 	if rec.Type != "system" || rec.Content == "" {
 		return false
 	}
-	for verb := range exitVerbs {
-		if strings.Contains(rec.Content, "<command-name>/"+verb+"</command-name>") {
+	for _, needle := range exitPatterns {
+		if strings.Contains(rec.Content, needle) {
 			return true
 		}
 	}
