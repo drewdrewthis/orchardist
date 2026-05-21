@@ -183,7 +183,15 @@ func (a *ProjectsAdapter) readSessionFile(path string, fromOffset int64) ([]Proj
 	for {
 		line, err := br.ReadBytes('\n')
 		consumed := int64(len(line))
-		if len(line) > 0 && line[len(line)-1] == '\n' {
+		// Accept the line in two cases:
+		//   1. It terminates with '\n' — a complete record.
+		//   2. We hit EOF with non-empty bytes — the writer flushed a
+		//      final record without a trailing newline. Without this
+		//      branch the last contract event in such a file would be
+		//      silently dropped.
+		hasNewline := len(line) > 0 && line[len(line)-1] == '\n'
+		atEOFWithData := errors.Is(err, io.EOF) && len(line) > 0
+		if hasNewline || atEOFWithData {
 			offset += consumed
 			// Trim whitespace on the []byte directly to avoid the
 			// []byte→string→[]byte round-trip on every line.
