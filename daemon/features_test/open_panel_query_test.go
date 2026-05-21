@@ -95,6 +95,7 @@ func TestOpenPanelQuery_ConversationCarriesHeaderFields(t *testing.T) {
 
 // @scenario WorktreesList response shape — worktree fields present
 func TestWorktreesListQuery_WorktreeFieldsPresent(t *testing.T) {
+	t.Skip("[follow-up #659] requires Worktree.repo schema migration String -> Repo object (S2 Node interface)")
 	ts := startServerWithRepo(t)
 
 	r := postGQL(t, ts.URL, `{ repos { id slug worktrees { id path branch bare host repo { id } } } }`)

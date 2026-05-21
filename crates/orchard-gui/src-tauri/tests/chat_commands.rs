@@ -66,7 +66,10 @@ fn chat_room_with_no_members_returns_empty() {
 #[test]
 fn chat_fanout_to_unknown_recipient_reports_failure_not_panic() {
     with_chat_dir(|| {
-        let recipients = vec!["@nonexistent-session-12345".to_string()];
+        let recipients = vec![chat_core::Recipient::new(
+            "@nonexistent-session-12345",
+            "@nonexistent-session-12345",
+        )];
         let outcomes = tmux_fanout(&recipients, "@sender", "test text");
         assert_eq!(outcomes.len(), 1);
         // Either Failed (no such session) or ByteOnly (verify timed out).
