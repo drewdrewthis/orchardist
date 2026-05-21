@@ -134,17 +134,16 @@ func scanRecapInHead(path string) (*string, error) {
 				prevUserIsRecap = isRecap
 				continue
 			}
+			// Non-user record: pair with the preceding user record if it
+			// was a /recap invocation, then reset the pairing intent
+			// (we only pair a system record with the IMMEDIATELY
+			// preceding user record).
 			if prevUserIsRecap {
 				if recap := parseSystemLocalStdout(line); recap != nil {
 					latest = recap
 				}
 			}
-			// Any non-user record resets the pairing intent. We only
-			// pair a system record with the user record IMMEDIATELY
-			// preceding it.
-			if !user {
-				prevUserIsRecap = false
-			}
+			prevUserIsRecap = false
 		}
 		if err == io.EOF {
 			break

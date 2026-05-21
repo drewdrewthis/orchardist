@@ -26,7 +26,8 @@ func conversationsCmd() *cobra.Command {
 		Long: "Issue a Conversation GraphQL query against the running orchard daemon and\n" +
 			"print the JSON response. Reports per-conversation metadata (sessionUuid, cwd,\n" +
 			"firstSeenAt, lastSeenAt, messageCount). Use --open to include the heartbeat\n" +
-			"boolean and --recap to include the (currently null) plugin-populated summary.",
+			"boolean and --recap to include the daemon-derived recap text (extracted from\n" +
+			"the latest `/recap` slash-command invocation; null if no `/recap` was run).",
 		Example: "  orchard query conversations\n" +
 			"  orchard query conversations --open\n" +
 			"  orchard query conversations --open --recap",
@@ -35,7 +36,7 @@ func conversationsCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&showOpen, "open", false, "include the `open` heartbeat boolean")
-	c.Flags().BoolVar(&showRecap, "recap", false, "include the `recap` field (always null in v1)")
+	c.Flags().BoolVar(&showRecap, "recap", false, "include the `recap` field (daemon-derived from the latest `/recap` invocation)")
 	return c
 }
 
