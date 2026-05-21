@@ -186,10 +186,11 @@ func TestConversation_E2E_EmptyRoot(t *testing.T) {
 	}
 }
 
-// TestConversation_RecapAlwaysNull is the v1 contract assertion — the
-// resolver must not surface recap content; the conversations plugin
-// will.
-func TestConversation_RecapAlwaysNull(t *testing.T) {
+// TestConversation_RecapNilWhenNoRecapInvocation asserts that recap
+// is nil when the session has not invoked /recap. The contract changed
+// from "always null" (plugin-populated) to "daemon-derived from the
+// most recent /recap" — but the nil-on-absent case still holds.
+func TestConversation_RecapNilWhenNoRecapInvocation(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "tmp-fixture-project")
 	if err := os.Mkdir(projectDir, 0o755); err != nil {
@@ -212,7 +213,7 @@ func TestConversation_RecapAlwaysNull(t *testing.T) {
 		t.Fatalf("got %d conversations, want 1", len(resp.Data.Conversations))
 	}
 	if resp.Data.Conversations[0].Recap != nil {
-		t.Errorf("recap = %v, want nil per v1 contract", resp.Data.Conversations[0].Recap)
+		t.Errorf("recap = %v, want nil (no /recap in fixture)", resp.Data.Conversations[0].Recap)
 	}
 }
 

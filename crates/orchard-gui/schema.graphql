@@ -258,7 +258,7 @@ type Conversation implements Node {
   """
   open: Boolean!
 
-  """Plugin-populated short summary. Always null in v1."""
+  """Daemon-derived recap from the most recent `/recap` slash-command invocation in this session. Null when no `/recap` has been invoked."""
   recap: String
 
   """

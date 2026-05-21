@@ -12,7 +12,8 @@ import (
 )
 
 // jsonlMeta is the cheap-to-compute summary of a JSONL transcript —
-// enough to populate every Conversation field except recap.
+// enough to populate every Conversation field, including the recap
+// extracted from the latest `/recap` slash-command invocation.
 //
 // All three "interesting" timestamps (and Cwd, when available) are
 // derived from the first and last record only. We never keep the
@@ -26,6 +27,7 @@ type jsonlMeta struct {
 	ModTime      time.Time
 	CustomTitle  *string
 	AgentName    *string
+	Recap        *string
 }
 
 // jsonlRecord is the parsed shape of a single JSONL line. Fields are
@@ -114,6 +116,12 @@ func readJSONLMeta(path string) (jsonlMeta, error) {
 	}
 	meta.CustomTitle = customTitle
 	meta.AgentName = agentName
+
+	recap, err := readLatestRecap(path, info.Size())
+	if err != nil {
+		return jsonlMeta{}, fmt.Errorf("read latest recap of %s: %w", path, err)
+	}
+	meta.Recap = recap
 
 	// If neither the first nor last record carried cwd, walk the tail
 	// backwards to find the most recent record that does. Many sessions

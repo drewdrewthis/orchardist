@@ -264,12 +264,12 @@ func (p *Provider) IsOpen(c Conversation) bool {
 }
 
 // ToGraphQL maps an in-memory Conversation onto the wire-level
-// graphql.Conversation type the resolver returns. `recap` is always
-// nil in v1 — a TODO placeholder is returned so the JSON shape is
-// stable for clients now and the conversations plugin can populate it
-// later without an API change.
+// graphql.Conversation type the resolver returns.
 //
-// TODO(plugin): populated by conversations plugin when it ships.
+// `recap` is derived directly from the JSONL: the daemon scans for the
+// latest `/recap` slash-command invocation and surfaces the
+// `<local-command-stdout>` text it produced. No plugin involvement —
+// the daemon owns the fold (see recap.go).
 func (p *Provider) ToGraphQL(c Conversation) *graphql.Conversation {
 	return &graphql.Conversation{
 		ID:           c.ID.GraphQLID(),
@@ -279,7 +279,7 @@ func (p *Provider) ToGraphQL(c Conversation) *graphql.Conversation {
 		LastSeenAt:   c.LastSeenAt,
 		MessageCount: c.MessageCount,
 		Open:         p.IsOpen(c),
-		Recap:        nil,
+		Recap:        c.Recap,
 		JsonlPath:    c.Path,
 		CustomTitle:  c.CustomTitle,
 		AgentName:    c.AgentName,

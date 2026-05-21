@@ -1,33 +1,45 @@
 # `daemon/contracts/`
 
-Agent delivery commitments parsed from the Contracts-plugin records.
+Agent delivery commitments parsed from the claude-contracts and
+conversation-contracts plugins' tool_use events.
 
 ## Owns
 
-- **Types:** `Contract`, `ContractStatus`, `ContractQuestion`
+- **Types:** `Contract`, `ContractStatus`, `ContractReason`
 - **Inputs:** `ContractFilter`
 - **Queries:** `contract`, `contracts`
 - **Schema partial:** [`schema.graphql`](./schema.graphql) per [S15a](../../RULES.md)
 
-## Why this exists
+## v0.8 model
 
-Per devils-advocate review of PR #618: Contracts has its own state machine (9 statuses: OPEN → DELIVERED_PENDING_VALIDATION → ... → SATISFIED | CANCELLED | JUDGE_REJECTED_TERMINAL). That state machine is a domain concern in its own right — bundling it inside `claude-jsonls/` (whose mission is "tail jsonls") was the layer-by-file-format thinking [R1](../../RULES.md) forbids.
+Two statuses (`SIGNED` → `CLOSED`) and a close `ContractReason`
+(`DELIVERED` | `ABANDONED`). The earlier 9-status machine (v0.7) is
+removed — the daemon never wrote nor read it in production, so there
+is no migration path to preserve.
 
 ## How contracts read from jsonls
 
-Contract records ride on the same JSONL stream as Conversation records (the Contracts plugin appends to `~/.claude/projects/<...>.jsonl`). This domain CONSUMES [`claude-jsonls`](../claude-jsonls/)'s service to read those records — it does not parse jsonl files directly.
+Contract records ride on the same JSONL stream as Conversation records
+(the plugins append `tool_use` events for `open_contract` /
+`close_contract` to `~/.claude/projects/<...>.jsonl`). This domain
+CONSUMES [`claude-jsonls`](../claude-jsonls/)'s service to read those
+records — it does not parse jsonl files directly.
 
-The state-machine fold (event records → current `ContractStatus`) lives in this domain's `service.go`.
+The state-machine fold (event records → current `ContractStatus` +
+`ContractReason`) will live in this domain's `service.go` once the
+daemon migration brings the live implementation here. Until then, the
+live implementation is at:
+
+- `internal/server/providers/contracts/`
+
+The schema partial in this directory IS the authoritative contract for
+the future migration — Go code that lives here later must match it.
 
 ## Cross-domain inputs (this domain CONSUMES)
 
 | Input | Owning domain |
 |---|---|
-| jsonl records typed as `contracts.*` events | [`claude-jsonls`](../claude-jsonls/) |
-
-## Current source location (pre-refactor)
-
-- `internal/server/providers/contracts/`
+| jsonl records typed as `open_contract` / `close_contract` tool_use | [`claude-jsonls`](../claude-jsonls/) |
 
 ## Constitution citations
 
