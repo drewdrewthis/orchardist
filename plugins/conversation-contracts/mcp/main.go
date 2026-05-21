@@ -478,6 +478,10 @@ func handleRequest(req rpcRequest) rpcResponse {
 
 func main() {
 	scanner := bufio.NewScanner(os.Stdin)
+	// Default Scanner token cap is 64 KiB; raise to 2 MiB so a large
+	// tool_use payload doesn't trip bufio.ErrTooLong and silently terminate
+	// the main loop.
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	encoder := json.NewEncoder(os.Stdout)
 
 	for scanner.Scan() {
@@ -502,5 +506,14 @@ func main() {
 			continue
 		}
 		_ = encoder.Encode(resp)
+	}
+	// Surface scanner errors (bufio.ErrTooLong, stdin I/O failures) as a
+	// JSON-RPC error so a host monitoring the binary sees the failure
+	// instead of a silent exit.
+	if err := scanner.Err(); err != nil {
+		_ = encoder.Encode(rpcResponse{
+			Jsonrpc: "2.0",
+			Error:   &rpcError{Code: -32000, Message: "stdin read error: " + err.Error()},
+		})
 	}
 }
