@@ -4,7 +4,7 @@ Close the open conversation contract for the current session.
 
 ## Flow
 
-1. Call `Query.contracts(filter:{ownerSessionId:$CLAUDE_SESSION_ID, statuses:[OPEN]})` to list all open contracts.
+1. Call `Query.contracts(filter:{ownerSessionId:$CLAUDE_SESSION_ID, statuses:[SIGNED]})` to list all open (SIGNED) contracts.
 
 2. Identify the conversation contract (statement == "user agrees conversation has come to a close and there are no loose ends").
 
@@ -31,7 +31,7 @@ Close the open conversation contract for the current session.
 |---------|--------|
 | User confirms (empty inventory) | `close_contract` delivered, conversation contract CLOSED |
 | User confirms (non-empty inventory) | `close_contract` delivered with inventory note, conversation contract CLOSED |
-| User names open items | `open_contract` per item, conversation contract stays OPEN |
+| User names open items | `open_contract` per item, conversation contract stays open |
 | `/exit`, `/quit`, `/bye` | Fold auto-synthesises `close_contract` delivered (no write needed) |
 | Direct `close_contract` MCP call | Contract closes immediately, no inventory prompt |
 
