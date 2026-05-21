@@ -1,0 +1,34 @@
+# Root schema — shared interface, scalars, and the empty root operation
+# types that per-domain partials extend.
+#
+# Per RULES.md S15: this file declares ONLY what every domain shares.
+# Domain-owned types live in `daemon/<name>/schema.graphql`.
+
+"""
+A node in the orchard graph. Every node has a globally-unique id so
+clients can fetch it via Query.node(id) regardless of which concrete
+type it is.
+"""
+interface Node {
+  "Globally-unique id (e.g. \"Host:<machineId>\")."
+  id: ID!
+}
+
+"RFC 3339 timestamp string. Mapped to Go's time.Time."
+scalar Time
+
+"""
+Opaque JSON value — any GraphQL-compatible type, marshalled verbatim.
+Used by gh-passthrough to forward GitHub GraphQL responses without
+imposing an orchard-side schema on them. Callers deserialise against
+their knowledge of the foreign schema.
+"""
+scalar JSON
+
+"""
+Empty root types — every domain extends these via `extend type Query`,
+`extend type Mutation`, `extend type Subscription` in its partial.
+"""
+type Query
+type Mutation
+type Subscription

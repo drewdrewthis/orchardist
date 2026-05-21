@@ -1,0 +1,97 @@
+# host-identity — machine identity + resource load.
+#
+# Owns: Host, ResourceLoad.
+# Owns: Query.{host, hosts, peers}.
+# Note: Host.processes lives in `ps` (extend type Host).
+#       Host.hostServices lives in `host-services` (extend type Host).
+
+extend type Query {
+  "The local machine running this daemon. Identity is one-shot at boot; resource load refreshes every 5s."
+  host: Host!
+
+  "All hosts known to this daemon. v1: only the local host. Federation adds remote peers."
+  hosts: [Host!]!
+
+  """
+  All peer hosts known to this daemon, flattened across `hosts[*].peers`.
+
+  Sugar for the common case where callers want every peer without
+  traversing the (currently single-element) `hosts` list. Equivalent to
+  `{ hosts { peers { ... } } }` with dedup by `id`. The local host is not
+  itself a peer — it is `Query.host`.
+  """
+  peers: [Host!]!
+}
+
+"""
+A machine that orchard reflects. Identity is the OS-issued machine id
+(/etc/machine-id on Linux, IOPlatformUUID on macOS). Resource load
+samples on a 5s TTL.
+"""
+type Host implements Node {
+  "Stable orchard id — \"Host:<machineId>\"."
+  id: ID!
+
+  "OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID."
+  machineId: String!
+
+  "Hostname as reported by the OS at boot."
+  hostname: String!
+
+  "Operating system family — 'darwin', 'linux', etc."
+  os: String!
+
+  "Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable."
+  kernel: String
+
+  "Reachable network address. v1: null for the local host; federation populates for peers."
+  address: String
+
+  "True when the daemon last heard from this host. v1: always true for local host."
+  reachable: Boolean!
+
+  "RFC 3339 timestamp of the last contact. Empty string when the daemon has never reached this host; pair with `reachable=false` to detect 'never seen live'."
+  lastSeenAt: String!
+
+  "Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands."
+  resourceLoad: ResourceLoad
+
+  "Peer hosts this daemon federates with. v1: always empty; federation populates."
+  peers: [Host!]!
+
+  """
+  Daemon binary version running on this host. Set at build time via
+  -ldflags -X main.version=<semver>; `dev` for plain `go build`.
+  Non-null on the local host (always at least "dev"). Null for a peer
+  host whose probe has not yet succeeded — "unknown" is represented as
+  null rather than an error so dashboards can render partial information.
+  """
+  version: String
+
+  "Free-form description of what this host is for. Set via the daemon config."
+  purpose: String
+}
+
+"""
+A snapshot of a host's resource utilisation. Percentages are 0..100.
+Load averages are the kernel-reported 1/5/15-minute moving averages.
+"""
+type ResourceLoad {
+  "Aggregate CPU usage 0..100."
+  cpuPercent: Float!
+
+  "Used memory as a percentage of total physical memory, 0..100."
+  memPercent: Float!
+
+  "Used disk on the root filesystem as a percentage, 0..100."
+  diskPercent: Float!
+
+  "1-minute load average."
+  loadAvg1m: Float!
+
+  "5-minute load average."
+  loadAvg5m: Float!
+
+  "15-minute load average."
+  loadAvg15m: Float!
+}

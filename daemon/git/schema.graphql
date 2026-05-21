@@ -1,0 +1,143 @@
+# git — local git repos: worktrees, branches, refs, status, ahead/behind.
+#
+# Owns: Repo, Worktree.
+# Owns: Query.repos, Subscription.worktreeChanged.
+# Mutations (to be added in #613): worktreeCreate, worktreeRemove, worktreeMove,
+#                                  fetch, pull, push. All exec `scripts/<op>`.
+#
+# Cross-domain fields on Worktree (resolved here, types owned elsewhere):
+#   processes      → ps
+#   tmuxPanes      → tmux
+#   tmuxSession    → tmux
+#   claudeInstances → claude-jsonls
+#   pr             → gh
+#   issue          → gh
+
+extend type Query {
+  "All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`."
+  repos: [Repo!]!
+
+  """
+  Pass-through (S16): run an arbitrary git command in the named worktree
+  and return its stdout, stderr, and exit code as opaque JSON. Used when
+  the typed core does not yet cover a call shape (e.g. `git blame`,
+  `git stash list`, `git log --pretty=...`).
+
+  Read-only by design — exposed as a Query field, not a Mutation. Writes
+  (commit, push, pull, fetch, worktree create/rm) go through typed
+  mutations that each exec `scripts/git-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  git(worktreeId: ID!, args: [String!]!): JSON
+}
+
+extend type Subscription {
+  """
+  Per-repo worktree firehose (#469 F7). Emits the repo's full
+  worktree list whenever the git provider invalidates any worktree
+  belonging to the named repo. The argument is the Repo id.
+  """
+  worktreeChanged(repo: ID!): [Worktree!]!
+}
+
+"A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Repo implements Node {
+  "Stable identifier derived from `slug`. Survives re-registration."
+  id: ID!
+
+  "GitHub-style `owner/repo` slug. The repo's identity."
+  slug: String!
+
+  "Absolute filesystem path to the repo's working tree."
+  path: String!
+
+  "Worktrees discovered for this repo — the main checkout plus everything under `.git/worktrees/`."
+  worktrees: [Worktree!]!
+}
+
+"A git worktree — either the project's main checkout or one created with `git worktree add`."
+type Worktree implements Node {
+  "Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`."
+  id: ID!
+
+  "Absolute filesystem path to the worktree."
+  path: String!
+
+  "Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees."
+  branch: String!
+
+  "Resolved 40-character SHA the worktree's HEAD points at. Empty string when HEAD cannot be resolved (e.g. an unborn branch)."
+  head: String!
+
+  "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
+  bare: Boolean!
+
+  "Hostname this worktree was discovered on. v1: always 'local'. Federation populates per-peer."
+  host: String!
+
+  "owner/repo slug derived from origin remote. Null when origin is not a GitHub URL."
+  repo: String
+
+  """
+  PR whose headRef matches this worktree's branch.
+
+  Selection precedence (#489): an OPEN PR is returned when one exists;
+  otherwise the most-recent CLOSED/MERGED PR with the matching headRef is
+  returned so the TUI stale-fade UX can render the post-merge cleanup
+  affordance. The `state` field on the returned PullRequest disambiguates
+  between live and post-merge.
+
+  Null when no PR has ever existed for this branch in any state, when the
+  branch is detached, or when the branch is the project's default branch.
+  Cross-domain field; resolver here calls the `gh` service.
+  """
+  pr: PullRequest
+
+  "Issue linked from the worktree's branch (issue<N>/... convention). Cross-domain field; resolver here calls the `gh` service."
+  issue: Issue
+
+  "Processes whose cwd lies under `path`. Cross-domain field; resolver here calls the `ps` service."
+  processes: [Process!]!
+
+  """
+  Tmux panes whose foreground-process cwd equals `path` exactly OR has `path + '/'` as a prefix (#511).
+  Returns the matching pane list for every worktree, derived from a server-side join of pane.process.cwd
+  against the worktree path. Ordered deterministically by paneId ascending.
+  Cross-domain field; resolver here calls the `tmux` service.
+  """
+  tmuxPanes: [TmuxPane!]!
+
+  """
+  The most-recently-active tmux session among the panes returned by `tmuxPanes` (#511).
+  When two sessions tie on lastActivityAt, the session with the lexicographically-first name wins.
+  Cross-domain field; resolver here calls the `tmux` service.
+  """
+  tmuxSession: TmuxSession
+
+  """
+  Claude REPLs whose resolved process cwd lies under this worktree's `path`.
+  Server-side join over the claude-jsonls + ps domains. Ordered deterministically by `id` ascending.
+
+  Note: a ClaudeInstance is a *running REPL* identified by sessionUuid — distinct from
+  a TmuxSession (tmux's server grouping of windows/panes). A worktree can carry zero or
+  many of each. Cross-domain field; resolver here calls the `claude-jsonls` service.
+  """
+  claudeInstances: [ClaudeInstance!]!
+
+  """
+  Number of commits the worktree's branch is AHEAD of its upstream tracking
+  branch (#483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  ahead: Int
+
+  """
+  Number of commits the worktree's branch is BEHIND its upstream tracking
+  branch (#483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  behind: Int
+}

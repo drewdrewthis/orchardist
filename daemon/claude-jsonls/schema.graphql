@@ -1,0 +1,103 @@
+# claude-jsonls — raw record parsing of Claude Code session JSONLs.
+#
+# Owns: Conversation.
+# Owns: Query.{conversations, conversation}.
+# Owns: Subscription.conversationChanged.
+#
+# This domain is the lowest layer of the Claude stack: parse the JSONLs at
+# `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl` and surface them
+# as `Conversation` nodes.
+#
+# Higher-layer domains that consume claude-jsonls:
+#   - `claude-instance`: derives live REPL instances from JSONL tails +
+#     matching pane processes
+#   - `contracts`: parses the Contracts-plugin records that ride on the
+#     same JSONL stream
+
+extend type Query {
+  "Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt."
+  conversations: [Conversation!]!
+
+  "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
+  conversation(id: ID!): Conversation
+}
+
+extend type Subscription {
+  "Receive the freshly-loaded node value each time its provider's invalidation channel fires for that id."
+  nodeChanged(id: ID!): Node!
+
+  """
+  Tunnel a subscription to a remote peer. The daemon opens (or reuses) a
+  websocket to the named peer and re-emits node updates locally.
+  Returns the touched Node on each remote invalidation. Unknown peers
+  raise an error and close the stream.
+  """
+  peer(host: String!): Node
+
+  """
+  Push-on-change for one Claude Code conversation, keyed by sessionUuid.
+  Emits the freshly-loaded Conversation every time the claude-jsonls
+  provider's fsnotify watcher fires for the matching JSONL. Use this
+  to rerender a transcript view without polling. Returns null when the
+  watcher reports the file was removed.
+  """
+  conversationChanged(sessionUuid: String!): Conversation
+}
+
+"""
+A Claude Code conversation, backed by the JSONL transcript that the
+Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
+
+The provider derives every field from the JSONL on disk — there is no
+sidecar metadata. Heavy fields (full transcripts, message bodies)
+deliberately do not surface here (RULES.md S10, ADR-016); the v1 contract
+is metadata + a single live signal (`open`) and an optional plugin-populated
+`recap`. For transcript bodies see `GET /v1/conversations/<sessionUuid>/jsonl`.
+
+`open` is a heartbeat: true when the JSONL was written within the last
+N seconds (default 60s, see provider.HeartbeatThreshold).
+"""
+type Conversation implements Node {
+  "Stable orchard id — \"Conversation:<sessionUuid>\"."
+  id: ID!
+
+  "The session UUID embedded in the JSONL filename — globally unique across Claude Code."
+  sessionUuid: String!
+
+  "Working directory recorded in the JSONL when the session was created. Null when not yet observed."
+  cwd: String
+
+  "RFC 3339 timestamp of the first record in the JSONL."
+  firstSeenAt: Time
+
+  "RFC 3339 timestamp of the last record in the JSONL."
+  lastSeenAt: Time
+
+  "Number of newline-terminated JSON records in the JSONL."
+  messageCount: Int!
+
+  "Heartbeat: true when the JSONL was last written within the heartbeat threshold."
+  open: Boolean!
+
+  "Plugin-populated short summary. Always null in v1."
+  recap: String
+
+  """
+  Absolute path to the JSONL transcript on the daemon's host.
+  Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
+  """
+  jsonlPath: String!
+
+  "User-set title from the JSONL `type: \"custom-title\"` record. Null when the session has not yet recorded one."
+  customTitle: String
+
+  "Sub-agent name from the JSONL `type: \"agent-name\"` record. Null when the session has not yet recorded one."
+  agentName: String
+
+  """
+  Live REPL instances currently bound to this JSONL. Typically 0
+  (historical) or 1 (running). 2+ is the rare /resume case.
+  Cross-domain field; resolver here calls the `claude-instance` service.
+  """
+  liveInstances: [ClaudeInstance!]!
+}
