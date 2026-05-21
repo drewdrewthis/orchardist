@@ -254,68 +254,56 @@ func TestL2_5_ConversationContractExcludedFromInventory(t *testing.T) {
 
 // ---- L2.6 — No regex `?` heuristic ------------------------------------------
 
-// TestL2_6_NoQuestionMarkRegexInScript verifies that the on-stop.sh script
-// does not contain any regex pattern matching "?" against user message bodies.
-// This is a code-search test: we read the script source and assert the
-// character "?" does not appear in a regex or pattern context.
-func TestL2_6_NoQuestionMarkRegexInScript(t *testing.T) {
-	script := scriptPath(t)
-	raw, err := os.ReadFile(script)
+// TestL2_6_QuestionMarksInUserMessagesDoNotProduceInventory verifies the AC
+// behaviourally: when a session jsonl contains user messages with `?`
+// characters but no open child contracts and no open TodoWrite items, the
+// stop hook emits the empty-inventory response. The hook must derive
+// inventory only from hard signals — never from question-mark-laden user
+// message bodies.
+func TestL2_6_QuestionMarksInUserMessagesDoNotProduceInventory(t *testing.T) {
+	const sessionID = "S-STOP-L26"
+
+	tmpDir := t.TempDir()
+
+	// Session jsonl: user messages containing `?` characters and a TodoWrite
+	// with every item completed. No remaining hard signals.
+	lines := []string{
+		`{"type":"user","sessionId":"` + sessionID + `","timestamp":"2026-05-21T12:00:00Z","message":{"role":"user","content":"What about the cache invalidation? And the retry policy? Did we ever decide?"}}`,
+		`{"type":"user","sessionId":"` + sessionID + `","timestamp":"2026-05-21T12:01:00Z","message":{"role":"user","content":"Is this safe under concurrent writes?"}}`,
+		`{"type":"assistant","uuid":"u1","sessionId":"` + sessionID + `","timestamp":"2026-05-21T12:02:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"TodoWrite","input":{"todos":[{"content":"already done","status":"completed"}]}}]}}`,
+	}
+	writeSessionJsonl(t, tmpDir, sessionID, lines)
+
+	// Daemon returns no open child contracts.
+	srv := stubDaemon(t, func(_ string) interface{} {
+		return graphqlContractsResponse([]map[string]string{})
+	})
+
+	env := baseEnv(t, tmpDir, srv.URL)
+	out, _, err := runStopHook(t, env, hookPayload(sessionID))
 	if err != nil {
-		t.Fatalf("L2.6: read script %s: %v", script, err)
-	}
-	content := string(raw)
-
-	// Assert no grep/awk/sed/python regex matching literal "?" against
-	// message bodies.  The simplest proxy: the script must not use common
-	// regex operators containing "?" in a context that looks like user
-	// message scanning.  We look for the pattern indicators that would
-	// accompany such heuristics.
-	//
-	// Prohibited patterns:
-	//   grep.*\?              — grepping for question marks
-	//   match.*\?.*message    — regex match on message text
-	//   re\.search.*\?        — Python regex search for "?"
-	//   \[[\?\*]\]            — shell glob/regex with ?
-	//
-	// We keep this test simple and non-brittle: assert the script does NOT
-	// contain any of the specific strings that would indicate user-message
-	// body scanning via "?".
-
-	prohibitedPhrases := []string{
-		`grep.*".*\?.*"`,       // grep "...?..." style
-		`re.search.*\?`,        // python regex
-		`re.findall.*\?`,       // python regex
-		`awk.*\?`,              // awk regex
-		`user_messages`,        // scanning user message collection
-		`role.*user.*content`,  // extracting user message bodies
-		`"role":"user"`,        // parsing user messages by role
-		`.role == "user"`,      // jq user message filter
+		t.Logf("exit error: %v", err)
 	}
 
-	for _, phrase := range prohibitedPhrases {
-		// Use simple substring check; the prohibitedPhrases are literal strings.
-		if strings.Contains(content, phrase) {
-			t.Errorf("L2.6: script contains prohibited user-message scanning pattern %q", phrase)
-		}
+	// AC: empty inventory → response is `{"continue":true}` with NO systemMessage.
+	var resp struct {
+		Continue      bool   `json:"continue"`
+		SystemMessage string `json:"systemMessage"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("L2.6: hook output is not valid JSON: %v\noutput: %s", err, out)
+	}
+	if !resp.Continue {
+		t.Error("L2.6: hook must return continue:true")
+	}
+	if resp.SystemMessage != "" {
+		t.Errorf("L2.6: question marks must NOT produce inventory; got systemMessage = %q", resp.SystemMessage)
 	}
 
-	// Explicit check: the string '?"' or "?'" should not appear in a regex
-	// context (i.e., not just in jq's optional operator .foo? which is allowed).
-	// The jq optional .foo? is legitimate; what's prohibited is grepping/matching
-	// literal "?" against message text.
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Skip comments.
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		// Flag grep commands that look for "?" in message text.
-		if strings.Contains(trimmed, "grep") && strings.Contains(trimmed, "?") &&
-			(strings.Contains(trimmed, "message") || strings.Contains(trimmed, "user") || strings.Contains(trimmed, "content")) {
-			t.Errorf("L2.6: line %d looks like grep-based question-mark heuristic: %q", i+1, trimmed)
-		}
+	// Defensive: the literal "unanswered" must never appear in output. The
+	// hook should not even mention the concept since there's no `?` heuristic.
+	if strings.Contains(strings.ToLower(out), "unanswered") {
+		t.Errorf("L2.6: output contains 'unanswered' — question-mark heuristic leaked into inventory: %s", out)
 	}
 }
 
