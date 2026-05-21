@@ -74,13 +74,13 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     When the daemon builds the ContractFold
     Then each unique contract id resolves to exactly one Contract node
     And close events are matched to open events by contract id regardless of source jsonl
-    And Query.contracts(filter:{statuses:[OPEN]}) returns the set of contracts with no matching close event
+    And Query.contracts(filter:{statuses:[SIGNED]}) returns the set of contracts with no matching close event
 
   @integration
   Scenario: ContractFold filters by ownerSessionId
     Given session "S-FOLD-001" has two open contracts and one closed contract
     And session "S-FOLD-002" has one open contract
-    When the client calls Query.contracts(filter:{ownerSessionId:"S-FOLD-001", statuses:[OPEN]})
+    When the client calls Query.contracts(filter:{ownerSessionId:"S-FOLD-001", statuses:[SIGNED]})
     Then exactly two contracts are returned
     And none of the contracts owned by "S-FOLD-002" appear in the response
 
@@ -137,7 +137,7 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     And an "open_contract" tool_use event is written into the session jsonl
     And the event has deliverable equal to the fixed conversation-contract deliverable
     And the event id matches "C-YYYY-MM-DD-XXXXXXXX" format
-    And Query.contracts(filter:{ownerSessionId:"S-FRESH-001", statuses:[OPEN]}) returns exactly one contract with the fixed deliverable
+    And Query.contracts(filter:{ownerSessionId:"S-FRESH-001", statuses:[SIGNED]}) returns exactly one contract with the fixed deliverable
 
   @integration
   Scenario: Subsequent user messages do not open additional conversation contracts (fold dedups)
@@ -145,7 +145,7 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     When the user submits a second, third, and fourth prompt
     Then the UserPromptSubmit hook fires on each prompt
     And the ContractFold dedupes per (ownerSessionId, deliverable) so subsequent opens are no-ops
-    And Query.contracts(filter:{ownerSessionId:"S-DEDUP-002", statuses:[OPEN]}) still returns exactly one conversation contract
+    And Query.contracts(filter:{ownerSessionId:"S-DEDUP-002", statuses:[SIGNED]}) still returns exactly one conversation contract
 
   @integration
   Scenario: Plugin does not write any state file to ${CLAUDE_PLUGIN_DATA}
@@ -165,7 +165,7 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     Then the existing universal block-stop hook hard-blocks the Stop
     And the new Stop hook contributes a systemMessage enumerating the inventory:
       | inventory item            | source                                                                   |
-      | open child contracts      | Query.contracts(filter:{ownerSessionId, statuses:[OPEN]}) minus self     |
+      | open child contracts      | Query.contracts(filter:{ownerSessionId, statuses:[SIGNED]}) minus self     |
       | open TodoWrite items      | system/stop_hook_summary records or harness TaskList                     |
     And the inventory message lists "C-CHILD-001" and "fix flaky test"
 
@@ -210,7 +210,7 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     When the user invokes the "/close-conversation" skill
     Then a "close_contract" tool_use event is written with reason "delivered"
     And the close-note contains the inventory summary at the moment of close
-    And Query.contracts(filter:{ownerSessionId:"S-CLOSE-001", statuses:[OPEN]}) returns zero contracts
+    And Query.contracts(filter:{ownerSessionId:"S-CLOSE-001", statuses:[SIGNED]}) returns zero contracts
 
   @integration
   Scenario: User names what is still open (contract stays open; named items become child contracts)
@@ -218,7 +218,7 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     When the user names two unresolved items at Stop instead of closing
     Then the conversation contract remains open
     And two new "open_contract" tool_use events are written as child contracts for the named items
-    And Query.contracts(filter:{ownerSessionId:"S-CLOSE-002", statuses:[OPEN]}) returns three contracts (conversation + two children)
+    And Query.contracts(filter:{ownerSessionId:"S-CLOSE-002", statuses:[SIGNED]}) returns three contracts (conversation + two children)
 
   @e2e
   Scenario: /exit auto-closes the conversation contract as delivered
