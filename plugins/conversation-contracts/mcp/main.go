@@ -165,21 +165,29 @@ var knownTools = []toolDef{
 
 // sessionJsonlPath resolves the absolute path to the calling session's jsonl.
 //
-// Path pattern: ~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl
-// Encoding: every '/' in the absolute cwd path becomes '-'.
+// Path pattern: <projectsRoot>/<encoded-cwd>/<session-uuid>.jsonl
+// Default root: ~/.claude/projects (overridable via CLAUDE_PROJECTS_DIR so the
+// provider and MCP writer stay in sync when tests or alternate installs move
+// the tree).
+// Encoding: every '/' and '.' in the absolute cwd path becomes '-'.
 //
 // The server reads:
-//   CLAUDE_SESSION_ID – the calling session UUID
-//   HOME              – the user home directory
-//   PWD               – the current working directory when Claude invoked the server
+//   CLAUDE_SESSION_ID    – the calling session UUID
+//   CLAUDE_PROJECTS_DIR  – optional projects-root override
+//   HOME                 – the user home directory (fallback when no override)
+//   PWD                  – the current working directory when Claude invoked the server
 func sessionJsonlPath() (string, error) {
 	sessionID := os.Getenv("CLAUDE_SESSION_ID")
 	if sessionID == "" {
 		return "", fmt.Errorf("CLAUDE_SESSION_ID env var is not set")
 	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		return "", fmt.Errorf("HOME env var is not set")
+	projectsRoot := os.Getenv("CLAUDE_PROJECTS_DIR")
+	if projectsRoot == "" {
+		home := os.Getenv("HOME")
+		if home == "" {
+			return "", fmt.Errorf("HOME env var is not set")
+		}
+		projectsRoot = filepath.Join(home, ".claude", "projects")
 	}
 	cwd := os.Getenv("PWD")
 	if cwd == "" {
@@ -190,7 +198,7 @@ func sessionJsonlPath() (string, error) {
 		}
 	}
 	encoded := encodeCwd(cwd)
-	return filepath.Join(home, ".claude", "projects", encoded, sessionID+".jsonl"), nil
+	return filepath.Join(projectsRoot, encoded, sessionID+".jsonl"), nil
 }
 
 // encodeCwd converts an absolute path to the encoded directory name Claude

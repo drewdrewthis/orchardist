@@ -47,11 +47,15 @@ _encode_cwd() {
 
 cwd="${PWD:-}"
 home="${HOME:-}"
-if [ -z "$cwd" ] || [ -z "$home" ]; then
+projects_root="${CLAUDE_PROJECTS_DIR:-}"
+if [ -z "$projects_root" ] && [ -n "$home" ]; then
+  projects_root="$home/.claude/projects"
+fi
+if [ -z "$cwd" ] || [ -z "$projects_root" ]; then
   session_jsonl=""
 else
   encoded=$(_encode_cwd "$cwd")
-  session_jsonl="$home/.claude/projects/$encoded/$session_id.jsonl"
+  session_jsonl="$projects_root/$encoded/$session_id.jsonl"
 fi
 
 # ---- query daemon for open child contracts ------------------------------------

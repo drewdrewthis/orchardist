@@ -408,3 +408,59 @@ func TestL2_8_DegradesToContractsWhenTodoUnavailable(t *testing.T) {
 		t.Errorf("L2.8: TodoWrite section should be absent when no todo data; got: %s", resp.SystemMessage)
 	}
 }
+
+// ---- CLAUDE_PROJECTS_DIR override ------------------------------------------
+
+// TestOnStop_HonorsCLAUDEProjectsDirOverride locks in compatibility with the
+// provider-side CLAUDE_PROJECTS_DIR override: when the env var is set, the
+// hook must read the session jsonl from <override>/<encoded-cwd>/<sid>.jsonl
+// rather than the default $HOME/.claude/projects/ tree.
+func TestOnStop_HonorsCLAUDEProjectsDirOverride(t *testing.T) {
+	const sessionID = "S-PROJECTS-DIR-OVR"
+	const todoText = "verify override path"
+
+	tmpDir := t.TempDir()
+	// Override projects root sits OUTSIDE the default HOME tree so the
+	// default path resolution would miss the jsonl entirely.
+	projectsRoot := filepath.Join(tmpDir, "custom", "projects")
+	cwd := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("mkdir cwd: %v", err)
+	}
+
+	// Layout: <projectsRoot>/<encoded-cwd>/<sid>.jsonl
+	encoded := strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
+	projectDir := filepath.Join(projectsRoot, encoded)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir projectDir: %v", err)
+	}
+	todoRecord := fmt.Sprintf(
+		`{"type":"assistant","uuid":"u1","timestamp":"2026-05-21T12:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"TodoWrite","input":{"todos":[{"content":%q,"status":"pending"}]}}]}}`,
+		todoText,
+	)
+	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
+	if err := os.WriteFile(jsonlPath, []byte(todoRecord+"\n"), 0o644); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	// Daemon returns no child contracts; the inventory must come from TodoWrite.
+	srv := stubDaemon(t, func(_ string) interface{} {
+		return graphqlContractsResponse(nil)
+	})
+
+	env := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + tmpDir,
+		"PWD=" + cwd,
+		"ORCHARD_DAEMON_URL=" + srv.URL,
+		"CLAUDE_PROJECTS_DIR=" + projectsRoot,
+	}
+	out, _, err := runStopHook(t, env, hookPayload(sessionID))
+	if err != nil {
+		t.Logf("stop hook exit: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(out, todoText) {
+		t.Errorf("expected hook output to surface TodoWrite item %q from override projects dir;\ngot: %s", todoText, out)
+	}
+}
