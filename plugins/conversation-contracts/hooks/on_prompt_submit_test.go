@@ -13,10 +13,12 @@ package hooks_test
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -118,6 +120,18 @@ func runHook(t *testing.T, env []string, cwd string) ([]byte, error) {
 	cmd := exec.Command("bash", script)
 	cmd.Env = env
 	cmd.Dir = cwd
+	return cmd.CombinedOutput()
+}
+
+// runHookWithPayload executes the hook with a JSON payload on stdin — the
+// shape real Claude Code passes. Setting cmd.Dir matters as above.
+func runHookWithPayload(t *testing.T, env []string, cwd, payload string) ([]byte, error) {
+	t.Helper()
+	script := hookScript(t)
+	cmd := exec.Command("bash", script)
+	cmd.Env = env
+	cmd.Dir = cwd
+	cmd.Stdin = strings.NewReader(payload)
 	return cmd.CombinedOutput()
 }
 
@@ -235,6 +249,51 @@ func TestOnPromptSubmit_NoStateWrittenToPluginData(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("want empty ${CLAUDE_PLUGIN_DATA}/conversation-contracts/; got files: %v", names)
+	}
+}
+
+// TestOnPromptSubmit_ReadsSessionIdFromStdinPayload asserts the production
+// path: real Claude Code does NOT set CLAUDE_SESSION_ID as an env var. It
+// passes a JSON payload on stdin with .session_id and .cwd. The hook must
+// parse those and forward them to the MCP server. Regression test for the
+// bug surfaced by /prove-it: without this path the hook silently exits 0
+// and no open_contract event is ever written.
+func TestOnPromptSubmit_ReadsSessionIdFromStdinPayload(t *testing.T) {
+	mcpBin := buildMCPBinary(t)
+
+	home := t.TempDir()
+	sessionID := "S-STDIN-PAYLOAD-001"
+	cwd := home
+
+	encodedCwd := encodeCwd(cwd)
+	projectDir := filepath.Join(home, ".claude", "projects", encodedCwd)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
+
+	// Critically: do NOT set CLAUDE_SESSION_ID in env. The hook must
+	// derive it from the stdin payload, matching real Claude Code behaviour.
+	env := []string{
+		"HOME=" + home,
+		"PWD=" + cwd,
+		"CONTRACTS_MCP_BIN=" + mcpBin,
+		"PATH=" + os.Getenv("PATH"),
+	}
+
+	payload := fmt.Sprintf(
+		`{"hook_event_name":"UserPromptSubmit","session_id":%q,"cwd":%q,"prompt":"first message"}`,
+		sessionID, cwd,
+	)
+
+	out, err := runHookWithPayload(t, env, cwd, payload)
+	if err != nil {
+		t.Fatalf("hook exited non-zero: %v\n%s", err, out)
+	}
+
+	recs := readJSONLToolUseEvents(t, jsonlPath, "open_contract")
+	if len(recs) != 1 {
+		t.Errorf("want exactly 1 open_contract tool_use event; got %d (out=%s)", len(recs), out)
 	}
 }
 
