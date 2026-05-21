@@ -67,20 +67,25 @@ INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 NOTIFY='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 CALL="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"open_contract\",\"arguments\":{\"deliverable\":\"${DELIVERABLE}\"}}}"
 
-# Pipe the three messages to the MCP binary. We swallow stdout (the
-# observable side effect is the tool_use event written to the session
-# jsonl by handleOpenContract) but capture stderr so a failure is visible
-# on the host's hook log instead of disappearing into /dev/null. Pass
-# session_id + cwd via env so the MCP server can resolve the target jsonl
-# regardless of the parent shell's env.
-mcp_stderr=$(
-    printf '%s\n%s\n%s\n' "${INIT}" "${NOTIFY}" "${CALL}" \
-        | env CLAUDE_SESSION_ID="$SESSION_ID" PWD="$HOOK_CWD" HOME="$HOME" "${MCP_BIN}" 2>&1 >/dev/null
-)
+# Pipe the three messages to the MCP binary. We capture stdout (so we can
+# detect JSON-RPC error responses that ship with exit code 0) and stderr
+# (process-level failures) separately. The observable side effect of a
+# successful open_contract is the tool_use event written to the session
+# jsonl by handleOpenContract. Pass session_id + cwd via env so the MCP
+# server can resolve the target jsonl regardless of the parent shell's env.
+tmp_out=$(mktemp)
+tmp_err=$(mktemp)
+trap 'rm -f "$tmp_out" "$tmp_err"' EXIT
+printf '%s\n%s\n%s\n' "${INIT}" "${NOTIFY}" "${CALL}" \
+    | env CLAUDE_SESSION_ID="$SESSION_ID" PWD="$HOOK_CWD" HOME="$HOME" "${MCP_BIN}" >"$tmp_out" 2>"$tmp_err"
 mcp_rc=$?
 if [ "$mcp_rc" -ne 0 ]; then
-    echo "conversation-contracts plugin: MCP open_contract failed (exit ${mcp_rc}): ${mcp_stderr}" >&2
+    echo "conversation-contracts plugin: MCP open_contract failed (exit ${mcp_rc}): $(cat "$tmp_err")" >&2
     # Still exit 0 so the user's prompt is not blocked by a contract
     # housekeeping failure — visibility, not blocking.
+elif command -v jq >/dev/null 2>&1 \
+    && jq -e 'select(.id==2 and .error != null)' <"$tmp_out" >/dev/null 2>&1; then
+    rpc_err=$(jq -r 'select(.id==2) | .error.message // "unknown rpc error"' <"$tmp_out" | tail -n1)
+    echo "conversation-contracts plugin: MCP open_contract returned JSON-RPC error: ${rpc_err}" >&2
 fi
 exit 0
