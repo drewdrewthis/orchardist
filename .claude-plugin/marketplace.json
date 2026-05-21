@@ -1,9 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "orchard",
-  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. The canonical home for the conversation-contracts plugin.",
+  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. Hosts conversation-contracts (auto-open + close on /exit) and claude-contracts (general append-only contract authoring via scripts/contracts/).",
   "owner": {
     "name": "drewdrewthis",
+    "email": "andrew@langwatch.ai",
     "url": "https://github.com/drewdrewthis"
   },
   "plugins": [
@@ -21,6 +22,21 @@
         "path": "plugins/conversation-contracts"
       },
       "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugins/conversation-contracts"
+    },
+    {
+      "name": "claude-contracts",
+      "description": "Track work commitments via /contracts:* skills and the contracts MCP server. Consumes scripts/contracts/. Three statuses (started | blocked | delivered) with append-only history.",
+      "author": {
+        "name": "drewdrewthis"
+      },
+      "category": "agent-orchestration",
+      "version": "0.8.0",
+      "source": {
+        "source": "github",
+        "url": ".",
+        "path": "plugins/contracts"
+      },
+      "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugins/contracts"
     }
   ]
 }
