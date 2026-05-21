@@ -3640,10 +3640,13 @@ enum ContractReason {
 Filter for ` + "`" + `Query.contracts` + "`" + `. All fields are optional.
 """
 input ContractFilter {
+  "Match contracts whose folded status is in this list."
   statuses: [ContractStatus!]
+  "Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts."
   closedReasons: [ContractReason!]
+  "Match contracts owned by this Claude session UUID."
   ownerSessionId: String
-  ownerAgentName: String
+  ownerAgentName: String @deprecated(reason: "v0.8 owner is a session id; agent name is no longer tracked.")
 }
 
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
