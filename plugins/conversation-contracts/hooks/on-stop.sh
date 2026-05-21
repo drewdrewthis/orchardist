@@ -94,46 +94,26 @@ _extract_open_todo_items() {
 
   # Find the most-recent TodoWrite tool_use event in the session jsonl.
   # We scan all lines, keep only the last TodoWrite content block.
-  python3 - "$jsonl_path" 2>/dev/null <<'PYEOF'
-import json, sys
-
-path = sys.argv[1]
-last_todos = None
-
-try:
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                r = json.loads(line)
-            except Exception:
-                continue
-            if r.get('type') != 'assistant':
-                continue
-            msg = r.get('message', {})
-            for c in msg.get('content', []):
-                if isinstance(c, dict) and c.get('type') == 'tool_use' and c.get('name') == 'TodoWrite':
-                    inp = c.get('input', {})
-                    todos = inp.get('todos', [])
-                    if isinstance(todos, list):
-                        last_todos = todos
-except Exception:
-    pass
-
-if not last_todos:
-    sys.exit(0)
-
-for item in last_todos:
-    if not isinstance(item, dict):
-        continue
-    status = item.get('status', '')
-    if status == 'completed':
-        continue
-    content = item.get('content', item.get('text', str(item)))
-    print('- ' + str(content))
-PYEOF
+  # jq -Rs slurps the file as a raw string, splits on newlines, parses each
+  # line as JSON (skipping blanks/invalid), then reduces to find the last
+  # assistant record whose content array has a TodoWrite tool_use block.
+  jq -Rs '
+    split("\n")
+    | map(select(length > 0) | . as $line | try fromjson catch null)
+    | map(select(. != null))
+    | map(select(.type == "assistant"))
+    | map(
+        .message.content // []
+        | map(select(.type == "tool_use" and .name == "TodoWrite"))
+        | last
+        | .input.todos // empty
+      )
+    | map(select(. != null))
+    | last // empty
+    | .[]
+    | select(.status != "completed")
+    | "- " + (if .content then .content elif .text then .text else tojson end)
+  ' "$jsonl_path" 2>/dev/null || true
 }
 
 # ---- compose inventory --------------------------------------------------------
