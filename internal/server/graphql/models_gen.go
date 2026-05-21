@@ -109,8 +109,10 @@ func (ClaudeInstance) IsNode() {}
 func (this ClaudeInstance) GetID() string { return this.ID }
 
 // A commitment an agent has made to deliver something. Contracts are
-// authored exclusively by the claude-contracts plugin; orchard reads
-// them via the contracts provider and never writes.
+// sourced from session JSONL `tool_use` events (open_contract /
+// close_contract) written by the conversation-contracts plugin; the
+// daemon's contracts provider folds those events into Contract nodes
+// and never writes the JSONL itself.
 type Contract struct {
 	// Stable orchard id — "Contract:<contract_id>".
 	ID string `json:"id"`
