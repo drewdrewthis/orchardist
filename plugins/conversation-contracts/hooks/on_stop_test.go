@@ -65,6 +65,17 @@ func runStopHook(t *testing.T, env []string, payload string) (string, string, er
 	cmd.Stdin = strings.NewReader(payload)
 	cmd.Env = env
 
+	// Bash overwrites PWD on startup with the process's actual cwd, so we
+	// must set cmd.Dir to whatever PWD env entry says. Otherwise the
+	// _encode_cwd path resolution in the script will mismatch what tests
+	// wrote to disk under tmpDir/.claude/projects/<encoded-cwd>/.
+	for _, e := range env {
+		if strings.HasPrefix(e, "PWD=") {
+			cmd.Dir = strings.TrimPrefix(e, "PWD=")
+			break
+		}
+	}
+
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

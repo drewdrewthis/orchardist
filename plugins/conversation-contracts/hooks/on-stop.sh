@@ -18,8 +18,8 @@
 #   - Open TodoWrite items: most-recent TodoWrite tool_use in the session jsonl,
 #     items whose status != "completed".
 #
-# No regex pattern matching against user message bodies is performed.
-# No "unanswered questions" heuristic is applied.
+# No regex pattern matching against user message bodies is performed
+# (per AC 3 amendment — hard signals only).
 
 set -uo pipefail
 

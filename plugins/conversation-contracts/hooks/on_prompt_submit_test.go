@@ -109,13 +109,15 @@ func readJSONLToolUseEvents(t *testing.T, path string, toolName string) []map[st
 	return out
 }
 
-// runHook executes on-prompt-submit.sh with the given environment overrides.
-// Returns the command's combined output and any exit error.
-func runHook(t *testing.T, env []string) ([]byte, error) {
+// runHook executes on-prompt-submit.sh with the given environment overrides
+// AND the given working directory. Setting cmd.Dir is required because bash
+// overwrites the PWD env var on startup with the actual process cwd.
+func runHook(t *testing.T, env []string, cwd string) ([]byte, error) {
 	t.Helper()
 	script := hookScript(t)
 	cmd := exec.Command("bash", script)
 	cmd.Env = env
+	cmd.Dir = cwd
 	return cmd.CombinedOutput()
 }
 
@@ -151,7 +153,7 @@ func TestOnPromptSubmit_FirstMessage_WritesOneToolUseEvent(t *testing.T) {
 		"PATH=" + os.Getenv("PATH"),
 	}
 
-	out, err := runHook(t, env)
+	out, err := runHook(t, env, cwd)
 	if err != nil {
 		t.Fatalf("hook exited non-zero: %v\n%s", err, out)
 	}
@@ -211,7 +213,7 @@ func TestOnPromptSubmit_NoStateWrittenToPluginData(t *testing.T) {
 
 	// Run the hook multiple times (simulating multiple prompts).
 	for i := 0; i < 3; i++ {
-		out, err := runHook(t, env)
+		out, err := runHook(t, env, cwd)
 		if err != nil {
 			t.Fatalf("hook run %d exited non-zero: %v\n%s", i, err, out)
 		}
