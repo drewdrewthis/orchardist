@@ -21,7 +21,6 @@ type Contract struct {
 	ID             ContractID
 	Statement      string
 	OwnerSessionID string
-	OwnerAgentName string
 	Status         string // "open" | "closed"
 	ClosedReason   string // "delivered" | "abandoned" | ""
 	CreatedAt      time.Time

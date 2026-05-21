@@ -382,10 +382,6 @@ func (p *Provider) fanOut(ev adapter.InvalidationEvent[ContractID]) {
 
 // matches applies a ContractFilter to an internal Contract. All filter
 // fields are AND-combined; nil/empty fields match everything.
-//
-// OwnerAgentName is not filterable in v0.8 — the plugin's owner field
-// is a session id, not an agent name. The schema field is kept as a
-// deprecated alias; this filter ignores it.
 func matches(c Contract, f *graphql.ContractFilter) bool {
 	if f == nil {
 		return true
@@ -435,7 +431,6 @@ func toGraphQL(c Contract) *graphql.Contract {
 		ContractID:     string(c.ID),
 		Statement:      c.Statement,
 		OwnerSessionID: c.OwnerSessionID,
-		OwnerAgentName: c.OwnerAgentName,
 		Status:         statusToGraphQL(c.Status),
 		CreatedAt:      formatTime(c.CreatedAt),
 		UpdatedAt:      formatTime(c.UpdatedAt),

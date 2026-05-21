@@ -31,16 +31,16 @@ const ConversationContractDeliverable = "user agrees conversation has come to a 
 // session into a Contract map. Each open_contract tool_use block
 // initialises a Contract keyed by contract id; close_contract closes it.
 //
-// ownerSessionID is the session UUID whose JSONL these records came from.
+// localSessionID is the session UUID whose JSONL these records came from.
 // Every Contract produced by an open_contract event in this slice carries
-// ownerSessionID as its OwnerSessionID.
+// localSessionID as its OwnerSessionID.
 //
-// Dedup rule: if the same (ownerSessionID, deliverable) pair already has
+// Dedup rule: if the same (localSessionID, deliverable) pair already has
 // an OPEN contract, a subsequent open_contract for the same deliverable is
 // a no-op. A close followed by a new open IS a new record.
-func FoldFromSessionJSONL(records []SessionRecord, ownerSessionID string) map[ContractID]Contract {
+func FoldFromSessionJSONL(records []SessionRecord, localSessionID string) map[ContractID]Contract {
 	state := make(map[ContractID]Contract)
-	ApplySessionRecords(state, records, ownerSessionID)
+	ApplySessionRecords(state, records, localSessionID)
 	return state
 }
 
@@ -86,7 +86,7 @@ func applySessionRecord(state map[ContractID]Contract, rec SessionRecord, localS
 }
 
 // applyOpenContractBlock handles one open_contract tool_use content block.
-func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentBlock, ownerSessionID string, rec SessionRecord) {
+func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentBlock, localSessionID string, rec SessionRecord) {
 	var inp OpenContractInput
 	if err := json.Unmarshal(block.Input, &inp); err != nil {
 		return // malformed input — skip silently
@@ -96,12 +96,12 @@ func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentB
 	}
 	id := ContractID(inp.ID)
 
-	// Dedup rule: if (ownerSessionID, deliverable) already has an OPEN
+	// Dedup rule: if (localSessionID, deliverable) already has an OPEN
 	// contract, treat this as a no-op. A close then re-open IS a new record.
 	deliverable := inp.effectiveDeliverable()
 	if deliverable != "" {
 		for _, c := range state {
-			if c.OwnerSessionID == ownerSessionID &&
+			if c.OwnerSessionID == localSessionID &&
 				c.Statement == deliverable &&
 				c.Status == "open" {
 				return // already open — idempotent
@@ -118,7 +118,7 @@ func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentB
 	c := Contract{
 		ID:             id,
 		Statement:      deliverable,
-		OwnerSessionID: ownerSessionID,
+		OwnerSessionID: localSessionID,
 		Status:         "open",
 		CreatedAt:      createdAt,
 		UpdatedAt:      createdAt,

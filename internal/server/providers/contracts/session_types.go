@@ -35,7 +35,7 @@ type SessionRecord struct {
 
 // SessionMessage is the message payload inside an assistant or user record.
 type SessionMessage struct {
-	Role    string               `json:"role"`
+	Role    string                `json:"role"`
 	Content []SessionContentBlock `json:"content"`
 }
 

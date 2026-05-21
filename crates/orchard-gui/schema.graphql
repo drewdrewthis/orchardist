@@ -171,7 +171,7 @@ type Contract implements Node {
   openQuestions: [ContractQuestion!]!
 
   """Owner agent name."""
-  ownerAgentName: String!
+  ownerAgentName: String! @deprecated(reason: "v0.8 owner is a session id; agent name is no longer tracked.")
 
   """Owner session id (Claude session UUID) recorded at creation time."""
   ownerSessionId: String!
