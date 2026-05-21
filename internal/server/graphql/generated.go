@@ -83,7 +83,6 @@ type ComplexityRoot struct {
 		CreatedAt      func(childComplexity int) int
 		ID             func(childComplexity int) int
 		LastEventAt    func(childComplexity int) int
-		OwnerAgentName func(childComplexity int) int
 		OwnerSessionID func(childComplexity int) int
 		Statement      func(childComplexity int) int
 		Status         func(childComplexity int) int
@@ -725,12 +724,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Contract.LastEventAt(childComplexity), true
-	case "Contract.ownerAgentName":
-		if e.ComplexityRoot.Contract.OwnerAgentName == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.OwnerAgentName(childComplexity), true
 	case "Contract.ownerSessionId":
 		if e.ComplexityRoot.Contract.OwnerSessionID == nil {
 			break
@@ -3599,9 +3592,6 @@ type Contract implements Node {
   "Owner session id (Claude session UUID) recorded at creation time."
   ownerSessionId: String!
 
-  "Owner agent name."
-  ownerAgentName: String! @deprecated(reason: "v0.8 owner is a session id; agent name is no longer tracked.")
-
   "Folded current status."
   status: ContractStatus!
 
@@ -3646,7 +3636,6 @@ input ContractFilter {
   closedReasons: [ContractReason!]
   "Match contracts owned by this Claude session UUID."
   ownerSessionId: String
-  ownerAgentName: String @deprecated(reason: "v0.8 owner is a session id; agent name is no longer tracked.")
 }
 
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
@@ -3929,8 +3918,6 @@ func (ec *executionContext) childFields_Contract(ctx context.Context, field grap
 		return ec.fieldContext_Contract_statement(ctx, field)
 	case "ownerSessionId":
 		return ec.fieldContext_Contract_ownerSessionId(ctx, field)
-	case "ownerAgentName":
-		return ec.fieldContext_Contract_ownerAgentName(ctx, field)
 	case "status":
 		return ec.fieldContext_Contract_status(ctx, field)
 	case "closedReason":
@@ -5797,29 +5784,6 @@ func (ec *executionContext) _Contract_ownerSessionId(ctx context.Context, field 
 	)
 }
 func (ec *executionContext) fieldContext_Contract_ownerSessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_ownerAgentName(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_ownerAgentName(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.OwnerAgentName, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_ownerAgentName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -13600,7 +13564,7 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"statuses", "closedReasons", "ownerSessionId", "ownerAgentName"}
+	fieldsInOrder := [...]string{"statuses", "closedReasons", "ownerSessionId"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -13628,13 +13592,6 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 				return it, err
 			}
 			it.OwnerSessionID = data
-		case "ownerAgentName":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ownerAgentName"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.OwnerAgentName = data
 		}
 	}
 	return it, nil
@@ -14213,11 +14170,6 @@ func (ec *executionContext) _Contract(ctx context.Context, sel ast.SelectionSet,
 			}
 		case "ownerSessionId":
 			out.Values[i] = ec._Contract_ownerSessionId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "ownerAgentName":
-			out.Values[i] = ec._Contract_ownerAgentName(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

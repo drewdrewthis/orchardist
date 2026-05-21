@@ -122,8 +122,6 @@ type Contract struct {
 	Statement string `json:"statement"`
 	// Owner session id (Claude session UUID) recorded at creation time.
 	OwnerSessionID string `json:"ownerSessionId"`
-	// Owner agent name.
-	OwnerAgentName string `json:"ownerAgentName"`
 	// Folded current status.
 	Status ContractStatus `json:"status"`
 	// Reason the contract was closed. Null when status is SIGNED.
@@ -143,10 +141,12 @@ func (this Contract) GetID() string { return this.ID }
 
 // Filter for `Query.contracts`. All fields are optional.
 type ContractFilter struct {
-	Statuses       []ContractStatus `json:"statuses,omitempty"`
-	ClosedReasons  []ContractReason `json:"closedReasons,omitempty"`
-	OwnerSessionID *string          `json:"ownerSessionId,omitempty"`
-	OwnerAgentName *string          `json:"ownerAgentName,omitempty"`
+	// Match contracts whose folded status is in this list.
+	Statuses []ContractStatus `json:"statuses,omitempty"`
+	// Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts.
+	ClosedReasons []ContractReason `json:"closedReasons,omitempty"`
+	// Match contracts owned by this Claude session UUID.
+	OwnerSessionID *string `json:"ownerSessionId,omitempty"`
 }
 
 // A Claude Code conversation, backed by the JSONL transcript that the
