@@ -108,6 +108,9 @@ func readJSONLToolUseEvents(t *testing.T, path string, toolName string) []map[st
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan jsonl %s: %v", path, err)
+	}
 	return out
 }
 
