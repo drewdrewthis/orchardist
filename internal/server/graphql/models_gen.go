@@ -142,6 +142,7 @@ func (this Contract) GetID() string { return this.ID }
 // Filter for `Query.contracts`. All fields are optional.
 type ContractFilter struct {
 	Statuses       []ContractStatus `json:"statuses,omitempty"`
+	ClosedReasons  []ContractReason `json:"closedReasons,omitempty"`
 	OwnerSessionID *string          `json:"ownerSessionId,omitempty"`
 	OwnerAgentName *string          `json:"ownerAgentName,omitempty"`
 }

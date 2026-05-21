@@ -387,6 +387,24 @@ func matches(c Contract, f *graphql.ContractFilter) bool {
 			return false
 		}
 	}
+	if len(f.ClosedReasons) > 0 {
+		// Only CLOSED contracts carry a ClosedReason; open contracts
+		// never match a closedReasons filter.
+		if c.Status != "closed" {
+			return false
+		}
+		want := reasonToGraphQL(c.ClosedReason)
+		ok := false
+		for _, r := range f.ClosedReasons {
+			if r == want {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
 	if f.OwnerSessionID != nil && *f.OwnerSessionID != "" && c.OwnerSessionID != *f.OwnerSessionID {
 		return false
 	}

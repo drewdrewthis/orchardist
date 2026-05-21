@@ -1197,6 +1197,7 @@ Filter for `Query.contracts`. All fields are optional.
 """
 input ContractFilter {
   statuses: [ContractStatus!]
+  closedReasons: [ContractReason!]
   ownerSessionId: String
   ownerAgentName: String
 }

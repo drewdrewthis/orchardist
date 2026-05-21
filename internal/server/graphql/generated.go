@@ -3639,6 +3639,7 @@ Filter for ` + "`" + `Query.contracts` + "`" + `. All fields are optional.
 """
 input ContractFilter {
   statuses: [ContractStatus!]
+  closedReasons: [ContractReason!]
   ownerSessionId: String
   ownerAgentName: String
 }
@@ -13594,7 +13595,7 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"statuses", "ownerSessionId", "ownerAgentName"}
+	fieldsInOrder := [...]string{"statuses", "closedReasons", "ownerSessionId", "ownerAgentName"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -13608,6 +13609,13 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 				return it, err
 			}
 			it.Statuses = data
+		case "closedReasons":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("closedReasons"))
+			data, err := ec.unmarshalOContractReason2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReasonᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClosedReasons = data
 		case "ownerSessionId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ownerSessionId"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
@@ -19121,6 +19129,16 @@ func (ec *executionContext) marshalNContract2ᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ec._Contract(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, v any) (ContractReason, error) {
+	var res ContractReason
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, sel ast.SelectionSet, v ContractReason) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) unmarshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx context.Context, v any) (ContractStatus, error) {
 	var res ContractStatus
 	err := res.UnmarshalGQL(v)
@@ -19933,6 +19951,43 @@ func (ec *executionContext) unmarshalOContractFilter2ᚖgithubᚗcomᚋdrewdrewt
 	}
 	res, err := ec.unmarshalInputContractFilter(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOContractReason2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReasonᚄ(ctx context.Context, v any) ([]ContractReason, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]ContractReason, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOContractReason2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReasonᚄ(ctx context.Context, sel ast.SelectionSet, v []ContractReason) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, v any) (*ContractReason, error) {

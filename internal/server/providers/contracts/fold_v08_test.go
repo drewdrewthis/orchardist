@@ -21,6 +21,8 @@ package contracts
 import (
 	"testing"
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
 // ---- L1.9: two-value status model ----------------------------------------
@@ -277,5 +279,104 @@ func TestFoldV08_ToGraphQL_ClosedAbandoned(t *testing.T) {
 	}
 	if *gc.ClosedReason != "ABANDONED" {
 		t.Errorf("ClosedReason = %q, want ABANDONED", *gc.ClosedReason)
+	}
+}
+
+// ---- ContractFilter.closedReasons ----------------------------------------
+
+// TestMatches_ClosedReasonDelivered verifies that filtering by
+// closedReasons:[DELIVERED] returns only CLOSED+DELIVERED contracts and
+// excludes CLOSED+ABANDONED and SIGNED (open) contracts.
+func TestMatches_ClosedReasonDelivered(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+
+	delivered := Contract{
+		ID: "C-delivered", Status: "closed", ClosedReason: "delivered",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	abandoned := Contract{
+		ID: "C-abandoned", Status: "closed", ClosedReason: "abandoned",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	open := Contract{
+		ID: "C-open", Status: "open", ClosedReason: "",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+
+	filter := &graphql.ContractFilter{
+		ClosedReasons: []graphql.ContractReason{graphql.ContractReasonDelivered},
+	}
+
+	if !matches(delivered, filter) {
+		t.Error("delivered contract should match closedReasons:[DELIVERED] filter")
+	}
+	if matches(abandoned, filter) {
+		t.Error("abandoned contract should not match closedReasons:[DELIVERED] filter")
+	}
+	if matches(open, filter) {
+		t.Error("open contract should not match closedReasons:[DELIVERED] filter")
+	}
+}
+
+// TestMatches_ClosedReasonAbandoned verifies that filtering by
+// closedReasons:[ABANDONED] returns only CLOSED+ABANDONED contracts.
+func TestMatches_ClosedReasonAbandoned(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+
+	delivered := Contract{
+		ID: "C-del2", Status: "closed", ClosedReason: "delivered",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	abandoned := Contract{
+		ID: "C-abn2", Status: "closed", ClosedReason: "abandoned",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+
+	filter := &graphql.ContractFilter{
+		ClosedReasons: []graphql.ContractReason{graphql.ContractReasonAbandoned},
+	}
+
+	if !matches(abandoned, filter) {
+		t.Error("abandoned contract should match closedReasons:[ABANDONED] filter")
+	}
+	if matches(delivered, filter) {
+		t.Error("delivered contract should not match closedReasons:[ABANDONED] filter")
+	}
+}
+
+// TestMatches_ClosedReasonBoth verifies that filtering by
+// closedReasons:[DELIVERED, ABANDONED] returns all closed contracts
+// regardless of reason, but excludes open contracts.
+func TestMatches_ClosedReasonBoth(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+
+	delivered := Contract{
+		ID: "C-del3", Status: "closed", ClosedReason: "delivered",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	abandoned := Contract{
+		ID: "C-abn3", Status: "closed", ClosedReason: "abandoned",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	open := Contract{
+		ID: "C-open3", Status: "open",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+
+	filter := &graphql.ContractFilter{
+		ClosedReasons: []graphql.ContractReason{
+			graphql.ContractReasonDelivered,
+			graphql.ContractReasonAbandoned,
+		},
+	}
+
+	if !matches(delivered, filter) {
+		t.Error("delivered contract should match closedReasons:[DELIVERED,ABANDONED] filter")
+	}
+	if !matches(abandoned, filter) {
+		t.Error("abandoned contract should match closedReasons:[DELIVERED,ABANDONED] filter")
+	}
+	if matches(open, filter) {
+		t.Error("open contract should not match closedReasons:[DELIVERED,ABANDONED] filter")
 	}
 }
