@@ -45,9 +45,11 @@ func TestAdapter_Snapshot_DirectoryScan(t *testing.T) {
 		id     ContractID
 		status string
 	}{
-		{"C-test-001", "delivered_pending_validation"},
+		// v0.7 delivered_pending_validation → v0.8 "closed"
+		{"C-test-001", "closed"},
 		{"C-test-002", "open"},
-		{"C-test-003", "cancelled"},
+		// v0.7 cancelled → v0.8 "closed"
+		{"C-test-003", "closed"},
 	}
 	for _, tc := range cases {
 		c, ok := state[tc.id]

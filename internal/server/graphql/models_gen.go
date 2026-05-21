@@ -122,20 +122,14 @@ type Contract struct {
 	OwnerSessionID string `json:"ownerSessionId"`
 	// Owner agent name.
 	OwnerAgentName string `json:"ownerAgentName"`
-	// Routing target for status updates and question answers.
-	ReportsTo *string `json:"reportsTo,omitempty"`
-	// Parent contract id when filed under a management contract.
-	ParentContractID *string `json:"parentContractId,omitempty"`
 	// Folded current status.
 	Status ContractStatus `json:"status"`
+	// Reason the contract was closed. Null when status is SIGNED.
+	ClosedReason *ContractReason `json:"closedReason,omitempty"`
 	// RFC 3339 timestamp the contract was first created.
 	CreatedAt string `json:"createdAt"`
 	// RFC 3339 timestamp the contract was last touched.
 	UpdatedAt string `json:"updatedAt"`
-	// Acceptance criteria added via `criterion_added` events, in original order.
-	Criteria []string `json:"criteria"`
-	// Questions awaiting an answer. Empty when nothing is pending.
-	OpenQuestions []*ContractQuestion `json:"openQuestions"`
 	// RFC 3339 timestamp of the most recent event affecting this contract.
 	LastEventAt string `json:"lastEventAt"`
 }
@@ -147,26 +141,9 @@ func (this Contract) GetID() string { return this.ID }
 
 // Filter for `Query.contracts`. All fields are optional.
 type ContractFilter struct {
-	Statuses         []ContractStatus `json:"statuses,omitempty"`
-	OwnerSessionID   *string          `json:"ownerSessionId,omitempty"`
-	OwnerAgentName   *string          `json:"ownerAgentName,omitempty"`
-	ParentContractID *string          `json:"parentContractId,omitempty"`
-}
-
-// A blocking question recorded against a Contract.
-type ContractQuestion struct {
-	// Question id as written by the plugin.
-	QuestionID string `json:"questionId"`
-	// The question text.
-	Text string `json:"text"`
-	// Agent that asked the question.
-	AskedBy string `json:"askedBy"`
-	// RFC 3339 timestamp the question was asked.
-	AskedAt string `json:"askedAt"`
-	// RFC 3339 deadline after which the question times out.
-	Deadline *string `json:"deadline,omitempty"`
-	// Whether this question blocks contract close while open.
-	BlocksClose bool `json:"blocksClose"`
+	Statuses       []ContractStatus `json:"statuses,omitempty"`
+	OwnerSessionID *string          `json:"ownerSessionId,omitempty"`
+	OwnerAgentName *string          `json:"ownerAgentName,omitempty"`
 }
 
 // A Claude Code conversation, backed by the JSONL transcript that the
@@ -681,9 +658,16 @@ type TmuxPaneFilter struct {
 	TitleContains *string `json:"titleContains,omitempty"`
 	// Only include dead (or non-dead) panes.
 	Dead *bool `json:"dead,omitempty"`
-	// Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis).
+	// Only include panes whose foreground-process cwd equals `cwd` exactly or has
+	// `cwd + '/'` as a prefix (server-side join via the ps provider, same path as
+	// Worktree.tmuxPanes). Requires ps provider to be wired; panes whose cwd cannot
+	// be resolved are silently skipped. ADR-022 axis: PanesByCwd.
 	Cwd *string `json:"cwd,omitempty"`
-	// Only include panes whose foreground-process command basename contains this substring (case-insensitive, ADR-022 PanesByCommand axis).
+	// Only include panes whose foreground-process command basename contains this
+	// substring (case-insensitive). Uses the ps provider for the real command name
+	// so node-wrapped CLIs (e.g. `node /usr/local/bin/claude`) resolve correctly;
+	// falls back to `currentCommand` when ps is unavailable. ADR-022 axis:
+	// PanesByCommand.
 	Command *string `json:"command,omitempty"`
 }
 
@@ -949,36 +933,80 @@ func (e CiStatus) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Lifecycle states for Contract.
+// Reason a Contract was closed. Only set when ContractStatus is CLOSED.
+type ContractReason string
+
+const (
+	ContractReasonDelivered ContractReason = "DELIVERED"
+	ContractReasonAbandoned ContractReason = "ABANDONED"
+)
+
+var AllContractReason = []ContractReason{
+	ContractReasonDelivered,
+	ContractReasonAbandoned,
+}
+
+func (e ContractReason) IsValid() bool {
+	switch e {
+	case ContractReasonDelivered, ContractReasonAbandoned:
+		return true
+	}
+	return false
+}
+
+func (e ContractReason) String() string {
+	return string(e)
+}
+
+func (e *ContractReason) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ContractReason(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ContractReason", str)
+	}
+	return nil
+}
+
+func (e ContractReason) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ContractReason) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ContractReason) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Lifecycle states for Contract (v0.8 two-value model).
+// SIGNED — contract is open and active.
+// CLOSED — contract has been closed (see closedReason for delivery vs abandon).
 type ContractStatus string
 
 const (
-	ContractStatusOpen                             ContractStatus = "OPEN"
-	ContractStatusDeliveredPendingValidation       ContractStatus = "DELIVERED_PENDING_VALIDATION"
-	ContractStatusDeliveredPendingParentValidation ContractStatus = "DELIVERED_PENDING_PARENT_VALIDATION"
-	ContractStatusPendingDrewApproval              ContractStatus = "PENDING_DREW_APPROVAL"
-	ContractStatusAwaitingCancelAck                ContractStatus = "AWAITING_CANCEL_ACK"
-	ContractStatusWaitingExternal                  ContractStatus = "WAITING_EXTERNAL"
-	ContractStatusSatisfied                        ContractStatus = "SATISFIED"
-	ContractStatusCancelled                        ContractStatus = "CANCELLED"
-	ContractStatusJudgeRejectedTerminal            ContractStatus = "JUDGE_REJECTED_TERMINAL"
+	ContractStatusSigned ContractStatus = "SIGNED"
+	ContractStatusClosed ContractStatus = "CLOSED"
 )
 
 var AllContractStatus = []ContractStatus{
-	ContractStatusOpen,
-	ContractStatusDeliveredPendingValidation,
-	ContractStatusDeliveredPendingParentValidation,
-	ContractStatusPendingDrewApproval,
-	ContractStatusAwaitingCancelAck,
-	ContractStatusWaitingExternal,
-	ContractStatusSatisfied,
-	ContractStatusCancelled,
-	ContractStatusJudgeRejectedTerminal,
+	ContractStatusSigned,
+	ContractStatusClosed,
 }
 
 func (e ContractStatus) IsValid() bool {
 	switch e {
-	case ContractStatusOpen, ContractStatusDeliveredPendingValidation, ContractStatusDeliveredPendingParentValidation, ContractStatusPendingDrewApproval, ContractStatusAwaitingCancelAck, ContractStatusWaitingExternal, ContractStatusSatisfied, ContractStatusCancelled, ContractStatusJudgeRejectedTerminal:
+	case ContractStatusSigned, ContractStatusClosed:
 		return true
 	}
 	return false

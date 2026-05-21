@@ -85,30 +85,20 @@ type Party struct {
 // Contract is the folded state of one contract, in the daemon's
 // internal shape. The resolver layer projects this onto graphql.Contract.
 //
-// Carries everything the schema surfaces plus a few private bookkeeping
-// fields (LastEventAt for sorting, raw event count for debugging).
+// v0.8 two-status model:
+//   - Status "open"   maps to ContractStatusSigned (active).
+//   - Status "closed" maps to ContractStatusClosed (ended).
+//   - ClosedReason "delivered" maps to ContractReasonDelivered.
+//   - ClosedReason "abandoned" maps to ContractReasonAbandoned.
+//   - ClosedReason is empty when Status is "open".
 type Contract struct {
-	ID               ContractID
-	Statement        string
-	OwnerSessionID   string
-	OwnerAgentName   string
-	ReportsTo        string // empty when unset; "drew" or "agent:<name>"
-	ParentContractID string // empty when top-level
-	Status           string // raw plugin status string; resolver maps to enum
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	LastEventAt      time.Time
-	Criteria         []string
-	OpenQuestions    []OpenQuestion
-}
-
-// OpenQuestion is a question still awaiting an answer. The fold drops
-// answered / timed-out questions from this list.
-type OpenQuestion struct {
-	QuestionID  string
-	Text        string
-	AskedBy     string
-	AskedAt     time.Time
-	Deadline    *time.Time
-	BlocksClose bool
+	ID             ContractID
+	Statement      string
+	OwnerSessionID string
+	OwnerAgentName string
+	Status         string // "open" | "closed"
+	ClosedReason   string // "delivered" | "abandoned" | ""
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	LastEventAt    time.Time
 }

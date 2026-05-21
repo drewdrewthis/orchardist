@@ -5,11 +5,16 @@ import (
 	"path/filepath"
 )
 
-// EnvLogDir is the environment variable that overrides the log
-// directory. Set CLAUDE_CONTRACTS_DIR=/abs/path to point the daemon
-// at a non-default directory of per-contract jsonl files (useful for
-// tests + per-machine experiments).
+// EnvLogDir is the environment variable that overrides the legacy
+// per-contract log directory. Set CLAUDE_CONTRACTS_DIR=/abs/path to
+// point the daemon at a non-default directory (useful for tests +
+// per-machine experiments).
 const EnvLogDir = "CLAUDE_CONTRACTS_DIR"
+
+// EnvProjectsDir is the environment variable that overrides the session
+// JSONL projects root. Set CLAUDE_PROJECTS_DIR=/abs/path to point the
+// v0.8 ContractFold at a non-default directory.
+const EnvProjectsDir = "CLAUDE_PROJECTS_DIR"
 
 // DefaultLogDir returns the directory the contracts provider scans
 // when no override is configured. Each contract is one file inside
@@ -36,4 +41,25 @@ func DefaultLogDir() string {
 		return filepath.Join(home, ".claude", "contracts")
 	}
 	return "contracts"
+}
+
+// DefaultProjectsDir returns the directory the v0.8 ContractFold scans
+// for session JSONL files. Layout:
+//
+//	<root>/<encoded-cwd>/<session-uuid>.jsonl
+//
+// Resolution order:
+//
+//  1. $CLAUDE_PROJECTS_DIR, if non-empty.
+//  2. $HOME/.claude/projects — the directory Claude Code writes session
+//     JSONL files to on every machine.
+//  3. ./projects as a last resort when $HOME is unresolvable.
+func DefaultProjectsDir() string {
+	if override := os.Getenv(EnvProjectsDir); override != "" {
+		return override
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".claude", "projects")
+	}
+	return "projects"
 }

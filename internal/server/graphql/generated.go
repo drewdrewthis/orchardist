@@ -78,28 +78,16 @@ type ComplexityRoot struct {
 	}
 
 	Contract struct {
-		ContractID       func(childComplexity int) int
-		CreatedAt        func(childComplexity int) int
-		Criteria         func(childComplexity int) int
-		ID               func(childComplexity int) int
-		LastEventAt      func(childComplexity int) int
-		OpenQuestions    func(childComplexity int) int
-		OwnerAgentName   func(childComplexity int) int
-		OwnerSessionID   func(childComplexity int) int
-		ParentContractID func(childComplexity int) int
-		ReportsTo        func(childComplexity int) int
-		Statement        func(childComplexity int) int
-		Status           func(childComplexity int) int
-		UpdatedAt        func(childComplexity int) int
-	}
-
-	ContractQuestion struct {
-		AskedAt     func(childComplexity int) int
-		AskedBy     func(childComplexity int) int
-		BlocksClose func(childComplexity int) int
-		Deadline    func(childComplexity int) int
-		QuestionID  func(childComplexity int) int
-		Text        func(childComplexity int) int
+		ClosedReason   func(childComplexity int) int
+		ContractID     func(childComplexity int) int
+		CreatedAt      func(childComplexity int) int
+		ID             func(childComplexity int) int
+		LastEventAt    func(childComplexity int) int
+		OwnerAgentName func(childComplexity int) int
+		OwnerSessionID func(childComplexity int) int
+		Statement      func(childComplexity int) int
+		Status         func(childComplexity int) int
+		UpdatedAt      func(childComplexity int) int
 	}
 
 	Conversation struct {
@@ -707,6 +695,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ClaudeInstance.Worktree(childComplexity), true
 
+	case "Contract.closedReason":
+		if e.ComplexityRoot.Contract.ClosedReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Contract.ClosedReason(childComplexity), true
 	case "Contract.contractId":
 		if e.ComplexityRoot.Contract.ContractID == nil {
 			break
@@ -719,12 +713,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Contract.CreatedAt(childComplexity), true
-	case "Contract.criteria":
-		if e.ComplexityRoot.Contract.Criteria == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.Criteria(childComplexity), true
 	case "Contract.id":
 		if e.ComplexityRoot.Contract.ID == nil {
 			break
@@ -737,12 +725,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Contract.LastEventAt(childComplexity), true
-	case "Contract.openQuestions":
-		if e.ComplexityRoot.Contract.OpenQuestions == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.OpenQuestions(childComplexity), true
 	case "Contract.ownerAgentName":
 		if e.ComplexityRoot.Contract.OwnerAgentName == nil {
 			break
@@ -755,18 +737,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Contract.OwnerSessionID(childComplexity), true
-	case "Contract.parentContractId":
-		if e.ComplexityRoot.Contract.ParentContractID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.ParentContractID(childComplexity), true
-	case "Contract.reportsTo":
-		if e.ComplexityRoot.Contract.ReportsTo == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.ReportsTo(childComplexity), true
 	case "Contract.statement":
 		if e.ComplexityRoot.Contract.Statement == nil {
 			break
@@ -785,43 +755,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Contract.UpdatedAt(childComplexity), true
-
-	case "ContractQuestion.askedAt":
-		if e.ComplexityRoot.ContractQuestion.AskedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ContractQuestion.AskedAt(childComplexity), true
-	case "ContractQuestion.askedBy":
-		if e.ComplexityRoot.ContractQuestion.AskedBy == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ContractQuestion.AskedBy(childComplexity), true
-	case "ContractQuestion.blocksClose":
-		if e.ComplexityRoot.ContractQuestion.BlocksClose == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ContractQuestion.BlocksClose(childComplexity), true
-	case "ContractQuestion.deadline":
-		if e.ComplexityRoot.ContractQuestion.Deadline == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ContractQuestion.Deadline(childComplexity), true
-	case "ContractQuestion.questionId":
-		if e.ComplexityRoot.ContractQuestion.QuestionID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ContractQuestion.QuestionID(childComplexity), true
-	case "ContractQuestion.text":
-		if e.ComplexityRoot.ContractQuestion.Text == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ContractQuestion.Text(childComplexity), true
 
 	case "Conversation.agentName":
 		if e.ComplexityRoot.Conversation.AgentName == nil {
@@ -3482,10 +3415,21 @@ input TmuxPaneFilter {
   "Only include dead (or non-dead) panes."
   dead: Boolean
 
-  "Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis)."
+  """
+  Only include panes whose foreground-process cwd equals ` + "`" + `cwd` + "`" + ` exactly or has
+  ` + "`" + `cwd + '/'` + "`" + ` as a prefix (server-side join via the ps provider, same path as
+  Worktree.tmuxPanes). Requires ps provider to be wired; panes whose cwd cannot
+  be resolved are silently skipped. ADR-022 axis: PanesByCwd.
+  """
   cwd: String
 
-  "Only include panes whose foreground-process command basename contains this substring, case-insensitive (ADR-022 PanesByCommand axis)."
+  """
+  Only include panes whose foreground-process command basename contains this
+  substring (case-insensitive). Uses the ps provider for the real command name
+  so node-wrapped CLIs (e.g. ` + "`" + `node /usr/local/bin/claude` + "`" + `) resolve correctly;
+  falls back to ` + "`" + `currentCommand` + "`" + ` when ps is unavailable. ADR-022 axis:
+  PanesByCommand.
+  """
   command: String
 }
 
@@ -3656,14 +3600,11 @@ type Contract implements Node {
   "Owner agent name."
   ownerAgentName: String!
 
-  "Routing target for status updates and question answers."
-  reportsTo: String
-
-  "Parent contract id when filed under a management contract."
-  parentContractId: ID
-
   "Folded current status."
   status: ContractStatus!
+
+  "Reason the contract was closed. Null when status is SIGNED."
+  closedReason: ContractReason
 
   "RFC 3339 timestamp the contract was first created."
   createdAt: String!
@@ -3671,50 +3612,26 @@ type Contract implements Node {
   "RFC 3339 timestamp the contract was last touched."
   updatedAt: String!
 
-  "Acceptance criteria added via ` + "`" + `criterion_added` + "`" + ` events, in original order."
-  criteria: [String!]!
-
-  "Questions awaiting an answer. Empty when nothing is pending."
-  openQuestions: [ContractQuestion!]!
-
   "RFC 3339 timestamp of the most recent event affecting this contract."
   lastEventAt: String!
 }
 
 """
-Lifecycle states for Contract.
+Lifecycle states for Contract (v0.8 two-value model).
+SIGNED — contract is open and active.
+CLOSED — contract has been closed (see closedReason for delivery vs abandon).
 """
 enum ContractStatus {
-  OPEN
-  DELIVERED_PENDING_VALIDATION
-  DELIVERED_PENDING_PARENT_VALIDATION
-  PENDING_DREW_APPROVAL
-  AWAITING_CANCEL_ACK
-  WAITING_EXTERNAL
-  SATISFIED
-  CANCELLED
-  JUDGE_REJECTED_TERMINAL
+  SIGNED
+  CLOSED
 }
 
-"A blocking question recorded against a Contract."
-type ContractQuestion {
-  "Question id as written by the plugin."
-  questionId: ID!
-
-  "The question text."
-  text: String!
-
-  "Agent that asked the question."
-  askedBy: String!
-
-  "RFC 3339 timestamp the question was asked."
-  askedAt: String!
-
-  "RFC 3339 deadline after which the question times out."
-  deadline: String
-
-  "Whether this question blocks contract close while open."
-  blocksClose: Boolean!
+"""
+Reason a Contract was closed. Only set when ContractStatus is CLOSED.
+"""
+enum ContractReason {
+  DELIVERED
+  ABANDONED
 }
 
 """
@@ -3724,7 +3641,6 @@ input ContractFilter {
   statuses: [ContractStatus!]
   ownerSessionId: String
   ownerAgentName: String
-  parentContractId: ID
 }
 
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
@@ -4009,42 +3925,18 @@ func (ec *executionContext) childFields_Contract(ctx context.Context, field grap
 		return ec.fieldContext_Contract_ownerSessionId(ctx, field)
 	case "ownerAgentName":
 		return ec.fieldContext_Contract_ownerAgentName(ctx, field)
-	case "reportsTo":
-		return ec.fieldContext_Contract_reportsTo(ctx, field)
-	case "parentContractId":
-		return ec.fieldContext_Contract_parentContractId(ctx, field)
 	case "status":
 		return ec.fieldContext_Contract_status(ctx, field)
+	case "closedReason":
+		return ec.fieldContext_Contract_closedReason(ctx, field)
 	case "createdAt":
 		return ec.fieldContext_Contract_createdAt(ctx, field)
 	case "updatedAt":
 		return ec.fieldContext_Contract_updatedAt(ctx, field)
-	case "criteria":
-		return ec.fieldContext_Contract_criteria(ctx, field)
-	case "openQuestions":
-		return ec.fieldContext_Contract_openQuestions(ctx, field)
 	case "lastEventAt":
 		return ec.fieldContext_Contract_lastEventAt(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Contract", field.Name)
-}
-
-func (ec *executionContext) childFields_ContractQuestion(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "questionId":
-		return ec.fieldContext_ContractQuestion_questionId(ctx, field)
-	case "text":
-		return ec.fieldContext_ContractQuestion_text(ctx, field)
-	case "askedBy":
-		return ec.fieldContext_ContractQuestion_askedBy(ctx, field)
-	case "askedAt":
-		return ec.fieldContext_ContractQuestion_askedAt(ctx, field)
-	case "deadline":
-		return ec.fieldContext_ContractQuestion_deadline(ctx, field)
-	case "blocksClose":
-		return ec.fieldContext_ContractQuestion_blocksClose(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type ContractQuestion", field.Name)
 }
 
 func (ec *executionContext) childFields_Conversation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5925,52 +5817,6 @@ func (ec *executionContext) fieldContext_Contract_ownerAgentName(_ context.Conte
 	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Contract_reportsTo(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_reportsTo(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ReportsTo, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_reportsTo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_parentContractId(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_parentContractId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ParentContractID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOID2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_parentContractId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
 func (ec *executionContext) _Contract_status(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -5992,6 +5838,29 @@ func (ec *executionContext) _Contract_status(ctx context.Context, field graphql.
 }
 func (ec *executionContext) fieldContext_Contract_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ContractStatus does not have child fields"))
+}
+
+func (ec *executionContext) _Contract_closedReason(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Contract_closedReason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ClosedReason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *ContractReason) graphql.Marshaler {
+			return ec.marshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Contract_closedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ContractReason does not have child fields"))
 }
 
 func (ec *executionContext) _Contract_createdAt(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
@@ -6040,61 +5909,6 @@ func (ec *executionContext) fieldContext_Contract_updatedAt(_ context.Context, f
 	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Contract_criteria(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_criteria(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Criteria, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_criteria(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_openQuestions(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_openQuestions(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.OpenQuestions, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*ContractQuestion) graphql.Marshaler {
-			return ec.marshalNContractQuestion2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractQuestionᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_openQuestions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Contract",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ContractQuestion(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Contract_lastEventAt(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6116,144 +5930,6 @@ func (ec *executionContext) _Contract_lastEventAt(ctx context.Context, field gra
 }
 func (ec *executionContext) fieldContext_Contract_lastEventAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ContractQuestion_questionId(ctx context.Context, field graphql.CollectedField, obj *ContractQuestion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ContractQuestion_questionId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.QuestionID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ContractQuestion_questionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ContractQuestion", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _ContractQuestion_text(ctx context.Context, field graphql.CollectedField, obj *ContractQuestion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ContractQuestion_text(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Text, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ContractQuestion_text(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ContractQuestion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ContractQuestion_askedBy(ctx context.Context, field graphql.CollectedField, obj *ContractQuestion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ContractQuestion_askedBy(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.AskedBy, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ContractQuestion_askedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ContractQuestion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ContractQuestion_askedAt(ctx context.Context, field graphql.CollectedField, obj *ContractQuestion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ContractQuestion_askedAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.AskedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ContractQuestion_askedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ContractQuestion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ContractQuestion_deadline(ctx context.Context, field graphql.CollectedField, obj *ContractQuestion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ContractQuestion_deadline(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Deadline, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_ContractQuestion_deadline(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ContractQuestion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ContractQuestion_blocksClose(ctx context.Context, field graphql.CollectedField, obj *ContractQuestion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ContractQuestion_blocksClose(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.BlocksClose, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ContractQuestion_blocksClose(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ContractQuestion", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
 func (ec *executionContext) _Conversation_id(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
@@ -13918,7 +13594,7 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"statuses", "ownerSessionId", "ownerAgentName", "parentContractId"}
+	fieldsInOrder := [...]string{"statuses", "ownerSessionId", "ownerAgentName"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -13946,13 +13622,6 @@ func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, ob
 				return it, err
 			}
 			it.OwnerAgentName = data
-		case "parentContractId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parentContractId"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ParentContractID = data
 		}
 	}
 	return it, nil
@@ -14539,15 +14208,13 @@ func (ec *executionContext) _Contract(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "reportsTo":
-			out.Values[i] = ec._Contract_reportsTo(ctx, field, obj)
-		case "parentContractId":
-			out.Values[i] = ec._Contract_parentContractId(ctx, field, obj)
 		case "status":
 			out.Values[i] = ec._Contract_status(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "closedReason":
+			out.Values[i] = ec._Contract_closedReason(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._Contract_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -14558,79 +14225,8 @@ func (ec *executionContext) _Contract(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "criteria":
-			out.Values[i] = ec._Contract_criteria(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "openQuestions":
-			out.Values[i] = ec._Contract_openQuestions(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "lastEventAt":
 			out.Values[i] = ec._Contract_lastEventAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var contractQuestionImplementors = []string{"ContractQuestion"}
-
-func (ec *executionContext) _ContractQuestion(ctx context.Context, sel ast.SelectionSet, obj *ContractQuestion) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, contractQuestionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("ContractQuestion")
-		case "questionId":
-			out.Values[i] = ec._ContractQuestion_questionId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "text":
-			out.Values[i] = ec._ContractQuestion_text(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "askedBy":
-			out.Values[i] = ec._ContractQuestion_askedBy(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "askedAt":
-			out.Values[i] = ec._ContractQuestion_askedAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "deadline":
-			out.Values[i] = ec._ContractQuestion_deadline(ctx, field, obj)
-		case "blocksClose":
-			out.Values[i] = ec._ContractQuestion_blocksClose(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -19525,32 +19121,6 @@ func (ec *executionContext) marshalNContract2ᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ec._Contract(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNContractQuestion2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractQuestionᚄ(ctx context.Context, sel ast.SelectionSet, v []*ContractQuestion) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNContractQuestion2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractQuestion(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNContractQuestion2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractQuestion(ctx context.Context, sel ast.SelectionSet, v *ContractQuestion) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ContractQuestion(ctx, sel, v)
-}
-
 func (ec *executionContext) unmarshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx context.Context, v any) (ContractStatus, error) {
 	var res ContractStatus
 	err := res.UnmarshalGQL(v)
@@ -19985,36 +19555,6 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 	return res
 }
 
-func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
-	var vSlice []any
-	vSlice = graphql.CoerceList(v)
-	var err error
-	res := make([]string, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	for i := range v {
-		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
-	}
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
 func (ec *executionContext) marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxClient) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -20395,6 +19935,22 @@ func (ec *executionContext) unmarshalOContractFilter2ᚖgithubᚗcomᚋdrewdrewt
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) unmarshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, v any) (*ContractReason, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(ContractReason)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, sel ast.SelectionSet, v *ContractReason) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
 func (ec *executionContext) unmarshalOContractStatus2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatusᚄ(ctx context.Context, v any) ([]ContractStatus, error) {
 	if v == nil {
 		return nil, nil
@@ -20478,24 +20034,6 @@ func (ec *executionContext) marshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewt
 		return graphql.Null
 	}
 	return v
-}
-
-func (ec *executionContext) unmarshalOID2ᚖstring(ctx context.Context, v any) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := graphql.UnmarshalID(v)
-	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOID2ᚖstring(ctx context.Context, sel ast.SelectionSet, v *string) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	_ = sel
-	_ = ctx
-	res := graphql.MarshalID(*v)
-	return res
 }
 
 func (ec *executionContext) unmarshalOInt2ᚕint64ᚄ(ctx context.Context, v any) ([]int64, error) {

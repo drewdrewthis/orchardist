@@ -2,38 +2,21 @@ package contracts
 
 import "time"
 
-// Fold reduces an ordered list of events into the current state of every
-// contract they touch. Pure function — no IO, no clock, no globals; the
-// only inputs are events and the only output is the folded map.
+// ConversationContractDeliverable is the fixed deliverable for the
+// auto-opened conversation contract. The UserPromptSubmit hook writes
+// an open_contract event with exactly this deliverable on every
+// first prompt; the fold deduplicates by (ownerSessionId, deliverable)
+// so only one Contract per session is ever created.
+const ConversationContractDeliverable = "user agrees conversation has come to a close and there are no loose ends"
+
+// Fold reduces an ordered list of v0.7 per-contract JSONL events into
+// the current state of every contract they touch.
 //
-// Event kinds Fold recognises:
+// Used by MigrateV07ToV08 to determine which v0.7 contracts are still
+// open before writing v0.8 open_contract events into session JSONLs.
+// v0.8 live contracts use FoldFromSessionJSONL instead.
 //
-//   - "contract": creation. Initialises a Contract record. Subsequent
-//     events for the same id update fields in place.
-//   - "status_change": updates Status. The plugin writes both `to`
-//     and a system-supplied `trigger`; Fold trusts the `to` field.
-//   - "criterion_added": appends to Criteria, in event order.
-//   - "question_asked": appends to OpenQuestions.
-//   - "question_answered": removes the matching QuestionID from
-//     OpenQuestions.
-//   - "question_timed_out": removes the matching QuestionID from
-//     OpenQuestions (treated identically to answered).
-//   - "cancel_requested" / "cancel_acked" / "cancel_withdrawn":
-//     LastEventAt only — the status moves via the paired
-//     status_change event the plugin always writes.
-//   - "judge_run" / "judge_run_failed": LastEventAt only — terminal
-//     verdict surfaces via the paired status_change.
-//   - "cooldown_set" / "wait_started": LastEventAt only.
-//   - "child_linked" / "child_cancelled": LastEventAt only.
-//
-// Unknown kinds are silently dropped so plugin extensions do not break
-// the daemon. Events that arrive before their contract's creation
-// record (out-of-order JSONL rows) are also dropped — a pathological
-// shape that should not occur in practice.
-//
-// Events are processed in the slice order; callers must pre-sort by
-// timestamp if their input is unsorted. The on-disk JSONL is naturally
-// in append order, so the adapter does no sorting.
+// Pure function — no IO, no clock, no globals.
 func Fold(events []Event) map[ContractID]Contract {
 	state := make(map[ContractID]Contract)
 	for _, ev := range events {
@@ -42,39 +25,23 @@ func Fold(events []Event) map[ContractID]Contract {
 	return state
 }
 
-// applyEvent dispatches one event into the fold. Extracted from Fold so
-// streaming callers (the provider's incremental update path) can apply
-// events one at a time without rebuilding the whole map.
+// applyEvent dispatches one event into the fold.
 func applyEvent(state map[ContractID]Contract, ev Event) {
 	switch ev.Kind {
 	case "contract":
 		applyCreation(state, ev)
 	case "status_change":
 		applyStatusChange(state, ev)
-	case "criterion_added":
-		applyCriterionAdded(state, ev)
-	case "question_asked":
-		applyQuestionAsked(state, ev)
-	case "question_answered", "question_timed_out":
-		applyQuestionResolved(state, ev)
-	case "cancel_requested",
-		"cancel_acked",
-		"cancel_withdrawn",
-		"judge_run",
-		"judge_run_failed",
-		"cooldown_set",
-		"wait_started",
-		"child_linked",
-		"child_cancelled":
+	default:
+		// All other v0.7 kinds (criterion_added, question_*, cancel_*,
+		// judge_run, etc.) are not surfaced in v0.8. Touch LastEventAt
+		// only so the migration can rank contracts by recency.
 		touchLastEvent(state, ContractID(ev.ID), eventTime(ev))
 	}
 }
 
 // touchLastEvent updates LastEventAt on the named contract, leaving all
-// other fields untouched. Used for events that signal activity but
-// whose effect on contract state is captured by a paired event
-// (judge_run pairs with status_change, cancel_requested with
-// status_change, etc.).
+// other fields untouched.
 func touchLastEvent(state map[ContractID]Contract, id ContractID, at time.Time) {
 	c, ok := state[id]
 	if !ok {
@@ -86,15 +53,32 @@ func touchLastEvent(state map[ContractID]Contract, id ContractID, at time.Time) 
 	state[id] = c
 }
 
-// applyCreation initialises a contract from a `kind: contract` row. If
-// the contract already exists (re-creation), the new fields overwrite
-// in place; in practice this never happens because contract ids are
-// 8-hex random.
+// applyCreation initialises a contract from a `kind: contract` row.
+//
+// Conversation-contract dedup rule: if the event's Statement equals
+// ConversationContractDeliverable and the same (ownerSessionId, deliverable)
+// pair already has an open contract in state, this event is a no-op. A
+// conversation contract that has been closed may be re-opened (L2.13 resume).
+//
+// Non-conversation-contract events with unique IDs are always inserted.
 func applyCreation(state map[ContractID]Contract, ev Event) {
 	if ev.ID == "" {
 		return
 	}
 	id := ContractID(ev.ID)
+
+	// Dedup: for the fixed conversation-contract deliverable, skip if an
+	// open contract for this (ownerSessionId, deliverable) already exists.
+	if ev.Statement == ConversationContractDeliverable && ev.Owner != nil {
+		ownerSID := ev.Owner.SessionID
+		for _, c := range state {
+			if c.OwnerSessionID == ownerSID &&
+				c.Statement == ConversationContractDeliverable &&
+				c.Status == "open" {
+				return // idempotent — conversation contract already open for this session
+			}
+		}
+	}
 
 	created := zeroOr(ev.CreatedOn)
 	updated := zeroOr(ev.UpdatedOn)
@@ -103,8 +87,12 @@ func applyCreation(state map[ContractID]Contract, ev Event) {
 	}
 	status := ev.InitialStatus
 	if status == "" {
-		// Older plugin versions omit status on creation; default to open.
 		status = "open"
+	}
+	// v0.7 multi-value statuses collapse to the v0.8 binary model:
+	// "open" stays "open"; every non-open terminal status becomes "closed".
+	if !isOpenStatus(status) {
+		status = "closed"
 	}
 
 	c := Contract{
@@ -121,17 +109,9 @@ func applyCreation(state map[ContractID]Contract, ev Event) {
 			c.OwnerAgentName = *ev.Owner.AgentName
 		}
 	}
-	c.ReportsTo = renderParty(ev.ReportsTo)
-	if ev.Parent != nil {
-		c.ParentContractID = *ev.Parent
-	}
 
-	// Preserve criteria/questions added before the creation row in
-	// degenerate inputs — never observed in practice but cheap to
-	// guard.
+	// Preserve LastEventAt from events that arrived before creation.
 	if existing, ok := state[id]; ok {
-		c.Criteria = existing.Criteria
-		c.OpenQuestions = existing.OpenQuestions
 		if !existing.LastEventAt.IsZero() && existing.LastEventAt.After(c.LastEventAt) {
 			c.LastEventAt = existing.LastEventAt
 		}
@@ -143,12 +123,15 @@ func applyStatusChange(state map[ContractID]Contract, ev Event) {
 	id := ContractID(ev.ID)
 	c, ok := state[id]
 	if !ok {
-		// status_change before creation — drop. JSONL append-order
-		// invariant should prevent this.
+		// status_change before creation — drop.
 		return
 	}
 	if ev.To != "" {
-		c.Status = ev.To
+		if isOpenStatus(ev.To) {
+			c.Status = "open"
+		} else {
+			c.Status = "closed"
+		}
 	}
 	t := eventTime(ev)
 	if !t.IsZero() {
@@ -158,88 +141,14 @@ func applyStatusChange(state map[ContractID]Contract, ev Event) {
 	state[id] = c
 }
 
-func applyCriterionAdded(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
-		return
-	}
-	if ev.Criterion != "" {
-		c.Criteria = append(c.Criteria, ev.Criterion)
-	}
-	if t := eventTime(ev); !t.IsZero() {
-		c.LastEventAt = t
-	}
-	state[id] = c
+// isOpenStatus returns true only for "open". Every other v0.7 status
+// (delivered_pending_validation, satisfied, cancelled, etc.) is treated
+// as closed in the v0.8 binary model.
+func isOpenStatus(s string) bool {
+	return s == "open"
 }
 
-func applyQuestionAsked(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
-		return
-	}
-	q := OpenQuestion{
-		QuestionID:  ev.QuestionID,
-		Text:        ev.QuestionText,
-		AskedBy:     ev.By,
-		AskedAt:     zeroOr(ev.Timestamp),
-		Deadline:    ev.QuestionDeadline,
-		BlocksClose: ev.QuestionBlocks == nil || *ev.QuestionBlocks,
-	}
-	c.OpenQuestions = append(c.OpenQuestions, q)
-	if t := eventTime(ev); !t.IsZero() {
-		c.LastEventAt = t
-	}
-	state[id] = c
-}
-
-func applyQuestionResolved(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
-		return
-	}
-	if ev.QuestionID != "" {
-		filtered := c.OpenQuestions[:0]
-		for _, q := range c.OpenQuestions {
-			if q.QuestionID == ev.QuestionID {
-				continue
-			}
-			filtered = append(filtered, q)
-		}
-		// Re-allocate so the trimmed slice does not retain backing
-		// memory pointing at removed entries.
-		c.OpenQuestions = append([]OpenQuestion(nil), filtered...)
-	}
-	if t := eventTime(ev); !t.IsZero() {
-		c.LastEventAt = t
-	}
-	state[id] = c
-}
-
-// renderParty turns a Party pointer into the schema's flat reportsTo
-// representation. Returns "" when nil so the resolver layer can decide
-// to surface a null vs an empty string.
-func renderParty(p *Party) string {
-	if p == nil {
-		return ""
-	}
-	if p.Kind == "drew" {
-		return "drew"
-	}
-	if p.Kind == "agent" && p.AgentName != nil && *p.AgentName != "" {
-		return "agent:" + *p.AgentName
-	}
-	if p.Kind != "" {
-		return p.Kind
-	}
-	return ""
-}
-
-// eventTime returns the most relevant timestamp for the event. Creation
-// rows use CreatedOn (no Timestamp field on disk); every other kind
-// uses Timestamp. A zero time.Time signals "no timestamp on this row."
+// eventTime returns the most relevant timestamp for the event.
 func eventTime(ev Event) time.Time {
 	if ev.Kind == "contract" {
 		t := zeroOr(ev.UpdatedOn)

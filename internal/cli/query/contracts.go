@@ -8,69 +8,63 @@ import (
 )
 
 // contractsBaseQuery is the canonical projection of every Contract
-// node — every scalar plus the questions sub-list. Mirrors host.go's
-// "one canonical query const" pattern so a regression in the resolver
-// surfaces immediately in `orchard query contracts`.
+// node. Mirrors host.go's "one canonical query const" pattern so a
+// regression in the resolver surfaces immediately in
+// `orchard query contracts`.
+//
+// v0.8 schema: two-status model (SIGNED/CLOSED) + closedReason
+// (DELIVERED/ABANDONED). Heavy fields (criteria, openQuestions,
+// reportsTo, parentContractId) have been removed from the schema.
 const contractsBaseQuery = `query Contracts($filter: ContractFilter) {
   contracts(filter: $filter) {
     id
     contractId
     statement
     ownerSessionId
-    ownerAgentName
-    reportsTo
-    parentContractId
     status
+    closedReason
     createdAt
     updatedAt
     lastEventAt
-    criteria
-    openQuestions {
-      questionId
-      text
-      askedBy
-      askedAt
-      deadline
-      blocksClose
-    }
   }
 }`
 
-// validStatuses lists the schema-recognised filter statuses, so we can
-// reject typos client-side without making a round-trip to the daemon.
+// validStatuses lists the v0.8 schema-recognised filter statuses so we
+// can reject typos client-side without a round-trip to the daemon.
 var validStatuses = map[string]string{
-	"open":                                "OPEN",
-	"delivered_pending_validation":        "DELIVERED_PENDING_VALIDATION",
-	"delivered_pending_parent_validation": "DELIVERED_PENDING_PARENT_VALIDATION",
-	"pending_drew_approval":               "PENDING_DREW_APPROVAL",
-	"awaiting_cancel_ack":                 "AWAITING_CANCEL_ACK",
-	"waiting_external":                    "WAITING_EXTERNAL",
-	"satisfied":                           "SATISFIED",
-	"cancelled":                           "CANCELLED",
-	"judge_rejected_terminal":             "JUDGE_REJECTED_TERMINAL",
+	"signed": "SIGNED",
+	"closed": "CLOSED",
+}
+
+// validReasons lists the v0.8 schema-recognised closed-reason values.
+var validReasons = map[string]string{
+	"delivered": "DELIVERED",
+	"abandoned": "ABANDONED",
 }
 
 // contractsCmd returns the `orchard query contracts` subcommand.
 //
 // Issues contractsBaseQuery against the running daemon and prints the
 // JSON response. The optional --status flag tightens the server-side
-// filter; multiple statuses are comma-separated. The hidden --addr
-// flag lets e2e tests target an ephemeral daemon.
+// filter; multiple statuses are comma-separated. The optional
+// --reason flag filters by closedReason (only meaningful when
+// --status closed is also set). The hidden --addr flag lets e2e tests
+// target an ephemeral daemon.
 func contractsCmd() *cobra.Command {
 	var statusFlag string
+	var reasonFlag string
 	var ownerSession string
-	var ownerAgent string
-	var parentID string
 
 	c := &cobra.Command{
 		Use:   "contracts",
 		Short: "List Contract nodes the daemon is tracking, with optional filters.",
 		Long: "Query the contracts provider for every contract folded from the\n" +
-			"claude-contracts JSONL log. Sorted descending by lastEventAt.",
+			"session JSONL open_contract/close_contract events. Sorted descending by lastEventAt.",
 		Example: "  orchard query contracts\n" +
-			"  orchard query contracts --status open",
+			"  orchard query contracts --status signed\n" +
+			"  orchard query contracts --status closed --reason delivered",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			filter, err := buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID)
+			filter, err := buildFilterPayload(statusFlag, reasonFlag, ownerSession)
 			if err != nil {
 				return err
 			}
@@ -78,33 +72,33 @@ func contractsCmd() *cobra.Command {
 			return runRaw(cmd.Context(), cmd.OutOrStdout(), query)
 		},
 	}
-	c.Flags().StringVar(&statusFlag, "status", "", "filter by status (comma-separated)")
+	c.Flags().StringVar(&statusFlag, "status", "", "filter by status: signed or closed (comma-separated)")
+	c.Flags().StringVar(&reasonFlag, "reason", "", "filter by closed reason: delivered or abandoned (comma-separated)")
 	c.Flags().StringVar(&ownerSession, "owner-session", "", "filter by owner session id")
-	c.Flags().StringVar(&ownerAgent, "owner-agent", "", "filter by owner agent name")
-	c.Flags().StringVar(&parentID, "parent", "", "filter by parent contract id")
 	return c
 }
 
 // buildFilterPayload converts user-provided flag values into the
 // ContractFilter literal embedded in the GraphQL query body. Empty
 // flags collapse to nil so the server applies no filter.
-func buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID string) (string, error) {
+func buildFilterPayload(statusFlag, reasonFlag, ownerSession string) (string, error) {
 	parts := []string{}
 	if statusFlag != "" {
-		statuses, err := parseStatuses(statusFlag)
+		statuses, err := parseFromMap(statusFlag, validStatuses, "status")
 		if err != nil {
 			return "", err
 		}
 		parts = append(parts, "statuses: ["+strings.Join(statuses, ", ")+"]")
 	}
+	if reasonFlag != "" {
+		reasons, err := parseFromMap(reasonFlag, validReasons, "reason")
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "closedReasons: ["+strings.Join(reasons, ", ")+"]")
+	}
 	if ownerSession != "" {
 		parts = append(parts, fmt.Sprintf("ownerSessionId: %q", ownerSession))
-	}
-	if ownerAgent != "" {
-		parts = append(parts, fmt.Sprintf("ownerAgentName: %q", ownerAgent))
-	}
-	if parentID != "" {
-		parts = append(parts, fmt.Sprintf("parentContractId: %q", parentID))
 	}
 	if len(parts) == 0 {
 		return "null", nil
@@ -112,11 +106,9 @@ func buildFilterPayload(statusFlag, ownerSession, ownerAgent, parentID string) (
 	return "{" + strings.Join(parts, ", ") + "}", nil
 }
 
-// parseStatuses turns "open,pending_drew_approval" into the SCREAMING
-// enum constants the schema expects. Unknown statuses produce a fast
-// client-side error so the user never has to hit the daemon to find
-// out about a typo.
-func parseStatuses(raw string) ([]string, error) {
+// parseFromMap splits raw on commas, maps each token to the enum
+// constant in allowed, and returns an error on the first unknown token.
+func parseFromMap(raw string, allowed map[string]string, flagName string) ([]string, error) {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -124,16 +116,24 @@ func parseStatuses(raw string) ([]string, error) {
 		if key == "" {
 			continue
 		}
-		val, ok := validStatuses[key]
+		val, ok := allowed[key]
 		if !ok {
-			return nil, fmt.Errorf("unknown status %q (try `orchard query contracts --help`)", p)
+			return nil, fmt.Errorf("unknown %s %q (try `orchard query contracts --help`)", flagName, p)
 		}
 		out = append(out, val)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("--status was empty")
+		return nil, fmt.Errorf("--%s was empty", flagName)
 	}
 	return out, nil
+}
+
+// parseStatuses is retained for backward-compat with any existing
+// tests that call it directly.
+//
+// Deprecated: use parseFromMap with validStatuses.
+func parseStatuses(raw string) ([]string, error) {
+	return parseFromMap(raw, validStatuses, "status")
 }
 
 // buildQueryWithVars splices the filter literal into the parameterised

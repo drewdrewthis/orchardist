@@ -53,7 +53,7 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 	srv := newTestDaemon(t, provider)
 	defer srv.Close()
 
-	// AC: GraphQL returns the satisfied contract.
+	// AC: GraphQL returns the contract (v0.8: satisfied → CLOSED).
 	resp := postQuery(t, srv.URL, fullContractQuery)
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors: %+v", resp.Errors)
@@ -62,8 +62,9 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 		t.Fatalf("contracts count = %d, want 1", got)
 	}
 	c := resp.Data.Contracts[0]
-	if c.Status != "SATISFIED" {
-		t.Errorf("status = %q, want SATISFIED", c.Status)
+	// v0.8 collapses all non-open statuses to CLOSED.
+	if c.Status != "CLOSED" {
+		t.Errorf("status = %q, want CLOSED (v0.8 two-status model)", c.Status)
 	}
 	if c.ContractID != happyContractID {
 		t.Errorf("contractId = %q, want %q", c.ContractID, happyContractID)
@@ -74,9 +75,8 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 	if c.OwnerSessionID != "session-1" {
 		t.Errorf("ownerSessionId = %q, want session-1", c.OwnerSessionID)
 	}
-	if c.OwnerAgentName != "agent-1" {
-		t.Errorf("ownerAgentName = %q, want agent-1", c.OwnerAgentName)
-	}
+	// ownerAgentName is deprecated in v0.8 (owner is derived from session id).
+	// The field is still present in the schema but toGraphQL returns "" for it.
 
 	// Subscribe so we can observe the post-cancel invalidation.
 	subCtx, subCancel := context.WithCancel(ctx)
@@ -92,9 +92,9 @@ func TestContracts_E2E_LifecycleAndMidTestCancel(t *testing.T) {
 		t.Fatalf("waiting for invalidation: %v", err)
 	}
 
-	// AC: GraphQL surfaces the cancelled status after the watcher tick.
-	if err := waitForStatus(t, srv.URL, happyContractID, "CANCELLED", 5*time.Second); err != nil {
-		t.Fatalf("status never moved to cancelled: %v", err)
+	// AC: GraphQL surfaces CLOSED after the cancel event (v0.8 two-status model).
+	if err := waitForStatus(t, srv.URL, happyContractID, "CLOSED", 5*time.Second); err != nil {
+		t.Fatalf("status never moved to CLOSED: %v", err)
 	}
 }
 
@@ -166,13 +166,13 @@ func TestContracts_E2E_StatusFilter(t *testing.T) {
 		t.Fatalf("unfiltered count = %d, want 2", got)
 	}
 
-	// Filter for OPEN only.
-	openResp := postQuery(t, srv.URL, queryWithFilter(`{statuses: [OPEN]}`))
+	// Filter for SIGNED (v0.8 name for "open") only.
+	openResp := postQuery(t, srv.URL, queryWithFilter(`{statuses: [SIGNED]}`))
 	if got := len(openResp.Data.Contracts); got != 1 {
-		t.Fatalf("OPEN filter count = %d, want 1", got)
+		t.Fatalf("SIGNED filter count = %d, want 1", got)
 	}
 	if openResp.Data.Contracts[0].ContractID != openID {
-		t.Errorf("OPEN filter returned %q, want %q", openResp.Data.Contracts[0].ContractID, openID)
+		t.Errorf("SIGNED filter returned %q, want %q", openResp.Data.Contracts[0].ContractID, openID)
 	}
 
 	// Filter by owner session id.
@@ -371,8 +371,11 @@ func waitForStatus(t *testing.T, url, contractID, expected string, deadline time
 }
 
 // fullContractQuery is the projection used in the e2e tests. Mirrors
-// the CLI subcommand's canonical query (kept in lockstep so any drift
-// fails this test before it fails a user).
+// the CLI subcommand's canonical query for the v0.8 schema (kept in
+// lockstep so any drift fails this test before it fails a user).
+//
+// v0.8 removes: reportsTo, parentContractId, criteria, openQuestions.
+// v0.8 collapses status to SIGNED | CLOSED (two values).
 const fullContractQuery = `query {
   contracts {
     id
@@ -380,21 +383,10 @@ const fullContractQuery = `query {
     statement
     ownerSessionId
     ownerAgentName
-    reportsTo
-    parentContractId
     status
     createdAt
     updatedAt
     lastEventAt
-    criteria
-    openQuestions {
-      questionId
-      text
-      askedBy
-      askedAt
-      deadline
-      blocksClose
-    }
   }
 }`
 
@@ -438,29 +430,19 @@ type graphqlResponse struct {
 	Errors []map[string]any `json:"errors,omitempty"`
 }
 
+// contractNode decodes the v0.8 Contract graphql shape. Fields removed in
+// the v0.8 schema break (reportsTo, parentContractId, criteria,
+// openQuestions) are omitted; status is now one of SIGNED | CLOSED.
 type contractNode struct {
-	ID               string             `json:"id"`
-	ContractID       string             `json:"contractId"`
-	Statement        string             `json:"statement"`
-	OwnerSessionID   string             `json:"ownerSessionId"`
-	OwnerAgentName   string             `json:"ownerAgentName"`
-	ReportsTo        *string            `json:"reportsTo,omitempty"`
-	ParentContractID *string            `json:"parentContractId,omitempty"`
-	Status           string             `json:"status"`
-	CreatedAt        string             `json:"createdAt"`
-	UpdatedAt        string             `json:"updatedAt"`
-	LastEventAt      string             `json:"lastEventAt"`
-	Criteria         []string           `json:"criteria"`
-	OpenQuestions    []contractQuestion `json:"openQuestions"`
-}
-
-type contractQuestion struct {
-	QuestionID  string  `json:"questionId"`
-	Text        string  `json:"text"`
-	AskedBy     string  `json:"askedBy"`
-	AskedAt     string  `json:"askedAt"`
-	Deadline    *string `json:"deadline,omitempty"`
-	BlocksClose bool    `json:"blocksClose"`
+	ID             string `json:"id"`
+	ContractID     string `json:"contractId"`
+	Statement      string `json:"statement"`
+	OwnerSessionID string `json:"ownerSessionId"`
+	OwnerAgentName string `json:"ownerAgentName"`
+	Status         string `json:"status"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+	LastEventAt    string `json:"lastEventAt"`
 }
 
 func postQuery(t *testing.T, url, query string) graphqlResponse {

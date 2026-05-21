@@ -325,6 +325,21 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 	if s.contracts != nil {
+		// One-shot v0.7→v0.8 contracts migration runs before the provider
+		// starts watching, so migrated events are visible on the first
+		// snapshot. The sentinel guards against repeat runs; errors are
+		// non-fatal and logged only.
+		if home, herr := os.UserHomeDir(); herr == nil {
+			if rpt, merr := contracts.MigrateV07ToV08(home); merr != nil {
+				s.logger.Warn("contracts migration failed", "err", merr)
+			} else if rpt.Migrated+rpt.Archived+rpt.Orphaned > 0 {
+				s.logger.Info("contracts migration complete",
+					"migrated", rpt.Migrated,
+					"archived", rpt.Archived,
+					"orphaned", rpt.Orphaned,
+				)
+			}
+		}
 		if err := s.contracts.Start(ctx); err != nil {
 			return fmt.Errorf("start contracts provider: %w", err)
 		}

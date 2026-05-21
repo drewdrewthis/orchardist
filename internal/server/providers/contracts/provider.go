@@ -232,11 +232,10 @@ func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*g
 
 	out := make([]*graphql.Contract, 0, len(contracts))
 	for _, c := range contracts {
-		gc := toGraphQL(c)
-		if filter != nil && !matches(gc, filter) {
+		if filter != nil && !matches(c, filter) {
 			continue
 		}
-		out = append(out, gc)
+		out = append(out, toGraphQL(c))
 	}
 	return out, nil
 }
@@ -365,16 +364,21 @@ func (p *Provider) fanOut(ev adapter.InvalidationEvent[ContractID]) {
 	}
 }
 
-// matches applies a ContractFilter to a single Contract. All filter
+// matches applies a ContractFilter to an internal Contract. All filter
 // fields are AND-combined; nil/empty fields match everything.
-func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
+//
+// OwnerAgentName is not filterable in v0.8 — the plugin's owner field
+// is a session id, not an agent name. The schema field is kept as a
+// deprecated alias; this filter ignores it.
+func matches(c Contract, f *graphql.ContractFilter) bool {
 	if f == nil {
 		return true
 	}
 	if len(f.Statuses) > 0 {
+		want := statusToGraphQL(c.Status)
 		ok := false
 		for _, s := range f.Statuses {
-			if s == c.Status {
+			if s == want {
 				ok = true
 				break
 			}
@@ -385,14 +389,6 @@ func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
 	}
 	if f.OwnerSessionID != nil && *f.OwnerSessionID != "" && c.OwnerSessionID != *f.OwnerSessionID {
 		return false
-	}
-	if f.OwnerAgentName != nil && *f.OwnerAgentName != "" && c.OwnerAgentName != *f.OwnerAgentName {
-		return false
-	}
-	if f.ParentContractID != nil && *f.ParentContractID != "" {
-		if c.ParentContractID == nil || *c.ParentContractID != *f.ParentContractID {
-			return false
-		}
 	}
 	return true
 }
@@ -406,75 +402,34 @@ func toGraphQL(c Contract) *graphql.Contract {
 		Statement:      c.Statement,
 		OwnerSessionID: c.OwnerSessionID,
 		OwnerAgentName: c.OwnerAgentName,
-		Status:         mapStatus(c.Status),
+		Status:         statusToGraphQL(c.Status),
 		CreatedAt:      formatTime(c.CreatedAt),
 		UpdatedAt:      formatTime(c.UpdatedAt),
 		LastEventAt:    formatTime(c.LastEventAt),
-		Criteria:       append([]string{}, c.Criteria...),
-		OpenQuestions:  buildOpenQuestions(c.OpenQuestions),
 	}
-	if c.ReportsTo != "" {
-		s := c.ReportsTo
-		out.ReportsTo = &s
-	}
-	if c.ParentContractID != "" {
-		s := c.ParentContractID
-		out.ParentContractID = &s
+	if c.ClosedReason != "" {
+		r := reasonToGraphQL(c.ClosedReason)
+		out.ClosedReason = &r
 	}
 	return out
 }
 
-// buildOpenQuestions copies the internal OpenQuestion list onto the
-// generated graphql.ContractQuestion slice. We allocate a fresh slice
-// so callers cannot mutate the cache by editing the response.
-func buildOpenQuestions(qs []OpenQuestion) []*graphql.ContractQuestion {
-	if len(qs) == 0 {
-		return []*graphql.ContractQuestion{}
+// statusToGraphQL maps the internal "open"/"closed" status to the v0.8
+// SIGNED/CLOSED enum. Unknown values default to SIGNED (open/active).
+func statusToGraphQL(s string) graphql.ContractStatus {
+	if s == "closed" {
+		return graphql.ContractStatusClosed
 	}
-	out := make([]*graphql.ContractQuestion, 0, len(qs))
-	for _, q := range qs {
-		gq := &graphql.ContractQuestion{
-			QuestionID:  q.QuestionID,
-			Text:        q.Text,
-			AskedBy:     q.AskedBy,
-			AskedAt:     formatTime(q.AskedAt),
-			BlocksClose: q.BlocksClose,
-		}
-		if q.Deadline != nil {
-			d := formatTime(*q.Deadline)
-			gq.Deadline = &d
-		}
-		out = append(out, gq)
-	}
-	return out
+	return graphql.ContractStatusSigned
 }
 
-// mapStatus maps the plugin's raw status string to the schema enum.
-// Unknown values fall through to OPEN — the safest default for a
-// future-tense enum addition.
-func mapStatus(s string) graphql.ContractStatus {
-	switch s {
-	case "open":
-		return graphql.ContractStatusOpen
-	case "delivered_pending_validation":
-		return graphql.ContractStatusDeliveredPendingValidation
-	case "delivered_pending_parent_validation":
-		return graphql.ContractStatusDeliveredPendingParentValidation
-	case "pending_drew_approval":
-		return graphql.ContractStatusPendingDrewApproval
-	case "awaiting_cancel_ack":
-		return graphql.ContractStatusAwaitingCancelAck
-	case "waiting_external":
-		return graphql.ContractStatusWaitingExternal
-	case "satisfied":
-		return graphql.ContractStatusSatisfied
-	case "cancelled":
-		return graphql.ContractStatusCancelled
-	case "judge_rejected_terminal":
-		return graphql.ContractStatusJudgeRejectedTerminal
-	default:
-		return graphql.ContractStatusOpen
+// reasonToGraphQL maps "delivered"/"abandoned" to the ContractReason enum.
+// Unknown values default to DELIVERED.
+func reasonToGraphQL(r string) graphql.ContractReason {
+	if r == "abandoned" {
+		return graphql.ContractReasonAbandoned
 	}
+	return graphql.ContractReasonDelivered
 }
 
 // formatTime renders a time as RFC 3339 with nanosecond precision.
