@@ -1,11 +1,10 @@
 package contracts
 
-// fold_v08_jsonl_test.go exercises the v0.8 session-JSONL fold path.
+// fold_jsonl_test.go exercises the session-JSONL fold path.
 //
-// v0.8 stores contract open/close as tool_use events inside assistant
-// message records inside session JSONL files (under
-// ~/.claude/projects/*/*.jsonl) rather than per-contract JSONL files
-// under ~/.claude/contracts/. These tests validate:
+// Contract open/close events live as tool_use blocks inside assistant
+// message records in session JSONL files (~/.claude/projects/*/*.jsonl).
+// These tests validate:
 //
 //   - L1.6: FoldFromSessionJSONL reads open_contract + close_contract
 //     tool_use events and derives the correct Contract state.

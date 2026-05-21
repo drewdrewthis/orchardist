@@ -48,7 +48,7 @@ The daemon's `internal/server/providers/contracts/` parses on-disk events accord
 ### Mitigations
 
 - Plugin source and daemon live in the same git checkout. Spec edits and daemon updates land in the same PR. Coordination friction is one review, not two repos.
-- The daemon's adoption is a one-time read-path-permissive change. After it lands, mixed-version JSONL (some events v0.7, some v0.8) is normal and no migration is needed for new events.
+- The daemon's adoption is a one-time read-path change to the session-JSONL fold; no migration of historic events is needed.
 - The marketplace pin update is a single-file change (`.claude-plugin/marketplace.json`). The version-bump flow is documented in `spec/version-policy.md`.
 
 ## Alternatives considered

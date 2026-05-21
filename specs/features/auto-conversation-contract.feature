@@ -111,38 +111,6 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
     Then fields "cooldown", "waiting", and "judgeRun" are absent
     And ContractFilter does not expose filters for the removed fields
 
-  # ---- L1 / One-shot migration of v0.7 contracts ----
-
-  @integration
-  Scenario: First daemon boot after upgrade migrates open v0.7 contracts into owning session jsonls
-    Given "~/.claude/contracts/" contains v0.7 per-id JSONL files for two open contracts owned by session "S-MIGRATE-001"
-    And no "~/.claude/contracts/.migrated-v0.8" sentinel exists
-    When the daemon starts
-    Then for each open v0.7 contract an "open_contract" tool_use event is appended to "S-MIGRATE-001"'s session jsonl
-    And the sentinel file "~/.claude/contracts/.migrated-v0.8" is created
-    And Query.contracts(filter:{ownerSessionId:"S-MIGRATE-001", statuses:[OPEN]}) returns the migrated contracts
-
-  @integration
-  Scenario: Migration is idempotent across daemon restarts
-    Given the "~/.claude/contracts/.migrated-v0.8" sentinel exists
-    When the daemon starts again
-    Then no additional migration writes occur
-    And no duplicate open_contract events appear in any session jsonl
-
-  @integration
-  Scenario: Closed v0.7 contracts move to archive untouched
-    Given "~/.claude/contracts/" contains v0.7 per-id JSONL files for closed contracts
-    When the daemon performs the one-shot migration
-    Then closed v0.7 contract files are moved to "~/.claude/contracts/.archive/"
-    And no migration events are appended to session jsonls for closed contracts
-
-  @integration
-  Scenario: Migration of v0.7 contract whose owning session jsonl is gone archives with orphan note
-    Given a v0.7 open contract whose ownerSessionId no longer maps to any session jsonl on disk
-    When the daemon performs the one-shot migration
-    Then the contract file is moved to "~/.claude/contracts/.archive/"
-    And an accompanying "migration-orphan.md" note records the missing session
-
   # ---- L1 / Consumer cleanup for the schema break ----
 
   @integration
@@ -327,11 +295,6 @@ Feature: Auto-conversation-contract on first user message (with v0.8 contracts s
   #     → Scenario: ContractStatus collapses to two values
   #     → Scenario: ContractReason enum exposes exactly DELIVERED and ABANDONED
   #     → Scenario: Removed Contract fields are absent from the schema
-  #   One-shot migration of v0.7 contracts:
-  #     → Scenario: First daemon boot after upgrade migrates open v0.7 contracts into owning session jsonls
-  #     → Scenario: Migration is idempotent across daemon restarts
-  #     → Scenario: Closed v0.7 contracts move to archive untouched
-  #     → Scenario: Migration of v0.7 contract whose owning session jsonl is gone archives with orphan note
   #   Consumer cleanup:
   #     → Scenario: CLI and skills are updated for the v0.8 schema break
   #
