@@ -67,7 +67,7 @@ func TestFoldExit_ExitSynthesizesVirtualClose(t *testing.T) {
 		mustDecodeSessionRecord(t, exitCommandLine("exit", sessionID, t1)),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	c, ok := state[ContractID(contractID)]
 	if !ok {
@@ -112,7 +112,7 @@ func TestFoldExit_QuitAndByeSynthesizeVirtualClose(t *testing.T) {
 				mustDecodeSessionRecord(t, exitCommandLine(tc.verb, tc.sessionID, t1)),
 			}
 
-			state := FoldFromSessionJSONL(records, tc.sessionID)
+			state := FoldFromSessionJSONL(records, tc.sessionID).Contracts
 
 			c, ok := state[ContractID(tc.contractID)]
 			if !ok {
@@ -143,7 +143,7 @@ func TestFoldExit_NonConvContractNotAutoClosedByExit(t *testing.T) {
 		mustDecodeSessionRecord(t, exitCommandLine("exit", sessionID, t1)),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	// Conversation contract must be closed.
 	conv, ok := state[ContractID(convID)]
@@ -176,7 +176,7 @@ func TestFoldExit_NoConvContractExitIsNoop(t *testing.T) {
 		mustDecodeSessionRecord(t, exitCommandLine("exit", sessionID, t0.Add(time.Hour))),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	// The other contract must be unaffected (still open).
 	c, ok := state[ContractID(contractID)]
@@ -213,7 +213,7 @@ func TestFoldExit_ResumeAfterExitCreatesTwoContracts(t *testing.T) {
 		mustDecodeSessionRecord(t, openConvContractLine(secondContractID, sessionID, t2)),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	// Must have exactly two contracts.
 	if got := len(state); got != 2 {
@@ -270,7 +270,7 @@ func TestFoldExit_ExplicitCloseContractClosesDirectly(t *testing.T) {
 		mustDecodeSessionRecord(t, closeContractLine(contractID, "delivered", sessionID, "", t1)),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	// Conversation contract must be closed.
 	conv, ok := state[ContractID(contractID)]

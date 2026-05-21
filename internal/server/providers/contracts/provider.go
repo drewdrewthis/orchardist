@@ -32,10 +32,10 @@ type Provider struct {
 	logger    *slog.Logger
 	clock     func() time.Time
 
-	mu     sync.RWMutex
-	state  map[ContractID]Contract
-	loaded bool
-	last   time.Time
+	mu         sync.RWMutex
+	foldState  *FoldState
+	loaded     bool
+	last       time.Time
 
 	// offsets is the per-file byte position the Provider has folded up
 	// to. Keyed by absolute file path. Tail reads resume from these offsets.
@@ -82,7 +82,7 @@ func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provid
 		watcher:   NewProjectsWatcher(dir, logger),
 		logger:    logger,
 		clock:     clock,
-		state:     map[ContractID]Contract{},
+		foldState: NewFoldState(),
 		offsets:   map[string]int64{},
 		subs:      map[chan adapter.InvalidationEvent[ContractID]]struct{}{},
 		stopCh:    make(chan struct{}),
@@ -113,7 +113,7 @@ func (p *Provider) Start(ctx context.Context) error {
 				"dir", p.adapterIO.Root(), "err", err)
 		}
 		p.mu.Lock()
-		p.state = FoldProjectsRecords(records)
+		p.foldState = FoldProjectsRecords(records)
 		p.offsets = offsets
 		p.loaded = true
 		p.last = p.clock()
@@ -158,7 +158,7 @@ func (p *Provider) Stop() error {
 // (which only happens during a watcher tick that has not landed yet).
 func (p *Provider) Get(_ context.Context, key ContractID) (*graphql.Contract, adapter.Freshness, error) {
 	p.mu.RLock()
-	c, ok := p.state[key]
+	c, ok := p.foldState.Contracts[key]
 	loaded := p.loaded
 	last := p.last
 	p.mu.RUnlock()
@@ -182,7 +182,7 @@ func (p *Provider) GetMany(_ context.Context, keys []ContractID) (map[ContractID
 		return out, freshness, fmt.Errorf("contracts provider not started")
 	}
 	for _, k := range keys {
-		c, ok := p.state[k]
+		c, ok := p.foldState.Contracts[k]
 		if !ok {
 			continue
 		}
@@ -197,8 +197,8 @@ func (p *Provider) GetMany(_ context.Context, keys []ContractID) (map[ContractID
 func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	out := make([]ContractID, 0, len(p.state))
-	for k := range p.state {
+	out := make([]ContractID, 0, len(p.foldState.Contracts))
+	for k := range p.foldState.Contracts {
 		out = append(out, k)
 	}
 	return out, nil
@@ -212,8 +212,8 @@ func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 // graphql shape directly keeps the resolver layer trivial.
 func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*graphql.Contract, error) {
 	p.mu.RLock()
-	contracts := make([]Contract, 0, len(p.state))
-	for _, c := range p.state {
+	contracts := make([]Contract, 0, len(p.foldState.Contracts))
+	for _, c := range p.foldState.Contracts {
 		contracts = append(contracts, c)
 	}
 	loaded := p.loaded
@@ -313,7 +313,7 @@ func (p *Provider) refresh(ctx context.Context) {
 	touched := make(map[ContractID]struct{})
 	now := p.clock()
 	p.mu.Lock()
-	ApplyProjectsRecords(p.state, records)
+	ApplyProjectsRecords(p.foldState, records)
 	for _, pr := range records {
 		// Extract the contract id from open_contract / close_contract blocks
 		// so we know which ids to invalidate without a full-state diff.

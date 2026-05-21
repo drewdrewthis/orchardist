@@ -154,7 +154,7 @@ func TestFoldV08_OpenContractFromSessionJSONL(t *testing.T) {
 		mustDecodeSessionRecord(t, openContractLine(contractID, "ship the widget", sessionID, t0)),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	c, ok := state[ContractID(contractID)]
 	if !ok {
@@ -187,7 +187,7 @@ func TestFoldV08_CloseContractSameSession(t *testing.T) {
 		mustDecodeSessionRecord(t, closeContractLine(contractID, "delivered", sessionID, "", t1)),
 	}
 
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	c, ok := state[ContractID(contractID)]
 	if !ok {
@@ -227,14 +227,11 @@ func TestFoldV08_CrossJsonlClose(t *testing.T) {
 	}
 
 	// Build a global state across both jsonls.
-	global := make(map[ContractID]Contract)
-	for id, c := range FoldFromSessionJSONL(recordsA, ownerSessionID) {
-		global[id] = c
-	}
+	global := FoldFromSessionJSONL(recordsA, ownerSessionID)
 	// Apply cross-jsonl close events against the global state.
 	ApplySessionRecords(global, recordsB, otherSessionID)
 
-	c, ok := global[ContractID(contractID)]
+	c, ok := global.Contracts[ContractID(contractID)]
 	if !ok {
 		t.Fatalf("contract %s not in global state after cross-jsonl close", contractID)
 	}
@@ -268,11 +265,11 @@ func TestFoldV08_CloseBeforeOpenInScanOrder(t *testing.T) {
 		mustDecodeSessionRecord(t, openContractLine(contractID, "scan-order contract", ownerSessionID, t0)),
 	}
 
-	global := make(map[ContractID]Contract)
+	global := NewFoldState()
 	ApplySessionRecords(global, recordsB, otherSessionID) // close FIRST
 	ApplySessionRecords(global, recordsA, ownerSessionID) // open SECOND
 
-	c, ok := global[ContractID(contractID)]
+	c, ok := global.Contracts[ContractID(contractID)]
 	if !ok {
 		t.Fatalf("contract %s missing from state", contractID)
 	}
@@ -320,17 +317,12 @@ func TestFoldV08_OwnerSessionIdFilter(t *testing.T) {
 	}
 
 	// Build global state.
-	global := make(map[ContractID]Contract)
-	for id, c := range FoldFromSessionJSONL(recA, sessionA) {
-		global[id] = c
-	}
-	for id, c := range FoldFromSessionJSONL(recB, sessionB) {
-		global[id] = c
-	}
+	global := FoldFromSessionJSONL(recA, sessionA)
+	ApplySessionRecords(global, recB, sessionB)
 
 	// Contracts owned by sessionA with status open must be exactly 2.
 	var openByA []Contract
-	for _, c := range global {
+	for _, c := range global.Contracts {
 		if c.OwnerSessionID == sessionA && c.Status == "open" {
 			openByA = append(openByA, c)
 		}
@@ -347,7 +339,7 @@ func TestFoldV08_OwnerSessionIdFilter(t *testing.T) {
 	}
 
 	// Total: idA1, idA2 open; idA3 closed; idB1 open → 4 contracts total.
-	if got := len(global); got != 4 {
+	if got := len(global.Contracts); got != 4 {
 		t.Errorf("total contracts = %d, want 4", got)
 	}
 }
@@ -383,7 +375,7 @@ func TestFoldV08_FsnotifyInvalidation(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	initialState := FoldProjectsRecords(records)
-	if _, ok := initialState[ContractID(contractID)]; ok {
+	if _, ok := initialState.Contracts[ContractID(contractID)]; ok {
 		t.Fatalf("contract appeared before write; expected absent")
 	}
 
@@ -397,13 +389,9 @@ func TestFoldV08_FsnotifyInvalidation(t *testing.T) {
 	}
 
 	// Apply new records to the existing (empty) global state.
-	global := make(map[ContractID]Contract)
-	for id, c := range initialState {
-		global[id] = c
-	}
-	ApplyProjectsRecords(global, newRecords)
+	ApplyProjectsRecords(initialState, newRecords)
 
-	c, ok := global[ContractID(contractID)]
+	c, ok := initialState.Contracts[ContractID(contractID)]
 	if !ok {
 		t.Fatalf("contract %s not found after fsnotify-driven refresh; expected it to appear", contractID)
 	}

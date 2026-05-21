@@ -45,40 +45,32 @@ func isExitRecord(rec SessionRecord) bool {
 	return false
 }
 
-// applyExitRecord scans state for the open conversation contract owned by
-// localSessionID and closes it with reason "delivered". If no such contract
-// exists the call is a no-op.
+// applyExitRecord uses the OpenIndex to find the open conversation contract
+// owned by localSessionID in O(1) and closes it with reason "delivered". If
+// no such contract exists the call is a no-op.
 //
 // Called from applySessionRecord when an exit/quit/bye local_command record
 // is detected. The timestamp from the exit record is used as the closure
 // timestamp so UpdatedAt/LastEventAt reflect when the session ended.
-func applyExitRecord(state map[ContractID]Contract, rec SessionRecord, localSessionID string) {
+func applyExitRecord(state *FoldState, rec SessionRecord, localSessionID string) {
 	if !isExitRecord(rec) {
 		return
 	}
 	closedAt := parseRFC3339(rec.Timestamp)
 
-	// Find the open conversation contract for this session. We iterate over
-	// state rather than relying on any index because the map is small and this
-	// path is cold (executed at most once per session replay).
-	for id, c := range state {
-		if c.OwnerSessionID != localSessionID {
-			continue
-		}
-		if c.Statement != ConversationContractDeliverable {
-			continue
-		}
-		if c.Status != "open" {
-			continue
-		}
-		// Close the conversation contract in-memory.
-		c.Status = "closed"
-		c.ClosedReason = "delivered"
-		if !closedAt.IsZero() {
-			c.UpdatedAt = closedAt
-			c.LastEventAt = closedAt
-		}
-		state[id] = c
-		return // only one open conversation contract per session
+	key := OpenKey{OwnerSessionID: localSessionID, Deliverable: ConversationContractDeliverable}
+	id, ok := state.OpenIndex[key]
+	if !ok {
+		return
 	}
+
+	c := state.Contracts[id]
+	c.Status = "closed"
+	c.ClosedReason = "delivered"
+	if !closedAt.IsZero() {
+		c.UpdatedAt = closedAt
+		c.LastEventAt = closedAt
+	}
+	state.Contracts[id] = c
+	delete(state.OpenIndex, key)
 }

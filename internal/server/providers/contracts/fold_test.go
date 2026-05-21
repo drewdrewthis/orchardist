@@ -38,7 +38,7 @@ func TestFoldV08_OpenEvent_StatusIsSigned(t *testing.T) {
 	records := []SessionRecord{
 		mustDecodeSessionRecord(t, openContractLine(contractID, "deliver feature A", sessionID, t0)),
 	}
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	c, ok := state[ContractID(contractID)]
 	if !ok {
@@ -72,7 +72,7 @@ func TestFoldV08_CloseDelivered_StatusIsClosedReasonDelivered(t *testing.T) {
 		mustDecodeSessionRecord(t, openContractLine(contractID, "deliver feature B", sessionID, t0)),
 		mustDecodeSessionRecord(t, closeContractLine(contractID, "delivered", sessionID, "", t1)),
 	}
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	c, ok := state[ContractID(contractID)]
 	if !ok {
@@ -110,7 +110,7 @@ func TestFoldV08_CloseAbandoned_StatusIsClosedReasonAbandoned(t *testing.T) {
 		mustDecodeSessionRecord(t, openContractLine(contractID, "abandoned thing", sessionID, t0)),
 		mustDecodeSessionRecord(t, closeContractLine(contractID, "abandoned", sessionID, "", t1)),
 	}
-	state := FoldFromSessionJSONL(records, sessionID)
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
 	c, ok := state[ContractID(contractID)]
 	if !ok {
@@ -378,5 +378,75 @@ func TestMatches_ClosedReasonBoth(t *testing.T) {
 	}
 	if matches(open, filter) {
 		t.Error("open contract should not match closedReasons:[DELIVERED,ABANDONED] filter")
+	}
+}
+
+// TestFoldState_OpenIndex_IsConsistentWithContracts verifies that OpenIndex
+// always mirrors the set of open contracts: open adds to the index, close
+// removes from it, and a close-then-reopen with a new id creates a fresh
+// entry rather than hitting the dedup guard.
+func TestFoldState_OpenIndex_IsConsistentWithContracts(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	t1 := mustParse(t, "2026-05-21T11:00:00Z")
+	t2 := mustParse(t, "2026-05-21T12:00:00Z")
+
+	sidA := "S-IDX-001"
+	sidB := "S-IDX-002"
+	sidC := "S-IDX-003"
+
+	// Three contracts opened in three different sessions.
+	idA := ContractID("C-IDX-A")
+	idB := ContractID("C-IDX-B")
+	idC := ContractID("C-IDX-C")
+
+	state := NewFoldState()
+
+	// Open three contracts.
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(string(idA), "deliver A", sidA, t0)),
+	}, sidA)
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(string(idB), "deliver B", sidB, t0)),
+	}, sidB)
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(string(idC), "deliver C", sidC, t0)),
+	}, sidC)
+
+	// Close contract B.
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, closeContractLine(string(idB), "delivered", sidB, "", t1)),
+	}, sidB)
+
+	// Re-open sidC's deliverable with a NEW contract id — this is a
+	// close-then-reopen, so dedup must NOT trigger.
+	idC2 := ContractID("C-IDX-C2")
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, closeContractLine(string(idC), "delivered", sidC, "", t1)),
+		mustDecodeSessionRecord(t, openContractLine(string(idC2), "deliver C", sidC, t2)),
+	}, sidC)
+
+	// Open contracts: idA (sidA/"deliver A") and idC2 (sidC/"deliver C").
+	// Closed: idB, idC.
+	wantOpenCount := 2
+	if got := len(state.OpenIndex); got != wantOpenCount {
+		t.Errorf("OpenIndex len = %d, want %d", got, wantOpenCount)
+	}
+
+	// Every entry in OpenIndex must point to an open Contract with matching fields.
+	for key, cid := range state.OpenIndex {
+		c, ok := state.Contracts[cid]
+		if !ok {
+			t.Errorf("OpenIndex[%v] = %v but no such contract in Contracts", key, cid)
+			continue
+		}
+		if c.Status != "open" {
+			t.Errorf("OpenIndex[%v] → contract %v has Status=%q, want open", key, cid, c.Status)
+		}
+		if c.OwnerSessionID != key.OwnerSessionID {
+			t.Errorf("OpenIndex[%v] → contract OwnerSessionID=%q, want %q", key, c.OwnerSessionID, key.OwnerSessionID)
+		}
+		if c.Statement != key.Deliverable {
+			t.Errorf("OpenIndex[%v] → contract Statement=%q, want %q", key, c.Statement, key.Deliverable)
+		}
 	}
 }

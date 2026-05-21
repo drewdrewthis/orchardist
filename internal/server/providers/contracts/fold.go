@@ -6,10 +6,10 @@ package contracts
 // message records in session JSONL files (~/.claude/projects/*/<uuid>.jsonl).
 // This file provides the pure-fold layer:
 //
-//   - FoldFromSessionJSONL: fold a single session's records into a Contract map.
-//   - ApplySessionRecords: apply records to an existing global state map.
+//   - FoldFromSessionJSONL: fold a single session's records into a FoldState.
+//   - ApplySessionRecords: apply records to an existing FoldState.
 //   - FoldProjectsRecords: fold records from multiple sessions (ProjectsRecord).
-//   - ApplyProjectsRecords: apply multi-session records to an existing state map.
+//   - ApplyProjectsRecords: apply multi-session records to an existing FoldState.
 //
 // ProjectsAdapter lives in projects_adapter.go (adapter + watcher split) and
 // is declared separately so tests can inject a different root without touching
@@ -27,8 +27,29 @@ import (
 // so only one Contract per session is ever created.
 const ConversationContractDeliverable = "user agrees conversation has come to a close and there are no loose ends"
 
+// OpenKey is the dedup key for open contracts: (ownerSessionID, deliverable).
+type OpenKey struct {
+	OwnerSessionID string
+	Deliverable    string
+}
+
+// FoldState holds the contract map plus the (ownerSessionID, deliverable)
+// index that makes dedup and exit-close O(1).
+type FoldState struct {
+	Contracts map[ContractID]Contract
+	OpenIndex map[OpenKey]ContractID
+}
+
+// NewFoldState returns an empty FoldState ready for use.
+func NewFoldState() *FoldState {
+	return &FoldState{
+		Contracts: map[ContractID]Contract{},
+		OpenIndex: map[OpenKey]ContractID{},
+	}
+}
+
 // FoldFromSessionJSONL folds a slice of SessionRecords for a single
-// session into a Contract map. Each open_contract tool_use block
+// session into a FoldState. Each open_contract tool_use block
 // initialises a Contract keyed by contract id; close_contract closes it.
 //
 // localSessionID is the session UUID whose JSONL these records came from.
@@ -38,17 +59,17 @@ const ConversationContractDeliverable = "user agrees conversation has come to a 
 // Dedup rule: if the same (localSessionID, deliverable) pair already has
 // an OPEN contract, a subsequent open_contract for the same deliverable is
 // a no-op. A close followed by a new open IS a new record.
-func FoldFromSessionJSONL(records []SessionRecord, localSessionID string) map[ContractID]Contract {
-	state := make(map[ContractID]Contract)
+func FoldFromSessionJSONL(records []SessionRecord, localSessionID string) *FoldState {
+	state := NewFoldState()
 	ApplySessionRecords(state, records, localSessionID)
 	return state
 }
 
 // ApplySessionRecords applies a slice of SessionRecords to an existing
-// global Contract map. localSessionID is the UUID of the JSONL these
-// records came from — used as OwnerSessionID for open_contract events
-// and to resolve F2 non-owner abandon closes (aboutSessionId).
-func ApplySessionRecords(state map[ContractID]Contract, records []SessionRecord, localSessionID string) {
+// FoldState. localSessionID is the UUID of the JSONL these records came
+// from — used as OwnerSessionID for open_contract events and to resolve
+// F2 non-owner abandon closes (aboutSessionId).
+func ApplySessionRecords(state *FoldState, records []SessionRecord, localSessionID string) {
 	for _, rec := range records {
 		applySessionRecord(state, rec, localSessionID)
 	}
@@ -62,7 +83,7 @@ func ApplySessionRecords(state map[ContractID]Contract, records []SessionRecord,
 // System records are checked for exit/quit/bye local_command content;
 // when matched a virtual close of the open conversation contract is
 // synthesised in-memory (L2.11/L2.12).
-func applySessionRecord(state map[ContractID]Contract, rec SessionRecord, localSessionID string) {
+func applySessionRecord(state *FoldState, rec SessionRecord, localSessionID string) {
 	// L2.11/L2.12: system/local_command exit records.
 	if rec.Type == "system" {
 		applyExitRecord(state, rec, localSessionID)
@@ -86,7 +107,7 @@ func applySessionRecord(state map[ContractID]Contract, rec SessionRecord, localS
 }
 
 // applyOpenContractBlock handles one open_contract tool_use content block.
-func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentBlock, localSessionID string, rec SessionRecord) {
+func applyOpenContractBlock(state *FoldState, block SessionContentBlock, localSessionID string, rec SessionRecord) {
 	var inp OpenContractInput
 	if err := json.Unmarshal(block.Input, &inp); err != nil {
 		return // malformed input — skip silently
@@ -100,12 +121,9 @@ func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentB
 	// contract, treat this as a no-op. A close then re-open IS a new record.
 	deliverable := inp.effectiveDeliverable()
 	if deliverable != "" {
-		for _, c := range state {
-			if c.OwnerSessionID == localSessionID &&
-				c.Statement == deliverable &&
-				c.Status == "open" {
-				return // already open — idempotent
-			}
+		key := OpenKey{OwnerSessionID: localSessionID, Deliverable: deliverable}
+		if _, exists := state.OpenIndex[key]; exists {
+			return // already open — idempotent
 		}
 	}
 
@@ -127,22 +145,26 @@ func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentB
 	// If a close arrived first (cross-jsonl, owner's file not yet scanned),
 	// state already holds a closed placeholder for this id. Hydrate the
 	// missing fields without resurrecting it to open — the close wins.
-	if existing, ok := state[id]; ok && existing.Status == "closed" {
+	if existing, ok := state.Contracts[id]; ok && existing.Status == "closed" {
 		existing.Statement = c.Statement
 		existing.OwnerSessionID = c.OwnerSessionID
 		if existing.CreatedAt.IsZero() {
 			existing.CreatedAt = c.CreatedAt
 		}
-		state[id] = existing
+		state.Contracts[id] = existing
+		// Do NOT add to OpenIndex — it stays closed.
 		return
 	}
-	state[id] = c
+	state.Contracts[id] = c
+	if deliverable != "" {
+		state.OpenIndex[OpenKey{OwnerSessionID: localSessionID, Deliverable: deliverable}] = id
+	}
 }
 
 // applyCloseContractBlock handles one close_contract tool_use content block.
 // Closes by contract id regardless of which session jsonl the close lives in
 // (supports the F2 non-owner abandon case where aboutSessionId != owner).
-func applyCloseContractBlock(state map[ContractID]Contract, block SessionContentBlock) {
+func applyCloseContractBlock(state *FoldState, block SessionContentBlock) {
 	var inp CloseContractInput
 	if err := json.Unmarshal(block.Input, &inp); err != nil {
 		return // malformed input — skip silently
@@ -154,10 +176,11 @@ func applyCloseContractBlock(state map[ContractID]Contract, block SessionContent
 
 	closedAt := parseRFC3339(inp.ClosedAt)
 
-	c, ok := state[id]
+	c, ok := state.Contracts[id]
 	if !ok {
 		// Close arrived before open (cross-jsonl case: the owner's jsonl
 		// hasn't been scanned yet). Create a minimal closed placeholder.
+		// Do NOT add to OpenIndex — it was never open in state.
 		c = Contract{
 			ID:           id,
 			Status:       "closed",
@@ -167,20 +190,26 @@ func applyCloseContractBlock(state map[ContractID]Contract, block SessionContent
 			c.UpdatedAt = closedAt
 			c.LastEventAt = closedAt
 		}
-		state[id] = c
+		state.Contracts[id] = c
 		return
 	}
 
 	if c.Status == "closed" {
 		return // already closed — idempotent
 	}
+
+	// Remove from OpenIndex before closing.
+	if c.Statement != "" {
+		delete(state.OpenIndex, OpenKey{OwnerSessionID: c.OwnerSessionID, Deliverable: c.Statement})
+	}
+
 	c.Status = "closed"
 	c.ClosedReason = inp.ClosedReason
 	if !closedAt.IsZero() {
 		c.UpdatedAt = closedAt
 		c.LastEventAt = closedAt
 	}
-	state[id] = c
+	state.Contracts[id] = c
 }
 
 // parseRFC3339 parses an RFC 3339 timestamp (with or without nanoseconds).
@@ -211,18 +240,18 @@ type ProjectsRecord struct {
 }
 
 // FoldProjectsRecords folds a slice of ProjectsRecords (from multiple
-// session jsonls) into a single global Contract map indexed by contract id.
-// Cross-jsonl close resolution works because all records share the same map.
-func FoldProjectsRecords(records []ProjectsRecord) map[ContractID]Contract {
-	state := make(map[ContractID]Contract)
+// session jsonls) into a single global FoldState indexed by contract id.
+// Cross-jsonl close resolution works because all records share the same state.
+func FoldProjectsRecords(records []ProjectsRecord) *FoldState {
+	state := NewFoldState()
 	ApplyProjectsRecords(state, records)
 	return state
 }
 
 // ApplyProjectsRecords applies a slice of ProjectsRecords to an existing
-// state map. Used for incremental updates (follow-from-offsets path) to
+// FoldState. Used for incremental updates (follow-from-offsets path) to
 // avoid a full rebuild on every fsnotify tick.
-func ApplyProjectsRecords(state map[ContractID]Contract, records []ProjectsRecord) {
+func ApplyProjectsRecords(state *FoldState, records []ProjectsRecord) {
 	for _, pr := range records {
 		applySessionRecord(state, pr.Record, pr.SessionID)
 	}
