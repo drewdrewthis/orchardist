@@ -19,6 +19,7 @@ package contracts
 // enum values.
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -157,7 +158,16 @@ func TestFoldV08_ContractHasNoRemovedFields(t *testing.T) {
 		UpdatedAt:      t0,
 		LastEventAt:    t0,
 	}
-	// If we reach here, the removed fields are confirmed absent.
+
+	// Runtime guard: omitting fields in a keyed struct literal is always
+	// legal in Go, so the literal above alone does not prove the fields
+	// are gone. Reflect to fail loudly if any are reintroduced.
+	typ := reflect.TypeOf(Contract{})
+	for _, name := range []string{"Criteria", "OpenQuestions", "ReportsTo", "ParentContractID"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Errorf("Contract unexpectedly contains removed field %q", name)
+		}
+	}
 }
 
 // ---- L1.9: mapStatus exhaustive coverage ----------------------------------
