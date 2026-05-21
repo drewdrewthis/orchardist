@@ -7,6 +7,10 @@ node_modules/
 # Go daemon build artefacts (cmd/orchard → bin/orchard).
 /bin/
 
+# conversation-contracts plugin MCP binary (built into plugin's bin/).
+/plugins/conversation-contracts/bin/
+/mcp
+
 # Claude Code session-local state
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
