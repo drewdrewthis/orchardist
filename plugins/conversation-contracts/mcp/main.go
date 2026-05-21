@@ -15,6 +15,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -205,15 +207,24 @@ func encodeCwd(cwd string) string {
 // ---- Contract ID generation ------------------------------------------------
 
 // newContractID returns a contract id in the form C-YYYY-MM-DD-XXXXXXXX.
-// XXXXXXXX is 8 lowercase hex characters derived from the current
-// nanosecond timestamp (deterministic within a test, sufficiently random
-// for real use when combined with the date prefix).
+// XXXXXXXX is 8 lowercase hex characters from crypto/rand — the fold
+// keys map[ContractID]Contract by this id, so a same-nanosecond collision
+// between two parallel sessions would silently merge distinct contracts.
+// crypto/rand prevents that; nanosecond fallback keeps the function pure
+// in pathological no-entropy environments.
 func newContractID(now time.Time) string {
 	date := now.UTC().Format("2006-01-02")
-	// 8 hex chars from the lower 32 bits of the unix nanosecond counter.
-	// For production use this is random-enough given date+nanoseconds.
-	hex := fmt.Sprintf("%08x", uint32(now.UnixNano()))
-	return fmt.Sprintf("C-%s-%s", date, hex)
+	return fmt.Sprintf("C-%s-%s", date, randomHex8(now))
+}
+
+// randomHex8 returns 8 lowercase hex chars from crypto/rand, or a
+// nanosecond-derived fallback if the rng read fails.
+func randomHex8(now time.Time) string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("%08x", uint32(now.UnixNano()))
 }
 
 // ---- open_contract handler -------------------------------------------------
@@ -303,8 +314,10 @@ func handleCloseContract(args closeContractArgs, jsonlPath string, now time.Time
 	}
 
 	closedAt := now.UTC().Format(time.RFC3339)
-	// Use a unique UUID for the event record itself; derive from time.
-	eventUUID := fmt.Sprintf("close-%s-%08x", args.ID, uint32(now.UnixNano()))
+	// Use a collision-resistant suffix for the event record UUID so two
+	// close_contract calls in the same nanosecond can't share a tool_use ID
+	// (which would break tool_use/tool_result correlation).
+	eventUUID := fmt.Sprintf("close-%s-%s", args.ID, randomHex8(now))
 
 	input := closeContractInput{
 		ID:             args.ID,
