@@ -210,8 +210,14 @@ func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 // graphql shape directly keeps the resolver layer trivial.
 func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*graphql.Contract, error) {
 	p.mu.RLock()
+	// Filter while copying so sort only runs over the survivors. For
+	// selective filters this avoids sorting contracts that will be
+	// discarded anyway.
 	contracts := make([]Contract, 0, len(p.state))
 	for _, c := range p.state {
+		if filter != nil && !matches(c, filter) {
+			continue
+		}
 		contracts = append(contracts, c)
 	}
 	loaded := p.loaded
@@ -232,9 +238,6 @@ func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*g
 
 	out := make([]*graphql.Contract, 0, len(contracts))
 	for _, c := range contracts {
-		if filter != nil && !matches(c, filter) {
-			continue
-		}
 		out = append(out, toGraphQL(c))
 	}
 	return out, nil
