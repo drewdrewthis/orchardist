@@ -23,9 +23,21 @@ run_once() {
   trap "rm -f '$qfile' '$panes'" RETURN
 
   local daemon_ok=1
-  if ! curl -sf --max-time 5 -X POST "${DAEMON}/graphql" \
+  # The query is intentionally lean (path+branch only) so the picker boot
+  # stays under ~1s even with 30+ worktrees across many repos. Enriching
+  # each worktree with PR/issue/labels hits the gh provider per-worktree
+  # and can take 30s+ under cold cache. Set ORCHARD_LABEL_ENRICH=1 to
+  # opt-in to the heavy query (useful when running outside the prefix-s
+  # hot path).
+  local query
+  if [ "${ORCHARD_LABEL_ENRICH:-0}" = "1" ]; then
+    query='{"query":"{ tmuxSessions { name lastActivityAt } claudeInstances { state pane { window { session { name } } } } repos { slug worktrees { branch path host pr { number draft mergeStateStatus statusCheckRollup labels { name } reviewDecision } issue { number title } } } }"}'
+  else
+    query='{"query":"{ tmuxSessions { name lastActivityAt } claudeInstances { state pane { window { session { name } } } } repos { slug worktrees { branch path host } } }"}'
+  fi
+  if ! curl -sf --max-time 15 -X POST "${DAEMON}/graphql" \
       -H 'Content-Type: application/json' \
-      -d '{"query":"{ tmuxSessions { name lastActivityAt } claudeInstances { state pane { window { session { name } } } } repos { slug worktrees { branch path host pr { number draft mergeStateStatus statusCheckRollup labels reviewDecision } issue { number title } } } }"}' \
+      -d "$query" \
       > "$qfile" 2>/dev/null; then
     daemon_ok=0
     printf '{"data":{"tmuxSessions":[],"claudeInstances":[],"repos":[]}}' > "$qfile"
@@ -145,9 +157,11 @@ with open(sys.argv[2]) as f:
             if b:
                 cells.append(f"#[fg=magenta]{b}#[default]")
 
-            labels = (pr or {}).get("labels") or []
-            if labels:
-                cells.append("#[fg=yellow]" + " ".join(f"[{l}]" for l in labels[:3]) + "#[default]")
+            # labels is [{name, color, description}, ...] in v0.8 (was [String]
+            # in pre-ADR-015 shape). Extract `.name` for the rendered chips.
+            label_names = [l.get("name") for l in ((pr or {}).get("labels") or []) if l.get("name")]
+            if label_names:
+                cells.append("#[fg=yellow]" + " ".join(f"[{l}]" for l in label_names[:3]) + "#[default]")
 
             if repo:
                 cells.append(f"#[fg=blue,italics]{repo}#[default]")
