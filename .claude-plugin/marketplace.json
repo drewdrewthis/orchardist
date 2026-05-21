@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "orchard",
+  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. The canonical home for the conversation-contracts plugin.",
+  "owner": {
+    "name": "drewdrewthis",
+    "url": "https://github.com/drewdrewthis"
+  },
+  "plugins": [
+    {
+      "name": "conversation-contracts",
+      "description": "Auto-open a conversation contract on the first user message of every session. Surfaces a loose-ends inventory at Stop. Only the user can close the contract via /close-conversation, /exit, /quit, or /bye. MCP tools: open_contract, close_contract. Hooks: UserPromptSubmit, Stop.",
+      "author": {
+        "name": "drewdrewthis"
+      },
+      "category": "agent-orchestration",
+      "version": "0.8.0",
+      "source": {
+        "source": "github",
+        "url": ".",
+        "path": "plugins/conversation-contracts"
+      },
+      "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugins/conversation-contracts"
+    }
+  ]
+}
