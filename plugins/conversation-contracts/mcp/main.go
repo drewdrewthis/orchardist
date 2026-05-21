@@ -140,7 +140,7 @@ var knownTools = []toolDef{
 	},
 	{
 		Name:        "close_contract",
-		Description: "Close an open contract by writing a close_contract tool_use event to the calling session's jsonl. Stub — implemented in task L1.3.",
+		Description: "Closes a contract by writing a close_contract event to the calling session's JSONL. Takes a contract id, a reason (\"delivered\" or \"abandoned\"), and optionally an aboutSessionId for non-owner abandons; the fold projection picks up the event on the next refresh.",
 		InputSchema: toolParam{
 			Type: "object",
 			Properties: map[string]toolParam{
