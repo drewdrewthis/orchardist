@@ -1139,8 +1139,10 @@ enum HostServiceState {
 
 """
 A commitment an agent has made to deliver something. Contracts are
-authored exclusively by the claude-contracts plugin; orchard reads
-them via the contracts provider and never writes.
+sourced from session JSONL `tool_use` events (open_contract /
+close_contract) written by the conversation-contracts plugin; the
+daemon's contracts provider folds those events into Contract nodes
+and never writes the JSONL itself.
 """
 type Contract implements Node {
   "Stable orchard id — \"Contract:<contract_id>\"."
@@ -1155,17 +1157,11 @@ type Contract implements Node {
   "Owner session id (Claude session UUID) recorded at creation time."
   ownerSessionId: String!
 
-  "Owner agent name."
-  ownerAgentName: String!
-
-  "Routing target for status updates and question answers."
-  reportsTo: String
-
-  "Parent contract id when filed under a management contract."
-  parentContractId: ID
-
   "Folded current status."
   status: ContractStatus!
+
+  "Reason the contract was closed. Null when status is SIGNED."
+  closedReason: ContractReason
 
   "RFC 3339 timestamp the contract was first created."
   createdAt: String!
@@ -1173,60 +1169,38 @@ type Contract implements Node {
   "RFC 3339 timestamp the contract was last touched."
   updatedAt: String!
 
-  "Acceptance criteria added via `criterion_added` events, in original order."
-  criteria: [String!]!
-
-  "Questions awaiting an answer. Empty when nothing is pending."
-  openQuestions: [ContractQuestion!]!
-
   "RFC 3339 timestamp of the most recent event affecting this contract."
   lastEventAt: String!
 }
 
 """
-Lifecycle states for Contract.
+Lifecycle states for Contract (v0.8 two-value model).
+SIGNED — contract is open and active.
+CLOSED — contract has been closed (see closedReason for delivery vs abandon).
 """
 enum ContractStatus {
-  OPEN
-  DELIVERED_PENDING_VALIDATION
-  DELIVERED_PENDING_PARENT_VALIDATION
-  PENDING_DREW_APPROVAL
-  AWAITING_CANCEL_ACK
-  WAITING_EXTERNAL
-  SATISFIED
-  CANCELLED
-  JUDGE_REJECTED_TERMINAL
+  SIGNED
+  CLOSED
 }
 
-"A blocking question recorded against a Contract."
-type ContractQuestion {
-  "Question id as written by the plugin."
-  questionId: ID!
-
-  "The question text."
-  text: String!
-
-  "Agent that asked the question."
-  askedBy: String!
-
-  "RFC 3339 timestamp the question was asked."
-  askedAt: String!
-
-  "RFC 3339 deadline after which the question times out."
-  deadline: String
-
-  "Whether this question blocks contract close while open."
-  blocksClose: Boolean!
+"""
+Reason a Contract was closed. Only set when ContractStatus is CLOSED.
+"""
+enum ContractReason {
+  DELIVERED
+  ABANDONED
 }
 
 """
 Filter for `Query.contracts`. All fields are optional.
 """
 input ContractFilter {
+  "Match contracts whose folded status is in this list."
   statuses: [ContractStatus!]
+  "Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts."
+  closedReasons: [ContractReason!]
+  "Match contracts owned by this Claude session UUID."
   ownerSessionId: String
-  ownerAgentName: String
-  parentContractId: ID
 }
 
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."

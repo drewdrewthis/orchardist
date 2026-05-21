@@ -1,388 +1,462 @@
 package contracts
 
+// fold_v08_test.go covers the v0.8 two-status fold model (L1.9-L1.11).
+//
+// L1.9: ContractStatus collapses to SIGNED and CLOSED.
+//   - open_contract event → internal Status "open" → mapStatus → SIGNED
+//   - close_contract event → internal Status "closed" → mapStatus → CLOSED
+//
+// L1.10: ClosedReason is DELIVERED or ABANDONED.
+//   - close_contract with closedReason:"delivered" → ClosedReason "delivered" → mapReason → DELIVERED
+//   - close_contract with closedReason:"abandoned" → ClosedReason "abandoned" → mapReason → ABANDONED
+//
+// L1.11: Removed fields (criteria, openQuestions, reportsTo, parentContractId)
+//   are absent from the Contract struct; only the v0.8 fields remain.
+//
+// These tests exercise the internal fold functions (FoldFromSessionJSONL,
+// applyCloseContractBlock) and the projection layer (statusToGraphQL,
+// reasonToGraphQL, toGraphQL) that maps internal strings to the GraphQL
+// enum values.
+
 import (
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 )
 
-// strPtr returns a pointer to s. The fold uses *string for nullable
-// fields per the on-disk JSONL shape.
-func strPtr(s string) *string { return &s }
+// ---- L1.9: two-value status model ----------------------------------------
 
-// timePtr is the time.Time analogue of strPtr.
-func timePtr(t time.Time) *time.Time { return &t }
+// TestFoldV08_OpenEvent_StatusIsSigned verifies that an open_contract
+// tool_use produces a Contract with internal status "open", which
+// projects to ContractStatusSigned.
+func TestFoldV08_OpenEvent_StatusIsSigned(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	sessionID := "S-L19-001"
+	contractID := "C-2026-05-21-L19-0001"
 
-// boolPtr lets tests pass `false` for blocks_close (the JSON unmarshal
-// has no other way to disambiguate "field omitted" from "field=false").
-func boolPtr(b bool) *bool { return &b }
-
-// mustParse is the test-side time parser. Fixtures use stable strings
-// so test failures show the original timestamp instead of a long
-// time.Now() drift.
-func mustParse(t *testing.T, s string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		t.Fatalf("parse %q: %v", s, err)
+	records := []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(contractID, "deliver feature A", sessionID, t0)),
 	}
-	return parsed
-}
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
 
-// agent constructs a Party for an agent owner. Used in fixtures so the
-// shape stays in lockstep with how the plugin writes JSONL.
-func agent(name, sessionID string) *Party {
-	return &Party{Kind: "agent", AgentName: strPtr(name), SessionID: sessionID}
-}
-
-func drew() *Party {
-	return &Party{Kind: "drew"}
-}
-
-// TestFold_Creation checks that a single `kind: contract` row produces
-// a fully populated Contract record.
-func TestFold_Creation(t *testing.T) {
-	created := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		{
-			Kind:          "contract",
-			ID:            "C-2026-05-04-aaaa1111",
-			Statement:     "Deliver foo",
-			Owner:         agent("agent-1", "session-1"),
-			ReportsTo:     drew(),
-			CreatedOn:     timePtr(created),
-			UpdatedOn:     timePtr(created),
-			InitialStatus: "open",
-		},
-	})
-
-	c, ok := state["C-2026-05-04-aaaa1111"]
+	c, ok := state[ContractID(contractID)]
 	if !ok {
-		t.Fatalf("contract not in fold result")
-	}
-	if c.Statement != "Deliver foo" {
-		t.Errorf("Statement = %q, want %q", c.Statement, "Deliver foo")
+		t.Fatalf("contract %s not in fold result", contractID)
 	}
 	if c.Status != "open" {
-		t.Errorf("Status = %q, want %q", c.Status, "open")
+		t.Errorf("Status = %q, want \"open\"", c.Status)
 	}
-	if c.OwnerSessionID != "session-1" {
-		t.Errorf("OwnerSessionID = %q, want %q", c.OwnerSessionID, "session-1")
+	if c.ClosedReason != "" {
+		t.Errorf("ClosedReason = %q, want empty (open contract has no reason)", c.ClosedReason)
 	}
-	if c.OwnerAgentName != "agent-1" {
-		t.Errorf("OwnerAgentName = %q, want %q", c.OwnerAgentName, "agent-1")
-	}
-	if c.ReportsTo != "drew" {
-		t.Errorf("ReportsTo = %q, want %q", c.ReportsTo, "drew")
-	}
-	if !c.CreatedAt.Equal(created) {
-		t.Errorf("CreatedAt = %v, want %v", c.CreatedAt, created)
-	}
-	if !c.LastEventAt.Equal(created) {
-		t.Errorf("LastEventAt = %v, want %v", c.LastEventAt, created)
+
+	// Verify projection to GraphQL enum.
+	gqlStatus := statusToGraphQL(c.Status)
+	if gqlStatus != "SIGNED" {
+		t.Errorf("statusToGraphQL(%q) = %q, want SIGNED", c.Status, gqlStatus)
 	}
 }
 
-// TestFold_LifecycleHappyPath traces created → delivered → judge_passed
-// → satisfied: the canonical AC scenario.
+// TestFoldV08_CloseDelivered_StatusIsClosedReasonDelivered verifies
+// open_contract + close_contract(closedReason:"delivered") →
+// internal Status "closed", ClosedReason "delivered" →
+// ContractStatusClosed, ContractReasonDelivered.
+func TestFoldV08_CloseDelivered_StatusIsClosedReasonDelivered(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	t1 := t0.Add(time.Hour)
+	sessionID := "S-L110-DELIVERED"
+	contractID := "C-2026-05-21-L110-DEL"
+
+	records := []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(contractID, "deliver feature B", sessionID, t0)),
+		mustDecodeSessionRecord(t, closeContractLine(contractID, "delivered", sessionID, "", t1)),
+	}
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
+
+	c, ok := state[ContractID(contractID)]
+	if !ok {
+		t.Fatalf("contract %s not in fold result", contractID)
+	}
+	if c.Status != "closed" {
+		t.Errorf("Status = %q, want \"closed\"", c.Status)
+	}
+	if c.ClosedReason != "delivered" {
+		t.Errorf("ClosedReason = %q, want \"delivered\"", c.ClosedReason)
+	}
+
+	// Verify GraphQL projection.
+	gqlStatus := statusToGraphQL(c.Status)
+	if gqlStatus != "CLOSED" {
+		t.Errorf("statusToGraphQL(%q) = %q, want CLOSED", c.Status, gqlStatus)
+	}
+	gqlReason := reasonToGraphQL(c.ClosedReason)
+	if gqlReason != "DELIVERED" {
+		t.Errorf("reasonToGraphQL(%q) = %q, want DELIVERED", c.ClosedReason, gqlReason)
+	}
+}
+
+// TestFoldV08_CloseAbandoned_StatusIsClosedReasonAbandoned verifies
+// open_contract + close_contract(closedReason:"abandoned") →
+// internal Status "closed", ClosedReason "abandoned" →
+// ContractStatusClosed, ContractReasonAbandoned.
+func TestFoldV08_CloseAbandoned_StatusIsClosedReasonAbandoned(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	t1 := t0.Add(30 * time.Minute)
+	sessionID := "S-L110-ABANDONED"
+	contractID := "C-2026-05-21-L110-ABN"
+
+	records := []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(contractID, "abandoned thing", sessionID, t0)),
+		mustDecodeSessionRecord(t, closeContractLine(contractID, "abandoned", sessionID, "", t1)),
+	}
+	state := FoldFromSessionJSONL(records, sessionID).Contracts
+
+	c, ok := state[ContractID(contractID)]
+	if !ok {
+		t.Fatalf("contract %s not in fold result", contractID)
+	}
+	if c.Status != "closed" {
+		t.Errorf("Status = %q, want \"closed\"", c.Status)
+	}
+	if c.ClosedReason != "abandoned" {
+		t.Errorf("ClosedReason = %q, want \"abandoned\"", c.ClosedReason)
+	}
+
+	// Verify GraphQL projection.
+	gqlStatus := statusToGraphQL(c.Status)
+	if gqlStatus != "CLOSED" {
+		t.Errorf("statusToGraphQL(%q) = %q, want CLOSED", c.Status, gqlStatus)
+	}
+	gqlReason := reasonToGraphQL(c.ClosedReason)
+	if gqlReason != "ABANDONED" {
+		t.Errorf("reasonToGraphQL(%q) = %q, want ABANDONED", c.ClosedReason, gqlReason)
+	}
+}
+
+// ---- L1.11: removed fields absent from Contract struct --------------------
+
+// TestFoldV08_ContractHasNoRemovedFields asserts that the internal Contract
+// struct does NOT carry the v0.8-removed fields: criteria, openQuestions,
+// reportsTo, parentContractId. Verified at compile time via struct literal
+// (unused fields are a compile error in Go).
 //
-// Status moves are driven by status_change events in the live JSONL,
-// so our fold mirrors that — the final status reflects the last
-// status_change row.
-func TestFold_LifecycleHappyPath(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	t1 := mustParse(t, "2026-05-04T12:30:00Z")
-	t2 := mustParse(t, "2026-05-04T12:45:00Z")
-	t3 := mustParse(t, "2026-05-04T12:50:00Z")
+// This test exists primarily as documentation — Go's type system enforces it.
+func TestFoldV08_ContractHasNoRemovedFields(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	// Compile-time check: constructing Contract without Criteria, OpenQuestions,
+	// ReportsTo, or ParentContractID. If those fields existed, we'd need to
+	// include them; since they don't, this compiles iff they are absent.
+	_ = Contract{
+		ID:             "C-test",
+		Statement:      "test",
+		OwnerSessionID: "S-test",
+		Status:         "open",
+		ClosedReason:   "",
+		CreatedAt:      t0,
+		UpdatedAt:      t0,
+		LastEventAt:    t0,
+	}
 
-	state := Fold([]Event{
-		{
-			Kind:          "contract",
-			ID:            "C-2026-05-04-bbbb2222",
-			Statement:     "Wire the foo provider",
-			Owner:         agent("agent-2", "session-2"),
-			ReportsTo:     drew(),
-			CreatedOn:     timePtr(t0),
-			UpdatedOn:     timePtr(t0),
-			InitialStatus: "open",
-		},
-		{
-			Kind:      "judge_run",
-			ID:        "C-2026-05-04-bbbb2222",
-			Timestamp: timePtr(t1),
-			Verdict:   "PASS",
-			Reason:    "AC verified end-to-end.",
-		},
-		{
-			Kind:      "status_change",
-			ID:        "C-2026-05-04-bbbb2222",
-			Timestamp: timePtr(t2),
-			From:      "open",
-			To:        "delivered_pending_validation",
-			Trigger:   "owner_judge_pass",
-		},
-		{
-			Kind:      "status_change",
-			ID:        "C-2026-05-04-bbbb2222",
-			Timestamp: timePtr(t3),
-			From:      "delivered_pending_validation",
-			To:        "satisfied",
-			Trigger:   "drew_approve",
-		},
-	})
-
-	c := state["C-2026-05-04-bbbb2222"]
-	if c.Status != "satisfied" {
-		t.Errorf("Status = %q, want satisfied", c.Status)
-	}
-	if !c.LastEventAt.Equal(t3) {
-		t.Errorf("LastEventAt = %v, want %v", c.LastEventAt, t3)
-	}
-	if !c.UpdatedAt.Equal(t3) {
-		t.Errorf("UpdatedAt = %v, want %v", c.UpdatedAt, t3)
-	}
-	if !c.CreatedAt.Equal(t0) {
-		t.Errorf("CreatedAt = %v, want %v (creation is immutable)", c.CreatedAt, t0)
-	}
-}
-
-// TestFold_CancelMidLife asserts that a cancel triggers the
-// status_change-driven transition to cancelled.
-func TestFold_CancelMidLife(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	t1 := mustParse(t, "2026-05-04T12:10:00Z")
-	t2 := mustParse(t, "2026-05-04T12:11:00Z")
-
-	state := Fold([]Event{
-		{
-			Kind: "contract", ID: "C-2026-05-04-cccc3333",
-			Statement: "abandoned thing",
-			Owner:     agent("agent-3", "session-3"),
-			ReportsTo: drew(),
-			CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0),
-			InitialStatus: "open",
-		},
-		{
-			Kind: "cancel_requested", ID: "C-2026-05-04-cccc3333",
-			Timestamp: timePtr(t1), CancelRequestID: "CR-deadbe",
-			Reason: "scope ballooned",
-			By:     "agent-3",
-		},
-		{
-			Kind: "status_change", ID: "C-2026-05-04-cccc3333",
-			Timestamp: timePtr(t2),
-			From:      "open", To: "cancelled",
-			Trigger: "drew_cancel",
-		},
-	})
-	c := state["C-2026-05-04-cccc3333"]
-	if c.Status != "cancelled" {
-		t.Errorf("Status = %q, want cancelled", c.Status)
-	}
-	if !c.LastEventAt.Equal(t2) {
-		t.Errorf("LastEventAt = %v, want %v", c.LastEventAt, t2)
-	}
-}
-
-// TestFold_CriteriaInOrder asserts criterion_added events accumulate
-// in original order — the brief explicitly lists this as part of the
-// AC set.
-func TestFold_CriteriaInOrder(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-2026-05-04-dddd4444", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{Kind: "criterion_added", ID: "C-2026-05-04-dddd4444", Timestamp: timePtr(t0), Criterion: "first"},
-		{Kind: "criterion_added", ID: "C-2026-05-04-dddd4444", Timestamp: timePtr(t0), Criterion: "second"},
-		{Kind: "criterion_added", ID: "C-2026-05-04-dddd4444", Timestamp: timePtr(t0), Criterion: "third"},
-	})
-	got := state["C-2026-05-04-dddd4444"].Criteria
-	want := []string{"first", "second", "third"}
-	if len(got) != len(want) {
-		t.Fatalf("Criteria = %v, want %v", got, want)
-	}
-	for i, c := range got {
-		if c != want[i] {
-			t.Errorf("Criteria[%d] = %q, want %q", i, c, want[i])
+	// Runtime guard: omitting fields in a keyed struct literal is always
+	// legal in Go, so the literal above alone does not prove the fields
+	// are gone. Reflect to fail loudly if any are reintroduced.
+	typ := reflect.TypeOf(Contract{})
+	for _, name := range []string{"Criteria", "OpenQuestions", "ReportsTo", "ParentContractID"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Errorf("Contract unexpectedly contains removed field %q", name)
 		}
 	}
 }
 
-// TestFold_OpenQuestionsLifecycle covers question_asked → answered:
-// the answered question must drop out of OpenQuestions.
-func TestFold_OpenQuestionsLifecycle(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	tAsked := mustParse(t, "2026-05-04T12:30:00Z")
-	tAns := mustParse(t, "2026-05-04T12:45:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-2026-05-04-eeee5555", Owner: agent("agent-1", "session-1"), CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{
-			Kind: "question_asked", ID: "C-2026-05-04-eeee5555",
-			Timestamp:    timePtr(tAsked),
-			QuestionID:   "Q-zzz1",
-			QuestionText: "are we go?",
-			By:           "agent-1",
-		},
-		{
-			Kind: "question_asked", ID: "C-2026-05-04-eeee5555",
-			Timestamp:    timePtr(tAsked.Add(time.Second)),
-			QuestionID:   "Q-zzz2",
-			QuestionText: "second q",
-			By:           "agent-1",
-		},
-	})
+// ---- L1.9: mapStatus exhaustive coverage ----------------------------------
 
-	c := state["C-2026-05-04-eeee5555"]
-	if got, want := len(c.OpenQuestions), 2; got != want {
-		t.Fatalf("OpenQuestions count = %d, want %d", got, want)
-	}
-
-	// Resolve the first question; second must remain.
-	state2 := Fold([]Event{
-		{Kind: "contract", ID: "C-2026-05-04-eeee5555", Owner: agent("agent-1", "session-1"), CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{Kind: "question_asked", ID: "C-2026-05-04-eeee5555", Timestamp: timePtr(tAsked), QuestionID: "Q-zzz1", QuestionText: "are we go?", By: "agent-1"},
-		{Kind: "question_asked", ID: "C-2026-05-04-eeee5555", Timestamp: timePtr(tAsked.Add(time.Second)), QuestionID: "Q-zzz2", QuestionText: "second q", By: "agent-1"},
-		{Kind: "question_answered", ID: "C-2026-05-04-eeee5555", Timestamp: timePtr(tAns), QuestionID: "Q-zzz1", QuestionAnswer: "yes"},
-	})
-	c2 := state2["C-2026-05-04-eeee5555"]
-	if got, want := len(c2.OpenQuestions), 1; got != want {
-		t.Fatalf("OpenQuestions after answer = %d, want %d", got, want)
-	}
-	if c2.OpenQuestions[0].QuestionID != "Q-zzz2" {
-		t.Errorf("remaining question id = %q, want Q-zzz2", c2.OpenQuestions[0].QuestionID)
-	}
-}
-
-// TestFold_BlocksCloseDefault covers the wrinkle that blocks_close
-// defaults to true when the plugin omits the field on a question_asked
-// row (which it does in some older versions of the log).
-func TestFold_BlocksCloseDefault(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-x", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{
-			Kind: "question_asked", ID: "C-x",
-			Timestamp: timePtr(t0.Add(time.Second)), QuestionID: "Q-default",
-			QuestionText: "no blocks_close on the wire",
-		},
-	})
-	c := state["C-x"]
-	if !c.OpenQuestions[0].BlocksClose {
-		t.Errorf("BlocksClose = false, want true (default when field omitted)")
-	}
-
-	state2 := Fold([]Event{
-		{Kind: "contract", ID: "C-y", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{
-			Kind: "question_asked", ID: "C-y",
-			Timestamp: timePtr(t0.Add(time.Second)), QuestionID: "Q-explicit",
-			QuestionText:   "explicit false",
-			QuestionBlocks: boolPtr(false),
-		},
-	})
-	if state2["C-y"].OpenQuestions[0].BlocksClose {
-		t.Errorf("BlocksClose = true, want false (explicit)")
-	}
-}
-
-// TestFold_UnknownKindIgnored asserts plugin extensions don't break us.
-func TestFold_UnknownKindIgnored(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-1", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{Kind: "future_extension_event", ID: "C-1", Timestamp: timePtr(t0)},
-		{Kind: "another_unknown", ID: "C-1", Timestamp: timePtr(t0)},
-	})
-	if c := state["C-1"]; c.Status != "open" {
-		t.Errorf("Status = %q, want open (unknown events should be no-ops)", c.Status)
-	}
-}
-
-// TestFold_OutOfOrderEventsBeforeCreation asserts that an event
-// arriving before its creation row is dropped silently. This shouldn't
-// happen in practice because the JSONL is append-order, but the fold
-// must be robust to corrupted input.
-func TestFold_OutOfOrderEventsBeforeCreation(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		// status_change before creation — drop.
-		{Kind: "status_change", ID: "C-orphan", Timestamp: timePtr(t0), To: "satisfied"},
-	})
-	if _, ok := state["C-orphan"]; ok {
-		t.Errorf("orphan status_change created a contract; expected drop")
-	}
-}
-
-// TestFold_HandoffPreservesCreated covers the `handoff` shape — a
-// future contract handoff (status_change with new owner). Today the
-// plugin doesn't change owner mid-life, but Fold's implementation
-// keeps CreatedAt immutable so a hypothetical handoff still surfaces a
-// stable creation timestamp.
-func TestFold_HandoffPreservesCreated(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	t1 := mustParse(t, "2026-05-04T12:30:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-h", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open", Owner: agent("a", "s1")},
-		{Kind: "status_change", ID: "C-h", Timestamp: timePtr(t1), From: "open", To: "open", Trigger: "handoff"},
-	})
-	c := state["C-h"]
-	if !c.CreatedAt.Equal(t0) {
-		t.Errorf("CreatedAt = %v, want %v (creation is immutable)", c.CreatedAt, t0)
-	}
-	if !c.UpdatedAt.Equal(t1) {
-		t.Errorf("UpdatedAt = %v, want %v", c.UpdatedAt, t1)
-	}
-}
-
-// TestFold_CancelledByDrewVsAgent demonstrates that fold reflects
-// whatever the live status_change wrote; the trigger field is
-// preserved nowhere on the Contract — by design, since the resolver
-// surfaces only `status`, not `trigger`.
-func TestFold_CancelledByDrewVsAgent(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-d", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open"},
-		{Kind: "cancel_requested", ID: "C-d", Timestamp: timePtr(t0.Add(time.Minute)), CancelRequestID: "CR-1", Reason: "drew said so", By: "drew"},
-		{Kind: "status_change", ID: "C-d", Timestamp: timePtr(t0.Add(2 * time.Minute)), From: "open", To: "cancelled", Trigger: "drew_cancel"},
-	})
-	if state["C-d"].Status != "cancelled" {
-		t.Errorf("Status = %q, want cancelled", state["C-d"].Status)
-	}
-}
-
-// TestFold_MultipleContractsIndependent confirms IDs do not bleed
-// between distinct contracts in a single Fold.
-func TestFold_MultipleContractsIndependent(t *testing.T) {
-	t0 := mustParse(t, "2026-05-04T12:00:00Z")
-	state := Fold([]Event{
-		{Kind: "contract", ID: "C-aaa", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open", Statement: "alpha"},
-		{Kind: "contract", ID: "C-bbb", CreatedOn: timePtr(t0), UpdatedOn: timePtr(t0), InitialStatus: "open", Statement: "beta"},
-		{Kind: "criterion_added", ID: "C-aaa", Timestamp: timePtr(t0), Criterion: "alpha-only"},
-	})
-	if got := state["C-aaa"].Criteria; len(got) != 1 || got[0] != "alpha-only" {
-		t.Errorf("alpha criteria = %v, want [alpha-only]", got)
-	}
-	if got := len(state["C-bbb"].Criteria); got != 0 {
-		t.Errorf("beta criteria count = %d, want 0", got)
-	}
-}
-
-// TestRenderParty exhaustively covers the Party → schema string mapping.
-func TestRenderParty(t *testing.T) {
+// TestFoldV08_MapStatus_KnownValues checks both expected status values.
+func TestFoldV08_MapStatus_KnownValues(t *testing.T) {
 	cases := []struct {
-		name string
-		in   *Party
-		want string
+		input   string
+		wantGQL string
 	}{
-		{"nil", nil, ""},
-		{"drew", &Party{Kind: "drew"}, "drew"},
-		{"agent_with_name", &Party{Kind: "agent", AgentName: strPtr("agent-7")}, "agent:agent-7"},
-		{"agent_no_name", &Party{Kind: "agent"}, "agent"},
-		{"empty_kind", &Party{}, ""},
+		{"open", "SIGNED"},
+		{"closed", "CLOSED"},
+		// Unknown values default to SIGNED (open/active).
+		{"", "SIGNED"},
+		{"anything_else", "SIGNED"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := renderParty(tc.in); got != tc.want {
-				t.Errorf("renderParty(%+v) = %q, want %q", tc.in, got, tc.want)
+		t.Run(tc.input, func(t *testing.T) {
+			got := string(statusToGraphQL(tc.input))
+			if got != tc.wantGQL {
+				t.Errorf("statusToGraphQL(%q) = %q, want %q", tc.input, got, tc.wantGQL)
 			}
 		})
+	}
+}
+
+// TestFoldV08_MapReason_KnownValues checks both expected reason values.
+func TestFoldV08_MapReason_KnownValues(t *testing.T) {
+	cases := []struct {
+		input   string
+		wantGQL string
+	}{
+		{"delivered", "DELIVERED"},
+		{"abandoned", "ABANDONED"},
+		// Unknown values default to DELIVERED.
+		{"", "DELIVERED"},
+		{"other", "DELIVERED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := string(reasonToGraphQL(tc.input))
+			if got != tc.wantGQL {
+				t.Errorf("reasonToGraphQL(%q) = %q, want %q", tc.input, got, tc.wantGQL)
+			}
+		})
+	}
+}
+
+// TestFoldV08_ToGraphQL_OpenContract verifies the full toGraphQL projection
+// for an open (SIGNED) contract: ClosedReason is nil.
+func TestFoldV08_ToGraphQL_OpenContract(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	c := Contract{
+		ID:             "C-tographql-open",
+		Statement:      "make it work",
+		OwnerSessionID: "S-open-001",
+		Status:         "open",
+		ClosedReason:   "",
+		CreatedAt:      t0,
+		UpdatedAt:      t0,
+		LastEventAt:    t0,
+	}
+	gc := toGraphQL(c)
+	if gc.Status != "SIGNED" {
+		t.Errorf("Status = %q, want SIGNED", gc.Status)
+	}
+	if gc.ClosedReason != nil {
+		t.Errorf("ClosedReason = %v, want nil (open contract has no reason)", gc.ClosedReason)
+	}
+}
+
+// TestFoldV08_ToGraphQL_ClosedDelivered verifies the full toGraphQL projection
+// for a closed contract with reason=delivered.
+func TestFoldV08_ToGraphQL_ClosedDelivered(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	t1 := t0.Add(time.Hour)
+	c := Contract{
+		ID:             "C-tographql-closed-del",
+		Statement:      "make it done",
+		OwnerSessionID: "S-closed-del-001",
+		Status:         "closed",
+		ClosedReason:   "delivered",
+		CreatedAt:      t0,
+		UpdatedAt:      t1,
+		LastEventAt:    t1,
+	}
+	gc := toGraphQL(c)
+	if gc.Status != "CLOSED" {
+		t.Errorf("Status = %q, want CLOSED", gc.Status)
+	}
+	if gc.ClosedReason == nil {
+		t.Fatalf("ClosedReason is nil, want DELIVERED")
+	}
+	if *gc.ClosedReason != "DELIVERED" {
+		t.Errorf("ClosedReason = %q, want DELIVERED", *gc.ClosedReason)
+	}
+}
+
+// TestFoldV08_ToGraphQL_ClosedAbandoned verifies the full toGraphQL projection
+// for a closed contract with reason=abandoned.
+func TestFoldV08_ToGraphQL_ClosedAbandoned(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	c := Contract{
+		ID:             "C-tographql-closed-abn",
+		Statement:      "gave up",
+		OwnerSessionID: "S-closed-abn-001",
+		Status:         "closed",
+		ClosedReason:   "abandoned",
+		CreatedAt:      t0,
+		UpdatedAt:      t0,
+		LastEventAt:    t0,
+	}
+	gc := toGraphQL(c)
+	if gc.Status != "CLOSED" {
+		t.Errorf("Status = %q, want CLOSED", gc.Status)
+	}
+	if gc.ClosedReason == nil {
+		t.Fatalf("ClosedReason is nil, want ABANDONED")
+	}
+	if *gc.ClosedReason != "ABANDONED" {
+		t.Errorf("ClosedReason = %q, want ABANDONED", *gc.ClosedReason)
+	}
+}
+
+// ---- ContractFilter.closedReasons ----------------------------------------
+
+// TestMatches_ClosedReasonDelivered verifies that filtering by
+// closedReasons:[DELIVERED] returns only CLOSED+DELIVERED contracts and
+// excludes CLOSED+ABANDONED and SIGNED (open) contracts.
+func TestMatches_ClosedReasonDelivered(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+
+	delivered := Contract{
+		ID: "C-delivered", Status: "closed", ClosedReason: "delivered",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	abandoned := Contract{
+		ID: "C-abandoned", Status: "closed", ClosedReason: "abandoned",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	open := Contract{
+		ID: "C-open", Status: "open", ClosedReason: "",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+
+	filter := &graphql.ContractFilter{
+		ClosedReasons: []graphql.ContractReason{graphql.ContractReasonDelivered},
+	}
+
+	if !matches(delivered, filter) {
+		t.Error("delivered contract should match closedReasons:[DELIVERED] filter")
+	}
+	if matches(abandoned, filter) {
+		t.Error("abandoned contract should not match closedReasons:[DELIVERED] filter")
+	}
+	if matches(open, filter) {
+		t.Error("open contract should not match closedReasons:[DELIVERED] filter")
+	}
+}
+
+// TestMatches_ClosedReasonAbandoned verifies that filtering by
+// closedReasons:[ABANDONED] returns only CLOSED+ABANDONED contracts.
+func TestMatches_ClosedReasonAbandoned(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+
+	delivered := Contract{
+		ID: "C-del2", Status: "closed", ClosedReason: "delivered",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	abandoned := Contract{
+		ID: "C-abn2", Status: "closed", ClosedReason: "abandoned",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+
+	filter := &graphql.ContractFilter{
+		ClosedReasons: []graphql.ContractReason{graphql.ContractReasonAbandoned},
+	}
+
+	if !matches(abandoned, filter) {
+		t.Error("abandoned contract should match closedReasons:[ABANDONED] filter")
+	}
+	if matches(delivered, filter) {
+		t.Error("delivered contract should not match closedReasons:[ABANDONED] filter")
+	}
+}
+
+// TestMatches_ClosedReasonBoth verifies that filtering by
+// closedReasons:[DELIVERED, ABANDONED] returns all closed contracts
+// regardless of reason, but excludes open contracts.
+func TestMatches_ClosedReasonBoth(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+
+	delivered := Contract{
+		ID: "C-del3", Status: "closed", ClosedReason: "delivered",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	abandoned := Contract{
+		ID: "C-abn3", Status: "closed", ClosedReason: "abandoned",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+	open := Contract{
+		ID: "C-open3", Status: "open",
+		CreatedAt: t0, UpdatedAt: t0, LastEventAt: t0,
+	}
+
+	filter := &graphql.ContractFilter{
+		ClosedReasons: []graphql.ContractReason{
+			graphql.ContractReasonDelivered,
+			graphql.ContractReasonAbandoned,
+		},
+	}
+
+	if !matches(delivered, filter) {
+		t.Error("delivered contract should match closedReasons:[DELIVERED,ABANDONED] filter")
+	}
+	if !matches(abandoned, filter) {
+		t.Error("abandoned contract should match closedReasons:[DELIVERED,ABANDONED] filter")
+	}
+	if matches(open, filter) {
+		t.Error("open contract should not match closedReasons:[DELIVERED,ABANDONED] filter")
+	}
+}
+
+// TestFoldState_OpenIndex_IsConsistentWithContracts verifies that OpenIndex
+// always mirrors the set of open contracts: open adds to the index, close
+// removes from it, and a close-then-reopen with a new id creates a fresh
+// entry rather than hitting the dedup guard.
+func TestFoldState_OpenIndex_IsConsistentWithContracts(t *testing.T) {
+	t0 := mustParse(t, "2026-05-21T10:00:00Z")
+	t1 := mustParse(t, "2026-05-21T11:00:00Z")
+	t2 := mustParse(t, "2026-05-21T12:00:00Z")
+
+	sidA := "S-IDX-001"
+	sidB := "S-IDX-002"
+	sidC := "S-IDX-003"
+
+	// Three contracts opened in three different sessions.
+	idA := ContractID("C-IDX-A")
+	idB := ContractID("C-IDX-B")
+	idC := ContractID("C-IDX-C")
+
+	state := NewFoldState()
+
+	// Open three contracts.
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(string(idA), "deliver A", sidA, t0)),
+	}, sidA)
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(string(idB), "deliver B", sidB, t0)),
+	}, sidB)
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, openContractLine(string(idC), "deliver C", sidC, t0)),
+	}, sidC)
+
+	// Close contract B.
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, closeContractLine(string(idB), "delivered", sidB, "", t1)),
+	}, sidB)
+
+	// Re-open sidC's deliverable with a NEW contract id — this is a
+	// close-then-reopen, so dedup must NOT trigger.
+	idC2 := ContractID("C-IDX-C2")
+	ApplySessionRecords(state, []SessionRecord{
+		mustDecodeSessionRecord(t, closeContractLine(string(idC), "delivered", sidC, "", t1)),
+		mustDecodeSessionRecord(t, openContractLine(string(idC2), "deliver C", sidC, t2)),
+	}, sidC)
+
+	// Open contracts: idA (sidA/"deliver A") and idC2 (sidC/"deliver C").
+	// Closed: idB, idC.
+	wantOpenCount := 2
+	if got := len(state.OpenIndex); got != wantOpenCount {
+		t.Errorf("OpenIndex len = %d, want %d", got, wantOpenCount)
+	}
+
+	// Every entry in OpenIndex must point to an open Contract with matching fields.
+	for key, cid := range state.OpenIndex {
+		c, ok := state.Contracts[cid]
+		if !ok {
+			t.Errorf("OpenIndex[%v] = %v but no such contract in Contracts", key, cid)
+			continue
+		}
+		if c.Status != "open" {
+			t.Errorf("OpenIndex[%v] → contract %v has Status=%q, want open", key, cid, c.Status)
+		}
+		if c.OwnerSessionID != key.OwnerSessionID {
+			t.Errorf("OpenIndex[%v] → contract OwnerSessionID=%q, want %q", key, c.OwnerSessionID, key.OwnerSessionID)
+		}
+		if c.Statement != key.Deliverable {
+			t.Errorf("OpenIndex[%v] → contract Statement=%q, want %q", key, c.Statement, key.Deliverable)
+		}
 	}
 }

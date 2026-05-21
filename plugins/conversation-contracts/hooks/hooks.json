@@ -1,0 +1,25 @@
+{
+  "description": "Conversation-contracts hooks: auto-open a contract on first user message; surface loose-ends inventory at Stop.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/on-prompt-submit.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -24,7 +24,8 @@
 
 .PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
         install install-daemon install-dispatcher install-tui install-worktree-cli \
-        test test-go test-rust
+        test test-go test-rust \
+        plugins-contracts-mcp
 
 VERSION ?= dev
 
@@ -83,3 +84,9 @@ test-go:
 
 test-rust:
 	cargo test
+
+# Build the conversation-contracts MCP server binary.
+# The binary is invoked by Claude Code when the plugin's MCP server is active.
+plugins-contracts-mcp:
+	go build -o plugins/conversation-contracts/bin/contracts-mcp \
+		./plugins/conversation-contracts/mcp

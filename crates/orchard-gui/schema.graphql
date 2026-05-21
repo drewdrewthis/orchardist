@@ -146,20 +146,20 @@ type ClaudeInstance implements Node {
 
 """
 A commitment an agent has made to deliver something. Contracts are
-authored exclusively by the claude-contracts plugin; orchard reads
-them via the contracts provider and never writes.
+sourced from session JSONL `tool_use` events (open_contract /
+close_contract) written by the conversation-contracts plugin; the
+daemon's contracts provider folds those events into Contract nodes
+and never writes the JSONL itself.
 """
 type Contract implements Node {
+  """Reason the contract was closed. Null when status is SIGNED."""
+  closedReason: ContractReason
+
   """The contract id as written by the plugin."""
   contractId: ID!
 
   """RFC 3339 timestamp the contract was first created."""
   createdAt: String!
-
-  """
-  Acceptance criteria added via `criterion_added` events, in original order.
-  """
-  criteria: [String!]!
 
   """Stable orchard id — "Contract:<contract_id>"."""
   id: ID!
@@ -167,20 +167,8 @@ type Contract implements Node {
   """RFC 3339 timestamp of the most recent event affecting this contract."""
   lastEventAt: String!
 
-  """Questions awaiting an answer. Empty when nothing is pending."""
-  openQuestions: [ContractQuestion!]!
-
-  """Owner agent name."""
-  ownerAgentName: String!
-
   """Owner session id (Claude session UUID) recorded at creation time."""
   ownerSessionId: String!
-
-  """Parent contract id when filed under a management contract."""
-  parentContractId: ID
-
-  """Routing target for status updates and question answers."""
-  reportsTo: String
 
   """What the owner committed to deliver."""
   statement: String!
@@ -194,44 +182,26 @@ type Contract implements Node {
 
 """Filter for `Query.contracts`. All fields are optional."""
 input ContractFilter {
-  ownerAgentName: String
+  """Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts."""
+  closedReasons: [ContractReason!]
   ownerSessionId: String
-  parentContractId: ID
   statuses: [ContractStatus!]
 }
 
-"""A blocking question recorded against a Contract."""
-type ContractQuestion {
-  """RFC 3339 timestamp the question was asked."""
-  askedAt: String!
-
-  """Agent that asked the question."""
-  askedBy: String!
-
-  """Whether this question blocks contract close while open."""
-  blocksClose: Boolean!
-
-  """RFC 3339 deadline after which the question times out."""
-  deadline: String
-
-  """Question id as written by the plugin."""
-  questionId: ID!
-
-  """The question text."""
-  text: String!
+"""Reason a Contract was closed. Only set when ContractStatus is CLOSED."""
+enum ContractReason {
+  ABANDONED
+  DELIVERED
 }
 
-"""Lifecycle states for Contract."""
+"""
+Lifecycle states for Contract (v0.8 two-value model).
+SIGNED — contract is open and active.
+CLOSED — contract has been closed (see closedReason for delivery vs abandon).
+"""
 enum ContractStatus {
-  AWAITING_CANCEL_ACK
-  CANCELLED
-  DELIVERED_PENDING_PARENT_VALIDATION
-  DELIVERED_PENDING_VALIDATION
-  JUDGE_REJECTED_TERMINAL
-  OPEN
-  PENDING_DREW_APPROVAL
-  SATISFIED
-  WAITING_EXTERNAL
+  CLOSED
+  SIGNED
 }
 
 """

@@ -1,260 +1,258 @@
 package contracts
 
-import "time"
+// fold.go implements the v0.8 ContractFold projection.
+//
+// v0.8 stores contract lifecycle events as tool_use blocks inside assistant
+// message records in session JSONL files (~/.claude/projects/*/<uuid>.jsonl).
+// This file provides the pure-fold layer:
+//
+//   - FoldFromSessionJSONL: fold a single session's records into a FoldState.
+//   - ApplySessionRecords: apply records to an existing FoldState.
+//   - FoldProjectsRecords: fold records from multiple sessions (ProjectsRecord).
+//   - ApplyProjectsRecords: apply multi-session records to an existing FoldState.
+//
+// ProjectsAdapter lives in projects_adapter.go (adapter + watcher split) and
+// is declared separately so tests can inject a different root without touching
+// the watcher.
 
-// Fold reduces an ordered list of events into the current state of every
-// contract they touch. Pure function — no IO, no clock, no globals; the
-// only inputs are events and the only output is the folded map.
-//
-// Event kinds Fold recognises:
-//
-//   - "contract": creation. Initialises a Contract record. Subsequent
-//     events for the same id update fields in place.
-//   - "status_change": updates Status. The plugin writes both `to`
-//     and a system-supplied `trigger`; Fold trusts the `to` field.
-//   - "criterion_added": appends to Criteria, in event order.
-//   - "question_asked": appends to OpenQuestions.
-//   - "question_answered": removes the matching QuestionID from
-//     OpenQuestions.
-//   - "question_timed_out": removes the matching QuestionID from
-//     OpenQuestions (treated identically to answered).
-//   - "cancel_requested" / "cancel_acked" / "cancel_withdrawn":
-//     LastEventAt only — the status moves via the paired
-//     status_change event the plugin always writes.
-//   - "judge_run" / "judge_run_failed": LastEventAt only — terminal
-//     verdict surfaces via the paired status_change.
-//   - "cooldown_set" / "wait_started": LastEventAt only.
-//   - "child_linked" / "child_cancelled": LastEventAt only.
-//
-// Unknown kinds are silently dropped so plugin extensions do not break
-// the daemon. Events that arrive before their contract's creation
-// record (out-of-order JSONL rows) are also dropped — a pathological
-// shape that should not occur in practice.
-//
-// Events are processed in the slice order; callers must pre-sort by
-// timestamp if their input is unsorted. The on-disk JSONL is naturally
-// in append order, so the adapter does no sorting.
-func Fold(events []Event) map[ContractID]Contract {
-	state := make(map[ContractID]Contract)
-	for _, ev := range events {
-		applyEvent(state, ev)
+import (
+	"encoding/json"
+	"time"
+)
+
+// ConversationContractDeliverable is the fixed deliverable for the
+// auto-opened conversation contract. The UserPromptSubmit hook writes
+// an open_contract event with exactly this deliverable on every
+// first prompt; the fold deduplicates by (ownerSessionId, deliverable)
+// so only one Contract per session is ever created.
+const ConversationContractDeliverable = "user agrees conversation has come to a close and there are no loose ends"
+
+// OpenKey is the dedup key for open contracts: (ownerSessionID, deliverable).
+type OpenKey struct {
+	OwnerSessionID string
+	Deliverable    string
+}
+
+// FoldState holds the contract map plus the (ownerSessionID, deliverable)
+// index that makes dedup and exit-close O(1).
+type FoldState struct {
+	Contracts map[ContractID]Contract
+	OpenIndex map[OpenKey]ContractID
+}
+
+// NewFoldState returns an empty FoldState ready for use.
+func NewFoldState() *FoldState {
+	return &FoldState{
+		Contracts: map[ContractID]Contract{},
+		OpenIndex: map[OpenKey]ContractID{},
 	}
+}
+
+// FoldFromSessionJSONL folds a slice of SessionRecords for a single
+// session into a FoldState. Each open_contract tool_use block
+// initialises a Contract keyed by contract id; close_contract closes it.
+//
+// localSessionID is the session UUID whose JSONL these records came from.
+// Every Contract produced by an open_contract event in this slice carries
+// localSessionID as its OwnerSessionID.
+//
+// Dedup rule: if the same (localSessionID, deliverable) pair already has
+// an OPEN contract, a subsequent open_contract for the same deliverable is
+// a no-op. A close followed by a new open IS a new record.
+func FoldFromSessionJSONL(records []SessionRecord, localSessionID string) *FoldState {
+	state := NewFoldState()
+	ApplySessionRecords(state, records, localSessionID)
 	return state
 }
 
-// applyEvent dispatches one event into the fold. Extracted from Fold so
-// streaming callers (the provider's incremental update path) can apply
-// events one at a time without rebuilding the whole map.
-func applyEvent(state map[ContractID]Contract, ev Event) {
-	switch ev.Kind {
-	case "contract":
-		applyCreation(state, ev)
-	case "status_change":
-		applyStatusChange(state, ev)
-	case "criterion_added":
-		applyCriterionAdded(state, ev)
-	case "question_asked":
-		applyQuestionAsked(state, ev)
-	case "question_answered", "question_timed_out":
-		applyQuestionResolved(state, ev)
-	case "cancel_requested",
-		"cancel_acked",
-		"cancel_withdrawn",
-		"judge_run",
-		"judge_run_failed",
-		"cooldown_set",
-		"wait_started",
-		"child_linked",
-		"child_cancelled":
-		touchLastEvent(state, ContractID(ev.ID), eventTime(ev))
+// ApplySessionRecords applies a slice of SessionRecords to an existing
+// FoldState. localSessionID is the UUID of the JSONL these records came
+// from — used as OwnerSessionID for open_contract events and to resolve
+// F2 non-owner abandon closes (aboutSessionId).
+func ApplySessionRecords(state *FoldState, records []SessionRecord, localSessionID string) {
+	for _, rec := range records {
+		applySessionRecord(state, rec, localSessionID)
 	}
 }
 
-// touchLastEvent updates LastEventAt on the named contract, leaving all
-// other fields untouched. Used for events that signal activity but
-// whose effect on contract state is captured by a paired event
-// (judge_run pairs with status_change, cancel_requested with
-// status_change, etc.).
-func touchLastEvent(state map[ContractID]Contract, id ContractID, at time.Time) {
-	c, ok := state[id]
-	if !ok {
+// applySessionRecord dispatches one SessionRecord into the fold state.
+//
+// Assistant records with tool_use content blocks are processed for
+// open_contract and close_contract events (the primary v0.8 path).
+//
+// System records are checked for exit/quit/bye local_command content;
+// when matched a virtual close of the open conversation contract is
+// synthesised in-memory (L2.11/L2.12).
+func applySessionRecord(state *FoldState, rec SessionRecord, localSessionID string) {
+	// L2.11/L2.12: system/local_command exit records.
+	if rec.Type == "system" {
+		applyExitRecord(state, rec, localSessionID)
 		return
 	}
-	if !at.IsZero() {
-		c.LastEventAt = at
+
+	if rec.Type != "assistant" || rec.Message == nil {
+		return
 	}
-	state[id] = c
+	for _, block := range rec.Message.Content {
+		if block.Type != "tool_use" {
+			continue
+		}
+		switch block.Name {
+		case "open_contract":
+			applyOpenContractBlock(state, block, localSessionID, rec)
+		case "close_contract":
+			applyCloseContractBlock(state, block)
+		}
+	}
 }
 
-// applyCreation initialises a contract from a `kind: contract` row. If
-// the contract already exists (re-creation), the new fields overwrite
-// in place; in practice this never happens because contract ids are
-// 8-hex random.
-func applyCreation(state map[ContractID]Contract, ev Event) {
-	if ev.ID == "" {
+// applyOpenContractBlock handles one open_contract tool_use content block.
+func applyOpenContractBlock(state *FoldState, block SessionContentBlock, localSessionID string, rec SessionRecord) {
+	var inp OpenContractInput
+	if err := json.Unmarshal(block.Input, &inp); err != nil {
+		return // malformed input — skip silently
+	}
+	if inp.ID == "" {
 		return
 	}
-	id := ContractID(ev.ID)
+	id := ContractID(inp.ID)
 
-	created := zeroOr(ev.CreatedOn)
-	updated := zeroOr(ev.UpdatedOn)
-	if updated.IsZero() {
-		updated = created
+	// Dedup rule: if (localSessionID, deliverable) already has an OPEN
+	// contract, treat this as a no-op. A close then re-open IS a new record.
+	deliverable := inp.effectiveDeliverable()
+	if deliverable != "" {
+		key := OpenKey{OwnerSessionID: localSessionID, Deliverable: deliverable}
+		if _, exists := state.OpenIndex[key]; exists {
+			return // already open — idempotent
+		}
 	}
-	status := ev.InitialStatus
-	if status == "" {
-		// Older plugin versions omit status on creation; default to open.
-		status = "open"
+
+	// Parse creation timestamp from input; fall back to the record timestamp.
+	createdAt := parseRFC3339(inp.CreatedAt)
+	if createdAt.IsZero() && rec.Timestamp != "" {
+		createdAt = parseRFC3339(rec.Timestamp)
 	}
 
 	c := Contract{
-		ID:          id,
-		Statement:   ev.Statement,
-		Status:      status,
-		CreatedAt:   created,
-		UpdatedAt:   updated,
-		LastEventAt: updated,
+		ID:             id,
+		Statement:      deliverable,
+		OwnerSessionID: localSessionID,
+		Status:         "open",
+		CreatedAt:      createdAt,
+		UpdatedAt:      createdAt,
+		LastEventAt:    createdAt,
 	}
-	if ev.Owner != nil {
-		c.OwnerSessionID = ev.Owner.SessionID
-		if ev.Owner.AgentName != nil {
-			c.OwnerAgentName = *ev.Owner.AgentName
+	// If a close arrived first (cross-jsonl, owner's file not yet scanned),
+	// state already holds a closed placeholder for this id. Hydrate the
+	// missing fields without resurrecting it to open — the close wins.
+	if existing, ok := state.Contracts[id]; ok && existing.Status == "closed" {
+		existing.Statement = c.Statement
+		existing.OwnerSessionID = c.OwnerSessionID
+		if existing.CreatedAt.IsZero() {
+			existing.CreatedAt = c.CreatedAt
 		}
-	}
-	c.ReportsTo = renderParty(ev.ReportsTo)
-	if ev.Parent != nil {
-		c.ParentContractID = *ev.Parent
-	}
-
-	// Preserve criteria/questions added before the creation row in
-	// degenerate inputs — never observed in practice but cheap to
-	// guard.
-	if existing, ok := state[id]; ok {
-		c.Criteria = existing.Criteria
-		c.OpenQuestions = existing.OpenQuestions
-		if !existing.LastEventAt.IsZero() && existing.LastEventAt.After(c.LastEventAt) {
-			c.LastEventAt = existing.LastEventAt
-		}
-	}
-	state[id] = c
-}
-
-func applyStatusChange(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
-		// status_change before creation — drop. JSONL append-order
-		// invariant should prevent this.
+		state.Contracts[id] = existing
+		// Do NOT add to OpenIndex — it stays closed.
 		return
 	}
-	if ev.To != "" {
-		c.Status = ev.To
+	state.Contracts[id] = c
+	if deliverable != "" {
+		state.OpenIndex[OpenKey{OwnerSessionID: localSessionID, Deliverable: deliverable}] = id
 	}
-	t := eventTime(ev)
-	if !t.IsZero() {
-		c.UpdatedAt = t
-		c.LastEventAt = t
-	}
-	state[id] = c
 }
 
-func applyCriterionAdded(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
+// applyCloseContractBlock handles one close_contract tool_use content block.
+// Closes by contract id regardless of which session jsonl the close lives in
+// (supports the F2 non-owner abandon case where aboutSessionId != owner).
+func applyCloseContractBlock(state *FoldState, block SessionContentBlock) {
+	var inp CloseContractInput
+	if err := json.Unmarshal(block.Input, &inp); err != nil {
+		return // malformed input — skip silently
+	}
+	if inp.ID == "" {
 		return
 	}
-	if ev.Criterion != "" {
-		c.Criteria = append(c.Criteria, ev.Criterion)
-	}
-	if t := eventTime(ev); !t.IsZero() {
-		c.LastEventAt = t
-	}
-	state[id] = c
-}
+	id := ContractID(inp.ID)
 
-func applyQuestionAsked(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
-		return
-	}
-	q := OpenQuestion{
-		QuestionID:  ev.QuestionID,
-		Text:        ev.QuestionText,
-		AskedBy:     ev.By,
-		AskedAt:     zeroOr(ev.Timestamp),
-		Deadline:    ev.QuestionDeadline,
-		BlocksClose: ev.QuestionBlocks == nil || *ev.QuestionBlocks,
-	}
-	c.OpenQuestions = append(c.OpenQuestions, q)
-	if t := eventTime(ev); !t.IsZero() {
-		c.LastEventAt = t
-	}
-	state[id] = c
-}
+	closedAt := parseRFC3339(inp.ClosedAt)
 
-func applyQuestionResolved(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
+	c, ok := state.Contracts[id]
 	if !ok {
-		return
-	}
-	if ev.QuestionID != "" {
-		filtered := c.OpenQuestions[:0]
-		for _, q := range c.OpenQuestions {
-			if q.QuestionID == ev.QuestionID {
-				continue
-			}
-			filtered = append(filtered, q)
+		// Close arrived before open (cross-jsonl case: the owner's jsonl
+		// hasn't been scanned yet). Create a minimal closed placeholder.
+		// Do NOT add to OpenIndex — it was never open in state.
+		c = Contract{
+			ID:           id,
+			Status:       "closed",
+			ClosedReason: inp.ClosedReason,
 		}
-		// Re-allocate so the trimmed slice does not retain backing
-		// memory pointing at removed entries.
-		c.OpenQuestions = append([]OpenQuestion(nil), filtered...)
-	}
-	if t := eventTime(ev); !t.IsZero() {
-		c.LastEventAt = t
-	}
-	state[id] = c
-}
-
-// renderParty turns a Party pointer into the schema's flat reportsTo
-// representation. Returns "" when nil so the resolver layer can decide
-// to surface a null vs an empty string.
-func renderParty(p *Party) string {
-	if p == nil {
-		return ""
-	}
-	if p.Kind == "drew" {
-		return "drew"
-	}
-	if p.Kind == "agent" && p.AgentName != nil && *p.AgentName != "" {
-		return "agent:" + *p.AgentName
-	}
-	if p.Kind != "" {
-		return p.Kind
-	}
-	return ""
-}
-
-// eventTime returns the most relevant timestamp for the event. Creation
-// rows use CreatedOn (no Timestamp field on disk); every other kind
-// uses Timestamp. A zero time.Time signals "no timestamp on this row."
-func eventTime(ev Event) time.Time {
-	if ev.Kind == "contract" {
-		t := zeroOr(ev.UpdatedOn)
-		if t.IsZero() {
-			t = zeroOr(ev.CreatedOn)
+		if !closedAt.IsZero() {
+			c.UpdatedAt = closedAt
+			c.LastEventAt = closedAt
 		}
-		return t
+		state.Contracts[id] = c
+		return
 	}
-	return zeroOr(ev.Timestamp)
+
+	if c.Status == "closed" {
+		return // already closed — idempotent
+	}
+
+	// Remove from OpenIndex before closing.
+	if c.Statement != "" {
+		delete(state.OpenIndex, OpenKey{OwnerSessionID: c.OwnerSessionID, Deliverable: c.Statement})
+	}
+
+	c.Status = "closed"
+	c.ClosedReason = inp.ClosedReason
+	if !closedAt.IsZero() {
+		c.UpdatedAt = closedAt
+		c.LastEventAt = closedAt
+	}
+	state.Contracts[id] = c
 }
 
-// zeroOr unwraps a *time.Time to a zero time.Time when nil.
-func zeroOr(t *time.Time) time.Time {
-	if t == nil {
+// parseRFC3339 parses an RFC 3339 timestamp (with or without nanoseconds).
+// Returns a zero time.Time on empty input or parse failure.
+func parseRFC3339(s string) time.Time {
+	if s == "" {
 		return time.Time{}
 	}
-	return *t
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-session fold (ProjectsRecord)
+// ---------------------------------------------------------------------------
+
+// ProjectsRecord pairs a SessionRecord with the session UUID it came from.
+// The ProjectsAdapter emits these so callers know which session owns each
+// record without re-deriving the UUID from the file path.
+type ProjectsRecord struct {
+	SessionID string
+	Record    SessionRecord
+}
+
+// FoldProjectsRecords folds a slice of ProjectsRecords (from multiple
+// session jsonls) into a single global FoldState indexed by contract id.
+// Cross-jsonl close resolution works because all records share the same state.
+func FoldProjectsRecords(records []ProjectsRecord) *FoldState {
+	state := NewFoldState()
+	ApplyProjectsRecords(state, records)
+	return state
+}
+
+// ApplyProjectsRecords applies a slice of ProjectsRecords to an existing
+// FoldState. Used for incremental updates (follow-from-offsets path) to
+// avoid a full rebuild on every fsnotify tick.
+func ApplyProjectsRecords(state *FoldState, records []ProjectsRecord) {
+	for _, pr := range records {
+		applySessionRecord(state, pr.Record, pr.SessionID)
+	}
 }

@@ -85,6 +85,10 @@ Tool fighting you = you're using it wrong.
 
 UI changes verified by rendering, not diff inspection. Playwright snapshot or browser check before claiming done.
 
+### Plugin / hook / MCP work requires real-runtime drive
+
+Plugin code (Claude Code plugins, hooks, MCP servers) verified by an actual `claude --plugin-dir <plugin> --print` invocation plus inspection of the resulting session jsonl for the expected events — not by Go/unit tests that mock the runtime contract (e.g. setting `CLAUDE_SESSION_ID` env var when real Claude Code passes session_id via JSON-on-stdin). Tests prove helpers compute; real-runtime drives prove the production contract.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -16,29 +17,28 @@ import (
 //
 // Owns:
 //
-//   - one [Adapter] (JSONL read).
-//   - one [Watcher] (fsnotify).
+//   - one [ProjectsAdapter] (session JSONL read).
+//   - one [ProjectsWatcher] (fsnotify on the projects tree).
 //   - the in-memory fold result, keyed by ContractID.
 //   - the per-key Subscribe fan-out for invalidation events.
 //
 // Per ADR-011 §2 the surface is read-only. Writes happen out-of-band
-// (the claude-contracts plugin appends to the JSONL); the watcher
+// (the claude-contracts plugin appends to session JSONLs); the watcher
 // turns those writes into invalidation events, the next read picks up
 // the fresh fold.
 type Provider struct {
-	adapterIO *Adapter
-	watcher   *Watcher
+	adapterIO *ProjectsAdapter
+	watcher   *ProjectsWatcher
 	logger    *slog.Logger
 	clock     func() time.Time
 
-	mu     sync.RWMutex
-	state  map[ContractID]Contract
-	loaded bool
-	last   time.Time
+	mu        sync.RWMutex
+	foldState *FoldState
+	loaded    bool
+	last      time.Time
 
 	// offsets is the per-file byte position the Provider has folded up
-	// to. Keyed by file basename (e.g. `C-2026-04-27-0398e48e.jsonl`).
-	// Tail reads resume from these offsets.
+	// to. Keyed by absolute file path. Tail reads resume from these offsets.
 	offsets map[string]int64
 
 	subMu sync.Mutex
@@ -50,14 +50,14 @@ type Provider struct {
 	doneCh    chan struct{}
 }
 
-// New constructs a Provider using the platform-default log directory
-// resolved by [DefaultLogDir].
+// New constructs a Provider using the platform-default projects directory
+// resolved by [DefaultProjectsDir].
 func New(logger *slog.Logger) *Provider {
-	return NewWithPath(DefaultLogDir(), logger)
+	return NewWithPath(DefaultProjectsDir(), logger)
 }
 
 // NewWithPath is the test-friendly constructor — accepts an explicit
-// log directory so unit tests can point at a t.TempDir(). The clock is
+// projects directory so unit tests can point at a t.TempDir(). The clock is
 // fixed to time.Now in production; NewForTest swaps it for callers
 // that need deterministic timestamps.
 func NewWithPath(dir string, logger *slog.Logger) *Provider {
@@ -67,6 +67,9 @@ func NewWithPath(dir string, logger *slog.Logger) *Provider {
 // NewForTest is the constructor with every dependency injectable.
 // Production callers use [New] / [NewWithPath]; test callers use this
 // to drive the provider with a fake clock.
+//
+// dir is the projects root (e.g. ~/.claude/projects), not the legacy
+// per-contract contracts dir.
 func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provider {
 	if logger == nil {
 		logger = slog.Default()
@@ -75,11 +78,11 @@ func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provid
 		clock = time.Now
 	}
 	return &Provider{
-		adapterIO: NewAdapter(dir),
-		watcher:   NewWatcher(dir, logger),
+		adapterIO: NewProjectsAdapter(dir),
+		watcher:   NewProjectsWatcher(dir, logger),
 		logger:    logger,
 		clock:     clock,
-		state:     map[ContractID]Contract{},
+		foldState: NewFoldState(),
 		offsets:   map[string]int64{},
 		subs:      map[chan adapter.InvalidationEvent[ContractID]]struct{}{},
 		stopCh:    make(chan struct{}),
@@ -89,29 +92,28 @@ func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provid
 
 // LogPath returns the absolute path the Provider reads from. Surfaces
 // the resolved default for diagnostics (e.g. `orchard query contracts
-// --help`). The path points at a directory of per-contract jsonl
-// files, not a single aggregate file.
+// --help`). The path points at the projects directory tree.
 func (p *Provider) LogPath() string {
-	return p.adapterIO.Dir()
+	return p.adapterIO.Root()
 }
 
 // Start hydrates the cache from a Snapshot read, then launches the
 // watcher loop. Subsequent calls are no-ops.
 //
-// A missing log directory is not an error — Start returns nil and the
+// A missing projects directory is not an error — Start returns nil and the
 // watcher waits for the directory to be created.
 func (p *Provider) Start(ctx context.Context) error {
 	var startErr error
 	p.startOnce.Do(func() {
-		events, offsets, err := p.adapterIO.Snapshot(ctx)
+		records, offsets, err := p.adapterIO.Snapshot(ctx)
 		if err != nil {
 			// Surface the error but let the daemon continue — a
 			// transient read failure should not collapse boot.
 			p.logger.Warn("contracts provider: snapshot read failed",
-				"dir", p.adapterIO.Dir(), "err", err)
+				"dir", p.adapterIO.Root(), "err", err)
 		}
 		p.mu.Lock()
-		p.state = Fold(events)
+		p.foldState = FoldProjectsRecords(records)
 		p.offsets = offsets
 		p.loaded = true
 		p.last = p.clock()
@@ -133,7 +135,7 @@ func (p *Provider) Start(ctx context.Context) error {
 // Idempotent. Safe to call before Start (no-op).
 //
 // Closing the underlying fsnotify watcher closes its event channels,
-// which causes [Watcher.Run] to exit and the provider's done channel
+// which causes [ProjectsWatcher.Run] to exit and the provider's done channel
 // to fire. We wait for that exit so callers can rely on no further
 // invalidation events after Stop returns.
 func (p *Provider) Stop() error {
@@ -156,7 +158,7 @@ func (p *Provider) Stop() error {
 // (which only happens during a watcher tick that has not landed yet).
 func (p *Provider) Get(_ context.Context, key ContractID) (*graphql.Contract, adapter.Freshness, error) {
 	p.mu.RLock()
-	c, ok := p.state[key]
+	c, ok := p.foldState.Contracts[key]
 	loaded := p.loaded
 	last := p.last
 	p.mu.RUnlock()
@@ -180,7 +182,7 @@ func (p *Provider) GetMany(_ context.Context, keys []ContractID) (map[ContractID
 		return out, freshness, fmt.Errorf("contracts provider not started")
 	}
 	for _, k := range keys {
-		c, ok := p.state[k]
+		c, ok := p.foldState.Contracts[k]
 		if !ok {
 			continue
 		}
@@ -195,8 +197,8 @@ func (p *Provider) GetMany(_ context.Context, keys []ContractID) (map[ContractID
 func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	out := make([]ContractID, 0, len(p.state))
-	for k := range p.state {
+	out := make([]ContractID, 0, len(p.foldState.Contracts))
+	for k := range p.foldState.Contracts {
 		out = append(out, k)
 	}
 	return out, nil
@@ -210,8 +212,8 @@ func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 // graphql shape directly keeps the resolver layer trivial.
 func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*graphql.Contract, error) {
 	p.mu.RLock()
-	contracts := make([]Contract, 0, len(p.state))
-	for _, c := range p.state {
+	contracts := make([]Contract, 0, len(p.foldState.Contracts))
+	for _, c := range p.foldState.Contracts {
 		contracts = append(contracts, c)
 	}
 	loaded := p.loaded
@@ -232,11 +234,10 @@ func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*g
 
 	out := make([]*graphql.Contract, 0, len(contracts))
 	for _, c := range contracts {
-		gc := toGraphQL(c)
-		if filter != nil && !matches(gc, filter) {
+		if filter != nil && !matches(c, filter) {
 			continue
 		}
-		out = append(out, gc)
+		out = append(out, toGraphQL(c))
 	}
 	return out, nil
 }
@@ -267,7 +268,7 @@ func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEve
 }
 
 // consume drives the fold loop. Each watcher tick triggers a tail read
-// from the saved offset; new events are merged into the existing state
+// from the saved offset; new records are merged into the existing state
 // (so the fold is incremental, not full-rebuild) and invalidations are
 // fanned out for whichever ids changed.
 func (p *Provider) consume(ctx context.Context) {
@@ -287,10 +288,10 @@ func (p *Provider) consume(ctx context.Context) {
 	}
 }
 
-// refresh tails every jsonl in the dir from the saved per-file
-// offsets, applies new events to the in-memory state, advances the
-// offsets, and fans out InvalidationEvents for every id touched. Run
-// on every watcher poke.
+// refresh tails every session jsonl in the projects tree from the saved
+// per-file offsets, applies new records to the in-memory state, advances the
+// offsets, and fans out InvalidationEvents for every contract id touched.
+// Run on every watcher poke.
 func (p *Provider) refresh(ctx context.Context) {
 	p.mu.RLock()
 	from := make(map[string]int64, len(p.offsets))
@@ -299,23 +300,37 @@ func (p *Provider) refresh(ctx context.Context) {
 	}
 	p.mu.RUnlock()
 
-	events, advanced, err := p.adapterIO.FollowFromOffsets(ctx, from)
+	records, advanced, err := p.adapterIO.FollowFromOffsets(ctx, from)
 	if err != nil {
 		p.logger.Warn("contracts provider: tail read failed",
-			"dir", p.adapterIO.Dir(), "err", err)
+			"dir", p.adapterIO.Root(), "err", err)
 	}
 
-	if len(events) == 0 && offsetsEqual(advanced, from) {
+	if len(records) == 0 && offsetsEqual(advanced, from) {
 		return
 	}
 
-	touched := make(map[ContractID]struct{}, len(events))
+	touched := make(map[ContractID]struct{})
 	now := p.clock()
 	p.mu.Lock()
-	for _, ev := range events {
-		applyEvent(p.state, ev)
-		if ev.ID != "" {
-			touched[ContractID(ev.ID)] = struct{}{}
+	ApplyProjectsRecords(p.foldState, records)
+	for _, pr := range records {
+		// Extract the contract id from open_contract / close_contract blocks
+		// so we know which ids to invalidate without a full-state diff.
+		if pr.Record.Type == "assistant" && pr.Record.Message != nil {
+			for _, block := range pr.Record.Message.Content {
+				if block.Type != "tool_use" {
+					continue
+				}
+				if block.Name == "open_contract" || block.Name == "close_contract" {
+					var inp struct {
+						ID string `json:"id"`
+					}
+					if jsonErr := json.Unmarshal(block.Input, &inp); jsonErr == nil && inp.ID != "" {
+						touched[ContractID(inp.ID)] = struct{}{}
+					}
+				}
+			}
 		}
 	}
 	p.offsets = advanced
@@ -365,16 +380,35 @@ func (p *Provider) fanOut(ev adapter.InvalidationEvent[ContractID]) {
 	}
 }
 
-// matches applies a ContractFilter to a single Contract. All filter
+// matches applies a ContractFilter to an internal Contract. All filter
 // fields are AND-combined; nil/empty fields match everything.
-func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
+func matches(c Contract, f *graphql.ContractFilter) bool {
 	if f == nil {
 		return true
 	}
 	if len(f.Statuses) > 0 {
+		want := statusToGraphQL(c.Status)
 		ok := false
 		for _, s := range f.Statuses {
-			if s == c.Status {
+			if s == want {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if len(f.ClosedReasons) > 0 {
+		// Only CLOSED contracts carry a ClosedReason; open contracts
+		// never match a closedReasons filter.
+		if c.Status != "closed" {
+			return false
+		}
+		want := reasonToGraphQL(c.ClosedReason)
+		ok := false
+		for _, r := range f.ClosedReasons {
+			if r == want {
 				ok = true
 				break
 			}
@@ -385,14 +419,6 @@ func matches(c *graphql.Contract, f *graphql.ContractFilter) bool {
 	}
 	if f.OwnerSessionID != nil && *f.OwnerSessionID != "" && c.OwnerSessionID != *f.OwnerSessionID {
 		return false
-	}
-	if f.OwnerAgentName != nil && *f.OwnerAgentName != "" && c.OwnerAgentName != *f.OwnerAgentName {
-		return false
-	}
-	if f.ParentContractID != nil && *f.ParentContractID != "" {
-		if c.ParentContractID == nil || *c.ParentContractID != *f.ParentContractID {
-			return false
-		}
 	}
 	return true
 }
@@ -405,76 +431,34 @@ func toGraphQL(c Contract) *graphql.Contract {
 		ContractID:     string(c.ID),
 		Statement:      c.Statement,
 		OwnerSessionID: c.OwnerSessionID,
-		OwnerAgentName: c.OwnerAgentName,
-		Status:         mapStatus(c.Status),
+		Status:         statusToGraphQL(c.Status),
 		CreatedAt:      formatTime(c.CreatedAt),
 		UpdatedAt:      formatTime(c.UpdatedAt),
 		LastEventAt:    formatTime(c.LastEventAt),
-		Criteria:       append([]string{}, c.Criteria...),
-		OpenQuestions:  buildOpenQuestions(c.OpenQuestions),
 	}
-	if c.ReportsTo != "" {
-		s := c.ReportsTo
-		out.ReportsTo = &s
-	}
-	if c.ParentContractID != "" {
-		s := c.ParentContractID
-		out.ParentContractID = &s
+	if c.ClosedReason != "" {
+		r := reasonToGraphQL(c.ClosedReason)
+		out.ClosedReason = &r
 	}
 	return out
 }
 
-// buildOpenQuestions copies the internal OpenQuestion list onto the
-// generated graphql.ContractQuestion slice. We allocate a fresh slice
-// so callers cannot mutate the cache by editing the response.
-func buildOpenQuestions(qs []OpenQuestion) []*graphql.ContractQuestion {
-	if len(qs) == 0 {
-		return []*graphql.ContractQuestion{}
+// statusToGraphQL maps the internal "open"/"closed" status to the v0.8
+// SIGNED/CLOSED enum. Unknown values default to SIGNED (open/active).
+func statusToGraphQL(s string) graphql.ContractStatus {
+	if s == "closed" {
+		return graphql.ContractStatusClosed
 	}
-	out := make([]*graphql.ContractQuestion, 0, len(qs))
-	for _, q := range qs {
-		gq := &graphql.ContractQuestion{
-			QuestionID:  q.QuestionID,
-			Text:        q.Text,
-			AskedBy:     q.AskedBy,
-			AskedAt:     formatTime(q.AskedAt),
-			BlocksClose: q.BlocksClose,
-		}
-		if q.Deadline != nil {
-			d := formatTime(*q.Deadline)
-			gq.Deadline = &d
-		}
-		out = append(out, gq)
-	}
-	return out
+	return graphql.ContractStatusSigned
 }
 
-// mapStatus maps the plugin's raw status string to the schema enum.
-// Unknown values fall through to OPEN — the safest default for a
-// future-tense enum addition.
-func mapStatus(s string) graphql.ContractStatus {
-	switch s {
-	case "open":
-		return graphql.ContractStatusOpen
-	case "delivered_pending_validation":
-		return graphql.ContractStatusDeliveredPendingValidation
-	case "delivered_pending_parent_validation":
-		return graphql.ContractStatusDeliveredPendingParentValidation
-	case "pending_drew_approval":
-		return graphql.ContractStatusPendingDrewApproval
-	case "awaiting_cancel_ack":
-		return graphql.ContractStatusAwaitingCancelAck
-	case "waiting_external":
-		return graphql.ContractStatusWaitingExternal
-	case "satisfied":
-		return graphql.ContractStatusSatisfied
-	case "cancelled":
-		return graphql.ContractStatusCancelled
-	case "judge_rejected_terminal":
-		return graphql.ContractStatusJudgeRejectedTerminal
-	default:
-		return graphql.ContractStatusOpen
+// reasonToGraphQL maps "delivered"/"abandoned" to the ContractReason enum.
+// Unknown values default to DELIVERED.
+func reasonToGraphQL(r string) graphql.ContractReason {
+	if r == "abandoned" {
+		return graphql.ContractReasonAbandoned
 	}
+	return graphql.ContractReasonDelivered
 }
 
 // formatTime renders a time as RFC 3339 with nanosecond precision.
