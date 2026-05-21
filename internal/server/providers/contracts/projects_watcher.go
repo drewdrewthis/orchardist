@@ -138,6 +138,14 @@ func (w *ProjectsWatcher) handleEvent(ev fsnotify.Event) {
 				w.logger.Warn("projects watcher: failed to attach new subdir",
 					"path", name, "err", err)
 			}
+			// Subscribe to any .jsonl files already present at the moment of
+			// attach. Linux/inotify directory watches do not reliably emit
+			// content-change events for files inside the directory, so without
+			// this any pre-existing .jsonl would not fire Write events.
+			if err := w.attachJsonlFiles(name); err != nil && !errors.Is(err, errWatcherClosed) {
+				w.logger.Warn("projects watcher: failed to attach jsonl files in new subdir",
+					"path", name, "err", err)
+			}
 			w.poke()
 			return
 		}
