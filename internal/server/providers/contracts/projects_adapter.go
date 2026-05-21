@@ -9,6 +9,7 @@ package contracts
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -184,9 +185,12 @@ func (a *ProjectsAdapter) readSessionFile(path string, fromOffset int64) ([]Proj
 		consumed := int64(len(line))
 		if len(line) > 0 && line[len(line)-1] == '\n' {
 			offset += consumed
-			if trimmed := strings.TrimSpace(string(line)); len(trimmed) > 0 {
+			// Trim whitespace on the []byte directly to avoid the
+			// []byte→string→[]byte round-trip on every line.
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) > 0 {
 				var rec SessionRecord
-				if jsonErr := json.Unmarshal([]byte(trimmed), &rec); jsonErr == nil {
+				if jsonErr := json.Unmarshal(trimmed, &rec); jsonErr == nil {
 					srcID := rec.SessionID
 					if srcID == "" {
 						srcID = sessionID
