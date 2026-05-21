@@ -220,6 +220,11 @@ func (w *ProjectsWatcher) attachJsonlFiles(subdir string) error {
 	return nil
 }
 
+// errWatcherClosed is returned by attachDir/attachPath when Stop has already
+// torn down the underlying fsnotify watcher. Callers can short-circuit
+// remaining work rather than logging once per file.
+var errWatcherClosed = errors.New("watcher closed")
+
 // attachDir adds a directory to the fsnotify watcher. Idempotent.
 func (w *ProjectsWatcher) attachDir(path string) error {
 	w.mu.Lock()

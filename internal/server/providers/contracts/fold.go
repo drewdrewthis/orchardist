@@ -1,6 +1,24 @@
 package contracts
 
-import "time"
+// fold.go implements the v0.8 ContractFold projection.
+//
+// v0.8 stores contract lifecycle events as tool_use blocks inside assistant
+// message records in session JSONL files (~/.claude/projects/*/<uuid>.jsonl).
+// This file provides the pure-fold layer:
+//
+//   - FoldFromSessionJSONL: fold a single session's records into a Contract map.
+//   - ApplySessionRecords: apply records to an existing global state map.
+//   - FoldProjectsRecords: fold records from multiple sessions (ProjectsRecord).
+//   - ApplyProjectsRecords: apply multi-session records to an existing state map.
+//
+// ProjectsAdapter lives in projects_adapter.go (adapter + watcher split) and
+// is declared separately so tests can inject a different root without touching
+// the watcher.
+
+import (
+	"encoding/json"
+	"time"
+)
 
 // ConversationContractDeliverable is the fixed deliverable for the
 // auto-opened conversation contract. The UserPromptSubmit hook writes
@@ -9,161 +27,191 @@ import "time"
 // so only one Contract per session is ever created.
 const ConversationContractDeliverable = "user agrees conversation has come to a close and there are no loose ends"
 
-// Fold reduces an ordered list of v0.7 per-contract JSONL events into
-// the current state of every contract they touch.
+// FoldFromSessionJSONL folds a slice of SessionRecords for a single
+// session into a Contract map. Each open_contract tool_use block
+// initialises a Contract keyed by contract id; close_contract closes it.
 //
-// Used by MigrateV07ToV08 to determine which v0.7 contracts are still
-// open before writing v0.8 open_contract events into session JSONLs.
-// v0.8 live contracts use FoldFromSessionJSONL instead.
+// ownerSessionID is the session UUID whose JSONL these records came from.
+// Every Contract produced by an open_contract event in this slice carries
+// ownerSessionID as its OwnerSessionID.
 //
-// Pure function — no IO, no clock, no globals.
-func Fold(events []Event) map[ContractID]Contract {
+// Dedup rule: if the same (ownerSessionID, deliverable) pair already has
+// an OPEN contract, a subsequent open_contract for the same deliverable is
+// a no-op. A close followed by a new open IS a new record.
+func FoldFromSessionJSONL(records []SessionRecord, ownerSessionID string) map[ContractID]Contract {
 	state := make(map[ContractID]Contract)
-	for _, ev := range events {
-		applyEvent(state, ev)
-	}
+	ApplySessionRecords(state, records, ownerSessionID)
 	return state
 }
 
-// applyEvent dispatches one event into the fold.
-func applyEvent(state map[ContractID]Contract, ev Event) {
-	switch ev.Kind {
-	case "contract":
-		applyCreation(state, ev)
-	case "status_change":
-		applyStatusChange(state, ev)
-	default:
-		// All other v0.7 kinds (criterion_added, question_*, cancel_*,
-		// judge_run, etc.) are not surfaced in v0.8. Touch LastEventAt
-		// only so the migration can rank contracts by recency.
-		touchLastEvent(state, ContractID(ev.ID), eventTime(ev))
+// ApplySessionRecords applies a slice of SessionRecords to an existing
+// global Contract map. localSessionID is the UUID of the JSONL these
+// records came from — used as OwnerSessionID for open_contract events
+// and to resolve F2 non-owner abandon closes (aboutSessionId).
+func ApplySessionRecords(state map[ContractID]Contract, records []SessionRecord, localSessionID string) {
+	for _, rec := range records {
+		applySessionRecord(state, rec, localSessionID)
 	}
 }
 
-// touchLastEvent updates LastEventAt on the named contract, leaving all
-// other fields untouched.
-func touchLastEvent(state map[ContractID]Contract, id ContractID, at time.Time) {
-	c, ok := state[id]
-	if !ok {
+// applySessionRecord dispatches one SessionRecord into the fold state.
+//
+// Assistant records with tool_use content blocks are processed for
+// open_contract and close_contract events (the primary v0.8 path).
+//
+// System records are checked for exit/quit/bye local_command content;
+// when matched a virtual close of the open conversation contract is
+// synthesised in-memory (L2.11/L2.12).
+func applySessionRecord(state map[ContractID]Contract, rec SessionRecord, localSessionID string) {
+	// L2.11/L2.12: system/local_command exit records.
+	if rec.Type == "system" {
+		applyExitRecord(state, rec, localSessionID)
 		return
 	}
-	if !at.IsZero() {
-		c.LastEventAt = at
+
+	if rec.Type != "assistant" || rec.Message == nil {
+		return
 	}
-	state[id] = c
+	for _, block := range rec.Message.Content {
+		if block.Type != "tool_use" {
+			continue
+		}
+		switch block.Name {
+		case "open_contract":
+			applyOpenContractBlock(state, block, localSessionID, rec)
+		case "close_contract":
+			applyCloseContractBlock(state, block)
+		}
+	}
 }
 
-// applyCreation initialises a contract from a `kind: contract` row.
-//
-// Conversation-contract dedup rule: if the event's Statement equals
-// ConversationContractDeliverable and the same (ownerSessionId, deliverable)
-// pair already has an open contract in state, this event is a no-op. A
-// conversation contract that has been closed may be re-opened (L2.13 resume).
-//
-// Non-conversation-contract events with unique IDs are always inserted.
-func applyCreation(state map[ContractID]Contract, ev Event) {
-	if ev.ID == "" {
+// applyOpenContractBlock handles one open_contract tool_use content block.
+func applyOpenContractBlock(state map[ContractID]Contract, block SessionContentBlock, ownerSessionID string, rec SessionRecord) {
+	var inp OpenContractInput
+	if err := json.Unmarshal(block.Input, &inp); err != nil {
+		return // malformed input — skip silently
+	}
+	if inp.ID == "" {
 		return
 	}
-	id := ContractID(ev.ID)
+	id := ContractID(inp.ID)
 
-	// Dedup: for the fixed conversation-contract deliverable, skip if an
-	// open contract for this (ownerSessionId, deliverable) already exists.
-	if ev.Statement == ConversationContractDeliverable && ev.Owner != nil {
-		ownerSID := ev.Owner.SessionID
+	// Dedup rule: if (ownerSessionID, deliverable) already has an OPEN
+	// contract, treat this as a no-op. A close then re-open IS a new record.
+	deliverable := inp.effectiveDeliverable()
+	if deliverable != "" {
 		for _, c := range state {
-			if c.OwnerSessionID == ownerSID &&
-				c.Statement == ConversationContractDeliverable &&
+			if c.OwnerSessionID == ownerSessionID &&
+				c.Statement == deliverable &&
 				c.Status == "open" {
-				return // idempotent — conversation contract already open for this session
+				return // already open — idempotent
 			}
 		}
 	}
 
-	created := zeroOr(ev.CreatedOn)
-	updated := zeroOr(ev.UpdatedOn)
-	if updated.IsZero() {
-		updated = created
-	}
-	status := ev.InitialStatus
-	if status == "" {
-		status = "open"
-	}
-	// v0.7 multi-value statuses collapse to the v0.8 binary model:
-	// "open" stays "open"; every non-open terminal status becomes "closed".
-	if !isOpenStatus(status) {
-		status = "closed"
+	// Parse creation timestamp from input; fall back to the record timestamp.
+	createdAt := parseRFC3339(inp.CreatedAt)
+	if createdAt.IsZero() && rec.Timestamp != "" {
+		createdAt = parseRFC3339(rec.Timestamp)
 	}
 
 	c := Contract{
-		ID:          id,
-		Statement:   ev.Statement,
-		Status:      status,
-		CreatedAt:   created,
-		UpdatedAt:   updated,
-		LastEventAt: updated,
-	}
-	if ev.Owner != nil {
-		c.OwnerSessionID = ev.Owner.SessionID
-		if ev.Owner.AgentName != nil {
-			c.OwnerAgentName = *ev.Owner.AgentName
-		}
-	}
-
-	// Preserve LastEventAt from events that arrived before creation.
-	if existing, ok := state[id]; ok {
-		if !existing.LastEventAt.IsZero() && existing.LastEventAt.After(c.LastEventAt) {
-			c.LastEventAt = existing.LastEventAt
-		}
+		ID:             id,
+		Statement:      deliverable,
+		OwnerSessionID: ownerSessionID,
+		Status:         "open",
+		CreatedAt:      createdAt,
+		UpdatedAt:      createdAt,
+		LastEventAt:    createdAt,
 	}
 	state[id] = c
 }
 
-func applyStatusChange(state map[ContractID]Contract, ev Event) {
-	id := ContractID(ev.ID)
-	c, ok := state[id]
-	if !ok {
-		// status_change before creation — drop.
+// applyCloseContractBlock handles one close_contract tool_use content block.
+// Closes by contract id regardless of which session jsonl the close lives in
+// (supports the F2 non-owner abandon case where aboutSessionId != owner).
+func applyCloseContractBlock(state map[ContractID]Contract, block SessionContentBlock) {
+	var inp CloseContractInput
+	if err := json.Unmarshal(block.Input, &inp); err != nil {
+		return // malformed input — skip silently
+	}
+	if inp.ID == "" {
 		return
 	}
-	if ev.To != "" {
-		if isOpenStatus(ev.To) {
-			c.Status = "open"
-		} else {
-			c.Status = "closed"
+	id := ContractID(inp.ID)
+
+	closedAt := parseRFC3339(inp.ClosedAt)
+
+	c, ok := state[id]
+	if !ok {
+		// Close arrived before open (cross-jsonl case: the owner's jsonl
+		// hasn't been scanned yet). Create a minimal closed placeholder.
+		c = Contract{
+			ID:           id,
+			Status:       "closed",
+			ClosedReason: inp.ClosedReason,
 		}
+		if !closedAt.IsZero() {
+			c.UpdatedAt = closedAt
+			c.LastEventAt = closedAt
+		}
+		state[id] = c
+		return
 	}
-	t := eventTime(ev)
-	if !t.IsZero() {
-		c.UpdatedAt = t
-		c.LastEventAt = t
+
+	if c.Status == "closed" {
+		return // already closed — idempotent
+	}
+	c.Status = "closed"
+	c.ClosedReason = inp.ClosedReason
+	if !closedAt.IsZero() {
+		c.UpdatedAt = closedAt
+		c.LastEventAt = closedAt
 	}
 	state[id] = c
 }
 
-// isOpenStatus returns true only for "open". Every other v0.7 status
-// (delivered_pending_validation, satisfied, cancelled, etc.) is treated
-// as closed in the v0.8 binary model.
-func isOpenStatus(s string) bool {
-	return s == "open"
-}
-
-// eventTime returns the most relevant timestamp for the event.
-func eventTime(ev Event) time.Time {
-	if ev.Kind == "contract" {
-		t := zeroOr(ev.UpdatedOn)
-		if t.IsZero() {
-			t = zeroOr(ev.CreatedOn)
-		}
-		return t
-	}
-	return zeroOr(ev.Timestamp)
-}
-
-// zeroOr unwraps a *time.Time to a zero time.Time when nil.
-func zeroOr(t *time.Time) time.Time {
-	if t == nil {
+// parseRFC3339 parses an RFC 3339 timestamp (with or without nanoseconds).
+// Returns a zero time.Time on empty input or parse failure.
+func parseRFC3339(s string) time.Time {
+	if s == "" {
 		return time.Time{}
 	}
-	return *t
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-session fold (ProjectsRecord)
+// ---------------------------------------------------------------------------
+
+// ProjectsRecord pairs a SessionRecord with the session UUID it came from.
+// The ProjectsAdapter emits these so callers know which session owns each
+// record without re-deriving the UUID from the file path.
+type ProjectsRecord struct {
+	SessionID string
+	Record    SessionRecord
+}
+
+// FoldProjectsRecords folds a slice of ProjectsRecords (from multiple
+// session jsonls) into a single global Contract map indexed by contract id.
+// Cross-jsonl close resolution works because all records share the same map.
+func FoldProjectsRecords(records []ProjectsRecord) map[ContractID]Contract {
+	state := make(map[ContractID]Contract)
+	ApplyProjectsRecords(state, records)
+	return state
+}
+
+// ApplyProjectsRecords applies a slice of ProjectsRecords to an existing
+// state map. Used for incremental updates (follow-from-offsets path) to
+// avoid a full rebuild on every fsnotify tick.
+func ApplyProjectsRecords(state map[ContractID]Contract, records []ProjectsRecord) {
+	for _, pr := range records {
+		applySessionRecord(state, pr.Record, pr.SessionID)
+	}
 }

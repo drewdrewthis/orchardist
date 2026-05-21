@@ -391,3 +391,13 @@ func mustDecodeSessionRecord(t *testing.T, line string) SessionRecord {
 	}
 	return rec
 }
+
+// mustParse parses an RFC3339 timestamp or fails the test.
+func mustParse(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return parsed
+}

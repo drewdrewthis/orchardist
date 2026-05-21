@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -16,18 +17,18 @@ import (
 //
 // Owns:
 //
-//   - one [Adapter] (JSONL read).
-//   - one [Watcher] (fsnotify).
+//   - one [ProjectsAdapter] (session JSONL read).
+//   - one [ProjectsWatcher] (fsnotify on the projects tree).
 //   - the in-memory fold result, keyed by ContractID.
 //   - the per-key Subscribe fan-out for invalidation events.
 //
 // Per ADR-011 §2 the surface is read-only. Writes happen out-of-band
-// (the claude-contracts plugin appends to the JSONL); the watcher
+// (the claude-contracts plugin appends to session JSONLs); the watcher
 // turns those writes into invalidation events, the next read picks up
 // the fresh fold.
 type Provider struct {
-	adapterIO *Adapter
-	watcher   *Watcher
+	adapterIO *ProjectsAdapter
+	watcher   *ProjectsWatcher
 	logger    *slog.Logger
 	clock     func() time.Time
 
@@ -37,8 +38,7 @@ type Provider struct {
 	last   time.Time
 
 	// offsets is the per-file byte position the Provider has folded up
-	// to. Keyed by file basename (e.g. `C-2026-04-27-0398e48e.jsonl`).
-	// Tail reads resume from these offsets.
+	// to. Keyed by absolute file path. Tail reads resume from these offsets.
 	offsets map[string]int64
 
 	subMu sync.Mutex
@@ -50,14 +50,14 @@ type Provider struct {
 	doneCh    chan struct{}
 }
 
-// New constructs a Provider using the platform-default log directory
-// resolved by [DefaultLogDir].
+// New constructs a Provider using the platform-default projects directory
+// resolved by [DefaultProjectsDir].
 func New(logger *slog.Logger) *Provider {
-	return NewWithPath(DefaultLogDir(), logger)
+	return NewWithPath(DefaultProjectsDir(), logger)
 }
 
 // NewWithPath is the test-friendly constructor — accepts an explicit
-// log directory so unit tests can point at a t.TempDir(). The clock is
+// projects directory so unit tests can point at a t.TempDir(). The clock is
 // fixed to time.Now in production; NewForTest swaps it for callers
 // that need deterministic timestamps.
 func NewWithPath(dir string, logger *slog.Logger) *Provider {
@@ -67,6 +67,9 @@ func NewWithPath(dir string, logger *slog.Logger) *Provider {
 // NewForTest is the constructor with every dependency injectable.
 // Production callers use [New] / [NewWithPath]; test callers use this
 // to drive the provider with a fake clock.
+//
+// dir is the projects root (e.g. ~/.claude/projects), not the legacy
+// per-contract contracts dir.
 func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provider {
 	if logger == nil {
 		logger = slog.Default()
@@ -75,8 +78,8 @@ func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provid
 		clock = time.Now
 	}
 	return &Provider{
-		adapterIO: NewAdapter(dir),
-		watcher:   NewWatcher(dir, logger),
+		adapterIO: NewProjectsAdapter(dir),
+		watcher:   NewProjectsWatcher(dir, logger),
 		logger:    logger,
 		clock:     clock,
 		state:     map[ContractID]Contract{},
@@ -89,29 +92,28 @@ func NewForTest(dir string, logger *slog.Logger, clock func() time.Time) *Provid
 
 // LogPath returns the absolute path the Provider reads from. Surfaces
 // the resolved default for diagnostics (e.g. `orchard query contracts
-// --help`). The path points at a directory of per-contract jsonl
-// files, not a single aggregate file.
+// --help`). The path points at the projects directory tree.
 func (p *Provider) LogPath() string {
-	return p.adapterIO.Dir()
+	return p.adapterIO.Root()
 }
 
 // Start hydrates the cache from a Snapshot read, then launches the
 // watcher loop. Subsequent calls are no-ops.
 //
-// A missing log directory is not an error — Start returns nil and the
+// A missing projects directory is not an error — Start returns nil and the
 // watcher waits for the directory to be created.
 func (p *Provider) Start(ctx context.Context) error {
 	var startErr error
 	p.startOnce.Do(func() {
-		events, offsets, err := p.adapterIO.Snapshot(ctx)
+		records, offsets, err := p.adapterIO.Snapshot(ctx)
 		if err != nil {
 			// Surface the error but let the daemon continue — a
 			// transient read failure should not collapse boot.
 			p.logger.Warn("contracts provider: snapshot read failed",
-				"dir", p.adapterIO.Dir(), "err", err)
+				"dir", p.adapterIO.Root(), "err", err)
 		}
 		p.mu.Lock()
-		p.state = Fold(events)
+		p.state = FoldProjectsRecords(records)
 		p.offsets = offsets
 		p.loaded = true
 		p.last = p.clock()
@@ -133,7 +135,7 @@ func (p *Provider) Start(ctx context.Context) error {
 // Idempotent. Safe to call before Start (no-op).
 //
 // Closing the underlying fsnotify watcher closes its event channels,
-// which causes [Watcher.Run] to exit and the provider's done channel
+// which causes [ProjectsWatcher.Run] to exit and the provider's done channel
 // to fire. We wait for that exit so callers can rely on no further
 // invalidation events after Stop returns.
 func (p *Provider) Stop() error {
@@ -210,14 +212,8 @@ func (p *Provider) Keys(_ context.Context) ([]ContractID, error) {
 // graphql shape directly keeps the resolver layer trivial.
 func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*graphql.Contract, error) {
 	p.mu.RLock()
-	// Filter while copying so sort only runs over the survivors. For
-	// selective filters this avoids sorting contracts that will be
-	// discarded anyway.
 	contracts := make([]Contract, 0, len(p.state))
 	for _, c := range p.state {
-		if filter != nil && !matches(c, filter) {
-			continue
-		}
 		contracts = append(contracts, c)
 	}
 	loaded := p.loaded
@@ -238,6 +234,9 @@ func (p *Provider) List(_ context.Context, filter *graphql.ContractFilter) ([]*g
 
 	out := make([]*graphql.Contract, 0, len(contracts))
 	for _, c := range contracts {
+		if filter != nil && !matches(c, filter) {
+			continue
+		}
 		out = append(out, toGraphQL(c))
 	}
 	return out, nil
@@ -269,7 +268,7 @@ func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEve
 }
 
 // consume drives the fold loop. Each watcher tick triggers a tail read
-// from the saved offset; new events are merged into the existing state
+// from the saved offset; new records are merged into the existing state
 // (so the fold is incremental, not full-rebuild) and invalidations are
 // fanned out for whichever ids changed.
 func (p *Provider) consume(ctx context.Context) {
@@ -289,10 +288,10 @@ func (p *Provider) consume(ctx context.Context) {
 	}
 }
 
-// refresh tails every jsonl in the dir from the saved per-file
-// offsets, applies new events to the in-memory state, advances the
-// offsets, and fans out InvalidationEvents for every id touched. Run
-// on every watcher poke.
+// refresh tails every session jsonl in the projects tree from the saved
+// per-file offsets, applies new records to the in-memory state, advances the
+// offsets, and fans out InvalidationEvents for every contract id touched.
+// Run on every watcher poke.
 func (p *Provider) refresh(ctx context.Context) {
 	p.mu.RLock()
 	from := make(map[string]int64, len(p.offsets))
@@ -301,23 +300,37 @@ func (p *Provider) refresh(ctx context.Context) {
 	}
 	p.mu.RUnlock()
 
-	events, advanced, err := p.adapterIO.FollowFromOffsets(ctx, from)
+	records, advanced, err := p.adapterIO.FollowFromOffsets(ctx, from)
 	if err != nil {
 		p.logger.Warn("contracts provider: tail read failed",
-			"dir", p.adapterIO.Dir(), "err", err)
+			"dir", p.adapterIO.Root(), "err", err)
 	}
 
-	if len(events) == 0 && offsetsEqual(advanced, from) {
+	if len(records) == 0 && offsetsEqual(advanced, from) {
 		return
 	}
 
-	touched := make(map[ContractID]struct{}, len(events))
+	touched := make(map[ContractID]struct{})
 	now := p.clock()
 	p.mu.Lock()
-	for _, ev := range events {
-		applyEvent(p.state, ev)
-		if ev.ID != "" {
-			touched[ContractID(ev.ID)] = struct{}{}
+	ApplyProjectsRecords(p.state, records)
+	for _, pr := range records {
+		// Extract the contract id from open_contract / close_contract blocks
+		// so we know which ids to invalidate without a full-state diff.
+		if pr.Record.Type == "assistant" && pr.Record.Message != nil {
+			for _, block := range pr.Record.Message.Content {
+				if block.Type != "tool_use" {
+					continue
+				}
+				if block.Name == "open_contract" || block.Name == "close_contract" {
+					var inp struct {
+						ID string `json:"id"`
+					}
+					if jsonErr := json.Unmarshal(block.Input, &inp); jsonErr == nil && inp.ID != "" {
+						touched[ContractID(inp.ID)] = struct{}{}
+					}
+				}
+			}
 		}
 	}
 	p.offsets = advanced
