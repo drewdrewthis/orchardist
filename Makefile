@@ -24,7 +24,7 @@
 
 .PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
         install install-daemon install-dispatcher install-tui install-worktree-cli \
-        test test-go test-rust \
+        test test-go test-rust bats-install bats-test \
         plugins-contracts-mcp
 
 VERSION ?= dev
@@ -94,3 +94,9 @@ test-rust:
 plugins-contracts-mcp:
 	go build -o plugins/conversation-contracts/bin/contracts-mcp \
 		./plugins/conversation-contracts/mcp
+
+bats-install:
+	@command -v bats >/dev/null || (echo "Installing bats..." && brew install bats-core 2>/dev/null || npm install -g bats)
+
+bats-test: bats-install
+	bats scripts/**/*.bats
