@@ -1,0 +1,1 @@
+- [2026-05-19-feature-parity-no-unimplemented](2026-05-19-feature-parity-no-unimplemented.md) — testing,parity,principle · daemon owns daemon-boundary scenarios; TUI/GUI move to crate-side feature files; no @unimplemented escape hatch · pending
