@@ -1,0 +1,262 @@
+# gh — GitHub API: repos (github view), issues, pull requests, workflow runs.
+#
+# Owns: PullRequest, PullRequestReview, Issue, Label, IssueComment, WorkflowRun.
+# Owns: MergeableState, ReviewDecisionEnum, CiStatus, PullRequestState, IssueState.
+# Owns: Query.{gh, pullRequests, openPullRequests, issues, issue, pullRequest, workflowRuns}.
+# Owns: Subscription.{pullRequestChanged, runChanged}.
+#
+# Mutations (to be added in #613): PR review/label/comment, issue create. All exec `scripts/<op>`.
+#
+# S16 (typed core + pass-through): the typed core is the queries below
+# (`pullRequests`, `issue`, `workflowRuns`, etc.). The pass-through escape
+# hatch is `Query.gh(query, variables): JSON` — opaque, uncached, returns
+# whatever GitHub returns.
+
+extend type Query {
+  """
+  Pass-through (S16): forward an arbitrary GraphQL query to GitHub's API
+  using the daemon's configured gh credentials. The `query` argument is a
+  GitHub-schema GraphQL document; the returned JSON is GitHub's full
+  envelope including the `data` and any `errors` keys.
+
+  Pass-through is read-only by design: it is exposed as a Query field,
+  not a Mutation, so callers cannot bypass orchardist guardrails by
+  routing mutations through the daemon. Auth, rate limiting, and base
+  URL come from the gh provider; callers do not pass tokens.
+
+  Federation: peers can call `gh` through the peerproxy surface. The
+  result is opaque JSON on the orchard side — the consumer typechecks
+  against GitHub's schema directly.
+
+  When a pass-through call shape becomes load-bearing, file an issue to
+  promote it to the typed core.
+  """
+  gh(query: String!, variables: JSON): JSON
+
+  "Pull requests on a GitHub repository. `repo` is `owner/name`."
+  pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
+
+  """
+  All open pull requests on a GitHub repository, optionally filtered by
+  author login. Unlike `Repo.pullRequests` (which only sees PRs whose
+  branch is locally checked out), this returns every open PR on the
+  repo. Used by /standup-style "give me all my open PRs" gathers (#435).
+  """
+  openPullRequests(repo: String!, author: String): [PullRequest!]!
+
+  "Issues on a GitHub repository. `repo` is `owner/name`."
+  issues(repo: String!, state: IssueState = OPEN): [Issue!]
+
+  """
+  Look up a single issue by repo + number. Resolves null when the issue
+  doesn't exist, the daemon isn't authenticated against GitHub, or the
+  repo isn't accessible. Use this for "is this number still open?"
+  cross-references against numbers from external sources (Slack lists,
+  comments, docs) — replaces ad-hoc `gh api repos/.../issues/N`
+  shellouts (#436).
+  """
+  issue(repo: String!, number: Int!): Issue
+
+  """
+  Look up a single pull request by repo + number. Same shape as
+  `issue(...)`. Returns null when not found (#436).
+  """
+  pullRequest(repo: String!, number: Int!): PullRequest
+
+  "Workflow runs on a GitHub repository. `repo` is `owner/name`."
+  workflowRuns(repo: String!): [WorkflowRun!]
+}
+
+extend type Subscription {
+  """
+  Push-on-change for a specific pull request (#469 F7). Emits the
+  freshly-loaded PullRequest every time the gh provider invalidates an
+  id whose repo+number match. Returns null until the PR has been seen
+  by the gh provider at least once. Equivalent to
+  `nodeChanged(id: \"PullRequest:<owner>/<name>:<n>\")` but typed.
+  """
+  pullRequestChanged(repo: String!, number: Int!): PullRequest!
+
+  """
+  Push-on-change for workflow runs scoped to a repo + branch (#469 F7).
+  Emits the freshly-loaded WorkflowRun on each gh invalidation that
+  matches the repo+branch filter. Useful for "watch CI for this
+  branch" without round-tripping through nodeChanged on each run id.
+  """
+  runChanged(repo: String!, branch: String!): WorkflowRun!
+}
+
+"Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
+enum MergeableState {
+  MERGEABLE
+  CONFLICTING
+  UNKNOWN
+}
+
+"Reviewer decision on a PR. Null when no review activity yet."
+enum ReviewDecisionEnum {
+  APPROVED
+  CHANGES_REQUESTED
+  REVIEW_REQUIRED
+  COMMENTED
+  DISMISSED
+}
+
+"Aggregated CI status across all check runs and statuses on the PR head sha."
+enum CiStatus {
+  SUCCESS
+  FAILURE
+  PENDING
+  UNKNOWN
+}
+
+"State filter for the pullRequests query."
+enum PullRequestState {
+  OPEN
+  CLOSED
+  MERGED
+  ALL
+}
+
+"State filter for the issues query."
+enum IssueState {
+  OPEN
+  CLOSED
+  ALL
+}
+
+"""
+A pull request on a GitHub repository. Sourced from the GitHub REST API.
+"""
+type PullRequest implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  number: Int!
+  title: String!
+  body: String!
+  state: PullRequestState!
+  draft: Boolean!
+  authorLogin: String!
+  baseRef: String!
+  headRef: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+  reviews: [PullRequestReview!]
+  comments: [IssueComment!]
+  mergeable: MergeableState!
+  mergeStateStatus: String!
+  reviewDecision: ReviewDecisionEnum
+  statusCheckRollup: CiStatus!
+  labels: [Label!]!
+}
+
+"A review submitted on a pull request."
+type PullRequestReview {
+  id: ID!
+  authorLogin: String!
+  state: String!
+  body: String!
+  submittedAt: String!
+}
+
+"""
+An issue on a GitHub repository. Pull requests are excluded.
+"""
+type Issue implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  number: Int!
+  title: String!
+  body: String!
+  state: IssueState!
+  authorLogin: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+  comments: [IssueComment!]
+
+  """
+  User-assigned labels on the issue. Orchard lifecycle / phase labels
+  (e.g. `in-progress`, `pr-ready`) are filtered out — only the user-set
+  ones are surfaced, matching `PullRequest.labels` semantics.
+  """
+  labels: [Label!]!
+
+  """
+  Issues that block this one (#563). Mirrors GitHub's
+  `Issue.blockedByIssues` connection, fetched via the preview-gated
+  GraphQL features `issue_types,sub_issues`. Empty list when none.
+  """
+  blockedByIssues: [Issue!]!
+
+  """
+  Issues this one blocks (#563). The inverse of `blockedByIssues`.
+  Empty list when none.
+  """
+  blockingIssues: [Issue!]!
+
+  """
+  Sub-issues nested under this issue when it acts as a tracker (#563).
+  Empty list when this issue is a leaf, not a tracker.
+  """
+  subIssues: [Issue!]!
+
+  """
+  Parent tracker issue when this issue is itself a sub-issue (#563).
+  Null when this issue has no parent.
+  """
+  parentIssue: Issue
+}
+
+"""
+A GitHub label attached to an issue or pull request. The `color` and
+`description` fields mirror the GitHub REST/GraphQL payloads and are
+empty strings (not null) when GitHub omits them.
+"""
+type Label {
+  "The label's textual name (e.g. `bug`, `P0`)."
+  name: String!
+
+  """
+  The label's hex color without leading `#` (e.g. `d73a4a`). Empty
+  string when GitHub returns no color for the label.
+  """
+  color: String!
+
+  """
+  The label's short description, as set on the repository's labels
+  page. Empty string when no description is set.
+  """
+  description: String!
+}
+
+"A comment on an issue or pull request thread."
+type IssueComment {
+  id: ID!
+  authorLogin: String!
+  body: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+A GitHub Actions workflow run.
+"""
+type WorkflowRun implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  runId: Int!
+  name: String!
+  workflowPath: String!
+  status: String!
+  conclusion: String!
+  headBranch: String!
+  headSHA: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+}

@@ -7,19 +7,20 @@
 # fill them in by hand and gqlgen leaves them alone on subsequent runs.
 
 schema:
-  - schema.graphql
+  - daemon/schema.graphql
+  - daemon/*/schema.graphql
 
 exec:
-  filename: internal/server/graphql/generated.go
+  filename: daemon/graphql/generated.go
   package: graphql
 
 model:
-  filename: internal/server/graphql/models_gen.go
+  filename: daemon/graphql/models_gen.go
   package: graphql
 
 resolver:
   layout: follow-schema
-  dir: internal/server/resolvers
+  dir: daemon/resolvers
   package: resolvers
   filename_template: "{name}.resolvers.go"
 

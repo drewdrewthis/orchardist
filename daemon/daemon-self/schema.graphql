@@ -1,0 +1,45 @@
+# daemon-self — daemon liveness, version, schema bytes, node-id dispatcher.
+#
+# Owns: Health.
+# Owns: Query.{health, version, schemaSDL, node}.
+#
+# Health-of-providers + freshness counters live in `daemon-meta`.
+# The composite workView lives in `views`.
+# `Query.gh` (pass-through) lives in `daemon/gh/` per S16b.
+
+extend type Query {
+  "Liveness probe — returns daemon health and uptime."
+  health: Health!
+
+  "Daemon binary version. Set at build time via -ldflags -X main.version=<semver>; `dev` for plain `go build`."
+  version: String!
+
+  """
+  Returns the daemon's embedded schema.graphql contents as a single
+  string. Lets agents on remote/fresh boxes self-describe even when
+  introspection is gated (#469 F10). The bytes are baked into the
+  daemon binary at build time via go:embed; they reflect whatever
+  schema the running daemon was built against.
+  """
+  schemaSDL: String!
+
+  """
+  Generic node lookup by globally-unique id. Returns the node if it
+  resides on the local daemon; ids whose host prefix matches a configured
+  peer are transparently proxied through the peerproxy surface
+  (federation transport). Unknown hosts return null.
+
+  Implemented as a prefix-registry dispatcher — each domain registers
+  its `<Type>:` prefix + lookup. The registry lives in `daemon/node.go`
+  at the shell, not in a domain.
+  """
+  node(id: ID!): Node
+}
+
+type Health {
+  "Daemon health status — 'ok' when serving."
+  status: String!
+
+  "Uptime in seconds since daemon started."
+  uptimeS: Int!
+}
