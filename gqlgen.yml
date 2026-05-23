@@ -1,25 +1,27 @@
-# gqlgen configuration — schema-first.
+# gqlgen configuration — schema-first, daemon/ module layout.
 # See https://gqlgen.com/config/
 #
-# schema.graphql at repo root is the source of truth. Generated types and
-# the executable schema land in internal/server/graphql/. Resolvers are
-# stubbed out into internal/server/resolvers/ on first generation; we then
-# fill them in by hand and gqlgen leaves them alone on subsequent runs.
+# Schema is composed from the root partial (Node, scalars, empty
+# Query/Mutation/Subscription) plus per-domain partials discovered via glob.
+# Generated types and the executable schema land in daemon/graphql/.
+# Resolver stubs land in daemon/resolvers/ — filled in per domain and left
+# alone on subsequent runs.
 
 schema:
-  - schema.graphql
+  - daemon/schema.graphql        # root: Node, Time, JSON, empty Query/Mutation/Subscription
+  - daemon/*/schema.graphql      # per-domain partials (alphabetical glob)
 
 exec:
-  filename: internal/server/graphql/generated.go
+  filename: daemon/graphql/generated.go
   package: graphql
 
 model:
-  filename: internal/server/graphql/models_gen.go
+  filename: daemon/graphql/models_gen.go
   package: graphql
 
 resolver:
   layout: follow-schema
-  dir: internal/server/resolvers
+  dir: daemon/resolvers
   package: resolvers
   filename_template: "{name}.resolvers.go"
 
