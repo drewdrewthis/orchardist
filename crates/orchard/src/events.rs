@@ -302,8 +302,13 @@ fn append_line(path: &Path, line: &str) {
         Err(_) => return,
     };
 
-    let _ = file.write_all(line.as_bytes());
-    let _ = file.write_all(b"\n");
+    // Single write_all so O_APPEND atomicity covers the entire line+newline.
+    // Two separate syscalls would allow concurrent writers to interleave
+    // as: A_payload | B_payload | A_\n | B_\n → malformed JSON.
+    let mut buf = Vec::with_capacity(line.len() + 1);
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    let _ = file.write_all(&buf);
     let _ = file.flush();
 }
 

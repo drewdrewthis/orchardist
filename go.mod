@@ -9,6 +9,7 @@ require (
 	github.com/graph-gophers/dataloader/v7 v7.1.3
 	github.com/spf13/cobra v1.10.2
 	github.com/vektah/gqlparser/v2 v2.5.33
+	golang.org/x/sync v0.20.0
 )
 
 require (
@@ -22,7 +23,6 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/urfave/cli/v3 v3.8.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect

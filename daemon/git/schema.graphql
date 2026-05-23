@@ -1,0 +1,97 @@
+# git — local git repos: worktrees, branches, refs, status, ahead/behind.
+#
+# Owns: Repo, Worktree.
+# Owns: Query.repos, Subscription.worktreeChanged.
+# Mutations (to be added in #613): worktreeCreate, worktreeRemove, worktreeMove,
+#                                  fetch, pull, push. All exec `scripts/<op>`.
+#
+# Cross-domain fields on Worktree live in the PRODUCING domain's partial (S15b):
+#   processes       → daemon/ps/schema.graphql
+#   tmuxPanes       → daemon/tmux/schema.graphql
+#   tmuxSession     → daemon/tmux/schema.graphql
+#   claudeInstances → daemon/claude-instance/schema.graphql
+#   pr              → daemon/gh/schema.graphql
+#   issue           → daemon/gh/schema.graphql
+
+extend type Query {
+  "All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`."
+  repos: [Repo!]!
+
+  """
+  Pass-through (S16): run an arbitrary git command in the named worktree
+  and return its stdout, stderr, and exit code as opaque JSON. Used when
+  the typed core does not yet cover a call shape (e.g. `git blame`,
+  `git stash list`, `git log --pretty=...`).
+
+  Read-only by design — exposed as a Query field, not a Mutation. Writes
+  (commit, push, pull, fetch, worktree create/rm) go through typed
+  mutations that each exec `scripts/git-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  git(worktreeId: ID!, args: [String!]!): JSON
+}
+
+extend type Subscription {
+  """
+  Per-repo worktree firehose (#469 F7). Emits the repo's full
+  worktree list whenever the git provider invalidates any worktree
+  belonging to the named repo. The argument is the Repo id.
+  """
+  worktreeChanged(repo: ID!): [Worktree!]!
+}
+
+"A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Repo implements Node {
+  "Stable identifier derived from `slug`. Survives re-registration."
+  id: ID!
+
+  "GitHub-style `owner/repo` slug. The repo's identity."
+  slug: String!
+
+  "Absolute filesystem path to the repo's working tree."
+  path: String!
+
+  "Worktrees discovered for this repo — the main checkout plus everything under `.git/worktrees/`."
+  worktrees: [Worktree!]!
+}
+
+"A git worktree — either the project's main checkout or one created with `git worktree add`."
+type Worktree implements Node {
+  "Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`."
+  id: ID!
+
+  "Absolute filesystem path to the worktree."
+  path: String!
+
+  "Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees."
+  branch: String!
+
+  "Resolved 40-character SHA the worktree's HEAD points at. Empty string when HEAD cannot be resolved (e.g. an unborn branch)."
+  head: String!
+
+  "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
+  bare: Boolean!
+
+  "Hostname this worktree was discovered on. v1: always 'local'. Federation populates per-peer."
+  host: String!
+
+  "owner/repo slug derived from origin remote. Null when origin is not a GitHub URL."
+  repo: String
+
+  """
+  Number of commits the worktree's branch is AHEAD of its upstream tracking
+  branch (#483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  ahead: Int
+
+  """
+  Number of commits the worktree's branch is BEHIND its upstream tracking
+  branch (#483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  behind: Int
+}

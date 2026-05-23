@@ -155,13 +155,15 @@ type ContractFilter struct {
 // The provider derives every field from the JSONL on disk — there is no
 // sidecar metadata. Heavy fields (full transcripts, message bodies)
 // deliberately do not surface here; the v1 contract is metadata + a
-// single live signal (`open`) and an optional plugin-populated `recap`.
+// single live signal (`open`) and a daemon-derived `recap`.
 //
 // `open` is a heartbeat: true when the JSONL was written within the last
 // N seconds (default 60s, see provider.HeartbeatThreshold).
 //
-// `recap` is reserved for a future conversations plugin to populate; v1
-// returns null unconditionally.
+// `recap` is the text of the most recent `/recap` slash-command
+// invocation in this session, extracted from the JSONL by the daemon.
+// Null when the session has not invoked `/recap` yet. No plugin
+// required — the fold lives in the claudeprojects provider.
 type Conversation struct {
 	// Stable orchard id — "Conversation:<sessionUuid>".
 	ID string `json:"id"`
@@ -177,7 +179,7 @@ type Conversation struct {
 	MessageCount int64 `json:"messageCount"`
 	// Heartbeat: true when the JSONL was last written within the heartbeat threshold.
 	Open bool `json:"open"`
-	// Plugin-populated short summary. Always null in v1.
+	// Daemon-derived recap from the most recent `/recap` slash-command invocation in this session. Null when no `/recap` has been invoked.
 	Recap *string `json:"recap,omitempty"`
 	// Absolute path to the JSONL transcript on the daemon's host.
 	// Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.

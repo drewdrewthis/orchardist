@@ -78,18 +78,25 @@ func TestMarketplaceJSON_ValidAndNamedOrchard(t *testing.T) {
 		t.Errorf("marketplace name = %q; want %q", m.Name, "orchard")
 	}
 
-	if len(m.Plugins) != 1 {
-		t.Errorf("marketplace has %d plugin(s); want exactly 1", len(m.Plugins))
+	// The orchard marketplace hosts multiple plugins; assert
+	// conversation-contracts is among them at the expected path.
+	var found bool
+	for _, p := range m.Plugins {
+		if p.Name == "conversation-contracts" {
+			found = true
+			if p.Source.Path != "plugins/conversation-contracts" {
+				t.Errorf("plugin %q source.path = %q; want %q",
+					p.Name, p.Source.Path, "plugins/conversation-contracts")
+			}
+			break
+		}
 	}
-
-	if len(m.Plugins) > 0 {
-		p := m.Plugins[0]
-		if p.Name != "conversation-contracts" {
-			t.Errorf("plugin[0].name = %q; want %q", p.Name, "conversation-contracts")
+	if !found {
+		names := make([]string, 0, len(m.Plugins))
+		for _, p := range m.Plugins {
+			names = append(names, p.Name)
 		}
-		if p.Source.Path != "plugins/conversation-contracts" {
-			t.Errorf("plugin[0].source.path = %q; want %q", p.Source.Path, "plugins/conversation-contracts")
-		}
+		t.Errorf("marketplace missing conversation-contracts; have: %v", names)
 	}
 }
 

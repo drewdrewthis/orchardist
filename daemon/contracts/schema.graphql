@@ -1,0 +1,78 @@
+# contracts — agent delivery commitments parsed from Contracts plugins'
+# session jsonl tool_use events.
+#
+# Owns: Contract, ContractStatus, ContractReason, ContractFilter.
+# Owns: Query.{contract, contracts}.
+#
+# Contract records ride on the same JSONL stream as Conversation
+# records (the plugins append tool_use events to
+# `~/.claude/projects/<...>.jsonl`). This domain CONSUMES claude-jsonls'
+# service to read those records — it does not parse jsonl files directly.
+# The v0.8 model is two statuses: SIGNED -> CLOSED. The close carries
+# a ContractReason (DELIVERED or ABANDONED).
+
+extend type Query {
+  "A single Contract by id. Returns null if the id is unknown."
+  contract(id: ID!): Contract
+
+  "Every Contract the daemon currently knows about, optionally filtered."
+  contracts(filter: ContractFilter): [Contract!]!
+}
+
+"""
+A commitment authored by a Claude session and read back here. The
+daemon never writes — plugins author via MCP tools that append
+tool_use events to the session jsonl; the contracts fold projects
+those events into Contract records.
+"""
+type Contract implements Node {
+  "Stable orchard id — \"Contract:<contract_id>\"."
+  id: ID!
+
+  "The contract id as written by the plugin."
+  contractId: ID!
+
+  "What the owner committed to deliver."
+  statement: String!
+
+  "Owner session id (Claude session UUID) recorded at creation time."
+  ownerSessionId: String!
+
+  "Current lifecycle state. SIGNED until closed; CLOSED is terminal."
+  status: ContractStatus!
+
+  """
+  Reason the contract was closed. Null while status is SIGNED.
+  DELIVERED when the owner closed it successfully; ABANDONED when
+  closed without delivery.
+  """
+  closedReason: ContractReason
+
+  "RFC 3339 timestamp the contract was first created."
+  createdAt: String!
+
+  "RFC 3339 timestamp the contract was last touched."
+  updatedAt: String!
+
+  "RFC 3339 timestamp of the most recent event affecting this contract."
+  lastEventAt: String!
+}
+
+"Lifecycle states for Contract (v0.8 two-status model)."
+enum ContractStatus {
+  SIGNED
+  CLOSED
+}
+
+"Reason a Contract reached the CLOSED state."
+enum ContractReason {
+  DELIVERED
+  ABANDONED
+}
+
+"Filter for `Query.contracts`. All fields are optional."
+input ContractFilter {
+  statuses: [ContractStatus!]
+  closedReasons: [ContractReason!]
+  ownerSessionId: String
+}

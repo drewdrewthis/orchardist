@@ -1,0 +1,94 @@
+# daemon-meta — provider freshness counters + per-field provenance envelope.
+#
+# Owns: DaemonState, ProviderHealth, Meta.
+# Owns: Query.daemonState.
+# Owns: Mutation.daemonReload (the rare exception to L5 — affects daemon-internal
+#       state, not external truth; documented criterion in L5's text).
+#
+# Separate from `daemon-self` because health-of-providers is a
+# cross-domain rollup (one entry per provider) — it would dominate
+# daemon-self's surface if folded in.
+
+extend type Query {
+  """
+  Daemon-side health surface for diagnosing "is it me or the daemon"
+  (#469 F9). Reports per-provider refresh state and a daemon-wide
+  meta envelope. Cheap — reads in-memory counters, no I/O.
+  """
+  daemonState: DaemonState!
+}
+
+extend type Mutation {
+  """
+  Reload the daemon's loaded config (`~/.orchard/config.json`) without
+  restarting. Returns the post-reload DaemonState so callers can verify
+  the new state took effect.
+
+  This is the canonical exception to L5 ("mutations exec scripts") —
+  it affects daemon-internal state (loaded config + provider registration),
+  not external truth.
+  """
+  daemonReload: DaemonState!
+}
+
+"""
+Daemon-wide health/diagnostic snapshot. v1 returns provider-level
+counters and the global startedAt / uptime; future versions can grow
+subscription/connection counts.
+"""
+type DaemonState {
+  "RFC3339 timestamp the daemon started serving."
+  startedAt: String!
+
+  "Daemon uptime in seconds."
+  uptimeS: Int!
+
+  "Per-provider freshness/error rollup."
+  providers: [ProviderHealth!]!
+}
+
+"""
+A daemon provider's health snapshot — what its most recent refresh
+did, when, and how it ended.
+"""
+type ProviderHealth {
+  "Stable provider name (e.g. \"tmux\", \"git\", \"gh\", \"ps\")."
+  name: String!
+
+  "True when the provider has been wired into this daemon."
+  configured: Boolean!
+
+  "RFC3339 timestamp of the last successful refresh; null until first success."
+  lastSuccessfulRefresh: String
+
+  "Reason for the most recent failure; null when none observed since startup."
+  lastFailureReason: String
+
+  "Total successful refreshes since daemon boot."
+  refreshCount: Int!
+
+  "Total refresh failures since daemon boot."
+  failureCount: Int!
+}
+
+"""
+Provenance and freshness envelope used to disambiguate "valid empty"
+from "data unavailable" (#469 F1). Returned alongside list/composite
+fields whose underlying providers can fail or be uninitialised.
+
+`provider` is a stable label (e.g. "tmux", "git", "gh"). `failureReason`
+is non-null when the most recent refresh did not succeed.
+`lastSuccessfulFetchAt` is the RFC3339 timestamp of the most recent
+provider refresh that completed cleanly; null when no successful
+refresh has happened yet.
+"""
+type Meta {
+  "Provider this envelope describes. Matches the labels in DaemonState.providers[]."
+  provider: String!
+
+  "RFC3339 timestamp of the most recent successful refresh; null when never observed."
+  lastSuccessfulFetchAt: String
+
+  "Human-readable reason the most recent refresh failed; null when healthy or never attempted."
+  failureReason: String
+}

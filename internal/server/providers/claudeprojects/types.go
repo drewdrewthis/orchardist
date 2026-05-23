@@ -4,9 +4,10 @@
 //
 // Each conversation has exactly one JSONL on disk. The provider derives
 // every Conversation field (firstSeenAt, lastSeenAt, messageCount,
-// open) from the file itself — no sidecar metadata, no embedded
-// process state. `recap` is reserved for the conversations plugin and
-// is always null in v1.
+// open, recap) from the file itself — no sidecar metadata, no embedded
+// process state. `recap` is the text of the most recent `/recap` slash
+// command invocation, extracted by the daemon directly. No plugin
+// required.
 //
 // Per ADR-011 §5.1 the v1 contract is metadata + `open` + `recap`;
 // `status`, `focus`, `awaitingDrew`, `artifacts` are all out of scope.
@@ -66,6 +67,11 @@ type Conversation struct {
 	CustomTitle *string
 	// AgentName is the sub-agent name from the JSONL `type: "agent-name"` record. Nil when not yet recorded.
 	AgentName *string
+	// Recap is the latest `<local-command-stdout>...</local-command-stdout>`
+	// content produced by a `/recap` slash command invocation in this
+	// session. Derived directly from the JSONL — no plugin involvement.
+	// Nil when the session has not invoked `/recap` yet.
+	Recap *string
 }
 
 // GraphQLID returns the stable orchard id for a Conversation node. The

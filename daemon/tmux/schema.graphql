@@ -1,0 +1,405 @@
+# tmux — tmux server: sessions, windows, panes, clients.
+#
+# Owns: TmuxServer, TmuxSession, TmuxWindow, TmuxPane, TmuxClient.
+# Owns: TmuxSessionSort, TmuxSessionFilter, TmuxPaneFilter.
+# Owns: Query.{tmuxServer, tmuxSessions, tmuxPanes}.
+# Owns: Subscription.tmuxSessionsChanged.
+# Owns: Mutation.sendTextToPane (L5: execs `scripts/tmux-send-text.sh`).
+#
+# Cross-domain `extend type Worktree` (S15b: tmux is the data producer):
+#   Worktree.tmuxPanes    — panes whose cwd matches the worktree path
+#   Worktree.tmuxSession  — most-recently-active session among those panes
+#
+# Cross-domain consumers (per dependency-graph north star):
+#   ps             → TmuxPane.process needs the Process node.
+#   claude-jsonls  → TmuxPane.claudeInstance is derived from a Claude jsonl matching
+#                    the pane's process. The ClaudeInstance edge is owned by claude-jsonls;
+#                    tmux declares the field (extend) but the derivation lives there.
+
+extend type Query {
+  "The tmux server running on the local host. Null when no tmux daemon is reachable."
+  tmuxServer: TmuxServer
+
+  "Tmux sessions on the local host, optionally filtered. Empty when no tmux daemon is reachable."
+  tmuxSessions(filter: TmuxSessionFilter): [TmuxSession!]!
+
+  "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
+  tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
+
+  """
+  Pass-through (S16): run an arbitrary `tmux ...` subcommand and return
+  stdout/stderr/exit code as opaque JSON. Used when the typed core does
+  not yet cover a call shape (e.g. `tmux show-options -g`,
+  `tmux list-buffers`).
+
+  Read-only by design — exposed as a Query field, not a Mutation.
+  Writes (`send-keys`, `kill-pane`, `new-window`) go through typed
+  mutations that each exec `scripts/tmux-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  tmux(args: [String!]!): JSON
+}
+
+extend type Subscription {
+  """
+  Per-type session firehose (#469 F7). Emits a fresh snapshot of every
+  cached tmux session whenever the tmux provider invalidates — sessions
+  added, removed, renamed, or pane state changed.
+  """
+  tmuxSessionsChanged: [TmuxSession!]!
+}
+
+extend type Mutation {
+  """
+  Send literal text to a tmux pane, followed by an Enter keypress.
+
+  Targets the live Claude REPL hosted by the named pane. The daemon
+  invokes `tmux send-keys -t <paneId> -l <text>` to write the text
+  literally (no shell interpretation), waits briefly for tmux to
+  flush, then sends a separate Enter keypress. The two-step pattern
+  avoids the race where a combined send can submit before the text is
+  fully written.
+
+  Returns true on success. paneId is the tmux pane id (e.g. "%15"),
+  the same value surfaced by `tmuxPanes.paneId` queries. Returns an
+  error when the pane cannot be reached or tmux exits non-zero.
+
+  Use case: browser / mobile / federated clients sending chat input
+  to a Claude REPL when they can't invoke tmux directly. Desktop
+  clients prefer the Tauri command since it stays local.
+
+  Per L5: this mutation execs `scripts/tmux-send-text.sh --pane <id> --text <body> --json`.
+  """
+  sendTextToPane(paneId: String!, text: String!): Boolean!
+}
+
+# ---------------------------------------------------------------------
+# Identity scheme:
+#   TmuxServer:   `TmuxServer:<host>:<socketPath>`
+#   TmuxSession:  `TmuxSession:<host>:<sessionName>`
+#   TmuxWindow:   `TmuxWindow:<host>:<sessionName>:<windowIndex>`
+#   TmuxPane:     `TmuxPane:<host>:<paneId>`            (e.g. `%26`)
+#   TmuxClient:   `TmuxClient:<host>:<clientName>`
+# ---------------------------------------------------------------------
+
+"""
+The tmux daemon process on a host. v1 surfaces the local tmux only;
+multi-server setups (custom -L socket names) are reachable via socketPath.
+"""
+type TmuxServer implements Node {
+  "Stable id `TmuxServer:<host>:<socketPath>`."
+  id: ID!
+
+  "Filesystem path of the tmux socket the daemon is listening on."
+  socketPath: String!
+
+  "Pid of the tmux daemon process. Null if not currently determinable."
+  pid: Int
+
+  "True while the tmux daemon answers a heartbeat command."
+  alive: Boolean!
+
+  """
+  Sessions hosted on this server. Defaults to LAST_ACTIVITY which orders
+  most-recently-active first (lex name break ties), matching the sidebar's
+  "what should I look at next" intent. Pass NAME for stable lex order.
+  """
+  sessions(sort: TmuxSessionSort = LAST_ACTIVITY): [TmuxSession!]!
+
+  "Clients currently connected to this server."
+  clients: [TmuxClient!]!
+}
+
+"""
+A named tmux session. Stable across detach/reattach. Identity is the
+session name within its server.
+"""
+type TmuxSession implements Node {
+  "Stable id `TmuxSession:<host>:<sessionName>`."
+  id: ID!
+
+  "Server hosting this session."
+  server: TmuxServer!
+
+  "Session name."
+  name: String!
+
+  "RFC3339 timestamp of when the session was created."
+  createdAt: String!
+
+  "True when at least one client is attached to this session."
+  attached: Boolean!
+
+  "True when at least one attached client has had activity within the freshness window (default 5m)."
+  activeAttached: Boolean!
+
+  "Clients currently attached to this session."
+  attachedClients: [TmuxClient!]!
+
+  """
+  Most recent activity timestamp across all panes/windows. RFC3339; null
+  if never observed.
+
+  Tracks tmux's `pane_activity` field, which fires on NEW pane content —
+  not on in-place redraws. A Claude REPL spinner ticking in place
+  ("Elucidating… 1m 11s") does NOT bump `lastActivityAt`, so a long
+  agentic turn can look identical to a hung pane (#506).
+
+  Do NOT use this field as a Claude-REPL stall signal. The canonical
+  signal is `ClaudeInstance.state` (working|idle|input|stalled, #501),
+  OR the heartbeat freshness exposed on `ClaudeInstance` directly.
+  `lastActivityAt` remains useful for plain shell panes and for the
+  lex-tie-breaker in `Worktree.tmuxSession`.
+  """
+  lastActivityAt: String
+
+  "Windows in this session."
+  windows: [TmuxWindow!]!
+
+  "The currently-focused window in this session."
+  currentWindow: TmuxWindow
+}
+
+"""
+A window inside a tmux session. Identity is the window index within its
+session.
+"""
+type TmuxWindow implements Node {
+  "Stable id `TmuxWindow:<host>:<sessionName>:<windowIndex>`."
+  id: ID!
+
+  "Session this window belongs to."
+  session: TmuxSession!
+
+  "Window index, zero-based as tmux numbers them when -base-index is 0."
+  index: Int!
+
+  "Window name (tmux's `window_name`)."
+  name: String!
+
+  "True when this window is the currently-focused window in its session."
+  active: Boolean!
+
+  "Panes in this window."
+  panes: [TmuxPane!]!
+
+  "The currently-focused pane in this window."
+  currentPane: TmuxPane
+}
+
+"""
+A pane inside a window — the leaf where commands actually run. Identity
+is the global tmux pane id (e.g. `%26`) within a host.
+
+Content fields (`content`, `contentRange`, `contentFull`) shell out to
+`tmux capture-pane`. They are not poll-cached; queries that ask for them
+pay the per-call cost.
+"""
+type TmuxPane implements Node {
+  "Stable id `TmuxPane:<host>:<paneId>`."
+  id: ID!
+
+  "Window this pane belongs to."
+  window: TmuxWindow!
+
+  "tmux pane id, including the leading `%` (e.g. `%26`)."
+  paneId: String!
+
+  "Pane title (tmux `pane_title`)."
+  title: String!
+
+  """
+  Foreground command name as reported by `tmux #{pane_current_command}`.
+  This is **whatever string tmux's pane_current_command emits**, NOT a
+  guaranteed basename. In practice that means:
+
+  - For most processes: a basename like `'zsh'` or `'vim'`.
+  - For Node-wrapped CLIs (claude, npx tools, etc.): often the wrapper's
+    version string (`'2.1.126'`) instead of the friendly name.
+
+  Operators filtering by command should not assume a stable name —
+  `currentCommandIn: ["claude"]` will silently miss panes running the
+  Claude CLI when its wrapper has set comm to a version string. To
+  identify panes by program intent, walk to the foreground process via
+  `Pane.process` and inspect that node's command/args instead.
+  """
+  currentCommand: String!
+
+  "Pid of the foreground process. Null when tmux reports no current pid."
+  currentPid: Int
+
+  "Pane width in cells."
+  width: Int!
+
+  "Pane height in cells."
+  height: Int!
+
+  "True when tmux marks the pane as dead (process exited, awaiting reuse/close)."
+  dead: Boolean!
+
+  "Clients with their cursor on this pane."
+  watchingClients: [TmuxClient!]!
+
+  """
+  OS-level Process for the pane's foreground pid (`pane_current_pid`).
+
+  Null when tmux reports no foreground pid (`currentPid == 0`) or when the
+  pid is no longer in the cached ps snapshot (process exited or just
+  spawned). Cache-only — never triggers a fresh `ps` shellout under a
+  request goroutine.
+
+  Selecting nested fields (e.g. `process { cwd }`) chains through the
+  standard Process resolvers; cwd resolution is the slow path described on
+  `Process.cwd` and only fires when the client selects it.
+
+  Cross-domain field; resolver here calls the `ps` service.
+  """
+  process: Process
+
+  """
+  Claude instance running in this pane, if the foreground command is claude.
+  Derived from matching the pane's process pid to a Claude jsonl tail.
+  Cross-domain field; resolver here calls the `claude-jsonls` service.
+  """
+  claudeInstance: ClaudeInstance
+
+  "Last N lines of pane output, default 50. Strips ANSI escapes by default."
+  content(lines: Int = 50, stripAnsi: Boolean = true): String!
+
+  "Output between two history line numbers (tmux's -S/-E semantics)."
+  contentRange(startLine: Int!, endLine: Int!, stripAnsi: Boolean = true): String!
+
+  "Full visible-history pane buffer."
+  contentFull(stripAnsi: Boolean = true): String!
+}
+
+"""
+A client (terminal) attached to a tmux server. Multiple clients may share
+the same session/window/pane.
+"""
+type TmuxClient implements Node {
+  "Stable id `TmuxClient:<host>:<clientName>`."
+  id: ID!
+
+  "Server this client connects to."
+  server: TmuxServer!
+
+  "Session this client is attached to."
+  session: TmuxSession!
+
+  "Client tty path (e.g. `/dev/ttys003`)."
+  tty: String!
+
+  "Hostname the client originated from. Empty for local clients."
+  hostname: String!
+
+  "TERM value the client advertises (e.g. `xterm-256color`)."
+  termName: String!
+
+  "RFC3339 attach time."
+  attachedAt: String!
+
+  "RFC3339 last activity time. Null if tmux returned no value."
+  lastActivityAt: String
+
+  "True when the client is in read-only mode."
+  readonly: Boolean!
+
+  "Window the client is currently looking at."
+  currentWindow: TmuxWindow
+
+  "Pane the client is currently looking at."
+  currentPane: TmuxPane
+}
+
+# ---------------------------------------------------------------------
+# Filter inputs.
+# ---------------------------------------------------------------------
+
+"Filter for `Query.tmuxSessions`. AND-combined when multiple are set."
+input TmuxSessionFilter {
+  "Session names to include."
+  nameIn: [String!]
+
+  "Only include sessions with at least one attached client."
+  attachedOnly: Boolean
+
+  "Only include sessions with active-attached clients within the freshness window."
+  activeAttachedOnly: Boolean
+}
+
+"Sort key for `TmuxServer.sessions`."
+enum TmuxSessionSort {
+  "Most-recently-active first (lastActivityAt DESC). Lex-lower name breaks ties; sessions with no activity rank below those with one."
+  LAST_ACTIVITY
+  "Stable lex order by session name."
+  NAME
+}
+
+"Filter for `Query.tmuxPanes`. AND-combined when multiple are set."
+input TmuxPaneFilter {
+  "Pane ids (e.g. `%26`) to include."
+  paneIdIn: [String!]
+
+  """
+  Only include panes whose `currentCommand` is in this list.
+
+  Note: `currentCommand` is the raw tmux `pane_current_command` value,
+  not a normalised basename. Wrapper processes (notably Node-based CLIs
+  like the Claude CLI) often surface as their version string rather
+  than the program name, so a filter like `["claude"]` may match zero
+  panes that are clearly running Claude. See the doc on
+  `TmuxPane.currentCommand` for the full caveat.
+  """
+  currentCommandIn: [String!]
+
+  "Only include panes in these session names."
+  sessionIn: [String!]
+
+  "Only include panes whose `pane_title` matches the substring (case-sensitive)."
+  titleContains: String
+
+  "Only include dead (or non-dead) panes."
+  dead: Boolean
+
+  """
+  Only include panes whose foreground-process cwd equals `cwd` exactly or has
+  `cwd + '/'` as a prefix (server-side join via the ps provider, same path as
+  Worktree.tmuxPanes). Requires ps provider to be wired; panes whose cwd cannot
+  be resolved are silently skipped. ADR-022 axis: PanesByCwd.
+  """
+  cwd: String
+
+  """
+  Only include panes whose foreground-process command basename contains this
+  substring (case-insensitive). Uses the ps provider for the real command name
+  so node-wrapped CLIs (e.g. `node /usr/local/bin/claude`) resolve correctly;
+  falls back to `currentCommand` when ps is unavailable. ADR-022 axis:
+  PanesByCommand.
+  """
+  command: String
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — tmux produces pane data.
+# The resolver lives in daemon/tmux/ and calls the tmux service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  Tmux panes whose foreground-process cwd equals `path` exactly OR has `path + '/'`
+  as a prefix (#511). Derived from a server-side join of pane.process.cwd against
+  the worktree path. Ordered deterministically by paneId ascending.
+  Resolver calls the tmux service (S15b: producer domain owns the field).
+  """
+  tmuxPanes: [TmuxPane!]!
+
+  """
+  The most-recently-active tmux session among the panes returned by `tmuxPanes` (#511).
+  When two sessions tie on lastActivityAt, the session with the lexicographically-first
+  name wins. Null when no panes match the worktree path.
+  Resolver calls the tmux service (S15b: producer domain owns the field).
+  """
+  tmuxSession: TmuxSession
+}

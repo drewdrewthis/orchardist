@@ -39,7 +39,7 @@ pub fn run(args: Args) -> ExitCode {
     };
     let session = args
         .session
-        .or_else(|| current_tmux_session())
+        .or_else(current_tmux_session)
         .unwrap_or_else(|| handle.trim_start_matches('@').to_string());
     let machine = chat_core::current_machine();
     if let Err(e) = chat_core::join(&room, &handle, &machine, &session) {
@@ -64,9 +64,7 @@ pub fn run(args: Args) -> ExitCode {
 }
 
 fn current_tmux_session() -> Option<String> {
-    if std::env::var_os("TMUX").is_none() {
-        return None;
-    }
+    std::env::var_os("TMUX")?;
     let out = std::process::Command::new("tmux")
         .args(["display-message", "-p", "#S"])
         .output()

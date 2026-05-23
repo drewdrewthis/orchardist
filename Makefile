@@ -24,8 +24,9 @@
 
 .PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
         install install-daemon install-dispatcher install-tui install-worktree-cli \
-        test test-go test-rust \
-        plugins-contracts-mcp
+        test test-go test-rust bats-install bats-test \
+        plugins-contracts-mcp \
+        check-feature-parity check-feature-parity-daemon check-feature-parity-tui check-feature-parity-gui
 
 VERSION ?= dev
 
@@ -43,6 +44,10 @@ generate:
 	# Mirror schema.graphql into the resolvers package so go:embed can
 	# bake it into the daemon binary for Query.schemaSDL (#469 F10).
 	cp schema.graphql internal/server/resolvers/schema.graphql
+	# Concatenate root partial + per-domain partials into the combined
+	# embedded schema for daemon/daemon-self (Query.schemaSDL post-refactor).
+	# daemon/daemon-self/resolver_health.go embeds this file at build time.
+	cat daemon/schema.graphql daemon/*/schema.graphql > daemon/daemon-self/schema_combined.graphql
 
 # Rust release builds — one target per crate.
 rust: dispatcher
@@ -90,3 +95,22 @@ test-rust:
 plugins-contracts-mcp:
 	go build -o plugins/conversation-contracts/bin/contracts-mcp \
 		./plugins/conversation-contracts/mcp
+
+bats-install:
+	@command -v bats >/dev/null || (echo "Installing bats..." && brew install bats-core 2>/dev/null || npm install -g bats)
+
+bats-test: bats-install
+	bats scripts/**/*.bats
+
+# Feature parity checks — verify scenario↔test annotation coverage.
+# See docs/testing-philosophy.md for the zero-tolerance policy.
+check-feature-parity: check-feature-parity-daemon check-feature-parity-tui check-feature-parity-gui
+
+check-feature-parity-daemon:
+	@bash scripts/check-feature-parity-daemon.sh
+
+check-feature-parity-tui:
+	@bash scripts/check-feature-parity-tui.sh
+
+check-feature-parity-gui:
+	@bash scripts/check-feature-parity-gui.sh

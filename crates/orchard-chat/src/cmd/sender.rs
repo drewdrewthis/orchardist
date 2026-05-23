@@ -35,9 +35,7 @@ fn normalize(h: &str) -> String {
 }
 
 fn current_tmux_session() -> Option<String> {
-    if std::env::var_os("TMUX").is_none() {
-        return None;
-    }
+    std::env::var_os("TMUX")?;
     let out = Command::new("tmux")
         .args(["display-message", "-p", "#S"])
         .output()

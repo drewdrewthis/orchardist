@@ -13,6 +13,7 @@ pub mod chat;
 pub mod ci_state;
 pub mod classify;
 pub mod claude_state;
+pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod derive;
