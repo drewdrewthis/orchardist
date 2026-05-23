@@ -165,9 +165,6 @@ type Contract implements Node {
   """RFC 3339 timestamp of the most recent event affecting this contract."""
   lastEventAt: String!
 
-  """Owner agent-name component of the owner string when parseable; empty otherwise. Deprecated — prefer ownerSessionId."""
-  ownerAgentName: String!
-
   """Owner session id in `machine:project:session_id` form."""
   ownerSessionId: String!
 
@@ -189,8 +186,6 @@ type Contract implements Node {
 
 """Filter for `Query.contracts`. All fields are optional."""
 input ContractFilter {
-  """Match by agent-name component (deprecated; prefer ownerSessionId)."""
-  ownerAgentName: String
   """Match by exact owner session id (the full `machine:project:session_id` string)."""
   ownerSessionId: String
   """Owner-string substring match — convenience for cross-machine queries."""

@@ -1155,9 +1155,6 @@ type Contract implements Node {
   "Owner session id in `machine:project:session_id` form."
   ownerSessionId: String!
 
-  "Agent-name component of the owner string when parseable; empty otherwise. Deprecated — prefer ownerSessionId."
-  ownerAgentName: String!
-
   "OPEN or DELIVERED (open/closed model, 2026-05-19)."
   status: ContractStatus!
 
@@ -1196,8 +1193,6 @@ input ContractFilter {
   statuses: [ContractStatus!]
   "Match by exact owner session id (the full `machine:project:session_id` string)."
   ownerSessionId: String
-  "Match by agent-name component (deprecated; prefer ownerSessionId)."
-  ownerAgentName: String
   "Owner-string substring match — convenience for cross-machine queries."
   ownerContains: String
 }

@@ -17,7 +17,6 @@ const contractsBaseQuery = `query Contracts($filter: ContractFilter) {
     contractId
     summary
     ownerSessionId
-    ownerAgentName
     status
     reasoning
     createdBy

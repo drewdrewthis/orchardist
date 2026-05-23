@@ -345,10 +345,6 @@ func offsetsEqual(a, b map[string]int64) bool {
 
 // matches applies a ContractFilter to a single Contract. All filter
 // fields are AND-combined; nil/empty fields match everything.
-//
-// OwnerAgentName is unused in v0.7 — the plugin's owner field is a
-// flat string, not a structured Party. The schema field is kept as a
-// deprecated alias; this filter ignores it.
 func matches(c Contract, f *graphql.ContractFilter) bool {
 	if f == nil {
 		return true
@@ -378,17 +374,12 @@ func matches(c Contract, f *graphql.ContractFilter) bool {
 
 // toGraphQL projects an internal Contract onto the GraphQL shape. Pure;
 // the resolver layer calls it after every read.
-//
-// OwnerAgentName is served as "" — v0.7 doesn't carry agent name; the
-// field is a deprecated schema alias until the next gqlgen regen drops
-// it.
 func toGraphQL(c Contract) *graphql.Contract {
 	out := &graphql.Contract{
 		ID:             "Contract:" + string(c.ID),
 		ContractID:     string(c.ID),
 		Summary:        c.Summary,
 		OwnerSessionID: c.OwnerSessionID,
-		OwnerAgentName: "",
 		Status:         c.Status,
 		Reasoning:      c.Reasoning,
 		CreatedBy:      c.CreatedBy,
