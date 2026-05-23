@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(boxd list *)",
+      "Bash(boxd new *)",
+      "Bash(boxd info *)",
+      "Bash(boxd exec *)"
+    ]
+  }
+}
