@@ -100,7 +100,7 @@ func signalName(sig syscall.Signal) string {
 
 // Adapter is the tmux CLI client. The alive-check result is cached for
 // aliveTTL (default = DefaultPollInterval) so consecutive FetchAll cycles
-// do not each pay for a separate `tmux info` exec.
+// do not each pay for a separate `tmux list-sessions` exec.
 //
 // The cache lives behind a pointer so the With*-builder methods can do a
 // shallow value-copy of Adapter without copying the embedded mutex —
@@ -116,7 +116,7 @@ type Adapter struct {
 	alive    *aliveCache
 }
 
-// aliveCache memoises the result of `tmux info` for one TTL window. It
+// aliveCache memoises the result of `tmux list-sessions` for one TTL window. It
 // is heap-allocated and shared across With*-derived Adapter copies so the
 // mutex inside is not copied by value.
 type aliveCache struct {
@@ -126,7 +126,7 @@ type aliveCache struct {
 }
 
 // defaultAliveTTL matches DefaultPollInterval so a single FetchAll within
-// one tick never calls `tmux info` twice.
+// one tick never calls `tmux list-sessions` twice.
 const defaultAliveTTL = DefaultPollInterval
 
 // NewAdapter constructs an Adapter targeting the default tmux socket on
@@ -204,7 +204,7 @@ func (a *Adapter) tmuxArgs(rest ...string) []string {
 // IsAlive shells out the cheapest possible command to detect a live tmux
 // server. Results are cached for aliveTTL (default = DefaultPollInterval) so
 // a single FetchAll cycle — which calls IsAlive before listAll — never pays
-// for two `tmux info` execs within the same tick.
+// for two `tmux list-sessions` execs within the same tick.
 //
 // Stale-true window: between server death and the next TTL expiry (≤TTL),
 // IsAlive may return true even though the server is dead. The next FetchAll
@@ -225,7 +225,15 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 	}
 	a.alive.mu.Unlock()
 
-	_, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("info")...)
+	// `tmux list-sessions` is the cheapest *client-independent* liveness
+	// probe: rc 0 when the server is up, "no server running" (rc 1) when
+	// it is down. `tmux info` was used here previously but it defaults its
+	// target to the *current client* and exits 1 with "no current client"
+	// whenever the caller isn't an attached tmux client — which a detached
+	// daemon (systemd / setsid) never is. That made IsAlive always false,
+	// so FetchAll shipped an EmptySnapshot and the whole tmux/claude
+	// subgraph reported zero.
+	_, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("list-sessions", "-F", "#{session_id}")...)
 	result := err == nil
 
 	a.alive.mu.Lock()
@@ -238,7 +246,7 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 
 // FetchAll fetches a full Snapshot in at most 3 tmux execs per cycle:
 //
-//  1. `tmux info` — via IsAlive (cached for aliveTTL; 0 execs when warm).
+//  1. `tmux list-sessions` — via IsAlive (cached for aliveTTL; 0 execs when warm).
 //  2. `tmux list-panes -a -F …` — via listAll, which synthesises session,
 //     window, and pane maps from a single output stream.
 //  3. `tmux list-clients -F …` — via listClients, which populates the Clients
@@ -473,7 +481,7 @@ func (a *Adapter) listAll(ctx context.Context) (
 	}
 
 	for _, line := range bytes.Split(out, []byte{'\n'}) {
-		fields := strings.Split(string(line), fieldSep)
+		fields := splitFields(string(line))
 		if len(fields) != listAllFieldCount {
 			continue
 		}
@@ -524,6 +532,21 @@ func (a *Adapter) listAll(ctx context.Context) (
 	return sessions, windows, panes, nil
 }
 
+// splitFields splits a tmux `-F` output line on the field separator.
+//
+// tmux escapes control bytes in format output rather than emitting them raw:
+// tmux 3.4 (Linux) turns a 0x01 in the format string into the literal 4-char
+// sequence `\001`, while tmux 3.5+ (macOS) passes the raw byte through.
+// Normalizing the octal-escaped form back to the raw separator makes the
+// split behave identically across tmux versions — without it the whole line
+// stays a single field and every session/pane/client is silently dropped
+// (#660 regression: the format was verified only against tmux 3.5 on macOS).
+// A 0x01 separator stays collision-proof because no tmux field value contains
+// a raw control byte.
+func splitFields(line string) []string {
+	return strings.Split(strings.ReplaceAll(line, `\001`, fieldSep), fieldSep)
+}
+
 // In `list-clients -F` context, the per-client format vars
 // `#{client_window_index}` and `#{client_active_pane}` are silently
 // empty in current tmux releases. The format engine instead resolves
@@ -557,7 +580,7 @@ func (a *Adapter) listClients(ctx context.Context) (map[ClientKey]Client, error)
 	}
 	clients := make(map[ClientKey]Client)
 	for _, line := range bytes.Split(out, []byte{'\n'}) {
-		fields := strings.Split(string(line), fieldSep)
+		fields := splitFields(string(line))
 		if len(fields) != 9 {
 			continue
 		}
