@@ -1,9 +1,11 @@
 // Adapter wraps the tmux CLI. Per ADR-011 §3 it is stateless: cache,
 // watcher, and invalidation live in the surrounding Provider.
 //
-// All field separation in -F format strings uses U+0001 (`\x01`) — tmux
-// never emits that byte for the format-variables we read, so the parser
-// never needs to consider quoting or escaping.
+// All field separation in -F format strings uses a TAB (U+0009) — see
+// fieldSep for why a control byte (the previous U+0001 choice) cannot be
+// used: tmux 3.x's format engine renders raw control bytes in a -F string
+// as their octal escape text (e.g. `\001`) rather than emitting the byte,
+// which collapses every output row to a single un-splittable field.
 
 package tmux
 
@@ -21,10 +23,25 @@ import (
 	"time"
 )
 
-// Field separator in -F format strings. tmux format-variables we read
-// (names, indexes, integers, paths, terminal names) never contain this
-// byte, so splitting on it round-trips losslessly.
-const fieldSep = "\x01"
+// Field separator in -F format strings.
+//
+// MUST be a printable character that tmux's format engine emits verbatim.
+// The previous choice — U+0001 (SOH) — does NOT round-trip on tmux 3.x:
+// the engine renders a raw control byte in a -F template as its 4-char
+// octal escape (`\001`), so a row like `name\001id\001…` came back as the
+// literal text `name\001id\001…` with zero real separators. listAll then
+// saw field-count==1, failed its `!= listAllFieldCount` guard, and dropped
+// every row — surfacing as empty tmuxSessions / claudeInstances even though
+// `tmux list-panes -a` clearly returned data. (The old comment claimed this
+// was "verified against tmux 3.5+ on macOS"; the regression bites tmux 3.4
+// on Linux.)
+//
+// TAB is tmux's conventional scripting delimiter and round-trips faithfully.
+// The tmux metadata we read (session/window names, indexes, integers, pids,
+// dimensions, pane_current_command, pane_title) does not contain tabs in
+// practice — same risk posture the SOH choice assumed, with a separator that
+// actually works.
+const fieldSep = "\t"
 
 // CommandRunner is the test seam — production wires execRunner.
 type CommandRunner interface {
@@ -100,7 +117,7 @@ func signalName(sig syscall.Signal) string {
 
 // Adapter is the tmux CLI client. The alive-check result is cached for
 // aliveTTL (default = DefaultPollInterval) so consecutive FetchAll cycles
-// do not each pay for a separate `tmux info` exec.
+// do not each pay for a separate liveness-probe exec (see IsAlive).
 //
 // The cache lives behind a pointer so the With*-builder methods can do a
 // shallow value-copy of Adapter without copying the embedded mutex —
@@ -116,9 +133,9 @@ type Adapter struct {
 	alive    *aliveCache
 }
 
-// aliveCache memoises the result of `tmux info` for one TTL window. It
-// is heap-allocated and shared across With*-derived Adapter copies so the
-// mutex inside is not copied by value.
+// aliveCache memoises the result of the liveness probe (see IsAlive) for
+// one TTL window. It is heap-allocated and shared across With*-derived
+// Adapter copies so the mutex inside is not copied by value.
 type aliveCache struct {
 	mu          sync.Mutex
 	lastChecked time.Time
@@ -126,7 +143,7 @@ type aliveCache struct {
 }
 
 // defaultAliveTTL matches DefaultPollInterval so a single FetchAll within
-// one tick never calls `tmux info` twice.
+// one tick never runs the liveness probe twice.
 const defaultAliveTTL = DefaultPollInterval
 
 // NewAdapter constructs an Adapter targeting the default tmux socket on
@@ -201,10 +218,20 @@ func (a *Adapter) tmuxArgs(rest ...string) []string {
 	return out
 }
 
-// IsAlive shells out the cheapest possible command to detect a live tmux
-// server. Results are cached for aliveTTL (default = DefaultPollInterval) so
-// a single FetchAll cycle — which calls IsAlive before listAll — never pays
-// for two `tmux info` execs within the same tick.
+// IsAlive shells out the cheapest possible SERVER-scoped command to detect a
+// live tmux server. Results are cached for aliveTTL (default =
+// DefaultPollInterval) so a single FetchAll cycle — which calls IsAlive before
+// listAll — never pays for two probe execs within the same tick.
+//
+// Issue: the probe must be SERVER-scoped, not CLIENT-scoped. `tmux info` is a
+// client command: it exits non-zero with "no current client" when run from a
+// process that is not attached to a tmux client — which is exactly the daemon's
+// situation (a detached background process). Under that probe IsAlive returned
+// false even though the server was alive and `list-panes -a` returned data,
+// short-circuiting FetchAll to an empty snapshot. `tmux list-sessions` is
+// server-scoped: it exits 0 (and lists sessions) whenever a server is running,
+// regardless of client attachment, and exits non-zero ("no server running" /
+// "error connecting") when the server is dead — correct in both directions.
 //
 // Stale-true window: between server death and the next TTL expiry (≤TTL),
 // IsAlive may return true even though the server is dead. The next FetchAll
@@ -225,7 +252,9 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 	}
 	a.alive.mu.Unlock()
 
-	_, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("info")...)
+	// `-F ''` suppresses the per-session output line — we only care about the
+	// exit code, not the session list (FetchAll's listAll does the real read).
+	_, err := a.runner.Run(ctx, "tmux", a.tmuxArgs("list-sessions", "-F", "")...)
 	result := err == nil
 
 	a.alive.mu.Lock()
@@ -238,7 +267,9 @@ func (a *Adapter) IsAlive(ctx context.Context) bool {
 
 // FetchAll fetches a full Snapshot in at most 3 tmux execs per cycle:
 //
-//  1. `tmux info` — via IsAlive (cached for aliveTTL; 0 execs when warm).
+//  1. `tmux list-sessions` — via IsAlive (cached for aliveTTL; 0 execs when
+//     warm). Server-scoped liveness probe; see IsAlive for why `tmux info`
+//     (client-scoped) is wrong for a detached daemon.
 //  2. `tmux list-panes -a -F …` — via listAll, which synthesises session,
 //     window, and pane maps from a single output stream.
 //  3. `tmux list-clients -F …` — via listClients, which populates the Clients

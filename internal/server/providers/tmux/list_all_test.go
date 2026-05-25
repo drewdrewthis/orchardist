@@ -17,12 +17,14 @@ func buildListAllLine(
 	winIndex, winName, winActive, winPanes, winActivePaneID,
 	paneID, paneTitle, paneCmd, panePID, paneWidth, paneHeight, paneDead string,
 ) string {
-	const sep = "\x01"
+	// Use the production field separator so the test data round-trips through
+	// the same split the parser uses. (fieldSep moved from U+0001 to TAB once
+	// tmux 3.x was found to escape control bytes in -F templates.)
 	return strings.Join([]string{
 		sessName, sessCreated, sessAttached, sessActivity, sessWindows, sessWindowIndex,
 		winIndex, winName, winActive, winPanes, winActivePaneID,
 		paneID, paneTitle, paneCmd, panePID, paneWidth, paneHeight, paneDead,
-	}, sep)
+	}, fieldSep)
 }
 
 // TestListAll_OnePaneOneWindowOneSession verifies the simplest happy path.
@@ -276,11 +278,15 @@ func TestFetchAll_TotalExecCount(t *testing.T) {
 	}
 }
 
-// staleAliveRunner returns success for `info` but "no server running" for
-// list-* — simulating tmux dying between the IsAlive cache hit and the
-// list call. Used by TestFetchAll_StaleAliveCache_RecoversToDeadServer.
+// staleAliveRunner returns success for the alive probe (`list-sessions`) but
+// "no server running" for the data list-* calls — simulating tmux dying
+// between the IsAlive cache hit and the list call. Used by
+// TestFetchAll_StaleAliveCache_RecoversToDeadServer.
+//
+// Arg-matching note: the alive probe is `list-sessions`, distinct from the
+// data-fetch `list-panes`; an exact per-arg switch keeps them separate.
 type staleAliveRunner struct {
-	infoCalls       int
+	aliveCalls      int
 	listPanesCalls  int
 	listClientCalls int
 }
@@ -288,8 +294,8 @@ type staleAliveRunner struct {
 func (r *staleAliveRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
 	for _, arg := range args {
 		switch arg {
-		case "info":
-			r.infoCalls++
+		case "list-sessions":
+			r.aliveCalls++
 			return []byte("ok"), nil
 		case "list-panes":
 			r.listPanesCalls++
@@ -312,12 +318,12 @@ func TestFetchAll_StaleAliveCache_RecoversToDeadServer(t *testing.T) {
 	a := NewAdapter("h").WithRunner(r).WithAliveTTL(10 * time.Second)
 	ctx := context.Background()
 
-	// Warm the alive cache: info succeeds, IsAlive returns true.
+	// Warm the alive cache: list-sessions succeeds, IsAlive returns true.
 	if !a.IsAlive(ctx) {
-		t.Fatalf("warm-up: IsAlive should be true with succeeding info call")
+		t.Fatalf("warm-up: IsAlive should be true with succeeding list-sessions probe")
 	}
 
-	// FetchAll: IsAlive uses the cache (no info call), list-panes returns
+	// FetchAll: IsAlive uses the cache (no probe call), list-panes returns
 	// errNoServer → adapter should invalidate the cache and ship Alive=false.
 	snap, err := a.FetchAll(ctx)
 	if err != nil {
@@ -333,7 +339,7 @@ func TestFetchAll_StaleAliveCache_RecoversToDeadServer(t *testing.T) {
 
 	// Cache should now be invalidated — next IsAlive should re-probe.
 	_ = a.IsAlive(ctx)
-	if r.infoCalls != 2 {
-		t.Errorf("after invalidation, IsAlive should re-probe; want 2 info calls, got %d", r.infoCalls)
+	if r.aliveCalls != 2 {
+		t.Errorf("after invalidation, IsAlive should re-probe; want 2 list-sessions probe calls, got %d", r.aliveCalls)
 	}
 }
