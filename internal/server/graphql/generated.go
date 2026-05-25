@@ -175,6 +175,13 @@ type ComplexityRoot struct {
 		Name        func(childComplexity int) int
 	}
 
+	LaunchSessionResult struct {
+		Cwd         func(childComplexity int) int
+		PaneID      func(childComplexity int) int
+		SessionName func(childComplexity int) int
+		SessionUUID func(childComplexity int) int
+	}
+
 	Meta struct {
 		FailureReason         func(childComplexity int) int
 		LastSuccessfulFetchAt func(childComplexity int) int
@@ -182,6 +189,7 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
+		LaunchSession  func(childComplexity int, input LaunchSessionInput) int
 		SendTextToPane func(childComplexity int, paneID string, text string) int
 	}
 
@@ -423,6 +431,7 @@ type IssueResolver interface {
 }
 type MutationResolver interface {
 	SendTextToPane(ctx context.Context, paneID string, text string) (bool, error)
+	LaunchSession(ctx context.Context, input LaunchSessionInput) (*LaunchSessionResult, error)
 }
 type ProcessResolver interface {
 	Host(ctx context.Context, obj *Process) (*Host, error)
@@ -1134,6 +1143,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Label.Name(childComplexity), true
 
+	case "LaunchSessionResult.cwd":
+		if e.ComplexityRoot.LaunchSessionResult.Cwd == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchSessionResult.Cwd(childComplexity), true
+	case "LaunchSessionResult.paneId":
+		if e.ComplexityRoot.LaunchSessionResult.PaneID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchSessionResult.PaneID(childComplexity), true
+	case "LaunchSessionResult.sessionName":
+		if e.ComplexityRoot.LaunchSessionResult.SessionName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchSessionResult.SessionName(childComplexity), true
+	case "LaunchSessionResult.sessionUuid":
+		if e.ComplexityRoot.LaunchSessionResult.SessionUUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchSessionResult.SessionUUID(childComplexity), true
+
 	case "Meta.failureReason":
 		if e.ComplexityRoot.Meta.FailureReason == nil {
 			break
@@ -1153,6 +1187,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Meta.Provider(childComplexity), true
 
+	case "Mutation.launchSession":
+		if e.ComplexityRoot.Mutation.LaunchSession == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_launchSession_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.LaunchSession(childComplexity, args["input"].(LaunchSessionInput)), true
 	case "Mutation.sendTextToPane":
 		if e.ComplexityRoot.Mutation.SendTextToPane == nil {
 			break
@@ -2338,6 +2383,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputContractFilter,
 		ec.unmarshalInputHostServiceFilter,
+		ec.unmarshalInputLaunchSessionInput,
 		ec.unmarshalInputProcessFilter,
 		ec.unmarshalInputTmuxPaneFilter,
 		ec.unmarshalInputTmuxSessionFilter,
@@ -3845,6 +3891,54 @@ type Mutation {
   clients prefer the Tauri command since it stays local.
   """
   sendTextToPane(paneId: String!, text: String!): Boolean!
+
+  """
+  Launch a new Claude REPL inside a fresh detached tmux session at the
+  given working directory.
+
+  The daemon creates the tmux session (` + "`" + `tmux new-session -d -s <name>
+  -c <cwd>` + "`" + `), resolves the new pane, then types
+  ` + "`" + `claude --session-id <uuid> --dangerously-skip-permissions --effort max` + "`" + `
+  (plus ` + "`" + `--model` + "`" + ` and an initial prompt when supplied) into the pane and
+  submits it — mirroring sendTextToPane's literal-write + Enter so the
+  REPL boots in the user's login shell with full env.
+
+  The session UUID is pre-assigned (` + "`" + `claude --session-id` + "`" + `) so the caller
+  can ` + "`" + `conversationChanged(sessionUuid:)` + "`" + `-subscribe and target the pane
+  with ` + "`" + `sendTextToPane` + "`" + ` immediately, without waiting for the JSONL to
+  first appear under an unknown id.
+
+  Use case: browser / mobile clients creating a new working session on a
+  host where they have no shell access.
+  """
+  launchSession(input: LaunchSessionInput!): LaunchSessionResult!
+}
+
+"""
+Input for launchSession. Anchored to (host, cwd) semantics (ADR-009);
+v1 is local-host only, so host is implicit.
+"""
+input LaunchSessionInput {
+  "Absolute working directory the session runs in — typically a worktree path. A leading ~ is expanded daemon-side."
+  cwd: String!
+  "Optional tmux session name. When omitted the daemon derives one from the cwd basename plus a short unique suffix; collisions are de-duplicated."
+  name: String
+  "Optional model alias or full name (e.g. \"opus\", \"claude-sonnet-4-6\"). Passed to ` + "`" + `claude --model` + "`" + ` when present."
+  model: String
+  "Optional first prompt. When present it is passed to Claude as the initial task so the agent starts working immediately."
+  prompt: String
+}
+
+"Result of launchSession: the freshly created tmux session, the Claude REPL pane to target for chat sends, and the pre-assigned session UUID."
+type LaunchSessionResult {
+  "The tmux session name that was created (after de-duplication)."
+  sessionName: String!
+  "The tmux pane id running the Claude REPL (e.g. \"%73\"). Target this with sendTextToPane."
+  paneId: String!
+  "The pre-assigned Claude session UUID. Subscribe to conversationChanged(sessionUuid:) to stream the transcript as it grows."
+  sessionUuid: String!
+  "The working directory the session was launched in (after ~ expansion)."
+  cwd: String!
 }
 `, BuiltIn: false},
 }
@@ -4104,6 +4198,20 @@ func (ec *executionContext) childFields_Label(ctx context.Context, field graphql
 		return ec.fieldContext_Label_description(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Label", field.Name)
+}
+
+func (ec *executionContext) childFields_LaunchSessionResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "sessionName":
+		return ec.fieldContext_LaunchSessionResult_sessionName(ctx, field)
+	case "paneId":
+		return ec.fieldContext_LaunchSessionResult_paneId(ctx, field)
+	case "sessionUuid":
+		return ec.fieldContext_LaunchSessionResult_sessionUuid(ctx, field)
+	case "cwd":
+		return ec.fieldContext_LaunchSessionResult_cwd(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LaunchSessionResult", field.Name)
 }
 
 func (ec *executionContext) childFields_Meta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4601,6 +4709,20 @@ func (ec *executionContext) field_Host_processes_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["filter"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_launchSession_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (LaunchSessionInput, error) {
+			return ec.unmarshalNLaunchSessionInput2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -7450,6 +7572,98 @@ func (ec *executionContext) fieldContext_Label_description(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Label", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _LaunchSessionResult_sessionName(ctx context.Context, field graphql.CollectedField, obj *LaunchSessionResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchSessionResult_sessionName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SessionName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchSessionResult_sessionName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchSessionResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LaunchSessionResult_paneId(ctx context.Context, field graphql.CollectedField, obj *LaunchSessionResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchSessionResult_paneId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PaneID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchSessionResult_paneId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchSessionResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LaunchSessionResult_sessionUuid(ctx context.Context, field graphql.CollectedField, obj *LaunchSessionResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchSessionResult_sessionUuid(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SessionUUID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchSessionResult_sessionUuid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchSessionResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LaunchSessionResult_cwd(ctx context.Context, field graphql.CollectedField, obj *LaunchSessionResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchSessionResult_cwd(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Cwd, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchSessionResult_cwd(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchSessionResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _Meta_provider(ctx context.Context, field graphql.CollectedField, obj *Meta) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7557,6 +7771,50 @@ func (ec *executionContext) fieldContext_Mutation_sendTextToPane(ctx context.Con
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_sendTextToPane_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_launchSession(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_launchSession(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().LaunchSession(ctx, fc.Args["input"].(LaunchSessionInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *LaunchSessionResult) graphql.Marshaler {
+			return ec.marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_launchSession(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_LaunchSessionResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_launchSession_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -13643,6 +13901,57 @@ func (ec *executionContext) unmarshalInputHostServiceFilter(ctx context.Context,
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputLaunchSessionInput(ctx context.Context, obj any) (LaunchSessionInput, error) {
+	var it LaunchSessionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"cwd", "name", "model", "prompt"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "cwd":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("cwd"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Cwd = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "model":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("model"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Model = data
+		case "prompt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("prompt"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Prompt = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputProcessFilter(ctx context.Context, obj any) (ProcessFilter, error) {
 	var it ProcessFilter
 	if obj == nil {
@@ -15002,6 +15311,60 @@ func (ec *executionContext) _Label(ctx context.Context, sel ast.SelectionSet, ob
 	return out
 }
 
+var launchSessionResultImplementors = []string{"LaunchSessionResult"}
+
+func (ec *executionContext) _LaunchSessionResult(ctx context.Context, sel ast.SelectionSet, obj *LaunchSessionResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, launchSessionResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("LaunchSessionResult")
+		case "sessionName":
+			out.Values[i] = ec._LaunchSessionResult_sessionName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "paneId":
+			out.Values[i] = ec._LaunchSessionResult_paneId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionUuid":
+			out.Values[i] = ec._LaunchSessionResult_sessionUuid(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cwd":
+			out.Values[i] = ec._LaunchSessionResult_cwd(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var metaImplementors = []string{"Meta"}
 
 func (ec *executionContext) _Meta(ctx context.Context, sel ast.SelectionSet, obj *Meta) graphql.Marshaler {
@@ -15067,6 +15430,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "sendTextToPane":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_sendTextToPane(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "launchSession":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_launchSession(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -19356,6 +19726,25 @@ func (ec *executionContext) marshalNLabel2ᚖgithubᚗcomᚋdrewdrewthisᚋgit�
 		return graphql.Null
 	}
 	return ec._Label(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNLaunchSessionInput2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionInput(ctx context.Context, v any) (LaunchSessionInput, error) {
+	res, err := ec.unmarshalInputLaunchSessionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNLaunchSessionResult2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx context.Context, sel ast.SelectionSet, v LaunchSessionResult) graphql.Marshaler {
+	return ec._LaunchSessionResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx context.Context, sel ast.SelectionSet, v *LaunchSessionResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._LaunchSessionResult(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, v any) (MergeableState, error) {

@@ -214,6 +214,13 @@ func (r *mutationResolver) SendTextToPane(ctx context.Context, paneID string, te
 	return true, nil
 }
 
+// LaunchSession is the resolver for the launchSession field. The tmux +
+// claude-launch logic lives in launch.go (launchClaudeSession) so this
+// gqlgen-managed file stays a thin projection.
+func (r *mutationResolver) LaunchSession(ctx context.Context, input graphql1.LaunchSessionInput) (*graphql1.LaunchSessionResult, error) {
+	return launchClaudeSession(ctx, input)
+}
+
 // Host is the resolver for the process.host field.
 func (r *processResolver) Host(ctx context.Context, obj *graphql1.Process) (*graphql1.Host, error) {
 	hostID, _ := splitProcessNodeID(obj.ID)
