@@ -1,0 +1,5 @@
+# pnpm 11+ build-script approval. esbuild ships a native binary and needs its
+# install script to run; without this, `pnpm install`/`pnpm build` abort with
+# ERR_PNPM_IGNORED_BUILDS. esbuild is a trusted, widely-used build dependency.
+allowBuilds:
+  esbuild: true
