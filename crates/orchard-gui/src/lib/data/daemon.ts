@@ -123,5 +123,9 @@ export async function launchSession(input: LaunchSessionInput): Promise<LaunchSe
 	if (body.errors && body.errors.length > 0) {
 		throw new Error(body.errors[0].message ?? "launchSession failed");
 	}
-	return body.data.launchSession as LaunchSessionResult;
+	const launched = body.data?.launchSession;
+	if (!launched) {
+		throw new Error("launchSession returned no data");
+	}
+	return launched as LaunchSessionResult;
 }

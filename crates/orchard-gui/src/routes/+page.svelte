@@ -147,7 +147,6 @@
 	surface={store.surface}
 	onClose={() => store.closeNewConv()}
 	onLaunch={async (spec) => {
-		store.closeNewConv();
 		// NewConversation emits an existing worktreeId from the picker, so the
 		// worktree is already on disk (its path is `spec.cwd`). The daemon's
 		// launchSession mutation creates the tmux session + boots Claude there
@@ -161,6 +160,9 @@
 				prompt: spec.task?.trim() ? spec.task : undefined,
 			});
 			store.openSession({ paneId: result.paneId, sessionUuid: result.sessionUuid });
+			// Close only on success — a failed launch keeps the modal open so the
+			// user's picked worktree / model / task aren't lost.
+			store.closeNewConv();
 			toast.success(`Launched ${result.sessionName}`);
 		} catch (err) {
 			toast.error(err);
