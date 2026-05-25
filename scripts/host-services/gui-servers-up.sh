@@ -22,6 +22,12 @@ PUBLIC_URL="https://orchard-gui.drewdrewthis.boxd.sh"
 # The browser loads the GUI from the boxd HTTPS origin; the daemon's WS
 # CheckOrigin must allowlist it or conversationChanged subscriptions 403.
 ORIGIN="$PUBLIC_URL"
+# Introspection is OFF by default on the public daemon — serving the full
+# schema to anyone who can reach the boxd URL is an info-disclosure surface.
+# Opt in for debugging with `ORCHARD_INTROSPECTION=1 gui-servers-up.sh`. The
+# live suites (create-chat / render-gate) drive the UI, not __schema queries,
+# so they pass with it off.
+INTROSPECTION="${ORCHARD_INTROSPECTION:-0}"
 BUILD=true
 [[ "${1:-}" == "--no-build" ]] && BUILD=false
 
@@ -38,7 +44,7 @@ echo "[gui-servers] (re)creating detached tmux session '$SESSION'…"
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -n daemon -c "$REPO"
 tmux send-keys -t "$SESSION:daemon" \
-  "ORCHARD_INTROSPECTION=1 ORCHARD_ALLOWED_ORIGINS=$ORIGIN ./bin/orchard-daemon daemon start 2>&1 | tee /tmp/orchard-daemon.log" Enter
+  "ORCHARD_INTROSPECTION=$INTROSPECTION ORCHARD_ALLOWED_ORIGINS=$ORIGIN ./bin/orchard-daemon daemon start 2>&1 | tee /tmp/orchard-daemon.log" Enter
 tmux new-window -t "$SESSION" -n vite -c "$GUI"
 tmux send-keys -t "$SESSION:vite" \
   "corepack pnpm preview --port 4173 2>&1 | tee /tmp/vite-preview.log" Enter
