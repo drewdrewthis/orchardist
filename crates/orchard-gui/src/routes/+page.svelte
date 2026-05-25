@@ -16,6 +16,8 @@
 		buildWorktreePickerRows,
 	} from "$lib/data/daemon-stores";
 	import { buildPaletteEntries, PALETTE_ACTIONS } from "$lib/data/palette";
+	import { launchSession } from "$lib/data/daemon";
+	import { toast } from "$lib/util/toast";
 	import type { Lens, PaletteEntry } from "$lib/data/types";
 
 	const store = getStore();
@@ -144,11 +146,24 @@
 	open={store.newConvOpen}
 	surface={store.surface}
 	onClose={() => store.closeNewConv()}
-	onLaunch={async (_spec) => {
+	onLaunch={async (spec) => {
 		store.closeNewConv();
-		// NewConversation only emits an existing worktreeId from the picker,
-		// so the worktree is already on disk — no createWorktree needed.
-		// The session itself is started outside this flow (user clicks the
-		// row in the sidebar; future: launch a Claude REPL into the pane).
+		// NewConversation emits an existing worktreeId from the picker, so the
+		// worktree is already on disk (its path is `spec.cwd`). The daemon's
+		// launchSession mutation creates the tmux session + boots Claude there
+		// and returns the pane + pre-assigned session UUID, which we open
+		// straight into the deep view — the composer targets the pane and the
+		// transcript subscribes by uuid, both before the daemon's next poll.
+		try {
+			const result = await launchSession({
+				cwd: spec.cwd,
+				model: spec.model,
+				prompt: spec.task?.trim() ? spec.task : undefined,
+			});
+			store.openSession({ paneId: result.paneId, sessionUuid: result.sessionUuid });
+			toast.success(`Launched ${result.sessionName}`);
+		} catch (err) {
+			toast.error(err);
+		}
 	}}
 />

@@ -182,9 +182,15 @@ type Contract implements Node {
 
 """Filter for `Query.contracts`. All fields are optional."""
 input ContractFilter {
-  """Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts."""
+  """
+  Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts.
+  """
   closedReasons: [ContractReason!]
+
+  """Match contracts owned by this Claude session UUID."""
   ownerSessionId: String
+
+  """Match contracts whose folded status is in this list."""
   statuses: [ContractStatus!]
 }
 
@@ -260,7 +266,9 @@ type Conversation implements Node {
   """
   open: Boolean!
 
-  """Daemon-derived recap from the most recent `/recap` slash-command invocation in this session. Null when no `/recap` has been invoked."""
+  """
+  Daemon-derived recap from the most recent `/recap` slash-command invocation in this session. Null when no `/recap` has been invoked.
+  """
   recap: String
 
   """
@@ -549,6 +557,53 @@ type Label {
 }
 
 """
+Input for launchSession. Anchored to (host, cwd) semantics (ADR-009);
+v1 is local-host only, so host is implicit.
+"""
+input LaunchSessionInput {
+  """
+  Absolute working directory the session runs in — typically a worktree path. A leading ~ is expanded daemon-side.
+  """
+  cwd: String!
+
+  """
+  Optional model alias or full name (e.g. "opus", "claude-sonnet-4-6"). Passed to `claude --model` when present.
+  """
+  model: String
+
+  """
+  Optional tmux session name. When omitted the daemon derives one from the cwd basename plus a short unique suffix; collisions are de-duplicated.
+  """
+  name: String
+
+  """
+  Optional first prompt. When present it is passed to Claude as the initial task so the agent starts working immediately.
+  """
+  prompt: String
+}
+
+"""
+Result of launchSession: the freshly created tmux session, the Claude REPL pane to target for chat sends, and the pre-assigned session UUID.
+"""
+type LaunchSessionResult {
+  """The working directory the session was launched in (after ~ expansion)."""
+  cwd: String!
+
+  """
+  The tmux pane id running the Claude REPL (e.g. "%73"). Target this with sendTextToPane.
+  """
+  paneId: String!
+
+  """The tmux session name that was created (after de-duplication)."""
+  sessionName: String!
+
+  """
+  The pre-assigned Claude session UUID. Subscribe to conversationChanged(sessionUuid:) to stream the transcript as it grows.
+  """
+  sessionUuid: String!
+}
+
+"""
 Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing.
 """
 enum MergeableState {
@@ -599,6 +654,27 @@ Every mutation MUST:
   - Be reversible or idempotent where reasonable
 """
 type Mutation {
+  """
+  Launch a new Claude REPL inside a fresh detached tmux session at the
+  given working directory.
+  
+  The daemon creates the tmux session (`tmux new-session -d -s <name>
+  -c <cwd>`), resolves the new pane, then types
+  `claude --session-id <uuid> --dangerously-skip-permissions --effort max`
+  (plus `--model` and an initial prompt when supplied) into the pane and
+  submits it — mirroring sendTextToPane's literal-write + Enter so the
+  REPL boots in the user's login shell with full env.
+  
+  The session UUID is pre-assigned (`claude --session-id`) so the caller
+  can `conversationChanged(sessionUuid:)`-subscribe and target the pane
+  with `sendTextToPane` immediately, without waiting for the JSONL to
+  first appear under an unknown id.
+  
+  Use case: browser / mobile clients creating a new working session on a
+  host where they have no shell access.
+  """
+  launchSession(input: LaunchSessionInput!): LaunchSessionResult!
+
   """
   Send literal text to a tmux pane, followed by an Enter keypress.
   
@@ -1194,7 +1270,11 @@ type TmuxPane implements Node {
 """Filter for `Query.tmuxPanes`. AND-combined when multiple are set."""
 input TmuxPaneFilter {
   """
-  Only include panes whose foreground-process command basename contains this substring, case-insensitive (ADR-022 PanesByCommand axis).
+  Only include panes whose foreground-process command basename contains this
+  substring (case-insensitive). Uses the ps provider for the real command name
+  so node-wrapped CLIs (e.g. `node /usr/local/bin/claude`) resolve correctly;
+  falls back to `currentCommand` when ps is unavailable. ADR-022 axis:
+  PanesByCommand.
   """
   command: String
 
@@ -1211,7 +1291,10 @@ input TmuxPaneFilter {
   currentCommandIn: [String!]
 
   """
-  Only include panes whose foreground-process cwd matches (ADR-022 PanesByCwd axis).
+  Only include panes whose foreground-process cwd equals `cwd` exactly or has
+  `cwd + '/'` as a prefix (server-side join via the ps provider, same path as
+  Worktree.tmuxPanes). Requires ps provider to be wired; panes whose cwd cannot
+  be resolved are silently skipped. ADR-022 axis: PanesByCwd.
   """
   cwd: String
 
