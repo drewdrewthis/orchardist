@@ -217,7 +217,13 @@ func (r *mutationResolver) SendTextToPane(ctx context.Context, paneID string, te
 	// 250ms clears Claude Code's paste-coalesce window. A shorter gap
 	// (tested at 75ms) intermittently lets the Enter get absorbed into the
 	// paste burst on a freshly-booted REPL, leaving the message unsent.
-	time.Sleep(250 * time.Millisecond)
+	// select (not a bare time.Sleep) so a cancelled request returns promptly
+	// instead of blocking the goroutine for the full window.
+	select {
+	case <-time.After(250 * time.Millisecond):
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 	if out, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", paneID, "Enter").CombinedOutput(); err != nil {
 		return false, fmt.Errorf("tmux send-keys (enter): %w: %s", err, strings.TrimSpace(string(out)))
 	}

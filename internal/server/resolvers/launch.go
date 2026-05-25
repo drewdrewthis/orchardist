@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
@@ -35,16 +34,29 @@ func launchClaudeSession(ctx context.Context, input graphql1.LaunchSessionInput)
 	if base == "" {
 		base = sanitizeTmuxName(filepath.Base(cwd))
 	}
-	sessionName := uniqueTmuxName(ctx, base)
 	sessionUUID := uuid.NewString()
 
-	// 1. Create the detached tmux session rooted at cwd.
-	if out, err := exec.CommandContext(ctx, "tmux", "new-session", "-d", "-s", sessionName, "-c", cwd).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
+	// 1. Create the detached tmux session rooted at cwd, retrying with a fresh
+	//    suffix on a name collision. Letting new-session arbitrate is atomic;
+	//    a has-session pre-check would race a concurrent create between the
+	//    check and the create.
+	sessionName, err := createUniqueSession(ctx, base, cwd)
+	if err != nil {
+		return nil, err
 	}
 
+	// Tear the session down if launch fails before it becomes a usable REPL,
+	// so a half-created detached session can't leak into the list. Uses
+	// exec.Command (not ctx) so cleanup still runs when ctx was cancelled.
+	launched := false
+	defer func() {
+		if !launched {
+			_ = exec.Command("tmux", "kill-session", "-t", "="+sessionName).Run()
+		}
+	}()
+
 	// 2. Resolve the pane id of the freshly created session.
-	paneOut, err := exec.CommandContext(ctx, "tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}").CombinedOutput()
+	paneOut, err := exec.CommandContext(ctx, "tmux", "list-panes", "-t", "="+sessionName, "-F", "#{pane_id}").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes: %w: %s", err, strings.TrimSpace(string(paneOut)))
 	}
@@ -64,6 +76,7 @@ func launchClaudeSession(ctx context.Context, input graphql1.LaunchSessionInput)
 		return nil, fmt.Errorf("tmux send-keys (enter): %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
+	launched = true
 	return &graphql1.LaunchSessionResult{
 		SessionName: sessionName,
 		PaneID:      paneID,
@@ -121,25 +134,28 @@ func sanitizeTmuxName(s string) string {
 	return strings.Trim(mapped, "-")
 }
 
-// uniqueTmuxName returns base when no live tmux session has that exact name,
-// else base with a short suffix that doesn't collide. `tmux has-session -t
-// =<name>` uses the `=` exact-match anchor (not the default prefix match).
-func uniqueTmuxName(ctx context.Context, base string) string {
+// createUniqueSession creates a detached tmux session rooted at cwd, named
+// base (or "session" when empty), retrying with a short random suffix on a
+// name collision. tmux rejects a duplicate name with a non-zero exit and
+// "duplicate session" on stderr; letting new-session arbitrate is atomic,
+// unlike a has-session pre-check which races a concurrent create between the
+// check and the create. Returns the name actually created.
+func createUniqueSession(ctx context.Context, base, cwd string) (string, error) {
 	if base == "" {
 		base = "session"
 	}
-	exists := func(n string) bool {
-		return exec.CommandContext(ctx, "tmux", "has-session", "-t", "="+n).Run() == nil
-	}
-	if !exists(base) {
-		return base
-	}
+	name := base
 	for i := 0; i < 50; i++ {
-		if cand := base + "-" + uuid.NewString()[:4]; !exists(cand) {
-			return cand
+		out, err := exec.CommandContext(ctx, "tmux", "new-session", "-d", "-s", name, "-c", cwd).CombinedOutput()
+		if err == nil {
+			return name, nil
 		}
+		if !strings.Contains(string(out), "duplicate session") {
+			return "", fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		name = base + "-" + uuid.NewString()[:4]
 	}
-	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
+	return "", fmt.Errorf("tmux new-session: no unique name for %q after 50 attempts", base)
 }
 
 // buildClaudeLaunch assembles the shell command line that boots an
