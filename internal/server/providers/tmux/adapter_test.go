@@ -27,7 +27,14 @@ func (f fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 		return out, nil
 	}
 	// Match by leading verb when the caller supplies a partial key —
-	// keeps test data short.
+	// keeps test data short. Errors are matched by prefix too so a staged
+	// failure for e.g. "tmux list-sessions" fires even when the real call
+	// appends flags ("tmux list-sessions -F ").
+	for prefix, err := range f.errs {
+		if strings.HasPrefix(key, prefix) {
+			return f.out[prefix], err
+		}
+	}
 	for prefix, out := range f.out {
 		if strings.HasPrefix(key, prefix) {
 			return out, nil
@@ -37,10 +44,12 @@ func (f fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 }
 
 func TestListPanes_EmptyOnNoServer(t *testing.T) {
+	// IsAlive probes with `tmux list-sessions`; staging that as a
+	// "no server running" error drives FetchAll down the dead-server path.
 	a := NewAdapter("h").WithRunner(fakeRunner{out: map[string][]byte{
-		"tmux info": nil,
+		"tmux list-sessions": nil,
 	}, errs: map[string]error{
-		"tmux info": errFake("no server running"),
+		"tmux list-sessions": errFake("no server running"),
 	}})
 
 	snap, err := a.FetchAll(context.Background())
