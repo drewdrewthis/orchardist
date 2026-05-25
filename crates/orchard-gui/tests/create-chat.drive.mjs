@@ -36,6 +36,14 @@ const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
 page.on("pageerror", (e) => pageErrors.push(String(e)));
+// Capture live-update evidence: graphql-ws frames. The conversationChanged
+// subscription's "next" frames carry the field name in their JSON payload, so
+// a frame matching /conversationChanged/ proves the WS subscription delivered.
+// Listener attaches before goto so the handshake + every frame is observed.
+const wsFrames = [];
+page.on("websocket", (ws) => {
+  ws.on("framereceived", (f) => { try { wsFrames.push(String(f.payload)); } catch {} });
+});
 
 try {
   await page.goto(BASE, { waitUntil: "networkidle", timeout: 30000 });
@@ -101,6 +109,9 @@ try {
       MARK);
     if (!assistantRendered) await page.waitForTimeout(1500);
   }
+  const convChangedFrames = wsFrames.filter((f) => /conversationChanged/.test(f)).length;
+  console.log(`    (ws frames received: ${wsFrames.length}; conversationChanged frames: ${convChangedFrames})`);
+  assert("conversationChanged fires over the WebSocket and the transcript re-fetches", convChangedFrames > 0);
   assert(`an assistant turn ([data-role="assistant"]) containing the reply renders in the GUI`, assistantRendered);
 
   // ── Scenario: end-to-end ──────────────────────────────────────────────────
