@@ -120,10 +120,12 @@ func TestRegression_FetchAllExecCount_Issue464(t *testing.T) {
 			callSet[c] = true
 		}
 
-		// After the fix the alive probe should still be present.
-		hasAliveProbe := callSet["info"] || callSet["display-message"] || callSet["server-info"]
+		// After the fix the alive probe should still be present. The probe is
+		// `list-sessions` (server-scoped); `info` is client-scoped and returns
+		// "no current client" for a detached daemon — see Adapter.IsAlive.
+		hasAliveProbe := callSet["list-sessions"] || callSet["info"] || callSet["display-message"] || callSet["server-info"]
 		if !hasAliveProbe {
-			t.Logf("advisory: expected an alive-probe subcommand (info/display-message/server-info); got %v", runner.calls)
+			t.Logf("advisory: expected an alive-probe subcommand (list-sessions/info/display-message/server-info); got %v", runner.calls)
 		}
 
 		// After the fix pane data should still be fetched — it is the richest
