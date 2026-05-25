@@ -57,9 +57,13 @@ try {
   await page.waitForFunction(() => /Launched/i.test(document.body.innerText), { timeout: 15000 }).catch(() => {});
   const toast = await page.evaluate(() => (document.body.innerText.match(/Launched[^\n]*/i) || [""])[0]);
   assert(`a success toast "Launched <sessionName>" is shown`, /^Launched\s+\S/.test(toast));
+  // Bind cleanup + the new-session check to the EXACT name from the toast — a
+  // generic before/after diff could pick up (and later kill) an unrelated
+  // session created concurrently by something else.
+  const launchedName = (toast.match(/^Launched\s+(\S+)/) || [])[1] || null;
   await page.waitForTimeout(1500);
-  const after = tmux("tmux ls -F '#{session_name}' 2>/dev/null").split("\n").filter(Boolean);
-  createdSession = after.find((s) => !before.has(s)) || null;
+  const after = new Set(tmux("tmux ls -F '#{session_name}' 2>/dev/null").split("\n").filter(Boolean));
+  createdSession = launchedName && after.has(launchedName) && !before.has(launchedName) ? launchedName : null;
   assert("a new tmux session appears that was not present before the click", !!createdSession);
   const paneLine = createdSession ? tmux(`tmux list-panes -t ${createdSession} -F '#{pane_id} #{pane_current_command}'`).trim() : "";
   const paneId = paneLine.split(" ")[0] || "";
