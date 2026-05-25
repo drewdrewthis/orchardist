@@ -15,7 +15,7 @@
 //   5. the "New" conversation entrypoint is visible (create affordance live)
 //   6. the sidebar rendered real daemon state (a lens group or conversation)
 //   7. no uncaught page errors during load
-import pw from "../node_modules/.pnpm/playwright@1.59.1/node_modules/playwright/index.js";
+import pw from "playwright";
 const { chromium } = pw;
 const BASE = process.argv[2] || process.env.ORCHARD_TEST_BASE || "https://orchard-gui.drewdrewthis.boxd.sh";
 

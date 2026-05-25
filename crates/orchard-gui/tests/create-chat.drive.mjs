@@ -10,8 +10,8 @@
 // Spawns a REAL Claude session (named git-orchard-rs*) and kills it on exit —
 // that is why this is a .drive.mjs, not a **/*.spec.ts the rig auto-runs.
 //
-// playwright is resolved from this package's pnpm store (CommonJS default import).
-import pw from "../node_modules/.pnpm/playwright@1.59.1/node_modules/playwright/index.js";
+// playwright's default export is its CJS module ({ chromium, firefox, … }).
+import pw from "playwright";
 import { execSync } from "node:child_process";
 const { chromium } = pw;
 
