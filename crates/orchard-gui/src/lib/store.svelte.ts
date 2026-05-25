@@ -18,6 +18,7 @@ import {
 	type ChatBackend,
 } from "./data/chat";
 import { toast } from "./util/toast";
+import { inTauri } from "./tauri";
 import type {
 	Conversation,
 	ConvView,
@@ -271,12 +272,15 @@ export class AppStore {
 		// Default view rule:
 		//   - mobile: always chat (browser can't host a PTY, terminal view
 		//     would just show "desktop app required").
-		//   - desktop + live pane: terminal (the substrate when attached).
-		//   - desktop + no pane: chat (the jsonl is the only thing to show).
+		//   - browser desktop: also chat — only the Tauri desktop app can
+		//     attach a PTY, so terminal view is dead weight in a plain browser
+		//     (the GUI is now served over HTTPS for browser create+chat).
+		//   - Tauri desktop + live pane: terminal (the substrate when attached).
+		//   - any + no pane: chat (the jsonl is the only thing to show).
 		// Drew (2026-05-10): "if no tmux sessions still okay, right, we have
 		// the jsonl."
 		const defaultView: ConvView =
-			this.surface === "mobile" ? "chat" : key.paneId ? "terminal" : "chat";
+			inTauri() && this.surface === "desktop" && key.paneId ? "terminal" : "chat";
 
 		// Mobile: always single-tab.
 		if (this.surface === "mobile") {
