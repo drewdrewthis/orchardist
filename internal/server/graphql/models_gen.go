@@ -362,6 +362,31 @@ type Label struct {
 	Description string `json:"description"`
 }
 
+// Input for launchSession. Anchored to (host, cwd) semantics (ADR-009);
+// v1 is local-host only, so host is implicit.
+type LaunchSessionInput struct {
+	// Absolute working directory the session runs in — typically a worktree path. A leading ~ is expanded daemon-side.
+	Cwd string `json:"cwd"`
+	// Optional tmux session name. When omitted the daemon derives one from the cwd basename plus a short unique suffix; collisions are de-duplicated.
+	Name *string `json:"name,omitempty"`
+	// Optional model alias or full name (e.g. "opus", "claude-sonnet-4-6"). Passed to `claude --model` when present.
+	Model *string `json:"model,omitempty"`
+	// Optional first prompt. When present it is passed to Claude as the initial task so the agent starts working immediately.
+	Prompt *string `json:"prompt,omitempty"`
+}
+
+// Result of launchSession: the freshly created tmux session, the Claude REPL pane to target for chat sends, and the pre-assigned session UUID.
+type LaunchSessionResult struct {
+	// The tmux session name that was created (after de-duplication).
+	SessionName string `json:"sessionName"`
+	// The tmux pane id running the Claude REPL (e.g. "%73"). Target this with sendTextToPane.
+	PaneID string `json:"paneId"`
+	// The pre-assigned Claude session UUID. Subscribe to conversationChanged(sessionUuid:) to stream the transcript as it grows.
+	SessionUUID string `json:"sessionUuid"`
+	// The working directory the session was launched in (after ~ expansion).
+	Cwd string `json:"cwd"`
+}
+
 // Provenance and freshness envelope used to disambiguate "valid empty"
 // from "data unavailable" (#469 F1). Returned alongside list/composite
 // fields whose underlying providers can fail or be uninitialised.

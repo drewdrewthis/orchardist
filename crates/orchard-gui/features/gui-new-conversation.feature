@@ -59,8 +59,10 @@ Feature: GUI new conversation modal — WorktreesList + HostsList
     Then cpu: 72% is displayed under the hostname button
 
   @integration
-  Scenario: Launch emits (worktreeId, host, model, task) — no client-side joins
+  Scenario: Launch emits (worktreeId, cwd, host, model, task) and calls launchSession
     When the user picks a worktree and clicks Launch
-    Then onLaunch is called with { worktreeId, host, model, task }
-    And no client-side cwd→worktree resolution occurs (worktreeId is the daemon-assigned ID)
+    Then onLaunch is called with { worktreeId, cwd, host, model, task }
+    And cwd is the picked worktree's path read from the already-loaded picker row (no fresh query)
+    And the page calls the daemon launchSession mutation with { cwd, model, prompt }
     And model defaults to "claude-sonnet-4-5" unless changed
+    And Launch is disabled until a worktree is selected (host and cur both required)

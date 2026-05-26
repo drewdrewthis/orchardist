@@ -21,7 +21,7 @@
 		open: boolean;
 		surface: "desktop" | "mobile";
 		onClose: () => void;
-		onLaunch: (spec: { worktreeId: string; host: string; model: string; task: string }) => void;
+		onLaunch: (spec: { worktreeId: string; cwd: string; host: string; model: string; task: string }) => void;
 	};
 	let { open, surface, onClose, onLaunch }: Props = $props();
 
@@ -253,8 +253,8 @@
 					<button
 						class="btn-primary"
 						style="display: inline-flex; align-items: center; gap: 6px;"
-						onclick={() => onLaunch({ worktreeId, host, model, task })}
-						disabled={!host}
+						onclick={() => onLaunch({ worktreeId, cwd, host, model, task })}
+						disabled={!host || !cur}
 					>
 						<Icon name="sparkle" size={13} />
 						<span>Launch</span>

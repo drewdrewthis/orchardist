@@ -18,7 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
  * The GUI deliberately keeps these proxies thin — callers handle the
  * "browser dev, no Tauri" case at the call site.
  */
-function inTauri(): boolean {
+export function inTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 function requireTauri(op: string): void {

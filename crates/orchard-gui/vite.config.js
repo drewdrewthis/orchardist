@@ -19,10 +19,10 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
-    // Allow cloudflared / ngrok hostnames during browser-dev preview from
-    // a phone or other device. Tauri reaches Vite via 127.0.0.1 and doesn't
-    // hit this guard.
-    allowedHosts: [".trycloudflare.com", ".ngrok-free.app", ".ngrok.io", ".loca.lt"],
+    // Allow cloudflared / ngrok / boxd hostnames during browser-dev preview
+    // from a phone or other device. Tauri reaches Vite via 127.0.0.1 and
+    // doesn't hit this guard.
+    allowedHosts: [".trycloudflare.com", ".ngrok-free.app", ".ngrok.io", ".loca.lt", ".boxd.sh"],
     hmr: host
       ? {
           protocol: "ws",
@@ -49,6 +49,28 @@ export default defineConfig(async () => ({
     // smoke-tested in a regular browser without Tauri's CORS-bypass. In Tauri,
     // `127.0.0.1:7777` is reached directly (and `csp: null` lets fetch through),
     // so this proxy is only consulted in browser dev.
+    proxy: {
+      "/__daemon": {
+        target: "http://127.0.0.1:7777",
+        changeOrigin: true,
+        ws: true,
+        rewrite: (/** @type {string} */ p) => p.replace(/^\/__daemon/, ""),
+      },
+    },
+  },
+
+  // `vite preview` serves the production build (adapter-static output).
+  // Unlike `server`, the preview server does NOT inherit `server.proxy`,
+  // so the `/__daemon` GraphQL proxy (HTTP + WS) is redeclared here. This
+  // is the same-origin path that lets a remote browser — loaded from the
+  // boxd HTTPS proxy — reach the daemon without a localhost-only endpoint
+  // leaking to the client. `host: true` binds 0.0.0.0 so the boxd proxy
+  // can forward to it.
+  preview: {
+    port: 4173,
+    strictPort: true,
+    host: true,
+    allowedHosts: [".trycloudflare.com", ".ngrok-free.app", ".ngrok.io", ".loca.lt", ".boxd.sh"],
     proxy: {
       "/__daemon": {
         target: "http://127.0.0.1:7777",

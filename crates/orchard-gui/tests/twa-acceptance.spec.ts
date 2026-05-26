@@ -330,7 +330,12 @@ test.describe("orchard-gui TWA — phone acceptance", () => {
 		let graphqlPosts = 0;
 		page.on("request", (req) => {
 			const url = req.url();
-			if (url.includes(":7777/graphql") && req.method() === "POST") {
+			// The browser client always POSTs to the same-origin `/__daemon/graphql`
+			// proxy path (see src/client.ts); it only targets `:7777/graphql`
+			// directly in the SSR fallback, which never runs in a browser test.
+			// Count both so the storm guard is real against the dev rig, the
+			// `vite preview` build, and the boxd HTTPS URL alike.
+			if ((url.includes("/__daemon/graphql") || url.includes(":7777/graphql")) && req.method() === "POST") {
 				graphqlPosts++;
 			}
 		});

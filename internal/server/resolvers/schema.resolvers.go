@@ -192,7 +192,8 @@ func (r *issueResolver) ParentIssue(ctx context.Context, obj *graphql1.Issue) (*
 // literally (no shell interpretation, safe with backticks / magic
 // strings); then a separate `Enter` keypress submits. Mirrors the
 // desktop app's Tauri command in crates/orchard-gui/src-tauri/src/commands.rs.
-// A 50ms gap between the two keeps long messages from racing Enter.
+// A short gap between the two keeps the Enter from racing the text into the
+// same input batch (which Claude's TUI swallows as a pasted newline).
 func (r *mutationResolver) SendTextToPane(ctx context.Context, paneID string, text string) (bool, error) {
 	if paneID == "" {
 		return false, fmt.Errorf("paneId is empty")
@@ -200,18 +201,40 @@ func (r *mutationResolver) SendTextToPane(ctx context.Context, paneID string, te
 	if text == "" {
 		return false, fmt.Errorf("text is empty")
 	}
-	// Single shellout: `-l <text>` literal write, then `Enter` keypress.
-	// Combining them into one send-keys invocation removes a fork+exec
-	// and the 50ms inter-key sleep the desktop Tauri command used (the
-	// sleep was belt+suspenders for very long messages; even 1KB texts
-	// don't race in practice). Round-trip drops from ~80ms+ to ~3ms
-	// inside the daemon; phone-side latency is dominated by the
-	// tunnel hop, not this.
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", paneID, "-l", text, ";", "send-keys", "-t", paneID, "Enter")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return false, fmt.Errorf("tmux send-keys: %w: %s", err, strings.TrimSpace(string(out)))
+	// Two separate send-keys with a short gap. First `-l <text>` writes the
+	// message literally (no shell interpretation, safe with backticks); a
+	// brief sleep lets Claude's TUI flush the paste-like input; then a
+	// discrete `Enter` keypress submits. Collapsing these into one
+	// invocation (or firing them back-to-back with no gap) makes the Enter
+	// race the text into the same input batch — Claude's TUI then treats it
+	// as a pasted newline rather than a submit, so the message lands in the
+	// composer box but is never sent. Observed on a freshly-booted REPL: the
+	// text appeared at the `❯` prompt but Claude never processed it until a
+	// manual Enter arrived. Mirrors the desktop Tauri command's gap.
+	if out, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", paneID, "-l", text).CombinedOutput(); err != nil {
+		return false, fmt.Errorf("tmux send-keys (text): %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	// 250ms clears Claude Code's paste-coalesce window. A shorter gap
+	// (tested at 75ms) intermittently lets the Enter get absorbed into the
+	// paste burst on a freshly-booted REPL, leaving the message unsent.
+	// select (not a bare time.Sleep) so a cancelled request returns promptly
+	// instead of blocking the goroutine for the full window.
+	select {
+	case <-time.After(250 * time.Millisecond):
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	if out, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", paneID, "Enter").CombinedOutput(); err != nil {
+		return false, fmt.Errorf("tmux send-keys (enter): %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return true, nil
+}
+
+// LaunchSession is the resolver for the launchSession field. The tmux +
+// claude-launch logic lives in launch.go (launchClaudeSession) so this
+// gqlgen-managed file stays a thin projection.
+func (r *mutationResolver) LaunchSession(ctx context.Context, input graphql1.LaunchSessionInput) (*graphql1.LaunchSessionResult, error) {
+	return launchClaudeSession(ctx, input)
 }
 
 // Host is the resolver for the process.host field.
