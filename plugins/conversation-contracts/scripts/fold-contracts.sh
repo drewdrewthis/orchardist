@@ -22,6 +22,11 @@
 # resident process. A fixed-string grep gates the (more expensive) jq pass so
 # the common "no contracts" case costs almost nothing.
 #
+# The fold is SET-BASED, not sequence-based: a close cancels an open with the
+# same id regardless of their order or timestamps in the file. For the
+# append-only contract model this is intended — a close for an unknown id is a
+# harmless no-op, and ids are random hex so reuse does not occur in practice.
+#
 # Usage:   fold-contracts.sh <session-jsonl-path>
 # Output:  one line per open contract, "- <id>: <statement>"; empty if none.
 # Exit:    0 always (missing/empty jsonl degrades to no output).

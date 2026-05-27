@@ -66,8 +66,8 @@ session_jsonl="$project_dir/$SESSION_ID.jsonl"
 
 # ---- idempotent auto-open -----------------------------------------------------
 # Append the sentinel only if no auto-open sentinel already exists for this
-# session. This replaces the MCP fold-dedup; repeated prompts yield exactly one
-# auto-open contract.
+# session, so repeated prompts yield exactly one auto-open contract. (This is
+# what the now-removed MCP server's fold-dedup used to guarantee.)
 
 if [ -f "$session_jsonl" ] \
     && grep -Fq '"source":"auto-prompt-submit"' "$session_jsonl" 2>/dev/null; then

@@ -11,7 +11,7 @@
 //     - that entry's source path == "plugins/conversation-contracts"
 //
 //   plugins/conversation-contracts/.claude-plugin/plugin.json
-//     - name, description, version ("0.8.0"), author all present
+//     - name, description, version ("0.9.0"), author all present
 //
 //   plugins/conversation-contracts/hooks/hooks.json
 //     - UserPromptSubmit and Stop hook keys present
@@ -99,7 +99,7 @@ func TestMarketplaceJSON_ValidAndNamedOrchard(t *testing.T) {
 
 // TestPluginJSON_ValidWithExpectedFields asserts that
 // plugins/conversation-contracts/.claude-plugin/plugin.json is valid JSON with
-// the required fields: name, description, version "0.8.0", and author.
+// the required fields: name, description, version "0.9.0", and author.
 func TestPluginJSON_ValidWithExpectedFields(t *testing.T) {
 	root := repoRoot(t)
 	path := filepath.Join(root, "plugins", "conversation-contracts", ".claude-plugin", "plugin.json")
