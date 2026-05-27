@@ -102,8 +102,20 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 	if err := ensureParentDir(pidPath); err != nil {
 		return err
 	}
-	if pid, err := readPid(pidPath); err == nil && processAlive(pid) {
-		return fmt.Errorf("orchard daemon already running (pid %d, pidfile %s)", pid, pidPath)
+	if pid, err := readPid(pidPath); err == nil {
+		// The pidfile names a process. Only honour it as "already running"
+		// when that PID is alive AND genuinely an orchard-daemon. After a
+		// crash that skipped `defer os.Remove(pidPath)`, the OS may have
+		// recycled the PID to an unrelated process — a bare liveness probe
+		// then falsely reports "already running" and refuses to start
+		// (issue #665, a P0 outage). When the live PID is NOT the daemon,
+		// the pidfile is stale: warn, reclaim it, and proceed to start.
+		if !shouldTreatPidfileAsStale(pid, processAlive, processIsDaemon) {
+			return fmt.Errorf("orchard daemon already running (pid %d, pidfile %s)", pid, pidPath)
+		}
+		if processAlive(pid) {
+			fmt.Fprintf(os.Stderr, "orchard: stale pidfile %s names live non-daemon pid %d; reclaiming\n", pidPath, pid)
+		}
 	}
 	if err := writePid(pidPath, os.Getpid()); err != nil {
 		return fmt.Errorf("write pidfile: %w", err)
@@ -456,4 +468,71 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// daemonProcessName is the executable basename of the daemon binary
+// (see cmd/orchard-daemon). It is what /proc/<pid>/comm reports and what
+// /proc/<pid>/cmdline starts with for a running daemon.
+const daemonProcessName = "orchard-daemon"
+
+// procNameReader returns a best-effort identifier for the process at pid
+// — on Linux the contents of /proc/<pid>/comm and /proc/<pid>/cmdline.
+// ok is false when the platform offers no introspection (no /proc), so
+// callers can fall back conservatively. It is a package var so tests can
+// inject a fake without depending on the real /proc.
+var procNameReader = readProcName
+
+// processIsDaemon reports whether the (assumed-alive) process at pid is
+// genuinely an orchard-daemon. On Linux this inspects /proc; where the
+// process name cannot be determined (non-Linux, or /proc unreadable) it
+// falls back to the old liveness-only behaviour — assuming the PID is the
+// daemon — so we never silently double-start on platforms we cannot
+// introspect.
+func processIsDaemon(pid int) bool {
+	name, ok := procNameReader(pid)
+	if !ok {
+		// Conservative fallback: cannot introspect, so treat a live PID as
+		// the daemon (preserves the pre-#665 double-start guard).
+		return true
+	}
+	return strings.Contains(name, daemonProcessName)
+}
+
+// shouldTreatPidfileAsStale decides what runStart's pidfile gate should
+// do, factored out of runStart so the three-way decision is unit-testable
+// without a pidfile, a signal trap, or an addr binding. It composes the
+// liveness probe (alive) with the daemon-identity probe (isDaemon):
+//
+//   - dead PID                  → stale (proceed to start)
+//   - live PID, not the daemon  → stale (PID reuse; reclaim and start) — issue #665
+//   - live PID, is the daemon   → NOT stale (genuine "already running")
+//
+// alive and isDaemon are injected so tests can drive every branch
+// deterministically.
+func shouldTreatPidfileAsStale(pid int, alive func(int) bool, isDaemon func(int) bool) bool {
+	if !alive(pid) {
+		return true
+	}
+	return !isDaemon(pid)
+}
+
+// readProcName reads the Linux /proc entries that identify a process.
+// It concatenates /proc/<pid>/comm and a space-joined /proc/<pid>/cmdline
+// so a substring match against daemonProcessName catches both the
+// (15-char-truncated) comm name and a path-prefixed argv[0]. ok is false
+// when neither file can be read — including on platforms without /proc,
+// where the open simply fails.
+func readProcName(pid int) (name string, ok bool) {
+	var parts []string
+	if comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); err == nil {
+		parts = append(parts, strings.TrimSpace(string(comm)))
+	}
+	if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
+		// cmdline args are NUL-separated; join with spaces for matching.
+		parts = append(parts, strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " "))
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return strings.Join(parts, " "), true
 }
