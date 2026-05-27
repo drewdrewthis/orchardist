@@ -1,42 +1,54 @@
+---
+name: close-conversation
+description: Close the open conversation contract for the current session after a loose-ends inventory. Use when the user signals the session is wrapping up ("we're done here", "close the conversation", "/close-conversation"). Runs the inventory, then either closes the conversation contract as delivered or files child contracts for named open items.
+---
+
 # /close-conversation
 
-Close the open conversation contract for the current session.
+Close the open conversation contract for the current session. Unlike the generic `/close-contract`, this skill runs a **loose-ends inventory** first, so the conversation contract closes only when there is genuinely nothing left dangling.
+
+Contracts are `orchard_contract` sentinels in the session jsonl (open minus close, folded by id) — there is no MCP server and no daemon. The shared fold script is the single source of truth.
 
 ## Flow
 
-1. Call `Query.contracts(filter:{ownerSessionId:$CLAUDE_SESSION_ID, statuses:[SIGNED]})` to list all open (SIGNED) contracts.
+1. **Fold the open contracts.** Run `scripts/fold-contracts.sh` against this session's jsonl to list every open contract:
 
-2. Identify the conversation contract (statement == "user agrees conversation has come to a close and there are no loose ends").
+   ```bash
+   FOLD="$CLAUDE_PLUGIN_ROOT/scripts/fold-contracts.sh"
+   ROOT="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+   ENC=$(printf '%s' "$PWD" | tr '/' '-' | tr '.' '-')
+   bash "$FOLD" "$ROOT/$ENC/$CLAUDE_SESSION_ID.jsonl"
+   ```
 
-3. Collect the inventory of open items:
-   - Open child contracts: all open contracts that are NOT the conversation contract.
-   - Open TodoWrite items: scan the session JSONL for pending TodoWrite entries.
+2. **Identify the conversation contract** by its fixed statement: `user agrees conversation has come to a close and there are no loose ends`. Any other open contract is a **child** contract.
 
-4. If the inventory is empty:
-   - Call `close_contract(id: <conversation-contract-id>, reason: "delivered")` with a close-note summarising the session.
-   - Report: "Conversation contract closed as delivered."
+3. **Build the inventory** of what is still open:
+   - Open child contracts: every open contract that is NOT the conversation contract.
+   - Open TodoWrite items: scan the session jsonl for pending TodoWrite entries (best-effort).
 
-5. If the user names items that are still open:
-   - For each named item, call `open_contract(deliverable: <item>)` to create a child contract.
-   - Do NOT close the conversation contract.
-   - Report: "Conversation contract remains open. Filed child contracts for: <items>."
+4. **If the inventory is empty** (only the conversation contract is open): close it as **delivered**. Emit a close sentinel for the conversation contract's id with a `Bash` echo, using the session summary as the reason:
 
-6. If the user confirms everything is resolved:
-   - Call `close_contract(id: <conversation-contract-id>, reason: "delivered")` with the inventory summary as the close-note.
-   - Report: "Conversation contract closed as delivered."
+   ```bash
+   echo "{\"orchard_contract\":\"close\",\"id\":\"<conversation-contract-id>\",\"reason\":\"delivered: <inventory summary>\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+   ```
+   Report: "Conversation contract closed as delivered."
+
+5. **If the user names items that are still open:** file a child contract for each via `/open-contract` (one open sentinel per named item). Do NOT close the conversation contract — it stays open. Report: "Conversation contract remains open. Filed child contracts for: <items>."
+
+6. **If the user confirms everything is resolved** (non-empty inventory but they accept it): close the conversation contract as delivered (step 4), folding the inventory summary into the reason for auditability.
 
 ## Close paths
 
 | Trigger | Result |
 |---------|--------|
-| User confirms (empty inventory) | `close_contract` delivered, conversation contract CLOSED |
-| User confirms (non-empty inventory) | `close_contract` delivered with inventory note, conversation contract CLOSED |
-| User names open items | `open_contract` per item, conversation contract stays open |
-| `/exit`, `/quit`, `/bye` | Fold auto-synthesises `close_contract` delivered (no write needed) |
-| Direct `close_contract` MCP call | Contract closes immediately, no inventory prompt |
+| User confirms (empty inventory) | close sentinel, reason `delivered`, conversation contract CLOSED |
+| User confirms (non-empty inventory) | close sentinel `delivered` with inventory note, conversation contract CLOSED |
+| User names open items | one open sentinel per item (child contracts), conversation contract stays open |
+| `/exit`, `/quit`, `/bye` | host treats these as user-accepts-close; close the conversation contract delivered |
+| Direct `/close-contract <id>` | closes immediately by id, no inventory prompt (escape hatch) |
 
 ## Notes
 
-- The conversation contract deliverable is fixed: "user agrees conversation has come to a close and there are no loose ends".
-- Idempotency: if no open conversation contract exists for the session, report success immediately.
-- The close-note should include the inventory summary at the moment of closure for auditability.
+- The conversation contract deliverable is fixed: `user agrees conversation has come to a close and there are no loose ends`.
+- Idempotency: if the fold shows no open conversation contract, report success immediately — nothing to close.
+- The close reason should include the inventory summary at the moment of closure for auditability.

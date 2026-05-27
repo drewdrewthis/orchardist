@@ -58,24 +58,25 @@ func readSkill(t *testing.T) string {
 func TestL2_9_SkillDescribesCloseContractDelivered(t *testing.T) {
 	content := readSkill(t)
 
-	// The skill must reference the close_contract MCP tool.
-	if !strings.Contains(content, "close_contract") {
-		t.Error("L2.9: SKILL.md must reference the close_contract MCP tool")
+	// The skill must emit a close sentinel (orchard_contract close) — the
+	// jsonl-sentinel mechanism that replaced the close_contract MCP tool.
+	if !strings.Contains(content, "orchard_contract") || !strings.Contains(content, "close") {
+		t.Error("L2.9: SKILL.md must describe emitting an orchard_contract close sentinel")
 	}
 
 	// The skill must specify reason "delivered".
 	if !strings.Contains(content, "delivered") {
-		t.Error(`L2.9: SKILL.md must specify reason "delivered" for the close_contract call`)
+		t.Error(`L2.9: SKILL.md must specify reason "delivered" for the close`)
 	}
 
-	// The skill must describe querying open contracts first (the inventory step).
-	if !strings.Contains(content, "contracts") && !strings.Contains(content, "Query") {
-		t.Error("L2.9: SKILL.md must describe querying open contracts for the inventory step")
+	// The skill must describe folding open contracts first (the inventory step).
+	if !strings.Contains(content, "contracts") && !strings.Contains(content, "fold") {
+		t.Error("L2.9: SKILL.md must describe folding open contracts for the inventory step")
 	}
 
-	// The skill must mention the close-note or inventory at the moment of close.
-	if !strings.Contains(content, "close-note") && !strings.Contains(content, "inventory") {
-		t.Error("L2.9: SKILL.md must reference including the inventory summary in the close-note")
+	// The skill must mention the inventory at the moment of close.
+	if !strings.Contains(content, "inventory") {
+		t.Error("L2.9: SKILL.md must reference including the inventory summary in the close reason")
 	}
 }
 
@@ -101,9 +102,9 @@ func TestL2_9_SkillIdentifiesConversationContractDeliverable(t *testing.T) {
 func TestL2_10_SkillDescribesChildContractPath(t *testing.T) {
 	content := readSkill(t)
 
-	// The skill must describe opening child contracts.
-	if !strings.Contains(content, "open_contract") {
-		t.Error("L2.10: SKILL.md must reference the open_contract MCP tool for child contracts")
+	// The skill must describe opening child contracts (via /open-contract).
+	if !strings.Contains(content, "/open-contract") {
+		t.Error("L2.10: SKILL.md must reference /open-contract for filing child contracts")
 	}
 
 	// The skill must state that the conversation contract stays open when items are named.
@@ -138,8 +139,8 @@ func TestL2_10_SkillCoversAllClosePathsInSummary(t *testing.T) {
 		t.Error("L2.10: SKILL.md must document the /bye auto-close path")
 	}
 
-	// Must mention the direct close_contract escape hatch (L2.15).
+	// Must mention the direct /close-contract escape hatch (L2.15).
 	if !strings.Contains(content, "Direct") && !strings.Contains(content, "direct") && !strings.Contains(content, "escape") {
-		t.Error("L2.10: SKILL.md must document the direct close_contract bypass path (L2.15)")
+		t.Error("L2.10: SKILL.md must document the direct /close-contract bypass path (L2.15)")
 	}
 }

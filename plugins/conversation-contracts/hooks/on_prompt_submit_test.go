@@ -1,13 +1,9 @@
 // Tests for on-prompt-submit.sh — UserPromptSubmit hook.
 //
-// Scenarios verified:
-//
-//   L2.1: First user message — hook fires and writes exactly one
-//   open_contract tool_use event to the session jsonl.
-//
-//   L2.3: Plugin writes no state to ${CLAUDE_PLUGIN_DATA}.
-//   After the hook runs, the conversation-contracts/ subdirectory under
-//   CLAUDE_PLUGIN_DATA remains absent or empty.
+// The hook auto-opens the conversation contract by appending exactly one
+// `orchard_contract` open sentinel (source "auto-prompt-submit") to the session
+// jsonl. It is idempotent: repeated prompts in a session yield exactly one
+// auto-open sentinel. No MCP server, no resident process.
 package hooks_test
 
 import (
@@ -22,37 +18,8 @@ import (
 	"testing"
 )
 
-// buildMCPBinary compiles the conversation-contracts MCP binary into a
-// temporary directory and returns its path. The binary is the real
-// MCP server; the test supplies a synthetic session jsonl path via env.
-func buildMCPBinary(t *testing.T) string {
-	t.Helper()
-
-	// Locate mcp/main.go relative to this test file.
-	_, testFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	// hooks/ is one level above mcp/.
-	mcpDir := filepath.Join(filepath.Dir(testFile), "..", "mcp")
-	mcpDir, err := filepath.Abs(mcpDir)
-	if err != nil {
-		t.Fatalf("abs mcp dir: %v", err)
-	}
-
-	binDir := t.TempDir()
-	binPath := filepath.Join(binDir, "contracts-mcp")
-
-	cmd := exec.Command("go", "build", "-o", binPath, ".")
-	cmd.Dir = mcpDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build MCP binary: %v\n%s", err, out)
-	}
-	return binPath
-}
-
-// hookScript returns the absolute path to on-prompt-submit.sh.
-func hookScript(t *testing.T) string {
+// promptHookScript returns the absolute path to on-prompt-submit.sh.
+func promptHookScript(t *testing.T) string {
 	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -65,9 +32,9 @@ func hookScript(t *testing.T) string {
 	return p
 }
 
-// readJSONLToolUseEvents reads all lines from path and returns the
-// assistant records whose content contains a tool_use block named toolName.
-func readJSONLToolUseEvents(t *testing.T, path string, toolName string) []map[string]interface{} {
+// autoOpenSentinel parses each jsonl line as a bare object and returns those
+// that are auto-prompt-submit open sentinels.
+func autoOpenSentinels(t *testing.T, path string) []map[string]interface{} {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
@@ -77,6 +44,7 @@ func readJSONLToolUseEvents(t *testing.T, path string, toolName string) []map[st
 
 	var out []map[string]interface{}
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -86,26 +54,8 @@ func readJSONLToolUseEvents(t *testing.T, path string, toolName string) []map[st
 		if err := json.Unmarshal(line, &rec); err != nil {
 			continue
 		}
-		if rec["type"] != "assistant" {
-			continue
-		}
-		msg, ok := rec["message"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		contents, ok := msg["content"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, c := range contents {
-			cm, ok := c.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if cm["type"] == "tool_use" && cm["name"] == toolName {
-				out = append(out, rec)
-				break
-			}
+		if rec["orchard_contract"] == "open" && rec["source"] == "auto-prompt-submit" {
+			out = append(out, rec)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -114,101 +64,47 @@ func readJSONLToolUseEvents(t *testing.T, path string, toolName string) []map[st
 	return out
 }
 
-// runHook executes on-prompt-submit.sh with the given environment overrides
-// AND the given working directory. Setting cmd.Dir is required because bash
-// overwrites the PWD env var on startup with the actual process cwd.
-func runHook(t *testing.T, env []string, cwd string) ([]byte, error) {
+// runPromptHook executes on-prompt-submit.sh with env + cwd. cmd.Dir is set
+// because bash overwrites PWD on startup with the process cwd.
+func runPromptHook(t *testing.T, env []string, cwd string) ([]byte, error) {
 	t.Helper()
-	script := hookScript(t)
-	cmd := exec.Command("bash", script)
+	cmd := exec.Command("bash", promptHookScript(t))
 	cmd.Env = env
 	cmd.Dir = cwd
 	return cmd.CombinedOutput()
 }
 
-// runHookWithPayload executes the hook with a JSON payload on stdin — the
-// shape real Claude Code passes. Setting cmd.Dir matters as above.
-func runHookWithPayload(t *testing.T, env []string, cwd, payload string) ([]byte, error) {
+// runPromptHookWithPayload executes the hook with a JSON payload on stdin.
+func runPromptHookWithPayload(t *testing.T, env []string, cwd, payload string) ([]byte, error) {
 	t.Helper()
-	script := hookScript(t)
-	cmd := exec.Command("bash", script)
+	cmd := exec.Command("bash", promptHookScript(t))
 	cmd.Env = env
 	cmd.Dir = cwd
 	cmd.Stdin = strings.NewReader(payload)
 	return cmd.CombinedOutput()
 }
 
-// TestOnPromptSubmit_FirstMessage_WritesOneToolUseEvent asserts that
-// running the hook once produces exactly one open_contract tool_use
-// event in the session jsonl (L2.1).
-func TestOnPromptSubmit_FirstMessage_WritesOneToolUseEvent(t *testing.T) {
-	mcpBin := buildMCPBinary(t)
-
-	home := t.TempDir()
-	sessionID := "S-HOOK-TEST-001"
-	cwd := home // simplest encoded cwd is just home itself
-
-	// Claude Code encodes cwd by replacing '/' with '-' and '.' with '-'.
-	// For a temp dir like /tmp/TestXxx123, encoded = -tmp-TestXxx123.
-	encodedCwd := encodeCwd(cwd)
-	projectDir := filepath.Join(home, ".claude", "projects", encodedCwd)
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatalf("mkdir project dir: %v", err)
-	}
-	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
-
-	// CLAUDE_PLUGIN_DATA is an isolated temp dir (L2.3 — nothing written there).
-	pluginData := t.TempDir()
-
-	env := []string{
-		"HOME=" + home,
-		"PWD=" + cwd,
-		"CLAUDE_SESSION_ID=" + sessionID,
-		"CONTRACTS_MCP_BIN=" + mcpBin,
-		"CLAUDE_PLUGIN_DATA=" + pluginData,
-		// PATH must include system tools (bash, python3, etc.).
-		"PATH=" + os.Getenv("PATH"),
-	}
-
-	out, err := runHook(t, env, cwd)
-	if err != nil {
-		t.Fatalf("hook exited non-zero: %v\n%s", err, out)
-	}
-
-	recs := readJSONLToolUseEvents(t, jsonlPath, "open_contract")
-	if len(recs) != 1 {
-		t.Errorf("want exactly 1 open_contract tool_use event; got %d", len(recs))
-	}
-
-	if len(recs) > 0 {
-		msg := recs[0]["message"].(map[string]interface{})
-		contents := msg["content"].([]interface{})
-		for _, c := range contents {
-			cm := c.(map[string]interface{})
-			if cm["type"] != "tool_use" {
-				continue
-			}
-			inp, ok := cm["input"].(map[string]interface{})
-			if !ok {
-				t.Fatal("tool_use input is not an object")
-			}
-			deliverable, _ := inp["deliverable"].(string)
-			const want = "user agrees conversation has come to a close and there are no loose ends"
-			if deliverable != want {
-				t.Errorf("deliverable = %q; want %q", deliverable, want)
-			}
+// encodeCwd mirrors the hook's cwd encoding ('/' and '.' → '-').
+func encodeCwd(cwd string) string {
+	out := make([]byte, len(cwd))
+	for i, b := range []byte(cwd) {
+		if b == '/' || b == '.' {
+			out[i] = '-'
+		} else {
+			out[i] = b
 		}
 	}
+	return string(out)
 }
 
-// TestOnPromptSubmit_NoStateWrittenToPluginData asserts that running the
-// hook does not create any files under ${CLAUDE_PLUGIN_DATA}/conversation-contracts/
-// (L2.3). Idempotency is derived entirely from the ContractFold.
-func TestOnPromptSubmit_NoStateWrittenToPluginData(t *testing.T) {
-	mcpBin := buildMCPBinary(t)
+const wantDeliverable = "user agrees conversation has come to a close and there are no loose ends"
 
+// TestOnPromptSubmit_FirstMessage_WritesOneAutoOpenSentinel asserts that running
+// the hook once produces exactly one auto-open sentinel with the fixed
+// deliverable as its statement.
+func TestOnPromptSubmit_FirstMessage_WritesOneAutoOpenSentinel(t *testing.T) {
 	home := t.TempDir()
-	sessionID := "S-HOOK-TEST-L23"
+	sessionID := "S-HOOK-TEST-001"
 	cwd := home
 
 	encodedCwd := encodeCwd(cwd)
@@ -216,54 +112,71 @@ func TestOnPromptSubmit_NoStateWrittenToPluginData(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("mkdir project dir: %v", err)
 	}
-
-	pluginData := t.TempDir()
+	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
 
 	env := []string{
 		"HOME=" + home,
 		"PWD=" + cwd,
 		"CLAUDE_SESSION_ID=" + sessionID,
-		"CONTRACTS_MCP_BIN=" + mcpBin,
-		"CLAUDE_PLUGIN_DATA=" + pluginData,
 		"PATH=" + os.Getenv("PATH"),
 	}
 
-	// Run the hook multiple times (simulating multiple prompts).
+	out, err := runPromptHook(t, env, cwd)
+	if err != nil {
+		t.Fatalf("hook exited non-zero: %v\n%s", err, out)
+	}
+
+	recs := autoOpenSentinels(t, jsonlPath)
+	if len(recs) != 1 {
+		t.Fatalf("want exactly 1 auto-open sentinel; got %d", len(recs))
+	}
+	if got, _ := recs[0]["statement"].(string); got != wantDeliverable {
+		t.Errorf("statement = %q; want %q", got, wantDeliverable)
+	}
+	if id, _ := recs[0]["id"].(string); !strings.HasPrefix(id, "C-") {
+		t.Errorf("id = %q; want a C-<date>-<hex> id", id)
+	}
+}
+
+// TestOnPromptSubmit_Idempotent asserts running the hook multiple times still
+// yields exactly one auto-open sentinel (idempotency replaces the old MCP
+// fold-dedup).
+func TestOnPromptSubmit_Idempotent(t *testing.T) {
+	home := t.TempDir()
+	sessionID := "S-HOOK-IDEMPOTENT"
+	cwd := home
+
+	encodedCwd := encodeCwd(cwd)
+	projectDir := filepath.Join(home, ".claude", "projects", encodedCwd)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
+
+	env := []string{
+		"HOME=" + home,
+		"PWD=" + cwd,
+		"CLAUDE_SESSION_ID=" + sessionID,
+		"PATH=" + os.Getenv("PATH"),
+	}
+
 	for i := 0; i < 3; i++ {
-		out, err := runHook(t, env, cwd)
-		if err != nil {
+		if out, err := runPromptHook(t, env, cwd); err != nil {
 			t.Fatalf("hook run %d exited non-zero: %v\n%s", i, err, out)
 		}
 	}
 
-	// Assert the plugin-data directory for conversation-contracts is empty.
-	ccDir := filepath.Join(pluginData, "conversation-contracts")
-	entries, err := os.ReadDir(ccDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Perfect — directory was never created.
-			return
-		}
-		t.Fatalf("ReadDir %s: %v", ccDir, err)
-	}
-	if len(entries) != 0 {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Errorf("want empty ${CLAUDE_PLUGIN_DATA}/conversation-contracts/; got files: %v", names)
+	recs := autoOpenSentinels(t, jsonlPath)
+	if len(recs) != 1 {
+		t.Errorf("want exactly 1 auto-open sentinel after 3 runs; got %d", len(recs))
 	}
 }
 
 // TestOnPromptSubmit_ReadsSessionIdFromStdinPayload asserts the production
-// path: real Claude Code does NOT set CLAUDE_SESSION_ID as an env var. It
-// passes a JSON payload on stdin with .session_id and .cwd. The hook must
-// parse those and forward them to the MCP server. Regression test for the
-// bug surfaced by /prove-it: without this path the hook silently exits 0
-// and no open_contract event is ever written.
+// path: real Claude Code does NOT set CLAUDE_SESSION_ID. It passes a JSON
+// payload on stdin with .session_id and .cwd. The hook must derive them and
+// write the auto-open sentinel to the correct jsonl.
 func TestOnPromptSubmit_ReadsSessionIdFromStdinPayload(t *testing.T) {
-	mcpBin := buildMCPBinary(t)
-
 	home := t.TempDir()
 	sessionID := "S-STDIN-PAYLOAD-001"
 	cwd := home
@@ -275,42 +188,25 @@ func TestOnPromptSubmit_ReadsSessionIdFromStdinPayload(t *testing.T) {
 	}
 	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
 
-	// Critically: do NOT set CLAUDE_SESSION_ID in env. The hook must
-	// derive it from the stdin payload, matching real Claude Code behaviour.
+	// Critically: do NOT set CLAUDE_SESSION_ID — the hook must derive it from
+	// the stdin payload, matching real Claude Code behaviour.
 	env := []string{
 		"HOME=" + home,
 		"PWD=" + cwd,
-		"CONTRACTS_MCP_BIN=" + mcpBin,
 		"PATH=" + os.Getenv("PATH"),
 	}
-
 	payload := fmt.Sprintf(
 		`{"hook_event_name":"UserPromptSubmit","session_id":%q,"cwd":%q,"prompt":"first message"}`,
 		sessionID, cwd,
 	)
 
-	out, err := runHookWithPayload(t, env, cwd, payload)
+	out, err := runPromptHookWithPayload(t, env, cwd, payload)
 	if err != nil {
 		t.Fatalf("hook exited non-zero: %v\n%s", err, out)
 	}
 
-	recs := readJSONLToolUseEvents(t, jsonlPath, "open_contract")
+	recs := autoOpenSentinels(t, jsonlPath)
 	if len(recs) != 1 {
-		t.Errorf("want exactly 1 open_contract tool_use event; got %d (out=%s)", len(recs), out)
+		t.Errorf("want exactly 1 auto-open sentinel; got %d (out=%s)", len(recs), out)
 	}
-}
-
-// encodeCwd mirrors the MCP server's cwd encoding so the test can
-// construct the expected jsonl path without importing the MCP package
-// (which is a main package and therefore not importable).
-func encodeCwd(cwd string) string {
-	out := make([]byte, len(cwd))
-	for i, b := range []byte(cwd) {
-		if b == '/' || b == '.' {
-			out[i] = '-'
-		} else {
-			out[i] = b
-		}
-	}
-	return string(out)
 }

@@ -1,7 +1,7 @@
 {
   "name": "conversation-contracts",
-  "version": "0.8.0",
-  "description": "Auto-open a conversation contract on the first user message of every Claude session. Surfaces a loose-ends inventory at Stop. Only the user can close the contract via /close-conversation, /exit, /quit, or /bye. MCP tools: open_contract, close_contract. No per-id contract files; session jsonl is the durable store.",
+  "version": "0.9.0",
+  "description": "Contracts as jsonl sentinels: open/close named commitments that block Stop until closed. Auto-opens a conversation contract on the first user message; /open-contract, /close-contract, /my-contracts manage arbitrary contracts; the Stop hook folds open-minus-close and blocks. No MCP server, no daemon, no per-id files — the session jsonl is the durable store.",
   "author": {
     "name": "drewdrewthis",
     "url": "https://github.com/drewdrewthis/git-orchard-rs"

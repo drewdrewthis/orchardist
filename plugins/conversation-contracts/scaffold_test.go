@@ -78,25 +78,22 @@ func TestMarketplaceJSON_ValidAndNamedOrchard(t *testing.T) {
 		t.Errorf("marketplace name = %q; want %q", m.Name, "orchard")
 	}
 
-	// The orchard marketplace hosts multiple plugins; assert
-	// conversation-contracts is among them at the expected path.
-	var found bool
-	for _, p := range m.Plugins {
-		if p.Name == "conversation-contracts" {
-			found = true
-			if p.Source.Path != "plugins/conversation-contracts" {
-				t.Errorf("plugin %q source.path = %q; want %q",
-					p.Name, p.Source.Path, "plugins/conversation-contracts")
-			}
-			break
-		}
-	}
-	if !found {
+	// After collapsing to a single plugin, the marketplace hosts exactly one
+	// entry: conversation-contracts at the expected path. The legacy
+	// claude-contracts plugin was removed.
+	if len(m.Plugins) != 1 {
 		names := make([]string, 0, len(m.Plugins))
 		for _, p := range m.Plugins {
 			names = append(names, p.Name)
 		}
-		t.Errorf("marketplace missing conversation-contracts; have: %v", names)
+		t.Fatalf("marketplace must host exactly one plugin; have %d: %v", len(m.Plugins), names)
+	}
+	if m.Plugins[0].Name != "conversation-contracts" {
+		t.Errorf("plugin name = %q; want %q", m.Plugins[0].Name, "conversation-contracts")
+	}
+	if m.Plugins[0].Source.Path != "plugins/conversation-contracts" {
+		t.Errorf("plugin source.path = %q; want %q",
+			m.Plugins[0].Source.Path, "plugins/conversation-contracts")
 	}
 }
 
@@ -130,8 +127,8 @@ func TestPluginJSON_ValidWithExpectedFields(t *testing.T) {
 	if p.Description == "" {
 		t.Error("plugin.json: description is empty")
 	}
-	if p.Version != "0.8.0" {
-		t.Errorf("plugin.json: version = %q; want %q", p.Version, "0.8.0")
+	if p.Version != "0.9.0" {
+		t.Errorf("plugin.json: version = %q; want %q", p.Version, "0.9.0")
 	}
 	if p.Author == nil || p.Author.Name == "" {
 		t.Error("plugin.json: author.name is missing or empty")
