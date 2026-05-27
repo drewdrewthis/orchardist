@@ -9,18 +9,13 @@ List the contracts currently OPEN for this session — the deliverables that wil
 
 ## Flow
 
-1. Resolve this session's jsonl path. It is `<projects_root>/<encoded-cwd>/<session-id>.jsonl`, where `encoded-cwd` is `$PWD` with `/` and `.` both replaced by `-`, and `projects_root` is `$CLAUDE_PROJECTS_DIR` (default `$HOME/.claude/projects`). Use `$CLAUDE_SESSION_ID` for the session id.
-
-2. Run the shared fold script against it with a single `Bash` call:
+1. Run the shared fold script with a single `Bash` call — it resolves this session's jsonl from the session id itself:
 
    ```bash
-   FOLD="$CLAUDE_PLUGIN_ROOT/scripts/fold-contracts.sh"
-   ROOT="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
-   ENC=$(printf '%s' "$PWD" | tr '/' '-' | tr '.' '-')
-   bash "$FOLD" "$ROOT/$ENC/$CLAUDE_SESSION_ID.jsonl"
+   bash "$CLAUDE_PLUGIN_ROOT/scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"
    ```
 
-   It prints one line per open contract: `- <id>: <statement>`. Empty output means no open contracts.
+   It prints one line per open contract: `- <id>: <statement>`. Empty output means no open contracts. (`--session <id> [<cwd>]` resolves `<projects_root>/<encoded-cwd>/<id>.jsonl`; pass an explicit jsonl path instead if you have one.)
 
 3. Report the result to the user:
    - Open contracts → list them and note each is closed with `/close-contract <id>`.
