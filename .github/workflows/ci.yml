@@ -68,6 +68,20 @@ jobs:
             exit 1
           fi
 
+  plugin-tests:
+    name: Plugin tests (conversation-contracts bats)
+    runs-on: ubuntu-latest
+    # The conversation-contracts plugin is pure bash + markdown (no Go, no MCP).
+    # Its behavior is verified by bats execing the real hook/fold scripts.
+    # Scoped to the plugin's own bats — the scripts/**/*.bats suite is daemon-
+    # adjacent and validated separately.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install bats
+        run: npm install -g bats
+      - name: Run conversation-contracts bats
+        run: bats -r plugins/conversation-contracts
+
   gui-stop-bleed:
     name: GUI stop-bleed (no new <style> blocks)
     runs-on: ubuntu-latest

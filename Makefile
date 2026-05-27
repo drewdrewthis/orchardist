@@ -94,6 +94,7 @@ bats-install:
 
 bats-test: bats-install
 	bats scripts/**/*.bats
+	bats -r plugins/conversation-contracts
 
 # Feature parity checks — verify scenario↔test annotation coverage.
 # See docs/testing-philosophy.md for the zero-tolerance policy.

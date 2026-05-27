@@ -12,8 +12,7 @@ input=$(cat)
 session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$session_id" ] || exit 0
 
-fold="${CLAUDE_PLUGIN_ROOT:-$(dirname "${BASH_SOURCE[0]}")/..}/scripts/fold-contracts.sh"
-open_contracts=$(bash "$fold" --session "$session_id" "${PWD:-}" 2>/dev/null || true)
+open_contracts=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/fold-contracts.sh" --session "$session_id" "${PWD:-}" 2>/dev/null || true)
 [ -n "$open_contracts" ] || exit 0
 
 count=$(printf '%s\n' "$open_contracts" | grep -c .)

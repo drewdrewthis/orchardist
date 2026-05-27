@@ -14,13 +14,8 @@
       "author": {
         "name": "drewdrewthis"
       },
-      "category": "agent-orchestration",
       "version": "0.9.0",
-      "source": {
-        "source": "github",
-        "url": ".",
-        "path": "plugins/conversation-contracts"
-      },
+      "source": "./plugins/conversation-contracts",
       "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugins/conversation-contracts"
     }
   ]
