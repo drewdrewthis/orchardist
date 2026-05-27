@@ -272,6 +272,39 @@ func TestOnStop_MissingJsonl_Allows(t *testing.T) {
 	}
 }
 
+// ---- malformed sentinel is ignored, valid one still blocks ------------------
+
+// TestOnStop_MalformedSentinelIgnored guards against a malformed sentinel (has
+// orchard_contract but a missing/non-string id) corrupting the fold. Such an
+// entry must be dropped — it must neither produce a phantom empty-id contract
+// nor suppress a valid open contract in the same file.
+func TestOnStop_MalformedSentinelIgnored(t *testing.T) {
+	const sessionID = "S-STOP-MALFORMED"
+	const validID = "C-VALID-1"
+	tmpDir := t.TempDir()
+	root := filepath.Join(tmpDir, ".claude", "projects")
+
+	// A malformed open sentinel (no id) alongside a valid open contract.
+	malformed := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"{\"orchard_contract\":\"open\",\"statement\":\"no id here\",\"ts\":\"t\"}"}]}}`
+	writeSessionJsonl(t, root, tmpDir, sessionID, []string{
+		openSentinelLine(validID, "real open contract"),
+		malformed,
+	})
+
+	out, _, _ := runStopHook(t, baseEnv(t, tmpDir), hookPayload(sessionID))
+	_, reason, ok := parseBlock(t, out)
+	if !ok {
+		t.Fatalf("expected a block (valid contract open); got empty output")
+	}
+	if !strings.Contains(reason, validID) {
+		t.Errorf("block reason must list the valid open contract %q; got:\n%s", validID, reason)
+	}
+	// The malformed entry must not create a phantom empty-id line.
+	if strings.Contains(reason, "- : ") {
+		t.Errorf("malformed sentinel produced a phantom empty-id contract line:\n%s", reason)
+	}
+}
+
 // ---- CLAUDE_PROJECTS_DIR override -------------------------------------------
 
 // TestOnStop_HonorsCLAUDEProjectsDirOverride locks in compatibility with the

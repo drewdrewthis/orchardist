@@ -57,7 +57,14 @@ grep -F 'orchard_contract' "$jsonl" 2>/dev/null \
         )
       | .[]
     ' 2>/dev/null \
-  | jq -sc 'unique' 2>/dev/null \
+  | jq -sc '
+      map(select(
+        ((.orchard_contract == "open") or (.orchard_contract == "close"))
+        and ((.id | type) == "string")
+        and ((.id | length) > 0)
+      ))
+      | unique
+    ' 2>/dev/null \
   | jq -r '
       group_by(.id)
       | map({
