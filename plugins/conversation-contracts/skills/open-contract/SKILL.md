@@ -20,15 +20,14 @@ Contracts live as JSON **sentinels** in this session's own jsonl — there is no
 
 1. Get a one-line **statement** of the commitment from the user (or state your own). Keep it free of unescaped double-quotes — it is embedded in a JSON line.
 
-2. Generate an id and emit the open sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the single source of truth for the on-disk shape, shared with `/close-contract` and the SessionStart auto-open hook:
+2. Generate an id and emit the open sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the single source of truth for the on-disk shape, shared with `/close-contract` and the SessionStart auto-open hook.
+
+   The script lives at `<this-skill-dir>/../../scripts/emit-sentinel.sh`. The "Base directory" line at the top of this SKILL.md (injected by the Claude Code harness when this skill loads) gives you the absolute skill directory; substitute that literal path for `<this-skill-dir>` when you construct the Bash call. Do not use `$CLAUDE_PLUGIN_ROOT` — it's not set in skill subprocesses.
 
    ```bash
-   PR="${CLAUDE_PLUGIN_ROOT:-$(find ~/.claude/plugins/cache -path '*/conversation-contracts/*/scripts/emit-sentinel.sh' -print -quit 2>/dev/null | sed 's|/scripts/emit-sentinel.sh$||')}" \
-     && id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4)" \
-     && bash "$PR/scripts/emit-sentinel.sh" open "$id" "<one-line statement>"
+   id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4)" \
+     && bash "<this-skill-dir>/../../scripts/emit-sentinel.sh" open "$id" "<one-line statement>"
    ```
-
-   The first line is a fallback for `$CLAUDE_PLUGIN_ROOT` — the harness sets it when invoking hooks, but interactive `Bash` tool calls in skill subprocesses often don't have it. The `find` resolves the install cache; if neither path works, the recipe fails loud with a "No such file or directory" rather than running blind.
 
    The emitted JSON is the **only** line on stdout — that single string becomes the `tool_result.content` the fold parses. Do NOT chain `&& echo "Opened contract $id"` into the same Bash command: the trailing text would concatenate into the same `tool_result.content` string and break the fold's `fromjson?` extraction. The id is in the JSON output already (`"id":"C-..."`); read it from there. The script JSON-escapes the statement, so double-quotes and backslashes in your text are safe.
 

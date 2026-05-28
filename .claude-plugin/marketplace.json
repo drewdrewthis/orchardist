@@ -14,7 +14,7 @@
       "author": {
         "name": "drewdrewthis"
       },
-      "version": "0.9.1",
+      "version": "0.9.2",
       "source": "./plugins/conversation-contracts",
       "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugins/conversation-contracts"
     }

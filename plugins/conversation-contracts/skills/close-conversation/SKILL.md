@@ -11,15 +11,16 @@ Contracts are `orchard_contract` sentinels in the session jsonl (open minus clos
 
 ## Flow
 
-1. **Fold the open contracts.** Run `scripts/fold-contracts.sh` — prefer `--session` (scans projects subdirs for the matching jsonl by id), fall back to `--auto` (encoded `$PWD`) when `$CLAUDE_SESSION_ID` is unset:
+1. **Fold the open contracts.** Run `scripts/fold-contracts.sh` — prefer `--session` (scans projects subdirs for the matching jsonl by id), fall back to `--auto` (encoded `$PWD`) when `$CLAUDE_SESSION_ID` is unset.
+
+   The script lives at `<this-skill-dir>/../../scripts/fold-contracts.sh`. The "Base directory" line at the top of this SKILL.md gives you the absolute skill directory; substitute that literal path for `<this-skill-dir>` when you construct the Bash call. Do not use `$CLAUDE_PLUGIN_ROOT` — it's not set in skill subprocesses.
 
    ```bash
-   PR="${CLAUDE_PLUGIN_ROOT:-$(find ~/.claude/plugins/cache -path '*/conversation-contracts/*/scripts/fold-contracts.sh' -print -quit 2>/dev/null | sed 's|/scripts/fold-contracts.sh$||')}" \
-     && if [ -n "${CLAUDE_SESSION_ID:-}" ]; then \
-          bash "$PR/scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"; \
-        else \
-          bash "$PR/scripts/fold-contracts.sh" --auto; \
-        fi
+   if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+     bash "<this-skill-dir>/../../scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"
+   else
+     bash "<this-skill-dir>/../../scripts/fold-contracts.sh" --auto
+   fi
    ```
 
 2. **Identify the conversation contract** by its fixed statement: `user agrees conversation has come to a close and there are no loose ends`. Any other open contract is a **child** contract.
@@ -28,10 +29,10 @@ Contracts are `orchard_contract` sentinels in the session jsonl (open minus clos
    - Open child contracts: every open contract that is NOT the conversation contract.
    - Open TodoWrite items: scan the session jsonl for pending TodoWrite entries (best-effort).
 
-4. **If the inventory is empty** (only the conversation contract is open): close it as **delivered**. Emit a close sentinel for the conversation contract's id via the shared `scripts/emit-sentinel.sh` (the same script `/close-contract` uses), folding the session summary into the reason:
+4. **If the inventory is empty** (only the conversation contract is open): close it as **delivered**. Emit a close sentinel for the conversation contract's id via the shared `scripts/emit-sentinel.sh` (the same script `/close-contract` uses), folding the session summary into the reason. Same `<this-skill-dir>/../../scripts/...` shape as step 1 — substitute the "Base directory" path inline:
 
    ```bash
-   bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" close "<conversation-contract-id>" "delivered: <inventory summary>"
+   bash "<this-skill-dir>/../../scripts/emit-sentinel.sh" close "<conversation-contract-id>" "delivered: <inventory summary>"
    ```
    Report: "Conversation contract closed as delivered."
 
