@@ -9,13 +9,18 @@ List the contracts currently OPEN for this session — the deliverables that wil
 
 ## Flow
 
-1. Run the shared fold script in `--auto` mode — it picks the newest jsonl under this cwd's projects dir (which IS the current session, by definition, because we are running inside it as it writes to itself):
+1. Run the shared fold script. Prefer `--session "$CLAUDE_SESSION_ID"` when the env var is set (the most-robust path — scans all projects subdirs for the matching jsonl, so a post-startup `cd` doesn't break it). Fall back to `--auto` (newest jsonl under the cwd's encoded projects dir) when it isn't:
 
    ```bash
-   bash "$CLAUDE_PLUGIN_ROOT/scripts/fold-contracts.sh" --auto
+   PR="${CLAUDE_PLUGIN_ROOT:-$(find ~/.claude/plugins/cache -path '*/conversation-contracts/*/scripts/fold-contracts.sh' -print -quit 2>/dev/null | sed 's|/scripts/fold-contracts.sh$||')}" \
+     && if [ -n "${CLAUDE_SESSION_ID:-}" ]; then \
+          bash "$PR/scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"; \
+        else \
+          bash "$PR/scripts/fold-contracts.sh" --auto; \
+        fi
    ```
 
-   It prints one line per open contract: `- <id>: <statement>`. Empty output means no open contracts. `--auto` does not need `$CLAUDE_SESSION_ID` — that env var is unset in SDK/--print contexts, so prefer `--auto` over `--session "$CLAUDE_SESSION_ID"` here.
+   It prints one line per open contract: `- <id>: <statement>`. Empty output means no open contracts. The first line is a `$CLAUDE_PLUGIN_ROOT` fallback — the harness sets it when invoking hooks, but interactive `Bash` tool calls in skill subprocesses often don't have it.
 
 3. Report the result to the user:
    - Open contracts → list them and note each is closed with `/close-contract <id>`.
@@ -25,4 +30,5 @@ List the contracts currently OPEN for this session — the deliverables that wil
 
 - This is read-only: it never writes a sentinel. Opening/closing is `/open-contract` and `/close-contract`.
 - It calls the SAME `scripts/fold-contracts.sh` the Stop hook uses, so what it lists is exactly what would block Stop. One fold, no drift.
-- `--auto` is the production-correct mode. The earlier `--session "$CLAUDE_SESSION_ID"` recipe was an i-am-done canonical anti-pattern: `CLAUDE_SESSION_ID` is not exported to skill subprocesses in SDK/--print runs, so the fold ran blind. `--auto` resolves the path from `$PWD` and picks the newest jsonl, which is the running session.
+- `--session` is preferred when `$CLAUDE_SESSION_ID` is set (interactive Claude Code typically exports it). It scans every projects subdir for the matching jsonl by session id, so the session's startup cwd vs. current `$PWD` doesn't matter.
+- `--auto` is the fallback when `$CLAUDE_SESSION_ID` is unset (SDK/--print contexts). It encodes `$PWD` and picks the newest jsonl there — correct as long as the session was started in the current cwd, which is the common case for `--print`.

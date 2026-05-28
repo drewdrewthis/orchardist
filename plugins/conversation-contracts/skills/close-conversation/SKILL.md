@@ -11,13 +11,16 @@ Contracts are `orchard_contract` sentinels in the session jsonl (open minus clos
 
 ## Flow
 
-1. **Fold the open contracts.** Run `scripts/fold-contracts.sh` in `--auto` mode to list every open contract for this session (it picks the newest jsonl under this cwd's projects dir):
+1. **Fold the open contracts.** Run `scripts/fold-contracts.sh` — prefer `--session` (scans projects subdirs for the matching jsonl by id), fall back to `--auto` (encoded `$PWD`) when `$CLAUDE_SESSION_ID` is unset:
 
    ```bash
-   bash "$CLAUDE_PLUGIN_ROOT/scripts/fold-contracts.sh" --auto
+   PR="${CLAUDE_PLUGIN_ROOT:-$(find ~/.claude/plugins/cache -path '*/conversation-contracts/*/scripts/fold-contracts.sh' -print -quit 2>/dev/null | sed 's|/scripts/fold-contracts.sh$||')}" \
+     && if [ -n "${CLAUDE_SESSION_ID:-}" ]; then \
+          bash "$PR/scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"; \
+        else \
+          bash "$PR/scripts/fold-contracts.sh" --auto; \
+        fi
    ```
-
-   Use `--auto`, not `--session "$CLAUDE_SESSION_ID"` — the env var is unset in SDK/--print contexts and the fold would silently return empty.
 
 2. **Identify the conversation contract** by its fixed statement: `user agrees conversation has come to a close and there are no loose ends`. Any other open contract is a **child** contract.
 

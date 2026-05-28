@@ -120,3 +120,55 @@ PY
   rm -rf "$other"
   [[ "$output" == *"C-ELSEWHERE"* ]]
 }
+
+# ---- --session scan-by-sid (Bug 3) -----------------------------------------
+#
+# Bug 3, surfaced post-merge of PR #666: Stop hook blocks were silently failing
+# in any session where the user `cd`'d after startup, because the fold's
+# `--session "$sid" "$PWD"` encoded $PWD to find the jsonl — but Claude Code
+# encodes the SESSION'S STARTUP cwd into the projects dir name, not $PWD. Fix:
+# scan every projects subdir for <sid>.jsonl; the session id is globally
+# unique so the scan is correct regardless of where the user cd'd.
+
+@test "--session finds the jsonl by sid even when stored under a different cwd-encoded dir" {
+  # The session jsonl lives under the encoding of the SESSION'S startup cwd —
+  # which here we simulate as a *different* dir than the calling $PWD.
+  local sid="S-SCAN-BY-SID"
+  local startup_encoded="-startup-cwd"
+  local startup_dir="$TMP_HOME/.claude/projects/$startup_encoded"
+  mkdir -p "$startup_dir"
+  printf '%s\n' "$(_open_line "C-SCANNED" "from startup-encoded dir")" \
+    > "$startup_dir/$sid.jsonl"
+
+  # Now invoke --session from a DIFFERENT $PWD whose encoding doesn't match
+  # the projects subdir at all. Pre-fix this returned empty (encoded $PWD,
+  # missed the jsonl). Post-fix it scans and finds.
+  run env HOME="$TMP_HOME" \
+      bash -c "cd '$CWD' && bash '$SCRIPT' --session '$sid'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"C-SCANNED"* ]]
+  [[ "$output" == *"from startup-encoded dir"* ]]
+}
+
+@test "--session ignores its optional cwd argument (backcompat with old callers)" {
+  # The old (pre-fix) signature was `--session <sid> [<cwd>]`. Callers in the
+  # wild may still pass a cwd argument; accept and ignore it.
+  local sid="S-IGNORES-CWD"
+  local startup_dir="$TMP_HOME/.claude/projects/-some-startup-cwd"
+  mkdir -p "$startup_dir"
+  printf '%s\n' "$(_open_line "C-BACKCOMPAT" "ignored-cwd-arg")" \
+    > "$startup_dir/$sid.jsonl"
+
+  # Pass a totally wrong cwd as the third arg; the scan should still find it.
+  run env HOME="$TMP_HOME" \
+      bash -c "bash '$SCRIPT' --session '$sid' /nonexistent/wrong/cwd"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"C-BACKCOMPAT"* ]]
+}
+
+@test "--session degrades to empty when no jsonl with that sid exists" {
+  run env HOME="$TMP_HOME" \
+      bash -c "bash '$SCRIPT' --session 'S-DOES-NOT-EXIST'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
