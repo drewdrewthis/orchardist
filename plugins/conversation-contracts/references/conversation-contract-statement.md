@@ -1,0 +1,1 @@
+user agrees conversation has come to a close and there are no loose ends. To close, /i-am-done must pass — it is the single source of truth for what "done" requires (evidence, failure-mode self-audit, common-mistake patterns, wisdom updates, skill-vs-freehand check).
