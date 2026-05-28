@@ -6,14 +6,28 @@
 # script (scripts/fold-contracts.sh) finds it via its strings-via-fromjson path
 # and treats it identically to a tool_result sentinel.
 #
-# Stateless: no file IO, no path resolution. SessionStart fires once per
-# session, so the open is naturally one-per-conversation. The sentinel itself
-# is rendered by scripts/emit-sentinel.sh — the single source of truth for the
-# on-disk shape, shared with /open-contract and /close-contract.
+# Stateless: no file IO except reading the statement file. SessionStart fires
+# once per session, so the open is naturally one-per-conversation. The sentinel
+# itself is rendered by scripts/emit-sentinel.sh — the single source of truth
+# for the on-disk shape, shared with /open-contract and /close-contract.
+#
+# The conversation contract's statement is the discipline gateway: it embeds
+# the failure-mode self-audit and the /i-am-done invocation. Statement is read
+# from references/conversation-contract-statement.md so the discipline is
+# editable without touching the hook. If the file is missing or empty (e.g.
+# in an old install), fall back to the minimal closure-deliverable string.
 
 set -uo pipefail
 
-DELIVERABLE="user agrees conversation has come to a close and there are no loose ends"
+FALLBACK="user agrees conversation has come to a close and there are no loose ends"
+STATEMENT_FILE="${CLAUDE_PLUGIN_ROOT}/references/conversation-contract-statement.md"
+
+if [ -r "$STATEMENT_FILE" ]; then
+  # Collapse the file to a single line: contract statements live one-per-jsonl-line.
+  DELIVERABLE=$(tr '\n' ' ' < "$STATEMENT_FILE" | sed 's/  */ /g; s/ *$//')
+fi
+DELIVERABLE="${DELIVERABLE:-$FALLBACK}"
+
 id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4 2>/dev/null || printf '%08x' "$RANDOM$RANDOM")"
 
 exec bash "${CLAUDE_PLUGIN_ROOT}/scripts/emit-sentinel.sh" open "$id" "$DELIVERABLE"

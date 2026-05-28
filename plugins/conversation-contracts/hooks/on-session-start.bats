@@ -4,15 +4,26 @@
 # The hook writes one `orchard_contract` open sentinel to stdout. The Claude
 # Code harness records hook stdout in the session jsonl as a `hook_success`
 # attachment whose `stdout` field is the literal string we emit; fold-contracts.sh
-# extracts the sentinel via its strings-via-fromjson path. Stateless: no file
-# IO, no path resolution, no idempotency check needed (SessionStart fires once).
+# extracts the sentinel via its strings-via-fromjson path.
+#
+# v0.10.0: the conversation contract's statement is read from
+# references/conversation-contract-statement.md (the discipline gateway), with
+# a fallback to the minimal closure-deliverable string when the file is missing.
 
 setup() {
   HOOK="$BATS_TEST_DIRNAME/on-session-start.sh"
   # Real Claude Code sets CLAUDE_PLUGIN_ROOT so the hook can `exec` the shared
   # emit-sentinel.sh; mirror that in the test environment.
   export CLAUDE_PLUGIN_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-  DELIVERABLE="user agrees conversation has come to a close and there are no loose ends"
+  STATEMENT_FILE="$CLAUDE_PLUGIN_ROOT/references/conversation-contract-statement.md"
+  FALLBACK="user agrees conversation has come to a close and there are no loose ends"
+  # The expected statement is the file collapsed to one line (matching the hook's
+  # tr-and-sed normalization).
+  if [ -r "$STATEMENT_FILE" ]; then
+    DELIVERABLE=$(tr '\n' ' ' < "$STATEMENT_FILE" | sed 's/  */ /g; s/ *$//')
+  else
+    DELIVERABLE="$FALLBACK"
+  fi
 }
 
 # _field <hook-stdout> <key> — parse the emitted sentinel and print the value.
@@ -32,10 +43,12 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   [ "$(_field "$output" orchard_contract)" = "open" ]
 }
 
-@test "the sentinel's statement is the fixed deliverable" {
+@test "the sentinel's statement is read from the statement file" {
   run bash "$HOOK"
   [ "$status" -eq 0 ]
   [ "$(_field "$output" statement)" = "$DELIVERABLE" ]
+  # The statement file should reference /i-am-done as the close gate.
+  [[ "$DELIVERABLE" == *"/i-am-done"* ]]
 }
 
 @test "the sentinel id has the C-YYYY-MM-DD-<8hex> shape" {
@@ -43,6 +56,17 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   [ "$status" -eq 0 ]
   id="$(_field "$output" id)"
   [[ "$id" =~ ^C-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-f0-9]{8}$ ]]
+}
+
+@test "falls back to the minimal deliverable string when the statement file is missing" {
+  tmp_root="$(mktemp -d)"
+  cp -r "$CLAUDE_PLUGIN_ROOT/scripts" "$tmp_root/"
+  cp -r "$CLAUDE_PLUGIN_ROOT/hooks" "$tmp_root/"
+  # No references/ in the temp root — simulates a missing statement file.
+  CLAUDE_PLUGIN_ROOT="$tmp_root" run bash "$tmp_root/hooks/on-session-start.sh"
+  [ "$status" -eq 0 ]
+  [ "$(_field "$output" statement)" = "$FALLBACK" ]
+  rm -rf "$tmp_root"
 }
 
 @test "the fold script picks up the sentinel when it appears in a stdout-attachment line" {
@@ -67,5 +91,7 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
 
   id="$(_field "$hook_stdout" id)"
   [[ "$fold_out" == *"$id"* ]]
-  [[ "$fold_out" == *"$DELIVERABLE"* ]]
+  # Fold output truncates long statements at the first sentence; just verify
+  # the conversation-contract closure deliverable prefix appears.
+  [[ "$fold_out" == *"user agrees conversation has come to a close"* ]]
 }
