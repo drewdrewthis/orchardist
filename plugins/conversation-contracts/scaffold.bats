@@ -51,7 +51,7 @@ _jq() {
 
 # ---- plugin.json ------------------------------------------------------------
 
-@test "plugin.json is valid JSON with name, description, current semver, author" {
+@test "plugin.json has name, description, semver-shaped version, and author" {
   local f=plugins/conversation-contracts/.claude-plugin/plugin.json
   [ -n "$(_jq "$f" '.name')" ]
   [ -n "$(_jq "$f" '.description')" ]

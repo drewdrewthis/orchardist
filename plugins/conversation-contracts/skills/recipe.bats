@@ -72,4 +72,27 @@ SKILLS=(open-contract close-contract my-contracts close-conversation)
   # behind AskUserQuestion.
   run grep -F 'AskUserQuestion' "$SKILLS_DIR/close-conversation/SKILL.md"
   [ "$status" -eq 0 ] || { echo "close-conversation/SKILL.md missing AskUserQuestion consent gate"; false; }
+  run grep -F 'consent' "$SKILLS_DIR/close-conversation/SKILL.md"
+  [ "$status" -eq 0 ] || { echo "close-conversation/SKILL.md does not mention consent"; false; }
+}
+
+@test "v0.11.1: both close-* SKILL.md embed /i-am-done's decision in AskUserQuestion text" {
+  # Concern 10 from /review on v0.11.0: agent's self-graded /i-am-done decision
+  # must be presented verbatim in the consent gate's question text, so the
+  # user sees what the agent saw and cannot rubber-stamp a `partial` close.
+  for s in close-contract close-conversation; do
+    run grep -F '/i-am-done' "$SKILLS_DIR/$s/SKILL.md"
+    [ "$status" -eq 0 ] || { echo "$s/SKILL.md must reference /i-am-done's decision in the question text"; false; }
+  done
+}
+
+@test "v0.11.1: /close-contract bypass requires literal commands, not paraphrased intent" {
+  # Concern 3 from /review on v0.11.0: leaving "clear directive" undefined
+  # re-opens the bypass for paraphrased close intents and defeats the v0.11
+  # thesis. The SKILL.md must name "literal" and "first non-whitespace token"
+  # as the bypass condition.
+  run grep -F 'literal' "$SKILLS_DIR/close-contract/SKILL.md"
+  [ "$status" -eq 0 ] || { echo "close-contract/SKILL.md must require literal close commands for bypass"; false; }
+  run grep -F 'first non-whitespace' "$SKILLS_DIR/close-contract/SKILL.md"
+  [ "$status" -eq 0 ] || { echo "close-contract/SKILL.md must scope bypass to 'first non-whitespace token'"; false; }
 }

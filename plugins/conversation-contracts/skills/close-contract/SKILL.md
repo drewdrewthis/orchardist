@@ -15,7 +15,12 @@ A close is one of two things:
 
 The agent produces evidence (via `/i-am-done`) but does NOT close on its own authority. Every agent-initiated close must be gated behind explicit user consent — the user is the closer; the agent is the proposer.
 
-The four user-typed close paths (`/exit`, `/quit`, `/bye`, `/close-conversation`) bypass the consent gate because the typing IS the consent.
+The literal user-typed close commands bypass the consent gate because the typing IS the consent. **Bypass requires the literal slash-command as the first non-whitespace token of a user message.** Paraphrased intents ("yes go ahead", "close it", "we're done here", "ship it") are NOT bypass triggers — they look like consent but the user did not commit a specific close action. Route them through the consent gate.
+
+Specifically:
+- `/close-contract <id>` (literal, first token) → bypass for that id.
+- `/exit`, `/quit`, `/bye` (literal, first token) → bypass for the conversation contract (closes it as part of session exit). Does NOT bypass closes on other ids — those still gate.
+- `/close-conversation` (literal, first token) → triggers the `/close-conversation` skill, which has its own consent flow. It is NOT a bypass for `/close-contract <id>` on arbitrary ids.
 
 ## Flow
 
@@ -27,15 +32,19 @@ The four user-typed close paths (`/exit`, `/quit`, `/bye`, `/close-conversation`
    - delivered → `delivered: <one-line evidence>` (a command output, a PR link, a test result — what proves it).
    - abandoned → `abandoned: <why it's being dropped>`.
 
-4. **If you are the agent and the user did NOT type a close path** — gate the close sentinel behind an `AskUserQuestion` confirmation. Present the proposed close with the evidence and the three real options:
+4. **If you are the agent and the user did NOT type a literal close command** — gate the close sentinel behind an `AskUserQuestion` confirmation. The question text MUST embed `/i-am-done`'s verbatim decision (`done` / `partial` / `not-done`) so the user sees what the agent saw. Two options:
 
    - "Yes — close `<id>` as `<delivered|abandoned>` with reason: `<reason>`"
    - "Keep open — there's more to do"
-   - "Edit the reason and re-ask"
 
-   Only emit the close sentinel on the "Yes" selection. On "Keep open" do nothing and continue. On "Edit" re-prompt with the revised reason.
+   If the user wants to redirect (edit the reason, abandon instead of deliver, etc.), they will say so in chat — that's normal user-driven redirection, not a third menu option. Only emit the close sentinel on the "Yes" selection.
 
-5. **If the user typed a close path** (`/exit`, `/quit`, `/bye`, `/close-conversation`, or explicit `/close-contract <id>` with a clear directive) — skip the AskUserQuestion. The typing IS the consent.
+   Example question text shape:
+   > "Close `C-XXX` as **delivered** (reason: `<reason>`)? /i-am-done returned: **done** with evidence [quoted]. Options below."
+
+   If `/i-am-done` returned `partial` or `not-done`, do NOT propose a `delivered` close — either complete the missing gate first or propose `abandoned` with the gap as the reason.
+
+5. **If the user typed a literal close command** as the first non-whitespace token of their message — skip the AskUserQuestion. The typing IS the consent. See the "Authority" section above for which literals bypass and which don't.
 
 6. Emit the close sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the same script `/open-contract` and the SessionStart auto-open hook use, so the on-disk shape stays consistent.
 
@@ -54,4 +63,3 @@ The four user-typed close paths (`/exit`, `/quit`, `/bye`, `/close-conversation`
 - The id must match an open contract's id exactly, or the fold won't cancel it.
 - Closing an already-closed or unknown id is harmless (the fold just sees an extra close); prefer `/my-contracts` first if unsure.
 - For the conversation-level contract specifically, prefer `/close-conversation` — it runs the loose-ends inventory before closing. `/close-contract` is the direct, generic closer for any contract by id.
-- The consent gate distinguishes "agent proposes" from "user authorizes" — the agent's job is to produce evidence and propose; the user's job is to accept or redirect.

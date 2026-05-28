@@ -29,35 +29,36 @@ Contracts are `orchard_contract` sentinels in the session jsonl (open minus clos
    - Open child contracts: every open contract that is NOT the conversation contract.
    - Open TodoWrite items: scan the session jsonl for pending TodoWrite entries (best-effort).
 
-4. **If the inventory is empty** (only the conversation contract is open) AND the user typed a close path (`/exit`, `/quit`, `/bye`, `/close-conversation`) — the typing IS the consent. Emit a close sentinel for the conversation contract's id via the shared `scripts/emit-sentinel.sh` (the same script `/close-contract` uses), folding the session summary into the reason. Same `<this-skill-dir>/../../scripts/...` shape as step 1 — substitute the "Base directory" path inline:
+4. **Build the consent context.** Classify the trigger and decide whether the consent gate fires:
+
+   | Trigger | Consent gate | Inventory state |
+   |---|---|---|
+   | User typed `/exit`, `/quit`, `/bye`, or `/close-conversation` as the first non-whitespace token | bypass — typing IS consent | empty OR non-empty (the typing accepts the inventory as-is) |
+   | User typed an explicit confirmation in chat ("yes close it", "I accept the inventory", "close delivered") | bypass — explicit confirmation IS consent | empty OR non-empty |
+   | Agent inferred the conversation is winding down (paraphrased intent like "we're done here", `/i-am-done` returns done, no user close-action) | **AskUserQuestion gate required** | empty OR non-empty |
+   | User named items that are still open | (no close happening) | non-empty after filing |
+
+5. **If close path bypasses the gate** (typed close command or explicit chat confirmation): emit the close sentinel for the conversation contract's id via the shared `scripts/emit-sentinel.sh`, folding the inventory summary into the reason:
 
    ```bash
    bash "<this-skill-dir>/../../scripts/emit-sentinel.sh" close "<conversation-contract-id>" "delivered: <inventory summary>"
    ```
    Report: "Conversation contract closed as delivered."
 
-5. **If the inventory is empty but the user did NOT type a close path** (e.g. they said "this is done?" or the agent decided the conversation is winding down) — gate the close behind an `AskUserQuestion` confirmation. Present the loose-ends inventory summary and the three options:
+6. **If the consent gate fires** (agent-inferred close): present the inventory summary via `AskUserQuestion`. The question text MUST embed `/i-am-done`'s verbatim decision so the user sees what the agent saw. Two options:
 
    - "Yes — close the conversation contract as delivered"
    - "Keep open — there's more I want to do"
-   - "Abandon with reason: `<reason>`"
 
-   Only emit the close sentinel on "Yes". On "Keep open" report the inventory and continue. On "Abandon" emit with `reason: "abandoned: <reason>"`.
+   Only emit the close sentinel (same shape as step 5) on "Yes". On "Keep open" report the inventory and continue. If the user wants to abandon instead, they will say so in chat — that's normal redirection, not a third menu option; emit the close with `reason: "abandoned: <reason>"`.
 
-6. **If the user names items that are still open:** file a child contract for each via `/open-contract` (one open sentinel per named item). Do NOT close the conversation contract — it stays open. Report: "Conversation contract remains open. Filed child contracts for: <items>."
+7. **If the user names items that are still open:** file a child contract for each via `/open-contract` (one open sentinel per named item). Do NOT close the conversation contract — it stays open. Report: "Conversation contract remains open. Filed child contracts for: <items>."
 
-7. **If the user explicitly confirms everything is resolved** (non-empty inventory but they accept it): close the conversation contract as delivered (step 4 emit-sentinel call), folding the inventory summary into the reason for auditability. The explicit confirmation IS the consent.
+## Notes on the consent gate
 
-## Close paths
+The numbered flow above (step 4 table + steps 5–7) is the canonical close-path source. The same discipline applies to `/close-contract` for arbitrary ids — see `close-contract/SKILL.md` § "Authority: the user owns the close" for that skill's gate, which has the same bypass-vs-gate rule scoped to its own trigger vocabulary.
 
-| Trigger | Consent gate | Result |
-|---------|--------------|--------|
-| User types `/exit`, `/quit`, `/bye`, `/close-conversation` | typing IS consent — bypass | close sentinel, reason `delivered`, conversation contract CLOSED |
-| User explicitly confirms close (empty inventory) | typed confirmation IS consent — bypass | close sentinel, reason `delivered`, conversation contract CLOSED |
-| User explicitly confirms close (non-empty inventory, accepted) | typed confirmation IS consent — bypass | close sentinel `delivered` with inventory note, conversation contract CLOSED |
-| Agent infers conversation is winding down | AskUserQuestion gate required | close ONLY on "Yes" selection |
-| User names open items | (no close happening) | one open sentinel per item (child contracts), conversation contract stays open |
-| Direct `/close-contract <id>` (escape hatch) | AskUserQuestion gate if agent-initiated | closes immediately by id on consent, no inventory prompt |
+Typing `/close-conversation` invokes THIS skill — it does NOT bypass `/close-contract <id>` for arbitrary ids.
 
 ## Notes
 
