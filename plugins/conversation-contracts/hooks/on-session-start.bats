@@ -31,17 +31,20 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
 
 @test "the sentinel's statement is the fixed deliverable" {
   run bash "$HOOK"
+  [ "$status" -eq 0 ]
   [ "$(_field "$output" statement)" = "$DELIVERABLE" ]
 }
 
 @test "the sentinel id has the C-YYYY-MM-DD-<8hex> shape" {
   run bash "$HOOK"
+  [ "$status" -eq 0 ]
   id="$(_field "$output" id)"
   [[ "$id" =~ ^C-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-f0-9]{8}$ ]]
 }
 
 @test "source is auto-session-start (distinguishable from skill-opened contracts)" {
   run bash "$HOOK"
+  [ "$status" -eq 0 ]
   [ "$(_field "$output" source)" = "auto-session-start" ]
 }
 
@@ -50,6 +53,7 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   # attachment whose `stdout` field is the literal string the hook printed.
   # The fold's strings-via-fromjson path must find the sentinel nested there.
   run bash "$HOOK"
+  [ "$status" -eq 0 ]
   hook_stdout="$output"
   hook_stdout_escaped="${hook_stdout//\\/\\\\}"
   hook_stdout_escaped="${hook_stdout_escaped//\"/\\\"}"
