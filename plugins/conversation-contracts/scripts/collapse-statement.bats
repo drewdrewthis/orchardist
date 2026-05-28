@@ -40,6 +40,16 @@ teardown() {
   [ "$output" = "sentence with trailing" ]
 }
 
+@test "strips leading whitespace (newlines and spaces)" {
+  # A statement file starting with a blank line would otherwise produce a
+  # leading-space sentinel — the single-line shape lock in on-session-start.bats
+  # does NOT catch this (awk counts content lines, not leading whitespace).
+  printf '\n\n   leading garbage\n' > "$TMP_FILE"
+  run bash "$SCRIPT" "$TMP_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "leading garbage" ]
+}
+
 @test "fails with usage when file argument is missing" {
   run bash "$SCRIPT"
   [ "$status" -eq 1 ]

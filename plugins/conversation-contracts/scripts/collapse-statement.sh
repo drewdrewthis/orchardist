@@ -17,5 +17,9 @@ if [ -z "$file" ] || [ ! -r "$file" ]; then
   exit 1
 fi
 
-# Collapse: newlines → spaces, runs of whitespace → single space, strip trailing.
-tr '\n' ' ' < "$file" | sed 's/  */ /g; s/ *$//'
+# Collapse: newlines → spaces, runs of whitespace → single space, strip leading
+# AND trailing. A statement file starting with a blank line would otherwise
+# produce a leading-space sentinel, which the single-line shape lock in
+# on-session-start.bats does NOT catch (awk counts content lines, not
+# leading whitespace).
+tr '\n' ' ' < "$file" | sed 's/  */ /g; s/^ *//; s/ *$//'

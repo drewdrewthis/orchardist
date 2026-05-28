@@ -13,7 +13,7 @@
 #       "./plugins/conversation-contracts" (NOT a {source:"github",url:"."} object)
 #
 #   plugins/conversation-contracts/.claude-plugin/plugin.json
-#     - name (the only required field), description, version "0.9.0",
+#     - name (the only required field), description, current semver version,
 #       author as an object with a name
 #
 #   plugins/conversation-contracts/hooks/hooks.json
@@ -51,11 +51,11 @@ _jq() {
 
 # ---- plugin.json ------------------------------------------------------------
 
-@test "plugin.json is valid JSON with name, description, version 0.10.2, author" {
+@test "plugin.json is valid JSON with name, description, version 0.10.3, author" {
   local f=plugins/conversation-contracts/.claude-plugin/plugin.json
   [ -n "$(_jq "$f" '.name')" ]
   [ -n "$(_jq "$f" '.description')" ]
-  [ "$(_jq "$f" '.version')" = "0.10.2" ]
+  [ "$(_jq "$f" '.version')" = "0.10.3" ]
   [ -n "$(_jq "$f" '.author.name')" ]
 }
 
