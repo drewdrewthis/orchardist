@@ -1,7 +1,7 @@
 {
   "name": "conversation-contracts",
-  "version": "0.10.0",
-  "description": "Contracts as jsonl sentinels: open/close named commitments that block Stop until closed. Auto-opens a conversation contract on the first user message; /open-contract, /close-contract, /my-contracts manage arbitrary contracts; the Stop hook folds open-minus-close and blocks. No MCP server, no daemon, no per-id files — the session jsonl is the durable store.",
+  "version": "0.10.1",
+  "description": "Contracts as jsonl sentinels: open/close named commitments that block Stop until closed. Auto-opens a conversation contract on SessionStart whose statement is the discipline gateway — it points the agent at /i-am-done as the universal close gate (evidence, failure-mode self-audit, common-mistake patterns, wisdom updates). /open-contract, /close-contract, /my-contracts manage arbitrary contracts; the Stop hook folds open-minus-close and blocks. No MCP server, no daemon, no per-id files — the session jsonl is the durable store.",
   "author": {
     "name": "drewdrewthis",
     "url": "https://github.com/drewdrewthis/git-orchard-rs"

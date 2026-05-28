@@ -14,13 +14,26 @@
 # The conversation contract's statement is the discipline gateway: it embeds
 # the failure-mode self-audit and the /i-am-done invocation. Statement is read
 # from references/conversation-contract-statement.md so the discipline is
-# editable without touching the hook. If the file is missing or empty (e.g.
-# in an old install), fall back to the minimal closure-deliverable string.
+# editable without touching the hook. If the file is missing or empty, fall
+# back to the minimal closure-deliverable string.
+#
+# Plugin root resolution: prefer $CLAUDE_PLUGIN_ROOT (what real Claude Code
+# exports to hook subprocesses); fall back to $(BASH_SOURCE[0])/.. so the
+# hook still works when invoked directly (tests, smoke checks, harness
+# misconfig). The fallback covers BOTH the statement-file path and the
+# emit-sentinel.sh exec path.
 
 set -uo pipefail
 
 FALLBACK="user agrees conversation has come to a close and there are no loose ends"
-STATEMENT_FILE="${CLAUDE_PLUGIN_ROOT}/references/conversation-contract-statement.md"
+
+# Resolve the plugin root: env var first, then the hook's own parent dir.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+if [ -z "$PLUGIN_ROOT" ]; then
+  PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+STATEMENT_FILE="$PLUGIN_ROOT/references/conversation-contract-statement.md"
 
 if [ -r "$STATEMENT_FILE" ]; then
   # Collapse the file to a single line: contract statements live one-per-jsonl-line.
@@ -30,4 +43,4 @@ DELIVERABLE="${DELIVERABLE:-$FALLBACK}"
 
 id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4 2>/dev/null || printf '%08x' "$RANDOM$RANDOM")"
 
-exec bash "${CLAUDE_PLUGIN_ROOT}/scripts/emit-sentinel.sh" open "$id" "$DELIVERABLE"
+exec bash "$PLUGIN_ROOT/scripts/emit-sentinel.sh" open "$id" "$DELIVERABLE"
