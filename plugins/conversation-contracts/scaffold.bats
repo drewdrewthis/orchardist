@@ -62,6 +62,17 @@ _jq() {
   [ -n "$(_jq "$f" '.author.name')" ]
 }
 
+@test "plugin.json and marketplace.json versions stay in lockstep" {
+  # Without this assertion, the per-release shotgun-surgery surface for #677
+  # would silently let plugin.json and marketplace.json drift apart — semver-
+  # shape testing alone catches malformed strings, not version mismatches.
+  # Surfaced by CodeRabbit on PR #682.
+  local plugin_v marketplace_v
+  plugin_v=$(_jq plugins/conversation-contracts/.claude-plugin/plugin.json '.version')
+  marketplace_v=$(_jq .claude-plugin/marketplace.json '.plugins[0].version')
+  [ "$plugin_v" = "$marketplace_v" ]
+}
+
 # ---- hooks.json -------------------------------------------------------------
 
 @test "hooks.json declares SessionStart and Stop hooks" {
