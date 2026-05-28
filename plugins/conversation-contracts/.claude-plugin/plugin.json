@@ -1,6 +1,6 @@
 {
   "name": "conversation-contracts",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Contracts as jsonl sentinels: open/close named commitments that block Stop until closed. Auto-opens a conversation contract on the first user message; /open-contract, /close-contract, /my-contracts manage arbitrary contracts; the Stop hook folds open-minus-close and blocks. No MCP server, no daemon, no per-id files — the session jsonl is the durable store.",
   "author": {
     "name": "drewdrewthis",

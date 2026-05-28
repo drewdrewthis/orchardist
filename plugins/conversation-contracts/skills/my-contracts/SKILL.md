@@ -9,18 +9,19 @@ List the contracts currently OPEN for this session — the deliverables that wil
 
 ## Flow
 
-1. Run the shared fold script. Prefer `--session "$CLAUDE_SESSION_ID"` when the env var is set (the most-robust path — scans all projects subdirs for the matching jsonl, so a post-startup `cd` doesn't break it). Fall back to `--auto` (newest jsonl under the cwd's encoded projects dir) when it isn't:
+1. Run the shared fold script. Prefer `--session "$CLAUDE_SESSION_ID"` when the env var is set (the most-robust path — scans all projects subdirs for the matching jsonl, so a post-startup `cd` doesn't break it). Fall back to `--auto` (newest jsonl under the cwd's encoded projects dir) when it isn't.
+
+   The script lives at `<this-skill-dir>/../../scripts/fold-contracts.sh`. The "Base directory" line at the top of this SKILL.md gives you the absolute skill directory; substitute that literal path for `<this-skill-dir>` when you construct the Bash call. Do not use `$CLAUDE_PLUGIN_ROOT` — it's not set in skill subprocesses.
 
    ```bash
-   PR="${CLAUDE_PLUGIN_ROOT:-$(find ~/.claude/plugins/cache -path '*/conversation-contracts/*/scripts/fold-contracts.sh' -print -quit 2>/dev/null | sed 's|/scripts/fold-contracts.sh$||')}" \
-     && if [ -n "${CLAUDE_SESSION_ID:-}" ]; then \
-          bash "$PR/scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"; \
-        else \
-          bash "$PR/scripts/fold-contracts.sh" --auto; \
-        fi
+   if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+     bash "<this-skill-dir>/../../scripts/fold-contracts.sh" --session "$CLAUDE_SESSION_ID"
+   else
+     bash "<this-skill-dir>/../../scripts/fold-contracts.sh" --auto
+   fi
    ```
 
-   It prints one line per open contract: `- <id>: <statement>`. Empty output means no open contracts. The first line is a `$CLAUDE_PLUGIN_ROOT` fallback — the harness sets it when invoking hooks, but interactive `Bash` tool calls in skill subprocesses often don't have it.
+   It prints one line per open contract: `- <id>: <statement>`. Empty output means no open contracts.
 
 3. Report the result to the user:
    - Open contracts → list them and note each is closed with `/close-contract <id>`.
