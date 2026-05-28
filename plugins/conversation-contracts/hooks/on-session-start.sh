@@ -28,16 +28,19 @@ set -uo pipefail
 FALLBACK="user agrees conversation has come to a close and there are no loose ends"
 
 # Resolve the plugin root: env var first, then the hook's own parent dir.
+# Use `cd -P` / `pwd -P` to match scripts/fold-contracts.sh — both resolve
+# symlinks so the plugin works under symlinked install paths consistently.
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 if [ -z "$PLUGIN_ROOT" ]; then
-  PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  PLUGIN_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 fi
 
 STATEMENT_FILE="$PLUGIN_ROOT/references/conversation-contract-statement.md"
 
 if [ -r "$STATEMENT_FILE" ]; then
-  # Collapse the file to a single line: contract statements live one-per-jsonl-line.
-  DELIVERABLE=$(tr '\n' ' ' < "$STATEMENT_FILE" | sed 's/  */ /g; s/ *$//')
+  # Single source of truth for the normalization shape lives in
+  # scripts/collapse-statement.sh — keeps hook and test in sync.
+  DELIVERABLE=$(bash "$PLUGIN_ROOT/scripts/collapse-statement.sh" "$STATEMENT_FILE")
 fi
 DELIVERABLE="${DELIVERABLE:-$FALLBACK}"
 
