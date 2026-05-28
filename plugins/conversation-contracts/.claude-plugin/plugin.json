@@ -1,6 +1,6 @@
 {
   "name": "conversation-contracts",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Contracts as jsonl sentinels: open/close named commitments that block Stop until closed. Auto-opens a conversation contract on SessionStart whose statement is the discipline gateway — it points the agent at /i-am-done as the universal close gate (evidence, failure-mode self-audit, common-mistake patterns, wisdom updates). Closing requires user consent: /close-contract and /close-conversation gate agent-initiated closes behind AskUserQuestion; user-typed close paths (/exit, /quit, /bye, /close-conversation) bypass the gate since the typing is the consent. /open-contract, /close-contract, /my-contracts manage arbitrary contracts; the Stop hook folds open-minus-close and blocks. No MCP server, no daemon, no per-id files — the session jsonl is the durable store.",
   "author": {
     "name": "drewdrewthis",
