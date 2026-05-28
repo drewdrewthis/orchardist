@@ -31,10 +31,12 @@ fi
 [ -n "$jsonl" ] && [ -f "$jsonl" ] || exit 0
 grep -Fq 'orchard_contract' "$jsonl" 2>/dev/null || exit 0
 
-# A sentinel appears two ways: a bare nested object (auto-open hook appends one
-# as a self-contained line) or an escaped JSON string inside a tool_result
-# (a skill's `Bash echo`). Union both extraction paths, keep only well-formed
-# open/close sentinels with a non-empty string id, dedupe, then fold by id.
+# A sentinel appears two ways: a bare nested object (legacy/test fixture form)
+# or a JSON string in any string-valued field — the production shape, where the
+# harness writes the sentinel both as a skill's `Bash echo` tool_result content
+# and as the SessionStart hook's recorded stdout (a `hook_success` attachment).
+# Union both extraction paths, keep only well-formed open/close sentinels with
+# a non-empty string id, dedupe, then fold by id.
 grep -F 'orchard_contract' "$jsonl" 2>/dev/null \
   | jq -c '
       ( [ .. | objects | select(.orchard_contract) ]

@@ -105,9 +105,13 @@ _run_hook() {
 # ---- auto-open conversation contract + skill-open both block (uniform fold) --
 
 @test "auto-open conversation contract and skill-open both block" {
-  # Auto-open is a bare self-contained line (as on-prompt-submit appends it);
-  # the skill-open is nested in a tool_result content string. Both must fold.
-  local auto="{\"orchard_contract\":\"open\",\"id\":\"C-CONV-1\",\"statement\":\"$DELIVERABLE\",\"ts\":\"t\",\"source\":\"auto-prompt-submit\"}"
+  # Two paths the fold must handle uniformly: (a) a bare self-contained
+  # sentinel line — historical shape, still valid; (b) a sentinel nested in a
+  # tool_result content string, the shape a skill's `Bash echo` produces. (The
+  # SessionStart hook now emits to stdout, which the harness records as a
+  # hook_success attachment whose .stdout is also a string — handled by the
+  # same strings-via-fromjson path as the tool_result case.)
+  local auto="{\"orchard_contract\":\"open\",\"id\":\"C-CONV-1\",\"statement\":\"$DELIVERABLE\",\"ts\":\"t\",\"source\":\"auto-session-start\"}"
   _write_jsonl "S-STOP-BOTH" \
     "$auto" \
     "$(_open_line "C-SKILL-1" "a sub commitment")"

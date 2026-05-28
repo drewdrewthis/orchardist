@@ -17,7 +17,7 @@
 #       author as an object with a name
 #
 #   plugins/conversation-contracts/hooks/hooks.json
-#     - UserPromptSubmit and Stop hook keys present
+#     - SessionStart and Stop hook keys present
 #     - hook commands anchored on ${CLAUDE_PLUGIN_ROOT} (the documented contract)
 
 setup() {
@@ -61,15 +61,15 @@ _jq() {
 
 # ---- hooks.json -------------------------------------------------------------
 
-@test "hooks.json declares UserPromptSubmit and Stop hooks" {
+@test "hooks.json declares SessionStart and Stop hooks" {
   local f=plugins/conversation-contracts/hooks/hooks.json
-  [ "$(_jq "$f" '.hooks | has("UserPromptSubmit")')" = "true" ]
+  [ "$(_jq "$f" '.hooks | has("SessionStart")')" = "true" ]
   [ "$(_jq "$f" '.hooks | has("Stop")')" = "true" ]
 }
 
 @test "hook commands are anchored on CLAUDE_PLUGIN_ROOT" {
   # Reference: plugin hook commands reference scripts via "${CLAUDE_PLUGIN_ROOT}".
   local f=plugins/conversation-contracts/hooks/hooks.json
-  [[ "$(_jq "$f" '.hooks.UserPromptSubmit[0].hooks[0].command')" == *'${CLAUDE_PLUGIN_ROOT}'* ]]
+  [[ "$(_jq "$f" '.hooks.SessionStart[0].hooks[0].command')" == *'${CLAUDE_PLUGIN_ROOT}'* ]]
   [[ "$(_jq "$f" '.hooks.Stop[0].hooks[0].command')" == *'${CLAUDE_PLUGIN_ROOT}'* ]]
 }
