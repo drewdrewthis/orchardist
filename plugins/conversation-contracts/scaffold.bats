@@ -51,11 +51,14 @@ _jq() {
 
 # ---- plugin.json ------------------------------------------------------------
 
-@test "plugin.json is valid JSON with name, description, version 0.10.3, author" {
+@test "plugin.json is valid JSON with name, description, current semver, author" {
   local f=plugins/conversation-contracts/.claude-plugin/plugin.json
   [ -n "$(_jq "$f" '.name')" ]
   [ -n "$(_jq "$f" '.description')" ]
-  [ "$(_jq "$f" '.version')" = "0.10.3" ]
+  # Semver shape — current release pins live in plugin.json + marketplace.json,
+  # not in this test. Avoids the per-release test edit shotgun-surgery flagged
+  # as #677.
+  [[ "$(_jq "$f" '.version')" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
   [ -n "$(_jq "$f" '.author.name')" ]
 }
 
