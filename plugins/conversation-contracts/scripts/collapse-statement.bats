@@ -50,6 +50,26 @@ teardown() {
   [ "$output" = "leading garbage" ]
 }
 
+@test "normalizes tabs into spaces" {
+  # A statement file with tabs would otherwise ship tab characters in the
+  # sentinel JSON value. The shape lock catches some structural starters but
+  # not embedded tabs — the collapse helper must normalize them.
+  printf 'word1\tword2\t\tword3\n' > "$TMP_FILE"
+  run bash "$SCRIPT" "$TMP_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "word1 word2 word3" ]
+}
+
+@test "normalizes CRLF line endings" {
+  # A Windows-edited statement file would otherwise leak \r control chars
+  # into the sentinel JSON. Strip \r before the newline collapse so the
+  # round-trip is clean.
+  printf 'line one\r\nline two\r\n' > "$TMP_FILE"
+  run bash "$SCRIPT" "$TMP_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "line one line two" ]
+}
+
 @test "fails with usage when file argument is missing" {
   run bash "$SCRIPT"
   [ "$status" -eq 1 ]

@@ -17,9 +17,9 @@ if [ -z "$file" ] || [ ! -r "$file" ]; then
   exit 1
 fi
 
-# Collapse: newlines → spaces, runs of whitespace → single space, strip leading
-# AND trailing. A statement file starting with a blank line would otherwise
-# produce a leading-space sentinel, which the single-line shape lock in
-# on-session-start.bats does NOT catch (awk counts content lines, not
-# leading whitespace).
-tr '\n' ' ' < "$file" | sed 's/  */ /g; s/^ *//; s/ *$//'
+# Normalize all whitespace shapes to spaces, then collapse runs and strip ends.
+# Handles: CRLF (strip \r first), tabs (tr maps to space), newlines (tr maps
+# to space), runs (sed collapses), leading + trailing space (sed strips).
+# Without these, a statement file with Windows line endings or leading tabs
+# would leak control characters into the sentinel JSON.
+sed 's/\r$//' "$file" | tr '\n\t' '  ' | sed 's/  */ /g; s/^ *//; s/ *$//'
