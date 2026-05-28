@@ -15,7 +15,6 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
@@ -40,8 +39,6 @@ func subscribeNodeChanged(ctx context.Context, r *Resolver, id string) (<-chan g
 		return subscribeClaudeAccountChanged(ctx, r, id)
 	case strings.HasPrefix(id, "ClaudeInstance:"):
 		return subscribeClaudeInstanceChanged(ctx, r, id)
-	case strings.HasPrefix(id, "Contract:"):
-		return subscribeContractChanged(ctx, r, id)
 	case strings.HasPrefix(id, "TmuxServer:"):
 		return subscribeTmuxServerChanged(ctx, r, id)
 	case strings.HasPrefix(id, "TmuxSession:"):
@@ -165,19 +162,6 @@ func subscribeClaudeInstanceChanged(ctx context.Context, r *Resolver, id string)
 		return true
 	}, func(c context.Context) (graphql1.Node, error) {
 		return resolveClaudeInstanceNode(c, r, id)
-	}), nil
-}
-
-func subscribeContractChanged(ctx context.Context, r *Resolver, id string) (<-chan graphql1.Node, error) {
-	if r.ContractsProvider == nil {
-		return nil, fmt.Errorf("contracts provider not configured")
-	}
-	wantKey := contracts.ContractID(strings.TrimPrefix(id, "Contract:"))
-	src := r.ContractsProvider.Subscribe(ctx)
-	return relayInvalidations(ctx, src, func(ev adapter.InvalidationEvent[contracts.ContractID]) bool {
-		return ev.Key == wantKey
-	}, func(c context.Context) (graphql1.Node, error) {
-		return resolveContractNode(c, r, id)
 	}), nil
 }
 

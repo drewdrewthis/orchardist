@@ -77,18 +77,6 @@ type ComplexityRoot struct {
 		Worktree          func(childComplexity int) int
 	}
 
-	Contract struct {
-		ClosedReason   func(childComplexity int) int
-		ContractID     func(childComplexity int) int
-		CreatedAt      func(childComplexity int) int
-		ID             func(childComplexity int) int
-		LastEventAt    func(childComplexity int) int
-		OwnerSessionID func(childComplexity int) int
-		Statement      func(childComplexity int) int
-		Status         func(childComplexity int) int
-		UpdatedAt      func(childComplexity int) int
-	}
-
 	Conversation struct {
 		AgentName    func(childComplexity int) int
 		CustomTitle  func(childComplexity int) int
@@ -253,8 +241,6 @@ type ComplexityRoot struct {
 	Query struct {
 		ClaudeAccounts   func(childComplexity int) int
 		ClaudeInstances  func(childComplexity int) int
-		Contract         func(childComplexity int, id string) int
-		Contracts        func(childComplexity int, filter *ContractFilter) int
 		Conversation     func(childComplexity int, id string) int
 		Conversations    func(childComplexity int) int
 		DaemonState      func(childComplexity int) int
@@ -460,8 +446,6 @@ type QueryResolver interface {
 	Conversations(ctx context.Context) ([]*Conversation, error)
 	Conversation(ctx context.Context, id string) (*Conversation, error)
 	ClaudeAccounts(ctx context.Context) ([]*ClaudeAccount, error)
-	Contract(ctx context.Context, id string) (*Contract, error)
-	Contracts(ctx context.Context, filter *ContractFilter) ([]*Contract, error)
 	ClaudeInstances(ctx context.Context) ([]*ClaudeInstance, error)
 	Peers(ctx context.Context) ([]*Host, error)
 	HostServices(ctx context.Context, filter *HostServiceFilter) ([]*HostService, error)
@@ -702,61 +686,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ClaudeInstance.Worktree(childComplexity), true
-
-	case "Contract.closedReason":
-		if e.ComplexityRoot.Contract.ClosedReason == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.ClosedReason(childComplexity), true
-	case "Contract.contractId":
-		if e.ComplexityRoot.Contract.ContractID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.ContractID(childComplexity), true
-	case "Contract.createdAt":
-		if e.ComplexityRoot.Contract.CreatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.CreatedAt(childComplexity), true
-	case "Contract.id":
-		if e.ComplexityRoot.Contract.ID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.ID(childComplexity), true
-	case "Contract.lastEventAt":
-		if e.ComplexityRoot.Contract.LastEventAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.LastEventAt(childComplexity), true
-	case "Contract.ownerSessionId":
-		if e.ComplexityRoot.Contract.OwnerSessionID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.OwnerSessionID(childComplexity), true
-	case "Contract.statement":
-		if e.ComplexityRoot.Contract.Statement == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.Statement(childComplexity), true
-	case "Contract.status":
-		if e.ComplexityRoot.Contract.Status == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.Status(childComplexity), true
-	case "Contract.updatedAt":
-		if e.ComplexityRoot.Contract.UpdatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Contract.UpdatedAt(childComplexity), true
 
 	case "Conversation.agentName":
 		if e.ComplexityRoot.Conversation.AgentName == nil {
@@ -1496,28 +1425,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ClaudeInstances(childComplexity), true
-	case "Query.contract":
-		if e.ComplexityRoot.Query.Contract == nil {
-			break
-		}
-
-		args, err := ec.field_Query_contract_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.Contract(childComplexity, args["id"].(string)), true
-	case "Query.contracts":
-		if e.ComplexityRoot.Query.Contracts == nil {
-			break
-		}
-
-		args, err := ec.field_Query_contracts_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.Contracts(childComplexity, args["filter"].(*ContractFilter)), true
 	case "Query.conversation":
 		if e.ComplexityRoot.Query.Conversation == nil {
 			break
@@ -2381,7 +2288,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
-		ec.unmarshalInputContractFilter,
 		ec.unmarshalInputHostServiceFilter,
 		ec.unmarshalInputLaunchSessionInput,
 		ec.unmarshalInputProcessFilter,
@@ -2699,12 +2605,6 @@ type Query {
 
   "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account ` + "`" + `claude auth status` + "`" + ` reports for; later workstreams may surface additional accounts."
   claudeAccounts: [ClaudeAccount!]!
-
-  "A single Contract by id. Returns null if the id is unknown."
-  contract(id: ID!): Contract
-
-  "Every Contract the daemon currently knows about, optionally filtered."
-  contracts(filter: ContractFilter): [Contract!]!
 
   "All live Claude instances the daemon is tracking via heartbeat files."
   claudeInstances: [ClaudeInstance!]!
@@ -3620,72 +3520,6 @@ enum HostServiceState {
   unknown
 }
 
-"""
-A commitment an agent has made to deliver something. Contracts are
-sourced from session JSONL ` + "`" + `tool_use` + "`" + ` events (open_contract /
-close_contract) written by the conversation-contracts plugin; the
-daemon's contracts provider folds those events into Contract nodes
-and never writes the JSONL itself.
-"""
-type Contract implements Node {
-  "Stable orchard id — \"Contract:<contract_id>\"."
-  id: ID!
-
-  "The contract id as written by the plugin."
-  contractId: ID!
-
-  "What the owner committed to deliver."
-  statement: String!
-
-  "Owner session id (Claude session UUID) recorded at creation time."
-  ownerSessionId: String!
-
-  "Folded current status."
-  status: ContractStatus!
-
-  "Reason the contract was closed. Null when status is SIGNED."
-  closedReason: ContractReason
-
-  "RFC 3339 timestamp the contract was first created."
-  createdAt: String!
-
-  "RFC 3339 timestamp the contract was last touched."
-  updatedAt: String!
-
-  "RFC 3339 timestamp of the most recent event affecting this contract."
-  lastEventAt: String!
-}
-
-"""
-Lifecycle states for Contract (v0.8 two-value model).
-SIGNED — contract is open and active.
-CLOSED — contract has been closed (see closedReason for delivery vs abandon).
-"""
-enum ContractStatus {
-  SIGNED
-  CLOSED
-}
-
-"""
-Reason a Contract was closed. Only set when ContractStatus is CLOSED.
-"""
-enum ContractReason {
-  DELIVERED
-  ABANDONED
-}
-
-"""
-Filter for ` + "`" + `Query.contracts` + "`" + `. All fields are optional.
-"""
-input ContractFilter {
-  "Match contracts whose folded status is in this list."
-  statuses: [ContractStatus!]
-  "Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts."
-  closedReasons: [ContractReason!]
-  "Match contracts owned by this Claude session UUID."
-  ownerSessionId: String
-}
-
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
 enum MergeableState {
   MERGEABLE
@@ -4002,30 +3836,6 @@ func (ec *executionContext) childFields_ClaudeInstance(ctx context.Context, fiel
 		return ec.fieldContext_ClaudeInstance_conversation(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
-}
-
-func (ec *executionContext) childFields_Contract(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "id":
-		return ec.fieldContext_Contract_id(ctx, field)
-	case "contractId":
-		return ec.fieldContext_Contract_contractId(ctx, field)
-	case "statement":
-		return ec.fieldContext_Contract_statement(ctx, field)
-	case "ownerSessionId":
-		return ec.fieldContext_Contract_ownerSessionId(ctx, field)
-	case "status":
-		return ec.fieldContext_Contract_status(ctx, field)
-	case "closedReason":
-		return ec.fieldContext_Contract_closedReason(ctx, field)
-	case "createdAt":
-		return ec.fieldContext_Contract_createdAt(ctx, field)
-	case "updatedAt":
-		return ec.fieldContext_Contract_updatedAt(ctx, field)
-	case "lastEventAt":
-		return ec.fieldContext_Contract_lastEventAt(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type Contract", field.Name)
 }
 
 func (ec *executionContext) childFields_Conversation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4759,34 +4569,6 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 		return nil, err
 	}
 	args["name"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_contract_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNID2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["id"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_contracts_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
-		func(ctx context.Context, v any) (*ContractFilter, error) {
-			return ec.unmarshalOContractFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractFilter(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["filter"] = arg0
 	return args, nil
 }
 
@@ -5817,213 +5599,6 @@ func (ec *executionContext) fieldContext_ClaudeInstance_conversation(_ context.C
 		},
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _Contract_id(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_id(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_contractId(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_contractId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ContractID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_contractId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_statement(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_statement(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Statement, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_statement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_ownerSessionId(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_ownerSessionId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.OwnerSessionID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_ownerSessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_status(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_status(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Status, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v ContractStatus) graphql.Marshaler {
-			return ec.marshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ContractStatus does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_closedReason(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_closedReason(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClosedReason, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *ContractReason) graphql.Marshaler {
-			return ec.marshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_closedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type ContractReason does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_createdAt(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_createdAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreatedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_updatedAt(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_updatedAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UpdatedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Contract_lastEventAt(ctx context.Context, field graphql.CollectedField, obj *Contract) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Contract_lastEventAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.LastEventAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Contract_lastEventAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Contract", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Conversation_id(ctx context.Context, field graphql.CollectedField, obj *Conversation) (ret graphql.Marshaler) {
@@ -9262,94 +8837,6 @@ func (ec *executionContext) fieldContext_Query_claudeAccounts(_ context.Context,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ClaudeAccount(ctx, field)
 		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_contract(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Query_contract(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Contract(ctx, fc.Args["id"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *Contract) graphql.Marshaler {
-			return ec.marshalOContract2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContract(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Query_contract(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Contract(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_contract_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_contracts(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Query_contracts(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Contracts(ctx, fc.Args["filter"].(*ContractFilter))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*Contract) graphql.Marshaler {
-			return ec.marshalNContract2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Query_contracts(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Contract(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_contracts_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
 	}
 	return fc, nil
 }
@@ -13813,50 +13300,6 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
-func (ec *executionContext) unmarshalInputContractFilter(ctx context.Context, obj any) (ContractFilter, error) {
-	var it ContractFilter
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"statuses", "closedReasons", "ownerSessionId"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "statuses":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
-			data, err := ec.unmarshalOContractStatus2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatusᚄ(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Statuses = data
-		case "closedReasons":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("closedReasons"))
-			data, err := ec.unmarshalOContractReason2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReasonᚄ(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClosedReasons = data
-		case "ownerSessionId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ownerSessionId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.OwnerSessionID = data
-		}
-	}
-	return it, nil
-}
-
 func (ec *executionContext) unmarshalInputHostServiceFilter(ctx context.Context, obj any) (HostServiceFilter, error) {
 	var it HostServiceFilter
 	if obj == nil {
@@ -14218,13 +13661,6 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Conversation(ctx, sel, obj)
-	case Contract:
-		return ec._Contract(ctx, sel, &obj)
-	case *Contract:
-		if obj == nil {
-			return graphql.Null
-		}
-		return ec._Contract(ctx, sel, obj)
 	case ClaudeInstance:
 		return ec._ClaudeInstance(ctx, sel, &obj)
 	case *ClaudeInstance:
@@ -14430,82 +13866,6 @@ func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.Selecti
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var contractImplementors = []string{"Contract", "Node"}
-
-func (ec *executionContext) _Contract(ctx context.Context, sel ast.SelectionSet, obj *Contract) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, contractImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("Contract")
-		case "id":
-			out.Values[i] = ec._Contract_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "contractId":
-			out.Values[i] = ec._Contract_contractId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "statement":
-			out.Values[i] = ec._Contract_statement(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "ownerSessionId":
-			out.Values[i] = ec._Contract_ownerSessionId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "status":
-			out.Values[i] = ec._Contract_status(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "closedReason":
-			out.Values[i] = ec._Contract_closedReason(ctx, field, obj)
-		case "createdAt":
-			out.Values[i] = ec._Contract_createdAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updatedAt":
-			out.Values[i] = ec._Contract_updatedAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "lastEventAt":
-			out.Values[i] = ec._Contract_lastEventAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -16326,47 +15686,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_claudeAccounts(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "contract":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_contract(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "contracts":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_contracts(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -19432,52 +18751,6 @@ func (ec *executionContext) marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthi
 	return ec._ClaudeInstance(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNContract2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractᚄ(ctx context.Context, sel ast.SelectionSet, v []*Contract) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNContract2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContract(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNContract2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContract(ctx context.Context, sel ast.SelectionSet, v *Contract) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._Contract(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, v any) (ContractReason, error) {
-	var res ContractReason
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, sel ast.SelectionSet, v ContractReason) graphql.Marshaler {
-	return v
-}
-
-func (ec *executionContext) unmarshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx context.Context, v any) (ContractStatus, error) {
-	var res ContractStatus
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx context.Context, sel ast.SelectionSet, v ContractStatus) graphql.Marshaler {
-	return v
-}
-
 func (ec *executionContext) marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx context.Context, sel ast.SelectionSet, v []*Conversation) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -20284,111 +19557,6 @@ func (ec *executionContext) marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthi
 		return graphql.Null
 	}
 	return ec._ClaudeInstance(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalOContract2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContract(ctx context.Context, sel ast.SelectionSet, v *Contract) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._Contract(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalOContractFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractFilter(ctx context.Context, v any) (*ContractFilter, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := ec.unmarshalInputContractFilter(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) unmarshalOContractReason2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReasonᚄ(ctx context.Context, v any) ([]ContractReason, error) {
-	if v == nil {
-		return nil, nil
-	}
-	var vSlice []any
-	vSlice = graphql.CoerceList(v)
-	var err error
-	res := make([]ContractReason, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalOContractReason2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReasonᚄ(ctx context.Context, sel ast.SelectionSet, v []ContractReason) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNContractReason2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) unmarshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, v any) (*ContractReason, error) {
-	if v == nil {
-		return nil, nil
-	}
-	var res = new(ContractReason)
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOContractReason2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractReason(ctx context.Context, sel ast.SelectionSet, v *ContractReason) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return v
-}
-
-func (ec *executionContext) unmarshalOContractStatus2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatusᚄ(ctx context.Context, v any) ([]ContractStatus, error) {
-	if v == nil {
-		return nil, nil
-	}
-	var vSlice []any
-	vSlice = graphql.CoerceList(v)
-	var err error
-	res := make([]ContractStatus, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalOContractStatus2ᚕgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []ContractStatus) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNContractStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐContractStatus(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
 }
 
 func (ec *executionContext) marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {

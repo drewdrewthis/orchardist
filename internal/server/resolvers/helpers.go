@@ -140,14 +140,6 @@ func mapState(s hostservice.State) graphql1.HostServiceState {
 	}
 }
 
-func stripContractIDPrefix(id string) string {
-	const prefix = "Contract:"
-	if len(id) > len(prefix) && id[:len(prefix)] == prefix {
-		return id[len(prefix):]
-	}
-	return id
-}
-
 func toGraphQLWorktree(w gitprovider.Worktree) *graphql1.Worktree {
 	// Host is the single source of truth for the worktree's host sentinel.
 	// "local" is the v1 sentinel for locally-discovered worktrees.

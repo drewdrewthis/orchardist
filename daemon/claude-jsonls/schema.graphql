@@ -11,8 +11,6 @@
 # Higher-layer domains that consume claude-jsonls:
 #   - `claude-instance`: derives live REPL instances from JSONL tails +
 #     matching pane processes
-#   - `contracts`: parses the Contracts-plugin records that ride on the
-#     same JSONL stream
 
 extend type Query {
   "Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt."

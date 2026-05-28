@@ -93,7 +93,7 @@ bats-install:
 	@command -v bats >/dev/null || (echo "Installing bats..." && brew install bats-core 2>/dev/null || npm install -g bats)
 
 bats-test: bats-install
-	bats scripts/**/*.bats
+	bats -r scripts
 	bats -r plugins/conversation-contracts
 
 # Feature parity checks — verify scenario↔test annotation coverage.
