@@ -28,10 +28,18 @@ set -uo pipefail
 _resolve_session_jsonl() {
   # Given a cwd, print the newest .jsonl in the corresponding projects subdir.
   # Empty if no match. Cwd encoding mirrors Claude Code's: / and . → -.
+  #
+  # The cwd must be the RESOLVED (physical) path, not the symlinked one Claude
+  # Code received via $PWD — on macOS, `/var` is a symlink to `/private/var`,
+  # and the harness encodes the resolved `/private/var/...` path into the
+  # projects dir name, while a script's $PWD may still report `/var/...`. We
+  # resolve via `cd -P` so the encoding matches what the harness wrote.
   local cwd="$1"
   [ -n "$cwd" ] || return 0
+  local resolved
+  resolved=$(cd -P -- "$cwd" 2>/dev/null && pwd -P) || resolved="$cwd"
   local root="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
-  local enc; enc=$(printf '%s' "$cwd" | tr '/.' '--')
+  local enc; enc=$(printf '%s' "$resolved" | tr '/.' '--')
   local dir="$root/$enc"
   [ -d "$dir" ] || return 0
   # ls -t sorts by mtime descending; ignore failures if no jsonls match.
@@ -61,10 +69,18 @@ grep -Fq 'orchard_contract' "$jsonl" 2>/dev/null || exit 0
 # and as the SessionStart hook's recorded stdout (a `hook_success` attachment).
 # Union both extraction paths, keep only well-formed open/close sentinels with
 # a non-empty string id, dedupe, then fold by id.
+#
+# For the strings path, split on \n and try fromjson on each line — tolerates
+# bash recipes that chained `&& echo "..."` after emit-sentinel.sh and ended
+# up writing `<sentinel>\nhuman text` into a single tool_result.content string.
+# The sentinel is always one line, so per-line fromjson recovers it.
 grep -F 'orchard_contract' "$jsonl" 2>/dev/null \
   | jq -c '
       ( [ .. | objects | select(.orchard_contract) ]
-      + [ .. | strings | (fromjson? // empty) | select(type == "object" and .orchard_contract) ]
+      + [ .. | strings
+            | split("\n") | .[]
+            | (fromjson? // empty)
+            | select(type == "object" and .orchard_contract) ]
       ) | .[]
     ' 2>/dev/null \
   | jq -sc '

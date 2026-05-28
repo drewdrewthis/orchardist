@@ -23,14 +23,13 @@ Contracts live as JSON **sentinels** in this session's own jsonl — there is no
 2. Generate an id and emit the open sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the single source of truth for the on-disk shape, shared with `/close-contract` and the SessionStart auto-open hook:
 
    ```bash
-   id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4)" \
-     && bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" open "$id" "<one-line statement>" \
-     && echo "Opened contract $id"
+   id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4)" && \
+     bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" open "$id" "<one-line statement>"
    ```
 
-   The emitted JSON lands in the jsonl (inside the tool_result), where the fold picks it up. The script JSON-escapes the statement, so double-quotes and backslashes in your text are safe — you do not need to escape them by hand.
+   The emitted JSON is the **only** line on stdout — that single string becomes the `tool_result.content` the fold parses. Do NOT chain `&& echo "Opened contract $id"` into the same Bash command: the trailing text would concatenate into the same `tool_result.content` string and break the fold's `fromjson?` extraction. The id is in the JSON output already (`"id":"C-..."`); read it from there. The script JSON-escapes the statement, so double-quotes and backslashes in your text are safe.
 
-3. Read the generated `id` from the script's output and **report it back** to the user: "Opened contract `<id>`: <statement>. Close it with `/close-contract <id>` when delivered." The user needs the id to close it later.
+3. Read the generated `id` from the script's JSON output and **report it back to the user as chat text** (not as another Bash echo): "Opened contract `<id>`: <statement>. Close it with `/close-contract <id>` when delivered." The user needs the id to close it later.
 
 ## Notes
 
