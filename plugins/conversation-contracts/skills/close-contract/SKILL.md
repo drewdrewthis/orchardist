@@ -18,13 +18,14 @@ A close is one of two things:
 2. Compose the **reason**:
    - delivered → `delivered: <one-line evidence>` (a command output, a PR link, a test result — what proves it).
    - abandoned → `abandoned: <why it's being dropped>`.
-   Keep it free of unescaped double-quotes — it embeds in a JSON line.
 
-3. Emit the close sentinel with a single `Bash` call:
+3. Emit the close sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the same script `/open-contract` and the SessionStart auto-open hook use, so the on-disk shape stays consistent:
 
    ```bash
-   echo "{\"orchard_contract\":\"close\",\"id\":\"<id>\",\"reason\":\"<reason>\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+   bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" close "<id>" "<reason>"
    ```
+
+   The script JSON-escapes the reason, so double-quotes and backslashes in your evidence text are safe — you do not need to escape them by hand.
 
 4. Report: "Closed `<id>` (<delivered|abandoned>): <reason>."
 

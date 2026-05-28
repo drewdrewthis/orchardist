@@ -20,15 +20,17 @@ Contracts live as JSON **sentinels** in this session's own jsonl — there is no
 
 1. Get a one-line **statement** of the commitment from the user (or state your own). Keep it free of unescaped double-quotes — it is embedded in a JSON line.
 
-2. Generate an id and emit the open sentinel with a single `Bash` call:
+2. Generate an id and emit the open sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the single source of truth for the on-disk shape, shared with `/close-contract` and the SessionStart auto-open hook:
 
    ```bash
-   echo "{\"orchard_contract\":\"open\",\"id\":\"C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4)\",\"statement\":\"<one-line statement>\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+   id="C-$(date -u +%Y-%m-%d)-$(openssl rand -hex 4)" \
+     && bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" open "$id" "<one-line statement>" \
+     && echo "Opened contract $id"
    ```
 
-   The echoed JSON lands in the jsonl (in the tool_result), where the fold picks it up.
+   The emitted JSON lands in the jsonl (inside the tool_result), where the fold picks it up. The script JSON-escapes the statement, so double-quotes and backslashes in your text are safe — you do not need to escape them by hand.
 
-3. Read the generated `id` from the echo output and **report it back** to the user: "Opened contract `<id>`: <statement>. Close it with `/close-contract <id>` when delivered." The user needs the id to close it later.
+3. Read the generated `id` from the script's output and **report it back** to the user: "Opened contract `<id>`: <statement>. Close it with `/close-contract <id>` when delivered." The user needs the id to close it later.
 
 ## Notes
 

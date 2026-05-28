@@ -111,7 +111,7 @@ _run_hook() {
   # SessionStart hook now emits to stdout, which the harness records as a
   # hook_success attachment whose .stdout is also a string — handled by the
   # same strings-via-fromjson path as the tool_result case.)
-  local auto="{\"orchard_contract\":\"open\",\"id\":\"C-CONV-1\",\"statement\":\"$DELIVERABLE\",\"ts\":\"t\",\"source\":\"auto-session-start\"}"
+  local auto="{\"orchard_contract\":\"open\",\"id\":\"C-CONV-1\",\"statement\":\"$DELIVERABLE\",\"ts\":\"t\"}"
   _write_jsonl "S-STOP-BOTH" \
     "$auto" \
     "$(_open_line "C-SKILL-1" "a sub commitment")"

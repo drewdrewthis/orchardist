@@ -9,6 +9,9 @@
 
 setup() {
   HOOK="$BATS_TEST_DIRNAME/on-session-start.sh"
+  # Real Claude Code sets CLAUDE_PLUGIN_ROOT so the hook can `exec` the shared
+  # emit-sentinel.sh; mirror that in the test environment.
+  export CLAUDE_PLUGIN_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   DELIVERABLE="user agrees conversation has come to a close and there are no loose ends"
 }
 
@@ -40,12 +43,6 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   [ "$status" -eq 0 ]
   id="$(_field "$output" id)"
   [[ "$id" =~ ^C-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-f0-9]{8}$ ]]
-}
-
-@test "source is auto-session-start (distinguishable from skill-opened contracts)" {
-  run bash "$HOOK"
-  [ "$status" -eq 0 ]
-  [ "$(_field "$output" source)" = "auto-session-start" ]
 }
 
 @test "the fold script picks up the sentinel when it appears in a stdout-attachment line" {

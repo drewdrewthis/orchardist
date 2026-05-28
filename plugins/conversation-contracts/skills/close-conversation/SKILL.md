@@ -23,10 +23,10 @@ Contracts are `orchard_contract` sentinels in the session jsonl (open minus clos
    - Open child contracts: every open contract that is NOT the conversation contract.
    - Open TodoWrite items: scan the session jsonl for pending TodoWrite entries (best-effort).
 
-4. **If the inventory is empty** (only the conversation contract is open): close it as **delivered**. Emit a close sentinel for the conversation contract's id with a `Bash` echo, using the session summary as the reason:
+4. **If the inventory is empty** (only the conversation contract is open): close it as **delivered**. Emit a close sentinel for the conversation contract's id via the shared `scripts/emit-sentinel.sh` (the same script `/close-contract` uses), folding the session summary into the reason:
 
    ```bash
-   echo "{\"orchard_contract\":\"close\",\"id\":\"<conversation-contract-id>\",\"reason\":\"delivered: <inventory summary>\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+   bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" close "<conversation-contract-id>" "delivered: <inventory summary>"
    ```
    Report: "Conversation contract closed as delivered."
 
