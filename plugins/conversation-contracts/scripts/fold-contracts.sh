@@ -13,9 +13,30 @@
 # Usage:
 #   fold-contracts.sh <session-jsonl-path>     # explicit path
 #   fold-contracts.sh --session <id> [<cwd>]   # resolve path from session id
+#   fold-contracts.sh --auto [<cwd>]           # newest jsonl under encoded-cwd
 # Output: one line per open contract; empty if none. Exit 0 always.
+#
+# Prefer --auto in skills: real Claude Code does NOT export CLAUDE_SESSION_ID
+# to user-driven skill subprocesses (SDK/--print mode in particular leaves it
+# unset), so any skill that calls `--session "$CLAUDE_SESSION_ID"` is blind to
+# the current session. --auto resolves the path from $PWD's encoding and picks
+# the newest jsonl in that directory — the current session by definition,
+# because we are running inside it as it writes to it.
 
 set -uo pipefail
+
+_resolve_session_jsonl() {
+  # Given a cwd, print the newest .jsonl in the corresponding projects subdir.
+  # Empty if no match. Cwd encoding mirrors Claude Code's: / and . → -.
+  local cwd="$1"
+  [ -n "$cwd" ] || return 0
+  local root="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+  local enc; enc=$(printf '%s' "$cwd" | tr '/.' '--')
+  local dir="$root/$enc"
+  [ -d "$dir" ] || return 0
+  # ls -t sorts by mtime descending; ignore failures if no jsonls match.
+  ls -t "$dir"/*.jsonl 2>/dev/null | head -1
+}
 
 if [ "${1:-}" = "--session" ]; then
   sid="${2:-}"
@@ -24,6 +45,9 @@ if [ "${1:-}" = "--session" ]; then
   root="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
   enc=$(printf '%s' "$cwd" | tr '/.' '--')
   jsonl="$root/$enc/$sid.jsonl"
+elif [ "${1:-}" = "--auto" ]; then
+  cwd="${2:-${PWD:-}}"
+  jsonl=$(_resolve_session_jsonl "$cwd")
 else
   jsonl="${1:-}"
 fi
