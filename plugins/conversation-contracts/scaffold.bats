@@ -51,11 +51,11 @@ _jq() {
 
 # ---- plugin.json ------------------------------------------------------------
 
-@test "plugin.json is valid JSON with name, description, version 0.10.0, author" {
+@test "plugin.json is valid JSON with name, description, version 0.10.1, author" {
   local f=plugins/conversation-contracts/.claude-plugin/plugin.json
   [ -n "$(_jq "$f" '.name')" ]
   [ -n "$(_jq "$f" '.description')" ]
-  [ "$(_jq "$f" '.version')" = "0.10.0" ]
+  [ "$(_jq "$f" '.version')" = "0.10.1" ]
   [ -n "$(_jq "$f" '.author.name')" ]
 }
 
