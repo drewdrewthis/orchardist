@@ -62,17 +62,29 @@ _run_hook() {
 
 # ---- open with no close → block ---------------------------------------------
 
-@test "open contract with no close blocks Stop and names the verbs" {
+@test "open contract with no close blocks Stop with the contract verbatim" {
+  # v0.11.2: hook is DUMB by design. It re-injects the open contract
+  # statements verbatim, no procedural commentary about close mechanics.
+  # The discipline lives in each contract's statement (the conversation
+  # contract points at /i-am-done; work contracts carry their own done-
+  # conditions). Procedural reminders in the hook duplicated and
+  # contradicted that design.
   local id="C-2026-05-27-aaaa1111"
-  _write_jsonl "S-STOP-OPEN" "$(_open_line "$id" "ship the X refactor")"
+  local stmt="ship the X refactor"
+  _write_jsonl "S-STOP-OPEN" "$(_open_line "$id" "$stmt")"
   _run_hook "S-STOP-OPEN"
 
   [ -n "$output" ]
   [ "$(printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"])')" = "block" ]
   reason="$(printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')"
+  # The reason MUST contain the open contract id and statement.
   [[ "$reason" == *"$id"* ]]
-  [[ "$reason" == *"/close-contract"* ]]      # self-documenting: names the close verb
-  [[ "$reason" == *"/my-contracts"* ]]        # ... and the list verb
+  [[ "$reason" == *"$stmt"* ]]
+  # The reason MUST NOT contain procedural commentary about close mechanics.
+  # (Hook is dumb; discipline lives in the contract statement.)
+  [[ "$reason" != *"deliver with /close-contract"* ]]
+  [[ "$reason" != *"abandon (reason"* ]]
+  [[ "$reason" != *"List them with /my-contracts"* ]]
 }
 
 # ---- open + matching close → allow ------------------------------------------

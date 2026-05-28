@@ -82,25 +82,31 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   [[ "$(_field "$output" statement)" == *"/i-am-done"* ]]
 }
 
-@test "BASH_SOURCE fallback resolves symlinked plugin paths via cd -P" {
-  # Exercises the cd -P / pwd -P hardening on the self-locating fallback path.
-  # Without -P, a symlinked install would resolve PLUGIN_ROOT to the symlink's
-  # parent (or fail to find the helper scripts). With -P, we follow the link
-  # to the real install dir and load the statement file from there.
+@test "BASH_SOURCE fallback smoke-tests a symlinked plugin install" {
+  # SMOKE check, not a `cd -P` regression lock — I tried twice to write one
+  # and failed because file reads through symlinks are kernel-transparent:
+  # both `cd` and `cd -P` resolve to the same statement file when the
+  # symlink points at the real install. (Two parallel-trees variants both
+  # passed without `-P` because the read followed the same physical inode.)
+  # The `cd -P` in the hook is defensive — it makes `$PLUGIN_ROOT` the
+  # physical path for any future use that compares the value, but no
+  # current code path is sensitive to that.
+  #
+  # This test verifies the smoke path: a symlinked install can still load
+  # the statement and emit a well-formed sentinel. It does NOT regression-
+  # lock `cd -P`. If you drop `-P` from the hook, this test will still
+  # pass — that's by design.
   tmp_root="$(mktemp -d)"
   cp -r "$CLAUDE_PLUGIN_ROOT/scripts" "$tmp_root/"
   cp -r "$CLAUDE_PLUGIN_ROOT/hooks" "$tmp_root/"
   cp -r "$CLAUDE_PLUGIN_ROOT/references" "$tmp_root/"
 
-  # Install a symlink that points at the real plugin dir; invoke the hook
-  # via the symlinked path with CLAUDE_PLUGIN_ROOT unset.
   link_root="$(mktemp -d)/plugin-link"
   ln -s "$tmp_root" "$link_root"
   unset CLAUDE_PLUGIN_ROOT
   run bash "$link_root/hooks/on-session-start.sh"
   [ "$status" -eq 0 ]
   [ "$(_field "$output" orchard_contract)" = "open" ]
-  # Statement file was found via the resolved real path, not the symlink.
   [[ "$(_field "$output" statement)" == *"/i-am-done"* ]]
 
   rm -rf "$tmp_root" "$(dirname "$link_root")"
