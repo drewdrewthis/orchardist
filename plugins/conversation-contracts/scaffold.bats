@@ -51,12 +51,26 @@ _jq() {
 
 # ---- plugin.json ------------------------------------------------------------
 
-@test "plugin.json is valid JSON with name, description, version 0.10.3, author" {
+@test "plugin.json is valid JSON with name, description, current semver, author" {
   local f=plugins/conversation-contracts/.claude-plugin/plugin.json
   [ -n "$(_jq "$f" '.name')" ]
   [ -n "$(_jq "$f" '.description')" ]
-  [ "$(_jq "$f" '.version')" = "0.10.3" ]
+  # Semver shape — current release pins live in plugin.json + marketplace.json,
+  # not in this test. Avoids the per-release test edit shotgun-surgery flagged
+  # as #677.
+  [[ "$(_jq "$f" '.version')" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
   [ -n "$(_jq "$f" '.author.name')" ]
+}
+
+@test "plugin.json and marketplace.json versions stay in lockstep" {
+  # Without this assertion, the per-release shotgun-surgery surface for #677
+  # would silently let plugin.json and marketplace.json drift apart — semver-
+  # shape testing alone catches malformed strings, not version mismatches.
+  # Surfaced by CodeRabbit on PR #682.
+  local plugin_v marketplace_v
+  plugin_v=$(_jq plugins/conversation-contracts/.claude-plugin/plugin.json '.version')
+  marketplace_v=$(_jq .claude-plugin/marketplace.json '.plugins[0].version')
+  [ "$plugin_v" = "$marketplace_v" ]
 }
 
 # ---- hooks.json -------------------------------------------------------------

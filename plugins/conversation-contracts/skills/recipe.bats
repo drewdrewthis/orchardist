@@ -54,3 +54,22 @@ SKILLS=(open-contract close-contract my-contracts close-conversation)
     [ "$status" -eq 0 ] || { echo "$s/SKILL.md does not point the agent at the 'Base directory' line"; false; }
   done
 }
+
+@test "v0.11: /close-contract documents the consent gate (AskUserQuestion)" {
+  # Closing requires user consent. The skill must instruct the agent to gate
+  # the close sentinel behind an AskUserQuestion when the user has not typed
+  # a close path. The four user-typed close paths bypass the gate (typing
+  # IS the consent).
+  run grep -F 'AskUserQuestion' "$SKILLS_DIR/close-contract/SKILL.md"
+  [ "$status" -eq 0 ] || { echo "close-contract/SKILL.md missing AskUserQuestion consent gate"; false; }
+  run grep -F 'consent' "$SKILLS_DIR/close-contract/SKILL.md"
+  [ "$status" -eq 0 ] || { echo "close-contract/SKILL.md does not mention consent"; false; }
+}
+
+@test "v0.11: /close-conversation documents the consent gate" {
+  # The conversation contract has the four user-typed bypass paths, but when
+  # the agent infers the conversation is winding down it must gate the close
+  # behind AskUserQuestion.
+  run grep -F 'AskUserQuestion' "$SKILLS_DIR/close-conversation/SKILL.md"
+  [ "$status" -eq 0 ] || { echo "close-conversation/SKILL.md missing AskUserQuestion consent gate"; false; }
+}
