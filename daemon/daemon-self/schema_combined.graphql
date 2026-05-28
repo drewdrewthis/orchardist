@@ -1,0 +1,1630 @@
+# Root schema — shared interface, scalars, and the empty root operation
+# types that per-domain partials extend.
+#
+# Per RULES.md S15: this file declares ONLY what every domain shares.
+# Domain-owned types live in `daemon/<name>/schema.graphql`.
+
+"""
+A node in the orchard graph. Every node has a globally-unique id so
+clients can fetch it via Query.node(id) regardless of which concrete
+type it is.
+"""
+interface Node {
+  "Globally-unique id (e.g. \"Host:<machineId>\")."
+  id: ID!
+}
+
+"RFC 3339 timestamp string. Mapped to Go's time.Time."
+scalar Time
+
+"""
+Opaque JSON value — any GraphQL-compatible type, marshalled verbatim.
+Used by gh-passthrough to forward GitHub GraphQL responses without
+imposing an orchard-side schema on them. Callers deserialise against
+their knowledge of the foreign schema.
+"""
+scalar JSON
+
+"""
+Empty root types — every domain extends these via `extend type Query`,
+`extend type Mutation`, `extend type Subscription` in its partial.
+"""
+type Query
+type Mutation
+type Subscription
+# claude-account — `claude auth status` + ccusage quota scraping.
+#
+# Owns: ClaudeAccount.
+# Owns: Query.claudeAccounts.
+#
+# Cross-domain back-edge:
+#   ClaudeAccount.host      → host-identity
+#   ClaudeAccount.instances → claude-jsonls (live REPLs running under this account)
+
+extend type Query {
+  "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account `claude auth status` reports for; later versions may surface additional accounts."
+  claudeAccounts: [ClaudeAccount!]!
+
+  """
+  Pass-through (S16): run an arbitrary `claude` CLI subcommand or
+  `ccusage` invocation and return stdout/stderr/exit code as opaque
+  JSON. Used when the typed core does not yet cover a call shape
+  (e.g. `claude config get`, `ccusage --since YYYY-MM-DD`).
+
+  Read-only by design — the typed account surface is the canonical
+  read; this pass-through is for ad-hoc inspection. Account-mutating
+  operations (login/logout) go through typed mutations that exec
+  `scripts/claude-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  claudeCli(tool: ClaudeCliTool!, args: [String!]!): JSON
+}
+
+"Which Claude-account-domain CLI the pass-through invokes."
+enum ClaudeCliTool {
+  claude
+  ccusage
+}
+
+"""
+A Claude CLI account. v1 surfaces the single account `claude auth
+status` reports for the local user.
+
+`quotaUsed`, `quotaCap`, and `quotaResetsAt` are scraped from
+`ccusage`. They are nullable because:
+  - `claude` may be installed without `ccusage`, in which case the
+    fields are unknown rather than zero.
+  - `ccusage` itself may not yet have observed any traffic for the
+    current quota window, in which case the cap is unknown.
+
+When the numbers come from `ccusage` (the only source v1 supports),
+`quotaEstimated` is true.
+"""
+type ClaudeAccount implements Node {
+  "Stable orchard id — \"ClaudeAccount:<host>:<email>\"."
+  id: ID!
+
+  "Email address `claude auth status` reports for the active session."
+  email: String!
+
+  "Quota consumed in the current window. Null when ccusage has not been able to report a number."
+  quotaUsed: Float
+
+  "Quota cap for the current window. Null when ccusage cannot determine the cap (e.g. fresh install with no traffic)."
+  quotaCap: Float
+
+  "True when the quota numbers are estimated by `ccusage` rather than reported by a first-party API. Always true in v1."
+  quotaEstimated: Boolean!
+
+  "When the current quota window resets. Null when ccusage cannot determine the next reset."
+  quotaResetsAt: Time
+
+  "The host this account is scoped to. Cross-domain join into `host-identity`."
+  host: Host!
+
+  "Claude REPLs currently running under this account. Cross-domain join into `claude-jsonls`."
+  instances: [ClaudeInstance!]!
+}
+# claude-instance — live Claude REPL derived from jsonl-tail + matching pane process.
+#
+# Owns: ClaudeInstance, InstanceState.
+# Owns: Query.claudeInstances.
+#
+# A ClaudeInstance is a JOIN, not a primary resource. Inputs:
+#   - claude-jsonls: jsonl tail freshness + sessionUuid
+#   - tmux: pane whose `pane_current_command` is `claude`
+#   - ps:   pane.process pid + cwd
+# Output: when all three line up, emit a ClaudeInstance node.
+#
+# Most jsonls have no instance. Some have 2+ (rare /resume case).
+#
+# Cross-domain `extend type Worktree` (S15b: claude-instance is the data producer):
+#   Worktree.claudeInstances — Claude REPLs whose cwd lies under the worktree path
+
+extend type Query {
+  "All live Claude instances the daemon is tracking — JSONLs with live process + pane matches."
+  claudeInstances: [ClaudeInstance!]!
+}
+
+"""
+A live Claude Code session running on a host. Derived — NOT a primary
+resource: a ClaudeInstance is the join of a live JSONL tail with a matching
+live pane process. Identity is the foreground claude pid scoped to a host.
+
+The instance set is: "JSONLs whose heartbeat is fresh AND there is a tmux
+pane whose process is `claude` with the matching sessionUuid in its working
+state."
+"""
+type ClaudeInstance implements Node {
+  "Stable orchard id — \"ClaudeInstance:<host>:<claudePid>\"."
+  id: ID!
+
+  "Tmux pane hosting this Claude process. Null if no pane could be matched. Cross-domain join into `tmux`."
+  pane: TmuxPane
+
+  "OS-level process. Null until the process can be matched by pid. Cross-domain join into `ps`."
+  process: Process
+
+  "Claude CLI account this session is authenticated under. Cross-domain join into `claude-account`."
+  account: ClaudeAccount
+
+  "Lifecycle state derived from the heartbeat file plus pid liveness."
+  state: InstanceState!
+
+  "claude.ai Remote Control URL when the session has it enabled."
+  rcUrl: String
+
+  "True when remote-control is enabled for this session."
+  rcEnabled: Boolean!
+
+  "Claude session UUID. Mirrors the heartbeat's session_id field."
+  sessionUuid: String
+
+  "RFC3339 timestamp the session was started."
+  startedAt: String
+
+  """
+  ISO8601 timestamp of the most recent activity for this Claude instance —
+  derived from the heartbeat's last_activity field, falling back to
+  TmuxPane.lastActivityAt, falling back to null when neither is available.
+  """
+  lastActivityAt: String
+
+  """
+  Claude model used by this session — from the last non-sidechain
+  assistant record's message.model field (e.g. \"claude-opus-4-7\").
+  Null when no jsonl has been observed yet for this session.
+  """
+  model: String
+
+  """
+  Number of tool_use calls open (sent by assistant, no matching tool_result)
+  in the current turn. Derived from the jsonl classifier. 0 when no jsonl
+  is found.
+  """
+  inflightToolCount: Int!
+
+  """
+  Worktree this Claude REPL is operating in — the deepest worktree whose
+  `path` contains the resolved process cwd. Cross-domain join into `git`.
+  """
+  worktree: Worktree
+
+  "Conversation node for this Claude session. Cross-domain join into `claude-jsonls`."
+  conversation: Conversation
+}
+
+"Lifecycle states for a Claude instance."
+enum InstanceState {
+  "Claude is actively executing a tool or generating a response."
+  working
+  "Claude has finished its turn and is waiting for the next prompt."
+  idle
+  "Claude is paused and waiting for user input."
+  input
+  "The session has been alive but is no longer answering heartbeats."
+  stalled
+  "Tracked but the underlying process is gone."
+  dead
+  "No Claude session has ever been observed for this pane/process."
+  no_claude
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — claude-instance produces REPL data.
+# The resolver lives in daemon/claude-instance/ and calls the claude-instance service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  Claude REPLs whose resolved process cwd lies under this worktree's `path`.
+  Server-side join over the claude-jsonls + ps domains. Ordered deterministically
+  by `id` ascending.
+
+  Note: a ClaudeInstance is a *running REPL* identified by sessionUuid — distinct
+  from a TmuxSession (tmux's server grouping of windows/panes). A worktree can carry
+  zero or many of each.
+  Resolver calls the claude-instance service (S15b: producer domain owns the field).
+  """
+  claudeInstances: [ClaudeInstance!]!
+}
+# claude-jsonls — raw record parsing of Claude Code session JSONLs.
+#
+# Owns: Conversation.
+# Owns: Query.{conversations, conversation}.
+# Owns: Subscription.conversationChanged.
+#
+# This domain is the lowest layer of the Claude stack: parse the JSONLs at
+# `~/.claude/projects/<encoded-cwd>/<sessionUuid>.jsonl` and surface them
+# as `Conversation` nodes.
+#
+# Higher-layer domains that consume claude-jsonls:
+#   - `claude-instance`: derives live REPL instances from JSONL tails +
+#     matching pane processes
+
+extend type Query {
+  "Every Claude Code conversation discovered under the repos root. Latest-first by lastSeenAt."
+  conversations: [Conversation!]!
+
+  "Look up a single conversation by its globally-unique id (e.g. \"Conversation:<sessionUuid>\"). Null when unknown."
+  conversation(id: ID!): Conversation
+}
+
+extend type Subscription {
+  "Receive the freshly-loaded node value each time its provider's invalidation channel fires for that id."
+  nodeChanged(id: ID!): Node!
+
+  """
+  Tunnel a subscription to a remote peer. The daemon opens (or reuses) a
+  websocket to the named peer and re-emits node updates locally.
+  Returns the touched Node on each remote invalidation. Unknown peers
+  raise an error and close the stream.
+  """
+  peer(host: String!): Node
+
+  """
+  Push-on-change for one Claude Code conversation, keyed by sessionUuid.
+  Emits the freshly-loaded Conversation every time the claude-jsonls
+  provider's fsnotify watcher fires for the matching JSONL. Use this
+  to rerender a transcript view without polling. Returns null when the
+  watcher reports the file was removed.
+  """
+  conversationChanged(sessionUuid: String!): Conversation
+}
+
+"""
+A Claude Code conversation, backed by the JSONL transcript that the
+Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
+
+The provider derives every field from the JSONL on disk — there is no
+sidecar metadata. Heavy fields (full transcripts, message bodies)
+deliberately do not surface here (RULES.md S10, ADR-016); the v1 contract
+is metadata + a single live signal (`open`) and a daemon-derived `recap`
+(scanned from the latest `/recap` slash-command invocation; no plugin).
+For transcript bodies see `GET /v1/conversations/<sessionUuid>/jsonl`.
+
+`open` is a heartbeat: true when the JSONL was written within the last
+N seconds (default 60s, see provider.HeartbeatThreshold).
+"""
+type Conversation implements Node {
+  "Stable orchard id — \"Conversation:<sessionUuid>\"."
+  id: ID!
+
+  "The session UUID embedded in the JSONL filename — globally unique across Claude Code."
+  sessionUuid: String!
+
+  "Working directory recorded in the JSONL when the session was created. Null when not yet observed."
+  cwd: String
+
+  "RFC 3339 timestamp of the first record in the JSONL."
+  firstSeenAt: Time
+
+  "RFC 3339 timestamp of the last record in the JSONL."
+  lastSeenAt: Time
+
+  "Number of newline-terminated JSON records in the JSONL."
+  messageCount: Int!
+
+  "Heartbeat: true when the JSONL was last written within the heartbeat threshold."
+  open: Boolean!
+
+  "Daemon-derived recap from the most recent `/recap` slash-command invocation in this session. Null when no `/recap` has been invoked."
+  recap: String
+
+  """
+  Absolute path to the JSONL transcript on the daemon's host.
+  Use `GET /v1/conversations/<sessionUuid>/jsonl` (hosted on the same listener as `/graphql`) to read transcript bodies.
+  """
+  jsonlPath: String!
+
+  "User-set title from the JSONL `type: \"custom-title\"` record. Null when the session has not yet recorded one."
+  customTitle: String
+
+  "Sub-agent name from the JSONL `type: \"agent-name\"` record. Null when the session has not yet recorded one."
+  agentName: String
+
+  """
+  Live REPL instances currently bound to this JSONL. Typically 0
+  (historical) or 1 (running). 2+ is the rare /resume case.
+  Cross-domain field; resolver here calls the `claude-instance` service.
+  """
+  liveInstances: [ClaudeInstance!]!
+}
+# daemon-meta — provider freshness counters + per-field provenance envelope.
+#
+# Owns: DaemonState, ProviderHealth, Meta.
+# Owns: Query.daemonState.
+# Owns: Mutation.daemonReload (the rare exception to L5 — affects daemon-internal
+#       state, not external truth; documented criterion in L5's text).
+#
+# Separate from `daemon-self` because health-of-providers is a
+# cross-domain rollup (one entry per provider) — it would dominate
+# daemon-self's surface if folded in.
+
+extend type Query {
+  """
+  Daemon-side health surface for diagnosing "is it me or the daemon"
+  (#469 F9). Reports per-provider refresh state and a daemon-wide
+  meta envelope. Cheap — reads in-memory counters, no I/O.
+  """
+  daemonState: DaemonState!
+}
+
+extend type Mutation {
+  """
+  Reload the daemon's loaded config (`~/.orchard/config.json`) without
+  restarting. Returns the post-reload DaemonState so callers can verify
+  the new state took effect.
+
+  This is the canonical exception to L5 ("mutations exec scripts") —
+  it affects daemon-internal state (loaded config + provider registration),
+  not external truth.
+  """
+  daemonReload: DaemonState!
+}
+
+"""
+Daemon-wide health/diagnostic snapshot. v1 returns provider-level
+counters and the global startedAt / uptime; future versions can grow
+subscription/connection counts.
+"""
+type DaemonState {
+  "RFC3339 timestamp the daemon started serving."
+  startedAt: String!
+
+  "Daemon uptime in seconds."
+  uptimeS: Int!
+
+  "Per-provider freshness/error rollup."
+  providers: [ProviderHealth!]!
+}
+
+"""
+A daemon provider's health snapshot — what its most recent refresh
+did, when, and how it ended.
+"""
+type ProviderHealth {
+  "Stable provider name (e.g. \"tmux\", \"git\", \"gh\", \"ps\")."
+  name: String!
+
+  "True when the provider has been wired into this daemon."
+  configured: Boolean!
+
+  "RFC3339 timestamp of the last successful refresh; null until first success."
+  lastSuccessfulRefresh: String
+
+  "Reason for the most recent failure; null when none observed since startup."
+  lastFailureReason: String
+
+  "Total successful refreshes since daemon boot."
+  refreshCount: Int!
+
+  "Total refresh failures since daemon boot."
+  failureCount: Int!
+}
+
+"""
+Provenance and freshness envelope used to disambiguate "valid empty"
+from "data unavailable" (#469 F1). Returned alongside list/composite
+fields whose underlying providers can fail or be uninitialised.
+
+`provider` is a stable label (e.g. "tmux", "git", "gh"). `failureReason`
+is non-null when the most recent refresh did not succeed.
+`lastSuccessfulFetchAt` is the RFC3339 timestamp of the most recent
+provider refresh that completed cleanly; null when no successful
+refresh has happened yet.
+"""
+type Meta {
+  "Provider this envelope describes. Matches the labels in DaemonState.providers[]."
+  provider: String!
+
+  "RFC3339 timestamp of the most recent successful refresh; null when never observed."
+  lastSuccessfulFetchAt: String
+
+  "Human-readable reason the most recent refresh failed; null when healthy or never attempted."
+  failureReason: String
+}
+# daemon-self — daemon liveness, version, schema bytes, node-id dispatcher.
+#
+# Owns: Health.
+# Owns: Query.{health, version, schemaSDL, node}.
+#
+# Health-of-providers + freshness counters live in `daemon-meta`.
+# `Query.gh` (pass-through) lives in `daemon/gh/` per S16b.
+
+extend type Query {
+  "Liveness probe — returns daemon health and uptime."
+  health: Health!
+
+  "Daemon binary version. Set at build time via -ldflags -X main.version=<semver>; `dev` for plain `go build`."
+  version: String!
+
+  """
+  Returns the daemon's embedded schema.graphql contents as a single
+  string. Lets agents on remote/fresh boxes self-describe even when
+  introspection is gated (#469 F10). The bytes are baked into the
+  daemon binary at build time via go:embed; they reflect whatever
+  schema the running daemon was built against.
+  """
+  schemaSDL: String!
+
+  """
+  Generic node lookup by globally-unique id. Returns the node if it
+  resides on the local daemon; ids whose host prefix matches a configured
+  peer are transparently proxied through the peerproxy surface
+  (federation transport). Unknown hosts return null.
+
+  Implemented as a prefix-registry dispatcher — each domain registers
+  its `<Type>:` prefix + lookup. The registry lives in `daemon/node.go`
+  at the shell, not in a domain.
+  """
+  node(id: ID!): Node
+}
+
+type Health {
+  "Daemon health status — 'ok' when serving."
+  status: String!
+
+  "Uptime in seconds since daemon started."
+  uptimeS: Int!
+}
+# gh — GitHub API: repos (github view), issues, pull requests, workflow runs.
+#
+# Owns: PullRequest, PullRequestReview, Issue, Label, IssueComment, WorkflowRun.
+# Owns: MergeableState, ReviewDecisionEnum, CiStatus, PullRequestState, IssueState.
+# Owns: Query.{gh, pullRequests, openPullRequests, issues, issue, pullRequest, workflowRuns}.
+# Owns: Subscription.{pullRequestChanged, runChanged}.
+#
+# Mutations (to be added in #613): PR review/label/comment, issue create. All exec `scripts/<op>`.
+#
+# S16 (typed core + pass-through): the typed core is the queries below
+# (`pullRequests`, `issue`, `workflowRuns`, etc.). The pass-through escape
+# hatch is `Query.gh(query, variables): JSON` — opaque, uncached, returns
+# whatever GitHub returns.
+#
+# Cross-domain `extend type Worktree` (S15b: gh is the data producer):
+#   Worktree.pr    — PR whose headRef matches the worktree branch
+#   Worktree.issue — Issue linked from the worktree branch name
+
+extend type Query {
+  """
+  Pass-through (S16): forward an arbitrary GraphQL query to GitHub's API
+  using the daemon's configured gh credentials. The `query` argument is a
+  GitHub-schema GraphQL document; the returned JSON is GitHub's full
+  envelope including the `data` and any `errors` keys.
+
+  Pass-through is read-only by design: it is exposed as a Query field,
+  not a Mutation, so callers cannot bypass orchardist guardrails by
+  routing mutations through the daemon. Auth, rate limiting, and base
+  URL come from the gh provider; callers do not pass tokens.
+
+  Federation: peers can call `gh` through the peerproxy surface. The
+  result is opaque JSON on the orchard side — the consumer typechecks
+  against GitHub's schema directly.
+
+  When a pass-through call shape becomes load-bearing, file an issue to
+  promote it to the typed core.
+  """
+  gh(query: String!, variables: JSON): JSON
+
+  "Pull requests on a GitHub repository. `repo` is `owner/name`."
+  pullRequests(repo: String!, state: PullRequestState = OPEN): [PullRequest!]
+
+  """
+  All open pull requests on a GitHub repository, optionally filtered by
+  author login. Unlike `Repo.pullRequests` (which only sees PRs whose
+  branch is locally checked out), this returns every open PR on the
+  repo. Used by /standup-style "give me all my open PRs" gathers (#435).
+  """
+  openPullRequests(repo: String!, author: String): [PullRequest!]!
+
+  "Issues on a GitHub repository. `repo` is `owner/name`."
+  issues(repo: String!, state: IssueState = OPEN): [Issue!]
+
+  """
+  Look up a single issue by repo + number. Resolves null when the issue
+  doesn't exist, the daemon isn't authenticated against GitHub, or the
+  repo isn't accessible. Use this for "is this number still open?"
+  cross-references against numbers from external sources (Slack lists,
+  comments, docs) — replaces ad-hoc `gh api repos/.../issues/N`
+  shellouts (#436).
+  """
+  issue(repo: String!, number: Int!): Issue
+
+  """
+  Look up a single pull request by repo + number. Same shape as
+  `issue(...)`. Returns null when not found (#436).
+  """
+  pullRequest(repo: String!, number: Int!): PullRequest
+
+  "Workflow runs on a GitHub repository. `repo` is `owner/name`."
+  workflowRuns(repo: String!): [WorkflowRun!]
+}
+
+extend type Subscription {
+  """
+  Push-on-change for a specific pull request (#469 F7). Emits the
+  freshly-loaded PullRequest every time the gh provider invalidates an
+  id whose repo+number match. Returns null until the PR has been seen
+  by the gh provider at least once. Equivalent to
+  `nodeChanged(id: \"PullRequest:<owner>/<name>:<n>\")` but typed.
+  """
+  pullRequestChanged(repo: String!, number: Int!): PullRequest!
+
+  """
+  Push-on-change for workflow runs scoped to a repo + branch (#469 F7).
+  Emits the freshly-loaded WorkflowRun on each gh invalidation that
+  matches the repo+branch filter. Useful for "watch CI for this
+  branch" without round-tripping through nodeChanged on each run id.
+  """
+  runChanged(repo: String!, branch: String!): WorkflowRun!
+}
+
+"Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
+enum MergeableState {
+  MERGEABLE
+  CONFLICTING
+  UNKNOWN
+}
+
+"Reviewer decision on a PR. Null when no review activity yet."
+enum ReviewDecisionEnum {
+  APPROVED
+  CHANGES_REQUESTED
+  REVIEW_REQUIRED
+  COMMENTED
+  DISMISSED
+}
+
+"Aggregated CI status across all check runs and statuses on the PR head sha."
+enum CiStatus {
+  SUCCESS
+  FAILURE
+  PENDING
+  UNKNOWN
+}
+
+"State filter for the pullRequests query."
+enum PullRequestState {
+  OPEN
+  CLOSED
+  MERGED
+  ALL
+}
+
+"State filter for the issues query."
+enum IssueState {
+  OPEN
+  CLOSED
+  ALL
+}
+
+"""
+A pull request on a GitHub repository. Sourced from the GitHub REST API.
+"""
+type PullRequest implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  number: Int!
+  title: String!
+  body: String!
+  state: PullRequestState!
+  draft: Boolean!
+  authorLogin: String!
+  baseRef: String!
+  headRef: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+  reviews: [PullRequestReview!]
+  comments: [IssueComment!]
+  mergeable: MergeableState!
+  mergeStateStatus: String!
+  reviewDecision: ReviewDecisionEnum
+  statusCheckRollup: CiStatus!
+  labels: [Label!]!
+}
+
+"A review submitted on a pull request."
+type PullRequestReview {
+  id: ID!
+  authorLogin: String!
+  state: String!
+  body: String!
+  submittedAt: String!
+}
+
+"""
+An issue on a GitHub repository. Pull requests are excluded.
+"""
+type Issue implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  number: Int!
+  title: String!
+  body: String!
+  state: IssueState!
+  authorLogin: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+  comments: [IssueComment!]
+
+  """
+  User-assigned labels on the issue. Orchard lifecycle / phase labels
+  (e.g. `in-progress`, `pr-ready`) are filtered out — only the user-set
+  ones are surfaced, matching `PullRequest.labels` semantics.
+  """
+  labels: [Label!]!
+
+  """
+  Issues that block this one (#563). Mirrors GitHub's
+  `Issue.blockedByIssues` connection, fetched via the preview-gated
+  GraphQL features `issue_types,sub_issues`. Empty list when none.
+  """
+  blockedByIssues: [Issue!]!
+
+  """
+  Issues this one blocks (#563). The inverse of `blockedByIssues`.
+  Empty list when none.
+  """
+  blockingIssues: [Issue!]!
+
+  """
+  Sub-issues nested under this issue when it acts as a tracker (#563).
+  Empty list when this issue is a leaf, not a tracker.
+  """
+  subIssues: [Issue!]!
+
+  """
+  Parent tracker issue when this issue is itself a sub-issue (#563).
+  Null when this issue has no parent.
+  """
+  parentIssue: Issue
+}
+
+"""
+A GitHub label attached to an issue or pull request. The `color` and
+`description` fields mirror the GitHub REST/GraphQL payloads and are
+empty strings (not null) when GitHub omits them.
+"""
+type Label {
+  "The label's textual name (e.g. `bug`, `P0`)."
+  name: String!
+
+  """
+  The label's hex color without leading `#` (e.g. `d73a4a`). Empty
+  string when GitHub returns no color for the label.
+  """
+  color: String!
+
+  """
+  The label's short description, as set on the repository's labels
+  page. Empty string when no description is set.
+  """
+  description: String!
+}
+
+"A comment on an issue or pull request thread."
+type IssueComment {
+  id: ID!
+  authorLogin: String!
+  body: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+A GitHub Actions workflow run.
+"""
+type WorkflowRun implements Node {
+  id: ID!
+  repoOwner: String!
+  repoName: String!
+  runId: Int!
+  name: String!
+  workflowPath: String!
+  status: String!
+  conclusion: String!
+  headBranch: String!
+  headSHA: String!
+  url: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — gh produces PR/issue data.
+# The resolver lives in daemon/gh/ and calls the gh service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  PR whose headRef matches this worktree's branch.
+
+  Selection precedence (#489): an OPEN PR is returned when one exists;
+  otherwise the most-recent CLOSED/MERGED PR with the matching headRef is
+  returned so the TUI stale-fade UX can render the post-merge cleanup
+  affordance. The `state` field on the returned PullRequest disambiguates
+  between live and post-merge.
+
+  Null when no PR has ever existed for this branch in any state, when the
+  branch is detached, or when the branch is the project's default branch.
+  Resolver calls the gh service (S15b: producer domain owns the field).
+  """
+  pr: PullRequest
+
+  """
+  Issue linked from the worktree's branch (issue<N>/... convention).
+  Null when the branch name does not match the convention.
+  Resolver calls the gh service (S15b: producer domain owns the field).
+  """
+  issue: Issue
+}
+# git — local git repos: worktrees, branches, refs, status, ahead/behind.
+#
+# Owns: Repo, Worktree.
+# Owns: Query.repos, Subscription.worktreeChanged.
+# Mutations (to be added in #613): worktreeCreate, worktreeRemove, worktreeMove,
+#                                  fetch, pull, push. All exec `scripts/<op>`.
+#
+# Cross-domain fields on Worktree live in the PRODUCING domain's partial (S15b):
+#   processes       → daemon/ps/schema.graphql
+#   tmuxPanes       → daemon/tmux/schema.graphql
+#   tmuxSession     → daemon/tmux/schema.graphql
+#   claudeInstances → daemon/claude-instance/schema.graphql
+#   pr              → daemon/gh/schema.graphql
+#   issue           → daemon/gh/schema.graphql
+
+extend type Query {
+  "All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`."
+  repos: [Repo!]!
+
+  """
+  Pass-through (S16): run an arbitrary git command in the named worktree
+  and return its stdout, stderr, and exit code as opaque JSON. Used when
+  the typed core does not yet cover a call shape (e.g. `git blame`,
+  `git stash list`, `git log --pretty=...`).
+
+  Read-only by design — exposed as a Query field, not a Mutation. Writes
+  (commit, push, pull, fetch, worktree create/rm) go through typed
+  mutations that each exec `scripts/git-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  git(worktreeId: ID!, args: [String!]!): JSON
+}
+
+extend type Subscription {
+  """
+  Per-repo worktree firehose (#469 F7). Emits the repo's full
+  worktree list whenever the git provider invalidates any worktree
+  belonging to the named repo. The argument is the Repo id.
+  """
+  worktreeChanged(repo: ID!): [Worktree!]!
+}
+
+"A repo registered in the orchard config. The config file is the source of truth; the daemon reflects it via fsnotify."
+type Repo implements Node {
+  "Stable identifier derived from `slug`. Survives re-registration."
+  id: ID!
+
+  "GitHub-style `owner/repo` slug. The repo's identity."
+  slug: String!
+
+  "Absolute filesystem path to the repo's working tree."
+  path: String!
+
+  "Worktrees discovered for this repo — the main checkout plus everything under `.git/worktrees/`."
+  worktrees: [Worktree!]!
+}
+
+"A git worktree — either the project's main checkout or one created with `git worktree add`."
+type Worktree implements Node {
+  "Stable identifier formatted as `<project_id>:<worktree_name>`. The main checkout uses the worktree name `main`."
+  id: ID!
+
+  "Absolute filesystem path to the worktree."
+  path: String!
+
+  "Branch the worktree currently has checked out. Empty string for detached HEAD or bare worktrees."
+  branch: String!
+
+  "Resolved 40-character SHA the worktree's HEAD points at. Empty string when HEAD cannot be resolved (e.g. an unborn branch)."
+  head: String!
+
+  "True when HEAD references a deleted branch or otherwise fails to resolve to a commit. Bare worktrees still appear in the list — they just have no live branch."
+  bare: Boolean!
+
+  "Hostname this worktree was discovered on. v1: always 'local'. Federation populates per-peer."
+  host: String!
+
+  "owner/repo slug derived from origin remote. Null when origin is not a GitHub URL."
+  repo: String
+
+  """
+  Number of commits the worktree's branch is AHEAD of its upstream tracking
+  branch (#483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  ahead: Int
+
+  """
+  Number of commits the worktree's branch is BEHIND its upstream tracking
+  branch (#483). Computed from `git rev-list --left-right --count <upstream>...HEAD`.
+  Null when the branch has no upstream configured, when HEAD is detached, or
+  when the count cannot be determined.
+  """
+  behind: Int
+}
+# host-identity — machine identity + resource load.
+#
+# Owns: Host, ResourceLoad.
+# Owns: Query.{host, hosts, peers}.
+# Note: Host.processes lives in `ps` (extend type Host).
+#       Host.hostServices lives in `host-services` (extend type Host).
+
+extend type Query {
+  "The local machine running this daemon. Identity is one-shot at boot; resource load refreshes every 5s."
+  host: Host!
+
+  "All hosts known to this daemon. v1: only the local host. Federation adds remote peers."
+  hosts: [Host!]!
+
+  """
+  All peer hosts known to this daemon, flattened across `hosts[*].peers`.
+
+  Sugar for the common case where callers want every peer without
+  traversing the (currently single-element) `hosts` list. Equivalent to
+  `{ hosts { peers { ... } } }` with dedup by `id`. The local host is not
+  itself a peer — it is `Query.host`.
+  """
+  peers: [Host!]!
+}
+
+"""
+A machine that orchard reflects. Identity is the OS-issued machine id
+(/etc/machine-id on Linux, IOPlatformUUID on macOS). Resource load
+samples on a 5s TTL.
+"""
+type Host implements Node {
+  "Stable orchard id — \"Host:<machineId>\"."
+  id: ID!
+
+  "OS-issued machine id. Linux: /etc/machine-id. macOS: IOPlatformUUID."
+  machineId: String!
+
+  "Hostname as reported by the OS at boot."
+  hostname: String!
+
+  "Operating system family — 'darwin', 'linux', etc."
+  os: String!
+
+  "Kernel version string (e.g. 'Darwin 25.4.0', 'Linux 6.5.0'). Nullable when unavailable."
+  kernel: String
+
+  "Reachable network address. v1: null for the local host; federation populates for peers."
+  address: String
+
+  "True when the daemon last heard from this host. v1: always true for local host."
+  reachable: Boolean!
+
+  "RFC 3339 timestamp of the last contact. Empty string when the daemon has never reached this host; pair with `reachable=false` to detect 'never seen live'."
+  lastSeenAt: String!
+
+  "Live CPU, memory, disk, and load averages. Polled every 5s; null briefly at cold boot before the first sample lands."
+  resourceLoad: ResourceLoad
+
+  "Peer hosts this daemon federates with. v1: always empty; federation populates."
+  peers: [Host!]!
+
+  """
+  Daemon binary version running on this host. Set at build time via
+  -ldflags -X main.version=<semver>; `dev` for plain `go build`.
+  Non-null on the local host (always at least "dev"). Null for a peer
+  host whose probe has not yet succeeded — "unknown" is represented as
+  null rather than an error so dashboards can render partial information.
+  """
+  version: String
+
+  "Free-form description of what this host is for. Set via the daemon config."
+  purpose: String
+}
+
+"""
+A snapshot of a host's resource utilisation. Percentages are 0..100.
+Load averages are the kernel-reported 1/5/15-minute moving averages.
+"""
+type ResourceLoad {
+  "Aggregate CPU usage 0..100."
+  cpuPercent: Float!
+
+  "Used memory as a percentage of total physical memory, 0..100."
+  memPercent: Float!
+
+  "Used disk on the root filesystem as a percentage, 0..100."
+  diskPercent: Float!
+
+  "1-minute load average."
+  loadAvg1m: Float!
+
+  "5-minute load average."
+  loadAvg5m: Float!
+
+  "15-minute load average."
+  loadAvg15m: Float!
+}
+# host-services — launchd/systemd unit watchlist.
+#
+# Owns: HostService, HostServiceState, HostServiceFilter.
+# Owns: Query.hostServices.
+# Cross-domain: extend Host with hostServices field.
+
+extend type Query {
+  """
+  All host services known to this daemon, flattened across
+  `hosts[*].hostServices` and optionally filtered. Filter clauses are
+  AND-combined when multiple are set.
+
+  Sugar for the common case where callers want every service without
+  traversing `hosts`. Per-host scoping is still available via
+  `Host.hostServices`.
+  """
+  hostServices(filter: HostServiceFilter): [HostService!]!
+
+  """
+  Pass-through (S16): run an arbitrary launchctl / systemctl invocation
+  on the named host and return stdout/stderr/exit code as opaque JSON.
+  Used when the typed core does not yet cover a call shape (e.g.
+  `launchctl print`, `systemctl --user show <unit>`).
+
+  Read-only by design. Service lifecycle writes (start/stop/restart)
+  go through typed mutations that each exec `scripts/service-<op>.sh
+  --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  hostServiceCtl(host: String!, args: [String!]!): JSON
+}
+
+extend type Host {
+  "Curated launchd / systemd watchlist for this host, drawn from `services` in ~/.orchard/config.json."
+  hostServices: [HostService!]!
+}
+
+"""
+A curated launchd (macOS) or systemd-user (Linux) unit on a host.
+
+The watchlist is config-driven — `services` in `~/.orchard/config.json`.
+Defaults to platform-correct unit labels (macOS: reverse-DNS launchd
+Labels such as `com.gitorchard.orchard`; Linux: `.service` unit names
+such as `orchard.service`). Watched services that don't exist on the host
+surface as `state: not_installed` rather than failing the resolver;
+`state: unknown` is reserved for unrecognised service-manager output.
+"""
+type HostService implements Node {
+  "Stable orchard id — \"HostService:<host_machineId>:<name>\"."
+  id: ID!
+
+  "The host this service belongs to."
+  host: Host!
+
+  "Service name as written in config (e.g. \"claude-remote\")."
+  name: String!
+
+  "Lifecycle state of the service on the host."
+  state: HostServiceState!
+
+  "RFC 3339 timestamp the service entered its current state."
+  since: String
+
+  "Most recent exit code of the service's last completed run."
+  exitCode: Int
+
+  "Last 20 log lines from the service."
+  logTail: String
+}
+
+"""
+Lifecycle state of a HostService.
+
+  - `active`        — running and healthy.
+  - `inactive`      — stopped cleanly; not currently running.
+  - `failed`        — exited with non-zero status or crashed.
+  - `not_installed` — no corresponding service-manager unit on this host.
+  - `unknown`       — service-manager returned output the daemon could
+                      not interpret (parse failure, unexpected error).
+"""
+enum HostServiceState {
+  active
+  inactive
+  failed
+  not_installed
+  unknown
+}
+
+"""
+Filter for `Query.hostServices`. AND-combined when multiple are set.
+
+`host` matches a `Host.machineId`. `name` is an exact-match service
+name (no glob, no substring). `state` filters by lifecycle state.
+"""
+input HostServiceFilter {
+  "Match services on this host machine id."
+  host: String
+
+  "Exact service name (e.g. \"com.gitorchard.orchard\")."
+  name: String
+
+  "Lifecycle state."
+  state: HostServiceState
+}
+
+"""
+Input for service lifecycle mutations. Single input object per S4.
+"""
+input ServiceLifecycleInput {
+  "machineId of the host owning the service. v1: must be the local machine."
+  host: String!
+
+  "Service name as written in config (e.g. \"com.gitorchard.orchard\")."
+  name: String!
+}
+
+extend type Mutation {
+  """
+  Start a watched service. Idempotent — starting an already-running service
+  is a no-op per launchctl/systemctl. Execs `scripts/host-service-start.sh
+  --json` per L5.
+  """
+  serviceStart(input: ServiceLifecycleInput!): HostService!
+
+  """
+  Stop a watched service. Execs `scripts/host-service-stop.sh --json`
+  per L5. Returns the affected node per L8.
+  """
+  serviceStop(input: ServiceLifecycleInput!): HostService!
+
+  """
+  Restart a watched service. Execs `scripts/host-service-restart.sh --json`
+  per L5. Returns the affected node per L8.
+  """
+  serviceRestart(input: ServiceLifecycleInput!): HostService!
+}
+
+extend type Subscription {
+  """
+  Fires after each poll-refresh of any watched service. Emits the updated
+  HostService node so clients update their normalized cache without a
+  follow-up query. Per R16, emissions happen AFTER the cache write.
+  """
+  hostServiceChanged: HostService!
+}
+# ps — OS process table.
+#
+# Owns: Process, ProcessFilter.
+# Cross-domain: extend Host with processes(filter), extend Subscription with processes.
+# Note: Process.{worktree, claudeInstance} are cross-domain back-edges; declared here,
+#       resolved here by calling into git's and claude-jsonls' services respectively.
+#
+# Cross-domain `extend type Worktree` (S15b: ps is the data producer):
+#   Worktree.processes — processes whose cwd lies under the worktree path
+
+extend type Query {
+  """
+  Pass-through (S16): run an arbitrary `ps` / `lsof` invocation and return
+  stdout/stderr/exit code as opaque JSON. Used when the typed core does
+  not yet cover a call shape (e.g. exotic ps output formats, `lsof -i`
+  socket inspection).
+
+  Read-only by design — there are no write paths to processes in this
+  domain (signal-sending lives in a future `process` mutation if needed,
+  per L5 via a script).
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  ps(tool: PsTool!, args: [String!]!): JSON
+}
+
+"Which OS process-table tool the `ps` pass-through invokes."
+enum PsTool {
+  ps
+  lsof
+}
+
+extend type Subscription {
+  "Receive a snapshot of every cached process whenever the ps provider invalidates."
+  processes: [Process!]!
+}
+
+extend type Host {
+  "Processes visible to this host's `ps` adapter, optionally filtered."
+  processes(filter: ProcessFilter): [Process!]!
+}
+
+"Process is an OS-level process surfaced via the `ps` adapter."
+type Process implements Node {
+  "Stable id formatted as `<host>:<pid>`."
+  id: ID!
+
+  "Host this process is running on."
+  host: Host!
+
+  "Process id."
+  pid: Int!
+
+  "Parent process id (0 for kernel/launchd-rooted processes)."
+  ppid: Int!
+
+  "Command basename (e.g. 'sleep', 'claude'). Cheap, always populated."
+  command: String!
+
+  "Full argv. Slow path — opt-in (separate `ps -wwax -o pid,args` lookup)."
+  args: [String!]
+
+  """
+  Current working directory.
+
+  Slow path — `lsof` on macOS, `/proc/<pid>/cwd` on Linux (Linux fallback
+  not yet implemented; returns null silently). Resolution only fires when
+  this field is in the selection set; the `cwdLoader` coalesces concurrent
+  calls into a single batched `lsof -p <pids> -F n` shellout per request.
+
+  The de-facto opt-in path from a tmux pane is `pane.process.cwd` — there
+  is no separate flag or argument; selecting `cwd` IS the opt-in.
+  """
+  cwd: String
+
+  "Process start time (RFC3339 if parseable, otherwise the raw `lstart` field)."
+  startedAt: String!
+
+  "CPU percent as reported by ps."
+  cpuPercent: Float!
+
+  "Resident memory in bytes (RSS * 1024 from ps)."
+  memBytes: Int!
+
+  "Controlling terminal, or null if none."
+  tty: String
+
+  "Worktree this process is running inside, derived from cwd. Cross-domain join into `git`."
+  worktree: Worktree
+
+  "Claude instance back-edge — populated when this pid is the foreground claude pid. Cross-domain join into `claude-jsonls`."
+  claudeInstance: ClaudeInstance
+}
+
+# ProcessFilter is applied at the resolver layer over the cached process
+# list. Multiple filters are AND-combined.
+input ProcessFilter {
+  "Match processes whose command basename is in this list."
+  commandIn: [String!]
+
+  "Match processes whose cwd starts with this prefix. Forces cwd resolution."
+  cwdPrefix: String
+
+  "Match processes by pid."
+  pidIn: [Int!]
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — ps produces process data.
+# The resolver lives in daemon/ps/ and calls the ps service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  Processes whose cwd lies under `path`.
+  Resolver calls the ps service (S15b: producer domain owns the field).
+  """
+  processes: [Process!]!
+}
+# tmux — tmux server: sessions, windows, panes, clients.
+#
+# Owns: TmuxServer, TmuxSession, TmuxWindow, TmuxPane, TmuxClient.
+# Owns: TmuxSessionSort, TmuxSessionFilter, TmuxPaneFilter.
+# Owns: Query.{tmuxServer, tmuxSessions, tmuxPanes}.
+# Owns: Subscription.tmuxSessionsChanged.
+# Owns: Mutation.sendTextToPane (L5: execs `scripts/tmux-send-text.sh`).
+#
+# Cross-domain `extend type Worktree` (S15b: tmux is the data producer):
+#   Worktree.tmuxPanes    — panes whose cwd matches the worktree path
+#   Worktree.tmuxSession  — most-recently-active session among those panes
+#
+# Cross-domain consumers (per dependency-graph north star):
+#   ps             → TmuxPane.process needs the Process node.
+#   claude-jsonls  → TmuxPane.claudeInstance is derived from a Claude jsonl matching
+#                    the pane's process. The ClaudeInstance edge is owned by claude-jsonls;
+#                    tmux declares the field (extend) but the derivation lives there.
+
+extend type Query {
+  "The tmux server running on the local host. Null when no tmux daemon is reachable."
+  tmuxServer: TmuxServer
+
+  "Tmux sessions on the local host, optionally filtered. Empty when no tmux daemon is reachable."
+  tmuxSessions(filter: TmuxSessionFilter): [TmuxSession!]!
+
+  "Tmux panes on the local host, optionally filtered. Cheaper than walking the tree per-pane."
+  tmuxPanes(filter: TmuxPaneFilter): [TmuxPane!]!
+
+  """
+  Pass-through (S16): run an arbitrary `tmux ...` subcommand and return
+  stdout/stderr/exit code as opaque JSON. Used when the typed core does
+  not yet cover a call shape (e.g. `tmux show-options -g`,
+  `tmux list-buffers`).
+
+  Read-only by design — exposed as a Query field, not a Mutation.
+  Writes (`send-keys`, `kill-pane`, `new-window`) go through typed
+  mutations that each exec `scripts/tmux-<op>.sh --json` per L5.
+
+  Promote a load-bearing call shape to the typed core by filing an issue.
+  """
+  tmux(args: [String!]!): JSON
+}
+
+extend type Subscription {
+  """
+  Per-type session firehose (#469 F7). Emits a fresh snapshot of every
+  cached tmux session whenever the tmux provider invalidates — sessions
+  added, removed, renamed, or pane state changed.
+  """
+  tmuxSessionsChanged: [TmuxSession!]!
+}
+
+extend type Mutation {
+  """
+  Send literal text to a tmux pane, followed by an Enter keypress.
+
+  Targets the live Claude REPL hosted by the named pane. The daemon
+  invokes `tmux send-keys -t <paneId> -l <text>` to write the text
+  literally (no shell interpretation), waits briefly for tmux to
+  flush, then sends a separate Enter keypress. The two-step pattern
+  avoids the race where a combined send can submit before the text is
+  fully written.
+
+  Returns true on success. paneId is the tmux pane id (e.g. "%15"),
+  the same value surfaced by `tmuxPanes.paneId` queries. Returns an
+  error when the pane cannot be reached or tmux exits non-zero.
+
+  Use case: browser / mobile / federated clients sending chat input
+  to a Claude REPL when they can't invoke tmux directly. Desktop
+  clients prefer the Tauri command since it stays local.
+
+  Per L5: this mutation execs `scripts/tmux-send-text.sh --pane <id> --text <body> --json`.
+  """
+  sendTextToPane(paneId: String!, text: String!): Boolean!
+}
+
+# ---------------------------------------------------------------------
+# Identity scheme:
+#   TmuxServer:   `TmuxServer:<host>:<socketPath>`
+#   TmuxSession:  `TmuxSession:<host>:<sessionName>`
+#   TmuxWindow:   `TmuxWindow:<host>:<sessionName>:<windowIndex>`
+#   TmuxPane:     `TmuxPane:<host>:<paneId>`            (e.g. `%26`)
+#   TmuxClient:   `TmuxClient:<host>:<clientName>`
+# ---------------------------------------------------------------------
+
+"""
+The tmux daemon process on a host. v1 surfaces the local tmux only;
+multi-server setups (custom -L socket names) are reachable via socketPath.
+"""
+type TmuxServer implements Node {
+  "Stable id `TmuxServer:<host>:<socketPath>`."
+  id: ID!
+
+  "Filesystem path of the tmux socket the daemon is listening on."
+  socketPath: String!
+
+  "Pid of the tmux daemon process. Null if not currently determinable."
+  pid: Int
+
+  "True while the tmux daemon answers a heartbeat command."
+  alive: Boolean!
+
+  """
+  Sessions hosted on this server. Defaults to LAST_ACTIVITY which orders
+  most-recently-active first (lex name break ties), matching the sidebar's
+  "what should I look at next" intent. Pass NAME for stable lex order.
+  """
+  sessions(sort: TmuxSessionSort = LAST_ACTIVITY): [TmuxSession!]!
+
+  "Clients currently connected to this server."
+  clients: [TmuxClient!]!
+}
+
+"""
+A named tmux session. Stable across detach/reattach. Identity is the
+session name within its server.
+"""
+type TmuxSession implements Node {
+  "Stable id `TmuxSession:<host>:<sessionName>`."
+  id: ID!
+
+  "Server hosting this session."
+  server: TmuxServer!
+
+  "Session name."
+  name: String!
+
+  "RFC3339 timestamp of when the session was created."
+  createdAt: String!
+
+  "True when at least one client is attached to this session."
+  attached: Boolean!
+
+  "True when at least one attached client has had activity within the freshness window (default 5m)."
+  activeAttached: Boolean!
+
+  "Clients currently attached to this session."
+  attachedClients: [TmuxClient!]!
+
+  """
+  Most recent activity timestamp across all panes/windows. RFC3339; null
+  if never observed.
+
+  Tracks tmux's `pane_activity` field, which fires on NEW pane content —
+  not on in-place redraws. A Claude REPL spinner ticking in place
+  ("Elucidating… 1m 11s") does NOT bump `lastActivityAt`, so a long
+  agentic turn can look identical to a hung pane (#506).
+
+  Do NOT use this field as a Claude-REPL stall signal. The canonical
+  signal is `ClaudeInstance.state` (working|idle|input|stalled, #501),
+  OR the heartbeat freshness exposed on `ClaudeInstance` directly.
+  `lastActivityAt` remains useful for plain shell panes and for the
+  lex-tie-breaker in `Worktree.tmuxSession`.
+  """
+  lastActivityAt: String
+
+  "Windows in this session."
+  windows: [TmuxWindow!]!
+
+  "The currently-focused window in this session."
+  currentWindow: TmuxWindow
+}
+
+"""
+A window inside a tmux session. Identity is the window index within its
+session.
+"""
+type TmuxWindow implements Node {
+  "Stable id `TmuxWindow:<host>:<sessionName>:<windowIndex>`."
+  id: ID!
+
+  "Session this window belongs to."
+  session: TmuxSession!
+
+  "Window index, zero-based as tmux numbers them when -base-index is 0."
+  index: Int!
+
+  "Window name (tmux's `window_name`)."
+  name: String!
+
+  "True when this window is the currently-focused window in its session."
+  active: Boolean!
+
+  "Panes in this window."
+  panes: [TmuxPane!]!
+
+  "The currently-focused pane in this window."
+  currentPane: TmuxPane
+}
+
+"""
+A pane inside a window — the leaf where commands actually run. Identity
+is the global tmux pane id (e.g. `%26`) within a host.
+
+Content fields (`content`, `contentRange`, `contentFull`) shell out to
+`tmux capture-pane`. They are not poll-cached; queries that ask for them
+pay the per-call cost.
+"""
+type TmuxPane implements Node {
+  "Stable id `TmuxPane:<host>:<paneId>`."
+  id: ID!
+
+  "Window this pane belongs to."
+  window: TmuxWindow!
+
+  "tmux pane id, including the leading `%` (e.g. `%26`)."
+  paneId: String!
+
+  "Pane title (tmux `pane_title`)."
+  title: String!
+
+  """
+  Foreground command name as reported by `tmux #{pane_current_command}`.
+  This is **whatever string tmux's pane_current_command emits**, NOT a
+  guaranteed basename. In practice that means:
+
+  - For most processes: a basename like `'zsh'` or `'vim'`.
+  - For Node-wrapped CLIs (claude, npx tools, etc.): often the wrapper's
+    version string (`'2.1.126'`) instead of the friendly name.
+
+  Operators filtering by command should not assume a stable name —
+  `currentCommandIn: ["claude"]` will silently miss panes running the
+  Claude CLI when its wrapper has set comm to a version string. To
+  identify panes by program intent, walk to the foreground process via
+  `Pane.process` and inspect that node's command/args instead.
+  """
+  currentCommand: String!
+
+  "Pid of the foreground process. Null when tmux reports no current pid."
+  currentPid: Int
+
+  "Pane width in cells."
+  width: Int!
+
+  "Pane height in cells."
+  height: Int!
+
+  "True when tmux marks the pane as dead (process exited, awaiting reuse/close)."
+  dead: Boolean!
+
+  "Clients with their cursor on this pane."
+  watchingClients: [TmuxClient!]!
+
+  """
+  OS-level Process for the pane's foreground pid (`pane_current_pid`).
+
+  Null when tmux reports no foreground pid (`currentPid == 0`) or when the
+  pid is no longer in the cached ps snapshot (process exited or just
+  spawned). Cache-only — never triggers a fresh `ps` shellout under a
+  request goroutine.
+
+  Selecting nested fields (e.g. `process { cwd }`) chains through the
+  standard Process resolvers; cwd resolution is the slow path described on
+  `Process.cwd` and only fires when the client selects it.
+
+  Cross-domain field; resolver here calls the `ps` service.
+  """
+  process: Process
+
+  """
+  Claude instance running in this pane, if the foreground command is claude.
+  Derived from matching the pane's process pid to a Claude jsonl tail.
+  Cross-domain field; resolver here calls the `claude-jsonls` service.
+  """
+  claudeInstance: ClaudeInstance
+
+  "Last N lines of pane output, default 50. Strips ANSI escapes by default."
+  content(lines: Int = 50, stripAnsi: Boolean = true): String!
+
+  "Output between two history line numbers (tmux's -S/-E semantics)."
+  contentRange(startLine: Int!, endLine: Int!, stripAnsi: Boolean = true): String!
+
+  "Full visible-history pane buffer."
+  contentFull(stripAnsi: Boolean = true): String!
+}
+
+"""
+A client (terminal) attached to a tmux server. Multiple clients may share
+the same session/window/pane.
+"""
+type TmuxClient implements Node {
+  "Stable id `TmuxClient:<host>:<clientName>`."
+  id: ID!
+
+  "Server this client connects to."
+  server: TmuxServer!
+
+  "Session this client is attached to."
+  session: TmuxSession!
+
+  "Client tty path (e.g. `/dev/ttys003`)."
+  tty: String!
+
+  "Hostname the client originated from. Empty for local clients."
+  hostname: String!
+
+  "TERM value the client advertises (e.g. `xterm-256color`)."
+  termName: String!
+
+  "RFC3339 attach time."
+  attachedAt: String!
+
+  "RFC3339 last activity time. Null if tmux returned no value."
+  lastActivityAt: String
+
+  "True when the client is in read-only mode."
+  readonly: Boolean!
+
+  "Window the client is currently looking at."
+  currentWindow: TmuxWindow
+
+  "Pane the client is currently looking at."
+  currentPane: TmuxPane
+}
+
+# ---------------------------------------------------------------------
+# Filter inputs.
+# ---------------------------------------------------------------------
+
+"Filter for `Query.tmuxSessions`. AND-combined when multiple are set."
+input TmuxSessionFilter {
+  "Session names to include."
+  nameIn: [String!]
+
+  "Only include sessions with at least one attached client."
+  attachedOnly: Boolean
+
+  "Only include sessions with active-attached clients within the freshness window."
+  activeAttachedOnly: Boolean
+}
+
+"Sort key for `TmuxServer.sessions`."
+enum TmuxSessionSort {
+  "Most-recently-active first (lastActivityAt DESC). Lex-lower name breaks ties; sessions with no activity rank below those with one."
+  LAST_ACTIVITY
+  "Stable lex order by session name."
+  NAME
+}
+
+"Filter for `Query.tmuxPanes`. AND-combined when multiple are set."
+input TmuxPaneFilter {
+  "Pane ids (e.g. `%26`) to include."
+  paneIdIn: [String!]
+
+  """
+  Only include panes whose `currentCommand` is in this list.
+
+  Note: `currentCommand` is the raw tmux `pane_current_command` value,
+  not a normalised basename. Wrapper processes (notably Node-based CLIs
+  like the Claude CLI) often surface as their version string rather
+  than the program name, so a filter like `["claude"]` may match zero
+  panes that are clearly running Claude. See the doc on
+  `TmuxPane.currentCommand` for the full caveat.
+  """
+  currentCommandIn: [String!]
+
+  "Only include panes in these session names."
+  sessionIn: [String!]
+
+  "Only include panes whose `pane_title` matches the substring (case-sensitive)."
+  titleContains: String
+
+  "Only include dead (or non-dead) panes."
+  dead: Boolean
+
+  """
+  Only include panes whose foreground-process cwd equals `cwd` exactly or has
+  `cwd + '/'` as a prefix (server-side join via the ps provider, same path as
+  Worktree.tmuxPanes). Requires ps provider to be wired; panes whose cwd cannot
+  be resolved are silently skipped. ADR-022 axis: PanesByCwd.
+  """
+  cwd: String
+
+  """
+  Only include panes whose foreground-process command basename contains this
+  substring (case-insensitive). Uses the ps provider for the real command name
+  so node-wrapped CLIs (e.g. `node /usr/local/bin/claude`) resolve correctly;
+  falls back to `currentCommand` when ps is unavailable. ADR-022 axis:
+  PanesByCommand.
+  """
+  command: String
+}
+
+# ---------------------------------------------------------------------
+# S15b: cross-domain `extend type Worktree` — tmux produces pane data.
+# The resolver lives in daemon/tmux/ and calls the tmux service.
+# ---------------------------------------------------------------------
+
+extend type Worktree {
+  """
+  Tmux panes whose foreground-process cwd equals `path` exactly OR has `path + '/'`
+  as a prefix (#511). Derived from a server-side join of pane.process.cwd against
+  the worktree path. Ordered deterministically by paneId ascending.
+  Resolver calls the tmux service (S15b: producer domain owns the field).
+  """
+  tmuxPanes: [TmuxPane!]!
+
+  """
+  The most-recently-active tmux session among the panes returned by `tmuxPanes` (#511).
+  When two sessions tie on lastActivityAt, the session with the lexicographically-first
+  name wins. Null when no panes match the worktree path.
+  Resolver calls the tmux service (S15b: producer domain owns the field).
+  """
+  tmuxSession: TmuxSession
+}

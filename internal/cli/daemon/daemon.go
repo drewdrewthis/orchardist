@@ -35,7 +35,6 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
@@ -234,7 +233,6 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 		server.WithClaudeProjects(claudeProjectsProvider),
 		server.WithConversationsJSONL(claudeProjectsProvider, claudeProjectsRoot),
 		server.WithClaudeAccount(claudeAccountProvider),
-		server.WithContracts(contracts.New(logger)),
 		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),
 		server.WithLocalEvents(localEvents),

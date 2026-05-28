@@ -1,12 +1,12 @@
 {
-  "description": "Conversation-contracts hooks: auto-open a contract on first user message; surface loose-ends inventory at Stop.",
+  "description": "Conversation-contracts hooks: auto-open the conversation contract once on SessionStart (sentinel echoed to stdout, harness records it in the jsonl); surface loose-ends inventory at Stop.",
   "hooks": {
-    "UserPromptSubmit": [
+    "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/on-prompt-submit.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/on-session-start.sh\""
           }
         ]
       }

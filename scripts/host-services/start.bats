@@ -27,7 +27,12 @@ _json_err_code() {
 }
 
 @test "service manager missing: ok=false, code=service_manager_missing" {
-  output="$(PATH="$EMPTY_DIR" "$SCRIPT" --json --name "example.test.svc" 2>/dev/null || true)"
+  # Pre-resolve bash's absolute path so the empty PATH only hides
+  # launchctl/systemctl from the script — not bash itself. The shebang's
+  # `env bash` lookup would need PATH to find bash, and on macOS bash sits
+  # next to launchctl in /bin, defeating the test.
+  local bash_path; bash_path="$(command -v bash)"
+  output="$(PATH="$EMPTY_DIR" "$bash_path" "$SCRIPT" --json --name "example.test.svc" 2>/dev/null || true)"
   [ "$(echo "$output" | _json_field ok)" = "False" ]
   [ "$(echo "$output" | _json_err_code)" = "service_manager_missing" ]
 }

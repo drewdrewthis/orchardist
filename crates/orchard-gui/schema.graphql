@@ -145,72 +145,6 @@ type ClaudeInstance implements Node {
 }
 
 """
-A commitment an agent has made to deliver something. Contracts are
-sourced from session JSONL `tool_use` events (open_contract /
-close_contract) written by the conversation-contracts plugin; the
-daemon's contracts provider folds those events into Contract nodes
-and never writes the JSONL itself.
-"""
-type Contract implements Node {
-  """Reason the contract was closed. Null when status is SIGNED."""
-  closedReason: ContractReason
-
-  """The contract id as written by the plugin."""
-  contractId: ID!
-
-  """RFC 3339 timestamp the contract was first created."""
-  createdAt: String!
-
-  """Stable orchard id — "Contract:<contract_id>"."""
-  id: ID!
-
-  """RFC 3339 timestamp of the most recent event affecting this contract."""
-  lastEventAt: String!
-
-  """Owner session id (Claude session UUID) recorded at creation time."""
-  ownerSessionId: String!
-
-  """What the owner committed to deliver."""
-  statement: String!
-
-  """Folded current status."""
-  status: ContractStatus!
-
-  """RFC 3339 timestamp the contract was last touched."""
-  updatedAt: String!
-}
-
-"""Filter for `Query.contracts`. All fields are optional."""
-input ContractFilter {
-  """
-  Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts.
-  """
-  closedReasons: [ContractReason!]
-
-  """Match contracts owned by this Claude session UUID."""
-  ownerSessionId: String
-
-  """Match contracts whose folded status is in this list."""
-  statuses: [ContractStatus!]
-}
-
-"""Reason a Contract was closed. Only set when ContractStatus is CLOSED."""
-enum ContractReason {
-  ABANDONED
-  DELIVERED
-}
-
-"""
-Lifecycle states for Contract (v0.8 two-value model).
-SIGNED — contract is open and active.
-CLOSED — contract has been closed (see closedReason for delivery vs abandon).
-"""
-enum ContractStatus {
-  CLOSED
-  SIGNED
-}
-
-"""
 A Claude Code conversation, backed by the JSONL transcript that the
 Claude Code CLI writes under `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`.
 
@@ -858,12 +792,6 @@ type Query {
 
   """All live Claude instances the daemon is tracking via heartbeat files."""
   claudeInstances: [ClaudeInstance!]!
-
-  """A single Contract by id. Returns null if the id is unknown."""
-  contract(id: ID!): Contract
-
-  """Every Contract the daemon currently knows about, optionally filtered."""
-  contracts(filter: ContractFilter): [Contract!]!
 
   """
   Look up a single conversation by its globally-unique id (e.g. "Conversation:<sessionUuid>"). Null when unknown.

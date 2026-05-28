@@ -9,7 +9,6 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
@@ -37,8 +36,6 @@ func resolveNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, er
 		return resolveClaudeAccountNode(ctx, r, id)
 	case strings.HasPrefix(id, "ClaudeInstance:"):
 		return resolveClaudeInstanceNode(ctx, r, id)
-	case strings.HasPrefix(id, "Contract:"):
-		return resolveContractNode(ctx, r, id)
 	case strings.HasPrefix(id, "TmuxServer:"):
 		return resolveTmuxServerNode(ctx, r, id)
 	case strings.HasPrefix(id, "TmuxSession:"):
@@ -293,18 +290,6 @@ func resolveHostServiceNode(ctx context.Context, r *Resolver, id string) (graphq
 		return nil, nil
 	}
 	return *hostServiceFromSnapshot(snap), nil
-}
-
-func resolveContractNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {
-	if r.ContractsProvider == nil {
-		return nil, fmt.Errorf("contracts provider not configured")
-	}
-	key := contracts.ContractID(strings.TrimPrefix(id, "Contract:"))
-	c, _, err := r.ContractsProvider.Get(ctx, key)
-	if err != nil || c == nil {
-		return nil, nil
-	}
-	return *c, nil
 }
 
 func resolvePullRequestNode(ctx context.Context, r *Resolver, id string) (graphql1.Node, error) {

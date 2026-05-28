@@ -9,7 +9,6 @@
 // Workstream B-claudeprojects: WithClaudeProjects starts on Run().
 // Workstream B-claudeaccount: WithClaudeAccount starts on Run().
 // Workstream B-hostservice: WithHostService starts on Run().
-// Workstream B-contracts: WithContracts starts on Run().
 // Workstream D-gh: WithGh wires the gh provider; Run() calls Start to prime
 // the auth bootstrap (failure is non-fatal — gh-derived fields surface
 // per-field GraphQL errors when auth is unavailable).
@@ -40,7 +39,6 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
@@ -79,7 +77,6 @@ type Server struct {
 	claudeProjects *claudeprojects.Provider
 	claudeAccount  *claudeaccount.Provider
 	hostService    *hostservice.Provider
-	contracts      *contracts.Provider
 	gh             *gh.Provider
 	peerProxy      *peerproxy.Provider
 	localEvents    *peerproxy.LocalInvalidator
@@ -165,14 +162,6 @@ func WithHostService(p *hostservice.Provider) Option {
 	return func(s *Server, r *resolvers.Resolver) {
 		s.hostService = p
 		r.WithHostService(p)
-	}
-}
-
-// WithContracts attaches a contracts provider.
-func WithContracts(p *contracts.Provider) Option {
-	return func(s *Server, r *resolvers.Resolver) {
-		s.contracts = p
-		r.WithContracts(p)
 	}
 }
 
@@ -322,11 +311,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.hostService != nil {
 		if err := s.hostService.Start(ctx); err != nil {
 			return fmt.Errorf("start hostservice provider: %w", err)
-		}
-	}
-	if s.contracts != nil {
-		if err := s.contracts.Start(ctx); err != nil {
-			return fmt.Errorf("start contracts provider: %w", err)
 		}
 	}
 	if s.gh != nil {

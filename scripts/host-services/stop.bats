@@ -27,7 +27,12 @@ _json_err_code() {
 }
 
 @test "service manager missing: ok=false, code=service_manager_missing" {
-  output="$(PATH="$EMPTY_DIR" "$SCRIPT" --json --name "example.svc" 2>/dev/null || true)"
+  # Pre-resolve bash's absolute path, then run it with an empty PATH so
+  # `command -v launchctl/systemctl` inside the script find nothing. Going
+  # through `#!/usr/bin/env bash` would need PATH to contain bash's dir; on
+  # macOS bash lives next to launchctl in /bin, defeating the test.
+  local bash_path; bash_path="$(command -v bash)"
+  output="$(PATH="$EMPTY_DIR" "$bash_path" "$SCRIPT" --json --name "example.svc" 2>/dev/null || true)"
   [ "$(echo "$output" | _json_field ok)" = "False" ]
   [ "$(echo "$output" | _json_err_code)" = "service_manager_missing" ]
 }

@@ -25,7 +25,6 @@
 .PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
         install install-daemon install-dispatcher install-tui install-worktree-cli \
         test test-go test-rust bats-install bats-test \
-        plugins-contracts-mcp \
         check-feature-parity check-feature-parity-daemon check-feature-parity-tui check-feature-parity-gui
 
 VERSION ?= dev
@@ -90,17 +89,12 @@ test-go:
 test-rust:
 	cargo test
 
-# Build the conversation-contracts MCP server binary.
-# The binary is invoked by Claude Code when the plugin's MCP server is active.
-plugins-contracts-mcp:
-	go build -o plugins/conversation-contracts/bin/contracts-mcp \
-		./plugins/conversation-contracts/mcp
-
 bats-install:
 	@command -v bats >/dev/null || (echo "Installing bats..." && brew install bats-core 2>/dev/null || npm install -g bats)
 
 bats-test: bats-install
-	bats scripts/**/*.bats
+	bats -r scripts
+	bats -r plugins/conversation-contracts
 
 # Feature parity checks — verify scenario↔test annotation coverage.
 # See docs/testing-philosophy.md for the zero-tolerance policy.

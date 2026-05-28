@@ -1,7 +1,7 @@
 # ADR-023: Contracts spec ownership belongs to the plugin + marketplace
 
 ## Status
-Accepted.
+Accepted (2026-05-19). Amended 2026-05-28 (PR #666): the daemon-side `contracts` provider was deleted entirely — the v0.9 plugin emits sentinels into the session jsonl and folds them locally via `scripts/fold-contracts.sh`, with no daemon participation. The principle this ADR articulates is unchanged and now stronger: the plugin is the sole owner of contract spec, lifecycle, and on-disk shape. If cross-session observability is later wanted, it should ride on top of `ClaudeSession` (an "enhanced session" derived field), not a separate node type.
 
 ## Context
 

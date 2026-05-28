@@ -10,7 +10,6 @@ import (
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
 	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
@@ -42,7 +41,6 @@ type Resolver struct {
 	ClaudeProjects      *claudeprojects.Provider
 	ClaudeAccount       *claudeaccount.Provider
 	HostServiceProvider *hostservice.Provider
-	ContractsProvider   *contracts.Provider
 	GH                  *gh.Provider
 	PeerProxy           *peerproxy.Provider
 	LocalEvents         *peerproxy.LocalInvalidator
@@ -107,12 +105,6 @@ func (r *Resolver) WithClaudeAccount(p *claudeaccount.Provider) *Resolver {
 // WithHostService wires the hostservice provider.
 func (r *Resolver) WithHostService(p *hostservice.Provider) *Resolver {
 	r.HostServiceProvider = p
-	return r
-}
-
-// WithContracts wires the contracts provider.
-func (r *Resolver) WithContracts(p *contracts.Provider) *Resolver {
-	r.ContractsProvider = p
 	return r
 }
 

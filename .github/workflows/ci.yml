@@ -68,6 +68,26 @@ jobs:
             exit 1
           fi
 
+  bats:
+    name: Bats (scripts + plugin)
+    runs-on: ubuntu-latest
+    # Runs every bats suite: the conversation-contracts plugin (pure bash +
+    # markdown, exercises hook/fold scripts) and the scripts/**/*.bats suite
+    # (L2-envelope assertions on the contracts-adjacent shell scripts under
+    # scripts/gh, scripts/git, scripts/host-services, scripts/tmux).
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run plugin bats
+        run: bats -r plugins/conversation-contracts
+      - name: Run scripts bats
+        run: bats -r scripts
+
   gui-stop-bleed:
     name: GUI stop-bleed (no new <style> blocks)
     runs-on: ubuntu-latest

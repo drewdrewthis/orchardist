@@ -18,7 +18,6 @@ import (
 	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/contracts"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
 	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
@@ -591,27 +590,6 @@ func (r *queryResolver) ClaudeAccounts(ctx context.Context) ([]*graphql1.ClaudeA
 	return out, nil
 }
 
-// Contract is the resolver for the contract field.
-func (r *queryResolver) Contract(ctx context.Context, id string) (*graphql1.Contract, error) {
-	if r.ContractsProvider == nil {
-		return nil, fmt.Errorf("contracts provider not initialised")
-	}
-	key := contracts.ContractID(stripContractIDPrefix(id))
-	c, _, err := r.ContractsProvider.Get(ctx, key)
-	if err != nil {
-		return nil, nil
-	}
-	return c, nil
-}
-
-// Contracts is the resolver for the contracts field.
-func (r *queryResolver) Contracts(ctx context.Context, filter *graphql1.ContractFilter) ([]*graphql1.Contract, error) {
-	if r.ContractsProvider == nil {
-		return nil, fmt.Errorf("contracts provider not initialised")
-	}
-	return r.ContractsProvider.List(ctx, filter)
-}
-
 // ClaudeInstances is the resolver for the claudeInstances field.
 //
 // ADR-022 Phase 4/5: pane-first path — a view over Pane nodes filtered by
@@ -825,7 +803,6 @@ func (r *queryResolver) DaemonState(ctx context.Context) (*graphql1.DaemonState,
 		{Name: "claudeAccount", Configured: r.ClaudeAccount != nil},
 		{Name: "claudeInstance", Configured: r.Tmux != nil},
 		{Name: "hostService", Configured: r.HostServiceProvider != nil},
-		{Name: "contracts", Configured: r.ContractsProvider != nil},
 		{Name: "gh", Configured: r.GH != nil},
 		{Name: "peerProxy", Configured: r.PeerProxy != nil},
 	}

@@ -219,12 +219,6 @@ type Query {
   "All Claude CLI accounts surfaced by the local daemon. v1 returns the single account `claude auth status` reports for; later workstreams may surface additional accounts."
   claudeAccounts: [ClaudeAccount!]!
 
-  "A single Contract by id. Returns null if the id is unknown."
-  contract(id: ID!): Contract
-
-  "Every Contract the daemon currently knows about, optionally filtered."
-  contracts(filter: ContractFilter): [Contract!]!
-
   "All live Claude instances the daemon is tracking via heartbeat files."
   claudeInstances: [ClaudeInstance!]!
 
@@ -1137,72 +1131,6 @@ enum HostServiceState {
   failed
   not_installed
   unknown
-}
-
-"""
-A commitment an agent has made to deliver something. Contracts are
-sourced from session JSONL `tool_use` events (open_contract /
-close_contract) written by the conversation-contracts plugin; the
-daemon's contracts provider folds those events into Contract nodes
-and never writes the JSONL itself.
-"""
-type Contract implements Node {
-  "Stable orchard id — \"Contract:<contract_id>\"."
-  id: ID!
-
-  "The contract id as written by the plugin."
-  contractId: ID!
-
-  "What the owner committed to deliver."
-  statement: String!
-
-  "Owner session id (Claude session UUID) recorded at creation time."
-  ownerSessionId: String!
-
-  "Folded current status."
-  status: ContractStatus!
-
-  "Reason the contract was closed. Null when status is SIGNED."
-  closedReason: ContractReason
-
-  "RFC 3339 timestamp the contract was first created."
-  createdAt: String!
-
-  "RFC 3339 timestamp the contract was last touched."
-  updatedAt: String!
-
-  "RFC 3339 timestamp of the most recent event affecting this contract."
-  lastEventAt: String!
-}
-
-"""
-Lifecycle states for Contract (v0.8 two-value model).
-SIGNED — contract is open and active.
-CLOSED — contract has been closed (see closedReason for delivery vs abandon).
-"""
-enum ContractStatus {
-  SIGNED
-  CLOSED
-}
-
-"""
-Reason a Contract was closed. Only set when ContractStatus is CLOSED.
-"""
-enum ContractReason {
-  DELIVERED
-  ABANDONED
-}
-
-"""
-Filter for `Query.contracts`. All fields are optional.
-"""
-input ContractFilter {
-  "Match contracts whose folded status is in this list."
-  statuses: [ContractStatus!]
-  "Match closed contracts whose closedReason is in this list. Ignored for SIGNED contracts."
-  closedReasons: [ContractReason!]
-  "Match contracts owned by this Claude session UUID."
-  ownerSessionId: String
 }
 
 "Whether GitHub considers the PR mergeable. UNKNOWN means GitHub is still computing."
