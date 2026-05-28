@@ -6,7 +6,7 @@
 # attachment whose `stdout` field is the literal string we emit; fold-contracts.sh
 # extracts the sentinel via its strings-via-fromjson path.
 #
-# v0.10.0: the conversation contract's statement is read from
+# The conversation contract's statement is read from
 # references/conversation-contract-statement.md (the discipline gateway), with
 # a fallback to the minimal closure-deliverable string when the file is missing.
 
@@ -17,10 +17,11 @@ setup() {
   export CLAUDE_PLUGIN_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   STATEMENT_FILE="$CLAUDE_PLUGIN_ROOT/references/conversation-contract-statement.md"
   FALLBACK="user agrees conversation has come to a close and there are no loose ends"
-  # The expected statement is the file collapsed to one line (matching the hook's
-  # tr-and-sed normalization).
+  # Compute the expected statement via the same shared collapse helper the
+  # hook uses — this prevents the test and the hook from co-drifting if the
+  # normalization shape ever changes (e.g. tabs, CRLF).
   if [ -r "$STATEMENT_FILE" ]; then
-    DELIVERABLE=$(tr '\n' ' ' < "$STATEMENT_FILE" | sed 's/  */ /g; s/ *$//')
+    DELIVERABLE=$(bash "$CLAUDE_PLUGIN_ROOT/scripts/collapse-statement.sh" "$STATEMENT_FILE")
   else
     DELIVERABLE="$FALLBACK"
   fi
@@ -96,16 +97,20 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   rm -rf "$tmp_root"
 }
 
-@test "statement file is single-line prose (no markdown structural chars)" {
-  # Lock the shape: the hook's tr-and-sed collapse turns ANY content into one
-  # line, so a stray `#` heading or `- ` list item would concatenate inline
-  # with the prose and ship an ugly JSON string into every session jsonl.
-  # If you want structured content, teach the hook to skip / strip it first.
-  line_count=$(wc -l < "$STATEMENT_FILE")
-  # Either one line + trailing newline (= 1) or one line + no trailing newline (= 0).
-  [ "$line_count" -le 1 ]
-  # No markdown structural chars at the start of a line.
-  ! grep -qE '^(#|-|\*|>|\|)' "$STATEMENT_FILE"
+@test "statement file is single-line prose (no markdown structural starters)" {
+  # Lock the shape: the hook collapses ANY content to one line, so a stray
+  # `#` heading, `- ` list item, or `1.` numbered item would concatenate
+  # inline with the prose and ship an ugly JSON string into every session
+  # jsonl. If you want structured content later, teach the hook (or the
+  # collapse helper) to skip / strip it first.
+  #
+  # Real single-line check: count lines with content (not trailing-newline
+  # sensitive). `wc -l` would lie on a "foo\nbar" file (1 newline = 1 line).
+  non_empty_lines=$(awk 'NF > 0 {n++} END {print n+0}' "$STATEMENT_FILE")
+  [ "$non_empty_lines" -eq 1 ]
+  # No common markdown structural starters at line start: heading, bullet,
+  # asterisk-list, blockquote, table, numbered-list, fenced-code opener.
+  ! grep -qE '^(#|-|\*|>|\||[0-9]+\.|```)' "$STATEMENT_FILE"
 }
 
 @test "the fold script picks up the sentinel when it appears in a stdout-attachment line" {
@@ -129,8 +134,9 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   rm -f "$jsonl"
 
   id="$(_field "$hook_stdout" id)"
-  [[ "$fold_out" == *"$id"* ]]
-  # The full statement must round-trip through the open→record→fold path. If
-  # this ever fails, fix fold-contracts.sh — do not relax the assertion.
-  [[ "$fold_out" == *"$DELIVERABLE"* ]]
+  # Equality, not substring. Fold output shape is exactly `- <id>: <statement>`
+  # (scripts/fold-contracts.sh:115-116). Substring would let trailing or
+  # leading garbage hide regressions. If this ever fails: fix fold-contracts.sh
+  # or the statement file — do NOT relax this assertion.
+  [ "$fold_out" = "- $id: $DELIVERABLE" ]
 }
