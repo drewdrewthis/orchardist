@@ -22,10 +22,11 @@ A close is one of two things:
 3. Emit the close sentinel with a single `Bash` call to the shared `scripts/emit-sentinel.sh` — the same script `/open-contract` and the SessionStart auto-open hook use, so the on-disk shape stays consistent:
 
    ```bash
-   bash "$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh" close "<id>" "<reason>"
+   PR="${CLAUDE_PLUGIN_ROOT:-$(find ~/.claude/plugins/cache -path '*/conversation-contracts/*/scripts/emit-sentinel.sh' -print -quit 2>/dev/null | sed 's|/scripts/emit-sentinel.sh$||')}" \
+     && bash "$PR/scripts/emit-sentinel.sh" close "<id>" "<reason>"
    ```
 
-   The script JSON-escapes the reason, so double-quotes and backslashes in your evidence text are safe — you do not need to escape them by hand.
+   The first line is a `$CLAUDE_PLUGIN_ROOT` fallback — the harness sets it when invoking hooks, but interactive `Bash` tool calls in skill subprocesses often don't have it. The script JSON-escapes the reason, so double-quotes and backslashes in your evidence text are safe — you do not need to escape them by hand.
 
 4. Report: "Closed `<id>` (<delivered|abandoned>): <reason>."
 

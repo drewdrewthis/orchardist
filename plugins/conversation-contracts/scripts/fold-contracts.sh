@@ -11,17 +11,24 @@
 # intended — a close for an unknown id is a harmless no-op.
 #
 # Usage:
-#   fold-contracts.sh <session-jsonl-path>     # explicit path
-#   fold-contracts.sh --session <id> [<cwd>]   # resolve path from session id
-#   fold-contracts.sh --auto [<cwd>]           # newest jsonl under encoded-cwd
+#   fold-contracts.sh <session-jsonl-path>   # explicit path
+#   fold-contracts.sh --session <id> [<cwd>] # scan projects dirs for <id>.jsonl
+#                                            # (cwd arg accepted for backcompat
+#                                            #  but ignored — see Bug 3 below)
+#   fold-contracts.sh --auto [<cwd>]         # newest jsonl under encoded-cwd
 # Output: one line per open contract; empty if none. Exit 0 always.
 #
-# Prefer --auto in skills: real Claude Code does NOT export CLAUDE_SESSION_ID
-# to user-driven skill subprocesses (SDK/--print mode in particular leaves it
-# unset), so any skill that calls `--session "$CLAUDE_SESSION_ID"` is blind to
-# the current session. --auto resolves the path from $PWD's encoding and picks
-# the newest jsonl in that directory — the current session by definition,
-# because we are running inside it as it writes to it.
+# Path resolution: Claude Code encodes the SESSION'S STARTUP cwd into the
+# projects dir name, not the current $PWD. If the user `cd`s after the session
+# starts (which is the common case in worktree-driven workflows), $PWD diverges
+# from the encoded path. Prior fold versions encoded $PWD and missed the jsonl
+# entirely — Stop blocks fired and silently allowed because the fold returned
+# empty (Bug 3, surfaced in PR #666 live verification).
+#
+# Fix: --session scans every projects subdir for <id>.jsonl rather than
+# encoding $PWD. The session id is globally unique, so the scan is correct
+# regardless of where the user has cd'd. The optional <cwd> argument is still
+# accepted for backward compatibility with old callers but is now ignored.
 
 set -uo pipefail
 
@@ -46,13 +53,24 @@ _resolve_session_jsonl() {
   ls -t "$dir"/*.jsonl 2>/dev/null | head -1
 }
 
+_find_jsonl_by_sid() {
+  # Scan every projects subdir for <sid>.jsonl. Print the first match's
+  # absolute path; empty if not found. Session ids are globally unique, so
+  # at most one match exists across all projects subdirs.
+  local sid="$1"
+  [ -n "$sid" ] || return 0
+  local root="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+  [ -d "$root" ] || return 0
+  # find ... -path is portable across macOS and Linux; -quit on first match.
+  # Using -name keeps the scan cheap (one stat per subdir's <sid>.jsonl).
+  find "$root" -maxdepth 2 -type f -name "$sid.jsonl" -print -quit 2>/dev/null
+}
+
 if [ "${1:-}" = "--session" ]; then
   sid="${2:-}"
-  cwd="${3:-${PWD:-}}"
-  [ -n "$sid" ] && [ -n "$cwd" ] || exit 0
-  root="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
-  enc=$(printf '%s' "$cwd" | tr '/.' '--')
-  jsonl="$root/$enc/$sid.jsonl"
+  [ -n "$sid" ] || exit 0
+  # The third arg (cwd) is accepted for backcompat but unused — see Bug 3 fix.
+  jsonl=$(_find_jsonl_by_sid "$sid")
 elif [ "${1:-}" = "--auto" ]; then
   cwd="${2:-${PWD:-}}"
   jsonl=$(_resolve_session_jsonl "$cwd")
