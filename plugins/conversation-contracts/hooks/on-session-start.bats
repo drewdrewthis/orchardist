@@ -82,6 +82,30 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   [[ "$(_field "$output" statement)" == *"/i-am-done"* ]]
 }
 
+@test "BASH_SOURCE fallback resolves symlinked plugin paths via cd -P" {
+  # Exercises the cd -P / pwd -P hardening on the self-locating fallback path.
+  # Without -P, a symlinked install would resolve PLUGIN_ROOT to the symlink's
+  # parent (or fail to find the helper scripts). With -P, we follow the link
+  # to the real install dir and load the statement file from there.
+  tmp_root="$(mktemp -d)"
+  cp -r "$CLAUDE_PLUGIN_ROOT/scripts" "$tmp_root/"
+  cp -r "$CLAUDE_PLUGIN_ROOT/hooks" "$tmp_root/"
+  cp -r "$CLAUDE_PLUGIN_ROOT/references" "$tmp_root/"
+
+  # Install a symlink that points at the real plugin dir; invoke the hook
+  # via the symlinked path with CLAUDE_PLUGIN_ROOT unset.
+  link_root="$(mktemp -d)/plugin-link"
+  ln -s "$tmp_root" "$link_root"
+  unset CLAUDE_PLUGIN_ROOT
+  run bash "$link_root/hooks/on-session-start.sh"
+  [ "$status" -eq 0 ]
+  [ "$(_field "$output" orchard_contract)" = "open" ]
+  # Statement file was found via the resolved real path, not the symlink.
+  [[ "$(_field "$output" statement)" == *"/i-am-done"* ]]
+
+  rm -rf "$tmp_root" "$(dirname "$link_root")"
+}
+
 @test "collapses a multi-line statement file into a single sentinel line" {
   tmp_root="$(mktemp -d)"
   cp -r "$CLAUDE_PLUGIN_ROOT/scripts" "$tmp_root/"
