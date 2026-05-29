@@ -5,6 +5,59 @@ All notable changes to the `conversation-contracts` plugin.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This plugin uses semantic versioning.
 
+## 0.12.2 — 2026-05-29
+
+### Fixed
+- `hooks/on-session-start.sh` skips emit (exit 0, empty stdout) when
+  `CLAUDE_CODE_ENTRYPOINT=sdk-cli`. Real Claude Code 2.1.x exports that value
+  for `claude --print` and SDK invocations — ephemeral one-shot sessions with
+  no interactive user to "agree the conversation has come to a close." Before
+  this fix the hook auto-opened the conversation contract, the agent's final
+  text became close-confirmation prose ("Closed C-XXX delivered: ..."), and
+  the caller (cron audits, drew-sim probes, programmatic SDK calls) got that
+  string instead of the requested task output. Closes parked-question
+  2026-05-28 "disable SessionStart auto-open for ephemeral claude -p?".
+- `hooks/on-stop.sh` honors Claude Code's `stop_hook_active` re-entry
+  protocol. Claude Code's `runQuery` loop tracks `stopHookBlockingCount`;
+  after `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8) consecutive blocks the
+  harness force-overrides Stop with a fixed message ("A hook blocked the
+  turn from ending 9 consecutive times — overriding and ending turn") that
+  drowns the open-contracts ledger. The hook now surfaces the ledger ONCE
+  per generation, then steps aside on re-entry — every new user message
+  resets the harness counter, so the next first-Stop blocks again. The
+  discipline is preserved across generations; the override-noise is not.
+
+### Why this isn't "less DUMB about content"
+v0.11.2 made the hook DUMB about CONTENT — no procedural commentary about
+close mechanics, statement-as-discipline. v0.12.2 keeps that. The re-entry
+fix is about MECHANISM (correct hook contract with the harness), not
+policy. The block reason is still the verbatim open-contracts list.
+
+### Why a denylist, not an allowlist on `cli`
+The discriminator is intentionally narrow: skip on known ephemeral values
+(`sdk-cli`), default-emit on everything else. If Anthropic adds a new
+interactive entrypoint (`cli-tui`, `vscode-extension`, `ide`, …), the hook
+keeps auto-opening rather than silently falling out of the discipline
+gateway. The denylist is widened by design, never by accident.
+
+### Added
+- `hooks/on-session-start.bats` — three regression cases pinning the
+  three-way behavior: skip on `sdk-cli`, emit on `cli`, emit on an unknown
+  future entrypoint value. The unknown-value case is the design-intent
+  pin — if a future contributor flips the discriminator to an allowlist, the
+  bats suite catches it.
+
+### Verified
+- Direct hook smoke: empty stdout under `CLAUDE_CODE_ENTRYPOINT=sdk-cli`,
+  full sentinel under `cli`, full sentinel when unset.
+- Live recipe-verbatim drive under real `claude --print`: `/open-contract`,
+  `/close-contract`, `/my-contracts`, `/close-conversation` step-1 fold all
+  executed verbatim against current SKILL.md templates. The drive sessions
+  themselves were ephemeral (`entrypoint:sdk-cli`); confirming the fix
+  doesn't break the recipes that DO get invoked by the agent in `--print`
+  on demand (vs. the SessionStart hook auto-open, which is what gets
+  skipped).
+
 ## 0.12.1 — 2026-05-29
 
 ### Added

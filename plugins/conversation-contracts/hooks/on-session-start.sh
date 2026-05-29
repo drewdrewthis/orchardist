@@ -22,8 +22,25 @@
 # hook still works when invoked directly (tests, smoke checks, harness
 # misconfig). The fallback covers BOTH the statement-file path and the
 # emit-sentinel.sh exec path.
+#
+# Ephemeral-mode skip: `claude --print` and SDK invocations set
+# CLAUDE_CODE_ENTRYPOINT=sdk-cli. They have no interactive user to "agree the
+# conversation has come to a close" and end after a single turn — auto-opening
+# a contract there shifts the agent's final reply into bogus close-confirmation
+# text instead of the requested output. The discriminator is intentionally a
+# narrow denylist on known ephemeral values (not an allowlist on "cli") so a
+# future interactive entrypoint (e.g. cli-tui, vscode-extension) keeps
+# auto-opening rather than silently falling out of the gateway.
 
 set -uo pipefail
+
+# Ephemeral one-shot? Skip silently — empty stdout means the harness records
+# no SessionStart attachment, the fold sees nothing, and the agent's final text
+# is the task output the caller asked for. Verified value (Claude Code 2.1.x):
+# `claude --print` sets CLAUDE_CODE_ENTRYPOINT=sdk-cli; interactive sets `cli`.
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+  sdk-cli) exit 0 ;;
+esac
 
 FALLBACK="user agrees conversation has come to a close and there are no loose ends"
 

@@ -143,6 +143,39 @@ print(json.loads(sys.stdin.read().strip()).get('$2', ''))
   ! grep -qE '^(#|-|\*|>|\||[0-9]+\.|```)' "$STATEMENT_FILE"
 }
 
+@test "emits empty stdout in ephemeral --print mode (CLAUDE_CODE_ENTRYPOINT=sdk-cli)" {
+  # `claude --print` and SDK invocations have no interactive user to consent
+  # to a "user agrees conversation has come to a close" contract; auto-opening
+  # one mangles the agent's final reply into close-confirmation text. The
+  # hook MUST skip silently in that mode (empty stdout, exit 0). Real-runtime
+  # value: `claude --print` exports CLAUDE_CODE_ENTRYPOINT=sdk-cli on
+  # Claude Code 2.1.x.
+  CLAUDE_CODE_ENTRYPOINT=sdk-cli run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "still emits the sentinel for interactive CLI (CLAUDE_CODE_ENTRYPOINT=cli)" {
+  # The denylist is intentionally narrow: only known ephemeral values are
+  # skipped. Interactive sessions (entrypoint=cli) must continue to auto-open
+  # the conversation contract — that's the discipline gateway.
+  CLAUDE_CODE_ENTRYPOINT=cli run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [ "$(_field "$output" orchard_contract)" = "open" ]
+  [[ "$(_field "$output" statement)" == *"/i-am-done"* ]]
+}
+
+@test "still emits the sentinel for any future entrypoint not on the denylist" {
+  # If Anthropic adds a new interactive entrypoint (cli-tui, vscode-extension,
+  # ide, ...), the hook defaults to emitting. The denylist must be widened by
+  # design choice, never by accident. This pins that property.
+  CLAUDE_CODE_ENTRYPOINT=some-future-interactive-mode run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [ "$(_field "$output" orchard_contract)" = "open" ]
+}
+
 @test "the fold script picks up the sentinel when it appears in a stdout-attachment line" {
   # Real Claude Code records the hook's stdout in the jsonl as a hook_success
   # attachment whose `stdout` field is the literal string the hook printed.
