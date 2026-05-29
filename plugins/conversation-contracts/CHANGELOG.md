@@ -14,7 +14,7 @@ This plugin uses semantic versioning.
   it also has a named procedure for how to act when uncertain mid-conversation
   instead of defaulting to ask-the-user.
 
-## 0.12.0 — 2026-05-28
+## 0.12.0 — 2026-05-29
 
 ### Changed
 - Conversation contract statement now encodes an 8-clause impossibly-high
@@ -30,7 +30,7 @@ depended on the agent applying the discipline by memory. v0.12.0 makes it
 structural — the statement TEXT documents the bar; the close-contract
 SKILL.md's AskUserQuestion gate ENFORCES it.
 
-## 0.11.2 — 2026-05-28
+## 0.11.2 — 2026-05-29
 
 ### Changed
 - `hooks/on-stop.sh` is DUMB: procedural commentary about close mechanics
