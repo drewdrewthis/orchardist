@@ -96,6 +96,20 @@ prior versions left to memory.
 - `cd -P` / `pwd -P` in the SessionStart hook's BASH_SOURCE fallback
   (defensive — see v0.11.2 honest-downgrade for the load-bearing analysis).
 
+## 0.10.1 — 2026-05-28
+
+### Fixed
+- `on-session-start.bats`: restored strict round-trip assertion
+  (`[[ "$fold_out" == *"$DELIVERABLE"* ]]`). The earlier relaxation cited
+  "fold truncates long statements" — `fold-contracts.sh` does NOT
+  truncate; the relaxation was based on a false premise. Test now binds
+  the full v0.10.0 statement through the open→record→fold pipeline.
+- `on-session-start.sh`: hardened the fallback path. `$CLAUDE_PLUGIN_ROOT`
+  was unguarded under `set -u`, so an unset env var aborted before any
+  fallback could fire. Now prefers `$CLAUDE_PLUGIN_ROOT` (what real
+  Claude Code exports) and falls back to `$(BASH_SOURCE[0])/..` so the
+  hook still emits a well-formed sentinel without the env var set.
+
 ## 0.10.0 — 2026-05-28
 
 ### Added
@@ -111,20 +125,6 @@ prior versions left to memory.
 Prior to v0.10.0 the auto-opened conversation contract had a hard-coded
 minimal statement. v0.10.0 lets the discipline gateway evolve in a single
 text file without touching the hook.
-
-## 0.10.1 — 2026-05-28
-
-### Fixed
-- `on-session-start.bats`: restored strict round-trip assertion
-  (`[[ "$fold_out" == *"$DELIVERABLE"* ]]`). The earlier relaxation cited
-  "fold truncates long statements" — `fold-contracts.sh` does NOT
-  truncate; the relaxation was based on a false premise. Test now binds
-  the full v0.10.0 statement through the open→record→fold pipeline.
-- `on-session-start.sh`: hardened the fallback path. `$CLAUDE_PLUGIN_ROOT`
-  was unguarded under `set -u`, so an unset env var aborted before any
-  fallback could fire. Now prefers `$CLAUDE_PLUGIN_ROOT` (what real
-  Claude Code exports) and falls back to `$(BASH_SOURCE[0])/..` so the
-  hook still emits a well-formed sentinel without the env var set.
 
 ## 0.9.2 — 2026-05-28
 
