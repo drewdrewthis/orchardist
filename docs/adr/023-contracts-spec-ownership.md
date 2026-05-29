@@ -1,6 +1,8 @@
 # ADR-023: Contracts spec ownership belongs to the plugin + marketplace
 
 ## Status
+**Superseded (2026-05-29):** the conversation-contracts plugin was retired entirely in favor of a single Stop hook (`audit-promise-stop.sh`, two terminal states: `<i-am-done>` | `<waiting-for>`) plus native TaskList. The marketplace is now empty. Rationale: the plugin became a 10-PR discipline-gateway thrash (v0.9→v0.12.2) reinventing what TaskList + one hook do natively; zero external consumers of its sentinels (surveyed 2026-05-29). See codex `research/2028-2026-05-29-replace-contracts-with-tasklist.md`. Retained as historical record of the spec-ownership principle, which still holds for any future plugin.
+
 Accepted (2026-05-19). Amended 2026-05-28 (PR #666): the daemon-side `contracts` provider was deleted entirely — the v0.9 plugin emits sentinels into the session jsonl and folds them locally via `scripts/fold-contracts.sh`, with no daemon participation. The principle this ADR articulates is unchanged and now stronger: the plugin is the sole owner of contract spec, lifecycle, and on-disk shape. If cross-session observability is later wanted, it should ride on top of `ClaudeSession` (an "enhanced session" derived field), not a separate node type.
 
 ## Context

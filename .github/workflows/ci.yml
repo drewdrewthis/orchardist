@@ -69,12 +69,12 @@ jobs:
           fi
 
   bats:
-    name: Bats (scripts + plugin)
+    name: Bats (scripts)
     runs-on: ubuntu-latest
-    # Runs every bats suite: the conversation-contracts plugin (pure bash +
-    # markdown, exercises hook/fold scripts) and the scripts/**/*.bats suite
-    # (L2-envelope assertions on the contracts-adjacent shell scripts under
-    # scripts/gh, scripts/git, scripts/host-services, scripts/tmux).
+    # Runs the scripts/**/*.bats suite (L2-envelope assertions on the shell
+    # scripts under scripts/gh, scripts/git, scripts/host-services,
+    # scripts/tmux). The conversation-contracts plugin (and its bats suite)
+    # was retired 2026-05-29 — see .claude-plugin/marketplace.json.
     permissions:
       contents: read
     steps:
@@ -83,8 +83,6 @@ jobs:
           persist-credentials: false
       - name: Install bats
         run: sudo apt-get update && sudo apt-get install -y bats
-      - name: Run plugin bats
-        run: bats -r plugins/conversation-contracts
       - name: Run scripts bats
         run: bats -r scripts
 

@@ -1,22 +1,11 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "orchard",
-  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. Hosts conversation-contracts: jsonl-sentinel contracts that block Stop until closed.",
+  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. The conversation-contracts plugin was retired 2026-05-29 in favor of a single Stop hook (audit-promise-stop.sh) + native TaskList — see codex research/2028. This marketplace is currently empty.",
   "owner": {
     "name": "drewdrewthis",
     "email": "andrew@langwatch.ai",
     "url": "https://github.com/drewdrewthis"
   },
-  "plugins": [
-    {
-      "name": "conversation-contracts",
-      "description": "Contracts as jsonl sentinels: open/close named commitments that block Stop until closed. Auto-opens a conversation contract on SessionStart whose statement is the discipline gateway — points the agent at /i-am-done as the close gate. Closing requires user consent: agent-initiated closes go through AskUserQuestion; user-typed close paths (/exit, /quit, /bye, /close-conversation) bypass. /open-contract, /close-contract, /my-contracts manage arbitrary contracts; the Stop hook folds open-minus-close and blocks. No MCP server, no daemon. Hooks: SessionStart, Stop.",
-      "author": {
-        "name": "drewdrewthis"
-      },
-      "version": "0.12.2",
-      "source": "./plugins/conversation-contracts",
-      "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugins/conversation-contracts"
-    }
-  ]
+  "plugins": []
 }
