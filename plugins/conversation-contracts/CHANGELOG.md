@@ -126,6 +126,14 @@ Prior to v0.10.0 the auto-opened conversation contract had a hard-coded
 minimal statement. v0.10.0 lets the discipline gateway evolve in a single
 text file without touching the hook.
 
+## (test) PR #674 — 2026-05-28 (between v0.9.2 and v0.10.0)
+
+### Added
+- `recipe-verbatim.bats` — bats tests that extract the bash code block from
+  each SKILL.md recipe and execute it literally under `env -i`. Catches
+  the class of bug where the script changes but the recipe doesn't (and
+  vice versa). No version bump — pure test addition.
+
 ## 0.9.2 — 2026-05-28
 
 ### Changed
@@ -134,12 +142,6 @@ text file without touching the hook.
   `$CLAUDE_PLUGIN_ROOT/scripts/emit-sentinel.sh`. The latter is empty in
   skill subprocesses; the relative path is resolved against the skill's
   Base directory (injected by the Claude Code harness on skill load).
-
-### Added
-- `recipe-verbatim.bats` — bats tests that extract the bash code block from
-  each SKILL.md recipe and execute it literally under `env -i`. Catches
-  the class of bug where the script changes but the recipe doesn't (and
-  vice versa).
 
 ## 0.9.1 — 2026-05-28
 
