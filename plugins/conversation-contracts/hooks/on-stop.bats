@@ -167,6 +167,41 @@ _run_hook() {
   [[ "$reason" != *"- : "* ]]        # no phantom empty-id contract line
 }
 
+# ---- stop_hook_active re-entry → allow Stop ---------------------------------
+
+@test "stop_hook_active=true allows Stop even with open contracts" {
+  # Claude Code's runQuery loop tracks stopHookBlockingCount and force-
+  # overrides after CLAUDE_CODE_STOP_HOOK_BLOCK_CAP (default 8) consecutive
+  # blocks with a fixed message that drowns the open-contracts ledger. The
+  # re-entry contract: when the hook has already blocked this generation,
+  # the harness re-fires Stop with `stop_hook_active: true`. Honest hook
+  # behavior is to surface the open ledger ONCE then step aside — the
+  # discipline is preserved across generations because each new user
+  # message resets the counter.
+  local id="C-2026-05-29-active-1"
+  _write_jsonl "S-STOP-REENTRY" "$(_open_line "$id" "still in flight")"
+  local payload="{\"hook_event_name\":\"Stop\",\"session_id\":\"S-STOP-REENTRY\",\"stop_hook_active\":true}"
+  run env HOME="$HOME_DIR" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
+      bash -c "cd '$WORK' && printf '%s' '$payload' | bash '$HOOK'"
+
+  [ "$status" -eq 0 ]
+  [ -z "$(printf '%s' "$output" | tr -d '[:space:]')" ]
+}
+
+@test "stop_hook_active=false blocks Stop with open contracts (first-firing path)" {
+  # Inverse pin: the explicit false case must still block. Defends against
+  # an accidental flip that would short-circuit the first-firing path too.
+  local id="C-2026-05-29-active-0"
+  _write_jsonl "S-STOP-FIRSTFIRE" "$(_open_line "$id" "first block")"
+  local payload="{\"hook_event_name\":\"Stop\",\"session_id\":\"S-STOP-FIRSTFIRE\",\"stop_hook_active\":false}"
+  run env HOME="$HOME_DIR" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
+      bash -c "cd '$WORK' && printf '%s' '$payload' | bash '$HOOK'"
+
+  [ -n "$output" ]
+  [ "$(printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"])')" = "block" ]
+  [[ "$output" == *"$id"* ]]
+}
+
 # ---- CLAUDE_PROJECTS_DIR override -------------------------------------------
 
 @test "honors CLAUDE_PROJECTS_DIR override for jsonl location" {

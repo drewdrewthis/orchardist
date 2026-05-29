@@ -17,6 +17,21 @@ This plugin uses semantic versioning.
   the caller (cron audits, drew-sim probes, programmatic SDK calls) got that
   string instead of the requested task output. Closes parked-question
   2026-05-28 "disable SessionStart auto-open for ephemeral claude -p?".
+- `hooks/on-stop.sh` honors Claude Code's `stop_hook_active` re-entry
+  protocol. Claude Code's `runQuery` loop tracks `stopHookBlockingCount`;
+  after `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8) consecutive blocks the
+  harness force-overrides Stop with a fixed message ("A hook blocked the
+  turn from ending 9 consecutive times — overriding and ending turn") that
+  drowns the open-contracts ledger. The hook now surfaces the ledger ONCE
+  per generation, then steps aside on re-entry — every new user message
+  resets the harness counter, so the next first-Stop blocks again. The
+  discipline is preserved across generations; the override-noise is not.
+
+### Why this isn't "less DUMB about content"
+v0.11.2 made the hook DUMB about CONTENT — no procedural commentary about
+close mechanics, statement-as-discipline. v0.12.2 keeps that. The re-entry
+fix is about MECHANISM (correct hook contract with the harness), not
+policy. The block reason is still the verbatim open-contracts list.
 
 ### Why a denylist, not an allowlist on `cli`
 The discriminator is intentionally narrow: skip on known ephemeral values
