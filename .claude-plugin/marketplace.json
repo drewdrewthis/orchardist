@@ -1,11 +1,20 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "orchard",
-  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. The conversation-contracts plugin was retired 2026-05-29 in favor of a single Stop hook (audit-promise-stop.sh) + native TaskList — see codex research/2028. This marketplace is currently empty.",
+  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. The conversation-contracts plugin was retired 2026-05-29 in favor of a single Stop hook (audit-promise-stop.sh) + native TaskList — see codex research/2028. Hosts the orchard-chat cross-machine chat plugin (migrated from orchard-codex 2026-06-08).",
   "owner": {
     "name": "drewdrewthis",
     "email": "andrew@langwatch.ai",
     "url": "https://github.com/drewdrewthis"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "orchard-chat",
+      "description": "Cross-machine chat channel for orchardists. Connects to the orchard-chat broker (Bun WS+HTTP service on boxd) and pushes messages into Claude as <channel source=\"orchard-chat\" ...> events. Exposes a chat:post reply tool. Orchardists listen+post; workers/sisters post-only via the chat-post shell helper.",
+      "author": { "name": "drewdrewthis" },
+      "category": "agent-orchestration",
+      "source": "./plugin-sources/orchard-chat",
+      "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugin-sources/orchard-chat"
+    }
+  ]
 }
