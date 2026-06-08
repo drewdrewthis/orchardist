@@ -1,0 +1,14 @@
+{
+  "name": "orchard-chat-channel",
+  "version": "0.1.1",
+  "description": "MCP channel plugin that bridges the orchard-chat broker into Claude Code sessions.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "test -d node_modules || bun install --no-summary; bun index.ts",
+    "install-deps": "bun install --no-summary"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
