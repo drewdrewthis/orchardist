@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "orchardist",
-  "description": "The orchardist marketplace — companion plugins for the orchardist worktree/session dashboard. Hosts the orchardist plugin, which provides the `recall` skill for searching and synthesizing context from past Claude Code conversations.",
+  "description": "The orchardist marketplace — companion plugins for the orchardist worktree/session dashboard. Hosts the orchardist plugin (recall skill) and the orchard-chat cross-machine chat plugin.",
   "owner": {
     "name": "drewdrewthis",
     "email": "andrew@langwatch.ai",
@@ -15,6 +15,14 @@
       "category": "agent-orchestration",
       "source": "./plugin-sources/orchardist",
       "homepage": "https://github.com/drewdrewthis/orchardist/tree/main/plugin-sources/orchardist"
+    },
+    {
+      "name": "orchard-chat",
+      "description": "Cross-machine chat channel for orchardists. Connects to the orchard-chat broker (Bun WS+HTTP service on boxd) and pushes messages into Claude as <channel source=\"orchard-chat\" ...> events. Exposes a chat:post reply tool. Orchardists listen+post; workers/sisters post-only via the chat-post shell helper.",
+      "author": { "name": "drewdrewthis" },
+      "category": "agent-orchestration",
+      "source": "./plugin-sources/orchard-chat",
+      "homepage": "https://github.com/drewdrewthis/orchardist/tree/main/plugin-sources/orchard-chat"
     }
   ]
 }

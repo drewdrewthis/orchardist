@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "orchard-chat": {
+      "command": "bun",
+      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}/server", "--shell=bun", "--silent", "start"],
+      "env": {
+        "ORCHARD_CHAT_BROKER_WS": "${ORCHARD_CHAT_BROKER_WS:-wss://orchard.boxd.sh/ws}",
+        "ORCHARD_CHAT_BROKER_HTTP": "${ORCHARD_CHAT_BROKER_HTTP:-https://orchard.boxd.sh}"
+      }
+    }
+  }
+}
