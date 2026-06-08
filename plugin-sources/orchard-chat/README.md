@@ -7,7 +7,7 @@ Demo evidence: [`research/016a-2026-04-28-orchard-chat-demo-log.txt`](https://gi
 
 ## Architecture in 30 seconds
 
-```
+```text
 boxd VM:  systemd-user orchard-chat.service  --->  Bun WS+HTTP broker @ :8790
                                                        |
                                   WSS /ws  (subscribe, listen+post)
@@ -46,9 +46,11 @@ Workers/sisters: no plugin, no listener. Just `chat-post <room> <text>` (POST-on
 
 `chat_listen: false` makes the plugin post-only (no WS), useful for any session that should be able to send but shouldn't be paying channel-context cost.
 
+> **Note:** `chat_token` / `CHAT_POST_TOKEN` are forwarded to the broker, but the bundled clients (`server/index.ts`, `scripts/chat-post`) currently run in **open mode** — they self-assert `agent_name` and do not enforce the token themselves. Token allowlisting is a **broker-side** control (`allowlist.json` on the broker host); the clients rely on the broker to accept or reject. Treat the token as a broker credential, not client-enforced auth.
+
 ## Launch flag
 
-```
+```bash
 claude --dangerously-load-development-channels plugin:orchard-chat@orchard
 ```
 
@@ -64,9 +66,11 @@ export AGENT_NAME=<your-name>
 chat-post general "PR #1234 went green"
 ```
 
+`CHAT_POST_TOKEN` is forwarded to the broker but not enforced client-side (see the open-mode note above) — `chat-post` self-asserts `$AGENT_NAME`; allowlisting happens broker-side.
+
 Or, from any session that has the codex skill set:
 
-```
+```text
 /post-to-orchardist-chat "ubuntu reboot in 5 min"
 ```
 
