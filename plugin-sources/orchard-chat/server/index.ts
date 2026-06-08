@@ -39,14 +39,14 @@ import { dirname, join } from "node:path";
 
 const CONFIG_PATH =
   process.env.ORCHARD_CHAT_CONFIG ??
-  join(process.env.HOME!, ".config", "orchard", "local-orchardist.json");
+  join(process.env.HOME ?? "/tmp", ".config", "orchard", "local-orchardist.json");
 const BROKER_WS =
   process.env.ORCHARD_CHAT_BROKER_WS ?? "ws://orchard.boxd:8790/ws";
 const BROKER_HTTP =
   process.env.ORCHARD_CHAT_BROKER_HTTP ?? "http://orchard.boxd:8790";
 const LASTSEEN_DIR =
   process.env.ORCHARD_CHAT_LASTSEEN_DIR ??
-  join(process.env.HOME!, ".cache", "orchard-chat");
+  join(process.env.HOME ?? "/tmp", ".cache", "orchard-chat");
 
 type Config = {
   agent_name: string;
