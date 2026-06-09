@@ -247,6 +247,12 @@ if ! ERR=$(git -C "$REPO_PATH" worktree remove $FORCE_FLAG "$WT_PATH" 2>&1); the
       if $JSON_MODE; then json_err "RM_ERROR" "$RM_ERR"; else echo "$RM_ERR" >&2; exit 1; fi
     fi
   fi
+  # Unlock before pruning: git worktree prune deliberately skips locked
+  # worktrees (the lock is a "do not remove me" marker), so a locked entry
+  # whose directory was just rm -rf'd would survive prune and remain in
+  # porcelain.  Unlocking first lets prune reap the now-missing entry.
+  # Tolerate failure: if the worktree was not locked, unlock exits non-zero.
+  git -C "$REPO_PATH" worktree unlock "$WT_PATH" 2>/dev/null || true
   # Always prune after a fallback removal (reconciles stale registration).
   if ! PRUNE_ERR=$(git -C "$REPO_PATH" worktree prune 2>&1); then
     if $JSON_MODE; then json_err "GIT_ERROR" "$PRUNE_ERR"; else echo "$PRUNE_ERR" >&2; exit 1; fi
