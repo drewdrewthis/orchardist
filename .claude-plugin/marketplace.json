@@ -1,11 +1,20 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "orchard",
-  "description": "The orchard marketplace. Companion plugins for the orchard worktree/session dashboard. The conversation-contracts plugin was retired 2026-05-29 in favor of a single Stop hook (audit-promise-stop.sh) + native TaskList — see codex research/2028. This marketplace is currently empty.",
+  "name": "orchardist",
+  "description": "The orchardist marketplace — companion plugins for the orchardist worktree/session dashboard. Hosts the orchardist plugin, which provides the `recall` skill for searching and synthesizing context from past Claude Code conversations.",
   "owner": {
     "name": "drewdrewthis",
     "email": "andrew@langwatch.ai",
     "url": "https://github.com/drewdrewthis"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "orchardist",
+      "description": "Recall: search and synthesize context from past Claude Code conversations across all projects.",
+      "author": { "name": "drewdrewthis" },
+      "category": "agent-orchestration",
+      "source": "./plugin-sources/orchardist",
+      "homepage": "https://github.com/drewdrewthis/orchardist/tree/main/plugin-sources/orchardist"
+    }
+  ]
 }

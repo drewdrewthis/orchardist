@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Thin dispatcher for the orchard CLI ecosystem (routes to orchard-tui, orchard-daemon, orchard-worktree, etc.)"
 license = "MIT"
-repository = "https://github.com/drewdrewthis/git-orchard-rs"
+repository = "https://github.com/drewdrewthis/orchardist"
 
 [[bin]]
 name = "orchard"

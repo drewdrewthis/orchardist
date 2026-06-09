@@ -14,8 +14,8 @@ Thanks for your interest in contributing! This guide covers everything you need 
 1. Fork and clone the repository:
 
    ```bash
-   gh repo fork drewdrewthis/git-orchard-rs --clone
-   cd git-orchard-rs
+   gh repo fork drewdrewthis/orchardist --clone
+   cd orchardist
    ```
 
 2. Build the project:
@@ -103,11 +103,11 @@ Read [docs/architecture.md](docs/architecture.md) for the full picture. Key prin
 
 ## Reporting Bugs
 
-Use the [bug report template](https://github.com/drewdrewthis/git-orchard-rs/issues/new?template=bug_report.md) to file bugs with steps to reproduce, expected/actual behavior, and your environment.
+Use the [bug report template](https://github.com/drewdrewthis/orchardist/issues/new?template=bug_report.md) to file bugs with steps to reproduce, expected/actual behavior, and your environment.
 
 ## Requesting Features
 
-Use the [feature request template](https://github.com/drewdrewthis/git-orchard-rs/issues/new?template=feature_request.md) to propose new functionality.
+Use the [feature request template](https://github.com/drewdrewthis/orchardist/issues/new?template=feature_request.md) to propose new functionality.
 
 ## License
 

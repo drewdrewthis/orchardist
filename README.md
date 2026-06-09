@@ -28,8 +28,10 @@ binary `orchard` dispatches to helper binaries under the hood:
   CLI. Dispatched as `orchard worktree …` and via bare-verb shortcuts
   (`orchard new <issue>`, `orchard rm <id>`, etc.).
 
-The repo name still ends in `-rs` because URL stability is worth more
-than the suffix. See `scripts/init/` for launchd / systemd units.
+Renamed from `git-orchard-rs` to `orchardist` on 2026-06-09; the old URL
+redirects. The repo is polyglot (Rust + Go) — the binaries are `orchard`,
+`orchard-tui`, `orchard-daemon`, and `orchard-worktree`. See `scripts/init/`
+for launchd / systemd units.
 
 The schema lives in `schema.graphql` at the repo root — schema-first.
 Run `make generate` to regenerate Go types from it. The Rust TUI client
@@ -69,7 +71,7 @@ Orchard gives you a single dashboard showing everything happening across your re
 ### From source
 
 ```bash
-cargo install --git https://github.com/drewdrewthis/git-orchard-rs orchard --bin orchard-tui
+cargo install --git https://github.com/drewdrewthis/orchardist orchard --bin orchard-tui
 
 # Or from a local checkout:
 cargo install --path crates/orchard --bin orchard-tui

@@ -1,4 +1,4 @@
-# Top-level Makefile for the polyglot git-orchard-rs repo.
+# Top-level Makefile for the polyglot orchardist repo.
 #
 # Three binaries coexist (per ADR-013):
 #   - `orchard` (Rust)        — thin dispatcher; routes verbs to helpers.
