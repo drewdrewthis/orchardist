@@ -14,6 +14,7 @@ Usage:
 import sqlite3
 import json
 import os
+import re
 import sys
 import glob
 import time
@@ -108,7 +109,11 @@ def build_index():
         project = os.path.basename(os.path.dirname(f))
         try:
             messages = extract_user_messages(f)
-        except Exception:
+        except (OSError, UnicodeDecodeError) as exc:
+            print(
+                json.dumps({"warning": "index_skip", "file_path": f, "error": str(exc)}),
+                file=sys.stderr,
+            )
             continue
 
         combined = "\n".join(messages)
@@ -162,26 +167,30 @@ def search(query, limit=10):
         sys.exit(1)
 
     results = []
-    rows = db.execute("""
-        SELECT
-            f.session_id,
-            s.project,
-            s.file_path,
-            s.mtime,
-            s.message_count,
-            s.first_prompt,
-            s.last_prompt,
-            snippet(sessions_fts, 2, '>>>', '<<<', '...', 24) as snippet,
-            rank
-        FROM sessions_fts f
-        JOIN sessions s ON s.session_id = f.session_id
-        WHERE sessions_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
-    """, (query, limit)).fetchall()
+    try:
+        rows = db.execute("""
+            SELECT
+                f.session_id,
+                s.project,
+                s.file_path,
+                s.mtime,
+                s.message_count,
+                s.first_prompt,
+                s.last_prompt,
+                snippet(sessions_fts, 2, '>>>', '<<<', '...', 24) as snippet,
+                rank
+            FROM sessions_fts f
+            JOIN sessions s ON s.session_id = f.session_id
+            WHERE sessions_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """, (query, limit)).fetchall()
+    except sqlite3.OperationalError as exc:
+        print(json.dumps({"error": "Invalid search query", "details": str(exc)}))
+        sys.exit(1)
 
     for row in rows:
-        proj = row["project"].replace("-Users-hope-", "~/").replace("-", "/")
+        proj = re.sub(r"^-Users-[^-]+-", "~/", row["project"])
         results.append({
             "session_id": row["session_id"],
             "project": proj,
@@ -226,7 +235,7 @@ def context(jsonl_path, tail=10):
                 if text.startswith("<local-command"):
                     continue
                 idx = text.find("<system-reminder>")
-                if idx > 0:
+                if idx >= 0:
                     text = text[:idx]
                 messages.append({"role": msg_type, "text": text[:400]})
             except (json.JSONDecodeError, KeyError):
@@ -253,7 +262,11 @@ if __name__ == "__main__":
         limit = 10
         if "--limit" in sys.argv:
             idx = sys.argv.index("--limit")
-            limit = int(sys.argv[idx + 1])
+            try:
+                limit = int(sys.argv[idx + 1])
+            except (IndexError, ValueError):
+                print(json.dumps({"error": "--limit requires an integer value"}))
+                sys.exit(1)
         search(query, limit)
     elif cmd == "context":
         if len(sys.argv) < 3:
@@ -263,7 +276,11 @@ if __name__ == "__main__":
         tail = 10
         if "--tail" in sys.argv:
             idx = sys.argv.index("--tail")
-            tail = int(sys.argv[idx + 1])
+            try:
+                tail = int(sys.argv[idx + 1])
+            except (IndexError, ValueError):
+                print(json.dumps({"error": "--tail requires an integer value"}))
+                sys.exit(1)
         context(path, tail)
     else:
         print(f"Unknown command: {cmd}")
