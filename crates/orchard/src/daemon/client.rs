@@ -203,38 +203,65 @@ impl Client {
             }
         "#;
 
-        let mut input = serde_json::json!({
-            "worktreeIds": worktree_ids,
-        });
-        if let Some(sess) = active_session {
-            input["activeSession"] = serde_json::Value::String(sess.to_string());
-        }
-        if let Some(cwd) = active_cwd {
-            input["activeCwd"] = serde_json::Value::String(cwd.to_string());
-        }
-        // AC-G3: include per-worktree session names when any are non-empty.
-        // Build a parallel array of Option<String> aligned with worktree_ids.
-        if !session_names.is_empty() {
-            let names: Vec<serde_json::Value> = worktree_ids
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    let name = session_names.get(i).map(|s| s.as_str()).unwrap_or("");
-                    if name.is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::Value::String(name.to_string())
-                    }
-                })
-                .collect();
-            input["sessionNames"] = serde_json::Value::Array(names);
-        }
-
-        let req = GraphQlRequest::with_variables(MUTATION, serde_json::json!({ "input": input }));
+        let variables =
+            build_cleanup_variables(worktree_ids, session_names, active_session, active_cwd);
+        let req = GraphQlRequest::with_variables(MUTATION, variables);
         let payload: WorktreesCleanupPayload = self.query(&req)?;
         Ok(payload.worktrees_cleanup)
     }
+}
 
+/// Constructs the GraphQL `variables` object for the `WorktreesCleanup` mutation.
+///
+/// Returns a `serde_json::Value` of the shape `{ "input": { "worktreeIds": [...],
+/// "sessionNames": [...], "activeSession": "...", "activeCwd": "..." } }`,
+/// with optional fields omitted when `None`/empty.
+///
+/// Extracted as a pure function so tests in `worktree_ops` can assert against
+/// the SAME construction path the production mutation uses — avoiding the
+/// hollow-tick problem of hand-building expected values in the test.
+///
+/// # Field names
+///
+/// The field names (`worktreeIds`, `sessionNames`, `activeSession`, `activeCwd`)
+/// match the GraphQL schema's `WorktreesCleanupInput` type exactly.
+pub(crate) fn build_cleanup_variables(
+    worktree_ids: &[String],
+    session_names: &[String],
+    active_session: Option<&str>,
+    active_cwd: Option<&str>,
+) -> serde_json::Value {
+    let mut input = serde_json::json!({
+        "worktreeIds": worktree_ids,
+    });
+    if let Some(sess) = active_session {
+        input["activeSession"] = serde_json::Value::String(sess.to_string());
+    }
+    if let Some(cwd) = active_cwd {
+        input["activeCwd"] = serde_json::Value::String(cwd.to_string());
+    }
+    // AC-G3: include per-worktree session names when any are non-empty.
+    // Build a parallel array of Option<String> aligned with worktree_ids.
+    if !session_names.is_empty() {
+        let names: Vec<serde_json::Value> = worktree_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let name = session_names.get(i).map(|s| s.as_str()).unwrap_or("");
+                if name.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(name.to_string())
+                }
+            })
+            .collect();
+        input["sessionNames"] = serde_json::Value::Array(names);
+    }
+
+    serde_json::json!({ "input": input })
+}
+
+impl Client {
     /// Fetches a complete local-data snapshot via `Query.workView`.
     ///
     /// Returns a [`WorkViewSnapshot`] containing all repos (with their

@@ -158,6 +158,9 @@ mod tests {
     /// Type alias for the compile-level signature check below.
     /// Keeps the full signature in one place so `assert_worktrees_cleanup_method_exists`
     /// stays readable without triggering clippy::type_complexity.
+    ///
+    /// Matches the 4-arg `worktrees_cleanup` public entry-point (not the 5-arg
+    /// `_with_sessions` variant); both exist on `daemon::Client`.
     type CleanupFn =
         fn(
             &crate::daemon::Client,
@@ -274,55 +277,59 @@ mod tests {
     // POSITIVE: client builds correct GraphQL POST body for worktrees_cleanup
     // -----------------------------------------------------------------------
 
-    /// Verifies that `GraphQlRequest::with_variables` serialises the mutation
-    /// body with the correct fields — mutation name, worktreeIds, and optional
-    /// active-session identity. This proves the client method sends the correct
-    /// wire shape to the daemon without requiring a live daemon.
+    /// Verifies that `build_cleanup_variables` — the REAL helper called by
+    /// `worktrees_cleanup_with_sessions` — produces the correct GraphQL variables
+    /// shape. Calling the real helper (rather than hand-building the expected
+    /// value inline) means this test actually exercises the production code path
+    /// for AC-G1 (active-session identity) and AC7 (correct mutation variables).
     ///
     /// @scenario The TUI local-cleanup path invokes the daemon mutation and
     ///            execs no local destruction (the positive route — body shape)
     #[test]
     fn worktrees_cleanup_request_body_has_correct_mutation_and_variables() {
-        use crate::daemon::client::GraphQlRequest;
+        use crate::daemon::client::build_cleanup_variables;
 
-        let ids = vec!["owner/repo:feat/branch".to_string()];
-        let active_session = "my-session";
-        let active_cwd = "/home/user/repo";
+        let ids = vec!["repo:branch-a".to_string(), "repo:branch-b".to_string()];
+        let session_names = vec!["sess-a".to_string()];
+        let active_session = "active-sess";
+        let active_cwd = "/path/to/active";
 
-        // Build the input object as the client method does.
-        let mut input = serde_json::json!({
-            "worktreeIds": ids,
-        });
-        input["activeSession"] = serde_json::Value::String(active_session.to_string());
-        input["activeCwd"] = serde_json::Value::String(active_cwd.to_string());
+        // Call the REAL helper — the same function worktrees_cleanup_with_sessions uses.
+        let vars =
+            build_cleanup_variables(&ids, &session_names, Some(active_session), Some(active_cwd));
 
-        let mutation = "mutation WorktreesCleanup($input: WorktreesCleanupInput!) { worktreesCleanup(input: $input) { ok entries { worktreeId ok } } }";
-        let req = GraphQlRequest::with_variables(mutation, serde_json::json!({ "input": input }));
+        // variables["input"]["worktreeIds"] — both ids present.
+        assert_eq!(
+            vars["input"]["worktreeIds"][0].as_str(),
+            Some("repo:branch-a"),
+            "worktreeIds[0] must be the first worktree ID"
+        );
+        assert_eq!(
+            vars["input"]["worktreeIds"][1].as_str(),
+            Some("repo:branch-b"),
+            "worktreeIds[1] must be the second worktree ID"
+        );
 
-        let body = serde_json::to_value(&req).expect("serialise request");
-
-        // Mutation document present.
+        // AC-G3: sessionNames parallel array — sess-a at index 0, null at index 1.
+        assert_eq!(
+            vars["input"]["sessionNames"][0].as_str(),
+            Some("sess-a"),
+            "sessionNames[0] must carry the session name"
+        );
         assert!(
-            body["query"].as_str().unwrap().contains("worktreesCleanup"),
-            "query field must reference worktreesCleanup"
+            vars["input"]["sessionNames"][1].is_null(),
+            "sessionNames[1] must be null when no session for that worktree"
         );
 
-        // variables.input.worktreeIds present and correct.
+        // AC-G1: activeSession and activeCwd forwarded verbatim.
         assert_eq!(
-            body["variables"]["input"]["worktreeIds"][0].as_str(),
-            Some("owner/repo:feat/branch"),
-            "worktreeIds[0] must be the formatted worktree ID"
-        );
-
-        // AC-G1: activeSession and activeCwd present.
-        assert_eq!(
-            body["variables"]["input"]["activeSession"].as_str(),
-            Some("my-session"),
+            vars["input"]["activeSession"].as_str(),
+            Some("active-sess"),
             "activeSession must be forwarded"
         );
         assert_eq!(
-            body["variables"]["input"]["activeCwd"].as_str(),
-            Some("/home/user/repo"),
+            vars["input"]["activeCwd"].as_str(),
+            Some("/path/to/active"),
             "activeCwd must be forwarded"
         );
     }
