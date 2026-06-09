@@ -1,0 +1,6 @@
+{
+  "name": "orchardist",
+  "description": "Recall: search past Claude Code conversations across all projects and synthesize context into the current session.",
+  "version": "0.1.0",
+  "author": { "name": "drewdrewthis", "email": "andrew@langwatch.ai", "url": "https://github.com/drewdrewthis" }
+}

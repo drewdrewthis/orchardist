@@ -96,12 +96,12 @@ boxd cp "$BINARY" "$VM_NAME:/home/boxd/.local/bin/orchard-tui"
 boxd exec "$VM_NAME" "chmod +x /home/boxd/.local/bin/orchard-tui"
 
 log "creating test worktree on VM (branch $TEST_BRANCH)"
-boxd exec "$VM_NAME" "cd /home/boxd/workspace/git-orchard-rs \
+boxd exec "$VM_NAME" "cd /home/boxd/workspace/orchardist \
     && git worktree add .worktrees/ac9-smoke -b $TEST_BRANCH origin/main"
 
 log "creating test tmux session on VM ($TEST_SESSION)"
 boxd exec "$VM_NAME" "tmux new-session -d -s $TEST_SESSION \
-    -c /home/boxd/workspace/git-orchard-rs/.worktrees/ac9-smoke"
+    -c /home/boxd/workspace/orchardist/.worktrees/ac9-smoke"
 
 # ---------------------------------------------------------------------------
 # 2. Configure VM as OrchardProxy remote locally
@@ -115,12 +115,12 @@ EVENTS_LOG="$HOME/.local/state/git-orchard/events.jsonl"
 cat > "$HOME/.config/orchard/config.json" <<EOF
 {
   "repos": [{
-    "slug": "drewdrewthis/git-orchard-rs",
+    "slug": "drewdrewthis/orchardist",
     "path": "$REPO_ROOT",
     "remotes": [{
       "name": "ac9-vm",
       "host": "$VM_HOST",
-      "path": "/home/boxd/workspace/git-orchard-rs",
+      "path": "/home/boxd/workspace/orchardist",
       "type": "orchard-proxy",
       "fallback_kind": "remmy"
     }]

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Cross-machine chat substrate: append-only JSONL rooms + tmux send-keys fanout with Level 2 receipts"
 license = "MIT"
-repository = "https://github.com/drewdrewthis/git-orchard-rs"
+repository = "https://github.com/drewdrewthis/orchardist"
 
 [lib]
 name = "chat_core"

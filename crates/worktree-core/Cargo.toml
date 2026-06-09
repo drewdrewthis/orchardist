@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Core git worktree operations: list, parse, create, remove, conflict detection"
 license = "MIT"
-repository = "https://github.com/drewdrewthis/git-orchard-rs"
+repository = "https://github.com/drewdrewthis/orchardist"
 
 [lib]
 name = "worktree_core"
