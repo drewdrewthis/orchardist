@@ -16,7 +16,7 @@ import (
 	"context"
 	"time"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // ConversationID uniquely identifies a Conversation across hosts.

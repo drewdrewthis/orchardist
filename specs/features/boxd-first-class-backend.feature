@@ -78,14 +78,14 @@ Feature: Boxd as first-class backend — hexagonal RemoteWorktreeService with un
 
   @unit
   Scenario: BoxdSharedAdapter preserves current single-VM-with-worktrees behavior
-    Given a remote of type "boxd-shared" with host "boxd@orchard-rs.boxd.sh" and path "~/git-orchard-rs"
+    Given a remote of type "boxd-shared" with host "boxd@orchard-rs.boxd.sh" and path "~/orchardist"
     And the adapter is constructed with a fake SSH exec runner
-    And the fake runner, when invoked with `ssh boxd@orchard-rs.boxd.sh 'git -C ~/git-orchard-rs worktree list --porcelain'`, returns
+    And the fake runner, when invoked with `ssh boxd@orchard-rs.boxd.sh 'git -C ~/orchardist worktree list --porcelain'`, returns
       """
-      worktree /home/boxd/git-orchard-rs
+      worktree /home/boxd/orchardist
       bare
 
-      worktree /home/boxd/git-orchard-rs/worktrees/issue240
+      worktree /home/boxd/orchardist/worktrees/issue240
       HEAD def456
       branch refs/heads/issue240/smart-sorting
       """

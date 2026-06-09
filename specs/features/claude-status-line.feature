@@ -28,9 +28,9 @@ Feature: Claude session state detection via status line
 
   @unit
   Scenario: Status line file uses session name from tmux
-    Given a Claude session in tmux session "orchard-rs_47_main"
+    Given a Claude session in tmux session "orchardist_47_main"
     When the status line script writes a status update
-    Then the file path is "/tmp/orchard-claude-orchard-rs_47_main.json"
+    Then the file path is "/tmp/orchard-claude-orchardist_47_main.json"
 
   @unit
   Scenario: Status line updates on each assistant message

@@ -7,7 +7,7 @@ argument-hint: "[test|revert]"
 
 # Orchard Worktree Test
 
-The `orchard` command in the user's shell is a symlink at `~/Library/pnpm/orchard` that points at `/Users/USER/workspace/git-orchard-rs/target/release/orchard` (the **main checkout's** release build). To test a worktree's changes via the shell `orchard` command, the symlink must be temporarily repointed at the worktree's `target/release/orchard`.
+The `orchard` command in the user's shell is a symlink at `~/Library/pnpm/orchard` that points at `/Users/USER/workspace/orchardist/target/release/orchard` (the **main checkout's** release build). To test a worktree's changes via the shell `orchard` command, the symlink must be temporarily repointed at the worktree's `target/release/orchard`.
 
 ## Modes
 
@@ -26,7 +26,7 @@ The `orchard` command in the user's shell is a symlink at `~/Library/pnpm/orchar
    ```
    readlink ~/Library/pnpm/orchard
    ```
-   Save it to memory (state in your response) — typical value is `/Users/USER/workspace/git-orchard-rs/target/release/orchard`.
+   Save it to memory (state in your response) — typical value is `/Users/USER/workspace/orchardist/target/release/orchard`.
 
 4. **Repoint the symlink** to the worktree's binary:
    ```
@@ -45,7 +45,7 @@ Triggered by `revert` argument, or after the user confirms testing is done (succ
 
 1. **Restore the symlink** to the main checkout:
    ```
-   ln -sf /Users/USER/workspace/git-orchard-rs/target/release/orchard ~/Library/pnpm/orchard
+   ln -sf /Users/USER/workspace/orchardist/target/release/orchard ~/Library/pnpm/orchard
    ```
 
 2. **Verify** with `ls -la ~/Library/pnpm/orchard`.

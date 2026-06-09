@@ -6,7 +6,7 @@ package resolvers
 import (
 	"strings"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // hostServiceMatchesFilter applies a HostServiceFilter to a single

@@ -48,17 +48,17 @@ Feature: Validate launch-remote + TUI Enter + federation end-to-end on v0.9.0
     And its working directory equals the worktree path
 
   # =======================================================================
-  # AC2 — Fresh launch (boxd-shared): /launch-remote on a git-orchard-rs
+  # AC2 — Fresh launch (boxd-shared): /launch-remote on an orchardist
   # issue uses the shared VM adapter, creates the session, and it appears
   # locally.
   # =======================================================================
 
   @e2e
-  Scenario: /launch-remote against a git-orchard-rs issue surfaces the new boxd-shared session locally
-    Given the user has a configured boxd-shared remote for "drewdrewthis/git-orchard-rs"
+  Scenario: /launch-remote against an orchardist issue surfaces the new boxd-shared session locally
+    Given the user has a configured boxd-shared remote for "drewdrewthis/orchardist"
         (host "boxd@orchard-rs.boxd.sh")
     And no existing tmux session exists for issue #<N> on that VM
-    When the user runs `/launch-remote drewdrewthis/git-orchard-rs#<N>`
+    When the user runs `/launch-remote drewdrewthis/orchardist#<N>`
     And the user runs `orchard refresh` after the launch completes
     And the user runs `orchard --json` locally
     Then within 30 seconds (after the explicit refresh) the output contains a worktree
@@ -154,7 +154,7 @@ Feature: Validate launch-remote + TUI Enter + federation end-to-end on v0.9.0
     Given the host "boxd@orchard-rs.boxd.sh" has `orchard --version` returning >= "0.9.0"
     And `~/.orchard/config.json` for that remote is updated to `"type": "orchard-proxy"`
     When the user runs `orchard refresh`
-    Then a file matching `~/.cache/orchard/*orchard-rs*orchard_snapshot.json` is written
+    Then a file matching `~/.cache/orchard/*orchardist*orchard_snapshot.json` is written
     And `orchard --json` includes worktrees attributed to that host
     And those worktrees carry `pr` / `issue` / `check_state` enrichment fields
         sourced from the remote snapshot
@@ -190,7 +190,7 @@ Feature: Validate launch-remote + TUI Enter + federation end-to-end on v0.9.0
 
   @integration
   Scenario: Same-slug repo from local cache and remote snapshot is host-attributed correctly
-    Given a local cache contains a worktree on slug "drewdrewthis/git-orchard-rs"
+    Given a local cache contains a worktree on slug "drewdrewthis/orchardist"
         with `host == None`
     And a remote snapshot from "boxd@orchard-rs.boxd.sh" contains a worktree on the same slug
         with `host == Some("boxd@orchard-rs.boxd.sh")`
@@ -248,7 +248,7 @@ Feature: Validate launch-remote + TUI Enter + federation end-to-end on v0.9.0
   #   -> "/launch-remote against a langwatch issue surfaces the new boxd-fork session locally" (@e2e)
   #   -> "boxd-fork adapter routing emits a session row matching the launched session" (@integration)
   # AC2 "Fresh launch — boxd-shared: session visible in local `orchard --json` after launch"
-  #   -> "/launch-remote against a git-orchard-rs issue surfaces the new boxd-shared session locally" (@e2e)
+  #   -> "/launch-remote against an orchardist issue surfaces the new boxd-shared session locally" (@e2e)
   #   -> "boxd-shared adapter discovers the new session on the shared VM" (@integration)
   # AC3 "TUI Enter — existing remote session: creates local proxy, SSH-attaches, lands in shell on VM"
   #   -> "TaskEnterAction builder selects JoinSession for a remote worktree with an existing session" (@unit)

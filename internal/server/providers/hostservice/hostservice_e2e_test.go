@@ -16,9 +16,9 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // TestHostService_E2E_FullStack drives the brief's primary AC: stub PATH

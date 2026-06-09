@@ -3,7 +3,7 @@ package claudeinstance
 import (
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // JsonlStateSnapshot is the output of ClassifyState. Pure data; no I/O.
@@ -114,7 +114,7 @@ func ClassifyState(records []Record, now time.Time) JsonlStateSnapshot {
 		// LastActivityAt stays zero — an empty transcript has no activity to
 		// report. Setting it to `now` would manufacture a false fresh-activity
 		// signal that ticks the subscription every refresh
-		// (https://github.com/drewdrewthis/git-orchard-rs/pull/606#discussion_r3243103664).
+		// (https://github.com/drewdrewthis/orchardist/pull/606#discussion_r3243103664).
 		return JsonlStateSnapshot{
 			State:          graphql.InstanceStateIdle,
 			StateChangedAt: now,

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
 )
 
 // setHomeForTest overrides $HOME to a temp dir so config writes never

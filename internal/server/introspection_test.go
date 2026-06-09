@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // --- env-var gate ---

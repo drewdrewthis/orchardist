@@ -7,7 +7,7 @@
 //   node tests/create-chat.drive.mjs [baseURL]
 //   ORCHARD_TEST_BASE=https://orchard-gui.drewdrewthis.boxd.sh node tests/create-chat.drive.mjs
 //
-// Spawns a REAL Claude session (named git-orchard-rs*) and kills it on exit —
+// Spawns a REAL Claude session (named orchardist*) and kills it on exit —
 // that is why this is a .drive.mjs, not a **/*.spec.ts the rig auto-runs.
 //
 // playwright's default export is its CJS module ({ chromium, firefox, … }).

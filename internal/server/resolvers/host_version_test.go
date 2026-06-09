@@ -31,8 +31,8 @@ import (
 
 	"log/slog"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 // hostVersionPost posts query against the graphqlURL and returns the decoded envelope.

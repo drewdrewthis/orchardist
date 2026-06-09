@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // ConversationResolver implements all field resolvers for the

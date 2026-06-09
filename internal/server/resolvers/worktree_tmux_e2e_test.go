@@ -39,13 +39,13 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
-	gqlgen "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	tmuxprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	gqlgen "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	tmuxprovider "github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // ----------------------------------------------------------------------

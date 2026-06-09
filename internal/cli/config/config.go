@@ -21,8 +21,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/orchpaths"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
 )
 
 // Command returns the `config` subcommand group.

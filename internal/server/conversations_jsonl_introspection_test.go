@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // TestConversationJsonlPath_DocMentionsHTTPEndpoint asserts that the

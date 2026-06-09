@@ -1493,7 +1493,7 @@ impl App {
         }
     }
 
-    /// Renders the attribution footer: "made with ❤ — https://github.com/drewdrewthis/git-orchard-rs"
+    /// Renders the attribution footer: "made with ❤ — https://github.com/drewdrewthis/orchardist"
     ///
     /// The ❤ is rendered in error (red) color; the URL in dimmed + underlined.
     /// The footer area is also used for mouse-click URL detection.

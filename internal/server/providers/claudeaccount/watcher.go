@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // Watcher is the poll-based change detector for the ClaudeAccount

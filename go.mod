@@ -1,4 +1,4 @@
-module github.com/drewdrewthis/git-orchard-rs
+module github.com/drewdrewthis/orchardist
 
 go 1.25.0
 

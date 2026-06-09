@@ -57,8 +57,8 @@ fn fails_offline_recipient() {
 
 #[test]
 fn handle_and_session_can_diverge() {
-    // The bug from live testing: handle `@git_orchard_rs_spawn2` (slugified)
-    // must still route to actual tmux session `git-orchard-rs-spawn2`
+    // The bug from live testing: handle `@orchardist_spawn2` (slugified)
+    // must still route to actual tmux session `orchardist-spawn2`
     // (dashes preserved). The Recipient struct keeps these distinct.
     let bogus = "this-also-does-not-exist-rs-spawn2";
     let outcomes = tmux_fanout(

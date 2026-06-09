@@ -28,7 +28,7 @@ package repodiscovery
 import (
 	"context"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/config"
 )
 
 // Source returns absolute repo-root paths (the directory containing a

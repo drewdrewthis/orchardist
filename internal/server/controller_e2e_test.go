@@ -32,11 +32,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
 )
 
 const probeTimeout = 5 * time.Second

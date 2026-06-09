@@ -80,19 +80,19 @@ fn launch_remote_boxd_fork_visibility_within_30s() {
 ///
 /// Setup before running:
 /// 1. Have a boxd-shared (or remmy-typed boxd) remote configured for
-///    `drewdrewthis/git-orchard-rs`.
+///    `drewdrewthis/orchardist`.
 /// 2. Manually create a tmux session on the shared VM with a name that
-///    references the issue (e.g., `git-orchard-rs_issue<N>`).
+///    references the issue (e.g., `orchardist_issue<N>`).
 /// 3. Set `ORCHARD_E2E_TEST_ISSUE` to the issue number used.
 /// 4. Optionally set `ORCHARD_E2E_REPO_SLUG`
-///    (default: `drewdrewthis/git-orchard-rs`).
+///    (default: `drewdrewthis/orchardist`).
 #[test]
 #[ignore = "requires real boxd-shared remote + GitHub credentials; run on demand with --ignored"]
 fn launch_remote_boxd_shared_visibility_within_30s() {
     let issue = std::env::var("ORCHARD_E2E_TEST_ISSUE")
         .expect("set ORCHARD_E2E_TEST_ISSUE to the issue number with a live session on the boxd-shared remote");
     let repo = std::env::var("ORCHARD_E2E_REPO_SLUG")
-        .unwrap_or_else(|_| "drewdrewthis/git-orchard-rs".to_string());
+        .unwrap_or_else(|_| "drewdrewthis/orchardist".to_string());
 
     let elapsed = poll_for_session_visibility(&repo, &issue);
     print_baseline("AC2 boxd-shared", &repo, &issue, elapsed);

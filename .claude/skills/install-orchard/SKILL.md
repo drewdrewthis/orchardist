@@ -61,8 +61,8 @@ orchard --help
 **Alternative — build from source** (if npm isn't available or they prefer it):
 
 ```bash
-git clone https://github.com/drewdrewthis/git-orchard-rs.git
-cd git-orchard-rs
+git clone https://github.com/drewdrewthis/orchardist.git
+cd orchardist
 cargo build --release
 ln -sf "$(pwd)/target/release/orchard" ~/.local/bin/orchard
 ```

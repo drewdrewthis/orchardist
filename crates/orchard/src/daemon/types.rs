@@ -423,16 +423,16 @@ mod tests {
             "workView": {
                 "repos": [
                     {
-                        "slug": "git-orchard-rs",
-                        "path": "/home/example/workspace/git-orchard-rs",
+                        "slug": "orchardist",
+                        "path": "/home/example/workspace/orchardist",
                         "worktrees": [
                             {
-                                "path": "/home/example/workspace/git-orchard-rs/.worktrees/issue429/rip-cache",
+                                "path": "/home/example/workspace/orchardist/.worktrees/issue429/rip-cache",
                                 "branch": "issue429/rip-cache-sources",
                                 "head": "abc1234def5678",
                                 "bare": false,
                                 "host": "local",
-                                "repo": "drewdrewthis/git-orchard-rs",
+                                "repo": "drewdrewthis/orchardist",
                                 "pr": {
                                     "number": 429,
                                     "state": "OPEN",
@@ -450,12 +450,12 @@ mod tests {
                                 }
                             },
                             {
-                                "path": "/home/example/workspace/git-orchard-rs",
+                                "path": "/home/example/workspace/orchardist",
                                 "branch": "main",
                                 "head": "deadbeef",
                                 "bare": false,
                                 "host": "local",
-                                "repo": "drewdrewthis/git-orchard-rs",
+                                "repo": "drewdrewthis/orchardist",
                                 "pr": null,
                                 "issue": null
                             }
@@ -498,8 +498,8 @@ mod tests {
         // repos
         assert_eq!(snapshot.repos.len(), 1);
         let repo = &snapshot.repos[0];
-        assert_eq!(repo.slug, "git-orchard-rs");
-        assert_eq!(repo.path, "/home/example/workspace/git-orchard-rs");
+        assert_eq!(repo.slug, "orchardist");
+        assert_eq!(repo.path, "/home/example/workspace/orchardist");
 
         // worktrees
         assert_eq!(repo.worktrees.len(), 2);
@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(wt.head, "abc1234def5678");
         assert!(!wt.bare);
         assert_eq!(wt.host, "local");
-        assert_eq!(wt.repo, "drewdrewthis/git-orchard-rs");
+        assert_eq!(wt.repo, "drewdrewthis/orchardist");
 
         // worktree without PR/issue
         assert!(repo.worktrees[1].pr.is_none());

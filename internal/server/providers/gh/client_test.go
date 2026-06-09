@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // TestClient_RateLimit asserts a 403 + X-RateLimit-Remaining: 0

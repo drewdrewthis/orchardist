@@ -2,7 +2,7 @@
 //! appear in `orchard-tui --json` output for flat-clone repositories.
 //!
 //! Reported symptom (2026-04-13): `orchard-tui --json` only returned the `main`
-//! worktree for `drewdrewthis/git-orchard-rs` (a flat clone with worktrees
+//! worktree for `drewdrewthis/orchardist` (a flat clone with worktrees
 //! under `.worktrees/`), while the langwatch submodule repo in the same
 //! config returned all of its worktrees correctly.
 //!

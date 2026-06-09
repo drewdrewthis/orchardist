@@ -17,7 +17,7 @@ Feature: Persistent state and event system
       """json
       {
         "repos": [
-          { "path": "/home/user/workspace/git-orchard-rs" },
+          { "path": "/home/user/workspace/orchardist" },
           { "path": "/home/user/workspace/api-server", "remote": { "host": "devbox", "repoPath": "/srv/api-server" } }
         ]
       }
@@ -25,7 +25,7 @@ Feature: Persistent state and event system
     When config is loaded
     Then 2 repos are configured
     And repo "api-server" has a remote on host "devbox"
-    And repo "git-orchard-rs" has no remote
+    And repo "orchardist" has no remote
 
   @unit
   Scenario: Per-repo .git/orchard.json is still read for remote config
@@ -69,12 +69,12 @@ Feature: Persistent state and event system
         "version": 1,
         "tasks": [
           {
-            "id": "git-orchard-rs#47",
+            "id": "orchardist#47",
             "source": { "type": "github_issue", "repo": "acme/my-project", "number": 47 },
             "status": "in_progress",
             "priority": 1,
-            "worktree": "/home/user/workspace/git-orchard-rs-47",
-            "sessions": ["git-orchard-rs_47_main"],
+            "worktree": "/home/user/workspace/orchardist-47",
+            "sessions": ["orchardist_47_main"],
             "pr": 53,
             "created_at": "2026-03-18T10:00:00Z",
             "updated_at": "2026-03-20T14:32:00Z"
@@ -85,7 +85,7 @@ Feature: Persistent state and event system
 
   @unit
   Scenario: Tasks have a sessions array, not a single session
-    Given a task with id "git-orchard-rs#47"
+    Given a task with id "orchardist#47"
     Then its "sessions" field is an array of tmux session names
     And it may contain zero or more entries
 
@@ -121,7 +121,7 @@ Feature: Persistent state and event system
     When I create a task from issue #47
     Then a task is added to the state file with:
       | field  | value                                   |
-      | id     | git-orchard-rs#47                       |
+      | id     | orchardist#47                       |
       | source | github_issue:acme/my-project#47 |
       | status | ready                                   |
 
@@ -135,14 +135,14 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: Issue sync does not duplicate existing tasks
-    Given the state file already has a task for "git-orchard-rs#47"
+    Given the state file already has a task for "orchardist#47"
     When issue sync runs and #47 is still open
     Then no duplicate task is created
     And the existing task is unchanged
 
   @integration
   Scenario: Issue sync marks done tasks when issue is closed
-    Given the state file has a task for "git-orchard-rs#47" with status "in_progress"
+    Given the state file has a task for "orchardist#47" with status "in_progress"
     When issue sync runs and #47 is now closed
     Then the task status changes to "done"
     And an event "task.status_change" is logged
@@ -153,7 +153,7 @@ Feature: Persistent state and event system
 
   @e2e
   Scenario: Enter on a ready task with no worktree or session
-    Given a task "git-orchard-rs#47" with status "ready"
+    Given a task "orchardist#47" with status "ready"
     And it has no worktree and no sessions
     When I press Enter on the task
     Then a git worktree is created for the task's branch
@@ -164,23 +164,23 @@ Feature: Persistent state and event system
 
   @e2e
   Scenario: Enter on an in-progress task with one session
-    Given a task "git-orchard-rs#47" with status "in_progress"
-    And it has one session "git-orchard-rs_47_main"
+    Given a task "orchardist#47" with status "in_progress"
+    And it has one session "orchardist_47_main"
     When I press Enter on the task
-    Then my tmux client switches to "git-orchard-rs_47_main"
+    Then my tmux client switches to "orchardist_47_main"
 
   @e2e
   Scenario: Enter on an in-progress task with multiple sessions
-    Given a task "git-orchard-rs#47" with status "in_progress"
-    And it has sessions ["git-orchard-rs_47_main", "git-orchard-rs_47_claude"]
+    Given a task "orchardist#47" with status "in_progress"
+    And it has sessions ["orchardist_47_main", "orchardist_47_claude"]
     When I press Enter on the task
     Then an inline session picker is shown with both sessions
     And each session shows its pane status (agent active, idle, etc.)
 
   @e2e
   Scenario: Enter on a task with a worktree but no session
-    Given a task "git-orchard-rs#47" with status "in_progress"
-    And it has worktree "/home/user/workspace/git-orchard-rs-47"
+    Given a task "orchardist#47" with status "in_progress"
+    And it has worktree "/home/user/workspace/orchardist-47"
     And it has no sessions
     When I press Enter on the task
     Then a tmux session is created in the existing worktree
@@ -193,21 +193,21 @@ Feature: Persistent state and event system
 
   @e2e
   Scenario: Creating a new session on a task
-    Given the cursor is on task "git-orchard-rs#47" which has worktree and session
+    Given the cursor is on task "orchardist#47" which has worktree and session
     When I press "n"
     Then a text input prompts for session suffix
     When I type "claude" and press Enter
-    Then a tmux session named "git-orchard-rs_47_claude" is created in the task's worktree
+    Then a tmux session named "orchardist_47_claude" is created in the task's worktree
     And it is added to the task's sessions array
     And my tmux client switches to the new session
 
   @integration
   Scenario: Session discovery binds orphaned sessions to tasks
-    Given a tmux session "git-orchard-rs_47_main" exists at path "/home/user/workspace/git-orchard-rs-47"
-    And task "git-orchard-rs#47" has worktree "/home/user/workspace/git-orchard-rs-47"
+    Given a tmux session "orchardist_47_main" exists at path "/home/user/workspace/orchardist-47"
+    And task "orchardist#47" has worktree "/home/user/workspace/orchardist-47"
     And the task's sessions array is empty
     When the collector runs session discovery
-    Then "git-orchard-rs_47_main" is added to the task's sessions array
+    Then "orchardist_47_main" is added to the task's sessions array
     And an event "session.bound" is logged
 
   @integration
@@ -220,10 +220,10 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: Dead session is detected and surfaced
-    Given task "git-orchard-rs#47" has session "git-orchard-rs_47_claude" in its sessions array
-    And tmux reports no session named "git-orchard-rs_47_claude"
+    Given task "orchardist#47" has session "orchardist_47_claude" in its sessions array
+    And tmux reports no session named "orchardist_47_claude"
     When the collector runs session reconciliation
-    Then the TUI shows "git-orchard-rs_47_claude" as dead
+    Then the TUI shows "orchardist_47_claude" as dead
     And an event "session.dead" is logged
 
   # ===================================================================
@@ -232,7 +232,7 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: Collector fetches all panes per session
-    Given a tmux session "git-orchard-rs_47_main" has 2 panes:
+    Given a tmux session "orchardist_47_main" has 2 panes:
       | pane_id | command | pane_title   |
       | %4      | zsh     | zsh          |
       | %5      | claude  | Claude Code  |
@@ -260,12 +260,12 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: TUI shows pane-level detail for in-progress tasks
-    Given task "git-orchard-rs#47" has session "git-orchard-rs_47_main"
+    Given task "orchardist#47" has session "orchardist_47_main"
     And the session has panes: zsh (idle), claude (active)
     When the TUI renders the task in expanded view
     Then it shows:
       """
-      session: git-orchard-rs_47_main
+      session: orchardist_47_main
          ├─ pane 1: zsh
          └─ pane 2: ⚡ claude active
       """
@@ -276,14 +276,14 @@ Feature: Persistent state and event system
 
   @e2e
   Scenario: Marking a task as done
-    Given task "git-orchard-rs#47" is in status "in_progress"
+    Given task "orchardist#47" is in status "in_progress"
     When I press "d" on the task
     Then the task status changes to "done"
     And an event "task.status_change" is logged
 
   @e2e
   Scenario: Cleanup archives done tasks and removes resources
-    Given tasks "git-orchard-rs#33" and "git-orchard-rs#35" have status "done"
+    Given tasks "orchardist#33" and "orchardist#35" have status "done"
     And they have worktrees and sessions
     When I press "c" to open the cleanup dialog
     Then I see a checkbox list of done tasks with their resources
@@ -344,10 +344,10 @@ Feature: Persistent state and event system
   @integration
   Scenario: Session switch is logged
     Given the TUI is running
-    When I press Enter to switch to session "git-orchard-rs_47_main"
+    When I press Enter to switch to session "orchardist_47_main"
     Then an event is logged:
       """json
-      {"ts":"...","event":"session.switch","task":"git-orchard-rs#47","session":"git-orchard-rs_47_main","trigger":"keypress"}
+      {"ts":"...","event":"session.switch","task":"orchardist#47","session":"orchardist_47_main","trigger":"keypress"}
       """
 
   @integration
@@ -360,7 +360,7 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: Agent state transitions are logged
-    Given session "git-orchard-rs_47_main" pane %5 was previously detected as agent-active
+    Given session "orchardist_47_main" pane %5 was previously detected as agent-active
     When the next refresh detects pane %5 is no longer running claude
     Then an event "agent.idle" is logged with "was_active_for" duration
 
@@ -385,7 +385,7 @@ Feature: Persistent state and event system
 
   @integration
   Scenario: Stale session in cached state is reconciled
-    Given the cached state says task #47 has session "git-orchard-rs_47_claude"
+    Given the cached state says task #47 has session "orchardist_47_claude"
     And tmux reports that session no longer exists
     When the background refresh completes reconciliation
     Then the session is marked as dead in the TUI
@@ -409,20 +409,20 @@ Feature: Persistent state and event system
 
   @e2e
   Scenario: Task line shows repo name for multi-repo
-    Given tasks from repos "git-orchard-rs" and "api-server"
+    Given tasks from repos "orchardist" and "api-server"
     When the TUI renders
     Then each task line includes the repo name
 
   @e2e
   Scenario: In-progress task shows session and pane detail
-    Given an in-progress task with session "orchard-rs_47_main" having 2 panes
+    Given an in-progress task with session "orchardist_47_main" having 2 panes
     When the TUI renders the task
     Then it shows:
       """
-      3  #47  Task-centric state system             orchard-rs
-              ├─ wt: ~/ws/git-orchard-rs-47
+      3  #47  Task-centric state system             orchardist
+              ├─ wt: ~/ws/orchardist-47
               ├─ pr: #53 ● passing ✓ approved
-              └─ session: orchard-rs_47_main
+              └─ session: orchardist_47_main
                  ├─ pane 1: zsh
                  └─ pane 2: ⚡ claude active
       """
@@ -433,11 +433,11 @@ Feature: Persistent state and event system
     When the TUI renders the task
     Then it shows:
       """
-      3  #47  Task-centric state system             orchard-rs
-              ├─ wt: ~/ws/git-orchard-rs-47
+      3  #47  Task-centric state system             orchardist
+              ├─ wt: ~/ws/orchardist-47
               ├─ pr: #53 ● passing ✓ approved
-              ├─ a: orchard-rs_47_main              ● you
-              └─ b: orchard-rs_47_claude             ⚡ active
+              ├─ a: orchardist_47_main              ● you
+              └─ b: orchardist_47_claude             ⚡ active
       """
 
   @e2e

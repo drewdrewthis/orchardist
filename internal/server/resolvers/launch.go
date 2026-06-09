@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 func launchClaudeSession(ctx context.Context, input graphql1.LaunchSessionInput) (*graphql1.LaunchSessionResult, error) {

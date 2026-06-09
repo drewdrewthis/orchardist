@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // PollInterval is the watcher's tick rate. Briefing AC: 60s is fine,

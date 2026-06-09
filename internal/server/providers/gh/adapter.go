@@ -3,7 +3,7 @@ package gh
 import (
 	"context"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // PRAdapter wraps the gh Client into the Adapter[PullRequestKey, PullRequest]

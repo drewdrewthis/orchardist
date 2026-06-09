@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	gh "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	gh "github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // readDefaultBranch returns the default branch of the git project that

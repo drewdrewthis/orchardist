@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	claudeaccount "github.com/drewdrewthis/git-orchard-rs/daemon/claude-account"
+	claudeaccount "github.com/drewdrewthis/orchardist/daemon/claude-account"
 )
 
 // fakeRunnerSeq lets a test queue different responses across calls.

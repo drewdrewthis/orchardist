@@ -12,7 +12,7 @@ import (
 	"context"
 	"sort"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // matchClaudeInstancesForWorktree returns every ClaudeInstance whose

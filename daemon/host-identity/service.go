@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	graphql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // Service is the R2 contract — the ONLY API consumers (resolvers, loaders,

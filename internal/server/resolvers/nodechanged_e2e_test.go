@@ -26,10 +26,10 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	tmuxprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	tmuxprovider "github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // stubRunner is a stateful CommandRunner. Each call returns the next

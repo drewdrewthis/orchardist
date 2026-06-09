@@ -246,7 +246,7 @@ Feature: Federation peers hot-reload — add/remove peers without restarting the
   Scenario: A follow-up GitHub issue exists for `boxd list`-driven auto-discovery
     Given issue #566 is closed
     When a reader inspects the closing message or linked issues on #566
-    Then there exists a linked GitHub issue on `drewdrewthis/git-orchard-rs` whose title or body references "auto-discover" and `boxd list`
+    Then there exists a linked GitHub issue on `drewdrewthis/orchardist` whose title or body references "auto-discover" and `boxd list`
     And that issue's body acknowledges the prerequisite gap (daemon not publicly exposed by default)
     And that issue is the canonical home for the deferred work
     # This AC is a workflow gate — verified by the implementer producing the issue

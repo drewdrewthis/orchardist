@@ -9,7 +9,7 @@ package tmux
 import (
 	"testing"
 
-	provider "github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	provider "github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // stubPsGetter is a minimal PanePsGetter for unit tests.

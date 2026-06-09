@@ -30,18 +30,18 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/repodiscovery"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/orchpaths"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/repodiscovery"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // Command returns the `daemon` subcommand group rooted with three leaves.

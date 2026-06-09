@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // TestReadOriginURL exercises the .git/config parser. We assemble a

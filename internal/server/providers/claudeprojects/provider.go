@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // HeartbeatThreshold is the cutoff for `open: Boolean!`. A

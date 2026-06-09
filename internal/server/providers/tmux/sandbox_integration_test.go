@@ -49,7 +49,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // sigkillRecord captures one detected SIGKILL event for the assertion

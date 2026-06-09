@@ -95,16 +95,16 @@ Feature: Branch tail segments in TITLE column and multi-repo main session auto-c
   # The fix: after refreshing worktrees and tmux sessions for each repo,
   # the cache pipeline should ensure a main session exists for each
   # configured repo, using `derive_main_session_name` for repo-specific
-  # naming (e.g. "git-orchard-rs_main", not just "main").
+  # naming (e.g. "orchardist_main", not just "main").
   #
   # This only applies in TUI mode. JSON mode remains read-only.
 
   Background:
     Given the global config declares repos:
       | slug                       | path                       |
-      | acme/my-project   | /workspace/git-orchard-rs  |
+      | acme/my-project   | /workspace/orchardist  |
       | acme/webapp        | /workspace/webapp       |
-    And the worktree origin for "acme/my-project" is at "/workspace/git-orchard-rs" on branch "main"
+    And the worktree origin for "acme/my-project" is at "/workspace/orchardist" on branch "main"
     And the worktree origin for "acme/webapp" is at "/workspace/webapp" on branch "main"
 
   # -------------------------------------------------------------------------
@@ -115,7 +115,7 @@ Feature: Branch tail segments in TITLE column and multi-repo main session auto-c
   Scenario: Each configured repo gets its own main tmux session on TUI startup
     Given no tmux sessions exist
     When the TUI starts and the cache refresh pipeline runs
-    Then a tmux session named "git-orchard-rs_main" is created at "/workspace/git-orchard-rs"
+    Then a tmux session named "orchardist_main" is created at "/workspace/orchardist"
     And a tmux session named "webapp_main" is created at "/workspace/webapp"
 
   # -------------------------------------------------------------------------
@@ -124,13 +124,13 @@ Feature: Branch tail segments in TITLE column and multi-repo main session auto-c
 
   @unit
   Scenario: Skips creation when repo-specific main session already exists
-    Given a tmux session named "git-orchard-rs_main" already exists
+    Given a tmux session named "orchardist_main" already exists
     When the ensure main session logic runs for "acme/my-project"
     Then no new session is created for that repo
 
   @unit
   Scenario: Creates missing session even when other repos already have theirs
-    Given a tmux session named "git-orchard-rs_main" already exists
+    Given a tmux session named "orchardist_main" already exists
     And no tmux session named "webapp_main" exists
     When the cache refresh pipeline runs for all repos
     Then a tmux session named "webapp_main" is created at "/workspace/webapp"
@@ -150,7 +150,7 @@ Feature: Branch tail segments in TITLE column and multi-repo main session auto-c
   @integration
   Scenario: Newly created sessions appear in cache and derived view
     Given no tmux sessions exist
-    When the cache refresh pipeline creates "git-orchard-rs_main"
+    When the cache refresh pipeline creates "orchardist_main"
     Then the tmux sessions cache includes the new session
     And the derived worktree view maps it to the origin worktree row
 
@@ -170,9 +170,9 @@ Feature: Branch tail segments in TITLE column and multi-repo main session auto-c
 
   @unit
   Scenario: Session name uses repo directory name, not slug
-    Given the worktree origin for "acme/my-project" is at "/workspace/git-orchard-rs" on branch "main"
+    Given the worktree origin for "acme/my-project" is at "/workspace/orchardist" on branch "main"
     When the main session name is derived for this repo
-    Then the session name is "git-orchard-rs_main"
+    Then the session name is "orchardist_main"
 
   @unit
   Scenario: Session name uses the origin branch, not hardcoded "main"
@@ -195,13 +195,13 @@ Feature: Branch tail segments in TITLE column and multi-repo main session auto-c
     Given tmux new-session will fail for "/workspace/webapp"
     And no tmux sessions exist
     When the cache refresh pipeline runs for all repos
-    Then a tmux session named "git-orchard-rs_main" is still created
+    Then a tmux session named "orchardist_main" is still created
     And an error is reported for the webapp session creation failure
     And the TUI continues functioning
 
   @integration
   Scenario: Error from session creation is shown as a persistent message
-    Given tmux new-session will fail for "/workspace/git-orchard-rs"
+    Given tmux new-session will fail for "/workspace/orchardist"
     When the cache refresh pipeline runs
     Then a persistent error message is displayed indicating the failure
     And the worktree row for the origin still appears without a session indicator

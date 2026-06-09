@@ -18,7 +18,7 @@ func TestEncodeCwd_SwapsSlashesAndDots(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"/home/user/workspace/git-orchard-rs", "-home-user-workspace-git-orchard-rs"},
+		{"/home/user/workspace/orchardist", "-home-user-workspace-orchardist"},
 		{"/", "-"},
 		{"", ""},
 		{"/foo", "-foo"},

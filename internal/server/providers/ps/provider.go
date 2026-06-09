@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	provider "github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/store"
+	provider "github.com/drewdrewthis/orchardist/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/store"
 )
 
 // Provider is the orchard-side facade over PsAdapter. Owns the cache,

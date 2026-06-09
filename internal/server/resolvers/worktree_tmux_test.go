@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	tmuxprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	tmuxprovider "github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // ----------------------------------------------------------------------

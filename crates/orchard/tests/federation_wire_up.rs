@@ -744,7 +744,7 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
 
     // Seed the OrchardState with a local worktree (host = None).
     let local_wt = WorktreeState {
-        path: "/local/git-orchard-rs".to_string(),
+        path: "/local/orchardist".to_string(),
         branch: "main".to_string(),
         is_bare: false,
         host: None,
@@ -761,7 +761,7 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
 
     let mut state = OrchardState {
         repos: vec![RepoState {
-            slug: "drewdrewthis/git-orchard-rs".to_string(),
+            slug: "drewdrewthis/orchardist".to_string(),
             worktrees: vec![local_wt],
             default_branch: Some("main".to_string()),
             main_ci_state: None,
@@ -776,11 +776,11 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
         version: 6,
         tmux_sessions: vec![],
         repos: vec![JsonRepo {
-            slug: "drewdrewthis/git-orchard-rs".to_string(),
+            slug: "drewdrewthis/orchardist".to_string(),
             default_branch: Some("main".to_string()),
             main_ci_state: None,
             worktrees: vec![JsonWorktree {
-                path: "/remote/git-orchard-rs".to_string(),
+                path: "/remote/orchardist".to_string(),
                 branch: "issue337/validate-launch-remote-and-federation".to_string(),
                 host: None,
                 layout: "bare".to_string(),
@@ -806,8 +806,8 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
     let repo = state
         .repos
         .iter()
-        .find(|r| r.slug == "drewdrewthis/git-orchard-rs")
-        .expect("drewdrewthis/git-orchard-rs must be present after merge");
+        .find(|r| r.slug == "drewdrewthis/orchardist")
+        .expect("drewdrewthis/orchardist must be present after merge");
 
     // Both the local and remote worktrees must coexist.
     assert_eq!(
@@ -821,8 +821,8 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
     let local_row = repo
         .worktrees
         .iter()
-        .find(|w| w.path == "/local/git-orchard-rs")
-        .expect("local worktree at /local/git-orchard-rs must still be present");
+        .find(|w| w.path == "/local/orchardist")
+        .expect("local worktree at /local/orchardist must still be present");
 
     assert!(
         local_row.host.is_none(),
@@ -834,8 +834,8 @@ fn local_and_remote_worktrees_for_same_slug_stay_separate_by_host() {
     let remote_row = repo
         .worktrees
         .iter()
-        .find(|w| w.path == "/remote/git-orchard-rs")
-        .expect("remote worktree at /remote/git-orchard-rs must be present after merge");
+        .find(|w| w.path == "/remote/orchardist")
+        .expect("remote worktree at /remote/orchardist must be present after merge");
 
     assert_eq!(
         remote_row.host.as_deref(),

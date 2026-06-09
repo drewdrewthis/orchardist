@@ -12,8 +12,8 @@ import (
 	"context"
 	"strings"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	tmux "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	tmux "github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // matchPanesForWorktree enumerates every pane in snap that:

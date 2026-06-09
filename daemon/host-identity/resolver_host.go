@@ -3,7 +3,7 @@ package hostidentity
 import (
 	"context"
 
-	graphql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // HostResolver handles resolver methods on the Host type that this domain owns.

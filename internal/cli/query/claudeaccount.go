@@ -3,7 +3,7 @@ package query
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server"
 )
 
 // claudeAccountQuery is the canonical projection of the local

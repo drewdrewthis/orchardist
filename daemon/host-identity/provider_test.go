@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	hostidentity "github.com/drewdrewthis/git-orchard-rs/daemon/host-identity"
+	hostidentity "github.com/drewdrewthis/orchardist/daemon/host-identity"
 )
 
 // staticIdentityReader returns a fixed Identity for test determinism.

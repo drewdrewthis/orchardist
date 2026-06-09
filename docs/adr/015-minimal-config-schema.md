@@ -53,8 +53,8 @@ top-level keys: `version`, `repos`, `peers`.**
   "version": 1,
   "repos": [
     {
-      "slug": "drewdrewthis/git-orchard-rs",
-      "path": "/Users/USER/workspace/git-orchard-rs",
+      "slug": "drewdrewthis/orchardist",
+      "path": "/Users/USER/workspace/orchardist",
       "remotes": []
     }
   ],
@@ -163,9 +163,9 @@ For each repo in the old `projects[]`, regenerate as a `repos[]` entry:
 
 ```bash
 # Old shape:
-#   "projects": [{ "id": "git-orchard-rs", "directory": "/Users/USER/workspace/git-orchard-rs", "name": "git-orchard-rs" }]
+#   "projects": [{ "id": "orchardist", "directory": "/Users/USER/workspace/orchardist", "name": "orchardist" }]
 # New shape:
-#   "repos": [{ "slug": "drewdrewthis/git-orchard-rs", "path": "/Users/USER/workspace/git-orchard-rs", "remotes": [] }]
+#   "repos": [{ "slug": "drewdrewthis/orchardist", "path": "/Users/USER/workspace/orchardist", "remotes": [] }]
 ```
 
 The slug requires `gh repo view` (or manual entry); the path is the same;
@@ -185,16 +185,16 @@ real `~/.orchard/config.json` after a test run.
 
 ## References
 
-- [#540](https://github.com/drewdrewthis/git-orchard-rs/issues/540) — the
+- [#540](https://github.com/drewdrewthis/orchardist/issues/540) — the
   cleanup issue that prompted this ADR.
 - [ADR-014](014-config-dotdir-location.md) — `~/.orchard/` becomes the
   canonical config directory.
-- [#19](https://github.com/drewdrewthis/git-orchard-rs/issues/19) — the
+- [#19](https://github.com/drewdrewthis/orchardist/issues/19) — the
   original `ci_gate_patterns` feature, whose config field is removed here.
-- [#52](https://github.com/drewdrewthis/git-orchard-rs/issues/52) — the
+- [#52](https://github.com/drewdrewthis/orchardist/issues/52) — the
   `terminal_app` feature, whose config field is removed here.
-- [#413](https://github.com/drewdrewthis/git-orchard-rs/issues/413) —
+- [#413](https://github.com/drewdrewthis/orchardist/issues/413) —
   `peer_secret` removal; verified clean of zombies.
-- [#479](https://github.com/drewdrewthis/git-orchard-rs/pull/479) — the
+- [#479](https://github.com/drewdrewthis/orchardist/pull/479) — the
   "preserve unknown keys" clobber fix, mostly subsumed by reducing the
   schema to three keys.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // DeriveState encapsulates the inputs needed to derive a ClaudeInstance's

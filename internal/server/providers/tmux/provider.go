@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	provider "github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/store"
+	provider "github.com/drewdrewthis/orchardist/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/store"
 )
 
 // DefaultPollInterval is the watcher tick rate per ADR-011 §12 line 413.

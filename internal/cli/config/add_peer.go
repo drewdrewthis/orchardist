@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/orchpaths"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 // peeredFile is the on-disk view of ~/.orchard/config.json that

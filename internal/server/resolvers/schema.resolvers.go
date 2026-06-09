@@ -15,13 +15,13 @@ import (
 	"strings"
 	"time"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // Worktree resolves ClaudeInstance.worktree (#540): the deepest worktree

@@ -4,8 +4,8 @@ package resolvers
 import (
 	"testing"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 func TestPurposeForLocalHost(t *testing.T) {

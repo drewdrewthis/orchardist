@@ -1030,7 +1030,7 @@ mod tests {
     fn repo_config_owner_with_different_owner_and_name() {
         let repo = RepoConfig {
             slug: "acme/my-project".to_string(),
-            path: "/workspace/git-orchard-rs".to_string(),
+            path: "/workspace/orchardist".to_string(),
             remotes: vec![],
         };
 

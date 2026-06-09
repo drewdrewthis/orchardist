@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	graphql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 
-	hostidentity "github.com/drewdrewthis/git-orchard-rs/daemon/host-identity"
+	hostidentity "github.com/drewdrewthis/orchardist/daemon/host-identity"
 )
 
 // countingService wraps a stubService and records how many times Host() is called.

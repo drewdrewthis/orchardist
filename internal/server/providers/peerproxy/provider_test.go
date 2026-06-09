@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 // fakePeer boots a minimal HTTP server that handles GraphQL POSTs and

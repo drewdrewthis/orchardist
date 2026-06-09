@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // Provider is the host-service-domain Provider implementation.

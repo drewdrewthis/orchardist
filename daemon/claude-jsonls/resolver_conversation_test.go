@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // TestConversationsResolver_ProjectsAll verifies that the Conversations

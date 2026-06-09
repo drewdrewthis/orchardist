@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // CacheTTL is the per-entry freshness window. ADR-011 §12 explicitly

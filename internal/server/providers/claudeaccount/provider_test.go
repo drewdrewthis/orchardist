@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
 )
 
 // stubAccount returns the canonical canned response for adapter tests

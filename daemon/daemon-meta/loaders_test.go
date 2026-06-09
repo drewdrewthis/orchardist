@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	daemonmeta "github.com/drewdrewthis/git-orchard-rs/daemon/daemon-meta"
+	daemonmeta "github.com/drewdrewthis/orchardist/daemon/daemon-meta"
 )
 
 // countingService wraps ServiceImpl and records DaemonState() call count.

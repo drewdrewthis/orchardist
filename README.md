@@ -28,7 +28,7 @@ binary `orchard` dispatches to helper binaries under the hood:
   CLI. Dispatched as `orchard worktree …` and via bare-verb shortcuts
   (`orchard new <issue>`, `orchard rm <id>`, etc.).
 
-Renamed from `git-orchard-rs` to `orchardist` on 2026-06-09; the old URL
+Renamed to `orchardist` on 2026-06-09; the old URL
 redirects. The repo is polyglot (Rust + Go) — the binaries are `orchard`,
 `orchard-tui`, `orchard-daemon`, and `orchard-worktree`. See `scripts/init/`
 for launchd / systemd units.

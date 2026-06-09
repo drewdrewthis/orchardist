@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
 )
 
 // metaProviderWorkView labels the Meta envelope returned alongside the

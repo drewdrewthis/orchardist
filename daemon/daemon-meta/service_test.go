@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	daemonmeta "github.com/drewdrewthis/git-orchard-rs/daemon/daemon-meta"
+	daemonmeta "github.com/drewdrewthis/orchardist/daemon/daemon-meta"
 )
 
 // stubProvider is a test double for ProviderRegistry (T1 — stubbed service).

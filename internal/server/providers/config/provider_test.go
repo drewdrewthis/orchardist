@@ -57,7 +57,7 @@ func TestProvider_FetchAll_NormalisesRows(t *testing.T) {
 	dir := t.TempDir()
 	p, cfgPath := newProviderForTest(t, dir)
 	writeConfig(t, cfgPath, []RepoRow{
-		{Slug: "drewdrewthis/git-orchard-rs", Path: "/abs/path/to/orchard"},
+		{Slug: "drewdrewthis/orchardist", Path: "/abs/path/to/orchard"},
 		{Slug: "langwatch/scenario", Path: "/abs/scenario"},
 		{Slug: "", Path: "/abs/no-slug"}, // slug derived from path basename
 	})
@@ -76,8 +76,8 @@ func TestProvider_FetchAll_NormalisesRows(t *testing.T) {
 	for _, r := range got {
 		byID[r.ID] = r
 	}
-	if r, ok := byID["drewdrewthis/git-orchard-rs"]; !ok || r.Path != "/abs/path/to/orchard" {
-		t.Errorf("expected slug 'drewdrewthis/git-orchard-rs' with /abs/path/to/orchard, got %+v", r)
+	if r, ok := byID["drewdrewthis/orchardist"]; !ok || r.Path != "/abs/path/to/orchard" {
+		t.Errorf("expected slug 'drewdrewthis/orchardist' with /abs/path/to/orchard, got %+v", r)
 	}
 	if r, ok := byID["langwatch/scenario"]; !ok || r.Path != "/abs/scenario" {
 		t.Errorf("expected slug 'langwatch/scenario', got %+v", r)
@@ -194,7 +194,7 @@ func TestSlug_HandlesPunctuation(t *testing.T) {
 		{"Hello, World!", "hello-world"},
 		{"  Foo  Bar  ", "foo-bar"},
 		{"snake_case", "snake-case"},
-		{"git-orchard-rs", "git-orchard-rs"},
+		{"orchardist", "orchardist"},
 		{"", ""},
 		{"   ", ""},
 	}
@@ -218,7 +218,7 @@ func TestRepo_DisplayName(t *testing.T) {
 		in   Repo
 		want string
 	}{
-		{Repo{Slug: "drewdrewthis/git-orchard-rs", Path: "/Users/x/git-orchard-rs"}, "git-orchard-rs"},
+		{Repo{Slug: "drewdrewthis/orchardist", Path: "/Users/x/orchardist"}, "orchardist"},
 		{Repo{Slug: "langwatch/scenario", Path: ""}, "scenario"},
 		{Repo{Slug: "lone", Path: "/"}, "lone"},
 	}

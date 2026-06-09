@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 var testNow = time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)

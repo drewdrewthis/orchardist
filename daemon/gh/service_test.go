@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/daemon/gh"
+	"github.com/drewdrewthis/orchardist/daemon/gh"
 )
 
 // stubService is a minimal stub satisfying gh.Service.

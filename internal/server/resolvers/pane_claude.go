@@ -11,10 +11,10 @@ import (
 	"sort"
 	"time"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	claudeinstance "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeinstance"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	claudeinstance "github.com/drewdrewthis/orchardist/internal/server/providers/claudeinstance"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
 )
 
 // projectPanesToClaudeInstances converts a slice of tmux panes (all presumed

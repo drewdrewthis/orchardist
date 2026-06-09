@@ -93,7 +93,7 @@ const POLL_TIMEOUT_MS: u64 = 100;
 const DOUBLE_CLICK_MS: u128 = 400;
 
 /// Attribution URL displayed in the hints bar footer.
-const ATTRIBUTION_URL: &str = "https://github.com/drewdrewthis/git-orchard-rs";
+const ATTRIBUTION_URL: &str = "https://github.com/drewdrewthis/orchardist";
 
 // ---------------------------------------------------------------------------
 // App
@@ -3993,29 +3993,21 @@ mod tests {
     fn returns_session_to_create_when_none_exist() {
         let repos = vec![(
             "acme/my-project".to_string(),
-            vec![make_cached_worktree(
-                "/workspace/git-orchard-rs",
-                "main",
-                false,
-            )],
+            vec![make_cached_worktree("/workspace/orchardist", "main", false)],
             vec![],
         )];
         let result = compute_sessions_to_create(&repos);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "git-orchard-rs_main");
-        assert_eq!(result[0].start_dir, "/workspace/git-orchard-rs");
+        assert_eq!(result[0].name, "orchardist_main");
+        assert_eq!(result[0].start_dir, "/workspace/orchardist");
     }
 
     #[test]
     fn skips_repo_when_session_already_exists() {
         let repos = vec![(
             "acme/my-project".to_string(),
-            vec![make_cached_worktree(
-                "/workspace/git-orchard-rs",
-                "main",
-                false,
-            )],
-            vec![make_cached_session("git-orchard-rs_main")],
+            vec![make_cached_worktree("/workspace/orchardist", "main", false)],
+            vec![make_cached_session("orchardist_main")],
         )];
         let result = compute_sessions_to_create(&repos);
         assert!(
@@ -4029,17 +4021,13 @@ mod tests {
         let repos = vec![
             (
                 "acme/my-project".to_string(),
-                vec![make_cached_worktree(
-                    "/workspace/git-orchard-rs",
-                    "main",
-                    false,
-                )],
-                vec![make_cached_session("git-orchard-rs_main")],
+                vec![make_cached_worktree("/workspace/orchardist", "main", false)],
+                vec![make_cached_session("orchardist_main")],
             ),
             (
                 "acme/webapp".to_string(),
                 vec![make_cached_worktree("/workspace/webapp", "main", false)],
-                vec![make_cached_session("git-orchard-rs_main")],
+                vec![make_cached_session("orchardist_main")],
             ),
         ];
         let result = compute_sessions_to_create(&repos);
@@ -4054,11 +4042,7 @@ mod tests {
         let repos = vec![
             (
                 "acme/my-project".to_string(),
-                vec![make_cached_worktree(
-                    "/workspace/git-orchard-rs",
-                    "main",
-                    false,
-                )],
+                vec![make_cached_worktree("/workspace/orchardist", "main", false)],
                 vec![],
             ),
             (
@@ -4071,8 +4055,8 @@ mod tests {
         assert_eq!(result.len(), 2);
         let names: Vec<&str> = result.iter().map(|s| s.name.as_str()).collect();
         assert!(
-            names.contains(&"git-orchard-rs_main"),
-            "expected git-orchard-rs_main"
+            names.contains(&"orchardist_main"),
+            "expected orchardist_main"
         );
         assert!(names.contains(&"webapp_main"), "expected webapp_main");
     }
@@ -4081,11 +4065,7 @@ mod tests {
     fn skips_repo_with_no_non_bare_worktree() {
         let repos = vec![(
             "acme/my-project".to_string(),
-            vec![make_cached_worktree(
-                "/workspace/git-orchard-rs",
-                "main",
-                true,
-            )],
+            vec![make_cached_worktree("/workspace/orchardist", "main", true)],
             vec![],
         )];
         let result = compute_sessions_to_create(&repos);
@@ -4112,14 +4092,14 @@ mod tests {
         let repos = vec![(
             "acme/my-project".to_string(),
             vec![
-                make_cached_worktree("/workspace/git-orchard-rs", "main", false),
-                make_cached_worktree("/workspace/git-orchard-rs/.worktrees/feat", "feat/x", false),
+                make_cached_worktree("/workspace/orchardist", "main", false),
+                make_cached_worktree("/workspace/orchardist/.worktrees/feat", "feat/x", false),
             ],
             vec![],
         )];
         let result = compute_sessions_to_create(&repos);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].start_dir, "/workspace/git-orchard-rs");
+        assert_eq!(result[0].start_dir, "/workspace/orchardist");
     }
 
     #[test]

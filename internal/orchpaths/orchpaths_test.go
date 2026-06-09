@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/orchpaths"
+	"github.com/drewdrewthis/orchardist/internal/orchpaths"
 )
 
 // TestConfigDir_ReturnsDotOrchard verifies that ConfigDir returns $HOME/.orchard,

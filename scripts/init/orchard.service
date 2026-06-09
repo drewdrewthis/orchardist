@@ -25,7 +25,7 @@
 
 [Unit]
 Description=orchard daemon — read-only join layer over local developer state
-Documentation=https://github.com/drewdrewthis/git-orchard-rs
+Documentation=https://github.com/drewdrewthis/orchardist
 After=network.target
 
 [Service]

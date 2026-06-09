@@ -23,14 +23,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // TestDaemonWiring_Worktrees is the AC-2 regression. Two configured

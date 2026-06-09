@@ -95,7 +95,7 @@ echo "Created tmux session: ${SESSION_NAME}"
 #    Args: <pr-number> <session-name>  (matches expected driver interface)
 # ---------------------------------------------------------------------------
 POLL_INTERVAL=1 \
-REPO="drewdrewthis/git-orchard-rs" \
+REPO="drewdrewthis/orchardist" \
   "${DRIVER}" 999999 "${SESSION_NAME}" >"${DRIVER_LOG}" 2>&1 &
 DRIVER_PID=$!
 echo "Started driver PID: ${DRIVER_PID}"
@@ -154,7 +154,7 @@ EOF
 chmod +x "${FAKE_BIN_DIR}/gh"
 
 POLL_INTERVAL=1 \
-REPO="drewdrewthis/git-orchard-rs" \
+REPO="drewdrewthis/orchardist" \
   "${DRIVER}" 999998 "${SESSION_NAME}" >"${DRIVER_LOG}" 2>&1 &
 DRIVER_PID=$!
 
@@ -189,7 +189,7 @@ chmod +x "${FAKE_BIN_DIR}/gh"
 
 POLL_INTERVAL=1 \
 MAX_ERR=3 \
-REPO="drewdrewthis/git-orchard-rs" \
+REPO="drewdrewthis/orchardist" \
   "${DRIVER}" 999997 "${SESSION_NAME}" >"${DRIVER_LOG}" 2>&1 &
 DRIVER_PID=$!
 
