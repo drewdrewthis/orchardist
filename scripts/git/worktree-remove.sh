@@ -10,7 +10,7 @@
 #     [--json]
 #
 # Outputs L2 envelope on --json:
-#   success: {"ok":true,"data":{"worktreeId":"<id>","branchDelete":{...}}}
+#   success: {"ok":true,"data":{"worktreeId":"<id>","branchDelete":{...},"dockerTeardown":{...}}}
 #   failure: {"ok":false,"error":{"code":"<code>","message":"<msg>"}}
 #
 # branchDelete is the result from scripts/git/branch-delete.sh:
@@ -18,6 +18,13 @@
 #   skipped:  {"branch":"<n>","deleted":false,"skipReason":"<reason>","warning":"<msg>"}
 # A branch-delete skip or error is NON-FATAL: the worktree/dir removal result
 # is still ok:true; only the branchDelete sub-object reflects the skip.
+#
+# dockerTeardown is the result from scripts/git/docker-teardown.sh (AC5/AC6):
+#   ran:   {"worktreeId":"<id>","projectKey":"<k>","action":"down"}
+#   no-op: {"worktreeId":"<id>","action":"no-op","reason":"<reason>"}
+# A docker-teardown error is NON-FATAL (same policy as branchDelete).
+# Stage ordering (CRITICAL): docker-teardown runs BEFORE dir-removal so that
+# the compose file is still on disk when docker compose reads it.
 #
 # Exit code 0 on ok:true, non-zero on ok:false.
 set -euo pipefail
@@ -89,6 +96,42 @@ if [[ -z "$WT_PATH" ]]; then
   exit 0
 fi
 
+# ---- Stage 1a: docker compose teardown (AC5 + AC6) -------------------------
+#
+# MUST run BEFORE the directory is removed: the compose file lives inside
+# WT_PATH and docker compose reads it from disk.  A skip or error here is
+# NON-FATAL; we record the result and continue.
+SCRIPT_DIR_DT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DT_SCRIPT="${SCRIPT_DIR_DT}/docker-teardown.sh"
+DOCKER_TEARDOWN_DATA="null"
+
+if [[ -f "$DT_SCRIPT" && -d "$WT_PATH" ]]; then
+  DT_ARGS=(
+    "--worktree-dir" "$WT_PATH"
+    "--worktree-id"  "$WORKTREE_ID"
+    "--json"
+  )
+  DT_OUTPUT="$(bash "$DT_SCRIPT" "${DT_ARGS[@]}" 2>/dev/null || true)"
+  if [[ -n "$DT_OUTPUT" ]]; then
+    DOCKER_TEARDOWN_DATA=$(echo "$DT_OUTPUT" | python3 -c "
+import json,sys
+raw=sys.stdin.read().strip()
+try:
+    d=json.loads(raw)
+except Exception:
+    print('null')
+    sys.exit(0)
+if d.get('ok'):
+    print(json.dumps(d.get('data')))
+else:
+    err=d.get('error',{})
+    print(json.dumps({'action':'error','reason':err.get('message','docker-teardown error')}))
+" 2>/dev/null || echo "null")
+  fi
+fi
+
+# ---- Stage 1b: git worktree remove + dir removal ---------------------------
+
 FORCE_FLAG=""
 if $FORCE; then FORCE_FLAG="--force"; fi
 
@@ -157,7 +200,7 @@ else:
 fi
 
 if $JSON_MODE; then
-  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"branchDelete\":${BRANCH_DELETE_DATA}}"
+  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"branchDelete\":${BRANCH_DELETE_DATA},\"dockerTeardown\":${DOCKER_TEARDOWN_DATA}}"
 else
   echo "Removed worktree $WT_NAME at $WT_PATH"
 fi
