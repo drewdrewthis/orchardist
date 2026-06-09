@@ -1,51 +1,49 @@
-# git-orchard 🌲🌳🌴
+# orchardist 🌲🌳🌴
 
-A command center for managing git worktrees, tmux sessions, GitHub PRs, and Claude Code sessions across multiple repositories.
+A command center for git worktrees, PRs, tmux sessions, and Claude Code sessions — across repos and machines.
 
-Built with [Rust](https://www.rust-lang.org/) + [Ratatui](https://ratatui.rs/).
-
-## Polyglot history
-
-This repo is polyglot as of **2026-05-04**:
-
-Per [ADR-013](docs/adr/013-orchard-cli-ecosystem.md), one user-facing
-binary `orchard` dispatches to helper binaries under the hood:
-
-- **`orchard`** (`crates/orchard-dispatcher`) — thin Rust dispatcher.
-  Routes verbs to helpers (`orchard tui` → `orchard-tui`, etc.).
-  This is the only binary users invoke directly.
-- **`orchard-tui`** (`crates/orchard`, `crates/orchard-gui`) — TUI / GUI
-  / `--json` worktree manager. Build with `make rust` →
-  `target/release/orchard-tui`.
-- **`orchard-daemon`** (`cmd/orchard-daemon`, `internal/`) — Go GraphQL
-  daemon introduced in [ADR-011](https://github.com/drewdrewthis/orchard-codex/blob/main/adrs/011-orchard-node-model-and-providers.md):
-  a read-only join layer over git, tmux, claude, and processes,
-  exposed over `localhost:7777`. Build with `make daemon` →
-  `bin/orchard-daemon`. Run `bin/orchard-daemon daemon start` (or
-  `orchard daemon start` after install) to bring it up,
-  `curl localhost:7777/health` to probe.
-- **`orchard-worktree`** (`crates/orchard-worktree`) — worktree mutation
-  CLI. Dispatched as `orchard worktree …` and via bare-verb shortcuts
-  (`orchard new <issue>`, `orchard rm <id>`, etc.).
-
-Renamed to `orchardist` on 2026-06-09; the old URL
-redirects. The repo is polyglot (Rust + Go) — the binaries are `orchard`,
-`orchard-tui`, `orchard-daemon`, and `orchard-worktree`. See `scripts/init/`
-for launchd / systemd units.
-
-The schema lives in `schema.graphql` at the repo root — schema-first.
-Run `make generate` to regenerate Go types from it. The Rust TUI client
-will codegen from the same file.
+Orchardist is an ecosystem of cooperating binaries and agent-layer tools. One `orchard` command dispatches to them; the languages (Rust, Go, Tauri) matter less than what the components do together.
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 📰 **Blog:** [Grow the Orchard](https://growtheorchard.substack.com/)
 
-## What it does
+## What is orchardist
 
-Orchard gives you a single dashboard showing everything happening across your repos: which worktrees have PRs, what state they're in, which Claude sessions are working/idle/waiting for input, and what needs your attention.
+Orchardist gives you a single dashboard showing everything happening across your repos: which worktrees have PRs, what state they're in, which Claude sessions are working/idle/waiting for input, and what needs your attention.
 
 ![Orchard TUI](assets/screenshot.png)
+
+The ecosystem spans a terminal dashboard, a desktop GUI, a local GraphQL daemon, worktree and chat CLIs, a tmux popup integration, and Claude Code agent skills — all wired together through one dispatcher.
+
+## The ecosystem
+
+One binary — `orchard` — is the user-facing entry point. It dispatches verbs to the right helper, so you never need to remember which binary owns which command.
+
+### Binaries
+
+| Binary | Role | Stack | Location | Build |
+|--------|------|-------|----------|-------|
+| **`orchard`** | Dispatcher — the only binary users invoke directly; routes verbs to helpers (`orchard tui` → `orchard-tui`, etc.) | Rust | `crates/orchard-dispatcher` | `make dispatcher` |
+| **`orchard-tui`** | Terminal dashboard — worktrees, PRs, sessions, CI in one view; `--json`/`--schema` wire format | Rust + Ratatui 0.30 | `crates/orchard` | `make rust` → `target/release/orchard-tui` |
+| **`orchard-daemon`** | Read/join GraphQL daemon on `localhost:7777`; schema-first (`schema.graphql` at repo root, `make generate` to regenerate Go types); read-only join layer over git, tmux, gh, claude, processes, and federation peers | Go (`github.com/drewdrewthis/orchardist`) | `cmd/orchard-daemon` | `make daemon` → `bin/orchard-daemon` |
+| **`orchard-gui`** | Desktop app for deep Claude session view | Tauri 2 + SvelteKit / Houdini / Tailwind / xterm | `crates/orchard-gui` | `make gui` |
+| **`orchard-worktree`** | Worktree mutation CLI; dispatched as `orchard new/rm/mv/prune/ls/path` | Rust | `crates/orchard-worktree` | `make worktree-cli` |
+| **`orchard-chat`** | Cross-machine agent-to-agent chat (JSONL rooms, tmux fanout); dispatched as `orchard send/chat` | Rust | `crates/orchard-chat` + `crates/chat-core` | — |
+
+> The binaries are named distinctly from the repo slug on purpose so they can coexist on the same `$PATH`.
+
+### Non-binary surfaces
+
+**tmux popup** — `orchard-tui init` installs an `orchard()` shell function, a `Ctrl-o` tmux popup keybinding, and an optional status bar. The TUI then lives one keystroke away from any terminal.
+
+**Claude skills / agent layer** — the `/install-orchard` skill (`.claude/skills/install-orchard/`) automates orchardist setup from inside a Claude Code session. The bundled `orchardist` plugin in `.claude-plugin/marketplace.json` provides `/orchardist:recall` — session-search and synthesis over past Claude Code conversations.
+
+**Federation / remote** — manage worktrees on remote SSH hosts; transfer (push/pull) worktrees between machines; reachability indicators in the dashboard.
+
+### History
+
+Renamed from `git-orchard` to `orchardist` on 2026-06-09; the old URL redirects.
 
 ## Features
 
@@ -77,10 +75,9 @@ cargo install --git https://github.com/drewdrewthis/orchardist orchard --bin orc
 cargo install --path crates/orchard --bin orchard-tui
 ```
 
-The Rust TUI binary is named `orchard-tui` so it can coexist with the
-Go daemon's `orchard` CLI on the same `$PATH`.
+The binaries are named distinctly from the repo slug (`orchardist`) on purpose so they can coexist on the same `$PATH`.
 
-### Setup
+## Setup
 
 ```bash
 orchard-tui init
@@ -205,16 +202,6 @@ If no global config exists, orchard auto-detects the current repo via `gh repo v
 
 See [ADR-003](docs/adr/003-per-repo-config.md) for the full design.
 
-## Architecture
-
-Orchard follows a **Functional Core, Imperative Shell** pattern:
-
-- **Source modules** fetch data from git, GitHub, tmux, SSH, and Claude hooks
-- **`build_state()`** is a pure function that joins all sources into a single `OrchardState`
-- **TUI** and **`--json`** both consume the same `OrchardState`
-
-See [docs/architecture.md](docs/architecture.md) for the full architecture guide.
-
 ## The Orchardist (optional)
 
 > **Optional power-user workflow.** Orchard is a fully functional worktree, PR, and session dashboard on its own. The orchardist is an advanced layer on top — skip this section unless you want it.
@@ -273,6 +260,16 @@ orchard-tui init  # installs hooks automatically
 ```
 
 The hooks write structured JSON on every Claude event (tool use, stop, notification). Orchard reads these for accurate working/idle/input detection, plus context window usage and cost tracking.
+
+## Architecture & deeper docs
+
+See [docs/architecture.md](docs/architecture.md) for the full architecture guide and the **Functional Core, Imperative Shell** breakdown (source modules → `build_state()` → TUI / `--json`).
+
+Contributor references:
+
+- [docs/adr/](docs/adr/) — 23 Architecture Decision Records, including [ADR-003](docs/adr/003-per-repo-config.md) (per-repo config) and [ADR-013](docs/adr/013-orchard-cli-ecosystem.md) (CLI ecosystem design)
+- [RULES.md](RULES.md) — the repo constitution
+- [specs/features/](specs/features/) — BDD feature specs
 
 ## Requirements
 
