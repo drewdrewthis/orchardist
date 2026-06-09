@@ -323,6 +323,18 @@ func (r *mutationResolver) WorktreesCleanup(ctx context.Context, input graphql1.
 	if input.Protected != nil {
 		domainInput.Protected = *input.Protected
 	}
+	// AC-G3: project per-worktree session names from the GraphQL input.
+	// The generated field is []*string (nullable elements); flatten to []string
+	// using "" for nil entries — the domain layer treats empty strings as absent.
+	if len(input.SessionNames) > 0 {
+		names := make([]string, len(input.SessionNames))
+		for i, p := range input.SessionNames {
+			if p != nil {
+				names[i] = *p
+			}
+		}
+		domainInput.SessionNames = names
+	}
 
 	result, err := r.GitMutations.WorktreesCleanup(ctx, domainInput)
 	if err != nil {
@@ -1530,7 +1542,7 @@ func (r *tmuxServerResolver) Alive(ctx context.Context, obj *graphql1.TmuxServer
 }
 
 // Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one). NOTE: parameter is sortKey not sort to avoid shadowing the imported sort package; gqlgen rewrites this back to sort on every regen, restore sortKey after each codegen.
-func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sort *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
+func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sortKey *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
 	if r.Tmux == nil {
 		return nil, nil
 	}
@@ -1541,8 +1553,8 @@ func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxSer
 	}
 
 	key := graphql1.TmuxSessionSortLastActivity
-	if sort != nil {
-		key = *sort
+	if sortKey != nil {
+		key = *sortKey
 	}
 	switch key {
 	case graphql1.TmuxSessionSortName:

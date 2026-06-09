@@ -169,6 +169,22 @@ impl Client {
         active_session: Option<&str>,
         active_cwd: Option<&str>,
     ) -> Result<WorktreesCleanupResult, DaemonError> {
+        self.worktrees_cleanup_with_sessions(worktree_ids, &[], active_session, active_cwd)
+    }
+
+    /// Like `worktrees_cleanup` but threads per-worktree tmux session names for AC-G3.
+    ///
+    /// `session_names` is a parallel array aligned by index with `worktree_ids`.
+    /// An empty string at position `i` means the worktree at `i` has no session to kill.
+    /// When `session_names` is empty or shorter than `worktree_ids`, the remaining
+    /// worktrees have no session name threaded (safe — the script no-ops the kill stage).
+    pub fn worktrees_cleanup_with_sessions(
+        &self,
+        worktree_ids: &[String],
+        session_names: &[String],
+        active_session: Option<&str>,
+        active_cwd: Option<&str>,
+    ) -> Result<WorktreesCleanupResult, DaemonError> {
         const MUTATION: &str = r#"
             mutation WorktreesCleanup($input: WorktreesCleanupInput!) {
               worktreesCleanup(input: $input) {
@@ -195,6 +211,23 @@ impl Client {
         }
         if let Some(cwd) = active_cwd {
             input["activeCwd"] = serde_json::Value::String(cwd.to_string());
+        }
+        // AC-G3: include per-worktree session names when any are non-empty.
+        // Build a parallel array of Option<String> aligned with worktree_ids.
+        if !session_names.is_empty() {
+            let names: Vec<serde_json::Value> = worktree_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let name = session_names.get(i).map(|s| s.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::String(name.to_string())
+                    }
+                })
+                .collect();
+            input["sessionNames"] = serde_json::Value::Array(names);
         }
 
         let req = GraphQlRequest::with_variables(MUTATION, serde_json::json!({ "input": input }));

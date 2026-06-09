@@ -96,10 +96,21 @@ pub(super) fn delete_task_row(
     // using the branch name via `git worktree list --porcelain`.
     let worktree_id = format!("{}:{}", row.repo_slug, row.branch);
 
+    // AC-G3: thread the per-worktree session name (from the row's first session)
+    // so the daemon can pass --tmux-session to worktree-remove.sh.
+    // This is distinct from active_session (the user's CURRENT session, AC-G1
+    // exclusion guard) — this is the session TO KILL for this stale worktree.
+    let worktree_session = session_name.map(|s| s.to_string()).unwrap_or_default();
+    let session_names: &[String] = if worktree_session.is_empty() {
+        &[]
+    } else {
+        std::slice::from_ref(&worktree_session)
+    };
+
     let client = daemon::Client::local().map_err(|e| anyhow::anyhow!("daemon client: {e}"))?;
 
     let result = client
-        .worktrees_cleanup(&[worktree_id], active_session, active_cwd)
+        .worktrees_cleanup_with_sessions(&[worktree_id], session_names, active_session, active_cwd)
         .map_err(|e| anyhow::anyhow!("daemon worktreesCleanup: {e}"))?;
 
     if !result.ok {

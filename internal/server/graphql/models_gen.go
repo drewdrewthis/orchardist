@@ -931,6 +931,13 @@ type WorktreesCleanupInput struct {
 	BaseBranch *string `json:"baseBranch,omitempty"`
 	// Comma-separated list of protected branch names to never delete.
 	Protected *string `json:"protected,omitempty"`
+	// Per-worktree tmux session names to kill during cleanup (AC-G3).
+	// Parallel array aligned by index with worktreeIds. An entry may be null or
+	// absent when the worktree has no associated tmux session. When non-empty,
+	// the daemon passes --tmux-session <name> to worktree-remove.sh so the kill
+	// stage actually fires. Omitting this field (or supplying nulls) is always safe:
+	// the script skips the tmux-kill stage when --tmux-session is not supplied.
+	SessionNames []*string `json:"sessionNames,omitempty"`
 }
 
 // Result of worktreesCleanup. ok:true even when some entries failed (partial failure is per-worktree).

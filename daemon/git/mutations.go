@@ -125,6 +125,11 @@ type WorktreesCleanupInput struct {
 	BaseBranch string
 	// Protected is a comma-separated list of branch names never to delete.
 	Protected string
+	// SessionNames is a parallel array aligned by index with WorktreeIDs.
+	// Each entry is the tmux session name to kill for that worktree (AC-G3).
+	// An empty or nil entry means the worktree has no associated session;
+	// the script skips the tmux-kill stage when --tmux-session is not supplied.
+	SessionNames []string
 }
 
 // WorktreeCleanupEntry is a per-worktree result inside WorktreesCleanupResult (AC8).
@@ -405,8 +410,12 @@ func (r *MutationResolver) WorktreesCleanup(ctx context.Context, input Worktrees
 	scriptPath := r.worktreeScript("remove")
 	entries := make([]WorktreeCleanupEntry, 0, len(input.WorktreeIDs))
 
-	for _, id := range input.WorktreeIDs {
-		entry := r.cleanupOne(ctx, scriptPath, id, input)
+	for i, id := range input.WorktreeIDs {
+		var sessionName string
+		if i < len(input.SessionNames) {
+			sessionName = input.SessionNames[i]
+		}
+		entry := r.cleanupOne(ctx, scriptPath, id, sessionName, input)
 		entries = append(entries, entry)
 	}
 
@@ -419,7 +428,12 @@ func (r *MutationResolver) WorktreesCleanup(ctx context.Context, input Worktrees
 // AC-G2: the gh merged-state is looked up from r.prLookup (daemon-owned,
 // not client-supplied). Any lookup error maps to "unknown" (fail-closed:
 // branch-delete is skipped, but worktree+dir removal proceeds normally).
-func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id string, input WorktreesCleanupInput) WorktreeCleanupEntry {
+//
+// AC-G3: sessionName is the tmux session name associated with this worktree.
+// When non-empty, --tmux-session <name> is passed to the script so the
+// tmux-kill stage actually fires. The kill is non-fatal: a failure records
+// a warning and removal continues.
+func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id, sessionName string, input WorktreesCleanupInput) WorktreeCleanupEntry {
 	args := []string{"--worktree-id", id}
 	if input.Force {
 		args = append(args, "--force")
@@ -429,6 +443,11 @@ func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id string
 	}
 	if input.ActiveCwd != "" {
 		args = append(args, "--active-cwd", input.ActiveCwd)
+	}
+	// AC-G3: pass the per-worktree tmux session name when supplied.
+	// The script skips the tmux-kill stage when --tmux-session is absent.
+	if sessionName != "" {
+		args = append(args, "--tmux-session", sessionName)
 	}
 
 	// AC-G2: resolve PR merged-state from the daemon's own gh service.
@@ -520,14 +539,18 @@ func enrichEntryFromData(entry WorktreeCleanupEntry, raw json.RawMessage) Worktr
 		return entry
 	}
 
-	// Detect alreadyRemoved: the script returns ok:true with no branchDelete/docker
-	// fields when the worktree was not found (idempotent no-op path). We also treat
-	// the case where the worktree was listed as non-existent (script returns ok:true
-	// with only worktreeId) as alreadyRemoved.
+	// Detect alreadyRemoved: the script returns ok:true with no branchDelete/docker/
+	// tmuxKill fields when the worktree was not found (idempotent no-op path). We also
+	// treat the case where the worktree was listed as non-existent (script returns
+	// ok:true with only worktreeId) as alreadyRemoved.
+	// Note: tmuxKill is also a "real removal happened" signal — a response with a
+	// tmuxKill field means the script DID reach the removal stages, so it is not
+	// an already-removed no-op.
 	_, hasBranch := data["branchDelete"]
 	_, hasDocker := data["dockerTeardown"]
 	_, hasSkipped := data["skipped"]
-	if !hasBranch && !hasDocker && !hasSkipped {
+	_, hasTmuxKill := data["tmuxKill"]
+	if !hasBranch && !hasDocker && !hasSkipped && !hasTmuxKill {
 		// Script returned ok:true with just worktreeId — worktree was not found.
 		entry.AlreadyRemoved = true
 	}
@@ -542,6 +565,18 @@ func enrichEntryFromData(entry WorktreeCleanupEntry, raw json.RawMessage) Worktr
 			}
 		}
 	}
+	// AC-G3: surface the tmux-kill warning when the kill stage failed.
+	// The script emits tmuxKill as:
+	//   success: {"stage":"tmux-kill","killed":true}
+	//   not-found: {"stage":"tmux-kill","killed":false,"reason":"session-not-found"}
+	//   failure: {"stage":"tmux-kill","warning":"tmux kill-session failed: <msg>"}
+	// Only the failure shape carries a "warning" field; surface it here.
+	if tk, ok := data["tmuxKill"].(map[string]interface{}); ok && tk != nil {
+		if warning, ok := tk["warning"].(string); ok && warning != "" {
+			entry.Warnings = append(entry.Warnings, warning)
+		}
+	}
+
 	if dt, ok := data["dockerTeardown"].(map[string]interface{}); ok && dt != nil {
 		if action, ok := dt["action"].(string); ok && action == "error" {
 			if reason, ok := dt["reason"].(string); ok && reason != "" {

@@ -3937,6 +3937,15 @@ input WorktreesCleanupInput {
   baseBranch: String
   "Comma-separated list of protected branch names to never delete."
   protected: String
+  """
+  Per-worktree tmux session names to kill during cleanup (AC-G3).
+  Parallel array aligned by index with worktreeIds. An entry may be null or
+  absent when the worktree has no associated tmux session. When non-empty,
+  the daemon passes --tmux-session <name> to worktree-remove.sh so the kill
+  stage actually fires. Omitting this field (or supplying nulls) is always safe:
+  the script skips the tmux-kill stage when --tmux-session is not supplied.
+  """
+  sessionNames: [String]
 }
 
 """
@@ -14347,7 +14356,7 @@ func (ec *executionContext) unmarshalInputWorktreesCleanupInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"worktreeIds", "force", "activeSession", "activeCwd", "prMerged", "baseBranch", "protected"}
+	fieldsInOrder := [...]string{"worktreeIds", "force", "activeSession", "activeCwd", "prMerged", "baseBranch", "protected", "sessionNames"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -14403,6 +14412,13 @@ func (ec *executionContext) unmarshalInputWorktreesCleanupInput(ctx context.Cont
 				return it, err
 			}
 			it.Protected = data
+		case "sessionNames":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sessionNames"))
+			data, err := ec.unmarshalOString2ᚕᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SessionNames = data
 		}
 	}
 	return it, nil
@@ -20984,6 +21000,36 @@ func (ec *executionContext) marshalOString2ᚕstringᚄ(ctx context.Context, sel
 		if e == graphql.Null {
 			return graphql.Null
 		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalOString2ᚕᚖstring(ctx context.Context, v any) ([]*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalOString2ᚖstring(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOString2ᚕᚖstring(ctx context.Context, sel ast.SelectionSet, v []*string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalOString2ᚖstring(ctx, sel, v[i])
 	}
 
 	return ret
