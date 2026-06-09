@@ -15,9 +15,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
+
+// PRStateLookup is the narrow contract MutationResolver needs to resolve
+// a branch's PR merged-state before the branch-delete step.
+//
+// Per R4 (ISP), consumers define this narrow interface in their own module
+// and depend on it, not on the gh domain's full Service.
+//
+// Implementations: the resolver layer wraps *gh.Provider with a thin
+// adapter that satisfies this interface (see resolver.go WithGitMutations).
+// In tests, a stub struct with a statically-configured response suffices.
+//
+// Error contract: on any lookup failure (network, auth, no PR) return
+// ("", err). The caller maps the empty state through PRMergedArgForState,
+// which yields "unknown" (fail-closed per AC-G2).
+type PRStateLookup interface {
+	// PRStateByBranch returns the gh PR state string ("MERGED", "CLOSED",
+	// "OPEN") for the most-relevant PR whose head branch matches `branch`
+	// in the repo identified by `repoSlug` ("owner/repo" format).
+	// Returns ("", nil) when no PR exists.
+	// Returns ("", err) on any lookup error — the caller must treat this as
+	// "unknown" and skip branch deletion (fail-closed, AC-G2).
+	PRStateByBranch(ctx context.Context, repoSlug, branch string) (string, error)
+}
 
 // MutationResolver owns the git mutation resolvers.
 //
@@ -27,8 +51,9 @@ import (
 // no-op path). This is the AC-G5 concurrency model: serialize-and-tolerate.
 type MutationResolver struct {
 	svc        Service
-	scriptRoot string    // abs path to scripts/ directory
-	cleanupMu  sync.Mutex // serializes WorktreesCleanup (AC-G5)
+	scriptRoot string         // abs path to scripts/ directory
+	cleanupMu  sync.Mutex     // serializes WorktreesCleanup (AC-G5)
+	prLookup   PRStateLookup  // optional; nil → PRMerged always "unknown" (fail-closed)
 }
 
 // NewMutationResolver creates a resolver backed by the service.
@@ -39,6 +64,15 @@ func NewMutationResolver(svc Service, scriptRoot string) *MutationResolver {
 		scriptRoot = "scripts"
 	}
 	return &MutationResolver{svc: svc, scriptRoot: scriptRoot}
+}
+
+// WithPRStateLookup injects the gh merged-state lookup dependency (AC-G2).
+// Must be called before any WorktreesCleanup call.
+// When not called (nil lookup), every branch-delete step is skipped
+// with reason "merged-state-unavailable" (fail-closed).
+func (r *MutationResolver) WithPRStateLookup(p PRStateLookup) *MutationResolver {
+	r.prLookup = p
+	return r
 }
 
 // --- Input types (M3: granular mutations, S4: single Input object) ---
@@ -82,8 +116,10 @@ type WorktreesCleanupInput struct {
 	ActiveSession string
 	// ActiveCwd is the absolute path of the user's active working directory (AC-G1).
 	ActiveCwd string
-	// PRMerged is the PR-merged state for branch-delete decisions.
-	// One of: "merged", "not-merged", "unknown". Empty → treated as "unknown" (fail-closed AC-G2).
+	// PRMerged is accepted for backwards API compatibility but is IGNORED by the
+	// daemon. Branch-delete decisions are always made from the daemon's own gh
+	// service lookup (AC-G2: the daemon owns the gh merged-state, not the client).
+	// See MutationResolver.resolvePRMerged.
 	PRMerged string
 	// BaseBranch is the base branch for branch-delete safety checks. Defaults to "main".
 	BaseBranch string
@@ -379,6 +415,10 @@ func (r *MutationResolver) WorktreesCleanup(ctx context.Context, input Worktrees
 
 // cleanupOne runs worktree-remove.sh for a single worktree and returns a
 // WorktreeCleanupEntry. It is always called while cleanupMu is held (AC-G5).
+//
+// AC-G2: the gh merged-state is looked up from r.prLookup (daemon-owned,
+// not client-supplied). Any lookup error maps to "unknown" (fail-closed:
+// branch-delete is skipped, but worktree+dir removal proceeds normally).
 func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id string, input WorktreesCleanupInput) WorktreeCleanupEntry {
 	args := []string{"--worktree-id", id}
 	if input.Force {
@@ -390,9 +430,15 @@ func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id string
 	if input.ActiveCwd != "" {
 		args = append(args, "--active-cwd", input.ActiveCwd)
 	}
-	if input.PRMerged != "" {
-		args = append(args, "--pr-merged", input.PRMerged)
+
+	// AC-G2: resolve PR merged-state from the daemon's own gh service.
+	// The client never supplies this — always daemon-owned (AC-G2 decision).
+	// Lookup failure → "" → PRMergedArgForState("") → "unknown" (fail-closed).
+	prMerged := r.resolvePRMerged(ctx, id)
+	if prMerged != "" {
+		args = append(args, "--pr-merged", prMerged)
 	}
+
 	if input.BaseBranch != "" {
 		args = append(args, "--base", input.BaseBranch)
 	}
@@ -431,6 +477,39 @@ func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id string
 		entry = enrichEntryFromData(entry, env.Data)
 	}
 	return entry
+}
+
+// resolvePRMerged looks up the PR merged-state for the worktree identified by
+// id via r.prLookup and maps it to the --pr-merged script argument.
+//
+// AC-G2 contract:
+//   - r.prLookup nil            → "" → PRMergedArgForState("") → "unknown"
+//   - lookup error              → "" → "unknown"
+//   - no PR found               → "" → "unknown"
+//   - PR found with state S     → PRMergedArgForState(S)
+//
+// The caller passes the result directly to --pr-merged. An "unknown" result
+// causes the script to skip branch-delete (fail-closed).
+func (r *MutationResolver) resolvePRMerged(ctx context.Context, id string) string {
+	if r.prLookup == nil {
+		return PRMergedArgForState("")
+	}
+
+	// Parse <repoSlug>:<branch> from the worktree ID.
+	// The resolver boundary already validated the format (has a colon with
+	// non-empty parts on both sides), so a missing colon here is defensive.
+	colonIdx := strings.LastIndex(id, ":")
+	if colonIdx <= 0 || colonIdx == len(id)-1 {
+		return PRMergedArgForState("") // malformed — fail-closed
+	}
+	repoSlug := id[:colonIdx]
+	branch := id[colonIdx+1:]
+
+	state, err := r.prLookup.PRStateByBranch(ctx, repoSlug, branch)
+	if err != nil {
+		return PRMergedArgForState("") // lookup error → unknown (AC-G2)
+	}
+	return PRMergedArgForState(state)
 }
 
 // enrichEntryFromData parses the script's ok:true data payload and populates

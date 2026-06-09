@@ -731,3 +731,296 @@ func formatEntries(entries []WorktreeCleanupEntry) string {
 
 // Ensure unused imports are consumed (json imported for writeOrchardConfig).
 var _ = json.Marshal
+
+// =============================================================================
+// Step 7 — AC-G2 integration: gh merged-state wiring (no-op bug fix)
+// =============================================================================
+//
+// These tests prove that the fix for the dead-wiring bug (#693) works
+// end-to-end:
+//   - A stale worktree whose PR is MERGED → branch IS deleted after cleanup.
+//   - A stale worktree where the gh lookup ERRORS → branch SURVIVES with
+//     "merged-state-unavailable" reason AND the worktree+dir are still removed.
+//
+// Before the fix, cleanupOne never passed --pr-merged to worktree-remove.sh,
+// so branch-delete.sh never ran. These tests confirm the wiring is live.
+
+// stubPRLookup is a minimal PRStateLookup stub for tests.
+// configureFor maps "repoSlug:branch" → state string; otherwise returns stateDefault.
+type stubPRLookup struct {
+	responses   map[string]string // "repoSlug:branch" → state or "ERROR"
+	stateDefault string
+}
+
+func (s *stubPRLookup) PRStateByBranch(_ context.Context, repoSlug, branch string) (string, error) {
+	key := repoSlug + ":" + branch
+	if v, ok := s.responses[key]; ok {
+		if v == "ERROR" {
+			return "", fmt.Errorf("stubPRLookup: simulated gh error for %s", key)
+		}
+		return v, nil
+	}
+	if s.stateDefault == "ERROR" {
+		return "", fmt.Errorf("stubPRLookup: simulated gh error (default)")
+	}
+	return s.stateDefault, nil
+}
+
+// setupRepoWithRemote initialises a git repo, creates a bare remote, and
+// configures the origin remote so branch-delete.sh can check the upstream.
+// Returns: repoDir (the working checkout), remoteDir (the bare remote).
+func setupRepoWithRemote(t *testing.T) (repoDir, remoteDir string) {
+	t.Helper()
+	repoDir = t.TempDir()
+	remoteDir = t.TempDir()
+
+	// Init the working repo.
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+
+	// Create a bare remote and wire it as origin.
+	cmds := [][]string{
+		{"git", "init", "--bare", "-q", remoteDir},
+		{"git", "-C", repoDir, "remote", "add", "origin", remoteDir},
+		{"git", "-C", repoDir, "push", "-q", "-u", "origin", "main"},
+		// Set origin/HEAD so branch-delete.sh symbolic-ref path works (mirrors real git clone).
+		{"git", "-C", repoDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"},
+	}
+	for _, args := range cmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Skipf("git remote setup failed (%v): %s", args, out)
+		}
+	}
+	return repoDir, remoteDir
+}
+
+// mergeBranchIntoMain creates a branch with one commit, merges it into main,
+// and pushes both to origin. After this call, `git branch --merged main`
+// includes the branch AND origin/branch has the branch's commit.
+func mergeBranchIntoMain(t *testing.T, repoDir, branch string) {
+	t.Helper()
+	branchFile := filepath.Join(repoDir, branch+".txt")
+	cmds := [][]string{
+		{"git", "-C", repoDir, "checkout", "-q", "-b", branch},
+	}
+	for _, args := range cmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Skipf("mergeBranchIntoMain: create branch: %v: %s", args, out)
+		}
+	}
+	if err := os.WriteFile(branchFile, []byte(branch), 0644); err != nil {
+		t.Skipf("mergeBranchIntoMain: write file: %v", err)
+	}
+	cmds = [][]string{
+		{"git", "-C", repoDir, "add", branch + ".txt"},
+		{"git", "-C", repoDir, "commit", "-q", "-m", "feat: " + branch},
+		{"git", "-C", repoDir, "push", "-q", "-u", "origin", branch},
+		{"git", "-C", repoDir, "checkout", "-q", "main"},
+		{"git", "-C", repoDir, "merge", "-q", "--no-ff", branch, "-m", "Merge " + branch},
+		{"git", "-C", repoDir, "push", "-q", "origin", "main"},
+	}
+	for _, args := range cmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Skipf("mergeBranchIntoMain: %v: %s", args, out)
+		}
+	}
+}
+
+// gitBranchExists returns true when `git branch --list <branch>` in repoDir
+// prints a non-empty result.
+func gitBranchExists(repoDir, branch string) bool {
+	out, err := exec.Command("git", "-C", repoDir, "branch", "--list", branch).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+// TestWorktreesCleanup_MergedPR_BranchDeleted verifies the AC4 / AC-G2 end-to-end
+// path: when the gh stub returns MERGED, cleanupOne passes --pr-merged merged to
+// the script, and the branch IS deleted after cleanup.
+//
+// @scenario merged-PR stale worktree: gh stub returns MERGED → branch deleted after cleanup (AC4)
+func TestWorktreesCleanup_MergedPR_BranchDeleted(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Set up a repo with a real remote so branch-delete can verify upstream.
+	repoDir, _ := setupRepoWithRemote(t)
+	branch := "merged-feature-branch"
+
+	// Create and merge the branch into main (makes git branch --merged main include it).
+	mergeBranchIntoMain(t, repoDir, branch)
+
+	// Add a detached worktree for the branch so worktree-remove.sh can find it.
+	wtDir := t.TempDir()
+	if err := addWorktree(t, repoDir, branch+"-wt", wtDir); err != nil {
+		// If branch already merged, we may need a fresh branch for the worktree.
+		// Directly check out the merged SHA into a new worktree branch.
+		t.Logf("addWorktree failed (branch already merged?): %v; trying detached checkout", err)
+		// Create a new worktree pointing to the merged branch's head indirectly.
+		// Use a worktree-specific branch name that diverges from the merged branch.
+		// For the test we actually want the worktree on the merged branch — use a
+		// separate worktree-branch name with the same content.
+		if out, err2 := exec.Command(
+			"git", "-C", repoDir, "worktree", "add", "-q",
+			"-b", branch+"-wt",
+			wtDir,
+			branch, // start point: the merged branch's tip
+		).CombinedOutput(); err2 != nil {
+			t.Skipf("addWorktree (retry): %v: %s", err2, out)
+		}
+	}
+
+	// The worktree name (the part after ':' in the ID) must match the branch
+	// that is merged. Use the worktree-branch we just created.
+	wtBranch := branch + "-wt"
+
+	// Merge the worktree branch into main too so git branch --merged lists it.
+	mergeCmds := [][]string{
+		{"git", "-C", repoDir, "push", "-q", "-u", "origin", wtBranch},
+		{"git", "-C", repoDir, "checkout", "-q", "main"},
+		{"git", "-C", repoDir, "merge", "-q", "--no-ff", wtBranch, "-m", "Merge " + wtBranch},
+		{"git", "-C", repoDir, "push", "-q", "origin", "main"},
+	}
+	for _, args := range mergeCmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Skipf("merge-into-main: %v: %s", err, out)
+		}
+	}
+
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	// Wire the stub gh service that returns MERGED.
+	stub := &stubPRLookup{
+		responses:    map[string]string{"myrepo:" + wtBranch: "MERGED"},
+		stateDefault: "",
+	}
+	r.WithPRStateLookup(stub)
+
+	// Confirm the branch exists before cleanup.
+	if !gitBranchExists(repoDir, wtBranch) {
+		t.Fatalf("pre-condition: branch %q should exist before cleanup", wtBranch)
+	}
+
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"myrepo:" + wtBranch},
+		BaseBranch:  "main",
+	})
+	if err != nil {
+		t.Fatalf("WorktreesCleanup error: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("expected ok=true, got ok=false errCode=%q errMsg=%q", result.ErrCode, result.ErrMsg)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result.Entries))
+	}
+	entry := result.Entries[0]
+	t.Logf("cleanup entry: ok=%v stage=%q msg=%q warnings=%v alreadyRemoved=%v",
+		entry.OK, entry.Stage, entry.Message, entry.Warnings, entry.AlreadyRemoved)
+
+	// AC4: the worktree directory must be gone.
+	if _, err := os.Stat(wtDir); err == nil {
+		t.Error("worktree directory still exists — should have been removed")
+	}
+
+	// AC4 key assertion: the branch must be gone (deleted by branch-delete.sh).
+	if gitBranchExists(repoDir, wtBranch) {
+		t.Errorf("AC4 FAIL: branch %q still exists after cleanup with MERGED stub — "+
+			"branch-delete.sh was not reached or failed; check entry warnings: %v",
+			wtBranch, entry.Warnings)
+	}
+}
+
+// TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved verifies the
+// AC-G2 fail-closed path: when the gh lookup ERRORS, the branch is skipped
+// with "merged-state-unavailable" but the worktree+dir are still removed.
+//
+// @scenario gh-error → branch skipped (merged-state-unavailable) + worktree still removed (AC-G2)
+func TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	wtDir := t.TempDir()
+	branch := "gh-error-branch"
+	if err := addWorktree(t, repoDir, branch, wtDir); err != nil {
+		t.Skipf("addWorktree: %v", err)
+	}
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	// Wire a gh stub that always errors.
+	stub := &stubPRLookup{stateDefault: "ERROR"}
+	r.WithPRStateLookup(stub)
+
+	// Confirm the branch exists before cleanup.
+	if !gitBranchExists(repoDir, branch) {
+		t.Fatalf("pre-condition: branch %q should exist before cleanup", branch)
+	}
+
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"myrepo:" + branch},
+		BaseBranch:  "main",
+	})
+	if err != nil {
+		t.Fatalf("WorktreesCleanup error: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("expected ok=true, got ok=false errCode=%q errMsg=%q", result.ErrCode, result.ErrMsg)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result.Entries))
+	}
+	entry := result.Entries[0]
+	t.Logf("cleanup entry: ok=%v stage=%q msg=%q warnings=%v alreadyRemoved=%v",
+		entry.OK, entry.Stage, entry.Message, entry.Warnings, entry.AlreadyRemoved)
+
+	// AC-G2: worktree directory MUST be removed (gh error must not abort removal).
+	if _, err := os.Stat(wtDir); err == nil {
+		t.Error("AC-G2 FAIL: worktree directory still exists — gh error must not prevent worktree removal")
+	}
+
+	// AC-G2: worktree must not appear in git worktree list.
+	porcelain, err := gitWorktreeListPorcelain(repoDir)
+	if err != nil {
+		t.Fatalf("git worktree list: %v", err)
+	}
+	wtDirReal := resolvePath(wtDir)
+	if strings.Contains(porcelain, wtDirReal) {
+		t.Errorf("AC-G2 FAIL: worktree still listed in git worktree list --porcelain after removal:\n%s", porcelain)
+	}
+
+	// AC-G2 key assertion: the branch must SURVIVE (fail-closed on gh error).
+	if !gitBranchExists(repoDir, branch) {
+		t.Errorf("AC-G2 FAIL: branch %q was deleted despite gh error — should be skipped (fail-closed)", branch)
+	}
+
+	// The branch-skip must surface as a warning in the entry (merged-state-unavailable).
+	hasMergedStateWarning := false
+	for _, w := range entry.Warnings {
+		if strings.Contains(w, "merged-state-unavailable") || strings.Contains(w, "unknown") {
+			hasMergedStateWarning = true
+		}
+	}
+	if !hasMergedStateWarning {
+		t.Logf("AC-G2 note: expected a 'merged-state-unavailable' warning in entry.Warnings=%v — "+
+			"this is a soft assertion (the worktree removal + branch survival are the hard ACs)", entry.Warnings)
+	}
+}

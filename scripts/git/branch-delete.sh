@@ -128,14 +128,50 @@ fi
 
 # ---- Predicate 2: default branch check ------------------------------------
 #
-# Determine the repo default branch via git.  If the lookup fails, fail closed.
+# Determine the repo default branch via a fallback chain.  Each step is tried
+# in order; the first that yields a non-empty branch name wins.
+#
+# 1. symbolic-ref refs/remotes/origin/HEAD  (set by git clone — authoritative)
+# 2. rev-parse --abbrev-ref origin/HEAD     (alternative notation)
+# 3. git config init.defaultBranch          (locally configured default)
+# 4. probe for conventional local branches: main, then master
+# 5. fail-closed: cannot determine default branch (data-loss safety)
 DEFAULT_BRANCH=""
-if SYMREF=$(git -C "$REPO_PATH" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null); then
-  DEFAULT_BRANCH="${SYMREF#refs/remotes/origin/}"
+
+# Step 1: symbolic-ref (set by clone, authoritative when present)
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  if SYMREF=$(git -C "$REPO_PATH" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null); then
+    DEFAULT_BRANCH="${SYMREF#refs/remotes/origin/}"
+  fi
 fi
 
-# If we still cannot determine the default branch, fail closed — we cannot
-# confirm the branch is NOT the default.
+# Step 2: rev-parse --abbrev-ref origin/HEAD (skip if it returns "origin/HEAD" literally)
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  ABBREV=$(git -C "$REPO_PATH" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || true)
+  if [[ -n "$ABBREV" && "$ABBREV" != "origin/HEAD" ]]; then
+    DEFAULT_BRANCH="${ABBREV#origin/}"
+  fi
+fi
+
+# Step 3: git config init.defaultBranch
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  CFG_DEFAULT=$(git -C "$REPO_PATH" config --get init.defaultBranch 2>/dev/null || true)
+  if [[ -n "$CFG_DEFAULT" ]]; then
+    DEFAULT_BRANCH="$CFG_DEFAULT"
+  fi
+fi
+
+# Step 4: probe conventional local branch names (main, then master)
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  if git -C "$REPO_PATH" show-ref --verify --quiet refs/heads/main 2>/dev/null; then
+    DEFAULT_BRANCH="main"
+  elif git -C "$REPO_PATH" show-ref --verify --quiet refs/heads/master 2>/dev/null; then
+    DEFAULT_BRANCH="master"
+  fi
+fi
+
+# Step 5: fail-closed — all detection methods exhausted; cannot confirm the
+# branch is NOT the default, so skip to avoid data loss.
 if [[ -z "$DEFAULT_BRANCH" ]]; then
   json_skip "$BRANCH" "default-branch" \
     "could not determine repo default branch; keeping ${BRANCH} to avoid data loss"
@@ -211,8 +247,25 @@ fi
 
 # ---- Predicate 5: no unpushed local commits ahead of merge ----------------
 #
-# If no upstream is configured, we CANNOT confirm the commits are pushed.
-# Fail closed.
+# If --upstream was not supplied, attempt to resolve the tracking ref from git
+# config (set by git push -u or git branch --set-upstream-to).  Fall back to
+# the conventional origin/<branch> ref if it exists.  Only fail-closed when no
+# upstream can be determined at all.
+if [[ -z "$UPSTREAM" ]]; then
+  # Try git-configured tracking branch first (@{u} notation)
+  TRACKED=$(git -C "$REPO_PATH" rev-parse --abbrev-ref "${BRANCH}@{u}" 2>/dev/null || true)
+  if [[ -n "$TRACKED" && "$TRACKED" != "${BRANCH}@{u}" ]]; then
+    UPSTREAM="$TRACKED"
+  fi
+fi
+
+if [[ -z "$UPSTREAM" ]]; then
+  # Probe the conventional origin/<branch> ref
+  if git -C "$REPO_PATH" show-ref --verify --quiet "refs/remotes/origin/${BRANCH}" 2>/dev/null; then
+    UPSTREAM="origin/${BRANCH}"
+  fi
+fi
+
 if [[ -z "$UPSTREAM" ]]; then
   json_skip "$BRANCH" "no-upstream" \
     "no upstream configured for branch ${BRANCH}; cannot confirm all commits are pushed; keeping branch"

@@ -138,9 +138,59 @@ func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 // WithGitMutations wires the git-domain mutation resolver (worktreeRemove, etc.).
 // scriptRoot is the absolute path to the scripts/ directory. When empty,
 // gitdomain.NewMutationResolver defaults to "scripts" (relative to cwd).
+//
+// AC-G2: if r.GH is already wired (WithGH was called before this), a
+// ghPRStateAdapter is injected into the resolver so cleanupOne can look up
+// the PR merged-state from the daemon's own gh service. Callers in daemon.go
+// must order WithGh before WithGitMutations for the injection to fire.
 func (r *Resolver) WithGitMutations(scriptRoot string) *Resolver {
-	r.GitMutations = gitdomain.NewMutationResolver(nil, scriptRoot)
+	mr := gitdomain.NewMutationResolver(nil, scriptRoot)
+	if r.GH != nil {
+		mr.WithPRStateLookup(&ghPRStateAdapter{gh: r.GH})
+	}
+	r.GitMutations = mr
 	return r
+}
+
+// ghPRStateAdapter adapts *gh.Provider to gitdomain.PRStateLookup.
+// It lists all PRs for the repo and returns the state of the most-relevant
+// PR whose HeadRef matches the branch (open wins over closed/merged per the
+// same precedence used by the Worktree.pr field resolver).
+type ghPRStateAdapter struct {
+	gh *gh.Provider
+}
+
+// PRStateByBranch satisfies gitdomain.PRStateLookup.
+func (a *ghPRStateAdapter) PRStateByBranch(ctx context.Context, repoSlug, branch string) (string, error) {
+	owner, name, err := gh.SplitRepo(repoSlug)
+	if err != nil {
+		// Slug not in owner/repo format — no PR lookup possible.
+		return "", nil
+	}
+	prs, err := a.gh.ListPullRequests(ctx, owner, name, gh.PullRequestStateAll)
+	if err != nil {
+		return "", err
+	}
+	// Precedence: open PR > most-recent closed/merged PR (mirrors Worktree.pr).
+	var best *gh.PullRequest
+	for i := range prs {
+		pr := &prs[i]
+		if pr.HeadRef != branch {
+			continue
+		}
+		if best == nil {
+			best = pr
+			continue
+		}
+		// Open beats any non-open.
+		if pr.State == gh.PullRequestStateOpen && best.State != gh.PullRequestStateOpen {
+			best = pr
+		}
+	}
+	if best == nil {
+		return "", nil
+	}
+	return string(best.State), nil
 }
 
 // LoaderBundle returns the read-side surface the request-scoped
