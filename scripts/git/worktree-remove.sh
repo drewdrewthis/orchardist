@@ -7,11 +7,27 @@
 #     [--base <base-branch>] \
 #     [--upstream <remote-tracking-ref>] \
 #     [--protected <branch1,branch2,...>] \
+#     [--active-session <tmux-session-name>] \
+#     [--active-cwd <abs-path>] \
+#     [--tmux-session <tmux-session-name>] \
 #     [--json]
 #
 # Outputs L2 envelope on --json:
-#   success: {"ok":true,"data":{"worktreeId":"<id>","branchDelete":{...},"dockerTeardown":{...}}}
+#   success: {"ok":true,"data":{"worktreeId":"<id>","branchDelete":{...},"dockerTeardown":{...},"tmuxKill":{...}}}
+#   skipped: {"ok":true,"data":{"worktreeId":"<id>","skipped":true,"skipReason":"hosts-active-session"}}
 #   failure: {"ok":false,"error":{"code":"<code>","message":"<msg>"}}
+#
+# AC-G1 — active-session exclusion:
+#   --active-session <name>  Tmux session name the user is currently active in.
+#   --active-cwd <path>      Absolute path the user is currently working in.
+#   If EITHER matches the target worktree (session name vs --tmux-session, path vs WT_PATH),
+#   ALL destruction stages are skipped and ok:true is returned with skipReason.
+#   The script NEVER reads $TMUX or any process-env variable for this decision.
+#   Identity comes only from the caller-supplied args.
+#
+# AC-G3 — tmux-kill is NON-FATAL:
+#   --tmux-session <name>  The tmux session to kill. On failure, a tmux-kill warning
+#   is added to the envelope and removal continues.
 #
 # branchDelete is the result from scripts/git/branch-delete.sh:
 #   deleted:  {"branch":"<n>","deleted":true}
@@ -37,17 +53,25 @@ PR_MERGED=""
 BASE_BRANCH=""
 UPSTREAM=""
 PROTECTED=""
+# Active-session exclusion (Step 5 — AC-G1)
+ACTIVE_SESSION=""
+ACTIVE_CWD=""
+# Tmux session to kill (Step 5 — AC-G3)
+TMUX_SESSION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --worktree-id) WORKTREE_ID="$2"; shift 2 ;;
-    --force)       FORCE=true;       shift   ;;
-    --json)        JSON_MODE=true;   shift   ;;
-    --pr-merged)   PR_MERGED="$2";   shift 2 ;;
-    --base)        BASE_BRANCH="$2"; shift 2 ;;
-    --upstream)    UPSTREAM="$2";    shift 2 ;;
-    --protected)   PROTECTED="$2";   shift 2 ;;
-    *)             echo "Unknown argument: $1" >&2; exit 2 ;;
+    --worktree-id)     WORKTREE_ID="$2";    shift 2 ;;
+    --force)           FORCE=true;           shift   ;;
+    --json)            JSON_MODE=true;       shift   ;;
+    --pr-merged)       PR_MERGED="$2";      shift 2 ;;
+    --base)            BASE_BRANCH="$2";    shift 2 ;;
+    --upstream)        UPSTREAM="$2";       shift 2 ;;
+    --protected)       PROTECTED="$2";      shift 2 ;;
+    --active-session)  ACTIVE_SESSION="$2"; shift 2 ;;
+    --active-cwd)      ACTIVE_CWD="$2";     shift 2 ;;
+    --tmux-session)    TMUX_SESSION="$2";   shift 2 ;;
+    *)                 echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -94,6 +118,71 @@ if [[ -z "$WT_PATH" ]]; then
   # Already removed — treat as success (idempotent per M5).
   if $JSON_MODE; then json_ok "{\"worktreeId\":\"${WORKTREE_ID}\"}"; else echo "worktree already removed"; fi
   exit 0
+fi
+
+# ---- AC-G1: active-session exclusion gate -----------------------------------
+#
+# If the caller passed --active-session or --active-cwd, check whether this
+# worktree hosts the active session BEFORE any destruction stage.
+#
+# Matching logic:
+#   --active-cwd <path>     → match if WT_PATH equals the real path of ACTIVE_CWD.
+#                             Both sides are resolved via python3 os.path.realpath
+#                             so symlink differences (e.g. /var vs /private/var on
+#                             macOS) do not produce false negatives.
+#   --active-session <name> → match if TMUX_SESSION equals ACTIVE_SESSION exactly.
+#
+# On match: return ok:true with skipped=true / skipReason=hosts-active-session.
+# ALL stages are bypassed — no docker, no tmux-kill, no dir removal, no branch delete.
+#
+# CRITICAL: the script NEVER reads $TMUX or any process-env variable for this
+# decision (scenario ~161). The identity comes solely from --active-session /
+# --active-cwd as passed by the caller.
+if [[ -n "$ACTIVE_CWD" ]]; then
+  # Resolve symlinks on both sides before comparing (macOS /var → /private/var).
+  ACTIVE_CWD_REAL=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$ACTIVE_CWD" 2>/dev/null || echo "$ACTIVE_CWD")
+  WT_PATH_REAL=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$WT_PATH" 2>/dev/null || echo "$WT_PATH")
+  if [[ "$WT_PATH_REAL" == "$ACTIVE_CWD_REAL" ]]; then
+    if $JSON_MODE; then
+      json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
+    else
+      echo "Skipped: worktree $WT_NAME hosts the active session (cwd match)"
+    fi
+    exit 0
+  fi
+fi
+if [[ -n "$ACTIVE_SESSION" && -n "$TMUX_SESSION" && "$TMUX_SESSION" == "$ACTIVE_SESSION" ]]; then
+  if $JSON_MODE; then
+    json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
+  else
+    echo "Skipped: worktree $WT_NAME hosts the active session (session name match)"
+  fi
+  exit 0
+fi
+
+# ---- Stage 0: tmux session kill (AC-G3) -------------------------------------
+#
+# Kill the tmux session associated with this worktree BEFORE removing the
+# directory.  This is NON-FATAL: a failure (session busy, undead, or not
+# found) records a warning in the envelope but does NOT abort removal.
+# The stage is a no-op when --tmux-session is not supplied.
+TMUX_KILL_DATA="null"
+
+if [[ -n "$TMUX_SESSION" ]]; then
+  # Guard: only kill if the session exists.  tmux has-session exits 0 iff it
+  # exists; we treat a non-zero exit (session absent) as a clean no-op.
+  if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+    if ! TMUX_KILL_ERR="$(tmux kill-session -t "$TMUX_SESSION" 2>&1)"; then
+      # Non-fatal: record warning, continue removal.
+      TMUX_KILL_ERR="${TMUX_KILL_ERR//\"/\\\"}"
+      TMUX_KILL_DATA="{\"stage\":\"tmux-kill\",\"warning\":\"tmux kill-session failed: ${TMUX_KILL_ERR}\"}"
+    else
+      TMUX_KILL_DATA="{\"stage\":\"tmux-kill\",\"killed\":true}"
+    fi
+  else
+    # Session not present — clean no-op.
+    TMUX_KILL_DATA="{\"stage\":\"tmux-kill\",\"killed\":false,\"reason\":\"session-not-found\"}"
+  fi
 fi
 
 # ---- Stage 1a: docker compose teardown (AC5 + AC6) -------------------------
@@ -200,7 +289,7 @@ else:
 fi
 
 if $JSON_MODE; then
-  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"branchDelete\":${BRANCH_DELETE_DATA},\"dockerTeardown\":${DOCKER_TEARDOWN_DATA}}"
+  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"branchDelete\":${BRANCH_DELETE_DATA},\"dockerTeardown\":${DOCKER_TEARDOWN_DATA},\"tmuxKill\":${TMUX_KILL_DATA}}"
 else
   echo "Removed worktree $WT_NAME at $WT_PATH"
 fi

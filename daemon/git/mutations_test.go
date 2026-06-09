@@ -95,6 +95,44 @@ func TestWorktreeRemoveInputValidation(t *testing.T) {
 	}
 }
 
+// TestWorktreeRemoveActiveSessionFieldsThreaded verifies that WorktreeRemove
+// passes ActiveSession and ActiveCwd through to the script as --active-session
+// and --active-cwd args (AC-G1: T1 resolver test — field threading).
+//
+// Uses a real but non-existent worktree ID so the script exits with a
+// structured L2 envelope (not an OS-level error), confirming the args were
+// accepted by the script's arg parser.
+func TestWorktreeRemoveActiveSessionFieldsThreaded(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Call with active-session + active-cwd fields set.
+	// A non-existent worktree will trigger REPO_NOT_FOUND before the guard
+	// is even reached, but the important thing is that the script does NOT
+	// reject the --active-session / --active-cwd args with "Unknown argument".
+	result, err := r.WorktreeRemove(context.Background(), WorktreeRemoveInput{
+		WorktreeID:    "nonexistent-repo:nonexistent-branch",
+		ActiveSession: "my-active-session",
+		ActiveCwd:     "/some/active/cwd",
+	})
+	if err != nil {
+		t.Logf("execScript error (expected for non-existent repo): %v", err)
+		return
+	}
+	// Must NOT be UNKNOWN_ARGUMENT — that would mean the args weren't recognised.
+	if result.ErrCode == "UNKNOWN_ARGUMENT" {
+		t.Errorf("script rejected --active-session/--active-cwd: got UNKNOWN_ARGUMENT; args were not threaded correctly")
+	}
+	// Any other error code (REPO_NOT_FOUND, INVALID_INPUT) is fine — it means
+	// the args were accepted and the script ran its normal logic.
+	t.Logf("WorktreeRemove with active session fields: ok=%v errCode=%q", result.OK, result.ErrCode)
+}
+
 // TestWorktreeRemoveScriptPathInEnvelope verifies that when the script is called
 // with a valid non-empty worktreeId, the call goes to the corrected path
 // (scripts/git/worktree-remove.sh), not the old flat sibling path.

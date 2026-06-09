@@ -53,6 +53,15 @@ type WorktreeRemoveInput struct {
 	WorktreeID string
 	// Force removes even if there are uncommitted changes.
 	Force bool
+	// ActiveSession is the tmux session name the user is currently active in (AC-G1).
+	// When non-empty, the worktree whose session matches is excluded from ALL destruction
+	// and reported as skipped with reason "hosts-active-session".
+	// The daemon MUST NOT infer this from its own $TMUX env — always caller-supplied.
+	ActiveSession string
+	// ActiveCwd is the absolute path of the user's active working directory (AC-G1).
+	// When non-empty, the worktree whose path matches is excluded from ALL destruction
+	// and reported as skipped with reason "hosts-active-session".
+	ActiveCwd string
 }
 
 // WorktreeMoveInput is the input for Mutation.worktreeMove.
@@ -184,6 +193,11 @@ func (r *MutationResolver) WorktreeCreate(ctx context.Context, input WorktreeCre
 
 // WorktreeRemove resolves Mutation.worktreeRemove.
 // Idempotency: idempotent — removing a non-existent worktree is a no-op at git level (M5).
+//
+// AC-G1: ActiveSession and ActiveCwd are passed through to the script as
+// --active-session / --active-cwd so the script can exclude the live
+// worktree from ALL destruction stages. The daemon NEVER reads $TMUX or
+// calls current_session_name() — identity comes only from the caller.
 func (r *MutationResolver) WorktreeRemove(ctx context.Context, input WorktreeRemoveInput) (MutationResult, error) {
 	if input.WorktreeID == "" {
 		return MutationResult{OK: false, ErrCode: "INVALID_INPUT", ErrMsg: "worktreeId is required"}, nil
@@ -195,6 +209,14 @@ func (r *MutationResolver) WorktreeRemove(ctx context.Context, input WorktreeRem
 	args := []string{"--worktree-id", input.WorktreeID}
 	if input.Force {
 		args = append(args, "--force")
+	}
+	// AC-G1: thread active-session identity through to the script.
+	// The script gates ALL destruction stages on this; no daemon-side $TMUX read.
+	if input.ActiveSession != "" {
+		args = append(args, "--active-session", input.ActiveSession)
+	}
+	if input.ActiveCwd != "" {
+		args = append(args, "--active-cwd", input.ActiveCwd)
 	}
 
 	env, err := r.execScript(ctx, r.worktreeScript("remove"), args...)

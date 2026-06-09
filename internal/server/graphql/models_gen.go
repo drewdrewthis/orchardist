@@ -879,6 +879,19 @@ type WorktreeRemoveInput struct {
 	WorktreeID string `json:"worktreeId"`
 	// When true, remove even if there are uncommitted changes.
 	Force *bool `json:"force,omitempty"`
+	// The name of the tmux session the user is currently active in (AC-G1).
+	// When set, any stale worktree whose resolved tmux session name matches this
+	// value is excluded from ALL destruction stages and reported as skipped with
+	// reason \"hosts-active-session\". The daemon MUST NOT infer this from its
+	// own process environment (\$TMUX) — the identity is always caller-supplied.
+	// Null means no active-session exclusion by session name.
+	ActiveSession *string `json:"activeSession,omitempty"`
+	// The absolute path of the directory the user's active session is running in (AC-G1).
+	// When set, any stale worktree whose path matches this value is excluded from ALL
+	// destruction stages and reported as skipped with reason \"hosts-active-session\".
+	// Paired with activeSession for belt-and-suspenders exclusion. Null means no
+	// active-session exclusion by cwd.
+	ActiveCwd *string `json:"activeCwd,omitempty"`
 }
 
 // Aggregated CI status across all check runs and statuses on the PR head sha.

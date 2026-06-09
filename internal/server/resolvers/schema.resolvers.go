@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	git "github.com/drewdrewthis/orchardist/daemon/git"
+	"github.com/drewdrewthis/orchardist/daemon/git"
 	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
 	"github.com/drewdrewthis/orchardist/internal/server/loaders"
 	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
@@ -255,6 +255,15 @@ func (r *mutationResolver) WorktreeRemove(ctx context.Context, input graphql1.Wo
 	}
 	if input.Force != nil {
 		domainInput.Force = *input.Force
+	}
+	// AC-G1: thread active-session identity from the caller through to the script.
+	// The daemon never reads $TMUX or calls current_session_name() — identity
+	// is always caller-supplied so the guard is not defeated by the daemon move.
+	if input.ActiveSession != nil {
+		domainInput.ActiveSession = *input.ActiveSession
+	}
+	if input.ActiveCwd != nil {
+		domainInput.ActiveCwd = *input.ActiveCwd
 	}
 	result, err := r.GitMutations.WorktreeRemove(ctx, domainInput)
 	if err != nil {

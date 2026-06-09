@@ -3807,6 +3807,23 @@ input WorktreeRemoveInput {
   worktreeId: String!
   "When true, remove even if there are uncommitted changes."
   force: Boolean
+  """
+  The name of the tmux session the user is currently active in (AC-G1).
+  When set, any stale worktree whose resolved tmux session name matches this
+  value is excluded from ALL destruction stages and reported as skipped with
+  reason \"hosts-active-session\". The daemon MUST NOT infer this from its
+  own process environment (\$TMUX) — the identity is always caller-supplied.
+  Null means no active-session exclusion by session name.
+  """
+  activeSession: String
+  """
+  The absolute path of the directory the user's active session is running in (AC-G1).
+  When set, any stale worktree whose path matches this value is excluded from ALL
+  destruction stages and reported as skipped with reason \"hosts-active-session\".
+  Paired with activeSession for belt-and-suspenders exclusion. Null means no
+  active-session exclusion by cwd.
+  """
+  activeCwd: String
 }
 
 """
@@ -13779,7 +13796,7 @@ func (ec *executionContext) unmarshalInputWorktreeRemoveInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"worktreeId", "force"}
+	fieldsInOrder := [...]string{"worktreeId", "force", "activeSession", "activeCwd"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -13800,6 +13817,20 @@ func (ec *executionContext) unmarshalInputWorktreeRemoveInput(ctx context.Contex
 				return it, err
 			}
 			it.Force = data
+		case "activeSession":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("activeSession"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ActiveSession = data
+		case "activeCwd":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("activeCwd"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ActiveCwd = data
 		}
 	}
 	return it, nil
