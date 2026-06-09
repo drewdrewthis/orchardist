@@ -1371,6 +1371,85 @@ type Mutation {
   is a thin façade (L1).
   """
   worktreeRemove(input: WorktreeRemoveInput!): WorktreeMutationResult!
+
+  """
+  Batch-remove a set of stale local git worktrees by their stable IDs.
+
+  Idempotency: idempotent — worktrees already removed are silently skipped, and
+  re-running on an already-clean fleet produces zero deletions with ok:true (AC9).
+
+  Partial failure: if cleanup of one worktree fails, the remaining worktrees are
+  still attempted. The result carries a per-worktree entry for each, with ok, stage,
+  and message for failures (AC8).
+
+  Concurrency: serialized daemon-side via a mutex. A second concurrent call that
+  arrives while the first is in progress will wait and then find worktrees already
+  removed (idempotent no-op). The loser receives ok:true with per-worktree entries
+  showing alreadyRemoved:true for doubly-targeted worktrees (AC-G5).
+
+  Per L5: delegates each removal to scripts/git/worktree-remove.sh --json. The
+  script is the canonical operation; this resolver is a thin façade (L1/L5).
+  """
+  worktreesCleanup(input: WorktreesCleanupInput!): WorktreesCleanupResult!
+}
+
+"""
+Input for worktreesCleanup. Targets a set of worktrees by their stable IDs.
+"""
+input WorktreesCleanupInput {
+  "The stable IDs of worktrees to remove (format: <project_id>:<worktree_name>). Must be non-empty."
+  worktreeIds: [String!]!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+  """
+  The name of the tmux session the user is currently active in (AC-G1).
+  Any worktree whose resolved session name matches this is excluded from ALL destruction
+  stages and reported as skipped with reason \"hosts-active-session\".
+  The daemon MUST NOT infer this from its own process environment.
+  """
+  activeSession: String
+  "The absolute path of the directory the user's active session is running in (AC-G1)."
+  activeCwd: String
+  """
+  PR-merged state for branch-delete decisions. One of: merged, not-merged, unknown.
+  When unknown or omitted, branch deletion is skipped (fail-closed per AC-G2).
+  """
+  prMerged: String
+  "Base branch for branch-delete safety checks (default: main)."
+  baseBranch: String
+  "Comma-separated list of protected branch names to never delete."
+  protected: String
+}
+
+"""
+Per-worktree cleanup result entry. ok:true means all stages for this worktree
+succeeded (or were clean no-ops). ok:false means a stage hard-failed.
+"""
+type WorktreeCleanupEntry {
+  "The stable worktree ID this entry describes."
+  worktreeId: String!
+  "True when cleanup succeeded or was a clean no-op (idempotent)."
+  ok: Boolean!
+  "The stage that failed, when ok:false. One of: worktree-remove, branch-delete, docker-teardown."
+  stage: String
+  "Human-readable failure or skip message."
+  message: String
+  "True when this worktree was already removed before this call (idempotent re-run or race loser)."
+  alreadyRemoved: Boolean
+  "Non-fatal warnings from sub-stages (e.g. branch-skip, tmux-kill)."
+  warnings: [String!]!
+}
+
+"Result of worktreesCleanup. ok:true even when some entries failed (partial failure is per-worktree)."
+type WorktreesCleanupResult {
+  "True when the batch call itself succeeded (input valid, no systemic errors). Individual entry ok fields carry per-worktree status."
+  ok: Boolean!
+  "Per-worktree result entries."
+  entries: [WorktreeCleanupEntry!]!
+  "Typed input validation error code; set when ok:false and the input itself was invalid."
+  errCode: String
+  "Human-readable error message; set when ok:false."
+  errMsg: String
 }
 
 """

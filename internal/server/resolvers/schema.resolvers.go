@@ -279,6 +279,93 @@ func (r *mutationResolver) WorktreeRemove(ctx context.Context, input graphql1.Wo
 	return out, nil
 }
 
+// WorktreesCleanup is the resolver for the worktreesCleanup field (#693 step 6).
+// Delegates to the git-domain MutationResolver which runs worktree-remove.sh
+// for each worktree, serialized under a daemon-side mutex (AC-G5, L1/L5).
+//
+// AC2: caller passes exactly the stale-set IDs; this resolver acts on exactly
+// that set and never touches worktrees it was not given.
+// AC8: partial-failure isolated per entry; all IDs are attempted.
+// AC9: idempotent — already-removed worktrees return alreadyRemoved:true.
+// AC-G5: serialize via cleanupMu; race loser gets alreadyRemoved:true entries.
+// AC10: malformed input → typed INVALID_INPUT at resolver boundary, not a script crash.
+func (r *mutationResolver) WorktreesCleanup(ctx context.Context, input graphql1.WorktreesCleanupInput) (*graphql1.WorktreesCleanupResult, error) {
+	if r.GitMutations == nil {
+		notConfigured := "NOT_CONFIGURED"
+		notConfiguredMsg := "git mutations resolver not configured"
+		return &graphql1.WorktreesCleanupResult{
+			Ok:      false,
+			ErrCode: &notConfigured,
+			ErrMsg:  &notConfiguredMsg,
+			Entries: []*graphql1.WorktreeCleanupEntry{},
+		}, nil
+	}
+
+	// Project GraphQL input → domain input.
+	domainInput := git.WorktreesCleanupInput{
+		WorktreeIDs: input.WorktreeIds,
+	}
+	if input.Force != nil {
+		domainInput.Force = *input.Force
+	}
+	if input.ActiveSession != nil {
+		domainInput.ActiveSession = *input.ActiveSession
+	}
+	if input.ActiveCwd != nil {
+		domainInput.ActiveCwd = *input.ActiveCwd
+	}
+	if input.PrMerged != nil {
+		domainInput.PRMerged = *input.PrMerged
+	}
+	if input.BaseBranch != nil {
+		domainInput.BaseBranch = *input.BaseBranch
+	}
+	if input.Protected != nil {
+		domainInput.Protected = *input.Protected
+	}
+
+	result, err := r.GitMutations.WorktreesCleanup(ctx, domainInput)
+	if err != nil {
+		return nil, err
+	}
+
+	// Project domain result → GraphQL result.
+	out := &graphql1.WorktreesCleanupResult{
+		Ok:      result.OK,
+		Entries: make([]*graphql1.WorktreeCleanupEntry, 0, len(result.Entries)),
+	}
+	if !result.OK {
+		errCode := result.ErrCode
+		errMsg := result.ErrMsg
+		out.ErrCode = &errCode
+		out.ErrMsg = &errMsg
+	}
+	for _, e := range result.Entries {
+		entry := &graphql1.WorktreeCleanupEntry{
+			WorktreeID: e.WorktreeID,
+			Ok:         e.OK,
+			Warnings:   e.Warnings,
+		}
+		if e.Warnings == nil {
+			entry.Warnings = []string{}
+		}
+		if e.Stage != "" {
+			s := e.Stage
+			entry.Stage = &s
+		}
+		if e.Message != "" {
+			m := e.Message
+			entry.Message = &m
+		}
+		if e.AlreadyRemoved {
+			t := true
+			entry.AlreadyRemoved = &t
+		}
+		out.Entries = append(out.Entries, entry)
+	}
+	return out, nil
+}
+
 // Host is the resolver for the process.host field.
 func (r *processResolver) Host(ctx context.Context, obj *graphql1.Process) (*graphql1.Host, error) {
 	hostID, _ := splitProcessNodeID(obj.ID)

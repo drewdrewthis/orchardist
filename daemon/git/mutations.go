@@ -15,13 +15,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sync"
 	"time"
 )
 
 // MutationResolver owns the git mutation resolvers.
+//
+// cleanupMu serializes worktreesCleanup calls so that two concurrent cleanup
+// operations over an overlapping stale set do not race: the second call waits
+// for the first to finish, then finds the worktrees already gone (idempotent
+// no-op path). This is the AC-G5 concurrency model: serialize-and-tolerate.
 type MutationResolver struct {
 	svc        Service
-	scriptRoot string // abs path to scripts/ directory
+	scriptRoot string    // abs path to scripts/ directory
+	cleanupMu  sync.Mutex // serializes WorktreesCleanup (AC-G5)
 }
 
 // NewMutationResolver creates a resolver backed by the service.
@@ -62,6 +69,81 @@ type WorktreeRemoveInput struct {
 	// When non-empty, the worktree whose path matches is excluded from ALL destruction
 	// and reported as skipped with reason "hosts-active-session".
 	ActiveCwd string
+}
+
+// WorktreesCleanupInput is the input for Mutation.worktreesCleanup (AC8/AC9/AC-G5/AC10).
+type WorktreesCleanupInput struct {
+	// WorktreeIDs is the set of stable worktree IDs to clean up.
+	// Must be non-empty; malformed IDs are rejected at the resolver boundary (M4, AC10).
+	WorktreeIDs []string
+	// Force removes even if there are uncommitted changes.
+	Force bool
+	// ActiveSession is the tmux session name the user is currently active in (AC-G1).
+	ActiveSession string
+	// ActiveCwd is the absolute path of the user's active working directory (AC-G1).
+	ActiveCwd string
+	// PRMerged is the PR-merged state for branch-delete decisions.
+	// One of: "merged", "not-merged", "unknown". Empty → treated as "unknown" (fail-closed AC-G2).
+	PRMerged string
+	// BaseBranch is the base branch for branch-delete safety checks. Defaults to "main".
+	BaseBranch string
+	// Protected is a comma-separated list of branch names never to delete.
+	Protected string
+}
+
+// WorktreeCleanupEntry is a per-worktree result inside WorktreesCleanupResult (AC8).
+type WorktreeCleanupEntry struct {
+	// WorktreeID is the stable ID of the worktree this entry describes.
+	WorktreeID string
+	// OK is true when cleanup succeeded or was a clean no-op.
+	OK bool
+	// Stage is the failing stage when OK is false (e.g. "worktree-remove").
+	Stage string
+	// Message is a human-readable message for failures or skips.
+	Message string
+	// AlreadyRemoved is true when the worktree was already gone before this call
+	// (idempotent re-run or race loser — AC9, AC-G5).
+	AlreadyRemoved bool
+	// Warnings carries non-fatal per-stage warnings (branch-skip, tmux-kill).
+	Warnings []string
+}
+
+// WorktreesCleanupResult is returned by WorktreesCleanup.
+type WorktreesCleanupResult struct {
+	// OK is true when the batch call itself succeeded (valid input, no systemic error).
+	// Individual entry OK fields carry per-worktree status.
+	OK      bool
+	Entries []WorktreeCleanupEntry
+	ErrCode string
+	ErrMsg  string
+}
+
+// --- gh-state → --pr-merged argument seam (AC-G2 / item G) ---
+
+// PRMergedArgForState maps a gh provider PullRequest state string to the
+// --pr-merged argument value consumed by scripts/git/branch-delete.sh.
+//
+// States:
+//
+//	"MERGED"  → "merged"
+//	"CLOSED"  → "not-merged"  (closed-without-merge → branch NOT merged via gh)
+//	"OPEN"    → "not-merged"
+//	err/""    → "unknown"     (fail-closed per AC-G2)
+//
+// This is the tested seam for Step 7 / integration: the gh service calls the
+// daemon's gh provider to get PullRequest.State, then passes it here to derive
+// the correct --pr-merged flag. When the gh call errors, pass "" to get "unknown"
+// (fail-closed: branch deletion is skipped rather than risking data loss).
+func PRMergedArgForState(ghPRState string) string {
+	switch ghPRState {
+	case "MERGED":
+		return "merged"
+	case "CLOSED", "OPEN":
+		return "not-merged"
+	default:
+		// Empty string, "unknown", or any gh error → fail-closed (AC-G2).
+		return "unknown"
+	}
 }
 
 // WorktreeMoveInput is the input for Mutation.worktreeMove.
@@ -228,6 +310,168 @@ func (r *MutationResolver) WorktreeRemove(ctx context.Context, input WorktreeRem
 		return MutationResult{OK: false, ErrCode: code, ErrMsg: msg}, nil
 	}
 	return MutationResult{OK: true}, nil
+}
+
+// WorktreesCleanup resolves Mutation.worktreesCleanup.
+//
+// Idempotency: idempotent — already-removed worktrees produce ok:true with
+// alreadyRemoved:true entries; re-running on a clean fleet is a no-op (AC9, M5).
+//
+// Partial failure: each worktree is attempted even if a sibling fails (AC8).
+//
+// Concurrency: serialized via cleanupMu. Two concurrent calls over an overlapping
+// set do not hard-race: the second waits, finds worktrees gone, and returns
+// alreadyRemoved:true entries for doubly-targeted worktrees (AC-G5).
+//
+// Input validation (M4, AC10): empty list or any malformed ID is rejected at
+// the resolver boundary; script is never exec'd for invalid input.
+func (r *MutationResolver) WorktreesCleanup(ctx context.Context, input WorktreesCleanupInput) (WorktreesCleanupResult, error) {
+	// M4 / AC10: validate at resolver boundary.
+	if len(input.WorktreeIDs) == 0 {
+		return WorktreesCleanupResult{
+			OK:      false,
+			ErrCode: "INVALID_INPUT",
+			ErrMsg:  "worktreeIds must be a non-empty list",
+		}, nil
+	}
+	for _, id := range input.WorktreeIDs {
+		if id == "" {
+			return WorktreesCleanupResult{
+				OK:      false,
+				ErrCode: "INVALID_INPUT",
+				ErrMsg:  "worktreeIds contains an empty entry",
+			}, nil
+		}
+		// Require <project>:<name> format.
+		colonIdx := -1
+		for i, c := range id {
+			if c == ':' {
+				colonIdx = i
+				break
+			}
+		}
+		if colonIdx <= 0 || colonIdx == len(id)-1 {
+			return WorktreesCleanupResult{
+				OK:      false,
+				ErrCode: "INVALID_INPUT",
+				ErrMsg:  fmt.Sprintf("malformed worktreeId %q: must be <project>:<name>", id),
+			}, nil
+		}
+	}
+
+	// AC-G5: serialize cleanup ops so races don't hard-error.
+	r.cleanupMu.Lock()
+	defer r.cleanupMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	scriptPath := r.worktreeScript("remove")
+	entries := make([]WorktreeCleanupEntry, 0, len(input.WorktreeIDs))
+
+	for _, id := range input.WorktreeIDs {
+		entry := r.cleanupOne(ctx, scriptPath, id, input)
+		entries = append(entries, entry)
+	}
+
+	return WorktreesCleanupResult{OK: true, Entries: entries}, nil
+}
+
+// cleanupOne runs worktree-remove.sh for a single worktree and returns a
+// WorktreeCleanupEntry. It is always called while cleanupMu is held (AC-G5).
+func (r *MutationResolver) cleanupOne(ctx context.Context, scriptPath, id string, input WorktreesCleanupInput) WorktreeCleanupEntry {
+	args := []string{"--worktree-id", id}
+	if input.Force {
+		args = append(args, "--force")
+	}
+	if input.ActiveSession != "" {
+		args = append(args, "--active-session", input.ActiveSession)
+	}
+	if input.ActiveCwd != "" {
+		args = append(args, "--active-cwd", input.ActiveCwd)
+	}
+	if input.PRMerged != "" {
+		args = append(args, "--pr-merged", input.PRMerged)
+	}
+	if input.BaseBranch != "" {
+		args = append(args, "--base", input.BaseBranch)
+	}
+	if input.Protected != "" {
+		args = append(args, "--protected", input.Protected)
+	}
+
+	env, err := r.execScript(ctx, scriptPath, args...)
+	if err != nil {
+		// Script produced no output or could not be exec'd — hard failure.
+		return WorktreeCleanupEntry{
+			WorktreeID: id,
+			OK:         false,
+			Stage:      "worktree-remove",
+			Message:    err.Error(),
+		}
+	}
+
+	if !env.OK {
+		code, msg := scriptErrFields(env)
+		return WorktreeCleanupEntry{
+			WorktreeID: id,
+			OK:         false,
+			Stage:      "worktree-remove",
+			Message:    fmt.Sprintf("%s: %s", code, msg),
+		}
+	}
+
+	// ok:true — parse the data for alreadyRemoved and warnings.
+	entry := WorktreeCleanupEntry{
+		WorktreeID: id,
+		OK:         true,
+		Warnings:   []string{},
+	}
+	if len(env.Data) > 0 {
+		entry = enrichEntryFromData(entry, env.Data)
+	}
+	return entry
+}
+
+// enrichEntryFromData parses the script's ok:true data payload and populates
+// alreadyRemoved and warnings into the entry.
+func enrichEntryFromData(entry WorktreeCleanupEntry, raw json.RawMessage) WorktreeCleanupEntry {
+	var data map[string]interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return entry
+	}
+
+	// Detect alreadyRemoved: the script returns ok:true with no branchDelete/docker
+	// fields when the worktree was not found (idempotent no-op path). We also treat
+	// the case where the worktree was listed as non-existent (script returns ok:true
+	// with only worktreeId) as alreadyRemoved.
+	_, hasBranch := data["branchDelete"]
+	_, hasDocker := data["dockerTeardown"]
+	_, hasSkipped := data["skipped"]
+	if !hasBranch && !hasDocker && !hasSkipped {
+		// Script returned ok:true with just worktreeId — worktree was not found.
+		entry.AlreadyRemoved = true
+	}
+
+	// Collect non-fatal warnings from branchDelete and dockerTeardown sub-objects.
+	if bd, ok := data["branchDelete"].(map[string]interface{}); ok && bd != nil {
+		if skipReason, ok := bd["skipReason"].(string); ok && skipReason != "" {
+			if warning, ok := bd["warning"].(string); ok && warning != "" {
+				entry.Warnings = append(entry.Warnings, warning)
+			} else {
+				entry.Warnings = append(entry.Warnings, "branch-skip: "+skipReason)
+			}
+		}
+	}
+	if dt, ok := data["dockerTeardown"].(map[string]interface{}); ok && dt != nil {
+		if action, ok := dt["action"].(string); ok && action == "error" {
+			if reason, ok := dt["reason"].(string); ok && reason != "" {
+				entry.Warnings = append(entry.Warnings, "docker-teardown error: "+reason)
+			}
+		}
+	}
+
+	return entry
 }
 
 // WorktreeMove resolves Mutation.worktreeMove.

@@ -862,6 +862,23 @@ func (Worktree) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Worktree) GetID() string { return this.ID }
 
+// Per-worktree cleanup result entry. ok:true means all stages for this worktree
+// succeeded (or were clean no-ops). ok:false means a stage hard-failed.
+type WorktreeCleanupEntry struct {
+	// The stable worktree ID this entry describes.
+	WorktreeID string `json:"worktreeId"`
+	// True when cleanup succeeded or was a clean no-op (idempotent).
+	Ok bool `json:"ok"`
+	// The stage that failed, when ok:false. One of: worktree-remove, branch-delete, docker-teardown.
+	Stage *string `json:"stage,omitempty"`
+	// Human-readable failure or skip message.
+	Message *string `json:"message,omitempty"`
+	// True when this worktree was already removed before this call (idempotent re-run or race loser).
+	AlreadyRemoved *bool `json:"alreadyRemoved,omitempty"`
+	// Non-fatal warnings from sub-stages (e.g. branch-skip, tmux-kill).
+	Warnings []string `json:"warnings"`
+}
+
 // Result of a git worktree mutation. When ok is false, errCode and errMsg carry
 // the typed error details from the script's L2 envelope.
 type WorktreeMutationResult struct {
@@ -892,6 +909,40 @@ type WorktreeRemoveInput struct {
 	// Paired with activeSession for belt-and-suspenders exclusion. Null means no
 	// active-session exclusion by cwd.
 	ActiveCwd *string `json:"activeCwd,omitempty"`
+}
+
+// Input for worktreesCleanup. Targets a set of worktrees by their stable IDs.
+type WorktreesCleanupInput struct {
+	// The stable IDs of worktrees to remove (format: <project_id>:<worktree_name>). Must be non-empty.
+	WorktreeIds []string `json:"worktreeIds"`
+	// When true, remove even if there are uncommitted changes.
+	Force *bool `json:"force,omitempty"`
+	// The name of the tmux session the user is currently active in (AC-G1).
+	// Any worktree whose resolved session name matches this is excluded from ALL destruction
+	// stages and reported as skipped with reason \"hosts-active-session\".
+	// The daemon MUST NOT infer this from its own process environment.
+	ActiveSession *string `json:"activeSession,omitempty"`
+	// The absolute path of the directory the user's active session is running in (AC-G1).
+	ActiveCwd *string `json:"activeCwd,omitempty"`
+	// PR-merged state for branch-delete decisions. One of: merged, not-merged, unknown.
+	// When unknown or omitted, branch deletion is skipped (fail-closed per AC-G2).
+	PrMerged *string `json:"prMerged,omitempty"`
+	// Base branch for branch-delete safety checks (default: main).
+	BaseBranch *string `json:"baseBranch,omitempty"`
+	// Comma-separated list of protected branch names to never delete.
+	Protected *string `json:"protected,omitempty"`
+}
+
+// Result of worktreesCleanup. ok:true even when some entries failed (partial failure is per-worktree).
+type WorktreesCleanupResult struct {
+	// True when the batch call itself succeeded (input valid, no systemic errors). Individual entry ok fields carry per-worktree status.
+	Ok bool `json:"ok"`
+	// Per-worktree result entries.
+	Entries []*WorktreeCleanupEntry `json:"entries"`
+	// Typed input validation error code; set when ok:false and the input itself was invalid.
+	ErrCode *string `json:"errCode,omitempty"`
+	// Human-readable error message; set when ok:false.
+	ErrMsg *string `json:"errMsg,omitempty"`
 }
 
 // Aggregated CI status across all check runs and statuses on the PR head sha.

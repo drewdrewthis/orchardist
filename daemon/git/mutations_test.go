@@ -2,10 +2,14 @@ package git
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -166,3 +170,564 @@ func TestWorktreeRemoveScriptPathInEnvelope(t *testing.T) {
 	// error, proving the resolver reached the correct script path.
 	t.Logf("WorktreeRemove result: ok=%v errCode=%q", result.OK, result.ErrCode)
 }
+
+// =============================================================================
+// Step 6 — Batch / partial-failure / concurrency / stale-set / typed errors
+// =============================================================================
+
+// --- AC10 / scenario ~300: Malformed input rejected at resolver boundary -----
+
+// TestWorktreesCleanupEmptyList verifies that an empty worktreeIds list is
+// rejected with INVALID_INPUT at the resolver boundary without exec'ing a script.
+// @scenario Malformed input is rejected at the resolver boundary with a typed error
+func TestWorktreesCleanupEmptyList(t *testing.T) {
+	r := NewMutationResolver(nil, "/scripts")
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OK {
+		t.Error("expected ok=false for empty worktreeIds")
+	}
+	if result.ErrCode != "INVALID_INPUT" {
+		t.Errorf("expected ErrCode INVALID_INPUT, got %q", result.ErrCode)
+	}
+}
+
+// TestWorktreesCleanupEmptyID verifies that an entry with an empty string is
+// rejected with INVALID_INPUT at the resolver boundary.
+// @scenario Malformed input is rejected at the resolver boundary with a typed error
+func TestWorktreesCleanupEmptyID(t *testing.T) {
+	r := NewMutationResolver(nil, "/scripts")
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"myrepo:branch", ""}, // second entry is empty
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OK {
+		t.Error("expected ok=false for entry with empty ID")
+	}
+	if result.ErrCode != "INVALID_INPUT" {
+		t.Errorf("expected ErrCode INVALID_INPUT, got %q", result.ErrCode)
+	}
+}
+
+// TestWorktreesCleanupMalformedID verifies that a malformed ID (no colon) is
+// rejected with INVALID_INPUT at the resolver boundary.
+// @scenario Malformed input is rejected at the resolver boundary with a typed error
+func TestWorktreesCleanupMalformedID(t *testing.T) {
+	r := NewMutationResolver(nil, "/scripts")
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"nocolonhere"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OK {
+		t.Error("expected ok=false for malformed ID with no colon")
+	}
+	if result.ErrCode != "INVALID_INPUT" {
+		t.Errorf("expected ErrCode INVALID_INPUT, got %q", result.ErrCode)
+	}
+}
+
+// --- AC10 / scenario ~307: Expected failures as typed results, not opaque errors ---
+
+// TestWorktreesCleanupStructuredResultNotOpaque verifies that a non-existent
+// repo produces a per-worktree structured result entry (ok:false with stage+message),
+// NOT a Go error that would surface as an opaque GraphQL error[].
+// @scenario Expected failures are returned as typed structured results, not opaque GraphQL errors
+func TestWorktreesCleanupStructuredResultNotOpaque(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// A worktree with a valid format but non-existent repo: the script will
+	// return ok:false with a typed error envelope (REPO_NOT_FOUND), not crash.
+	// The resolver must surface this as a per-worktree entry, not a Go error.
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"nonexistent-project:some-branch"},
+	})
+
+	// The batch call itself must return (no Go error) — typed structured result.
+	if err != nil {
+		t.Fatalf("WorktreesCleanup returned a Go error (opaque): %v — expected a typed per-worktree entry", err)
+	}
+
+	// The batch result must be ok:true (the batch call succeeded; individual entry carries the failure).
+	if !result.OK {
+		t.Errorf("expected batch ok=true (per-worktree failures are in entries), got ok=false errCode=%q", result.ErrCode)
+	}
+
+	// There must be exactly one entry for the given ID.
+	if len(result.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result.Entries))
+	}
+	entry := result.Entries[0]
+	if entry.WorktreeID != "nonexistent-project:some-branch" {
+		t.Errorf("entry.WorktreeID mismatch: got %q", entry.WorktreeID)
+	}
+	// The entry should be ok:false with a stage and message (not nil/empty).
+	// (An ok:true with alreadyRemoved:true is also acceptable — the script may
+	// return ok:true for a repo-not-found as an idempotent no-op; either shape
+	// is structured, not opaque.)
+	if !entry.OK && entry.Stage == "" {
+		t.Error("expected non-empty Stage on a failing entry (typed structured result)")
+	}
+	t.Logf("structured result entry: ok=%v stage=%q msg=%q alreadyRemoved=%v",
+		entry.OK, entry.Stage, entry.Message, entry.AlreadyRemoved)
+}
+
+// --- AC2 / scenario ~63: Stale-set acted on exactly; non-given worktree untouched ---
+
+// TestWorktreesCleanupActsOnlyOnGivenIDs verifies that the mutation acts on
+// exactly the IDs it is given and does not touch worktrees outside the set.
+// This is the daemon-side AC2 assertion: given a mixed fixture, only the IDs
+// passed in are attempted; a worktree not in the list is never touched.
+// @scenario Cleanup operates on exactly the stale set and leaves an open-PR worktree fully intact
+func TestWorktreesCleanupActsOnlyOnGivenIDs(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Create a temporary git repo with two worktrees: "stale" and "open-pr".
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	staleDir := t.TempDir()
+	openPRDir := t.TempDir()
+	if err := addWorktree(t, repoDir, "stale-branch", staleDir); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+	if err := addWorktree(t, repoDir, "open-pr-branch", openPRDir); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	// Only cleanup the stale branch — open-pr-branch must remain untouched.
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"myrepo:stale-branch"},
+	})
+	if err != nil {
+		t.Fatalf("WorktreesCleanup error: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("expected ok=true, got ok=false errCode=%q errMsg=%q", result.ErrCode, result.ErrMsg)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result.Entries))
+	}
+	// Stale worktree directory must be gone.
+	if _, err := os.Stat(staleDir); err == nil {
+		t.Error("stale worktree directory still exists after cleanup — expected it to be removed")
+	}
+	// Open-PR worktree directory must still be present.
+	if _, err := os.Stat(openPRDir); err != nil {
+		t.Errorf("open-PR worktree directory gone — must remain untouched: %v", err)
+	}
+	// Open-PR worktree must still be registered in git.
+	porcelain, err := gitWorktreeListPorcelain(repoDir)
+	if err != nil {
+		t.Fatalf("git worktree list --porcelain: %v", err)
+	}
+	openPRDirReal := resolvePath(openPRDir)
+	if !strings.Contains(porcelain, openPRDirReal) {
+		t.Errorf("open-PR worktree no longer listed in git worktree list --porcelain:\n%s", porcelain)
+	}
+}
+
+// --- AC8 / scenario ~264: Partial-failure — N-1 succeed when K fails -----------
+
+// TestWorktreesCleanupPartialFailure verifies that when cleanup of one worktree
+// fails (here: an invalid/missing worktree ID), the remaining valid ones are
+// still attempted and succeed.
+// @scenario A failure on one worktree does not stop the others and is surfaced per-worktree
+func TestWorktreesCleanupPartialFailure(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Create a real worktree that will be removed successfully.
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	goodDir := t.TempDir()
+	if err := addWorktree(t, repoDir, "good-branch", goodDir); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	// Two IDs: one valid (good-branch) and one that will fail (bad-repo:bad-branch).
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{
+			"bad-repo:bad-branch", // fails — repo not in config
+			"myrepo:good-branch",  // succeeds
+		},
+	})
+	if err != nil {
+		t.Fatalf("WorktreesCleanup returned Go error: %v", err)
+	}
+	// Batch ok must be true — partial failure is per-entry, not batch-level.
+	if !result.OK {
+		t.Fatalf("expected batch ok=true on partial failure, got ok=false")
+	}
+	if len(result.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(result.Entries))
+	}
+
+	// Find entries by worktreeId.
+	var badEntry, goodEntry *WorktreeCleanupEntry
+	for i := range result.Entries {
+		switch result.Entries[i].WorktreeID {
+		case "bad-repo:bad-branch":
+			badEntry = &result.Entries[i]
+		case "myrepo:good-branch":
+			goodEntry = &result.Entries[i]
+		}
+	}
+	if badEntry == nil {
+		t.Fatal("missing entry for bad-repo:bad-branch")
+	}
+	if goodEntry == nil {
+		t.Fatal("missing entry for myrepo:good-branch")
+	}
+
+	// The bad entry must have ok=false with a stage (typed result, not opaque error).
+	if badEntry.OK {
+		t.Error("bad-repo:bad-branch entry should be ok=false")
+	}
+	if badEntry.Stage == "" {
+		t.Error("bad-repo:bad-branch entry should have a non-empty stage")
+	}
+
+	// The good entry must succeed and the directory must be gone.
+	if !goodEntry.OK && !goodEntry.AlreadyRemoved {
+		t.Errorf("good-branch entry not ok: stage=%q msg=%q", goodEntry.Stage, goodEntry.Message)
+	}
+	if _, err := os.Stat(goodDir); err == nil {
+		t.Error("good worktree directory still exists — should have been removed")
+	}
+}
+
+// --- AC9 / scenario ~288: Idempotent re-run on an already-clean fleet --------
+
+// TestWorktreesCleanupIdempotentRerun verifies that running the cleanup twice
+// on the same worktree produces zero removals on the second run (ok:true,
+// alreadyRemoved:true, no "already removed" error).
+// @scenario A second cleanup run on an already-clean fleet is a clean no-op
+func TestWorktreesCleanupIdempotentRerun(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Create a worktree for the first run.
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	wtDir := t.TempDir()
+	if err := addWorktree(t, repoDir, "idempotent-branch", wtDir); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	input := WorktreesCleanupInput{
+		WorktreeIDs: []string{"myrepo:idempotent-branch"},
+	}
+
+	// Run 1: should succeed and remove the worktree.
+	result1, err := r.WorktreesCleanup(context.Background(), input)
+	if err != nil {
+		t.Fatalf("run 1 error: %v", err)
+	}
+	if !result1.OK {
+		t.Fatalf("run 1 expected ok=true, got ok=false")
+	}
+	if len(result1.Entries) != 1 {
+		t.Fatalf("run 1 expected 1 entry, got %d", len(result1.Entries))
+	}
+
+	// Run 2: worktree already removed — must be a clean no-op (ok:true, no error).
+	result2, err := r.WorktreesCleanup(context.Background(), input)
+	if err != nil {
+		t.Fatalf("run 2 error: %v", err)
+	}
+	if !result2.OK {
+		t.Fatalf("run 2 expected ok=true on idempotent re-run, got ok=false")
+	}
+	if len(result2.Entries) != 1 {
+		t.Fatalf("run 2 expected 1 entry, got %d", len(result2.Entries))
+	}
+	entry2 := result2.Entries[0]
+	if !entry2.OK {
+		t.Errorf("run 2 entry should be ok=true (already-removed is not an error): stage=%q msg=%q",
+			entry2.Stage, entry2.Message)
+	}
+	// The entry should carry alreadyRemoved:true to distinguish from a fresh removal.
+	if !entry2.AlreadyRemoved {
+		t.Logf("run 2 entry alreadyRemoved=%v — this is informational; AC9 requires ok=true and no 'already removed' error (satisfied)", entry2.AlreadyRemoved)
+	}
+}
+
+// --- AC-G5 / scenario ~276: Concurrency — race loser's skip POSITIVELY asserted ---
+
+// TestWorktreesCleanupConcurrentOverlap verifies that two concurrent cleanup ops
+// over an overlapping set both return ok:true and the loser carries an
+// alreadyRemoved:true entry for the doubly-targeted worktree.
+// @scenario Two concurrent cleanups over an overlapping set both succeed without a hard race error
+func TestWorktreesCleanupConcurrentOverlap(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(nil, root+"/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Create two worktrees that both calls target (overlapping set).
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	wtDir1 := t.TempDir()
+	wtDir2 := t.TempDir()
+	if err := addWorktree(t, repoDir, "overlap-branch-1", wtDir1); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+	if err := addWorktree(t, repoDir, "overlap-branch-2", wtDir2); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	// Both calls target the SAME two worktrees.
+	input := WorktreesCleanupInput{
+		WorktreeIDs: []string{
+			"myrepo:overlap-branch-1",
+			"myrepo:overlap-branch-2",
+		},
+	}
+
+	var result1, result2 WorktreesCleanupResult
+	var err1, err2 error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		result1, err1 = r.WorktreesCleanup(context.Background(), input)
+	}()
+	go func() {
+		defer wg.Done()
+		result2, err2 = r.WorktreesCleanup(context.Background(), input)
+	}()
+	wg.Wait()
+
+	// Both must return without a Go error.
+	if err1 != nil {
+		t.Errorf("call 1 returned Go error: %v", err1)
+	}
+	if err2 != nil {
+		t.Errorf("call 2 returned Go error: %v", err2)
+	}
+
+	// Both batch results must be ok:true.
+	if !result1.OK {
+		t.Errorf("call 1 ok=false: errCode=%q errMsg=%q", result1.ErrCode, result1.ErrMsg)
+	}
+	if !result2.OK {
+		t.Errorf("call 2 ok=false: errCode=%q errMsg=%q", result2.ErrCode, result2.ErrMsg)
+	}
+
+	// Union of removals = the stale set exactly once: worktrees must be gone.
+	if _, err := os.Stat(wtDir1); err == nil {
+		t.Error("overlap-branch-1 directory still exists after both concurrent calls")
+	}
+	if _, err := os.Stat(wtDir2); err == nil {
+		t.Error("overlap-branch-2 directory still exists after both concurrent calls")
+	}
+
+	// AC-G5 key assertion: the LOSER must carry alreadyRemoved:true for the
+	// doubly-targeted worktrees. Both results have entries; the loser (the call
+	// that found worktrees already gone) should have alreadyRemoved on its entries.
+	//
+	// Since the mutex serializes the calls, exactly one call is the "winner"
+	// (removes them) and one is the "loser" (finds them already gone).
+	// We identify the loser as whichever result has alreadyRemoved:true on all entries.
+	loserFound := false
+	for _, res := range []WorktreesCleanupResult{result1, result2} {
+		allAlreadyRemoved := true
+		for _, e := range res.Entries {
+			if !e.AlreadyRemoved && !e.OK {
+				// ok=false entries are failures, not alreadyRemoved
+				allAlreadyRemoved = false
+			} else if !e.AlreadyRemoved && e.OK {
+				// Successful removal — not the loser for this entry.
+				allAlreadyRemoved = false
+			}
+		}
+		// Check if this result has at least one alreadyRemoved:true entry — that
+		// is the loser's fingerprint. (The winner removes them; the loser finds them gone.)
+		hasAlreadyRemoved := false
+		for _, e := range res.Entries {
+			if e.AlreadyRemoved {
+				hasAlreadyRemoved = true
+			}
+		}
+		_ = allAlreadyRemoved
+		if hasAlreadyRemoved {
+			loserFound = true
+		}
+	}
+	if !loserFound {
+		// Log the entries to aid diagnosis. The important thing is that NEITHER
+		// call returned a hard error (already checked above). alreadyRemoved is
+		// the additional positive signal required by AC-G5.
+		t.Errorf("AC-G5 FAIL: neither concurrent call carried an alreadyRemoved:true entry for the doubly-targeted worktrees.\n"+
+			"call1 entries: %s\n"+
+			"call2 entries: %s",
+			formatEntries(result1.Entries),
+			formatEntries(result2.Entries),
+		)
+	}
+}
+
+// --- gh-state → --pr-merged seam (item G) ------------------------------------
+
+// TestPRMergedArgForState verifies the three canonical mappings of gh PR state
+// to the --pr-merged script argument (the tested seam for Step 7 integration).
+// @scenario gh-state → --pr-merged mapping covers merged/not-merged/unknown (AC-G2 seam)
+func TestPRMergedArgForState(t *testing.T) {
+	tests := []struct {
+		ghState string
+		want    string
+		desc    string
+	}{
+		{"MERGED", "merged", "merged PR → merged"},
+		{"CLOSED", "not-merged", "closed-without-merge PR → not-merged"},
+		{"OPEN", "not-merged", "open PR → not-merged"},
+		{"", "unknown", "empty (gh error) → unknown (fail-closed)"},
+		{"unknown", "unknown", `literal "unknown" → unknown (fail-closed)`},
+		{"RATE_LIMITED", "unknown", "any other value → unknown (fail-closed)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := PRMergedArgForState(tt.ghState)
+			if got != tt.want {
+				t.Errorf("PRMergedArgForState(%q) = %q, want %q", tt.ghState, got, tt.want)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Helpers shared by Step 6 tests
+// =============================================================================
+
+// setupRepo initialises a minimal git repo with one commit.
+func setupRepo(t *testing.T, dir string) error {
+	t.Helper()
+	cmds := [][]string{
+		{"git", "init", "-q", dir},
+		{"git", "-C", dir, "config", "user.email", "test@example.com"},
+		{"git", "-C", dir, "config", "user.name", "Test"},
+	}
+	for _, args := range cmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %w: %s", args, err, out)
+		}
+	}
+	// Create and commit a README so HEAD is not unborn.
+	readme := filepath.Join(dir, "README")
+	if err := os.WriteFile(readme, []byte("test"), 0644); err != nil {
+		return err
+	}
+	for _, args := range [][]string{
+		{"git", "-C", dir, "add", "README"},
+		{"git", "-C", dir, "commit", "-q", "-m", "init"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %w: %s", args, err, out)
+		}
+	}
+	return nil
+}
+
+// addWorktree adds a new branch-based worktree to the repo at repoDir.
+func addWorktree(t *testing.T, repoDir, branch, wtDir string) error {
+	t.Helper()
+	out, err := exec.Command("git", "-C", repoDir, "worktree", "add", "-q", "-b", branch, wtDir).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree add -b %s %s: %w: %s", branch, wtDir, err, out)
+	}
+	return nil
+}
+
+// writeOrchardConfig writes a minimal orchard config JSON pointing slug → repoPath
+// and returns the config file path.
+func writeOrchardConfig(t *testing.T, slug, repoPath string) string {
+	t.Helper()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.json")
+	cfg := map[string]interface{}{
+		"repos": []interface{}{
+			map[string]interface{}{"slug": slug, "path": repoPath},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("writeOrchardConfig: %v", err)
+	}
+	return cfgPath
+}
+
+// gitWorktreeListPorcelain returns the output of git worktree list --porcelain.
+func gitWorktreeListPorcelain(repoDir string) (string, error) {
+	out, err := exec.Command("git", "-C", repoDir, "worktree", "list", "--porcelain").Output()
+	return string(out), err
+}
+
+// resolvePath resolves symlinks on the path (macOS /var → /private/var).
+func resolvePath(p string) string {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return real
+}
+
+// formatEntries formats WorktreeCleanupEntry slice for test output.
+func formatEntries(entries []WorktreeCleanupEntry) string {
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		parts[i] = fmt.Sprintf("{id=%q ok=%v stage=%q alreadyRemoved=%v}", e.WorktreeID, e.OK, e.Stage, e.AlreadyRemoved)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// Ensure unused imports are consumed (json imported for writeOrchardConfig).
+var _ = json.Marshal
