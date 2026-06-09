@@ -45,6 +45,19 @@
 # Exit code 0 on ok:true, non-zero on ok:false.
 set -euo pipefail
 
+# canonicalize <path> — resolve all symlinks in a directory path using only
+# POSIX builtins (cd + pwd -P).  No python3 or coreutils realpath required.
+#
+# Runs in a subshell so the caller's cwd is never changed.
+# If the directory does not exist (cd fails), falls back to the raw input —
+# this keeps the AC-G1 exclusion CONSERVATIVE: a raw-vs-raw compare can still
+# match when both sides use the same literal path, so canonicalization failure
+# never causes a false "no-match" that would allow destroying the active worktree.
+canonicalize() {
+  local p="$1"
+  (cd "$p" 2>/dev/null && pwd -P) || printf '%s' "$p"
+}
+
 WORKTREE_ID=""
 FORCE=false
 JSON_MODE=false
@@ -127,7 +140,7 @@ fi
 #
 # Matching logic:
 #   --active-cwd <path>     → match if WT_PATH equals the real path of ACTIVE_CWD.
-#                             Both sides are resolved via python3 os.path.realpath
+#                             Both sides are resolved via canonicalize() (cd + pwd -P)
 #                             so symlink differences (e.g. /var vs /private/var on
 #                             macOS) do not produce false negatives.
 #   --active-session <name> → match if TMUX_SESSION equals ACTIVE_SESSION exactly.
@@ -140,8 +153,8 @@ fi
 # --active-cwd as passed by the caller.
 if [[ -n "$ACTIVE_CWD" ]]; then
   # Resolve symlinks on both sides before comparing (macOS /var → /private/var).
-  ACTIVE_CWD_REAL=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$ACTIVE_CWD" 2>/dev/null || echo "$ACTIVE_CWD")
-  WT_PATH_REAL=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$WT_PATH" 2>/dev/null || echo "$WT_PATH")
+  ACTIVE_CWD_REAL=$(canonicalize "$ACTIVE_CWD")
+  WT_PATH_REAL=$(canonicalize "$WT_PATH")
   if [[ "$WT_PATH_REAL" == "$ACTIVE_CWD_REAL" ]]; then
     if $JSON_MODE; then
       json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
@@ -202,20 +215,13 @@ if [[ -f "$DT_SCRIPT" && -d "$WT_PATH" ]]; then
   )
   DT_OUTPUT="$(bash "$DT_SCRIPT" "${DT_ARGS[@]}" 2>/dev/null || true)"
   if [[ -n "$DT_OUTPUT" ]]; then
-    DOCKER_TEARDOWN_DATA=$(echo "$DT_OUTPUT" | python3 -c "
-import json,sys
-raw=sys.stdin.read().strip()
-try:
-    d=json.loads(raw)
-except Exception:
-    print('null')
-    sys.exit(0)
-if d.get('ok'):
-    print(json.dumps(d.get('data')))
-else:
-    err=d.get('error',{})
-    print(json.dumps({'action':'error','reason':err.get('message','docker-teardown error')}))
-" 2>/dev/null || echo "null")
+    # Extract the data field from the L2 envelope using jq (no python3 dependency).
+    # ok:true  → emit .data;  ok:false → emit a minimal error object.
+    DOCKER_TEARDOWN_DATA=$(printf '%s' "$DT_OUTPUT" | jq -c '
+      if .ok then .data
+      else {action:"error", reason:(.error.message // "docker-teardown error")}
+      end
+    ' 2>/dev/null || echo "null")
   fi
 fi
 
@@ -268,22 +274,14 @@ if [[ -n "$PR_MERGED" ]]; then
   # worktree removal itself already succeeded.
   BD_OUTPUT="$(bash "$BD_SCRIPT" "${BD_ARGS[@]}" 2>/dev/null || true)"
   if [[ -n "$BD_OUTPUT" ]]; then
-    # Extract the data field from the branch-delete L2 envelope.
-    # Pipe BD_OUTPUT into python3 via stdin to avoid shell-quoting issues.
-    BD_DATA=$(echo "$BD_OUTPUT" | python3 -c "
-import json,sys
-raw=sys.stdin.read().strip()
-try:
-    d=json.loads(raw)
-except Exception:
-    print('null')
-    sys.exit(0)
-if d.get('ok'):
-    print(json.dumps(d.get('data')))
-else:
-    err=d.get('error',{})
-    print(json.dumps({'deleted':False,'skipReason':'error','warning':err.get('message','branch-delete error')}))
-" 2>/dev/null || echo "null")
+    # Extract the data field from the branch-delete L2 envelope using jq.
+    # ok:true  → emit .data;
+    # ok:false → emit a minimal skip object so the caller can embed it safely.
+    BD_DATA=$(printf '%s' "$BD_OUTPUT" | jq -c '
+      if .ok then .data
+      else {deleted:false, skipReason:"error", warning:(.error.message // "branch-delete error")}
+      end
+    ' 2>/dev/null || echo "null")
     BRANCH_DELETE_DATA="$BD_DATA"
   fi
 fi

@@ -498,7 +498,7 @@ func (r *MutationResolver) resolvePRMerged(ctx context.Context, id string) strin
 	// Parse <repoSlug>:<branch> from the worktree ID.
 	// The resolver boundary already validated the format (has a colon with
 	// non-empty parts on both sides), so a missing colon here is defensive.
-	colonIdx := strings.LastIndex(id, ":")
+	colonIdx := strings.Index(id, ":")
 	if colonIdx <= 0 || colonIdx == len(id)-1 {
 		return PRMergedArgForState("") // malformed — fail-closed
 	}

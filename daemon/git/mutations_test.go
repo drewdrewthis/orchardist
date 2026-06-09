@@ -618,6 +618,57 @@ func TestWorktreesCleanupConcurrentOverlap(t *testing.T) {
 
 // --- gh-state → --pr-merged seam (item G) ------------------------------------
 
+// TestResolvePRMerged_ColonInBranch verifies that when the worktree ID is
+// "owner/repo:alice:fix-endpoint" (branch name contains a colon), resolvePRMerged
+// splits on the FIRST colon — yielding repoSlug="owner/repo" and
+// branch="alice:fix-endpoint" — not the last colon.
+//
+// The stub returns "MERGED" only for the exact args (owner/repo, alice:fix-endpoint).
+// If the parser uses LastIndex it calls with ("owner/repo:alice", "fix-endpoint")
+// which the stub does not recognise → returns "" → result is "unknown", not "merged".
+func TestResolvePRMerged_ColonInBranch(t *testing.T) {
+	type call struct{ repoSlug, branch string }
+	var recorded []call
+	recordingStub := &recordingPRLookup{
+		fn: func(repoSlug, branch string) (string, error) {
+			recorded = append(recorded, call{repoSlug, branch})
+			if repoSlug == "owner/repo" && branch == "alice:fix-endpoint" {
+				return "MERGED", nil
+			}
+			return "", nil // unexpected args → empty state → "unknown"
+		},
+	}
+
+	r := NewMutationResolver(nil, "")
+	r.WithPRStateLookup(recordingStub)
+
+	result := r.resolvePRMerged(context.Background(), "owner/repo:alice:fix-endpoint")
+
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 PRStateByBranch call, got %d", len(recorded))
+	}
+	if recorded[0].repoSlug != "owner/repo" {
+		t.Errorf("repoSlug: got %q, want %q", recorded[0].repoSlug, "owner/repo")
+	}
+	if recorded[0].branch != "alice:fix-endpoint" {
+		t.Errorf("branch: got %q, want %q", recorded[0].branch, "alice:fix-endpoint")
+	}
+	wantResult := PRMergedArgForState("MERGED")
+	if result != wantResult {
+		t.Errorf("resolvePRMerged result: got %q, want %q — parsing used wrong colon (last instead of first)", result, wantResult)
+	}
+}
+
+// recordingPRLookup is a PRStateLookup that delegates to a user-supplied function,
+// allowing tests to record call arguments.
+type recordingPRLookup struct {
+	fn func(repoSlug, branch string) (string, error)
+}
+
+func (r *recordingPRLookup) PRStateByBranch(_ context.Context, repoSlug, branch string) (string, error) {
+	return r.fn(repoSlug, branch)
+}
+
 // TestPRMergedArgForState verifies the three canonical mappings of gh PR state
 // to the --pr-merged script argument (the tested seam for Step 7 integration).
 // @scenario gh-state → --pr-merged mapping covers merged/not-merged/unknown (AC-G2 seam)
