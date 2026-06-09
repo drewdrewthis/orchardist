@@ -444,11 +444,17 @@ COMPOSE_EOF
   built_before="$(docker images -q orchard-test-local-svc:step4 2>/dev/null || true)"
   [ -n "$built_before" ]
 
-  # Run docker-teardown.
+  # Run docker-teardown; capture stderr separately for diagnostics on failure.
+  local stderr_log="${TMPDIR_BASE}/teardown-stderr.log"
   output="$("$SCRIPT" \
     --worktree-dir "$wt_dir" \
     --worktree-id  "myrepo:rmi-branch" \
-    --json 2>/dev/null)"
+    --json 2>"$stderr_log" || true)"
+
+  # Emit envelope + stderr to bats fd3 (TAP diagnostics) so a CI failure
+  # shows the full script output without weakening the assertions below.
+  echo "SCRIPT OUTPUT: $output" >&3
+  echo "SCRIPT STDERR: $(cat "$stderr_log")" >&3
 
   [ "$(echo "$output" | _json_field ok)" = "True" ]
   [ "$(echo "$output" | _json_data_field action)" = "down" ]

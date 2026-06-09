@@ -186,6 +186,7 @@ fi
 # build: key, collect their image names, then docker rmi those images.
 # This correctly handles custom-tagged builds (image: foo:tag) that --rmi local
 # silently skips.
+# Phase 2 is best-effort: an image-removal hiccup must never abort the teardown.
 _remove_built_images() {
   local project_key="$1"
   local wt_dir="$2"
@@ -197,18 +198,16 @@ _remove_built_images() {
   fi
 
   # Extract image names for services that have a build: key.
-  # Use python3 for JSON parsing (portable; python3 is available on CI Linux).
+  # Use jq for JSON parsing — no interpreter dependency beyond jq, which is
+  # already required by worktree-remove.sh and branch-delete.sh (issue #87).
+  # Compose v2 config --format json shape:
+  #   {"services": {"<name>": {"build": {...}, "image": "foo:tag", ...}, ...}}
+  # select(.value.build != null) matches services with a build object.
+  # // empty drops services whose image field is absent or null.
   local built_images
-  built_images=$(printf '%s' "$config_json" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-services = data.get('services', {})
-for name, svc in services.items():
-    if 'build' in svc:
-        img = svc.get('image', '')
-        if img:
-            print(img)
-" 2>/dev/null) || return 0
+  built_images=$(printf '%s' "$config_json" | \
+    jq -r '.services | to_entries[] | select(.value.build != null) | .value.image // empty' \
+    2>/dev/null) || return 0
 
   if [ -z "$built_images" ]; then
     return 0
@@ -219,9 +218,18 @@ for name, svc in services.items():
     [ -z "$img" ] && continue
     docker rmi -f "$img" 2>/dev/null || true
   done <<< "$built_images"
+
+  # Explicit return 0: the while/read loop exits with read's EOF status (non-zero)
+  # as the last command. Under set -euo pipefail that non-zero would propagate
+  # and abort the script before json_ok. Phase 2 is best-effort; always succeed.
+  return 0
 }
 
-_remove_built_images "$PROJECT_KEY" "$WORKTREE_DIR"
+# Call with || true: phase 2 is best-effort image cleanup — a non-zero return
+# (read EOF, rmi hiccup, jq parse error) must never turn a successful teardown
+# into ok:false. The script runs under set -euo pipefail; a bare call would let
+# any non-zero exit from _remove_built_images abort execution before json_ok.
+_remove_built_images "$PROJECT_KEY" "$WORKTREE_DIR" || true
 
 if $JSON_MODE; then
   PROJECT_KEY_SAFE="${PROJECT_KEY//\"/\\\"}"
