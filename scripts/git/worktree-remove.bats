@@ -369,6 +369,56 @@ print(tk.get('stage','MISSING'))
 }
 
 # ---------------------------------------------------------------------------
+# AC-G3 kill-FAILURE: tmux has-session succeeds but kill-session fails;
+# worktree is still removed and the warning is surfaced in the envelope.
+# @scenario Stubs tmux so kill-session exits 1 without a real tmux server.
+# ---------------------------------------------------------------------------
+
+@test "AC-G3: tmux kill-session failure is non-fatal — worktree still removed, warning surfaced" {
+  _make_repo
+  _add_worktree "feature-killerfail"
+  cfg="$(_write_config)"
+
+  # Create a fake tmux binary: has-session exits 0 (session "exists"),
+  # kill-session exits 1 with an error message on stderr.
+  FAKE_BIN="$(mktemp -d)"
+  cat > "$FAKE_BIN/tmux" <<'TMUX_STUB'
+#!/usr/bin/env bash
+if [[ "$1" == "has-session" ]]; then
+  exit 0
+fi
+if [[ "$1" == "kill-session" ]]; then
+  echo "simulated kill-session failure" >&2
+  exit 1
+fi
+exit 0
+TMUX_STUB
+  chmod +x "$FAKE_BIN/tmux"
+
+  output="$(PATH="$FAKE_BIN:$PATH" ORCHARD_CONFIG="$cfg" "$SCRIPT" \
+    --json \
+    --worktree-id "myrepo:feature-killerfail" \
+    --tmux-session "any-session-name" \
+    2>/dev/null)"
+
+  # Worktree must still be removed despite the kill failure
+  [ "$(echo "$output" | _json_field ok)" = "True" ]
+  [ ! -d "$WT_DIR" ]
+  refute_in_porcelain "$REPO_DIR" "$WT_DIR"
+
+  # tmuxKill must carry the warning field (non-fatal kill failure)
+  tmux_kill_warning="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+tk=d.get('data',{}).get('tmuxKill',{}) or {}
+print(tk.get('warning','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [[ "$tmux_kill_warning" == *"tmux kill-session failed"* ]]
+
+  rm -rf "$FAKE_BIN"
+}
+
+# ---------------------------------------------------------------------------
 # Helper: assert the given worktree path is NOT in git worktree list --porcelain
 # ---------------------------------------------------------------------------
 refute_in_porcelain() {

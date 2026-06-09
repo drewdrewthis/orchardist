@@ -104,6 +104,11 @@ if [[ -z "$WORKTREE_ID" ]]; then
   if $JSON_MODE; then json_err "INVALID_INPUT" "worktreeId is required"; else echo "worktreeId is required" >&2; exit 1; fi
 fi
 
+# JSON-safe worktreeId: escape backslash first, then double-quote,
+# so a crafted id with " cannot break the JSON output or silently deny cleanup.
+WORKTREE_ID_SAFE="${WORKTREE_ID//\\/\\\\}"
+WORKTREE_ID_SAFE="${WORKTREE_ID_SAFE//\"/\\\"}"
+
 # Parse worktreeId: <projectId>:<worktreeName>
 PROJECT_ID="${WORKTREE_ID%%:*}"
 WT_NAME="${WORKTREE_ID#*:}"
@@ -129,7 +134,7 @@ WT_PATH=$(git -C "$REPO_PATH" worktree list --porcelain 2>/dev/null \
 
 if [[ -z "$WT_PATH" ]]; then
   # Already removed — treat as success (idempotent per M5).
-  if $JSON_MODE; then json_ok "{\"worktreeId\":\"${WORKTREE_ID}\"}"; else echo "worktree already removed"; fi
+  if $JSON_MODE; then json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\"}"; else echo "worktree already removed"; fi
   exit 0
 fi
 
@@ -157,7 +162,7 @@ if [[ -n "$ACTIVE_CWD" ]]; then
   WT_PATH_REAL=$(canonicalize "$WT_PATH")
   if [[ "$WT_PATH_REAL" == "$ACTIVE_CWD_REAL" ]]; then
     if $JSON_MODE; then
-      json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
+      json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
     else
       echo "Skipped: worktree $WT_NAME hosts the active session (cwd match)"
     fi
@@ -166,7 +171,7 @@ if [[ -n "$ACTIVE_CWD" ]]; then
 fi
 if [[ -n "$ACTIVE_SESSION" && -n "$TMUX_SESSION" && "$TMUX_SESSION" == "$ACTIVE_SESSION" ]]; then
   if $JSON_MODE; then
-    json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
+    json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
   else
     echo "Skipped: worktree $WT_NAME hosts the active session (session name match)"
   fi
@@ -184,8 +189,8 @@ TMUX_KILL_DATA="null"
 if [[ -n "$TMUX_SESSION" ]]; then
   # Guard: only kill if the session exists.  tmux has-session exits 0 iff it
   # exists; we treat a non-zero exit (session absent) as a clean no-op.
-  if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-    if ! TMUX_KILL_ERR="$(tmux kill-session -t "$TMUX_SESSION" 2>&1)"; then
+  if tmux has-session -t "=${TMUX_SESSION}" 2>/dev/null; then
+    if ! TMUX_KILL_ERR="$(tmux kill-session -t "=${TMUX_SESSION}" 2>&1)"; then
       # Non-fatal: record warning, continue removal.
       TMUX_KILL_ERR="${TMUX_KILL_ERR//\"/\\\"}"
       TMUX_KILL_DATA="{\"stage\":\"tmux-kill\",\"warning\":\"tmux kill-session failed: ${TMUX_KILL_ERR}\"}"
@@ -287,7 +292,7 @@ if [[ -n "$PR_MERGED" ]]; then
 fi
 
 if $JSON_MODE; then
-  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"branchDelete\":${BRANCH_DELETE_DATA},\"dockerTeardown\":${DOCKER_TEARDOWN_DATA},\"tmuxKill\":${TMUX_KILL_DATA}}"
+  json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"branchDelete\":${BRANCH_DELETE_DATA},\"dockerTeardown\":${DOCKER_TEARDOWN_DATA},\"tmuxKill\":${TMUX_KILL_DATA}}"
 else
   echo "Removed worktree $WT_NAME at $WT_PATH"
 fi
