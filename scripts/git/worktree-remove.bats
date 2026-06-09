@@ -147,6 +147,48 @@ _write_config() {
 }
 
 # ---------------------------------------------------------------------------
+# AC-G2: gh error → worktree+dir STILL removed, branch SURVIVES
+# @scenario A gh enrichment error skips the branch deletion but still removes the worktree and dir
+# ---------------------------------------------------------------------------
+
+@test "AC-G2 gh enrichment error (pr-merged=unknown): worktree+dir removed, branch survives" {
+  _make_repo
+  _add_worktree "feature-gh-err"
+  cfg="$(_write_config)"
+
+  # Point origin/HEAD at main so default-branch detection does not fail
+  git -C "$REPO_DIR" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main 2>/dev/null || true
+
+  # Simulate gh error by passing pr-merged=unknown
+  output="$(ORCHARD_CONFIG="$cfg" "$SCRIPT" \
+    --json \
+    --worktree-id "myrepo:feature-gh-err" \
+    --pr-merged "unknown" \
+    --base "main" \
+    2>/dev/null)"
+
+  # Worktree removal must succeed (ok=true)
+  [ "$(echo "$output" | _json_field ok)" = "True" ]
+
+  # Worktree directory and registration must be GONE
+  [ ! -d "$WT_DIR" ]
+  refute_in_porcelain "$REPO_DIR" "$WT_DIR"
+
+  # Branch must SURVIVE (fail-closed proof)
+  result="$(git -C "$REPO_DIR" branch --list "feature-gh-err")"
+  [[ -n "$result" ]]
+
+  # branchDelete must carry skipReason=merged-state-unavailable
+  skip_reason="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+bd=d.get('data',{}).get('branchDelete',{}) or {}
+print(bd.get('skipReason','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skip_reason" = "merged-state-unavailable" ]
+}
+
+# ---------------------------------------------------------------------------
 # Helper: assert the given worktree path is NOT in git worktree list --porcelain
 # ---------------------------------------------------------------------------
 refute_in_porcelain() {

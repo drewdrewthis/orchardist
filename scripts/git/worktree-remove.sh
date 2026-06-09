@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
-# scripts/git-worktree-remove.sh — remove a git worktree (L1, L2, L3)
+# scripts/git/worktree-remove.sh — remove a git worktree (L1, L2, L3)
 #
-# Usage: git-worktree-remove.sh --worktree-id <id> [--force] [--json]
+# Usage:
+#   worktree-remove.sh --worktree-id <id> [--force] \
+#     [--pr-merged <merged|not-merged|unknown>] \
+#     [--base <base-branch>] \
+#     [--upstream <remote-tracking-ref>] \
+#     [--protected <branch1,branch2,...>] \
+#     [--json]
 #
 # Outputs L2 envelope on --json:
-#   success: {"ok":true,"data":{"worktreeId":"<id>"}}
+#   success: {"ok":true,"data":{"worktreeId":"<id>","branchDelete":{...}}}
 #   failure: {"ok":false,"error":{"code":"<code>","message":"<msg>"}}
+#
+# branchDelete is the result from scripts/git/branch-delete.sh:
+#   deleted:  {"branch":"<n>","deleted":true}
+#   skipped:  {"branch":"<n>","deleted":false,"skipReason":"<reason>","warning":"<msg>"}
+# A branch-delete skip or error is NON-FATAL: the worktree/dir removal result
+# is still ok:true; only the branchDelete sub-object reflects the skip.
 #
 # Exit code 0 on ok:true, non-zero on ok:false.
 set -euo pipefail
@@ -13,12 +25,21 @@ set -euo pipefail
 WORKTREE_ID=""
 FORCE=false
 JSON_MODE=false
+# Branch-delete arguments (Step 3 — AC4 + AC-G2)
+PR_MERGED=""
+BASE_BRANCH=""
+UPSTREAM=""
+PROTECTED=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --worktree-id) WORKTREE_ID="$2"; shift 2 ;;
     --force)       FORCE=true;       shift   ;;
     --json)        JSON_MODE=true;   shift   ;;
+    --pr-merged)   PR_MERGED="$2";   shift 2 ;;
+    --base)        BASE_BRANCH="$2"; shift 2 ;;
+    --upstream)    UPSTREAM="$2";    shift 2 ;;
+    --protected)   PROTECTED="$2";   shift 2 ;;
     *)             echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -89,8 +110,54 @@ if ! ERR=$(git -C "$REPO_PATH" worktree remove $FORCE_FLAG "$WT_PATH" 2>&1); the
   fi
 fi
 
+# ---- Stage 2: safe branch deletion (AC4 + AC-G2) --------------------------
+#
+# This runs AFTER the worktree and its directory are gone.  A skip or error
+# here is NON-FATAL: the worktree removal still succeeded.  We record the
+# branch-delete result in the response envelope.
+BRANCH_DELETE_DATA="null"
+
+if [[ -n "$PR_MERGED" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  BD_SCRIPT="${SCRIPT_DIR}/branch-delete.sh"
+
+  BD_ARGS=(
+    "--repo-path" "$REPO_PATH"
+    "--branch"    "$WT_NAME"
+    "--base"      "${BASE_BRANCH:-main}"
+    "--pr-merged" "$PR_MERGED"
+    "--json"
+  )
+  if [[ -n "$UPSTREAM" ]];  then BD_ARGS+=("--upstream"  "$UPSTREAM");  fi
+  if [[ -n "$PROTECTED" ]]; then BD_ARGS+=("--protected" "$PROTECTED"); fi
+
+  # Run branch-delete.sh; capture its output regardless of exit code.
+  # A non-zero exit (json_err path) is still captured and embedded — the
+  # worktree removal itself already succeeded.
+  BD_OUTPUT="$(bash "$BD_SCRIPT" "${BD_ARGS[@]}" 2>/dev/null || true)"
+  if [[ -n "$BD_OUTPUT" ]]; then
+    # Extract the data field from the branch-delete L2 envelope.
+    # Pipe BD_OUTPUT into python3 via stdin to avoid shell-quoting issues.
+    BD_DATA=$(echo "$BD_OUTPUT" | python3 -c "
+import json,sys
+raw=sys.stdin.read().strip()
+try:
+    d=json.loads(raw)
+except Exception:
+    print('null')
+    sys.exit(0)
+if d.get('ok'):
+    print(json.dumps(d.get('data')))
+else:
+    err=d.get('error',{})
+    print(json.dumps({'deleted':False,'skipReason':'error','warning':err.get('message','branch-delete error')}))
+" 2>/dev/null || echo "null")
+    BRANCH_DELETE_DATA="$BD_DATA"
+  fi
+fi
+
 if $JSON_MODE; then
-  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\"}"
+  json_ok "{\"worktreeId\":\"${WORKTREE_ID}\",\"branchDelete\":${BRANCH_DELETE_DATA}}"
 else
   echo "Removed worktree $WT_NAME at $WT_PATH"
 fi
