@@ -96,18 +96,14 @@ pub(super) fn delete_task_row(
     // using the branch name via `git worktree list --porcelain`.
     let worktree_id = format!("{}:{}", row.repo_slug, row.branch);
 
-    let client = daemon::Client::local()
-        .map_err(|e| anyhow::anyhow!("daemon client: {e}"))?;
+    let client = daemon::Client::local().map_err(|e| anyhow::anyhow!("daemon client: {e}"))?;
 
     let result = client
         .worktrees_cleanup(&[worktree_id], active_session, active_cwd)
         .map_err(|e| anyhow::anyhow!("daemon worktreesCleanup: {e}"))?;
 
     if !result.ok {
-        let msg = result
-            .err_msg
-            .as_deref()
-            .unwrap_or("unknown daemon error");
+        let msg = result.err_msg.as_deref().unwrap_or("unknown daemon error");
         return Err(anyhow::anyhow!("daemon rejected cleanup: {}", msg));
     }
 
@@ -148,6 +144,17 @@ mod tests {
     // structural test that would fail to compile if `worktrees_cleanup` did not
     // exist or was removed.
 
+    /// Type alias for the compile-level signature check below.
+    /// Keeps the full signature in one place so `assert_worktrees_cleanup_method_exists`
+    /// stays readable without triggering clippy::type_complexity.
+    type CleanupFn =
+        fn(
+            &crate::daemon::Client,
+            &[String],
+            Option<&str>,
+            Option<&str>,
+        ) -> Result<crate::daemon::WorktreesCleanupResult, crate::daemon::DaemonError>;
+
     /// Compile-level proof that `daemon::Client::worktrees_cleanup` exists and
     /// has the expected signature. If the positive route were removed or the
     /// method signature changed, this function would fail to compile.
@@ -158,13 +165,7 @@ mod tests {
     fn assert_worktrees_cleanup_method_exists() {
         // Type-checking proof: this closure captures the method call shape.
         // The closure is never called; it only needs to type-check.
-        let _verify: fn(
-            &crate::daemon::Client,
-            &[String],
-            Option<&str>,
-            Option<&str>,
-        ) -> Result<crate::daemon::WorktreesCleanupResult, crate::daemon::DaemonError> =
-            |client, ids, sess, cwd| client.worktrees_cleanup(ids, sess, cwd);
+        let _verify: CleanupFn = |client, ids, sess, cwd| client.worktrees_cleanup(ids, sess, cwd);
     }
 
     // -----------------------------------------------------------------------
@@ -241,7 +242,9 @@ mod tests {
             .join("\n");
 
         let needle_remove = format!("{}::{}", "worktree_core", "remove_worktree");
-        let needle_kill = format!("{}", "kill_tmux_session_safe");
+        // Concatenate two substrings so the whole forbidden literal never appears
+        // in this source file — prevents the scan from matching its own needle.
+        let needle_kill = ["kill_tmux", "_session_safe"].concat();
         assert!(
             !prod.contains(&needle_remove),
             "LOCAL branch must not call worktree_core::remove_worktree"
@@ -272,17 +275,15 @@ mod tests {
         use crate::daemon::client::GraphQlRequest;
 
         let ids = vec!["owner/repo:feat/branch".to_string()];
-        let active_session = Some("my-session");
-        let active_cwd = Some("/home/user/repo");
+        let active_session = "my-session";
+        let active_cwd = "/home/user/repo";
 
         // Build the input object as the client method does.
         let mut input = serde_json::json!({
             "worktreeIds": ids,
         });
-        input["activeSession"] =
-            serde_json::Value::String(active_session.unwrap().to_string());
-        input["activeCwd"] =
-            serde_json::Value::String(active_cwd.unwrap().to_string());
+        input["activeSession"] = serde_json::Value::String(active_session.to_string());
+        input["activeCwd"] = serde_json::Value::String(active_cwd.to_string());
 
         let mutation = "mutation WorktreesCleanup($input: WorktreesCleanupInput!) { worktreesCleanup(input: $input) { ok entries { worktreeId ok } } }";
         let req = GraphQlRequest::with_variables(mutation, serde_json::json!({ "input": input }));
