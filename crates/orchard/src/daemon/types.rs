@@ -521,8 +521,13 @@ pub struct WorktreeCleanupEntry {
     #[serde(default)]
     pub message: Option<String>,
     /// True when this worktree was already removed before this call.
+    ///
+    /// The daemon emits `null` (not `false`) when the worktree was actively
+    /// removed this call — the GraphQL schema declares this field `Boolean`
+    /// (nullable). `None` and `Some(false)` both mean "not already removed";
+    /// only `Some(true)` means the worktree was already gone on entry.
     #[serde(rename = "alreadyRemoved", default)]
-    pub already_removed: bool,
+    pub already_removed: Option<bool>,
     /// Non-fatal per-stage warnings (e.g. branch-skip, tmux-kill failure).
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -826,5 +831,91 @@ mod tests {
         assert!(pr.merge_state_status.is_none());
         assert!(!pr.draft);
         assert!(pr.labels.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    //  WorktreesCleanup null-tolerance tests
+    // -----------------------------------------------------------------------
+
+    /// `alreadyRemoved: null` (the normal successful-cleanup case) must
+    /// deserialize to `already_removed: None` without error.  This is the
+    /// regression test for the bug introduced in commit e2b763d where the
+    /// field was typed `bool` and `#[serde(default)]` only filled in absent
+    /// keys — an explicit JSON `null` produced a deserialization error.
+    #[test]
+    fn cleanup_entry_already_removed_null_is_none() {
+        let raw = r#"{
+            "worktreeId": "repo:feat/x",
+            "ok": true,
+            "stage": null,
+            "message": null,
+            "alreadyRemoved": null,
+            "warnings": []
+        }"#;
+        let entry: WorktreeCleanupEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(entry.worktree_id, "repo:feat/x");
+        assert!(entry.ok);
+        // null → None, treated as "not already removed"
+        assert_eq!(entry.already_removed, None);
+        assert!(!entry.already_removed.unwrap_or(false));
+    }
+
+    /// `alreadyRemoved: true` must deserialize to `Some(true)`.
+    #[test]
+    fn cleanup_entry_already_removed_true_is_some_true() {
+        let raw = r#"{
+            "worktreeId": "repo:feat/y",
+            "ok": true,
+            "alreadyRemoved": true,
+            "warnings": []
+        }"#;
+        let entry: WorktreeCleanupEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(entry.already_removed, Some(true));
+        assert!(entry.already_removed.unwrap_or(false));
+    }
+
+    /// `alreadyRemoved` key absent must deserialize to `None` (no regression
+    /// on the previous `#[serde(default)]` behavior for absent keys).
+    #[test]
+    fn cleanup_entry_already_removed_absent_is_none() {
+        let raw = r#"{
+            "worktreeId": "repo:feat/z",
+            "ok": true,
+            "warnings": []
+        }"#;
+        let entry: WorktreeCleanupEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(entry.already_removed, None);
+    }
+
+    /// Full `WorktreesCleanupResult` envelope with a null `alreadyRemoved`
+    /// entry — round-trips the actual GraphQL response shape.
+    #[test]
+    fn cleanup_result_envelope_null_already_removed() {
+        let raw = r#"{
+            "data": {
+                "worktreesCleanup": {
+                    "ok": true,
+                    "entries": [
+                        {
+                            "worktreeId": "myrepo:issue/123",
+                            "ok": true,
+                            "stage": null,
+                            "message": null,
+                            "alreadyRemoved": null,
+                            "warnings": []
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let env: GraphQlResponse<WorktreesCleanupPayload> = serde_json::from_str(raw).unwrap();
+        let result = env.data.unwrap().worktrees_cleanup;
+        assert!(result.ok);
+        assert_eq!(result.entries.len(), 1);
+        let entry = &result.entries[0];
+        assert_eq!(entry.worktree_id, "myrepo:issue/123");
+        assert!(entry.ok);
+        assert_eq!(entry.already_removed, None);
+        assert!(!entry.already_removed.unwrap_or(false));
     }
 }
