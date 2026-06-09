@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use super::types::{
     GraphQlResponse, HealthPayload, HostsPayload, TmuxSession, TmuxSessionsPayload,
-    WorkViewPayload, WorkViewSnapshot,
+    WorkViewPayload, WorkViewSnapshot, WorktreesCleanupPayload, WorktreesCleanupResult,
 };
 use super::{DaemonError, resolve_daemon_url};
 
@@ -146,6 +146,62 @@ impl Client {
         Ok(payload.hosts)
     }
 
+    /// Invokes the `Mutation.worktreesCleanup` operation — the **first mutation
+    /// method on this client** (ADR-018: all state mutations go through the
+    /// daemon; the TUI never execs local destruction directly).
+    ///
+    /// Sends a batch cleanup request for the given worktree IDs. Each ID must
+    /// be in `<repo_slug>:<branch>` format (e.g. `"owner/repo:feat/my-branch"`).
+    ///
+    /// `active_session` and `active_cwd` implement the AC-G1 data-loss guard:
+    /// the worktree matching either value is excluded from all destruction and
+    /// reported as skipped with reason `"hosts-active-session"`. These **must**
+    /// be captured in the TUI process (where `$TMUX` is valid) and passed here;
+    /// the daemon must not read its own `$TMUX`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaemonError::Unreachable`] when the daemon is not reachable.
+    /// Returns [`DaemonError::GraphQl`] when the daemon returns GraphQL errors.
+    pub fn worktrees_cleanup(
+        &self,
+        worktree_ids: &[String],
+        active_session: Option<&str>,
+        active_cwd: Option<&str>,
+    ) -> Result<WorktreesCleanupResult, DaemonError> {
+        const MUTATION: &str = r#"
+            mutation WorktreesCleanup($input: WorktreesCleanupInput!) {
+              worktreesCleanup(input: $input) {
+                ok
+                errCode
+                errMsg
+                entries {
+                  worktreeId
+                  ok
+                  stage
+                  message
+                  alreadyRemoved
+                  warnings
+                }
+              }
+            }
+        "#;
+
+        let mut input = serde_json::json!({
+            "worktreeIds": worktree_ids,
+        });
+        if let Some(sess) = active_session {
+            input["activeSession"] = serde_json::Value::String(sess.to_string());
+        }
+        if let Some(cwd) = active_cwd {
+            input["activeCwd"] = serde_json::Value::String(cwd.to_string());
+        }
+
+        let req = GraphQlRequest::with_variables(MUTATION, serde_json::json!({ "input": input }));
+        let payload: WorktreesCleanupPayload = self.query(&req)?;
+        Ok(payload.worktrees_cleanup)
+    }
+
     /// Fetches a complete local-data snapshot via `Query.workView`.
     ///
     /// Returns a [`WorkViewSnapshot`] containing all repos (with their
@@ -228,18 +284,37 @@ impl Client {
     }
 }
 
-/// GraphQL request envelope: just `query` (no variables yet — the queries
-/// we issue today take none).
+/// GraphQL request envelope — carries a query/mutation document plus optional
+/// variables. Callers that need no variables use [`GraphQlRequest::new`];
+/// mutations with input objects use [`GraphQlRequest::with_variables`].
+///
+/// `variables` is serialised as-is when present. When absent (`None`) the
+/// field is omitted from the JSON body so the server receives a clean
+/// query-only request — unchanged behaviour for all existing query callers.
 #[derive(Debug, Serialize)]
 pub struct GraphQlRequest<'a> {
-    /// The query document.
+    /// The query or mutation document.
     pub query: &'a str,
+    /// Optional variables object sent alongside the document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<serde_json::Value>,
 }
 
 impl<'a> GraphQlRequest<'a> {
-    /// New request with no variables.
+    /// New request with no variables (backwards-compatible for all existing query callers).
     pub fn new(query: &'a str) -> Self {
-        Self { query }
+        Self {
+            query,
+            variables: None,
+        }
+    }
+
+    /// New request carrying a variables object.  Used for mutations with input types.
+    pub fn with_variables(query: &'a str, variables: serde_json::Value) -> Self {
+        Self {
+            query,
+            variables: Some(variables),
+        }
     }
 }
 

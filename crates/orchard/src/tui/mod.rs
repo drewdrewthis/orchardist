@@ -2111,12 +2111,25 @@ impl App {
         let wt = target.clone();
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
-        std::thread::spawn(move || match delete_task_row(&wt, &global_config) {
-            Ok(()) => {
-                let _ = tx.send(AppMsg::DeleteDone);
-            }
-            Err(e) => {
-                let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
+        // Capture active-session identity HERE in the TUI process, where $TMUX is
+        // valid. The daemon must not read its own $TMUX (AC-G1 data-loss guard).
+        let active_session = tmux::current_session_name();
+        let active_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()));
+        std::thread::spawn(move || {
+            match delete_task_row(
+                &wt,
+                &global_config,
+                active_session.as_deref(),
+                active_cwd.as_deref(),
+            ) {
+                Ok(()) => {
+                    let _ = tx.send(AppMsg::DeleteDone);
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
+                }
             }
         });
     }
@@ -2124,11 +2137,22 @@ impl App {
     fn start_cleanup(&self, items: Vec<derive::WorktreeRow>) {
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
+        // Capture active-session identity HERE in the TUI process, where $TMUX is
+        // valid. The daemon must not read its own $TMUX (AC-G1 data-loss guard).
+        let active_session = tmux::current_session_name();
+        let active_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()));
         std::thread::spawn(move || {
             let mut deleted = Vec::new();
             let mut errors = Vec::new();
             for row in &items {
-                match delete_task_row(row, &global_config) {
+                match delete_task_row(
+                    row,
+                    &global_config,
+                    active_session.as_deref(),
+                    active_cwd.as_deref(),
+                ) {
                     Ok(()) => deleted.push(row.worktree_path.clone()),
                     Err(e) => errors.push(format!("{}: {}", row.branch, e)),
                 }

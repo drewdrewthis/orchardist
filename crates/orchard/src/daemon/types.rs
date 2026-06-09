@@ -347,6 +347,62 @@ pub struct ClaudeInstance {
     pub inflight_tool_count: i32,
 }
 
+// ============================================================
+//  worktreesCleanup mutation — response types
+// ============================================================
+
+/// Top-level `Mutation.worktreesCleanup` payload.
+#[derive(Debug, Deserialize)]
+pub struct WorktreesCleanupPayload {
+    /// `worktreesCleanup` field result.
+    #[serde(rename = "worktreesCleanup")]
+    pub worktrees_cleanup: WorktreesCleanupResult,
+}
+
+/// Result of `Mutation.worktreesCleanup`.
+///
+/// `ok` is `true` even when some individual entries failed — per-worktree
+/// failure is reported in the `entries` vec. `ok` is `false` only when
+/// the batch call itself failed (e.g. invalid input, systemic error).
+#[derive(Debug, Deserialize)]
+pub struct WorktreesCleanupResult {
+    /// True when the batch call itself succeeded (input valid, no systemic errors).
+    pub ok: bool,
+    /// Per-worktree result entries. Present even when `ok` is `false` at the
+    /// input-validation level (entries will be empty in that case).
+    #[serde(default)]
+    pub entries: Vec<WorktreeCleanupEntry>,
+    /// Typed input validation error code; set when `ok` is `false`.
+    #[serde(rename = "errCode", default)]
+    pub err_code: Option<String>,
+    /// Human-readable error message; set when `ok` is `false`.
+    #[serde(rename = "errMsg", default)]
+    pub err_msg: Option<String>,
+}
+
+/// Per-worktree result inside [`WorktreesCleanupResult`].
+#[derive(Debug, Deserialize)]
+pub struct WorktreeCleanupEntry {
+    /// The stable worktree ID this entry describes.
+    #[serde(rename = "worktreeId")]
+    pub worktree_id: String,
+    /// True when cleanup succeeded or was a clean no-op (idempotent re-run).
+    pub ok: bool,
+    /// The stage that failed when `ok` is `false`.
+    /// One of: `"worktree-remove"`, `"branch-delete"`, `"docker-teardown"`.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// Human-readable failure or skip message.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// True when this worktree was already removed before this call.
+    #[serde(rename = "alreadyRemoved", default)]
+    pub already_removed: bool,
+    /// Non-fatal per-stage warnings (e.g. branch-skip, tmux-kill failure).
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
