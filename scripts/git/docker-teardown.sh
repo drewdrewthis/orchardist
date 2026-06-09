@@ -25,11 +25,15 @@
 #   identity: sha1 of the absolute path, truncated to 12 hex chars, prefixed
 #   with "orchard-".  Paths that share only the basename get different keys.
 #
-# Teardown command (AC5):
-#   docker compose -p <key> down --volumes --rmi local
-#   -- removes containers, networks, named+anonymous volumes, and ONLY images
-#      built by this compose project (--rmi local). Does NOT remove registry-
-#      pulled / externally-tagged images.
+# Teardown command (AC5): two-phase teardown
+#   Phase 1: docker compose -p <key> down --volumes
+#     -- removes containers, networks, named+anonymous volumes; NO --rmi flag
+#        so registry-pulled images are left untouched.
+#   Phase 2: explicitly remove images BUILT by this compose project.
+#     -- identify services that have a build: key via docker compose config
+#        output; collect their image names; docker rmi those images.
+#        This correctly handles both auto-named and custom-tagged (image: field)
+#        built images, unlike --rmi local which skips custom-tagged images.
 #
 # Exit code 0 on ok:true, non-zero on ok:false.
 set -euo pipefail
@@ -157,14 +161,17 @@ PROJECT_KEY="orchard-$(_path_hash "$WORKTREE_DIR")"
 
 # ---- AC5: teardown ----------------------------------------------------------
 #
-# docker compose -p <key> down --volumes --rmi local
-#   --volumes : remove named + anonymous volumes
-#   --rmi local: remove ONLY locally-built images; leaves registry-pulled images
+# Two-phase teardown:
+#   Phase 1: down --volumes — remove containers, networks, volumes.
+#   Phase 2: remove BUILT images — find services with a build: key in the
+#     compose config; collect their resolved image names; docker rmi them.
+#     Registry-pulled images (no build: key) are left untouched.
 #
 # Run from the worktree dir so compose reads the file naturally.
 COMPOSE_FILE_PATH=$(_find_compose_file "$WORKTREE_DIR")
 
-if ! DOCKER_ERR=$(cd "$WORKTREE_DIR" && docker compose -p "$PROJECT_KEY" down --volumes --rmi local 2>&1); then
+# Phase 1: bring down containers/networks/volumes (no --rmi).
+if ! DOCKER_ERR=$(cd "$WORKTREE_DIR" && docker compose -p "$PROJECT_KEY" down --volumes 2>&1); then
   if $JSON_MODE; then
     DOCKER_ERR="${DOCKER_ERR//\"/\\\"}"
     json_err "DOCKER_ERROR" "docker compose down failed for ${WORKTREE_ID}: ${DOCKER_ERR}"
@@ -173,6 +180,48 @@ if ! DOCKER_ERR=$(cd "$WORKTREE_DIR" && docker compose -p "$PROJECT_KEY" down --
     exit 1
   fi
 fi
+
+# Phase 2: remove images built by this compose project.
+# Strategy: parse "docker compose config" JSON to find services that have a
+# build: key, collect their image names, then docker rmi those images.
+# This correctly handles custom-tagged builds (image: foo:tag) that --rmi local
+# silently skips.
+_remove_built_images() {
+  local project_key="$1"
+  local wt_dir="$2"
+
+  # Get the resolved compose config as JSON; skip if docker compose config fails.
+  local config_json
+  if ! config_json=$(cd "$wt_dir" && docker compose -p "$project_key" config --format json 2>/dev/null); then
+    return 0
+  fi
+
+  # Extract image names for services that have a build: key.
+  # Use python3 for JSON parsing (portable; python3 is available on CI Linux).
+  local built_images
+  built_images=$(printf '%s' "$config_json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+services = data.get('services', {})
+for name, svc in services.items():
+    if 'build' in svc:
+        img = svc.get('image', '')
+        if img:
+            print(img)
+" 2>/dev/null) || return 0
+
+  if [ -z "$built_images" ]; then
+    return 0
+  fi
+
+  # Remove each built image; tolerate already-removed or in-use errors.
+  while IFS= read -r img; do
+    [ -z "$img" ] && continue
+    docker rmi -f "$img" 2>/dev/null || true
+  done <<< "$built_images"
+}
+
+_remove_built_images "$PROJECT_KEY" "$WORKTREE_DIR"
 
 if $JSON_MODE; then
   PROJECT_KEY_SAFE="${PROJECT_KEY//\"/\\\"}"

@@ -398,7 +398,7 @@ COMPOSE_EOF
 # @scenario Compose teardown removes built images but leaves registry-pulled images intact
 # ---------------------------------------------------------------------------
 
-@test "AC5: --rmi local removes built images but leaves registry-pulled images intact (requires docker)" {
+@test "AC5: built images removed, registry-pulled images left intact (requires docker)" {
   if ! _docker_compose_available; then
     skip "docker compose v2 unavailable — AC5 rmi-local test skipped"
   fi
@@ -453,7 +453,7 @@ COMPOSE_EOF
   [ "$(echo "$output" | _json_field ok)" = "True" ]
   [ "$(echo "$output" | _json_data_field action)" = "down" ]
 
-  # Locally-built image must be GONE (--rmi local removed it).
+  # Locally-built image must be GONE (removed by phase-2 built-image cleanup).
   built_after="$(docker images -q orchard-test-local-svc:step4 2>/dev/null || true)"
   [ -z "$built_after" ]
 
