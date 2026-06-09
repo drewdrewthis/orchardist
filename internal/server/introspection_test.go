@@ -117,6 +117,11 @@ func TestIntrospection_HTTPDisabledWhenEnvOff(t *testing.T) {
 // After this change, introspection against the in-process executable schema
 // must include the field, where previously only "launchSession" and
 // "sendTextToPane" appeared.
+//
+// Also asserts "worktreesCleanup" — the batch mutation the TUI actually calls
+// (worktree_ops.rs:113 via daemon::Client::worktrees_cleanup_with_sessions).
+// AC1 requires the cleanup mutation to be listed; omitting this check left a
+// gap between what the TUI calls and what introspection confirmed.
 func TestIntrospection_WorktreeRemoveMutationListed(t *testing.T) {
 	t.Setenv("ORCHARD_INTROSPECTION", "")
 
@@ -131,6 +136,12 @@ func TestIntrospection_WorktreeRemoveMutationListed(t *testing.T) {
 	if !strings.Contains(body, "worktreeRemove") {
 		t.Errorf("Mutation type fields do not include \"worktreeRemove\".\n"+
 			"Before #693 the field was absent; now it must be listed.\n"+
+			"Got response body: %s", body)
+	}
+	if !strings.Contains(body, "worktreesCleanup") {
+		t.Errorf("Mutation type fields do not include \"worktreesCleanup\".\n"+
+			"The TUI calls worktreesCleanup (not worktreeRemove) for local cleanup;\n"+
+			"the batch mutation must be listed in the schema.\n"+
 			"Got response body: %s", body)
 	}
 }

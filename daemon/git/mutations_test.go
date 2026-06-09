@@ -31,7 +31,7 @@ func repoRoot(t *testing.T) string {
 // returns <root>/git/worktree-remove.sh, NOT the flat sibling <root>/git-worktree-remove.sh
 // that was the pre-#693 bug (scenario 2, AC1).
 func TestWorktreeScriptProducesGitSubdirPath(t *testing.T) {
-	r := NewMutationResolver(nil, "/scripts")
+	r := NewMutationResolver("/scripts")
 	got := r.worktreeScript("remove")
 	want := "/scripts/git/worktree-remove.sh"
 	if got != want {
@@ -41,7 +41,7 @@ func TestWorktreeScriptProducesGitSubdirPath(t *testing.T) {
 
 // TestWorktreeScriptNotFlatSibling confirms the old (buggy) path is NOT returned.
 func TestWorktreeScriptNotFlatSibling(t *testing.T) {
-	r := NewMutationResolver(nil, "/scripts")
+	r := NewMutationResolver("/scripts")
 	got := r.worktreeScript("remove")
 	if strings.HasSuffix(got, "git-worktree-remove.sh") {
 		t.Errorf("worktreeScript still returns the buggy flat-sibling path: %q", got)
@@ -52,7 +52,7 @@ func TestWorktreeScriptNotFlatSibling(t *testing.T) {
 // not <root>/git-<op>.sh (same family of bug, Boy Scout — fix consistently).
 func TestGitScriptProducesGitSubdirPath(t *testing.T) {
 	for _, op := range []string{"fetch", "pull", "push"} {
-		r := NewMutationResolver(nil, "/scripts")
+		r := NewMutationResolver("/scripts")
 		got := r.gitScript(op)
 		want := "/scripts/git/" + op + ".sh"
 		if got != want {
@@ -66,7 +66,7 @@ func TestGitScriptProducesGitSubdirPath(t *testing.T) {
 // shape: confirms the real file is reachable at the corrected path, not the old buggy one).
 func TestWorktreeRemoveScriptExistsOnDisk(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 	scriptPath := r.worktreeScript("remove")
 
 	// Assert the path ends in git/worktree-remove.sh.
@@ -84,7 +84,7 @@ func TestWorktreeRemoveScriptExistsOnDisk(t *testing.T) {
 // for an empty worktreeId (M4: validate at resolver boundary, AC10).
 func TestWorktreeRemoveInputValidation(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 	result, err := r.WorktreeRemove(context.Background(), WorktreeRemoveInput{
 		WorktreeID: "", // intentionally empty — must be rejected at resolver boundary
 	})
@@ -108,7 +108,7 @@ func TestWorktreeRemoveInputValidation(t *testing.T) {
 // accepted by the script's arg parser.
 func TestWorktreeRemoveActiveSessionFieldsThreaded(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -144,7 +144,7 @@ func TestWorktreeRemoveActiveSessionFieldsThreaded(t *testing.T) {
 // still proves the resolver reached the script at the right path.
 func TestWorktreeRemoveScriptPathInEnvelope(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	// The script must be present; if it is absent the resolver would return
 	// a raw error (not an L2 envelope). The presence check above covers this,
@@ -181,7 +181,7 @@ func TestWorktreeRemoveScriptPathInEnvelope(t *testing.T) {
 // rejected with INVALID_INPUT at the resolver boundary without exec'ing a script.
 // @scenario Malformed input is rejected at the resolver boundary with a typed error
 func TestWorktreesCleanupEmptyList(t *testing.T) {
-	r := NewMutationResolver(nil, "/scripts")
+	r := NewMutationResolver("/scripts")
 	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
 		WorktreeIDs: []string{},
 	})
@@ -200,7 +200,7 @@ func TestWorktreesCleanupEmptyList(t *testing.T) {
 // rejected with INVALID_INPUT at the resolver boundary.
 // @scenario Malformed input is rejected at the resolver boundary with a typed error
 func TestWorktreesCleanupEmptyID(t *testing.T) {
-	r := NewMutationResolver(nil, "/scripts")
+	r := NewMutationResolver("/scripts")
 	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
 		WorktreeIDs: []string{"myrepo:branch", ""}, // second entry is empty
 	})
@@ -219,7 +219,7 @@ func TestWorktreesCleanupEmptyID(t *testing.T) {
 // rejected with INVALID_INPUT at the resolver boundary.
 // @scenario Malformed input is rejected at the resolver boundary with a typed error
 func TestWorktreesCleanupMalformedID(t *testing.T) {
-	r := NewMutationResolver(nil, "/scripts")
+	r := NewMutationResolver("/scripts")
 	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
 		WorktreeIDs: []string{"nocolonhere"},
 	})
@@ -242,7 +242,7 @@ func TestWorktreesCleanupMalformedID(t *testing.T) {
 // @scenario Expected failures are returned as typed structured results, not opaque GraphQL errors
 func TestWorktreesCleanupStructuredResultNotOpaque(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -294,7 +294,7 @@ func TestWorktreesCleanupStructuredResultNotOpaque(t *testing.T) {
 // @scenario Cleanup operates on exactly the stale set and leaves an open-PR worktree fully intact
 func TestWorktreesCleanupActsOnlyOnGivenIDs(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -358,7 +358,7 @@ func TestWorktreesCleanupActsOnlyOnGivenIDs(t *testing.T) {
 // @scenario A failure on one worktree does not stop the others and is surfaced per-worktree
 func TestWorktreesCleanupPartialFailure(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -437,7 +437,7 @@ func TestWorktreesCleanupPartialFailure(t *testing.T) {
 // @scenario A second cleanup run on an already-clean fleet is a clean no-op
 func TestWorktreesCleanupIdempotentRerun(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -502,7 +502,7 @@ func TestWorktreesCleanupIdempotentRerun(t *testing.T) {
 // @scenario Two concurrent cleanups over an overlapping set both succeed without a hard race error
 func TestWorktreesCleanupConcurrentOverlap(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -580,26 +580,13 @@ func TestWorktreesCleanupConcurrentOverlap(t *testing.T) {
 	// We identify the loser as whichever result has alreadyRemoved:true on all entries.
 	loserFound := false
 	for _, res := range []WorktreesCleanupResult{result1, result2} {
-		allAlreadyRemoved := true
+		allAlreadyRemoved := len(res.Entries) > 0
 		for _, e := range res.Entries {
-			if !e.AlreadyRemoved && !e.OK {
-				// ok=false entries are failures, not alreadyRemoved
-				allAlreadyRemoved = false
-			} else if !e.AlreadyRemoved && e.OK {
-				// Successful removal — not the loser for this entry.
+			if !e.AlreadyRemoved {
 				allAlreadyRemoved = false
 			}
 		}
-		// Check if this result has at least one alreadyRemoved:true entry — that
-		// is the loser's fingerprint. (The winner removes them; the loser finds them gone.)
-		hasAlreadyRemoved := false
-		for _, e := range res.Entries {
-			if e.AlreadyRemoved {
-				hasAlreadyRemoved = true
-			}
-		}
-		_ = allAlreadyRemoved
-		if hasAlreadyRemoved {
+		if allAlreadyRemoved && len(res.Entries) > 0 {
 			loserFound = true
 		}
 	}
@@ -639,7 +626,7 @@ func TestResolvePRMerged_ColonInBranch(t *testing.T) {
 		},
 	}
 
-	r := NewMutationResolver(nil, "")
+	r := NewMutationResolver("")
 	r.WithPRStateLookup(recordingStub)
 
 	result := r.resolvePRMerged(context.Background(), "owner/repo:alice:fix-endpoint")
@@ -895,7 +882,7 @@ func gitBranchExists(repoDir, branch string) bool {
 // @scenario merged-PR stale worktree: gh stub returns MERGED → branch deleted after cleanup (AC4)
 func TestWorktreesCleanup_MergedPR_BranchDeleted(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -998,7 +985,7 @@ func TestWorktreesCleanup_MergedPR_BranchDeleted(t *testing.T) {
 // @scenario gh-error → branch skipped (merged-state-unavailable) + worktree still removed (AC-G2)
 func TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -1080,19 +1067,18 @@ func TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved(t *testing.T) {
 // AC-G3 integration: tmux-kill fires THROUGH the resolver (not just the script)
 // =============================================================================
 //
-// TestWorktreesCleanup_TmuxKill_NonFatal proves the FULL WIRE for AC-G3:
+// TestWorktreesCleanup_TmuxSessionAbsent_NonFatal proves the FULL WIRE for AC-G3:
 //   mutation input (SessionNames) → cleanupOne passes --tmux-session →
-//   script runs tmux-kill stage → fails (session not found) →
-//   enrichEntryFromData surfaces warning in entry.Warnings →
-//   entry.ok remains true (non-fatal) AND worktree is removed.
+//   script runs tmux-kill stage → session absent (tmux has-session returns non-zero) →
+//   script records a non-fatal no-op → worktree is removed.
 //
 // This is the integration proof; the bats test (scripts/git/worktree-remove.bats:315)
 // proves the SCRIPT level. This test proves the RESOLVER wire.
 //
-// @scenario AC-G3: tmux-kill failure is non-fatal; worktree removed + warning surfaced through resolver
-func TestWorktreesCleanup_TmuxKill_NonFatal(t *testing.T) {
+// @scenario AC-G3: tmux session absent → non-fatal no-op, worktree removed
+func TestWorktreesCleanup_TmuxSessionAbsent_NonFatal(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(nil, root+"/scripts")
+	r := NewMutationResolver(root+"/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {

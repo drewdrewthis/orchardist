@@ -50,20 +50,19 @@ type PRStateLookup interface {
 // for the first to finish, then finds the worktrees already gone (idempotent
 // no-op path). This is the AC-G5 concurrency model: serialize-and-tolerate.
 type MutationResolver struct {
-	svc        Service
 	scriptRoot string         // abs path to scripts/ directory
 	cleanupMu  sync.Mutex     // serializes WorktreesCleanup (AC-G5)
-	prLookup   PRStateLookup  // optional; nil → PRMerged always "unknown" (fail-closed)
+	prLookup   PRStateLookup  // optional; nil → PR merged-state always "unknown" (fail-closed)
 }
 
-// NewMutationResolver creates a resolver backed by the service.
+// NewMutationResolver creates a resolver.
 // scriptRoot is the absolute path to the scripts/ directory; it must
 // end without a trailing slash. If empty, defaults to "scripts".
-func NewMutationResolver(svc Service, scriptRoot string) *MutationResolver {
+func NewMutationResolver(scriptRoot string) *MutationResolver {
 	if scriptRoot == "" {
 		scriptRoot = "scripts"
 	}
-	return &MutationResolver{svc: svc, scriptRoot: scriptRoot}
+	return &MutationResolver{scriptRoot: scriptRoot}
 }
 
 // WithPRStateLookup injects the gh merged-state lookup dependency (AC-G2).
@@ -116,11 +115,6 @@ type WorktreesCleanupInput struct {
 	ActiveSession string
 	// ActiveCwd is the absolute path of the user's active working directory (AC-G1).
 	ActiveCwd string
-	// PRMerged is accepted for backwards API compatibility but is IGNORED by the
-	// daemon. Branch-delete decisions are always made from the daemon's own gh
-	// service lookup (AC-G2: the daemon owns the gh merged-state, not the client).
-	// See MutationResolver.resolvePRMerged.
-	PRMerged string
 	// BaseBranch is the base branch for branch-delete safety checks. Defaults to "main".
 	BaseBranch string
 	// Protected is a comma-separated list of branch names never to delete.

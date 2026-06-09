@@ -924,9 +924,6 @@ type WorktreesCleanupInput struct {
 	ActiveSession *string `json:"activeSession,omitempty"`
 	// The absolute path of the directory the user's active session is running in (AC-G1).
 	ActiveCwd *string `json:"activeCwd,omitempty"`
-	// PR-merged state for branch-delete decisions. One of: merged, not-merged, unknown.
-	// When unknown or omitted, branch deletion is skipped (fail-closed per AC-G2).
-	PrMerged *string `json:"prMerged,omitempty"`
 	// Base branch for branch-delete safety checks (default: main).
 	BaseBranch *string `json:"baseBranch,omitempty"`
 	// Comma-separated list of protected branch names to never delete.

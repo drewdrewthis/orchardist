@@ -314,9 +314,6 @@ func (r *mutationResolver) WorktreesCleanup(ctx context.Context, input graphql1.
 	if input.ActiveCwd != nil {
 		domainInput.ActiveCwd = *input.ActiveCwd
 	}
-	if input.PrMerged != nil {
-		domainInput.PRMerged = *input.PrMerged
-	}
 	if input.BaseBranch != nil {
 		domainInput.BaseBranch = *input.BaseBranch
 	}
@@ -1541,8 +1538,8 @@ func (r *tmuxServerResolver) Alive(ctx context.Context, obj *graphql1.TmuxServer
 	return r.Tmux.Server().Alive, nil
 }
 
-// Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one). NOTE: parameter is sortKey not sort to avoid shadowing the imported sort package; gqlgen rewrites this back to sort on every regen, restore sortKey after each codegen.
-func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sortKey *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
+// Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one).
+func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sort *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
 	if r.Tmux == nil {
 		return nil, nil
 	}
@@ -1553,8 +1550,8 @@ func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxSer
 	}
 
 	key := graphql1.TmuxSessionSortLastActivity
-	if sortKey != nil {
-		key = *sortKey
+	if sort != nil {
+		key = *sort
 	}
 	switch key {
 	case graphql1.TmuxSessionSortName:

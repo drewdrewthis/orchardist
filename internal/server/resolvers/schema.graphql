@@ -1410,11 +1410,6 @@ input WorktreesCleanupInput {
   activeSession: String
   "The absolute path of the directory the user's active session is running in (AC-G1)."
   activeCwd: String
-  """
-  PR-merged state for branch-delete decisions. One of: merged, not-merged, unknown.
-  When unknown or omitted, branch deletion is skipped (fail-closed per AC-G2).
-  """
-  prMerged: String
   "Base branch for branch-delete safety checks (default: main)."
   baseBranch: String
   "Comma-separated list of protected branch names to never delete."

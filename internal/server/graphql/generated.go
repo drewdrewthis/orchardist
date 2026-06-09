@@ -3928,11 +3928,6 @@ input WorktreesCleanupInput {
   activeSession: String
   "The absolute path of the directory the user's active session is running in (AC-G1)."
   activeCwd: String
-  """
-  PR-merged state for branch-delete decisions. One of: merged, not-merged, unknown.
-  When unknown or omitted, branch deletion is skipped (fail-closed per AC-G2).
-  """
-  prMerged: String
   "Base branch for branch-delete safety checks (default: main)."
   baseBranch: String
   "Comma-separated list of protected branch names to never delete."
@@ -14356,7 +14351,7 @@ func (ec *executionContext) unmarshalInputWorktreesCleanupInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"worktreeIds", "force", "activeSession", "activeCwd", "prMerged", "baseBranch", "protected", "sessionNames"}
+	fieldsInOrder := [...]string{"worktreeIds", "force", "activeSession", "activeCwd", "baseBranch", "protected", "sessionNames"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -14391,13 +14386,6 @@ func (ec *executionContext) unmarshalInputWorktreesCleanupInput(ctx context.Cont
 				return it, err
 			}
 			it.ActiveCwd = data
-		case "prMerged":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("prMerged"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.PrMerged = data
 		case "baseBranch":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("baseBranch"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)

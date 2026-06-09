@@ -144,7 +144,7 @@ func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 // the PR merged-state from the daemon's own gh service. Callers in daemon.go
 // must order WithGh before WithGitMutations for the injection to fire.
 func (r *Resolver) WithGitMutations(scriptRoot string) *Resolver {
-	mr := gitdomain.NewMutationResolver(nil, scriptRoot)
+	mr := gitdomain.NewMutationResolver(scriptRoot)
 	if r.GH != nil {
 		mr.WithPRStateLookup(&ghPRStateAdapter{gh: r.GH})
 	}
