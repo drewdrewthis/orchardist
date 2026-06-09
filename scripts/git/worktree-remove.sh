@@ -54,8 +54,13 @@ if [[ -z "$REPO_PATH" ]]; then
 fi
 
 # Get the worktree path from git.
+# Parse porcelain blocks (worktree / HEAD / branch / blank) with awk so the
+# grep -A2 / grep -B1 separator-line bug on macOS is avoided.
 WT_PATH=$(git -C "$REPO_PATH" worktree list --porcelain 2>/dev/null \
-  | grep -A2 "worktree " | grep -B1 "branch refs/heads/${WT_NAME}" | grep "^worktree " | awk '{print $2}' || true)
+  | awk -v branch="refs/heads/${WT_NAME}" '
+      /^worktree /  { cur = $2 }
+      $0 == "branch " branch { print cur; exit }
+    ' || true)
 
 if [[ -z "$WT_PATH" ]]; then
   # Already removed — treat as success (idempotent per M5).
@@ -67,7 +72,21 @@ FORCE_FLAG=""
 if $FORCE; then FORCE_FLAG="--force"; fi
 
 if ! ERR=$(git -C "$REPO_PATH" worktree remove $FORCE_FLAG "$WT_PATH" 2>&1); then
-  if $JSON_MODE; then json_err "GIT_ERROR" "$ERR"; else echo "$ERR" >&2; exit 1; fi
+  # Fallback: if the directory no longer exists (deleted out-of-band) or if
+  # git worktree remove --force itself failed (locked worktree, submodule
+  # gitlinks), fall back to rm -rf + git worktree prune.
+  #
+  # The path was already confirmed as a registered worktree above, so rm -rf
+  # here is safe (we are not removing an arbitrary path).
+  if [ -d "$WT_PATH" ]; then
+    if ! RM_ERR=$(rm -rf "$WT_PATH" 2>&1); then
+      if $JSON_MODE; then json_err "RM_ERROR" "$RM_ERR"; else echo "$RM_ERR" >&2; exit 1; fi
+    fi
+  fi
+  # Always prune after a fallback removal (reconciles stale registration).
+  if ! PRUNE_ERR=$(git -C "$REPO_PATH" worktree prune 2>&1); then
+    if $JSON_MODE; then json_err "GIT_ERROR" "$PRUNE_ERR"; else echo "$PRUNE_ERR" >&2; exit 1; fi
+  fi
 fi
 
 if $JSON_MODE; then
