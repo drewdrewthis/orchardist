@@ -29,9 +29,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
 )
 
 const remoteName = "remote-host"

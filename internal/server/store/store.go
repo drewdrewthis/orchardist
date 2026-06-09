@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	provider "github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	provider "github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // Store is a generic in-memory map of K → V plus per-entry freshness.

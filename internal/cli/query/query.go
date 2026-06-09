@@ -21,7 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server"
 )
 
 // daemonURLEnv lets E2E tests redirect the CLI at an httptest.Server

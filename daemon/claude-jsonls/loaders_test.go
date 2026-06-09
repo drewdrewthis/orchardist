@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // stubService is a minimal Service implementation for loader tests.

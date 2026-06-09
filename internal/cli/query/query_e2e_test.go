@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
 )
 
 const cliE2EDeadline = 10 * time.Second

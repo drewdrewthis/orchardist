@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	claudeinstance "github.com/drewdrewthis/git-orchard-rs/daemon/claude-instance"
+	claudeinstance "github.com/drewdrewthis/orchardist/daemon/claude-instance"
 )
 
 // ─── Stubs (respect service interfaces, not provider internals) ────────────────

@@ -12,7 +12,7 @@ package claudeinstance
 import (
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // TestLastActivityAt_FieldExistsAndIsNullable verifies that the

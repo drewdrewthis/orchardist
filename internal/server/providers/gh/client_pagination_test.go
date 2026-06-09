@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // TestParseLinkNext exercises the Link-header parser used by the

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	claudeaccount "github.com/drewdrewthis/git-orchard-rs/daemon/claude-account"
+	claudeaccount "github.com/drewdrewthis/orchardist/daemon/claude-account"
 )
 
 // T1: Every typed field has a resolver test against a stubbed service.

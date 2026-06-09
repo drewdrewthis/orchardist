@@ -20,8 +20,8 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
-	gqlgen "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	gqlgen "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // newVersionDaemon stands up an httptest.Server with the GraphQL handler

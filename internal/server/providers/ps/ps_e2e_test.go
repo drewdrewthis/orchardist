@@ -32,9 +32,9 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // TestPS_E2E_SpawnAndDisappear is the AC7 test: real subprocess + real ps

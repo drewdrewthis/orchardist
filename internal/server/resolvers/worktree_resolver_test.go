@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	ghprovider "github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // writeGitConfig writes a minimal .git/config under dir with the given
@@ -60,7 +60,7 @@ func TestWorktreeHost_ReturnsLocal(t *testing.T) {
 // produces the owner/repo slug.
 func TestWorktreeRepo_GitHubSSHURL(t *testing.T) {
 	dir := t.TempDir()
-	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/orchardist.git")
 
 	r := newWorktreeResolver()
 	obj := &graphql1.Worktree{ID: "proj:main", Path: dir}
@@ -72,7 +72,7 @@ func TestWorktreeRepo_GitHubSSHURL(t *testing.T) {
 	if got == nil {
 		t.Fatal("Repo() returned nil, want non-nil")
 	}
-	want := "drewdrewthis/git-orchard-rs"
+	want := "drewdrewthis/orchardist"
 	if *got != want {
 		t.Errorf("Repo() = %q, want %q", *got, want)
 	}
@@ -217,7 +217,7 @@ func TestWorktreeIssue_NonGitHubOrigin(t *testing.T) {
 // errGHNotConfigured.
 func TestWorktreeIssue_GHNotConfigured(t *testing.T) {
 	dir := t.TempDir()
-	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/orchardist.git")
 
 	r := newWorktreeResolver() // GH is nil by default
 
@@ -289,7 +289,7 @@ func TestWorktreePr_NonGitHubOrigin(t *testing.T) {
 // swallow the misconfiguration).
 func TestWorktreePr_NoLoadersInContext(t *testing.T) {
 	dir := t.TempDir()
-	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/orchardist.git")
 
 	r := newWorktreeResolver()
 	obj := &graphql1.Worktree{ID: "proj:feat", Path: dir, Branch: "feature/something"}
@@ -325,7 +325,7 @@ func (s *neverCallStub) ListPullRequests(_ context.Context, _, _ string, _ ghpro
 // default branch ... And no PR list is fetched for this worktree".
 func TestWorktreePr_DefaultBranchSkipsLoader(t *testing.T) {
 	dir := t.TempDir()
-	writeGitConfig(t, dir, "git@github.com:drewdrewthis/git-orchard-rs.git")
+	writeGitConfig(t, dir, "git@github.com:drewdrewthis/orchardist.git")
 
 	// Write .git/HEAD pointing at refs/heads/main so readDefaultBranch
 	// returns ("main", true).

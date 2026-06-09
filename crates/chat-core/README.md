@@ -146,7 +146,7 @@ All subcommands accept `-j`/`--json` for machine-readable output. Sender
 identity comes from `$TMUX` / current tmux session name, with `--as <handle>`
 overriding. Outside tmux without `--as`, the CLI exits 3 with a clear message.
 
-See the issue body of [#495](https://github.com/drewdrewthis/git-orchard-rs/issues/495)
+See the issue body of [#495](https://github.com/drewdrewthis/orchardist/issues/495)
 for the full design rationale and AC list.
 
 ## Tests

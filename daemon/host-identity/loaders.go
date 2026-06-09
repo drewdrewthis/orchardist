@@ -6,7 +6,7 @@ import (
 
 	"github.com/graph-gophers/dataloader/v7"
 
-	graphql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // Loaders holds request-scoped DataLoader instances for the host-identity

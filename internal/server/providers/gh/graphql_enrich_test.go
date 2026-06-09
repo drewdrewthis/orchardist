@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // TestMapStatusCheckRollup confirms the aggregation rules from issue #442:

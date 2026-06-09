@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 func prKeyFromGraphQL(r *Resolver, obj *graphql1.PullRequest) (gh.PullRequestKey, bool) {

@@ -59,7 +59,7 @@ fn port_list_worktrees_returns_ok_for_boxd_shared_variant() {
     use orchard::remote_adapter::BoxdSharedAdapter;
     let adapter = RemoteAdapter::BoxdShared(BoxdSharedAdapter {
         host: "boxd@orchard-rs.boxd.sh".to_string(),
-        path: "~/git-orchard-rs".to_string(),
+        path: "~/orchardist".to_string(),
         ssh: Box::new(FakeSshExec::new()),
     });
     let result = adapter.list_worktrees();
@@ -173,7 +173,7 @@ fn dispatch_boxd_shared_type_returns_boxd_shared_adapter() {
     let cfg = RemoteConfig {
         name: "my-boxd".to_string(),
         host: "boxd@orchard-rs.boxd.sh".to_string(),
-        path: "~/git-orchard-rs".to_string(),
+        path: "~/orchardist".to_string(),
         shell: "ssh".to_string(),
         kind: RemoteKind::BoxdShared,
         allow_transitive: false,
@@ -382,7 +382,7 @@ fn name_containing_boxd_without_type_is_not_silently_auto_detected() {
             "remotes": [{
                 "name": "boxd-fork-langwatch",
                 "host": "boxd@orchard-rs.boxd.sh",
-                "path": "~/git-orchard-rs"
+                "path": "~/orchardist"
             }]
         }]
     }"#;
@@ -525,13 +525,13 @@ fn boxd_shared_adapter_returns_parsed_non_bare_worktrees_with_correct_host_and_b
     use orchard::remote_adapter::BoxdSharedAdapter;
 
     let host = "boxd@orchard-rs.boxd.sh";
-    let path = "~/git-orchard-rs";
+    let path = "~/orchardist";
     let cmd = format!("git -C {path} worktree list --porcelain");
     let porcelain = "\
-worktree /home/boxd/git-orchard-rs\n\
+worktree /home/boxd/orchardist\n\
 bare\n\
 \n\
-worktree /home/boxd/git-orchard-rs/worktrees/issue240\n\
+worktree /home/boxd/orchardist/worktrees/issue240\n\
 HEAD def456\n\
 branch refs/heads/issue240/smart-sorting\n";
 
@@ -597,7 +597,7 @@ fn boxd_shared_adapter_returns_empty_on_ssh_failure() {
     use orchard::remote_adapter::BoxdSharedAdapter;
 
     let host = "boxd@orchard-rs.boxd.sh";
-    let path = "~/git-orchard-rs";
+    let path = "~/orchardist";
     // No canned response → FakeSshExec will return Err.
     let adapter = BoxdSharedAdapter {
         host: host.to_string(),
@@ -824,7 +824,7 @@ branch refs/heads/issue-7/my-feature\n";
 
     // --- BoxdShared: valid canned response ---
     let boxd_host = "boxd@orchard-rs.boxd.sh";
-    let boxd_path = "~/git-orchard-rs";
+    let boxd_path = "~/orchardist";
     let boxd_cmd = format!("git -C {boxd_path} worktree list --porcelain");
     let mut boxd_fake = FakeSshExec::new();
     boxd_fake.insert(
@@ -832,10 +832,10 @@ branch refs/heads/issue-7/my-feature\n";
         &boxd_cmd,
         SshOutput {
             stdout: "\
-worktree /home/boxd/git-orchard-rs\n\
+worktree /home/boxd/orchardist\n\
 bare\n\
 \n\
-worktree /home/boxd/git-orchard-rs/worktrees/issue267\n\
+worktree /home/boxd/orchardist/worktrees/issue267\n\
 HEAD 112233\n\
 branch refs/heads/issue267/boxd-backend\n"
                 .to_string(),

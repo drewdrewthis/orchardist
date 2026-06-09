@@ -11,7 +11,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
 )
 
 // TestPaneByID_NilTmux asserts PaneByID returns nil gracefully when no tmux provider is wired.

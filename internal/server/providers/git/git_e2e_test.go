@@ -27,9 +27,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
 )
 
 // staticReposLister is a fixture-grade resolvers.ReposLister for the

@@ -15,7 +15,7 @@ The pattern: when policy is implicit in the implementation, the consumer is free
 
 ## Decision
 
-**Spec ownership of the contracts subsystem belongs to the `conversation-contracts` plugin + the `drewdrewthis/git-orchard-rs` marketplace.**
+**Spec ownership of the contracts subsystem belongs to the `conversation-contracts` plugin + the `drewdrewthis/orchardist` marketplace.**
 
 Specifically:
 
@@ -66,7 +66,7 @@ The daemon's `internal/server/providers/contracts/` parses on-disk events accord
 
 ## Implementation
 
-This ADR was committed as part of issue [#650](https://github.com/drewdrewthis/git-orchard-rs/issues/650) along with:
+This ADR was committed as part of issue [#650](https://github.com/drewdrewthis/orchardist/issues/650) along with:
 
 - The `plugins/conversation-contracts/` plugin scaffold (marketplace.json, plugin.json, hooks.json).
 - The `.claude-plugin/marketplace.json` marketplace bootstrap at the repo root.

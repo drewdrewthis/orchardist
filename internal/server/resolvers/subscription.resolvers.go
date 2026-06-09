@@ -11,15 +11,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	tmuxprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	hostprovider "github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/hostservice"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	tmuxprovider "github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // subscribeNodeChanged opens the owning provider's invalidation

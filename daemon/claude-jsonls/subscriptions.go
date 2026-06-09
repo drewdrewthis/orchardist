@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // ConversationChangedEmitter manages the Subscription.conversationChanged

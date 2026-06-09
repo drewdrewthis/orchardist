@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // enumValues fetches the values of a named GraphQL enum via introspection.

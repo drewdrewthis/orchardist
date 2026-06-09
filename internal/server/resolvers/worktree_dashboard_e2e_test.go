@@ -38,16 +38,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
-	gqlgen "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	gqlgen "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // dashboardE2EGHScript is the fake `gh auth token` shim.

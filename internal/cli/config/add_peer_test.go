@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 // TestAddPeerCmd_HelpMentionsPrerequisite asserts that the Long help text of

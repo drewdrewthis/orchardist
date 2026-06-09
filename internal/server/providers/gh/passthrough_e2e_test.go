@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // stubGraphQLAPI mounts /graphql on a TLS server. The handler captures

@@ -35,9 +35,9 @@ Feature: Schema Worktree.host, repo, pr, issue — read-side joined enrichment f
 
   @unit
   Scenario: repo resolver returns owner/repo slug when origin is a GitHub URL
-    Given a worktree whose project's origin remote is "git@github.com:drewdrewthis/git-orchard-rs.git"
+    Given a worktree whose project's origin remote is "git@github.com:drewdrewthis/orchardist.git"
     When a GraphQL query selects Worktree.repo
-    Then the resolver returns "drewdrewthis/git-orchard-rs"
+    Then the resolver returns "drewdrewthis/orchardist"
 
   @unit
   Scenario: repo resolver returns null when origin is not a GitHub URL

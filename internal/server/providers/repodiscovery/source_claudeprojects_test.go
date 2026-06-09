@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
 )
 
 type fakeConversationLister struct {

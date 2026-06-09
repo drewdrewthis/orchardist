@@ -14,7 +14,7 @@ if (process.env.ORCHARD_BINARY_PATH) {
   process.exit(0);
 }
 
-const REPO = 'drewdrewthis/git-orchard-rs';
+const REPO = 'drewdrewthis/orchardist';
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const version = pkg.version;
 

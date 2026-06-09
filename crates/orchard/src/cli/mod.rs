@@ -75,7 +75,7 @@ pub fn resolve_script(name: &str) -> Option<PathBuf> {
         }
     }
 
-    // 2. Repo-local scripts/ (covers running from a checkout of git-orchard-rs).
+    // 2. Repo-local scripts/ (covers running from a checkout of orchardist).
     let cwd_candidate = std::env::current_dir()
         .map(|d| d.join("scripts").join(name))
         .unwrap_or_default();

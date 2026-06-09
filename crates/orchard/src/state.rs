@@ -152,7 +152,7 @@ mod tests {
 
     fn make_task() -> Task {
         Task {
-            id: "git-orchard-rs#47".to_string(),
+            id: "orchardist#47".to_string(),
             title: "Task-centric state system".to_string(),
             source: TaskSource::GithubIssue {
                 repo: "acme/my-project".to_string(),
@@ -160,8 +160,8 @@ mod tests {
             },
             status: TaskStatus::InProgress,
             priority: 1,
-            worktree: Some("/home/user/workspace/git-orchard-rs-47".to_string()),
-            sessions: vec!["git-orchard-rs_47_main".to_string()],
+            worktree: Some("/home/user/workspace/orchardist-47".to_string()),
+            sessions: vec!["orchardist_47_main".to_string()],
             pr: Some(53),
             remote_host: None,
             created_at: Utc.with_ymd_and_hms(2026, 3, 18, 10, 0, 0).unwrap(),
@@ -228,7 +228,7 @@ mod tests {
             version: 1,
             tasks: vec![make_task(), {
                 let mut t = make_task();
-                t.id = "git-orchard-rs#48".to_string();
+                t.id = "orchardist#48".to_string();
                 t.status = TaskStatus::Ready;
                 t.pr = None;
                 t.worktree = None;

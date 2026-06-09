@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"sync/atomic"
 
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
 )
 
 // gitConfigSubscriber bridges configprovider.Provider invalidations to

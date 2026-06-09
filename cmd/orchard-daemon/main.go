@@ -18,9 +18,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/cli/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/cli/daemon"
-	"github.com/drewdrewthis/git-orchard-rs/internal/cli/query"
+	"github.com/drewdrewthis/orchardist/internal/cli/config"
+	"github.com/drewdrewthis/orchardist/internal/cli/daemon"
+	"github.com/drewdrewthis/orchardist/internal/cli/query"
 )
 
 // version is overridden via -ldflags at release time.

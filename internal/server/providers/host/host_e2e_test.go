@@ -13,9 +13,9 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // TestHost_E2E_RealMachine boots the GraphQL stack against the real

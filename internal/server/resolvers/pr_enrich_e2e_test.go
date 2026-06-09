@@ -31,9 +31,9 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
-	gqlgen "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	gqlgen "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // prEnrichFakeGHScript is the `gh auth token` shim for enrichment tests.

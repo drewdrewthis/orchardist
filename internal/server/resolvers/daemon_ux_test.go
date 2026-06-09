@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 func TestSchemaSDL_NonEmpty(t *testing.T) {

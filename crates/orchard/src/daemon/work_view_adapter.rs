@@ -651,9 +651,9 @@ mod tests {
     #[test]
     fn builds_local_repo_state_from_work_view() {
         let snapshot = WorkViewFixture::new()
-            .project("git-orchard-rs", "/repos/git-orchard-rs")
+            .project("orchardist", "/repos/orchardist")
             .worktree(
-                "/repos/git-orchard-rs/.worktrees/issue429",
+                "/repos/orchardist/.worktrees/issue429",
                 "issue429/spec",
                 "owner/repo",
                 Some(minimal_pr(429, "issue429/spec")),
@@ -693,9 +693,9 @@ mod tests {
 
     #[test]
     fn joins_sessions_to_worktrees_via_path() {
-        let wt_path = "/repos/git-orchard-rs/.worktrees/issue429";
+        let wt_path = "/repos/orchardist/.worktrees/issue429";
         let snapshot = WorkViewFixture::new()
-            .project("git-orchard-rs", "/repos/git-orchard-rs")
+            .project("orchardist", "/repos/orchardist")
             .worktree(wt_path, "issue429/spec", "owner/repo", None, None)
             .session("issue429", Some(wt_path))
             .build();
@@ -726,11 +726,11 @@ mod tests {
 
     #[test]
     fn joins_claude_to_session_via_pane_reference() {
-        let wt_path = "/repos/git-orchard-rs/.worktrees/issue429";
+        let wt_path = "/repos/orchardist/.worktrees/issue429";
         let session_uuid = "550e8400-e29b-41d4-a716-446655440000";
 
         let snapshot = WorkViewFixture::new()
-            .project("git-orchard-rs", "/repos/git-orchard-rs")
+            .project("orchardist", "/repos/orchardist")
             .worktree(wt_path, "issue429/spec", "owner/repo", None, None)
             .session("issue429", Some(wt_path))
             .claude("issue429", "working", session_uuid)
@@ -769,9 +769,9 @@ mod tests {
     #[test]
     fn unmatched_sessions_become_standalone() {
         let snapshot = WorkViewFixture::new()
-            .project("git-orchard-rs", "/repos/git-orchard-rs")
+            .project("orchardist", "/repos/orchardist")
             .worktree(
-                "/repos/git-orchard-rs/.worktrees/issue429",
+                "/repos/orchardist/.worktrees/issue429",
                 "issue429/spec",
                 "owner/repo",
                 None,

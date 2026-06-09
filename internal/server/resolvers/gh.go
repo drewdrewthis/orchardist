@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
 )
 
 // errGHNotConfigured is returned when the gh provider was never wired.

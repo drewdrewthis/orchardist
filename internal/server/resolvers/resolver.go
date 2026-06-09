@@ -6,17 +6,17 @@ import (
 	"context"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/hostservice"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // ReposLister is the narrow read-side contract the repo resolver depends on.

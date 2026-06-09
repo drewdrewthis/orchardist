@@ -17,10 +17,10 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	gql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	gql "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // TestConversation_E2E_OpenThenClosed boots the GraphQL stack against a

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
 )
 
 const e2eDeadline = 5 * time.Second

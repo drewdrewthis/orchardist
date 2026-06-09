@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // Provider exposes Chat rooms and ChatMessage events to the GraphQL

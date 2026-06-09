@@ -338,7 +338,7 @@ impl RemmyAdapter {
 pub struct BoxdSharedAdapter {
     /// SSH target host (e.g. `"boxd@orchard-rs.boxd.sh"`).
     pub host: String,
-    /// Absolute path to the bare repo on the VM (e.g. `"~/git-orchard-rs"`).
+    /// Absolute path to the bare repo on the VM (e.g. `"~/orchardist"`).
     pub path: String,
     /// SSH executor (real process or test double).
     pub ssh: Box<dyn SshExec>,
@@ -1104,7 +1104,7 @@ mod tests {
         let cfg = crate::global_config::RemoteConfig {
             name: "proxy".to_string(),
             host: "boxd@vm.boxd.sh".to_string(),
-            path: "~/git-orchard-rs".to_string(),
+            path: "~/orchardist".to_string(),
             shell: "ssh".to_string(),
             kind: RemoteKind::OrchardProxy,
             allow_transitive: false,
@@ -1193,7 +1193,7 @@ mod tests {
 
         let adapter = OrchardProxyAdapter {
             host: "boxd@vm.boxd.sh".to_string(),
-            path: "~/git-orchard-rs".to_string(),
+            path: "~/orchardist".to_string(),
             ssh: Box::new(fake),
             snapshot: OnceLock::new(),
         };
@@ -2104,7 +2104,7 @@ mod tests {
 
         let adapter_a = OrchardProxyAdapter {
             host: host_a.to_string(),
-            path: "~/git-orchard-rs".to_string(),
+            path: "~/orchardist".to_string(),
             ssh: Box::new(recording_a),
             snapshot: OnceLock::new(),
         };

@@ -45,10 +45,10 @@ Feature: Tmux popup mode
   @e2e
   Scenario: Enter on a task switches to its session and closes the popup
     Given the popup TUI is showing tasks
-    And task #47 has session "git-orchard-rs_47_main"
+    And task #47 has session "orchardist_47_main"
     When I press Enter on task #47
     Then the popup closes
-    And my tmux client switches to session "git-orchard-rs_47_main"
+    And my tmux client switches to session "orchardist_47_main"
 
   @e2e
   Scenario: Enter creates local worktree and session, then switches
@@ -137,9 +137,9 @@ Feature: Tmux popup mode
 
   @integration
   Scenario: Binary exits with switch target on stdout
-    Given the user selected task #47 with session "git-orchard-rs_47_main"
+    Given the user selected task #47 with session "orchardist_47_main"
     When the TUI exits after selection
-    Then it prints "git-orchard-rs_47_main" to stdout
+    Then it prints "orchardist_47_main" to stdout
     And exits with code 0
 
   @integration

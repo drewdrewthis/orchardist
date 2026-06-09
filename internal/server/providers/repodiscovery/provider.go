@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/config"
 )
 
 // DefaultTTL is the discovery cache lifetime. 30 seconds is short

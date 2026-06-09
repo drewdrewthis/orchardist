@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
 )
 
 // TestRemoveProject_CancelsAndDrops verifies that RemoveProject cancels

@@ -9,7 +9,7 @@ import (
 
 func TestSanitizeTmuxName(t *testing.T) {
 	cases := map[string]string{
-		"git-orchard-rs":     "git-orchard-rs",
+		"orchardist":     "orchardist",
 		"new session 1":      "new-session-1",
 		"feat/foo.bar:baz":   "feat-foo-bar-baz",
 		"  padded  ":         "padded",

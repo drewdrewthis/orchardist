@@ -20,7 +20,7 @@ Feature: Federated orchard — remote discovery via `ssh host orchard --json`
 
   @unit
   Scenario: RemoteConfig accepts "orchard-proxy" as a valid type
-    Given a RemoteConfig with `"type": "orchard-proxy"`, host "boxd@vm.boxd.sh", path "~/git-orchard-rs"
+    Given a RemoteConfig with `"type": "orchard-proxy"`, host "boxd@vm.boxd.sh", path "~/orchardist"
     When the config is loaded
     Then loading succeeds
     And the parsed RemoteConfig.kind equals RemoteKind::OrchardProxy

@@ -48,7 +48,7 @@ pub const PROTECTED_SESSION_KEEPERS: &[&str] = &[
     "technician",
     "krusty_brain",
     "langwatch_main",
-    "git-orchard-rs_main",
+    "orchardist_main",
     "scenario_main",
     "claude-remote_main",
     "orchard-oss-audit",

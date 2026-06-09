@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // pollInterval is the test-time tick rate. Snappier than the 1s

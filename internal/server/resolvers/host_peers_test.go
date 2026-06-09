@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 // TestHostPeers_PurposeFromConfig asserts that a peer Host returned by

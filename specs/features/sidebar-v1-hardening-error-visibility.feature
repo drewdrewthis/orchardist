@@ -89,7 +89,7 @@ Feature: orchard-gui sidebar v1 hardening + error visibility (parent #548)
 
   @e2e
   Scenario: Sidebar item shows a repo chip alongside the branch
-    Given the user has worktrees across two repos: "git-orchard-rs" and "langwatch"
+    Given the user has worktrees across two repos: "orchardist" and "langwatch"
     When orchard-gui renders the sidebar
     Then each sidebar item visibly shows its repo (chip, label, or icon) alongside the branch
     And two items on different repos but the same branch name are visually distinguishable without hovering or expanding
@@ -223,7 +223,7 @@ Feature: orchard-gui sidebar v1 hardening + error visibility (parent #548)
 
   @e2e
   Scenario: A printed URL underlines on hover and opens in the default browser on click
-    Given a terminal pane prints "https://github.com/drewdrewthis/git-orchard-rs"
+    Given a terminal pane prints "https://github.com/drewdrewthis/orchardist"
     When the user hovers the URL
     Then the URL underlines
     When the user clicks the URL (cmd-click on macOS, plain click on platforms where that is conventional)

@@ -320,7 +320,7 @@ Feature: Per-source cache architecture
           },
           {
             "slug": "acme/my-project",
-            "path": "/workspace/git-orchard-rs"
+            "path": "/workspace/orchardist"
           }
         ]
       }

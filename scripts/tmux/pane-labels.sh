@@ -7,7 +7,7 @@
 #   bind-key s run-shell '~/.local/bin/orchard-tmux-labels' \; choose-tree ...
 #
 # Install: copy to ~/.local/bin/orchard-tmux-labels
-# Source of truth: scripts/tmux/pane-labels.sh in git-orchard-rs (L1).
+# Source of truth: scripts/tmux/pane-labels.sh in orchardist (L1).
 #
 # Daemon contract: queries `repos { slug worktrees { ... } }` per the v0.8
 # schema (ADR-015 rename project→repo). Falls back to empty results when

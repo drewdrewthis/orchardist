@@ -3941,13 +3941,13 @@ issue42/fix-bug 2026-04-12T14:30:00-07:00
     fn parse_tmux_output_new_format_handles_tabs_in_none_of_the_fields() {
         // Sanity: tmux session names and paths never contain tabs, so tab is a
         // reliable separator. A well-formed line with no embedded tabs parses cleanly.
-        let input = "repo_main\t1\t/workspace/git-orchard-rs\t1700000000\t1700001000";
+        let input = "repo_main\t1\t/workspace/orchardist\t1700000000\t1700001000";
 
         let sessions = parse_tmux_sessions_from_panes(input, None, |_| String::new(), |_| vec![]);
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].name, "repo_main");
-        assert_eq!(sessions[0].path, "/workspace/git-orchard-rs");
+        assert_eq!(sessions[0].path, "/workspace/orchardist");
     }
 
     #[test]

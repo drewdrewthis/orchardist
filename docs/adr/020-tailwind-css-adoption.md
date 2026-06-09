@@ -164,6 +164,6 @@ revert ADR-020 and reopen the trade-off.
 
 ## Related
 
-- [#544](https://github.com/drewdrewthis/git-orchard-rs/issues/544) — this issue
-- [#548](https://github.com/drewdrewthis/git-orchard-rs/issues/548) — sidebar rework (concurrent, excluded from this PR)
-- [#549](https://github.com/drewdrewthis/git-orchard-rs/issues/549)–[#552](https://github.com/drewdrewthis/git-orchard-rs/issues/552) — downstream beneficiaries
+- [#544](https://github.com/drewdrewthis/orchardist/issues/544) — this issue
+- [#548](https://github.com/drewdrewthis/orchardist/issues/548) — sidebar rework (concurrent, excluded from this PR)
+- [#549](https://github.com/drewdrewthis/orchardist/issues/549)–[#552](https://github.com/drewdrewthis/orchardist/issues/552) — downstream beneficiaries

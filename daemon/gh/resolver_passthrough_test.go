@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/daemon/gh"
+	"github.com/drewdrewthis/orchardist/daemon/gh"
 )
 
 // slowService is a stub that sleeps before returning GraphQL results.

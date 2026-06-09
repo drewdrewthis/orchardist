@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/loaders"
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/loaders"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	ghprovider "github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	hostprovider "github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
 )
 
 // TestProcessLoaderBatchesByPid asserts the n+1 ACs for the

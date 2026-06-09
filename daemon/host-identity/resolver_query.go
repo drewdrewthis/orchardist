@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	graphql "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
+	graphql "github.com/drewdrewthis/orchardist/internal/server/graphql"
 )
 
 // QueryResolver handles the Query.{host, hosts, peers} fields owned by the

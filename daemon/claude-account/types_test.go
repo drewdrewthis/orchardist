@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	claudeaccount "github.com/drewdrewthis/git-orchard-rs/daemon/claude-account"
+	claudeaccount "github.com/drewdrewthis/orchardist/daemon/claude-account"
 )
 
 // TestAccountID_GraphQLID asserts the canonical id format.

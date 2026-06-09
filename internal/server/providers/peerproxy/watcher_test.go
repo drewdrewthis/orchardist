@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/peerproxy"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
 // TestConfigWatcher_EditTriggersReload verifies that writing a new config

@@ -27,12 +27,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/resolvers"
+	"github.com/drewdrewthis/orchardist/internal/server"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	"github.com/drewdrewthis/orchardist/internal/server/resolvers"
 )
 
 // ---------------------------------------------------------------------------

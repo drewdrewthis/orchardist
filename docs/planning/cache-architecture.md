@@ -69,7 +69,7 @@ The config declares repos to manage:
 {
   "repos": [
     { "slug": "acme/webapp", "path": "/home/user/workspace/webapp", "remote": { "host": "ubuntu@10.0.0.1", "path": "/home/ubuntu/webapp-workspace" } },
-    { "slug": "drewdrewthis/git-orchard-rs", "path": "/home/user/workspace/git-orchard-rs" }
+    { "slug": "drewdrewthis/orchardist", "path": "/home/user/workspace/orchardist" }
   ]
 }
 ```

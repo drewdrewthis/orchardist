@@ -11,8 +11,8 @@ import (
 	"context"
 	"testing"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	tmuxprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/tmux"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	tmuxprovider "github.com/drewdrewthis/orchardist/internal/server/providers/tmux"
 )
 
 // TestTmuxPaneClaudeInstance_ClaudePaneReturnsInstance verifies that a pane

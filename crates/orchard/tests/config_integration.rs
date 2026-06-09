@@ -147,7 +147,7 @@ fn config_with_path_field_round_trips() {
 fn repo_config_slug_splits_correctly() {
     let repo = RepoConfig {
         slug: "acme/my-project".to_string(),
-        path: "/workspace/git-orchard-rs".to_string(),
+        path: "/workspace/orchardist".to_string(),
         remotes: vec![],
     };
 

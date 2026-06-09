@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/ps"
 )
 
 // TestApplyProcessFilter_PidIn confirms pidIn filters are applied at the

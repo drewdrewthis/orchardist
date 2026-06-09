@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drewdrewthis/git-orchard-rs/daemon/gh"
+	"github.com/drewdrewthis/orchardist/daemon/gh"
 )
 
 // countingService wraps stubService and counts BatchEnrichPullRequests calls.

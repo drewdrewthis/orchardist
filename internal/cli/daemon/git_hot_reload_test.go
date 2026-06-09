@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	configprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/config"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
+	configprovider "github.com/drewdrewthis/orchardist/internal/server/providers/config"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
 )
 
 const hotReloadDeadline = 5 * time.Second

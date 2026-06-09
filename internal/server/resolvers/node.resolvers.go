@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"strings"
 
-	graphql1 "github.com/drewdrewthis/git-orchard-rs/internal/server/graphql"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeaccount"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/claudeprojects"
-	ghprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/gh"
-	gitprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/git"
-	hostprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/host"
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/providers/hostservice"
-	psprovider "github.com/drewdrewthis/git-orchard-rs/internal/server/providers/ps"
+	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
+	ghprovider "github.com/drewdrewthis/orchardist/internal/server/providers/gh"
+	gitprovider "github.com/drewdrewthis/orchardist/internal/server/providers/git"
+	hostprovider "github.com/drewdrewthis/orchardist/internal/server/providers/host"
+	"github.com/drewdrewthis/orchardist/internal/server/providers/hostservice"
+	psprovider "github.com/drewdrewthis/orchardist/internal/server/providers/ps"
 )
 
 // resolveNode parses the id and dispatches to the right provider. The

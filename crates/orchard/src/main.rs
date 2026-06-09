@@ -209,7 +209,7 @@ fn handle_setup_remote(args: &[String]) {
 fn handle_upgrade() {
     eprintln!("Upgrade not yet implemented for the Rust binary.");
     eprintln!(
-        "Download the latest from: https://github.com/drewdrewthis/git-orchard-rs/releases/latest"
+        "Download the latest from: https://github.com/drewdrewthis/orchardist/releases/latest"
     );
 }
 
@@ -460,7 +460,7 @@ fn emit_json_deprecation_warning(surface: &str) {
     eprintln!(
         "[deprecated] `{surface}` is deprecated and will be removed. \
          Query the daemon's GraphQL endpoint at http://127.0.0.1:7777/graphql instead. \
-         See https://github.com/drewdrewthis/git-orchard-rs/issues/438."
+         See https://github.com/drewdrewthis/orchardist/issues/438."
     );
 }
 

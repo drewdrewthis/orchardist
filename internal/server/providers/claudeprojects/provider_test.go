@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // TestToGraphQL_JsonlPath asserts that ToGraphQL maps the in-memory

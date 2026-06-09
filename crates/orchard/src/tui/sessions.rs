@@ -18,7 +18,7 @@ use crate::tmux;
 /// A session that needs to be created for a repo.
 #[derive(Debug, PartialEq)]
 pub(super) struct SessionToCreate {
-    /// Derived tmux session name (e.g. "git-orchard-rs_main").
+    /// Derived tmux session name (e.g. "orchardist_main").
     pub name: String,
     /// Absolute path on disk for the session start directory.
     pub start_dir: String,

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drewdrewthis/git-orchard-rs/internal/server/adapter"
+	"github.com/drewdrewthis/orchardist/internal/server/adapter"
 )
 
 // Provider implements adapter.Provider[WorktreeID, Worktree] for the
