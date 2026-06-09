@@ -136,14 +136,18 @@ func (r *MutationResolver) execScript(ctx context.Context, script string, args .
 	return env, nil
 }
 
-// worktreeScript returns the absolute path to a git-worktree-* script.
+// worktreeScript returns the absolute path to a git/worktree-* script.
+// Scripts live under <scriptRoot>/git/worktree-<op>.sh, NOT as flat siblings
+// <scriptRoot>/git-worktree-<op>.sh (issue #693).
 func (r *MutationResolver) worktreeScript(op string) string {
-	return fmt.Sprintf("%s/git-worktree-%s.sh", r.scriptRoot, op)
+	return fmt.Sprintf("%s/git/worktree-%s.sh", r.scriptRoot, op)
 }
 
-// gitScript returns the absolute path to a git-* script.
+// gitScript returns the absolute path to a git/<op> script.
+// Scripts live under <scriptRoot>/git/<op>.sh, NOT as flat siblings
+// <scriptRoot>/git-<op>.sh (issue #693).
 func (r *MutationResolver) gitScript(op string) string {
-	return fmt.Sprintf("%s/git-%s.sh", r.scriptRoot, op)
+	return fmt.Sprintf("%s/git/%s.sh", r.scriptRoot, op)
 }
 
 // --- Mutation resolvers ---

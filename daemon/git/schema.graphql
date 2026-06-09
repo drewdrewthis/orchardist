@@ -2,7 +2,8 @@
 #
 # Owns: Repo, Worktree.
 # Owns: Query.repos, Subscription.worktreeChanged.
-# Mutations (to be added in #613): worktreeCreate, worktreeRemove, worktreeMove,
+# Owns: Mutation.worktreeRemove (wired in #693).
+# Remaining mutations (to be added in follow-up issues): worktreeCreate, worktreeMove,
 #                                  fetch, pull, push. All exec `scripts/<op>`.
 #
 # Cross-domain fields on Worktree live in the PRODUCING domain's partial (S15b):
@@ -12,6 +13,20 @@
 #   claudeInstances → daemon/claude-instance/schema.graphql
 #   pr              → daemon/gh/schema.graphql
 #   issue           → daemon/gh/schema.graphql
+
+extend type Mutation {
+  """
+  Remove a local git worktree by its stable ID.
+
+  Idempotency: idempotent — removing a non-existent worktree is a no-op at
+  git level. Callers may safely retry after a transient failure (M5).
+
+  Per L5: execs scripts/git/worktree-remove.sh --json with the provided
+  input arguments. The script is the canonical operation; this resolver
+  is a thin façade (L1).
+  """
+  worktreeRemove(input: WorktreeRemoveInput!): WorktreeMutationResult!
+}
 
 extend type Query {
   "All repos declared in ~/.orchard/config.json. Read-only — repos are added with `orchard config add-repo`."

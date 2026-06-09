@@ -6,6 +6,7 @@ import (
 	"context"
 	"time"
 
+	gitdomain "github.com/drewdrewthis/orchardist/daemon/git"
 	"github.com/drewdrewthis/orchardist/internal/server/loaders"
 	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
 	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeprojects"
@@ -44,6 +45,10 @@ type Resolver struct {
 	GH                  *gh.Provider
 	PeerProxy           *peerproxy.Provider
 	LocalEvents         *peerproxy.LocalInvalidator
+	// GitMutations is the git-domain mutation resolver. When nil, worktreeRemove
+	// and sibling git mutations return an "not configured" error. Wired at boot
+	// via WithGitMutations.
+	GitMutations *gitdomain.MutationResolver
 }
 
 // New constructs a Resolver with the daemon's start time captured.
@@ -127,6 +132,14 @@ func (r *Resolver) WithPeerProxy(p *peerproxy.Provider) *Resolver {
 // subscribe to via their peerproxy adapter.
 func (r *Resolver) WithLocalEvents(l *peerproxy.LocalInvalidator) *Resolver {
 	r.LocalEvents = l
+	return r
+}
+
+// WithGitMutations wires the git-domain mutation resolver (worktreeRemove, etc.).
+// scriptRoot is the absolute path to the scripts/ directory. When empty,
+// gitdomain.NewMutationResolver defaults to "scripts" (relative to cwd).
+func (r *Resolver) WithGitMutations(scriptRoot string) *Resolver {
+	r.GitMutations = gitdomain.NewMutationResolver(nil, scriptRoot)
 	return r
 }
 

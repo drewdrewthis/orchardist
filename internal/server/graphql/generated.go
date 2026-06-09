@@ -179,6 +179,7 @@ type ComplexityRoot struct {
 	Mutation struct {
 		LaunchSession  func(childComplexity int, input LaunchSessionInput) int
 		SendTextToPane func(childComplexity int, paneID string, text string) int
+		WorktreeRemove func(childComplexity int, input WorktreeRemoveInput) int
 	}
 
 	Process struct {
@@ -397,6 +398,12 @@ type ComplexityRoot struct {
 		TmuxPanes       func(childComplexity int) int
 		TmuxSession     func(childComplexity int) int
 	}
+
+	WorktreeMutationResult struct {
+		ErrCode func(childComplexity int) int
+		ErrMsg  func(childComplexity int) int
+		Ok      func(childComplexity int) int
+	}
 }
 
 type ClaudeInstanceResolver interface {
@@ -418,6 +425,7 @@ type IssueResolver interface {
 type MutationResolver interface {
 	SendTextToPane(ctx context.Context, paneID string, text string) (bool, error)
 	LaunchSession(ctx context.Context, input LaunchSessionInput) (*LaunchSessionResult, error)
+	WorktreeRemove(ctx context.Context, input WorktreeRemoveInput) (*WorktreeMutationResult, error)
 }
 type ProcessResolver interface {
 	Host(ctx context.Context, obj *Process) (*Host, error)
@@ -1138,6 +1146,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SendTextToPane(childComplexity, args["paneId"].(string), args["text"].(string)), true
+	case "Mutation.worktreeRemove":
+		if e.ComplexityRoot.Mutation.WorktreeRemove == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_worktreeRemove_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorktreeRemove(childComplexity, args["input"].(WorktreeRemoveInput)), true
 
 	case "Process.args":
 		if e.ComplexityRoot.Process.Args == nil {
@@ -2280,6 +2299,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Worktree.TmuxSession(childComplexity), true
 
+	case "WorktreeMutationResult.errCode":
+		if e.ComplexityRoot.WorktreeMutationResult.ErrCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeMutationResult.ErrCode(childComplexity), true
+	case "WorktreeMutationResult.errMsg":
+		if e.ComplexityRoot.WorktreeMutationResult.ErrMsg == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeMutationResult.ErrMsg(childComplexity), true
+	case "WorktreeMutationResult.ok":
+		if e.ComplexityRoot.WorktreeMutationResult.Ok == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeMutationResult.Ok(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -2293,6 +2331,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputProcessFilter,
 		ec.unmarshalInputTmuxPaneFilter,
 		ec.unmarshalInputTmuxSessionFilter,
+		ec.unmarshalInputWorktreeRemoveInput,
 	)
 	first := true
 
@@ -3746,6 +3785,41 @@ type Mutation {
   host where they have no shell access.
   """
   launchSession(input: LaunchSessionInput!): LaunchSessionResult!
+
+  """
+  Remove a local git worktree by its stable ID.
+
+  Idempotency: idempotent — removing a non-existent worktree is a no-op at
+  git level. Callers may safely retry after a transient failure (M5).
+
+  Per L5: execs scripts/git/worktree-remove.sh --json with the provided
+  input arguments. The script is the canonical operation; this resolver
+  is a thin façade (L1).
+  """
+  worktreeRemove(input: WorktreeRemoveInput!): WorktreeMutationResult!
+}
+
+"""
+Input for worktreeRemove. Targets a worktree by its stable ID.
+"""
+input WorktreeRemoveInput {
+  "The stable ID of the worktree to remove (format: <project_id>:<worktree_name>)."
+  worktreeId: String!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+}
+
+"""
+Result of a git worktree mutation. When ok is false, errCode and errMsg carry
+the typed error details from the script's L2 envelope.
+"""
+type WorktreeMutationResult {
+  "True when the mutation succeeded."
+  ok: Boolean!
+  "Typed error code from the script envelope; null when ok is true."
+  errCode: String
+  "Human-readable error message; null when ok is true."
+  errMsg: String
 }
 
 """
@@ -4392,6 +4466,18 @@ func (ec *executionContext) childFields_Worktree(ctx context.Context, field grap
 	return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 }
 
+func (ec *executionContext) childFields_WorktreeMutationResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ok":
+		return ec.fieldContext_WorktreeMutationResult_ok(ctx, field)
+	case "errCode":
+		return ec.fieldContext_WorktreeMutationResult_errCode(ctx, field)
+	case "errMsg":
+		return ec.fieldContext_WorktreeMutationResult_errMsg(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorktreeMutationResult", field.Name)
+}
+
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -4555,6 +4641,20 @@ func (ec *executionContext) field_Mutation_sendTextToPane_args(ctx context.Conte
 		return nil, err
 	}
 	args["text"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_worktreeRemove_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (WorktreeRemoveInput, error) {
+			return ec.unmarshalNWorktreeRemoveInput2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeRemoveInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -7390,6 +7490,50 @@ func (ec *executionContext) fieldContext_Mutation_launchSession(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_launchSession_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_worktreeRemove(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_worktreeRemove(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorktreeRemove(ctx, fc.Args["input"].(WorktreeRemoveInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *WorktreeMutationResult) graphql.Marshaler {
+			return ec.marshalNWorktreeMutationResult2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeMutationResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_worktreeRemove(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorktreeMutationResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_worktreeRemove_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -12241,6 +12385,75 @@ func (ec *executionContext) fieldContext_Worktree_behind(_ context.Context, fiel
 	return graphql.NewScalarFieldContext("Worktree", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _WorktreeMutationResult_ok(ctx context.Context, field graphql.CollectedField, obj *WorktreeMutationResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeMutationResult_ok(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ok, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeMutationResult_ok(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeMutationResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeMutationResult_errCode(ctx context.Context, field graphql.CollectedField, obj *WorktreeMutationResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeMutationResult_errCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeMutationResult_errCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeMutationResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeMutationResult_errMsg(ctx context.Context, field graphql.CollectedField, obj *WorktreeMutationResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeMutationResult_errMsg(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrMsg, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeMutationResult_errMsg(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeMutationResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -13555,6 +13768,43 @@ func (ec *executionContext) unmarshalInputTmuxSessionFilter(ctx context.Context,
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputWorktreeRemoveInput(ctx context.Context, obj any) (WorktreeRemoveInput, error) {
+	var it WorktreeRemoveInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"worktreeId", "force"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "worktreeId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("worktreeId"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.WorktreeID = data
+		case "force":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("force"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Force = data
+		}
+	}
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -14797,6 +15047,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "launchSession":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_launchSession(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "worktreeRemove":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_worktreeRemove(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -18338,6 +18595,49 @@ func (ec *executionContext) _Worktree(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
+var worktreeMutationResultImplementors = []string{"WorktreeMutationResult"}
+
+func (ec *executionContext) _WorktreeMutationResult(ctx context.Context, sel ast.SelectionSet, obj *WorktreeMutationResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, worktreeMutationResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorktreeMutationResult")
+		case "ok":
+			out.Values[i] = ec._WorktreeMutationResult_ok(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "errCode":
+			out.Values[i] = ec._WorktreeMutationResult_errCode(ctx, field, obj)
+		case "errMsg":
+			out.Values[i] = ec._WorktreeMutationResult_errMsg(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var __DirectiveImplementors = []string{"__Directive"}
 
 func (ec *executionContext) ___Directive(ctx context.Context, sel ast.SelectionSet, obj *introspection.Directive) graphql.Marshaler {
@@ -19372,6 +19672,25 @@ func (ec *executionContext) marshalNWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgi
 		return graphql.Null
 	}
 	return ec._Worktree(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorktreeMutationResult2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeMutationResult(ctx context.Context, sel ast.SelectionSet, v WorktreeMutationResult) graphql.Marshaler {
+	return ec._WorktreeMutationResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorktreeMutationResult2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeMutationResult(ctx context.Context, sel ast.SelectionSet, v *WorktreeMutationResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorktreeMutationResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNWorktreeRemoveInput2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeRemoveInput(ctx context.Context, v any) (WorktreeRemoveInput, error) {
+	res, err := ec.unmarshalInputWorktreeRemoveInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalN__Directive2githubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐDirective(ctx context.Context, sel ast.SelectionSet, v introspection.Directive) graphql.Marshaler {

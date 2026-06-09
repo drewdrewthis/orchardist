@@ -1359,6 +1359,41 @@ type Mutation {
   host where they have no shell access.
   """
   launchSession(input: LaunchSessionInput!): LaunchSessionResult!
+
+  """
+  Remove a local git worktree by its stable ID.
+
+  Idempotency: idempotent — removing a non-existent worktree is a no-op at
+  git level. Callers may safely retry after a transient failure (M5).
+
+  Per L5: execs scripts/git/worktree-remove.sh --json with the provided
+  input arguments. The script is the canonical operation; this resolver
+  is a thin façade (L1).
+  """
+  worktreeRemove(input: WorktreeRemoveInput!): WorktreeMutationResult!
+}
+
+"""
+Input for worktreeRemove. Targets a worktree by its stable ID.
+"""
+input WorktreeRemoveInput {
+  "The stable ID of the worktree to remove (format: <project_id>:<worktree_name>)."
+  worktreeId: String!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+}
+
+"""
+Result of a git worktree mutation. When ok is false, errCode and errMsg carry
+the typed error details from the script's L2 envelope.
+"""
+type WorktreeMutationResult {
+  "True when the mutation succeeded."
+  ok: Boolean!
+  "Typed error code from the script envelope; null when ok is true."
+  errCode: String
+  "Human-readable error message; null when ok is true."
+  errMsg: String
 }
 
 """

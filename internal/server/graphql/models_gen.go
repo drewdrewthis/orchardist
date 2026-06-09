@@ -862,6 +862,25 @@ func (Worktree) IsNode() {}
 // Globally-unique id (e.g. "Host:<machineId>").
 func (this Worktree) GetID() string { return this.ID }
 
+// Result of a git worktree mutation. When ok is false, errCode and errMsg carry
+// the typed error details from the script's L2 envelope.
+type WorktreeMutationResult struct {
+	// True when the mutation succeeded.
+	Ok bool `json:"ok"`
+	// Typed error code from the script envelope; null when ok is true.
+	ErrCode *string `json:"errCode,omitempty"`
+	// Human-readable error message; null when ok is true.
+	ErrMsg *string `json:"errMsg,omitempty"`
+}
+
+// Input for worktreeRemove. Targets a worktree by its stable ID.
+type WorktreeRemoveInput struct {
+	// The stable ID of the worktree to remove (format: <project_id>:<worktree_name>).
+	WorktreeID string `json:"worktreeId"`
+	// When true, remove even if there are uncommitted changes.
+	Force *bool `json:"force,omitempty"`
+}
+
 // Aggregated CI status across all check runs and statuses on the PR head sha.
 type CiStatus string
 

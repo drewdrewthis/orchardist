@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	git "github.com/drewdrewthis/orchardist/daemon/git"
 	graphql1 "github.com/drewdrewthis/orchardist/internal/server/graphql"
 	"github.com/drewdrewthis/orchardist/internal/server/loaders"
 	"github.com/drewdrewthis/orchardist/internal/server/providers/claudeaccount"
@@ -234,6 +235,39 @@ func (r *mutationResolver) SendTextToPane(ctx context.Context, paneID string, te
 // gqlgen-managed file stays a thin projection.
 func (r *mutationResolver) LaunchSession(ctx context.Context, input graphql1.LaunchSessionInput) (*graphql1.LaunchSessionResult, error) {
 	return launchClaudeSession(ctx, input)
+}
+
+// WorktreeRemove is the resolver for the worktreeRemove field (#693 step 1).
+// Delegates to the git-domain MutationResolver which execs
+// scripts/git/worktree-remove.sh --json (L1/L5).
+func (r *mutationResolver) WorktreeRemove(ctx context.Context, input graphql1.WorktreeRemoveInput) (*graphql1.WorktreeMutationResult, error) {
+	if r.GitMutations == nil {
+		notConfigured := "NOT_CONFIGURED"
+		notConfiguredMsg := "git mutations resolver not configured"
+		return &graphql1.WorktreeMutationResult{
+			Ok:      false,
+			ErrCode: &notConfigured,
+			ErrMsg:  &notConfiguredMsg,
+		}, nil
+	}
+	domainInput := git.WorktreeRemoveInput{
+		WorktreeID: input.WorktreeID,
+	}
+	if input.Force != nil {
+		domainInput.Force = *input.Force
+	}
+	result, err := r.GitMutations.WorktreeRemove(ctx, domainInput)
+	if err != nil {
+		return nil, err
+	}
+	out := &graphql1.WorktreeMutationResult{Ok: result.OK}
+	if !result.OK {
+		errCode := result.ErrCode
+		errMsg := result.ErrMsg
+		out.ErrCode = &errCode
+		out.ErrMsg = &errMsg
+	}
+	return out, nil
 }
 
 // Host is the resolver for the process.host field.
@@ -1400,7 +1434,7 @@ func (r *tmuxServerResolver) Alive(ctx context.Context, obj *graphql1.TmuxServer
 }
 
 // Sessions is the resolver for tmuxServer.sessions. Sort key defaults to LAST_ACTIVITY (most-recently-active first; lex name break ties; sessions with zero activity rank below those with one). NOTE: parameter is sortKey not sort to avoid shadowing the imported sort package; gqlgen rewrites this back to sort on every regen, restore sortKey after each codegen.
-func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sortKey *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
+func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxServer, sort *graphql1.TmuxSessionSort) ([]*graphql1.TmuxSession, error) {
 	if r.Tmux == nil {
 		return nil, nil
 	}
@@ -1411,8 +1445,8 @@ func (r *tmuxServerResolver) Sessions(ctx context.Context, obj *graphql1.TmuxSer
 	}
 
 	key := graphql1.TmuxSessionSortLastActivity
-	if sortKey != nil {
-		key = *sortKey
+	if sort != nil {
+		key = *sort
 	}
 	switch key {
 	case graphql1.TmuxSessionSortName:

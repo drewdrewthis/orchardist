@@ -112,6 +112,29 @@ func TestIntrospection_HTTPDisabledWhenEnvOff(t *testing.T) {
 	}
 }
 
+// TestIntrospection_WorktreeRemoveMutationListed verifies that the served
+// GraphQL schema lists "worktreeRemove" in the Mutation type's fields (#693 AC1).
+// After this change, introspection against the in-process executable schema
+// must include the field, where previously only "launchSession" and
+// "sendTextToPane" appeared.
+func TestIntrospection_WorktreeRemoveMutationListed(t *testing.T) {
+	t.Setenv("ORCHARD_INTROSPECTION", "")
+
+	res := &resolvers.Resolver{}
+	srv := httptest.NewServer(graphqlHandlerFor(res))
+	t.Cleanup(srv.Close)
+
+	body := postQuery(t, srv.URL, `{ __type(name: "Mutation") { fields { name } } }`)
+	if strings.Contains(body, "introspection disabled") {
+		t.Fatalf("introspection unexpectedly disabled: %s", body)
+	}
+	if !strings.Contains(body, "worktreeRemove") {
+		t.Errorf("Mutation type fields do not include \"worktreeRemove\".\n"+
+			"Before #693 the field was absent; now it must be listed.\n"+
+			"Got response body: %s", body)
+	}
+}
+
 // postQuery posts a single GraphQL document and returns the raw response body.
 func postQuery(t *testing.T, url, query string) string {
 	t.Helper()

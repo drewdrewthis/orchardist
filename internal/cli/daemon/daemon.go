@@ -236,6 +236,7 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),
 		server.WithLocalEvents(localEvents),
+		server.WithGitMutations(orchardScriptsRoot()),
 	}
 	if hsvc != nil {
 		opts = append(opts, server.WithHostService(hsvc))
@@ -420,6 +421,29 @@ func claudeprojectsRoot() string {
 		return ".claude/projects"
 	}
 	return home + "/.claude/projects"
+}
+
+// orchardScriptsRoot returns the absolute path to the scripts/ directory.
+// ORCHARD_SCRIPTS_ROOT env overrides; otherwise resolved relative to the
+// running binary so the installed daemon finds scripts/ next to itself.
+// Falls back to "scripts" (relative to cwd) so unit tests that rely on the
+// default still work.
+func orchardScriptsRoot() string {
+	if v := os.Getenv("ORCHARD_SCRIPTS_ROOT"); v != "" {
+		return v
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "scripts"
+	}
+	// Installed layout: /usr/local/bin/orchard-daemon → /usr/local/bin/../scripts → /usr/local/scripts
+	// Dev layout:        bin/orchard-daemon            → bin/../scripts            → scripts/
+	binDir := pathDir(exe)
+	candidate := binDir + "/../scripts"
+	if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
+		return candidate
+	}
+	return "scripts"
 }
 
 func ensureParentDir(path string) error {

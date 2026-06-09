@@ -463,3 +463,4 @@ func (r *tmuxWindowResolver) lookupWindow(id string) (tmux.Window, bool) {
 	w, ok := r.Tmux.Snapshot().Windows[tmux.WindowKey{Host: host, Session: session, Index: indexN}]
 	return w, ok
 }
+
