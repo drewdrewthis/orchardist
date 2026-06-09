@@ -75,8 +75,8 @@ install-daemon: daemon
 # Install shell scripts to /usr/local/share/orchard/scripts so the daemon
 # can find them via orchardScriptsRoot() when running from a system install.
 install-scripts:
-	install -d /usr/local/share/orchard
-	cp -R scripts /usr/local/share/orchard/
+	install -d /usr/local/share/orchard/scripts/git
+	install -m 755 scripts/git/*.sh /usr/local/share/orchard/scripts/git/
 
 install-tui: rust
 	install -m 755 target/release/orchard-tui /usr/local/bin/orchard-tui
