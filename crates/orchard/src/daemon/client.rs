@@ -19,12 +19,30 @@ use super::types::{
 use super::{DaemonError, resolve_daemon_url};
 
 /// Default per-request timeout against any single daemon (local or peer).
+/// Used for fast read queries (work_view, health, tmux_sessions, etc.) that
+/// should fail quickly if the daemon is unresponsive.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Timeout for the `worktreesCleanup` mutation.
+///
+/// Cleanup is a destructive, long-running operation: each worktree may run
+/// `worktree-remove.sh` + `branch-delete.sh` + `docker-teardown.sh` (which
+/// includes `docker compose down --volumes` and image removal). Docker teardown
+/// routinely takes 10–30 s per worktree, far exceeding the 5 s query default.
+/// The call is issued once per worktree, so 120 s gives ample headroom for a
+/// single worktree's teardown without sharing the fast-fail query timeout.
+pub const CLEANUP_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Blocking GraphQL client. Cheap to construct; reuse one per logical
 /// operation when fanning out to peers.
+///
+/// Holds two underlying HTTP clients: `http` (built with [`DEFAULT_TIMEOUT`])
+/// for fast read queries, and `http_cleanup` (built with [`CLEANUP_TIMEOUT`])
+/// used exclusively by [`Client::worktrees_cleanup_with_sessions`] so that
+/// long-running docker teardowns do not race the 5 s fast-fail window.
 pub struct Client {
     http: reqwest::blocking::Client,
+    http_cleanup: reqwest::blocking::Client,
     url: String,
 }
 
@@ -45,8 +63,13 @@ impl Client {
             .timeout(DEFAULT_TIMEOUT)
             .build()
             .map_err(|e| DaemonError::Transport(format!("build http client: {e}")))?;
+        let http_cleanup = reqwest::blocking::Client::builder()
+            .timeout(CLEANUP_TIMEOUT)
+            .build()
+            .map_err(|e| DaemonError::Transport(format!("build http cleanup client: {e}")))?;
         Ok(Self {
             http,
+            http_cleanup,
             url: url.into(),
         })
     }
@@ -58,11 +81,31 @@ impl Client {
 
     /// Generic GraphQL POST. Returns the parsed `data` payload, or maps every
     /// failure mode to a [`DaemonError`].
+    ///
+    /// All read queries use this method (backed by `self.http` with
+    /// [`DEFAULT_TIMEOUT`]). Long-running mutations call [`Self::query_with`]
+    /// directly with `self.http_cleanup`.
     pub fn query<T>(&self, body: &GraphQlRequest<'_>) -> Result<T, DaemonError>
     where
         T: serde::de::DeserializeOwned,
     {
-        let resp = self.http.post(&self.url).json(body).send().map_err(|e| {
+        self.query_with(&self.http, body)
+    }
+
+    /// Internal: issues a GraphQL POST using the provided HTTP client.
+    ///
+    /// Splits from `query` so that callers needing a different timeout (e.g.
+    /// the cleanup mutation) can pass `&self.http_cleanup` without duplicating
+    /// the response-handling logic.
+    fn query_with<T>(
+        &self,
+        http: &reqwest::blocking::Client,
+        body: &GraphQlRequest<'_>,
+    ) -> Result<T, DaemonError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let resp = http.post(&self.url).json(body).send().map_err(|e| {
             if e.is_connect() || e.is_timeout() {
                 DaemonError::Unreachable {
                     url: self.url.clone(),
@@ -83,9 +126,17 @@ impl Client {
             });
         }
 
-        let env: GraphQlResponse<T> = resp
-            .json()
-            .map_err(|e| DaemonError::Parse(format!("decode JSON: {e}")))?;
+        // Read the body as text first so we can include it in the error message
+        // if JSON parsing fails — the opaque "decode JSON" error has been observed
+        // in production (e.g. when the daemon returns a partial response for a
+        // worktree whose PR/issue lookup errors).
+        let text = resp
+            .text()
+            .map_err(|e| DaemonError::Transport(format!("read response body: {e}")))?;
+        let env: GraphQlResponse<T> = serde_json::from_str(&text).map_err(|e| {
+            let preview: String = text.chars().take(500).collect();
+            DaemonError::Parse(format!("decode JSON: {e}; body preview: {preview}"))
+        })?;
 
         if !env.errors.is_empty() {
             return Err(DaemonError::GraphQl(
@@ -206,7 +257,9 @@ impl Client {
         let variables =
             build_cleanup_variables(worktree_ids, session_names, active_session, active_cwd);
         let req = GraphQlRequest::with_variables(MUTATION, variables);
-        let payload: WorktreesCleanupPayload = self.query(&req)?;
+        // Use http_cleanup (CLEANUP_TIMEOUT = 120 s) instead of the default 5 s
+        // query client — docker teardown per worktree routinely takes 10–30 s.
+        let payload: WorktreesCleanupPayload = self.query_with(&self.http_cleanup, &req)?;
         Ok(payload.worktrees_cleanup)
     }
 }
@@ -407,6 +460,18 @@ pub fn peer_url(address: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cleanup operations (docker teardown per worktree) take 10–30 s and must
+    /// not share the 5 s fast-fail query timeout. This test is a compile-time +
+    /// runtime guard: if someone accidentally lowers CLEANUP_TIMEOUT below
+    /// DEFAULT_TIMEOUT, CI will catch it here.
+    #[test]
+    fn cleanup_timeout_exceeds_default_timeout() {
+        assert!(
+            CLEANUP_TIMEOUT > DEFAULT_TIMEOUT,
+            "CLEANUP_TIMEOUT ({CLEANUP_TIMEOUT:?}) must be greater than DEFAULT_TIMEOUT ({DEFAULT_TIMEOUT:?})"
+        );
+    }
 
     #[test]
     fn peer_url_prefixes_graphql() {
