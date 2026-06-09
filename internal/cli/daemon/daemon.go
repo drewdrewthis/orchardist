@@ -424,10 +424,15 @@ func claudeprojectsRoot() string {
 }
 
 // orchardScriptsRoot returns the absolute path to the scripts/ directory.
-// ORCHARD_SCRIPTS_ROOT env overrides; otherwise resolved relative to the
-// running binary so the installed daemon finds scripts/ next to itself.
-// Falls back to "scripts" (relative to cwd) so unit tests that rely on the
-// default still work.
+// Resolution order (first candidate whose git/worktree-remove.sh exists wins):
+//
+//  1. ORCHARD_SCRIPTS_ROOT env var — operator override, highest priority.
+//  2. <binDir>/../share/orchard/scripts — installed layout:
+//     /usr/local/bin/orchard-daemon → /usr/local/share/orchard/scripts
+//     (populated by `make install-scripts`).
+//  3. <binDir>/../scripts — dev/checkout layout:
+//     bin/orchard-daemon → scripts/ at the repo root.
+//  4. "scripts" — relative to cwd, last resort for unit tests.
 func orchardScriptsRoot() string {
 	if v := os.Getenv("ORCHARD_SCRIPTS_ROOT"); v != "" {
 		return v
@@ -436,14 +441,26 @@ func orchardScriptsRoot() string {
 	if err != nil {
 		return "scripts"
 	}
-	// Installed layout: /usr/local/bin/orchard-daemon → /usr/local/bin/../scripts → /usr/local/scripts
-	// Dev layout:        bin/orchard-daemon            → bin/../scripts            → scripts/
 	binDir := pathDir(exe)
-	candidate := binDir + "/../scripts"
-	if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
-		return candidate
+	candidates := []string{
+		// Installed layout: /usr/local/share/orchard/scripts
+		binDir + "/../share/orchard/scripts",
+		// Dev/checkout layout: scripts/ relative to the repo root
+		binDir + "/../scripts",
+	}
+	for _, c := range candidates {
+		if scriptsRootExists(c) {
+			return c
+		}
 	}
 	return "scripts"
+}
+
+// scriptsRootExists reports whether dir contains git/worktree-remove.sh,
+// which is the sentinel file used to confirm a scripts root is populated.
+func scriptsRootExists(dir string) bool {
+	_, err := os.Stat(dir + "/git/worktree-remove.sh")
+	return err == nil
 }
 
 func ensureParentDir(path string) error {

@@ -23,7 +23,7 @@
 #                                            execs by name
 
 .PHONY: daemon generate rust dispatcher worktree-cli gui all clean \
-        install install-daemon install-dispatcher install-tui install-worktree-cli \
+        install install-daemon install-dispatcher install-tui install-worktree-cli install-scripts \
         test test-go test-rust bats-install bats-test \
         check-feature-parity check-feature-parity-daemon check-feature-parity-tui check-feature-parity-gui
 
@@ -64,13 +64,19 @@ gui:
 
 all: daemon rust
 
-install: install-dispatcher install-daemon install-tui install-worktree-cli
+install: install-dispatcher install-daemon install-tui install-worktree-cli install-scripts
 
 install-dispatcher: dispatcher
 	install -m 755 target/release/orchard /usr/local/bin/orchard
 
 install-daemon: daemon
 	install -m 755 bin/orchard-daemon /usr/local/bin/orchard-daemon
+
+# Install shell scripts to /usr/local/share/orchard/scripts so the daemon
+# can find them via orchardScriptsRoot() when running from a system install.
+install-scripts:
+	install -d /usr/local/share/orchard
+	cp -R scripts /usr/local/share/orchard/
 
 install-tui: rust
 	install -m 755 target/release/orchard-tui /usr/local/bin/orchard-tui
