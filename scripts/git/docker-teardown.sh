@@ -32,8 +32,10 @@
 #   Phase 2: explicitly remove images BUILT by this compose project.
 #     -- identify services that have a build: key via docker compose config
 #        output; collect their image names; docker rmi those images.
-#        This correctly handles both auto-named and custom-tagged (image: field)
-#        built images, unlike --rmi local which skips custom-tagged images.
+#        This removes built images that carry an explicit image: tag (the common
+#        case).  Built services with no explicit image: field (relying on
+#        compose default auto-naming) are not currently removed; that is a
+#        future enhancement.
 #
 # Exit code 0 on ok:true, non-zero on ok:false.
 set -euo pipefail
@@ -184,8 +186,8 @@ fi
 # Phase 2: remove images built by this compose project.
 # Strategy: parse "docker compose config" JSON to find services that have a
 # build: key, collect their image names, then docker rmi those images.
-# This correctly handles custom-tagged builds (image: foo:tag) that --rmi local
-# silently skips.
+# This handles built images that carry an explicit image: tag; built services
+# without an explicit image: field (auto-named by compose) are not removed here.
 # Phase 2 is best-effort: an image-removal hiccup must never abort the teardown.
 _remove_built_images() {
   local project_key="$1"
@@ -216,7 +218,7 @@ _remove_built_images() {
   # Remove each built image; tolerate already-removed or in-use errors.
   while IFS= read -r img; do
     [ -z "$img" ] && continue
-    docker rmi -f "$img" 2>/dev/null || true
+    docker rmi -f "$img" >/dev/null 2>&1 || true
   done <<< "$built_images"
 
   # Explicit return 0: the while/read loop exits with read's EOF status (non-zero)
