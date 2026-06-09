@@ -390,7 +390,11 @@ pub struct WorkViewTmuxSession {
     ///
     /// The daemon returns `[TmuxClient!]!` objects; we flatten to a count via
     /// [`count_clients`] so consumers see a plain `u32`.
-    #[serde(default, rename = "attachedClients", deserialize_with = "count_clients")]
+    #[serde(
+        default,
+        rename = "attachedClients",
+        deserialize_with = "count_clients"
+    )]
     pub attached_clients: u32,
 
     /// Number of windows in this session.
@@ -404,7 +408,11 @@ pub struct WorkViewTmuxSession {
     ///
     /// The daemon returns a `TmuxWindow` object (nullable); we flatten to its
     /// `name` string via [`name_from_window`].
-    #[serde(default, rename = "currentWindow", deserialize_with = "name_from_window")]
+    #[serde(
+        default,
+        rename = "currentWindow",
+        deserialize_with = "name_from_window"
+    )]
     pub current_window: Option<String>,
 
     /// Working directory of the session's active pane. Used by the client-side
