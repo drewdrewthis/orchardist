@@ -1359,6 +1359,141 @@ type Mutation {
   host where they have no shell access.
   """
   launchSession(input: LaunchSessionInput!): LaunchSessionResult!
+
+  """
+  Remove a local git worktree by its stable ID.
+
+  Idempotency: idempotent — removing a non-existent worktree is a no-op at
+  git level. Callers may safely retry after a transient failure (M5).
+
+  Per L5: execs scripts/git/worktree-remove.sh --json with the provided
+  input arguments. The script is the canonical operation; this resolver
+  is a thin façade (L1).
+  """
+  worktreeRemove(input: WorktreeRemoveInput!): WorktreeMutationResult!
+
+  """
+  Batch-remove a set of stale local git worktrees by their stable IDs.
+
+  Idempotency: idempotent — worktrees already removed are silently skipped, and
+  re-running on an already-clean fleet produces zero deletions with ok:true (AC9).
+
+  Partial failure: if cleanup of one worktree fails, the remaining worktrees are
+  still attempted. The result carries a per-worktree entry for each, with ok, stage,
+  and message for failures (AC8).
+
+  Concurrency: serialized daemon-side via a mutex. A second concurrent call that
+  arrives while the first is in progress will wait and then find worktrees already
+  removed (idempotent no-op). The loser receives ok:true with per-worktree entries
+  showing alreadyRemoved:true for doubly-targeted worktrees (AC-G5).
+
+  Per L5: delegates each removal to scripts/git/worktree-remove.sh --json. The
+  script is the canonical operation; this resolver is a thin façade (L1/L5).
+  """
+  worktreesCleanup(input: WorktreesCleanupInput!): WorktreesCleanupResult!
+}
+
+"""
+Input for worktreesCleanup. Targets a set of worktrees by their stable IDs.
+"""
+input WorktreesCleanupInput {
+  "The stable IDs of worktrees to remove (format: <project_id>:<worktree_name>). Must be non-empty."
+  worktreeIds: [String!]!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+  """
+  The name of the tmux session the user is currently active in (AC-G1).
+  Any worktree whose resolved session name matches this is excluded from ALL destruction
+  stages and reported as skipped with reason \"hosts-active-session\".
+  The daemon MUST NOT infer this from its own process environment.
+  """
+  activeSession: String
+  "The absolute path of the directory the user's active session is running in (AC-G1)."
+  activeCwd: String
+  "Base branch for branch-delete safety checks (default: main)."
+  baseBranch: String
+  "Comma-separated list of protected branch names to never delete."
+  protected: String
+  """
+  Per-worktree tmux session names to kill during cleanup (AC-G3).
+  Parallel array aligned by index with worktreeIds. An entry may be null or
+  absent when the worktree has no associated tmux session. When non-empty,
+  the daemon passes --tmux-session <name> to worktree-remove.sh so the kill
+  stage actually fires. Omitting this field (or supplying nulls) is always safe:
+  the script skips the tmux-kill stage when --tmux-session is not supplied.
+  """
+  sessionNames: [String]
+}
+
+"""
+Per-worktree cleanup result entry. ok:true means all stages for this worktree
+succeeded (or were clean no-ops). ok:false means a stage hard-failed.
+"""
+type WorktreeCleanupEntry {
+  "The stable worktree ID this entry describes."
+  worktreeId: String!
+  "True when cleanup succeeded or was a clean no-op (idempotent)."
+  ok: Boolean!
+  "The stage that failed, when ok:false. One of: worktree-remove, branch-delete, docker-teardown."
+  stage: String
+  "Human-readable failure or skip message."
+  message: String
+  "True when this worktree was already removed before this call (idempotent re-run or race loser)."
+  alreadyRemoved: Boolean
+  "Non-fatal warnings from sub-stages (e.g. branch-skip, tmux-kill)."
+  warnings: [String!]!
+}
+
+"Result of worktreesCleanup. ok:true even when some entries failed (partial failure is per-worktree)."
+type WorktreesCleanupResult {
+  "True when the batch call itself succeeded (input valid, no systemic errors). Individual entry ok fields carry per-worktree status."
+  ok: Boolean!
+  "Per-worktree result entries."
+  entries: [WorktreeCleanupEntry!]!
+  "Typed input validation error code; set when ok:false and the input itself was invalid."
+  errCode: String
+  "Human-readable error message; set when ok:false."
+  errMsg: String
+}
+
+"""
+Input for worktreeRemove. Targets a worktree by its stable ID.
+"""
+input WorktreeRemoveInput {
+  "The stable ID of the worktree to remove (format: <project_id>:<worktree_name>)."
+  worktreeId: String!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+  """
+  The name of the tmux session the user is currently active in (AC-G1).
+  When set, any stale worktree whose resolved tmux session name matches this
+  value is excluded from ALL destruction stages and reported as skipped with
+  reason \"hosts-active-session\". The daemon MUST NOT infer this from its
+  own process environment (\$TMUX) — the identity is always caller-supplied.
+  Null means no active-session exclusion by session name.
+  """
+  activeSession: String
+  """
+  The absolute path of the directory the user's active session is running in (AC-G1).
+  When set, any stale worktree whose path matches this value is excluded from ALL
+  destruction stages and reported as skipped with reason \"hosts-active-session\".
+  Paired with activeSession for belt-and-suspenders exclusion. Null means no
+  active-session exclusion by cwd.
+  """
+  activeCwd: String
+}
+
+"""
+Result of a git worktree mutation. When ok is false, errCode and errMsg carry
+the typed error details from the script's L2 envelope.
+"""
+type WorktreeMutationResult {
+  "True when the mutation succeeded."
+  ok: Boolean!
+  "Typed error code from the script envelope; null when ok is true."
+  errCode: String
+  "Human-readable error message; null when ok is true."
+  errMsg: String
 }
 
 """

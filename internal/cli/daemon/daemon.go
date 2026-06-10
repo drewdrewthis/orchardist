@@ -236,6 +236,7 @@ func runStart(parentCtx context.Context, addr string, version string) error {
 		server.WithGh(ghProvider),
 		server.WithPeerProxy(peerProvider),
 		server.WithLocalEvents(localEvents),
+		server.WithGitMutations(orchardScriptsRoot()),
 	}
 	if hsvc != nil {
 		opts = append(opts, server.WithHostService(hsvc))
@@ -420,6 +421,46 @@ func claudeprojectsRoot() string {
 		return ".claude/projects"
 	}
 	return home + "/.claude/projects"
+}
+
+// orchardScriptsRoot returns the absolute path to the scripts/ directory.
+// Resolution order (first candidate whose git/worktree-remove.sh exists wins):
+//
+//  1. ORCHARD_SCRIPTS_ROOT env var — operator override, highest priority.
+//  2. <binDir>/../share/orchard/scripts — installed layout:
+//     /usr/local/bin/orchard-daemon → /usr/local/share/orchard/scripts
+//     (populated by `make install-scripts`).
+//  3. <binDir>/../scripts — dev/checkout layout:
+//     bin/orchard-daemon → scripts/ at the repo root.
+//  4. "scripts" — relative to cwd, last resort for unit tests.
+func orchardScriptsRoot() string {
+	if v := os.Getenv("ORCHARD_SCRIPTS_ROOT"); v != "" {
+		return v
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "scripts"
+	}
+	binDir := pathDir(exe)
+	candidates := []string{
+		// Installed layout: /usr/local/share/orchard/scripts
+		binDir + "/../share/orchard/scripts",
+		// Dev/checkout layout: scripts/ relative to the repo root
+		binDir + "/../scripts",
+	}
+	for _, c := range candidates {
+		if scriptsRootExists(c) {
+			return c
+		}
+	}
+	return "scripts"
+}
+
+// scriptsRootExists reports whether dir contains git/worktree-remove.sh,
+// which is the sentinel file used to confirm a scripts root is populated.
+func scriptsRootExists(dir string) bool {
+	_, err := os.Stat(dir + "/git/worktree-remove.sh")
+	return err == nil
 }
 
 func ensureParentDir(path string) error {

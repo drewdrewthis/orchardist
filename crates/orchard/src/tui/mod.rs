@@ -1696,6 +1696,16 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
+                    if vt.row.is_main_worktree {
+                        // UX-only block: surface a warning and abort the confirm
+                        // flow.  The authoritative data-loss guard lives in
+                        // scripts/git/worktree-remove.sh (positional porcelain check).
+                        self.warning = Some((
+                            "Cannot delete the main working tree.".to_string(),
+                            Instant::now(),
+                        ));
+                        return ok();
+                    }
                     self.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
                         target: vt.row.clone(),
                         phase: Phase::Confirm,
@@ -2111,12 +2121,25 @@ impl App {
         let wt = target.clone();
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
-        std::thread::spawn(move || match delete_task_row(&wt, &global_config) {
-            Ok(()) => {
-                let _ = tx.send(AppMsg::DeleteDone);
-            }
-            Err(e) => {
-                let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
+        // Capture active-session identity HERE in the TUI process, where $TMUX is
+        // valid. The daemon must not read its own $TMUX (AC-G1 data-loss guard).
+        let active_session = tmux::current_session_name();
+        let active_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()));
+        std::thread::spawn(move || {
+            match delete_task_row(
+                &wt,
+                &global_config,
+                active_session.as_deref(),
+                active_cwd.as_deref(),
+            ) {
+                Ok(()) => {
+                    let _ = tx.send(AppMsg::DeleteDone);
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMsg::DeleteErr(e.to_string()));
+                }
             }
         });
     }
@@ -2124,11 +2147,22 @@ impl App {
     fn start_cleanup(&self, items: Vec<derive::WorktreeRow>) {
         let global_config = self.global_config.clone();
         let tx = self.tx.clone();
+        // Capture active-session identity HERE in the TUI process, where $TMUX is
+        // valid. The daemon must not read its own $TMUX (AC-G1 data-loss guard).
+        let active_session = tmux::current_session_name();
+        let active_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()));
         std::thread::spawn(move || {
             let mut deleted = Vec::new();
             let mut errors = Vec::new();
             for row in &items {
-                match delete_task_row(row, &global_config) {
+                match delete_task_row(
+                    row,
+                    &global_config,
+                    active_session.as_deref(),
+                    active_cwd.as_deref(),
+                ) {
                     Ok(()) => deleted.push(row.worktree_path.clone()),
                     Err(e) => errors.push(format!("{}: {}", row.branch, e)),
                 }
@@ -3907,6 +3941,37 @@ mod tests {
         let app = App::new_test(rows);
         let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::CursorTo(0)));
+    }
+
+    /// #693 / #695 defense-in-depth: pressing 'd' on the main working tree must
+    /// NOT enter ConfirmDelete — the daemon script already skips it, but the TUI
+    /// should block the action up-front and surface a warning instead.
+    #[test]
+    fn delete_on_main_worktree_does_not_enter_confirm_delete() {
+        let main_row = WorktreeRow {
+            is_main_worktree: true,
+            display_group: DisplayGroup::RepoMain,
+            ..make_worktree_row("main", DisplayGroup::RepoMain)
+        };
+        let mut app = App::new_test(vec![main_row]);
+        // cursor=0 → the main-worktree row
+        app.cursor = 0;
+        let result = app.update(Message::Delete);
+        assert!(!result.quit);
+        assert!(
+            !matches!(app.view, ViewState::ConfirmDelete(_)),
+            "Delete on main worktree must not enter ConfirmDelete; got {:?}",
+            std::mem::discriminant(&app.view)
+        );
+        assert!(
+            app.warning.is_some(),
+            "Delete on main worktree must set a warning"
+        );
+        assert_eq!(
+            app.warning.as_ref().unwrap().0,
+            "Cannot delete the main working tree.",
+            "warning must be the exact sentinel string"
+        );
     }
 
     #[test]

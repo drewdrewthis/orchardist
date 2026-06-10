@@ -11,7 +11,105 @@
 //! - [`GraphQlResponse`] / [`GraphQlError`] — generic envelope wrapping every
 //!   query response.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+// ---------------------------------------------------------------------------
+// Private helper types for GraphQL object→scalar flattening
+//
+// The daemon schema exposes some fields as object/list types (e.g. `labels`,
+// `windows`, `attachedClients`, `currentWindow`) even when the TUI only needs
+// a scalar projection (label names, counts, window name). These thin structs
+// serve as deserialization intermediaries so the public struct fields can stay
+// as ergonomic scalars (`Vec<String>`, `u32`, `Option<String>`).
+// ---------------------------------------------------------------------------
+
+/// Minimum projection of a GraphQL `Label` object — carries only `name`.
+#[derive(Deserialize)]
+struct LabelNode {
+    name: String,
+}
+
+/// Minimum projection of a GraphQL `TmuxClient` object — carries only `id`
+/// so we can count the list length.
+#[derive(Deserialize)]
+struct ClientNode {
+    #[allow(dead_code)]
+    id: String,
+}
+
+/// Minimum projection of a GraphQL `TmuxWindow` object — carries only `name`.
+#[derive(Deserialize)]
+struct WindowNode {
+    name: String,
+}
+
+/// Minimum projection of a GraphQL `TmuxPane` object — carries only `id`.
+#[derive(Deserialize)]
+struct PaneNode {
+    id: String,
+}
+
+/// Minimum projection of a GraphQL `Process` object — carries only `command`.
+/// `Process.command` is the basename (e.g. `"claude"`), matching the semantic
+/// of `ClaudeInstance.process` as used downstream.
+#[derive(Deserialize)]
+struct ProcessNode {
+    command: String,
+}
+
+/// Deserialises `TmuxPane` (nullable) → `Option<String>` (extracts `id`).
+fn id_from_pane<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let node: PaneNode = PaneNode::deserialize(de)?;
+    Ok(node.id)
+}
+
+/// Deserialises `Process` (nullable) → `String` (extracts `command`).
+fn command_from_process<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let node: ProcessNode = ProcessNode::deserialize(de)?;
+    Ok(node.command)
+}
+
+/// Deserialises `[Label!]!` → `Vec<String>` (extracts each label's `name`).
+fn labels_from_objects<'de, D>(de: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let nodes: Vec<LabelNode> = Vec::deserialize(de)?;
+    Ok(nodes.into_iter().map(|l| l.name).collect())
+}
+
+/// Deserialises `[TmuxClient!]!` → `u32` (returns the list length).
+fn count_clients<'de, D>(de: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let nodes: Vec<ClientNode> = Vec::deserialize(de)?;
+    Ok(nodes.len() as u32)
+}
+
+/// Deserialises `[TmuxWindow!]!` → `u32` (returns the list length).
+fn count_windows<'de, D>(de: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let nodes: Vec<WindowNode> = Vec::deserialize(de)?;
+    Ok(nodes.len() as u32)
+}
+
+/// Deserialises `TmuxWindow` (nullable) → `Option<String>` (extracts `name`).
+fn name_from_window<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let node: Option<WindowNode> = Option::deserialize(de)?;
+    Ok(node.map(|w| w.name))
+}
 
 /// Top-level GraphQL response envelope.
 #[derive(Debug, Deserialize)]
@@ -239,7 +337,10 @@ pub struct WorkViewPr {
     pub draft: bool,
 
     /// Label names applied to the PR.
-    #[serde(default)]
+    ///
+    /// The daemon returns `[Label!]!` objects; we flatten to name strings via
+    /// [`labels_from_objects`] so consumers see a plain `Vec<String>`.
+    #[serde(default, deserialize_with = "labels_from_objects")]
     pub labels: Vec<String>,
 }
 
@@ -256,7 +357,10 @@ pub struct WorkViewIssue {
     pub title: String,
 
     /// Label names applied to the issue.
-    #[serde(default)]
+    ///
+    /// The daemon returns `[Label!]!` objects; we flatten to name strings via
+    /// [`labels_from_objects`] so consumers see a plain `Vec<String>`.
+    #[serde(default, deserialize_with = "labels_from_objects")]
     pub labels: Vec<String>,
 }
 
@@ -283,15 +387,32 @@ pub struct WorkViewTmuxSession {
     pub last_activity_at: Option<String>,
 
     /// Number of clients currently attached.
-    #[serde(default, rename = "attachedClients")]
+    ///
+    /// The daemon returns `[TmuxClient!]!` objects; we flatten to a count via
+    /// [`count_clients`] so consumers see a plain `u32`.
+    #[serde(
+        default,
+        rename = "attachedClients",
+        deserialize_with = "count_clients"
+    )]
     pub attached_clients: u32,
 
     /// Number of windows in this session.
-    #[serde(default)]
+    ///
+    /// The daemon returns `[TmuxWindow!]!` objects; we flatten to a count via
+    /// [`count_windows`] so consumers see a plain `u32`.
+    #[serde(default, deserialize_with = "count_windows")]
     pub windows: u32,
 
     /// Name of the currently active window.
-    #[serde(default, rename = "currentWindow")]
+    ///
+    /// The daemon returns a `TmuxWindow` object (nullable); we flatten to its
+    /// `name` string via [`name_from_window`].
+    #[serde(
+        default,
+        rename = "currentWindow",
+        deserialize_with = "name_from_window"
+    )]
     pub current_window: Option<String>,
 
     /// Working directory of the session's active pane. Used by the client-side
@@ -314,9 +435,13 @@ pub struct ClaudeInstance {
 
     /// Pane reference used to locate the tmux session this instance lives in.
     /// Format: `TmuxPane:<host>:<session>:<window>:<pane>`.
+    /// Flattened from the daemon's `TmuxPane` object via [`id_from_pane`].
+    #[serde(deserialize_with = "id_from_pane")]
     pub pane: String,
 
-    /// Process identifier (PID as string or process name).
+    /// Process command basename (e.g. `"claude"`).
+    /// Flattened from the daemon's `Process` object via [`command_from_process`].
+    #[serde(deserialize_with = "command_from_process")]
     pub process: String,
 
     /// Current activity state: `"idle"`, `"working"`, `"waiting"`, etc.
@@ -345,6 +470,67 @@ pub struct ClaudeInstance {
     /// jsonl (issue #603 phase 2). Zero when no jsonl is found.
     #[serde(default, rename = "inflightToolCount")]
     pub inflight_tool_count: i32,
+}
+
+// ============================================================
+//  worktreesCleanup mutation — response types
+// ============================================================
+
+/// Top-level `Mutation.worktreesCleanup` payload.
+#[derive(Debug, Deserialize)]
+pub struct WorktreesCleanupPayload {
+    /// `worktreesCleanup` field result.
+    #[serde(rename = "worktreesCleanup")]
+    pub worktrees_cleanup: WorktreesCleanupResult,
+}
+
+/// Result of `Mutation.worktreesCleanup`.
+///
+/// `ok` is `true` even when some individual entries failed — per-worktree
+/// failure is reported in the `entries` vec. `ok` is `false` only when
+/// the batch call itself failed (e.g. invalid input, systemic error).
+#[derive(Debug, Deserialize)]
+pub struct WorktreesCleanupResult {
+    /// True when the batch call itself succeeded (input valid, no systemic errors).
+    pub ok: bool,
+    /// Per-worktree result entries. Present even when `ok` is `false` at the
+    /// input-validation level (entries will be empty in that case).
+    #[serde(default)]
+    pub entries: Vec<WorktreeCleanupEntry>,
+    /// Typed input validation error code; set when `ok` is `false`.
+    #[serde(rename = "errCode", default)]
+    pub err_code: Option<String>,
+    /// Human-readable error message; set when `ok` is `false`.
+    #[serde(rename = "errMsg", default)]
+    pub err_msg: Option<String>,
+}
+
+/// Per-worktree result inside [`WorktreesCleanupResult`].
+#[derive(Debug, Deserialize)]
+pub struct WorktreeCleanupEntry {
+    /// The stable worktree ID this entry describes.
+    #[serde(rename = "worktreeId")]
+    pub worktree_id: String,
+    /// True when cleanup succeeded or was a clean no-op (idempotent re-run).
+    pub ok: bool,
+    /// The stage that failed when `ok` is `false`.
+    /// One of: `"worktree-remove"`, `"branch-delete"`, `"docker-teardown"`.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// Human-readable failure or skip message.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// True when this worktree was already removed before this call.
+    ///
+    /// The daemon emits `null` (not `false`) when the worktree was actively
+    /// removed this call — the GraphQL schema declares this field `Boolean`
+    /// (nullable). `None` and `Some(false)` both mean "not already removed";
+    /// only `Some(true)` means the worktree was already gone on entry.
+    #[serde(rename = "alreadyRemoved", default)]
+    pub already_removed: Option<bool>,
+    /// Non-fatal per-stage warnings (e.g. branch-skip, tmux-kill failure).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[cfg(test)]
@@ -441,7 +627,10 @@ mod tests {
                                     "reviewDecision": "APPROVED",
                                     "mergeStateStatus": "CLEAN",
                                     "draft": false,
-                                    "labels": ["enhancement", "phase-1"]
+                                    "labels": [
+                                        {"name": "enhancement"},
+                                        {"name": "phase-1"}
+                                    ]
                                 },
                                 "issue": {
                                     "number": 429,
@@ -469,16 +658,20 @@ mod tests {
                         "attached": true,
                         "activeAttached": true,
                         "lastActivityAt": "2026-05-08T10:00:00Z",
-                        "attachedClients": 1,
-                        "windows": 3,
-                        "currentWindow": "editor"
+                        "attachedClients": [{"id": "TmuxClient:local:/dev/ttys001"}],
+                        "windows": [
+                            {"name": "shell"},
+                            {"name": "editor"},
+                            {"name": "logs"}
+                        ],
+                        "currentWindow": {"name": "editor"}
                     }
                 ],
                 "claudeInstances": [
                     {
                         "id": "ClaudeInstance:local:12345",
-                        "pane": "TmuxPane:local:issue429:editor:0",
-                        "process": "claude",
+                        "pane": {"id": "TmuxPane:local:issue429:editor:0"},
+                        "process": {"command": "claude"},
                         "state": "working",
                         "sessionUuid": "550e8400-e29b-41d4-a716-446655440000",
                         "rcEnabled": true,
@@ -638,5 +831,91 @@ mod tests {
         assert!(pr.merge_state_status.is_none());
         assert!(!pr.draft);
         assert!(pr.labels.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    //  WorktreesCleanup null-tolerance tests
+    // -----------------------------------------------------------------------
+
+    /// `alreadyRemoved: null` (the normal successful-cleanup case) must
+    /// deserialize to `already_removed: None` without error.  This is the
+    /// regression test for the bug introduced in commit e2b763d where the
+    /// field was typed `bool` and `#[serde(default)]` only filled in absent
+    /// keys — an explicit JSON `null` produced a deserialization error.
+    #[test]
+    fn cleanup_entry_already_removed_null_is_none() {
+        let raw = r#"{
+            "worktreeId": "repo:feat/x",
+            "ok": true,
+            "stage": null,
+            "message": null,
+            "alreadyRemoved": null,
+            "warnings": []
+        }"#;
+        let entry: WorktreeCleanupEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(entry.worktree_id, "repo:feat/x");
+        assert!(entry.ok);
+        // null → None, treated as "not already removed"
+        assert_eq!(entry.already_removed, None);
+        assert!(!entry.already_removed.unwrap_or(false));
+    }
+
+    /// `alreadyRemoved: true` must deserialize to `Some(true)`.
+    #[test]
+    fn cleanup_entry_already_removed_true_is_some_true() {
+        let raw = r#"{
+            "worktreeId": "repo:feat/y",
+            "ok": true,
+            "alreadyRemoved": true,
+            "warnings": []
+        }"#;
+        let entry: WorktreeCleanupEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(entry.already_removed, Some(true));
+        assert!(entry.already_removed.unwrap_or(false));
+    }
+
+    /// `alreadyRemoved` key absent must deserialize to `None` (no regression
+    /// on the previous `#[serde(default)]` behavior for absent keys).
+    #[test]
+    fn cleanup_entry_already_removed_absent_is_none() {
+        let raw = r#"{
+            "worktreeId": "repo:feat/z",
+            "ok": true,
+            "warnings": []
+        }"#;
+        let entry: WorktreeCleanupEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(entry.already_removed, None);
+    }
+
+    /// Full `WorktreesCleanupResult` envelope with a null `alreadyRemoved`
+    /// entry — round-trips the actual GraphQL response shape.
+    #[test]
+    fn cleanup_result_envelope_null_already_removed() {
+        let raw = r#"{
+            "data": {
+                "worktreesCleanup": {
+                    "ok": true,
+                    "entries": [
+                        {
+                            "worktreeId": "myrepo:issue/123",
+                            "ok": true,
+                            "stage": null,
+                            "message": null,
+                            "alreadyRemoved": null,
+                            "warnings": []
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let env: GraphQlResponse<WorktreesCleanupPayload> = serde_json::from_str(raw).unwrap();
+        let result = env.data.unwrap().worktrees_cleanup;
+        assert!(result.ok);
+        assert_eq!(result.entries.len(), 1);
+        let entry = &result.entries[0];
+        assert_eq!(entry.worktree_id, "myrepo:issue/123");
+        assert!(entry.ok);
+        assert_eq!(entry.already_removed, None);
+        assert!(!entry.already_removed.unwrap_or(false));
     }
 }

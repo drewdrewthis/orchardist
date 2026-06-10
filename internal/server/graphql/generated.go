@@ -177,8 +177,10 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		LaunchSession  func(childComplexity int, input LaunchSessionInput) int
-		SendTextToPane func(childComplexity int, paneID string, text string) int
+		LaunchSession    func(childComplexity int, input LaunchSessionInput) int
+		SendTextToPane   func(childComplexity int, paneID string, text string) int
+		WorktreeRemove   func(childComplexity int, input WorktreeRemoveInput) int
+		WorktreesCleanup func(childComplexity int, input WorktreesCleanupInput) int
 	}
 
 	Process struct {
@@ -397,6 +399,28 @@ type ComplexityRoot struct {
 		TmuxPanes       func(childComplexity int) int
 		TmuxSession     func(childComplexity int) int
 	}
+
+	WorktreeCleanupEntry struct {
+		AlreadyRemoved func(childComplexity int) int
+		Message        func(childComplexity int) int
+		Ok             func(childComplexity int) int
+		Stage          func(childComplexity int) int
+		Warnings       func(childComplexity int) int
+		WorktreeID     func(childComplexity int) int
+	}
+
+	WorktreeMutationResult struct {
+		ErrCode func(childComplexity int) int
+		ErrMsg  func(childComplexity int) int
+		Ok      func(childComplexity int) int
+	}
+
+	WorktreesCleanupResult struct {
+		Entries func(childComplexity int) int
+		ErrCode func(childComplexity int) int
+		ErrMsg  func(childComplexity int) int
+		Ok      func(childComplexity int) int
+	}
 }
 
 type ClaudeInstanceResolver interface {
@@ -418,6 +442,8 @@ type IssueResolver interface {
 type MutationResolver interface {
 	SendTextToPane(ctx context.Context, paneID string, text string) (bool, error)
 	LaunchSession(ctx context.Context, input LaunchSessionInput) (*LaunchSessionResult, error)
+	WorktreeRemove(ctx context.Context, input WorktreeRemoveInput) (*WorktreeMutationResult, error)
+	WorktreesCleanup(ctx context.Context, input WorktreesCleanupInput) (*WorktreesCleanupResult, error)
 }
 type ProcessResolver interface {
 	Host(ctx context.Context, obj *Process) (*Host, error)
@@ -1138,6 +1164,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SendTextToPane(childComplexity, args["paneId"].(string), args["text"].(string)), true
+	case "Mutation.worktreeRemove":
+		if e.ComplexityRoot.Mutation.WorktreeRemove == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_worktreeRemove_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorktreeRemove(childComplexity, args["input"].(WorktreeRemoveInput)), true
+	case "Mutation.worktreesCleanup":
+		if e.ComplexityRoot.Mutation.WorktreesCleanup == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_worktreesCleanup_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorktreesCleanup(childComplexity, args["input"].(WorktreesCleanupInput)), true
 
 	case "Process.args":
 		if e.ComplexityRoot.Process.Args == nil {
@@ -2280,6 +2328,87 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Worktree.TmuxSession(childComplexity), true
 
+	case "WorktreeCleanupEntry.alreadyRemoved":
+		if e.ComplexityRoot.WorktreeCleanupEntry.AlreadyRemoved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeCleanupEntry.AlreadyRemoved(childComplexity), true
+	case "WorktreeCleanupEntry.message":
+		if e.ComplexityRoot.WorktreeCleanupEntry.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeCleanupEntry.Message(childComplexity), true
+	case "WorktreeCleanupEntry.ok":
+		if e.ComplexityRoot.WorktreeCleanupEntry.Ok == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeCleanupEntry.Ok(childComplexity), true
+	case "WorktreeCleanupEntry.stage":
+		if e.ComplexityRoot.WorktreeCleanupEntry.Stage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeCleanupEntry.Stage(childComplexity), true
+	case "WorktreeCleanupEntry.warnings":
+		if e.ComplexityRoot.WorktreeCleanupEntry.Warnings == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeCleanupEntry.Warnings(childComplexity), true
+	case "WorktreeCleanupEntry.worktreeId":
+		if e.ComplexityRoot.WorktreeCleanupEntry.WorktreeID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeCleanupEntry.WorktreeID(childComplexity), true
+
+	case "WorktreeMutationResult.errCode":
+		if e.ComplexityRoot.WorktreeMutationResult.ErrCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeMutationResult.ErrCode(childComplexity), true
+	case "WorktreeMutationResult.errMsg":
+		if e.ComplexityRoot.WorktreeMutationResult.ErrMsg == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeMutationResult.ErrMsg(childComplexity), true
+	case "WorktreeMutationResult.ok":
+		if e.ComplexityRoot.WorktreeMutationResult.Ok == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreeMutationResult.Ok(childComplexity), true
+
+	case "WorktreesCleanupResult.entries":
+		if e.ComplexityRoot.WorktreesCleanupResult.Entries == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreesCleanupResult.Entries(childComplexity), true
+	case "WorktreesCleanupResult.errCode":
+		if e.ComplexityRoot.WorktreesCleanupResult.ErrCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreesCleanupResult.ErrCode(childComplexity), true
+	case "WorktreesCleanupResult.errMsg":
+		if e.ComplexityRoot.WorktreesCleanupResult.ErrMsg == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreesCleanupResult.ErrMsg(childComplexity), true
+	case "WorktreesCleanupResult.ok":
+		if e.ComplexityRoot.WorktreesCleanupResult.Ok == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorktreesCleanupResult.Ok(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -2293,6 +2422,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputProcessFilter,
 		ec.unmarshalInputTmuxPaneFilter,
 		ec.unmarshalInputTmuxSessionFilter,
+		ec.unmarshalInputWorktreeRemoveInput,
+		ec.unmarshalInputWorktreesCleanupInput,
 	)
 	first := true
 
@@ -3746,6 +3877,141 @@ type Mutation {
   host where they have no shell access.
   """
   launchSession(input: LaunchSessionInput!): LaunchSessionResult!
+
+  """
+  Remove a local git worktree by its stable ID.
+
+  Idempotency: idempotent — removing a non-existent worktree is a no-op at
+  git level. Callers may safely retry after a transient failure (M5).
+
+  Per L5: execs scripts/git/worktree-remove.sh --json with the provided
+  input arguments. The script is the canonical operation; this resolver
+  is a thin façade (L1).
+  """
+  worktreeRemove(input: WorktreeRemoveInput!): WorktreeMutationResult!
+
+  """
+  Batch-remove a set of stale local git worktrees by their stable IDs.
+
+  Idempotency: idempotent — worktrees already removed are silently skipped, and
+  re-running on an already-clean fleet produces zero deletions with ok:true (AC9).
+
+  Partial failure: if cleanup of one worktree fails, the remaining worktrees are
+  still attempted. The result carries a per-worktree entry for each, with ok, stage,
+  and message for failures (AC8).
+
+  Concurrency: serialized daemon-side via a mutex. A second concurrent call that
+  arrives while the first is in progress will wait and then find worktrees already
+  removed (idempotent no-op). The loser receives ok:true with per-worktree entries
+  showing alreadyRemoved:true for doubly-targeted worktrees (AC-G5).
+
+  Per L5: delegates each removal to scripts/git/worktree-remove.sh --json. The
+  script is the canonical operation; this resolver is a thin façade (L1/L5).
+  """
+  worktreesCleanup(input: WorktreesCleanupInput!): WorktreesCleanupResult!
+}
+
+"""
+Input for worktreesCleanup. Targets a set of worktrees by their stable IDs.
+"""
+input WorktreesCleanupInput {
+  "The stable IDs of worktrees to remove (format: <project_id>:<worktree_name>). Must be non-empty."
+  worktreeIds: [String!]!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+  """
+  The name of the tmux session the user is currently active in (AC-G1).
+  Any worktree whose resolved session name matches this is excluded from ALL destruction
+  stages and reported as skipped with reason \"hosts-active-session\".
+  The daemon MUST NOT infer this from its own process environment.
+  """
+  activeSession: String
+  "The absolute path of the directory the user's active session is running in (AC-G1)."
+  activeCwd: String
+  "Base branch for branch-delete safety checks (default: main)."
+  baseBranch: String
+  "Comma-separated list of protected branch names to never delete."
+  protected: String
+  """
+  Per-worktree tmux session names to kill during cleanup (AC-G3).
+  Parallel array aligned by index with worktreeIds. An entry may be null or
+  absent when the worktree has no associated tmux session. When non-empty,
+  the daemon passes --tmux-session <name> to worktree-remove.sh so the kill
+  stage actually fires. Omitting this field (or supplying nulls) is always safe:
+  the script skips the tmux-kill stage when --tmux-session is not supplied.
+  """
+  sessionNames: [String]
+}
+
+"""
+Per-worktree cleanup result entry. ok:true means all stages for this worktree
+succeeded (or were clean no-ops). ok:false means a stage hard-failed.
+"""
+type WorktreeCleanupEntry {
+  "The stable worktree ID this entry describes."
+  worktreeId: String!
+  "True when cleanup succeeded or was a clean no-op (idempotent)."
+  ok: Boolean!
+  "The stage that failed, when ok:false. One of: worktree-remove, branch-delete, docker-teardown."
+  stage: String
+  "Human-readable failure or skip message."
+  message: String
+  "True when this worktree was already removed before this call (idempotent re-run or race loser)."
+  alreadyRemoved: Boolean
+  "Non-fatal warnings from sub-stages (e.g. branch-skip, tmux-kill)."
+  warnings: [String!]!
+}
+
+"Result of worktreesCleanup. ok:true even when some entries failed (partial failure is per-worktree)."
+type WorktreesCleanupResult {
+  "True when the batch call itself succeeded (input valid, no systemic errors). Individual entry ok fields carry per-worktree status."
+  ok: Boolean!
+  "Per-worktree result entries."
+  entries: [WorktreeCleanupEntry!]!
+  "Typed input validation error code; set when ok:false and the input itself was invalid."
+  errCode: String
+  "Human-readable error message; set when ok:false."
+  errMsg: String
+}
+
+"""
+Input for worktreeRemove. Targets a worktree by its stable ID.
+"""
+input WorktreeRemoveInput {
+  "The stable ID of the worktree to remove (format: <project_id>:<worktree_name>)."
+  worktreeId: String!
+  "When true, remove even if there are uncommitted changes."
+  force: Boolean
+  """
+  The name of the tmux session the user is currently active in (AC-G1).
+  When set, any stale worktree whose resolved tmux session name matches this
+  value is excluded from ALL destruction stages and reported as skipped with
+  reason \"hosts-active-session\". The daemon MUST NOT infer this from its
+  own process environment (\$TMUX) — the identity is always caller-supplied.
+  Null means no active-session exclusion by session name.
+  """
+  activeSession: String
+  """
+  The absolute path of the directory the user's active session is running in (AC-G1).
+  When set, any stale worktree whose path matches this value is excluded from ALL
+  destruction stages and reported as skipped with reason \"hosts-active-session\".
+  Paired with activeSession for belt-and-suspenders exclusion. Null means no
+  active-session exclusion by cwd.
+  """
+  activeCwd: String
+}
+
+"""
+Result of a git worktree mutation. When ok is false, errCode and errMsg carry
+the typed error details from the script's L2 envelope.
+"""
+type WorktreeMutationResult {
+  "True when the mutation succeeded."
+  ok: Boolean!
+  "Typed error code from the script envelope; null when ok is true."
+  errCode: String
+  "Human-readable error message; null when ok is true."
+  errMsg: String
 }
 
 """
@@ -4392,6 +4658,50 @@ func (ec *executionContext) childFields_Worktree(ctx context.Context, field grap
 	return nil, fmt.Errorf("no field named %q was found under type Worktree", field.Name)
 }
 
+func (ec *executionContext) childFields_WorktreeCleanupEntry(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "worktreeId":
+		return ec.fieldContext_WorktreeCleanupEntry_worktreeId(ctx, field)
+	case "ok":
+		return ec.fieldContext_WorktreeCleanupEntry_ok(ctx, field)
+	case "stage":
+		return ec.fieldContext_WorktreeCleanupEntry_stage(ctx, field)
+	case "message":
+		return ec.fieldContext_WorktreeCleanupEntry_message(ctx, field)
+	case "alreadyRemoved":
+		return ec.fieldContext_WorktreeCleanupEntry_alreadyRemoved(ctx, field)
+	case "warnings":
+		return ec.fieldContext_WorktreeCleanupEntry_warnings(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorktreeCleanupEntry", field.Name)
+}
+
+func (ec *executionContext) childFields_WorktreeMutationResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ok":
+		return ec.fieldContext_WorktreeMutationResult_ok(ctx, field)
+	case "errCode":
+		return ec.fieldContext_WorktreeMutationResult_errCode(ctx, field)
+	case "errMsg":
+		return ec.fieldContext_WorktreeMutationResult_errMsg(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorktreeMutationResult", field.Name)
+}
+
+func (ec *executionContext) childFields_WorktreesCleanupResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ok":
+		return ec.fieldContext_WorktreesCleanupResult_ok(ctx, field)
+	case "entries":
+		return ec.fieldContext_WorktreesCleanupResult_entries(ctx, field)
+	case "errCode":
+		return ec.fieldContext_WorktreesCleanupResult_errCode(ctx, field)
+	case "errMsg":
+		return ec.fieldContext_WorktreesCleanupResult_errMsg(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorktreesCleanupResult", field.Name)
+}
+
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -4513,7 +4823,7 @@ func (ec *executionContext) field_Host_processes_args(ctx context.Context, rawAr
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
 		func(ctx context.Context, v any) (*ProcessFilter, error) {
-			return ec.unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessFilter(ctx, v)
+			return ec.unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcessFilter(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4527,7 +4837,7 @@ func (ec *executionContext) field_Mutation_launchSession_args(ctx context.Contex
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (LaunchSessionInput, error) {
-			return ec.unmarshalNLaunchSessionInput2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionInput(ctx, v)
+			return ec.unmarshalNLaunchSessionInput2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLaunchSessionInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4555,6 +4865,34 @@ func (ec *executionContext) field_Mutation_sendTextToPane_args(ctx context.Conte
 		return nil, err
 	}
 	args["text"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_worktreeRemove_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (WorktreeRemoveInput, error) {
+			return ec.unmarshalNWorktreeRemoveInput2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeRemoveInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_worktreesCleanup_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (WorktreesCleanupInput, error) {
+			return ec.unmarshalNWorktreesCleanupInput2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreesCleanupInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -4613,7 +4951,7 @@ func (ec *executionContext) field_Query_hostServices_args(ctx context.Context, r
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
 		func(ctx context.Context, v any) (*HostServiceFilter, error) {
-			return ec.unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx, v)
+			return ec.unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4657,7 +4995,7 @@ func (ec *executionContext) field_Query_issues_args(ctx context.Context, rawArgs
 	args["repo"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "state",
 		func(ctx context.Context, v any) (*IssueState, error) {
-			return ec.unmarshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx, v)
+			return ec.unmarshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4737,7 +5075,7 @@ func (ec *executionContext) field_Query_pullRequests_args(ctx context.Context, r
 	args["repo"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "state",
 		func(ctx context.Context, v any) (*PullRequestState, error) {
-			return ec.unmarshalOPullRequestState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx, v)
+			return ec.unmarshalOPullRequestState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4751,7 +5089,7 @@ func (ec *executionContext) field_Query_tmuxPanes_args(ctx context.Context, rawA
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
 		func(ctx context.Context, v any) (*TmuxPaneFilter, error) {
-			return ec.unmarshalOTmuxPaneFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneFilter(ctx, v)
+			return ec.unmarshalOTmuxPaneFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPaneFilter(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4765,7 +5103,7 @@ func (ec *executionContext) field_Query_tmuxSessions_args(ctx context.Context, r
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
 		func(ctx context.Context, v any) (*TmuxSessionFilter, error) {
-			return ec.unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionFilter(ctx, v)
+			return ec.unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionFilter(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4959,7 +5297,7 @@ func (ec *executionContext) field_TmuxServer_sessions_args(ctx context.Context, 
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "sort",
 		func(ctx context.Context, v any) (*TmuxSessionSort, error) {
-			return ec.unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx, v)
+			return ec.unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -5183,7 +5521,7 @@ func (ec *executionContext) _ClaudeAccount_host(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
+			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
 		},
 		true,
 		true,
@@ -5215,7 +5553,7 @@ func (ec *executionContext) _ClaudeAccount_instances(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
-			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
+			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -5270,7 +5608,7 @@ func (ec *executionContext) _ClaudeInstance_pane(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
-			return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, selections, v)
+			return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, selections, v)
 		},
 		true,
 		false,
@@ -5302,7 +5640,7 @@ func (ec *executionContext) _ClaudeInstance_process(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Process) graphql.Marshaler {
-			return ec.marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, selections, v)
+			return ec.marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, selections, v)
 		},
 		true,
 		false,
@@ -5334,7 +5672,7 @@ func (ec *executionContext) _ClaudeInstance_account(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
-			return ec.marshalOClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx, selections, v)
+			return ec.marshalOClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx, selections, v)
 		},
 		true,
 		false,
@@ -5366,7 +5704,7 @@ func (ec *executionContext) _ClaudeInstance_state(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v InstanceState) graphql.Marshaler {
-			return ec.marshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx, selections, v)
+			return ec.marshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx, selections, v)
 		},
 		true,
 		true,
@@ -5550,7 +5888,7 @@ func (ec *executionContext) _ClaudeInstance_worktree(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Worktree) graphql.Marshaler {
-			return ec.marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, selections, v)
+			return ec.marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, selections, v)
 		},
 		true,
 		false,
@@ -5582,7 +5920,7 @@ func (ec *executionContext) _ClaudeInstance_conversation(ctx context.Context, fi
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Conversation) graphql.Marshaler {
-			return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, selections, v)
+			return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, selections, v)
 		},
 		true,
 		false,
@@ -5913,7 +6251,7 @@ func (ec *executionContext) _DaemonState_providers(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*ProviderHealth) graphql.Marshaler {
-			return ec.marshalNProviderHealth2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProviderHealthᚄ(ctx, selections, v)
+			return ec.marshalNProviderHealth2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProviderHealthᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6175,7 +6513,7 @@ func (ec *executionContext) _Host_resourceLoad(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ResourceLoad) graphql.Marshaler {
-			return ec.marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx, selections, v)
+			return ec.marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6207,7 +6545,7 @@ func (ec *executionContext) _Host_peers(ctx context.Context, field graphql.Colle
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, selections, v)
+			return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6263,7 +6601,7 @@ func (ec *executionContext) _Host_processes(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Process) graphql.Marshaler {
-			return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, selections, v)
+			return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6306,7 +6644,7 @@ func (ec *executionContext) _Host_hostServices(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*HostService) graphql.Marshaler {
-			return ec.marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx, selections, v)
+			return ec.marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6384,7 +6722,7 @@ func (ec *executionContext) _HostService_host(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
+			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6439,7 +6777,7 @@ func (ec *executionContext) _HostService_state(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v HostServiceState) graphql.Marshaler {
-			return ec.marshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx, selections, v)
+			return ec.marshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6669,7 +7007,7 @@ func (ec *executionContext) _Issue_state(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v IssueState) graphql.Marshaler {
-			return ec.marshalNIssueState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx, selections, v)
+			return ec.marshalNIssueState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6784,7 +7122,7 @@ func (ec *executionContext) _Issue_comments(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*IssueComment) graphql.Marshaler {
-			return ec.marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx, selections, v)
+			return ec.marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6816,7 +7154,7 @@ func (ec *executionContext) _Issue_labels(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Label) graphql.Marshaler {
-			return ec.marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLabelᚄ(ctx, selections, v)
+			return ec.marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLabelᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6848,7 +7186,7 @@ func (ec *executionContext) _Issue_blockedByIssues(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
-			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6880,7 +7218,7 @@ func (ec *executionContext) _Issue_blockingIssues(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
-			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6912,7 +7250,7 @@ func (ec *executionContext) _Issue_subIssues(ctx context.Context, field graphql.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
-			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+			return ec.marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6944,7 +7282,7 @@ func (ec *executionContext) _Issue_parentIssue(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Issue) graphql.Marshaler {
-			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
+			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7366,7 +7704,7 @@ func (ec *executionContext) _Mutation_launchSession(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *LaunchSessionResult) graphql.Marshaler {
-			return ec.marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx, selections, v)
+			return ec.marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7390,6 +7728,94 @@ func (ec *executionContext) fieldContext_Mutation_launchSession(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_launchSession_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_worktreeRemove(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_worktreeRemove(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorktreeRemove(ctx, fc.Args["input"].(WorktreeRemoveInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *WorktreeMutationResult) graphql.Marshaler {
+			return ec.marshalNWorktreeMutationResult2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeMutationResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_worktreeRemove(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorktreeMutationResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_worktreeRemove_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_worktreesCleanup(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_worktreesCleanup(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorktreesCleanup(ctx, fc.Args["input"].(WorktreesCleanupInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *WorktreesCleanupResult) graphql.Marshaler {
+			return ec.marshalNWorktreesCleanupResult2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreesCleanupResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_worktreesCleanup(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorktreesCleanupResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_worktreesCleanup_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -7432,7 +7858,7 @@ func (ec *executionContext) _Process_host(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
+			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7671,7 +8097,7 @@ func (ec *executionContext) _Process_worktree(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Worktree) graphql.Marshaler {
-			return ec.marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, selections, v)
+			return ec.marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7703,7 +8129,7 @@ func (ec *executionContext) _Process_claudeInstance(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
-			return ec.marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, selections, v)
+			return ec.marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8011,7 +8437,7 @@ func (ec *executionContext) _PullRequest_state(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v PullRequestState) graphql.Marshaler {
-			return ec.marshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx, selections, v)
+			return ec.marshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8195,7 +8621,7 @@ func (ec *executionContext) _PullRequest_reviews(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*PullRequestReview) graphql.Marshaler {
-			return ec.marshalOPullRequestReview2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestReviewᚄ(ctx, selections, v)
+			return ec.marshalOPullRequestReview2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestReviewᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8227,7 +8653,7 @@ func (ec *executionContext) _PullRequest_comments(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*IssueComment) graphql.Marshaler {
-			return ec.marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx, selections, v)
+			return ec.marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8259,7 +8685,7 @@ func (ec *executionContext) _PullRequest_mergeable(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v MergeableState) graphql.Marshaler {
-			return ec.marshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx, selections, v)
+			return ec.marshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8305,7 +8731,7 @@ func (ec *executionContext) _PullRequest_reviewDecision(ctx context.Context, fie
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ReviewDecisionEnum) graphql.Marshaler {
-			return ec.marshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx, selections, v)
+			return ec.marshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8328,7 +8754,7 @@ func (ec *executionContext) _PullRequest_statusCheckRollup(ctx context.Context, 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v CiStatus) graphql.Marshaler {
-			return ec.marshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx, selections, v)
+			return ec.marshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8351,7 +8777,7 @@ func (ec *executionContext) _PullRequest_labels(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Label) graphql.Marshaler {
-			return ec.marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLabelᚄ(ctx, selections, v)
+			return ec.marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLabelᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8498,7 +8924,7 @@ func (ec *executionContext) _Query_health(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Health) graphql.Marshaler {
-			return ec.marshalNHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHealth(ctx, selections, v)
+			return ec.marshalNHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHealth(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8530,7 +8956,7 @@ func (ec *executionContext) _Query_host(ctx context.Context, field graphql.Colle
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
+			return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8562,7 +8988,7 @@ func (ec *executionContext) _Query_hosts(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, selections, v)
+			return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8594,7 +9020,7 @@ func (ec *executionContext) _Query_repos(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Repo) graphql.Marshaler {
-			return ec.marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx, selections, v)
+			return ec.marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8626,7 +9052,7 @@ func (ec *executionContext) _Query_tmuxServer(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
-			return ec.marshalOTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx, selections, v)
+			return ec.marshalOTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8659,7 +9085,7 @@ func (ec *executionContext) _Query_tmuxSessions(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxSession) graphql.Marshaler {
-			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
+			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8703,7 +9129,7 @@ func (ec *executionContext) _Query_tmuxPanes(ctx context.Context, field graphql.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxPane) graphql.Marshaler {
-			return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, selections, v)
+			return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8746,7 +9172,7 @@ func (ec *executionContext) _Query_conversations(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Conversation) graphql.Marshaler {
-			return ec.marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx, selections, v)
+			return ec.marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8779,7 +9205,7 @@ func (ec *executionContext) _Query_conversation(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Conversation) graphql.Marshaler {
-			return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, selections, v)
+			return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8822,7 +9248,7 @@ func (ec *executionContext) _Query_claudeAccounts(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*ClaudeAccount) graphql.Marshaler {
-			return ec.marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx, selections, v)
+			return ec.marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8854,7 +9280,7 @@ func (ec *executionContext) _Query_claudeInstances(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
-			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
+			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8886,7 +9312,7 @@ func (ec *executionContext) _Query_peers(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Host) graphql.Marshaler {
-			return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, selections, v)
+			return ec.marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8919,7 +9345,7 @@ func (ec *executionContext) _Query_hostServices(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*HostService) graphql.Marshaler {
-			return ec.marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx, selections, v)
+			return ec.marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8963,7 +9389,7 @@ func (ec *executionContext) _Query_pullRequests(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
-			return ec.marshalOPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx, selections, v)
+			return ec.marshalOPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9007,7 +9433,7 @@ func (ec *executionContext) _Query_openPullRequests(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
-			return ec.marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx, selections, v)
+			return ec.marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9051,7 +9477,7 @@ func (ec *executionContext) _Query_issues(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Issue) graphql.Marshaler {
-			return ec.marshalOIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
+			return ec.marshalOIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9095,7 +9521,7 @@ func (ec *executionContext) _Query_issue(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Issue) graphql.Marshaler {
-			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
+			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9139,7 +9565,7 @@ func (ec *executionContext) _Query_pullRequest(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *PullRequest) graphql.Marshaler {
-			return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, selections, v)
+			return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9183,7 +9609,7 @@ func (ec *executionContext) _Query_workflowRuns(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*WorkflowRun) graphql.Marshaler {
-			return ec.marshalOWorkflowRun2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkflowRunᚄ(ctx, selections, v)
+			return ec.marshalOWorkflowRun2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkflowRunᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9277,7 +9703,7 @@ func (ec *executionContext) _Query_node(ctx context.Context, field graphql.Colle
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v Node) graphql.Marshaler {
-			return ec.marshalONode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx, selections, v)
+			return ec.marshalONode2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐNode(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9343,7 +9769,7 @@ func (ec *executionContext) _Query_workView(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *WorkView) graphql.Marshaler {
-			return ec.marshalNWorkView2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkView(ctx, selections, v)
+			return ec.marshalNWorkView2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkView(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9375,7 +9801,7 @@ func (ec *executionContext) _Query_daemonState(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *DaemonState) graphql.Marshaler {
-			return ec.marshalNDaemonState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐDaemonState(ctx, selections, v)
+			return ec.marshalNDaemonState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐDaemonState(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9575,7 +10001,7 @@ func (ec *executionContext) _Repo_worktrees(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Worktree) graphql.Marshaler {
-			return ec.marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx, selections, v)
+			return ec.marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9746,7 +10172,7 @@ func (ec *executionContext) _Subscription_nodeChanged(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v Node) graphql.Marshaler {
-			return ec.marshalNNode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx, selections, v)
+			return ec.marshalNNode2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐNode(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9789,7 +10215,7 @@ func (ec *executionContext) _Subscription_processes(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Process) graphql.Marshaler {
-			return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, selections, v)
+			return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9822,7 +10248,7 @@ func (ec *executionContext) _Subscription_peer(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v Node) graphql.Marshaler {
-			return ec.marshalONode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx, selections, v)
+			return ec.marshalONode2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐNode(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9865,7 +10291,7 @@ func (ec *executionContext) _Subscription_tmuxSessionsChanged(ctx context.Contex
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxSession) graphql.Marshaler {
-			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
+			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9898,7 +10324,7 @@ func (ec *executionContext) _Subscription_pullRequestChanged(ctx context.Context
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *PullRequest) graphql.Marshaler {
-			return ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, selections, v)
+			return ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9942,7 +10368,7 @@ func (ec *executionContext) _Subscription_runChanged(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *WorkflowRun) graphql.Marshaler {
-			return ec.marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx, selections, v)
+			return ec.marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9986,7 +10412,7 @@ func (ec *executionContext) _Subscription_worktreeChanged(ctx context.Context, f
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Worktree) graphql.Marshaler {
-			return ec.marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx, selections, v)
+			return ec.marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10030,7 +10456,7 @@ func (ec *executionContext) _Subscription_conversationChanged(ctx context.Contex
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Conversation) graphql.Marshaler {
-			return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, selections, v)
+			return ec.marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10096,7 +10522,7 @@ func (ec *executionContext) _TmuxClient_server(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
-			return ec.marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx, selections, v)
+			return ec.marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10128,7 +10554,7 @@ func (ec *executionContext) _TmuxClient_session(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
-			return ec.marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, selections, v)
+			return ec.marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10298,7 +10724,7 @@ func (ec *executionContext) _TmuxClient_currentWindow(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
-			return ec.marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, selections, v)
+			return ec.marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10330,7 +10756,7 @@ func (ec *executionContext) _TmuxClient_currentPane(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
-			return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, selections, v)
+			return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10385,7 +10811,7 @@ func (ec *executionContext) _TmuxPane_window(ctx context.Context, field graphql.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
-			return ec.marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, selections, v)
+			return ec.marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10578,7 +11004,7 @@ func (ec *executionContext) _TmuxPane_watchingClients(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxClient) graphql.Marshaler {
-			return ec.marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx, selections, v)
+			return ec.marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10610,7 +11036,7 @@ func (ec *executionContext) _TmuxPane_process(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Process) graphql.Marshaler {
-			return ec.marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, selections, v)
+			return ec.marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10642,7 +11068,7 @@ func (ec *executionContext) _TmuxPane_claudeInstance(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
-			return ec.marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, selections, v)
+			return ec.marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10899,7 +11325,7 @@ func (ec *executionContext) _TmuxServer_sessions(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxSession) graphql.Marshaler {
-			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
+			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10942,7 +11368,7 @@ func (ec *executionContext) _TmuxServer_clients(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxClient) graphql.Marshaler {
-			return ec.marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx, selections, v)
+			return ec.marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10997,7 +11423,7 @@ func (ec *executionContext) _TmuxSession_server(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
-			return ec.marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx, selections, v)
+			return ec.marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11121,7 +11547,7 @@ func (ec *executionContext) _TmuxSession_attachedClients(ctx context.Context, fi
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxClient) graphql.Marshaler {
-			return ec.marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx, selections, v)
+			return ec.marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11176,7 +11602,7 @@ func (ec *executionContext) _TmuxSession_windows(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxWindow) graphql.Marshaler {
-			return ec.marshalNTmuxWindow2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindowᚄ(ctx, selections, v)
+			return ec.marshalNTmuxWindow2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindowᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11208,7 +11634,7 @@ func (ec *executionContext) _TmuxSession_currentWindow(ctx context.Context, fiel
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
-			return ec.marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, selections, v)
+			return ec.marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, selections, v)
 		},
 		true,
 		false,
@@ -11263,7 +11689,7 @@ func (ec *executionContext) _TmuxWindow_session(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
-			return ec.marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, selections, v)
+			return ec.marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11364,7 +11790,7 @@ func (ec *executionContext) _TmuxWindow_panes(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxPane) graphql.Marshaler {
-			return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, selections, v)
+			return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11396,7 +11822,7 @@ func (ec *executionContext) _TmuxWindow_currentPane(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
-			return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, selections, v)
+			return ec.marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, selections, v)
 		},
 		true,
 		false,
@@ -11428,7 +11854,7 @@ func (ec *executionContext) _WorkView_repos(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Repo) graphql.Marshaler {
-			return ec.marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx, selections, v)
+			return ec.marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11460,7 +11886,7 @@ func (ec *executionContext) _WorkView_tmuxSessions(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxSession) graphql.Marshaler {
-			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
+			return ec.marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11492,7 +11918,7 @@ func (ec *executionContext) _WorkView_claudeInstances(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
-			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
+			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11524,7 +11950,7 @@ func (ec *executionContext) _WorkView_meta(ctx context.Context, field graphql.Co
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Meta) graphql.Marshaler {
-			return ec.marshalNMeta2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMeta(ctx, selections, v)
+			return ec.marshalNMeta2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐMeta(ctx, selections, v)
 		},
 		true,
 		true,
@@ -12016,7 +12442,7 @@ func (ec *executionContext) _Worktree_pr(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *PullRequest) graphql.Marshaler {
-			return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, selections, v)
+			return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, selections, v)
 		},
 		true,
 		false,
@@ -12048,7 +12474,7 @@ func (ec *executionContext) _Worktree_issue(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Issue) graphql.Marshaler {
-			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
+			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, selections, v)
 		},
 		true,
 		false,
@@ -12080,7 +12506,7 @@ func (ec *executionContext) _Worktree_processes(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*Process) graphql.Marshaler {
-			return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, selections, v)
+			return ec.marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -12112,7 +12538,7 @@ func (ec *executionContext) _Worktree_tmuxPanes(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*TmuxPane) graphql.Marshaler {
-			return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, selections, v)
+			return ec.marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -12144,7 +12570,7 @@ func (ec *executionContext) _Worktree_tmuxSession(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
-			return ec.marshalOTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, selections, v)
+			return ec.marshalOTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, selections, v)
 		},
 		true,
 		false,
@@ -12176,7 +12602,7 @@ func (ec *executionContext) _Worktree_claudeInstances(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
-			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
+			return ec.marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -12239,6 +12665,314 @@ func (ec *executionContext) _Worktree_behind(ctx context.Context, field graphql.
 }
 func (ec *executionContext) fieldContext_Worktree_behind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Worktree", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeCleanupEntry_worktreeId(ctx context.Context, field graphql.CollectedField, obj *WorktreeCleanupEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeCleanupEntry_worktreeId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.WorktreeID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeCleanupEntry_worktreeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeCleanupEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeCleanupEntry_ok(ctx context.Context, field graphql.CollectedField, obj *WorktreeCleanupEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeCleanupEntry_ok(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ok, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeCleanupEntry_ok(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeCleanupEntry", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeCleanupEntry_stage(ctx context.Context, field graphql.CollectedField, obj *WorktreeCleanupEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeCleanupEntry_stage(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Stage, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeCleanupEntry_stage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeCleanupEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeCleanupEntry_message(ctx context.Context, field graphql.CollectedField, obj *WorktreeCleanupEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeCleanupEntry_message(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeCleanupEntry_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeCleanupEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeCleanupEntry_alreadyRemoved(ctx context.Context, field graphql.CollectedField, obj *WorktreeCleanupEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeCleanupEntry_alreadyRemoved(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AlreadyRemoved, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeCleanupEntry_alreadyRemoved(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeCleanupEntry", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeCleanupEntry_warnings(ctx context.Context, field graphql.CollectedField, obj *WorktreeCleanupEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeCleanupEntry_warnings(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Warnings, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeCleanupEntry_warnings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeCleanupEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeMutationResult_ok(ctx context.Context, field graphql.CollectedField, obj *WorktreeMutationResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeMutationResult_ok(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ok, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeMutationResult_ok(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeMutationResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeMutationResult_errCode(ctx context.Context, field graphql.CollectedField, obj *WorktreeMutationResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeMutationResult_errCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeMutationResult_errCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeMutationResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreeMutationResult_errMsg(ctx context.Context, field graphql.CollectedField, obj *WorktreeMutationResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreeMutationResult_errMsg(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrMsg, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreeMutationResult_errMsg(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreeMutationResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreesCleanupResult_ok(ctx context.Context, field graphql.CollectedField, obj *WorktreesCleanupResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreesCleanupResult_ok(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ok, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreesCleanupResult_ok(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreesCleanupResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreesCleanupResult_entries(ctx context.Context, field graphql.CollectedField, obj *WorktreesCleanupResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreesCleanupResult_entries(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Entries, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WorktreeCleanupEntry) graphql.Marshaler {
+			return ec.marshalNWorktreeCleanupEntry2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeCleanupEntryᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreesCleanupResult_entries(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorktreesCleanupResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorktreeCleanupEntry(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WorktreesCleanupResult_errCode(ctx context.Context, field graphql.CollectedField, obj *WorktreesCleanupResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreesCleanupResult_errCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreesCleanupResult_errCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreesCleanupResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorktreesCleanupResult_errMsg(ctx context.Context, field graphql.CollectedField, obj *WorktreesCleanupResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorktreesCleanupResult_errMsg(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrMsg, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorktreesCleanupResult_errMsg(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorktreesCleanupResult", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
@@ -13334,7 +14068,7 @@ func (ec *executionContext) unmarshalInputHostServiceFilter(ctx context.Context,
 			it.Name = data
 		case "state":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("state"))
-			data, err := ec.unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx, v)
+			data, err := ec.unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -13550,6 +14284,129 @@ func (ec *executionContext) unmarshalInputTmuxSessionFilter(ctx context.Context,
 				return it, err
 			}
 			it.ActiveAttachedOnly = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorktreeRemoveInput(ctx context.Context, obj any) (WorktreeRemoveInput, error) {
+	var it WorktreeRemoveInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"worktreeId", "force", "activeSession", "activeCwd"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "worktreeId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("worktreeId"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.WorktreeID = data
+		case "force":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("force"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Force = data
+		case "activeSession":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("activeSession"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ActiveSession = data
+		case "activeCwd":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("activeCwd"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ActiveCwd = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorktreesCleanupInput(ctx context.Context, obj any) (WorktreesCleanupInput, error) {
+	var it WorktreesCleanupInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"worktreeIds", "force", "activeSession", "activeCwd", "baseBranch", "protected", "sessionNames"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "worktreeIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("worktreeIds"))
+			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.WorktreeIds = data
+		case "force":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("force"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Force = data
+		case "activeSession":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("activeSession"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ActiveSession = data
+		case "activeCwd":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("activeCwd"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ActiveCwd = data
+		case "baseBranch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("baseBranch"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BaseBranch = data
+		case "protected":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("protected"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Protected = data
+		case "sessionNames":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sessionNames"))
+			data, err := ec.unmarshalOString2ᚕᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SessionNames = data
 		}
 	}
 	return it, nil
@@ -14797,6 +15654,20 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "launchSession":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_launchSession(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "worktreeRemove":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_worktreeRemove(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "worktreesCleanup":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_worktreesCleanup(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -18338,6 +19209,152 @@ func (ec *executionContext) _Worktree(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
+var worktreeCleanupEntryImplementors = []string{"WorktreeCleanupEntry"}
+
+func (ec *executionContext) _WorktreeCleanupEntry(ctx context.Context, sel ast.SelectionSet, obj *WorktreeCleanupEntry) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, worktreeCleanupEntryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorktreeCleanupEntry")
+		case "worktreeId":
+			out.Values[i] = ec._WorktreeCleanupEntry_worktreeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ok":
+			out.Values[i] = ec._WorktreeCleanupEntry_ok(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stage":
+			out.Values[i] = ec._WorktreeCleanupEntry_stage(ctx, field, obj)
+		case "message":
+			out.Values[i] = ec._WorktreeCleanupEntry_message(ctx, field, obj)
+		case "alreadyRemoved":
+			out.Values[i] = ec._WorktreeCleanupEntry_alreadyRemoved(ctx, field, obj)
+		case "warnings":
+			out.Values[i] = ec._WorktreeCleanupEntry_warnings(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var worktreeMutationResultImplementors = []string{"WorktreeMutationResult"}
+
+func (ec *executionContext) _WorktreeMutationResult(ctx context.Context, sel ast.SelectionSet, obj *WorktreeMutationResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, worktreeMutationResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorktreeMutationResult")
+		case "ok":
+			out.Values[i] = ec._WorktreeMutationResult_ok(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "errCode":
+			out.Values[i] = ec._WorktreeMutationResult_errCode(ctx, field, obj)
+		case "errMsg":
+			out.Values[i] = ec._WorktreeMutationResult_errMsg(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var worktreesCleanupResultImplementors = []string{"WorktreesCleanupResult"}
+
+func (ec *executionContext) _WorktreesCleanupResult(ctx context.Context, sel ast.SelectionSet, obj *WorktreesCleanupResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, worktreesCleanupResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorktreesCleanupResult")
+		case "ok":
+			out.Values[i] = ec._WorktreesCleanupResult_ok(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "entries":
+			out.Values[i] = ec._WorktreesCleanupResult_entries(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "errCode":
+			out.Values[i] = ec._WorktreesCleanupResult_errCode(ctx, field, obj)
+		case "errMsg":
+			out.Values[i] = ec._WorktreesCleanupResult_errMsg(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var __DirectiveImplementors = []string{"__Directive"}
 
 func (ec *executionContext) ___Directive(ctx context.Context, sel ast.SelectionSet, obj *introspection.Directive) graphql.Marshaler {
@@ -18689,21 +19706,21 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) unmarshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx context.Context, v any) (CiStatus, error) {
+func (ec *executionContext) unmarshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx context.Context, v any) (CiStatus, error) {
 	var res CiStatus
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx context.Context, sel ast.SelectionSet, v CiStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNCiStatus2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐCiStatus(ctx context.Context, sel ast.SelectionSet, v CiStatus) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeAccount) graphql.Marshaler {
+func (ec *executionContext) marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeAccountᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeAccount) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx, sel, v[i])
+		return ec.marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18715,7 +19732,7 @@ func (ec *executionContext) marshalNClaudeAccount2ᚕᚖgithubᚗcomᚋdrewdrewt
 	return ret
 }
 
-func (ec *executionContext) marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx context.Context, sel ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
+func (ec *executionContext) marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx context.Context, sel ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18725,11 +19742,11 @@ func (ec *executionContext) marshalNClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthis
 	return ec._ClaudeAccount(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
+func (ec *executionContext) marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstanceᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClaudeInstance) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, sel, v[i])
+		return ec.marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18741,7 +19758,7 @@ func (ec *executionContext) marshalNClaudeInstance2ᚕᚖgithubᚗcomᚋdrewdrew
 	return ret
 }
 
-func (ec *executionContext) marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
+func (ec *executionContext) marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18751,11 +19768,11 @@ func (ec *executionContext) marshalNClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthi
 	return ec._ClaudeInstance(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx context.Context, sel ast.SelectionSet, v []*Conversation) graphql.Marshaler {
+func (ec *executionContext) marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversationᚄ(ctx context.Context, sel ast.SelectionSet, v []*Conversation) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, sel, v[i])
+		return ec.marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversation(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18767,7 +19784,7 @@ func (ec *executionContext) marshalNConversation2ᚕᚖgithubᚗcomᚋdrewdrewth
 	return ret
 }
 
-func (ec *executionContext) marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {
+func (ec *executionContext) marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18777,11 +19794,11 @@ func (ec *executionContext) marshalNConversation2ᚖgithubᚗcomᚋdrewdrewthis�
 	return ec._Conversation(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNDaemonState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐDaemonState(ctx context.Context, sel ast.SelectionSet, v DaemonState) graphql.Marshaler {
+func (ec *executionContext) marshalNDaemonState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐDaemonState(ctx context.Context, sel ast.SelectionSet, v DaemonState) graphql.Marshaler {
 	return ec._DaemonState(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNDaemonState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐDaemonState(ctx context.Context, sel ast.SelectionSet, v *DaemonState) graphql.Marshaler {
+func (ec *executionContext) marshalNDaemonState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐDaemonState(ctx context.Context, sel ast.SelectionSet, v *DaemonState) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18807,11 +19824,11 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 	return graphql.WrapContextMarshaler(ctx, res)
 }
 
-func (ec *executionContext) marshalNHealth2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHealth(ctx context.Context, sel ast.SelectionSet, v Health) graphql.Marshaler {
+func (ec *executionContext) marshalNHealth2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHealth(ctx context.Context, sel ast.SelectionSet, v Health) graphql.Marshaler {
 	return ec._Health(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHealth(ctx context.Context, sel ast.SelectionSet, v *Health) graphql.Marshaler {
+func (ec *executionContext) marshalNHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHealth(ctx context.Context, sel ast.SelectionSet, v *Health) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18821,15 +19838,15 @@ func (ec *executionContext) marshalNHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋgit�
 	return ec._Health(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNHost2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx context.Context, sel ast.SelectionSet, v Host) graphql.Marshaler {
+func (ec *executionContext) marshalNHost2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx context.Context, sel ast.SelectionSet, v Host) graphql.Marshaler {
 	return ec._Host(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx context.Context, sel ast.SelectionSet, v []*Host) graphql.Marshaler {
+func (ec *executionContext) marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostᚄ(ctx context.Context, sel ast.SelectionSet, v []*Host) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx, sel, v[i])
+		return ec.marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18841,7 +19858,7 @@ func (ec *executionContext) marshalNHost2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgit
 	return ret
 }
 
-func (ec *executionContext) marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHost(ctx context.Context, sel ast.SelectionSet, v *Host) graphql.Marshaler {
+func (ec *executionContext) marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHost(ctx context.Context, sel ast.SelectionSet, v *Host) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18851,11 +19868,11 @@ func (ec *executionContext) marshalNHost2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑ
 	return ec._Host(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx context.Context, sel ast.SelectionSet, v []*HostService) graphql.Marshaler {
+func (ec *executionContext) marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceᚄ(ctx context.Context, sel ast.SelectionSet, v []*HostService) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostService(ctx, sel, v[i])
+		return ec.marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostService(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18867,7 +19884,7 @@ func (ec *executionContext) marshalNHostService2ᚕᚖgithubᚗcomᚋdrewdrewthi
 	return ret
 }
 
-func (ec *executionContext) marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostService(ctx context.Context, sel ast.SelectionSet, v *HostService) graphql.Marshaler {
+func (ec *executionContext) marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostService(ctx context.Context, sel ast.SelectionSet, v *HostService) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18877,13 +19894,13 @@ func (ec *executionContext) marshalNHostService2ᚖgithubᚗcomᚋdrewdrewthis�
 	return ec._HostService(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, v any) (HostServiceState, error) {
+func (ec *executionContext) unmarshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, v any) (HostServiceState, error) {
 	var res HostServiceState
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, sel ast.SelectionSet, v HostServiceState) graphql.Marshaler {
+func (ec *executionContext) marshalNHostServiceState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, sel ast.SelectionSet, v HostServiceState) graphql.Marshaler {
 	return v
 }
 
@@ -18903,13 +19920,13 @@ func (ec *executionContext) marshalNID2string(ctx context.Context, sel ast.Selec
 	return res
 }
 
-func (ec *executionContext) unmarshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx context.Context, v any) (InstanceState, error) {
+func (ec *executionContext) unmarshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx context.Context, v any) (InstanceState, error) {
 	var res InstanceState
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx context.Context, sel ast.SelectionSet, v InstanceState) graphql.Marshaler {
+func (ec *executionContext) marshalNInstanceState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐInstanceState(ctx context.Context, sel ast.SelectionSet, v InstanceState) graphql.Marshaler {
 	return v
 }
 
@@ -18929,11 +19946,11 @@ func (ec *executionContext) marshalNInt2int64(ctx context.Context, sel ast.Selec
 	return res
 }
 
-func (ec *executionContext) marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []*Issue) graphql.Marshaler {
+func (ec *executionContext) marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []*Issue) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, sel, v[i])
+		return ec.marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18945,7 +19962,7 @@ func (ec *executionContext) marshalNIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ret
 }
 
-func (ec *executionContext) marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx context.Context, sel ast.SelectionSet, v *Issue) graphql.Marshaler {
+func (ec *executionContext) marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx context.Context, sel ast.SelectionSet, v *Issue) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18955,7 +19972,7 @@ func (ec *executionContext) marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgit�
 	return ec._Issue(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNIssueComment2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueComment(ctx context.Context, sel ast.SelectionSet, v *IssueComment) graphql.Marshaler {
+func (ec *executionContext) marshalNIssueComment2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueComment(ctx context.Context, sel ast.SelectionSet, v *IssueComment) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -18965,21 +19982,21 @@ func (ec *executionContext) marshalNIssueComment2ᚖgithubᚗcomᚋdrewdrewthis�
 	return ec._IssueComment(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNIssueState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, v any) (IssueState, error) {
+func (ec *executionContext) unmarshalNIssueState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, v any) (IssueState, error) {
 	var res IssueState
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNIssueState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, sel ast.SelectionSet, v IssueState) graphql.Marshaler {
+func (ec *executionContext) marshalNIssueState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, sel ast.SelectionSet, v IssueState) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLabelᚄ(ctx context.Context, sel ast.SelectionSet, v []*Label) graphql.Marshaler {
+func (ec *executionContext) marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLabelᚄ(ctx context.Context, sel ast.SelectionSet, v []*Label) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNLabel2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLabel(ctx, sel, v[i])
+		return ec.marshalNLabel2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLabel(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -18991,7 +20008,7 @@ func (ec *executionContext) marshalNLabel2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ret
 }
 
-func (ec *executionContext) marshalNLabel2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLabel(ctx context.Context, sel ast.SelectionSet, v *Label) graphql.Marshaler {
+func (ec *executionContext) marshalNLabel2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLabel(ctx context.Context, sel ast.SelectionSet, v *Label) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19001,16 +20018,16 @@ func (ec *executionContext) marshalNLabel2ᚖgithubᚗcomᚋdrewdrewthisᚋgit�
 	return ec._Label(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNLaunchSessionInput2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionInput(ctx context.Context, v any) (LaunchSessionInput, error) {
+func (ec *executionContext) unmarshalNLaunchSessionInput2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLaunchSessionInput(ctx context.Context, v any) (LaunchSessionInput, error) {
 	res, err := ec.unmarshalInputLaunchSessionInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNLaunchSessionResult2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx context.Context, sel ast.SelectionSet, v LaunchSessionResult) graphql.Marshaler {
+func (ec *executionContext) marshalNLaunchSessionResult2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx context.Context, sel ast.SelectionSet, v LaunchSessionResult) graphql.Marshaler {
 	return ec._LaunchSessionResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx context.Context, sel ast.SelectionSet, v *LaunchSessionResult) graphql.Marshaler {
+func (ec *executionContext) marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐLaunchSessionResult(ctx context.Context, sel ast.SelectionSet, v *LaunchSessionResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19020,17 +20037,17 @@ func (ec *executionContext) marshalNLaunchSessionResult2ᚖgithubᚗcomᚋdrewdr
 	return ec._LaunchSessionResult(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, v any) (MergeableState, error) {
+func (ec *executionContext) unmarshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, v any) (MergeableState, error) {
 	var res MergeableState
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, sel ast.SelectionSet, v MergeableState) graphql.Marshaler {
+func (ec *executionContext) marshalNMergeableState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐMergeableState(ctx context.Context, sel ast.SelectionSet, v MergeableState) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalNMeta2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐMeta(ctx context.Context, sel ast.SelectionSet, v *Meta) graphql.Marshaler {
+func (ec *executionContext) marshalNMeta2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐMeta(ctx context.Context, sel ast.SelectionSet, v *Meta) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19040,7 +20057,7 @@ func (ec *executionContext) marshalNMeta2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑ
 	return ec._Meta(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNNode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx context.Context, sel ast.SelectionSet, v Node) graphql.Marshaler {
+func (ec *executionContext) marshalNNode2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐNode(ctx context.Context, sel ast.SelectionSet, v Node) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19050,11 +20067,11 @@ func (ec *executionContext) marshalNNode2githubᚗcomᚋdrewdrewthisᚋgitᚑorc
 	return ec._Node(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx context.Context, sel ast.SelectionSet, v []*Process) graphql.Marshaler {
+func (ec *executionContext) marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcessᚄ(ctx context.Context, sel ast.SelectionSet, v []*Process) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, sel, v[i])
+		return ec.marshalNProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcess(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19066,7 +20083,7 @@ func (ec *executionContext) marshalNProcess2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcess(ctx context.Context, sel ast.SelectionSet, v *Process) graphql.Marshaler {
+func (ec *executionContext) marshalNProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcess(ctx context.Context, sel ast.SelectionSet, v *Process) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19076,11 +20093,11 @@ func (ec *executionContext) marshalNProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgit
 	return ec._Process(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProviderHealth2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProviderHealthᚄ(ctx context.Context, sel ast.SelectionSet, v []*ProviderHealth) graphql.Marshaler {
+func (ec *executionContext) marshalNProviderHealth2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProviderHealthᚄ(ctx context.Context, sel ast.SelectionSet, v []*ProviderHealth) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNProviderHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProviderHealth(ctx, sel, v[i])
+		return ec.marshalNProviderHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProviderHealth(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19092,7 +20109,7 @@ func (ec *executionContext) marshalNProviderHealth2ᚕᚖgithubᚗcomᚋdrewdrew
 	return ret
 }
 
-func (ec *executionContext) marshalNProviderHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProviderHealth(ctx context.Context, sel ast.SelectionSet, v *ProviderHealth) graphql.Marshaler {
+func (ec *executionContext) marshalNProviderHealth2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProviderHealth(ctx context.Context, sel ast.SelectionSet, v *ProviderHealth) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19102,15 +20119,15 @@ func (ec *executionContext) marshalNProviderHealth2ᚖgithubᚗcomᚋdrewdrewthi
 	return ec._ProviderHealth(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNPullRequest2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v PullRequest) graphql.Marshaler {
+func (ec *executionContext) marshalNPullRequest2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v PullRequest) graphql.Marshaler {
 	return ec._PullRequest(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
+func (ec *executionContext) marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, sel, v[i])
+		return ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19122,7 +20139,7 @@ func (ec *executionContext) marshalNPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthi
 	return ret
 }
 
-func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v *PullRequest) graphql.Marshaler {
+func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v *PullRequest) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19132,7 +20149,7 @@ func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthis�
 	return ec._PullRequest(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNPullRequestReview2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestReview(ctx context.Context, sel ast.SelectionSet, v *PullRequestReview) graphql.Marshaler {
+func (ec *executionContext) marshalNPullRequestReview2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestReview(ctx context.Context, sel ast.SelectionSet, v *PullRequestReview) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19142,21 +20159,21 @@ func (ec *executionContext) marshalNPullRequestReview2ᚖgithubᚗcomᚋdrewdrew
 	return ec._PullRequestReview(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, v any) (PullRequestState, error) {
+func (ec *executionContext) unmarshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, v any) (PullRequestState, error) {
 	var res PullRequestState
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, sel ast.SelectionSet, v PullRequestState) graphql.Marshaler {
+func (ec *executionContext) marshalNPullRequestState2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, sel ast.SelectionSet, v PullRequestState) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx context.Context, sel ast.SelectionSet, v []*Repo) graphql.Marshaler {
+func (ec *executionContext) marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐRepoᚄ(ctx context.Context, sel ast.SelectionSet, v []*Repo) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNRepo2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepo(ctx, sel, v[i])
+		return ec.marshalNRepo2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐRepo(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19168,7 +20185,7 @@ func (ec *executionContext) marshalNRepo2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgit
 	return ret
 }
 
-func (ec *executionContext) marshalNRepo2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐRepo(ctx context.Context, sel ast.SelectionSet, v *Repo) graphql.Marshaler {
+func (ec *executionContext) marshalNRepo2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐRepo(ctx context.Context, sel ast.SelectionSet, v *Repo) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19194,11 +20211,41 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 	return res
 }
 
-func (ec *executionContext) marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxClient) graphql.Marshaler {
+func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxClientᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxClient) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTmuxClient2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClient(ctx, sel, v[i])
+		return ec.marshalNTmuxClient2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxClient(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19210,7 +20257,7 @@ func (ec *executionContext) marshalNTmuxClient2ᚕᚖgithubᚗcomᚋdrewdrewthis
 	return ret
 }
 
-func (ec *executionContext) marshalNTmuxClient2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxClient(ctx context.Context, sel ast.SelectionSet, v *TmuxClient) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxClient2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxClient(ctx context.Context, sel ast.SelectionSet, v *TmuxClient) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19220,11 +20267,11 @@ func (ec *executionContext) marshalNTmuxClient2ᚖgithubᚗcomᚋdrewdrewthisᚋ
 	return ec._TmuxClient(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxPane) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPaneᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxPane) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, sel, v[i])
+		return ec.marshalNTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19236,7 +20283,7 @@ func (ec *executionContext) marshalNTmuxPane2ᚕᚖgithubᚗcomᚋdrewdrewthis�
 	return ret
 }
 
-func (ec *executionContext) marshalNTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx context.Context, sel ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx context.Context, sel ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19246,11 +20293,11 @@ func (ec *executionContext) marshalNTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ec._TmuxPane(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNTmuxServer2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx context.Context, sel ast.SelectionSet, v TmuxServer) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxServer2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx context.Context, sel ast.SelectionSet, v TmuxServer) graphql.Marshaler {
 	return ec._TmuxServer(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx context.Context, sel ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx context.Context, sel ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19260,15 +20307,15 @@ func (ec *executionContext) marshalNTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋ
 	return ec._TmuxServer(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNTmuxSession2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v TmuxSession) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxSession2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v TmuxSession) graphql.Marshaler {
 	return ec._TmuxSession(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxSession) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxSession) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, sel, v[i])
+		return ec.marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19280,7 +20327,7 @@ func (ec *executionContext) marshalNTmuxSession2ᚕᚖgithubᚗcomᚋdrewdrewthi
 	return ret
 }
 
-func (ec *executionContext) marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19290,15 +20337,15 @@ func (ec *executionContext) marshalNTmuxSession2ᚖgithubᚗcomᚋdrewdrewthis�
 	return ec._TmuxSession(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNTmuxWindow2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v TmuxWindow) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxWindow2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v TmuxWindow) graphql.Marshaler {
 	return ec._TmuxWindow(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTmuxWindow2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindowᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxWindow) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxWindow2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindowᚄ(ctx context.Context, sel ast.SelectionSet, v []*TmuxWindow) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, sel, v[i])
+		return ec.marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19310,7 +20357,7 @@ func (ec *executionContext) marshalNTmuxWindow2ᚕᚖgithubᚗcomᚋdrewdrewthis
 	return ret
 }
 
-func (ec *executionContext) marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
+func (ec *executionContext) marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19320,11 +20367,11 @@ func (ec *executionContext) marshalNTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋ
 	return ec._TmuxWindow(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNWorkView2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkView(ctx context.Context, sel ast.SelectionSet, v WorkView) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkView2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkView(ctx context.Context, sel ast.SelectionSet, v WorkView) graphql.Marshaler {
 	return ec._WorkView(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkView2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkView(ctx context.Context, sel ast.SelectionSet, v *WorkView) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkView2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkView(ctx context.Context, sel ast.SelectionSet, v *WorkView) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19334,11 +20381,11 @@ func (ec *executionContext) marshalNWorkView2ᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ec._WorkView(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNWorkflowRun2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx context.Context, sel ast.SelectionSet, v WorkflowRun) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkflowRun2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx context.Context, sel ast.SelectionSet, v WorkflowRun) graphql.Marshaler {
 	return ec._WorkflowRun(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx context.Context, sel ast.SelectionSet, v *WorkflowRun) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx context.Context, sel ast.SelectionSet, v *WorkflowRun) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19348,11 +20395,11 @@ func (ec *executionContext) marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthis�
 	return ec._WorkflowRun(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx context.Context, sel ast.SelectionSet, v []*Worktree) graphql.Marshaler {
+func (ec *executionContext) marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeᚄ(ctx context.Context, sel ast.SelectionSet, v []*Worktree) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, sel, v[i])
+		return ec.marshalNWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19364,7 +20411,7 @@ func (ec *executionContext) marshalNWorktree2ᚕᚖgithubᚗcomᚋdrewdrewthis�
 	return ret
 }
 
-func (ec *executionContext) marshalNWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx context.Context, sel ast.SelectionSet, v *Worktree) graphql.Marshaler {
+func (ec *executionContext) marshalNWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx context.Context, sel ast.SelectionSet, v *Worktree) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -19372,6 +20419,70 @@ func (ec *executionContext) marshalNWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgi
 		return graphql.Null
 	}
 	return ec._Worktree(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorktreeCleanupEntry2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeCleanupEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []*WorktreeCleanupEntry) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWorktreeCleanupEntry2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeCleanupEntry(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWorktreeCleanupEntry2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeCleanupEntry(ctx context.Context, sel ast.SelectionSet, v *WorktreeCleanupEntry) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorktreeCleanupEntry(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorktreeMutationResult2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeMutationResult(ctx context.Context, sel ast.SelectionSet, v WorktreeMutationResult) graphql.Marshaler {
+	return ec._WorktreeMutationResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorktreeMutationResult2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeMutationResult(ctx context.Context, sel ast.SelectionSet, v *WorktreeMutationResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorktreeMutationResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNWorktreeRemoveInput2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreeRemoveInput(ctx context.Context, v any) (WorktreeRemoveInput, error) {
+	res, err := ec.unmarshalInputWorktreeRemoveInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorktreesCleanupInput2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreesCleanupInput(ctx context.Context, v any) (WorktreesCleanupInput, error) {
+	res, err := ec.unmarshalInputWorktreesCleanupInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNWorktreesCleanupResult2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreesCleanupResult(ctx context.Context, sel ast.SelectionSet, v WorktreesCleanupResult) graphql.Marshaler {
+	return ec._WorktreesCleanupResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorktreesCleanupResult2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktreesCleanupResult(ctx context.Context, sel ast.SelectionSet, v *WorktreesCleanupResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorktreesCleanupResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalN__Directive2githubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐDirective(ctx context.Context, sel ast.SelectionSet, v introspection.Directive) graphql.Marshaler {
@@ -19545,21 +20656,21 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
-func (ec *executionContext) marshalOClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx context.Context, sel ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
+func (ec *executionContext) marshalOClaudeAccount2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeAccount(ctx context.Context, sel ast.SelectionSet, v *ClaudeAccount) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ClaudeAccount(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
+func (ec *executionContext) marshalOClaudeInstance2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v *ClaudeInstance) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ClaudeInstance(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {
+func (ec *executionContext) marshalOConversation2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐConversation(ctx context.Context, sel ast.SelectionSet, v *Conversation) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -19583,7 +20694,7 @@ func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel as
 	return graphql.WrapContextMarshaler(ctx, res)
 }
 
-func (ec *executionContext) unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx context.Context, v any) (*HostServiceFilter, error) {
+func (ec *executionContext) unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceFilter(ctx context.Context, v any) (*HostServiceFilter, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19591,7 +20702,7 @@ func (ec *executionContext) unmarshalOHostServiceFilter2ᚖgithubᚗcomᚋdrewdr
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, v any) (*HostServiceState, error) {
+func (ec *executionContext) unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, v any) (*HostServiceState, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19600,7 +20711,7 @@ func (ec *executionContext) unmarshalOHostServiceState2ᚖgithubᚗcomᚋdrewdre
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, sel ast.SelectionSet, v *HostServiceState) graphql.Marshaler {
+func (ec *executionContext) marshalOHostServiceState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐHostServiceState(ctx context.Context, sel ast.SelectionSet, v *HostServiceState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -19661,14 +20772,14 @@ func (ec *executionContext) marshalOInt2ᚖint64(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) marshalOIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []*Issue) graphql.Marshaler {
+func (ec *executionContext) marshalOIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []*Issue) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, sel, v[i])
+		return ec.marshalNIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19680,21 +20791,21 @@ func (ec *executionContext) marshalOIssue2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgi
 	return ret
 }
 
-func (ec *executionContext) marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssue(ctx context.Context, sel ast.SelectionSet, v *Issue) graphql.Marshaler {
+func (ec *executionContext) marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssue(ctx context.Context, sel ast.SelectionSet, v *Issue) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Issue(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx context.Context, sel ast.SelectionSet, v []*IssueComment) graphql.Marshaler {
+func (ec *executionContext) marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueCommentᚄ(ctx context.Context, sel ast.SelectionSet, v []*IssueComment) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNIssueComment2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueComment(ctx, sel, v[i])
+		return ec.marshalNIssueComment2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueComment(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19706,7 +20817,7 @@ func (ec *executionContext) marshalOIssueComment2ᚕᚖgithubᚗcomᚋdrewdrewth
 	return ret
 }
 
-func (ec *executionContext) unmarshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, v any) (*IssueState, error) {
+func (ec *executionContext) unmarshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, v any) (*IssueState, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19715,7 +20826,7 @@ func (ec *executionContext) unmarshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthis�
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, sel ast.SelectionSet, v *IssueState) graphql.Marshaler {
+func (ec *executionContext) marshalOIssueState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐIssueState(ctx context.Context, sel ast.SelectionSet, v *IssueState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -19740,21 +20851,21 @@ func (ec *executionContext) marshalOJSON2interface(ctx context.Context, sel ast.
 	return res
 }
 
-func (ec *executionContext) marshalONode2githubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐNode(ctx context.Context, sel ast.SelectionSet, v Node) graphql.Marshaler {
+func (ec *executionContext) marshalONode2githubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐNode(ctx context.Context, sel ast.SelectionSet, v Node) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Node(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcess(ctx context.Context, sel ast.SelectionSet, v *Process) graphql.Marshaler {
+func (ec *executionContext) marshalOProcess2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcess(ctx context.Context, sel ast.SelectionSet, v *Process) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Process(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐProcessFilter(ctx context.Context, v any) (*ProcessFilter, error) {
+func (ec *executionContext) unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐProcessFilter(ctx context.Context, v any) (*ProcessFilter, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19762,14 +20873,14 @@ func (ec *executionContext) unmarshalOProcessFilter2ᚖgithubᚗcomᚋdrewdrewth
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
+func (ec *executionContext) marshalOPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequest) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, sel, v[i])
+		return ec.marshalNPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19781,21 +20892,21 @@ func (ec *executionContext) marshalOPullRequest2ᚕᚖgithubᚗcomᚋdrewdrewthi
 	return ret
 }
 
-func (ec *executionContext) marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v *PullRequest) graphql.Marshaler {
+func (ec *executionContext) marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequest(ctx context.Context, sel ast.SelectionSet, v *PullRequest) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._PullRequest(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOPullRequestReview2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestReviewᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequestReview) graphql.Marshaler {
+func (ec *executionContext) marshalOPullRequestReview2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestReviewᚄ(ctx context.Context, sel ast.SelectionSet, v []*PullRequestReview) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNPullRequestReview2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestReview(ctx, sel, v[i])
+		return ec.marshalNPullRequestReview2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestReview(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19807,7 +20918,7 @@ func (ec *executionContext) marshalOPullRequestReview2ᚕᚖgithubᚗcomᚋdrewd
 	return ret
 }
 
-func (ec *executionContext) unmarshalOPullRequestState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, v any) (*PullRequestState, error) {
+func (ec *executionContext) unmarshalOPullRequestState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, v any) (*PullRequestState, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19816,21 +20927,21 @@ func (ec *executionContext) unmarshalOPullRequestState2ᚖgithubᚗcomᚋdrewdre
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOPullRequestState2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, sel ast.SelectionSet, v *PullRequestState) graphql.Marshaler {
+func (ec *executionContext) marshalOPullRequestState2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐPullRequestState(ctx context.Context, sel ast.SelectionSet, v *PullRequestState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return v
 }
 
-func (ec *executionContext) marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx context.Context, sel ast.SelectionSet, v *ResourceLoad) graphql.Marshaler {
+func (ec *executionContext) marshalOResourceLoad2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐResourceLoad(ctx context.Context, sel ast.SelectionSet, v *ResourceLoad) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ResourceLoad(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx context.Context, v any) (*ReviewDecisionEnum, error) {
+func (ec *executionContext) unmarshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx context.Context, v any) (*ReviewDecisionEnum, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19839,7 +20950,7 @@ func (ec *executionContext) unmarshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewd
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx context.Context, sel ast.SelectionSet, v *ReviewDecisionEnum) graphql.Marshaler {
+func (ec *executionContext) marshalOReviewDecisionEnum2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐReviewDecisionEnum(ctx context.Context, sel ast.SelectionSet, v *ReviewDecisionEnum) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -19882,6 +20993,36 @@ func (ec *executionContext) marshalOString2ᚕstringᚄ(ctx context.Context, sel
 	return ret
 }
 
+func (ec *executionContext) unmarshalOString2ᚕᚖstring(ctx context.Context, v any) ([]*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalOString2ᚖstring(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOString2ᚕᚖstring(ctx context.Context, sel ast.SelectionSet, v []*string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalOString2ᚖstring(ctx, sel, v[i])
+	}
+
+	return ret
+}
+
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v any) (*string, error) {
 	if v == nil {
 		return nil, nil
@@ -19918,14 +21059,14 @@ func (ec *executionContext) marshalOTime2ᚖtimeᚐTime(ctx context.Context, sel
 	return res
 }
 
-func (ec *executionContext) marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx context.Context, sel ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
+func (ec *executionContext) marshalOTmuxPane2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPane(ctx context.Context, sel ast.SelectionSet, v *TmuxPane) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._TmuxPane(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOTmuxPaneFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxPaneFilter(ctx context.Context, v any) (*TmuxPaneFilter, error) {
+func (ec *executionContext) unmarshalOTmuxPaneFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxPaneFilter(ctx context.Context, v any) (*TmuxPaneFilter, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19933,21 +21074,21 @@ func (ec *executionContext) unmarshalOTmuxPaneFilter2ᚖgithubᚗcomᚋdrewdrewt
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx context.Context, sel ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
+func (ec *executionContext) marshalOTmuxServer2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxServer(ctx context.Context, sel ast.SelectionSet, v *TmuxServer) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._TmuxServer(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
+func (ec *executionContext) marshalOTmuxSession2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSession(ctx context.Context, sel ast.SelectionSet, v *TmuxSession) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._TmuxSession(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionFilter(ctx context.Context, v any) (*TmuxSessionFilter, error) {
+func (ec *executionContext) unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionFilter(ctx context.Context, v any) (*TmuxSessionFilter, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19955,7 +21096,7 @@ func (ec *executionContext) unmarshalOTmuxSessionFilter2ᚖgithubᚗcomᚋdrewdr
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx context.Context, v any) (*TmuxSessionSort, error) {
+func (ec *executionContext) unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx context.Context, v any) (*TmuxSessionSort, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -19964,28 +21105,28 @@ func (ec *executionContext) unmarshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrew
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx context.Context, sel ast.SelectionSet, v *TmuxSessionSort) graphql.Marshaler {
+func (ec *executionContext) marshalOTmuxSessionSort2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxSessionSort(ctx context.Context, sel ast.SelectionSet, v *TmuxSessionSort) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return v
 }
 
-func (ec *executionContext) marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
+func (ec *executionContext) marshalOTmuxWindow2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v *TmuxWindow) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._TmuxWindow(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOWorkflowRun2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkflowRunᚄ(ctx context.Context, sel ast.SelectionSet, v []*WorkflowRun) graphql.Marshaler {
+func (ec *executionContext) marshalOWorkflowRun2ᚕᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkflowRunᚄ(ctx context.Context, sel ast.SelectionSet, v []*WorkflowRun) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx, sel, v[i])
+		return ec.marshalNWorkflowRun2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorkflowRun(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -19997,7 +21138,7 @@ func (ec *executionContext) marshalOWorkflowRun2ᚕᚖgithubᚗcomᚋdrewdrewthi
 	return ret
 }
 
-func (ec *executionContext) marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋgitᚑorchardᚑrsᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx context.Context, sel ast.SelectionSet, v *Worktree) graphql.Marshaler {
+func (ec *executionContext) marshalOWorktree2ᚖgithubᚗcomᚋdrewdrewthisᚋorchardistᚋinternalᚋserverᚋgraphqlᚐWorktree(ctx context.Context, sel ast.SelectionSet, v *Worktree) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}

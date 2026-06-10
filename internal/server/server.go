@@ -203,6 +203,14 @@ func WithVersion(v string) Option {
 	return func(_ *Server, r *resolvers.Resolver) { r.WithVersion(v) }
 }
 
+// WithGitMutations wires the git-domain mutation resolver (Mutation.worktreeRemove, etc.).
+// scriptRoot is the absolute path to the scripts/ directory that holds
+// scripts/git/worktree-remove.sh and siblings. When empty,
+// gitdomain.NewMutationResolver defaults to "scripts" (relative to cwd).
+func WithGitMutations(scriptRoot string) Option {
+	return func(_ *Server, r *resolvers.Resolver) { r.WithGitMutations(scriptRoot) }
+}
+
 // New constructs a Server bound to addr.
 func New(addr string, logger *slog.Logger, opts ...Option) *Server {
 	if addr == "" {
