@@ -100,6 +100,19 @@ json_err() {
   exit 1
 }
 
+# skip_ok <reason> <human-message>
+# Emit a skip envelope (ok:true, skipped:true, skipReason:<reason>) and exit 0.
+# Centralises the five identical skip sites so JSON-escaping cannot drift.
+skip_ok() {
+  local reason="$1" human="$2"
+  if $JSON_MODE; then
+    json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"${reason}\"}"
+  else
+    echo "$human"
+  fi
+  exit 0
+}
+
 if [[ -z "$WORKTREE_ID" ]]; then
   if $JSON_MODE; then json_err "INVALID_INPUT" "worktreeId is required"; else echo "worktreeId is required" >&2; exit 1; fi
 fi
@@ -124,27 +137,52 @@ if [[ -z "$REPO_PATH" ]]; then
   # path is unresolvable — nothing is safe to act on.  Mirror the
   # hosts-active-session skip envelope (ok:true, skipped:true) so the caller
   # treats this as a non-fatal, batch-safe outcome.
-  if $JSON_MODE; then
-    json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"repo-unregistered\"}"
-  else
-    echo "Skipped: repo $PROJECT_ID not registered (repo-unregistered)"
-  fi
-  exit 0
+  skip_ok "repo-unregistered" "Skipped: repo $PROJECT_ID not registered (repo-unregistered)"
 fi
 
-# Get the worktree path from git.
+# Capture porcelain ONCE: derive both WT_PATH and PRIMARY_WT from the same
+# snapshot so there is no TOCTOU window between the two pieces of data.
 # Parse porcelain blocks (worktree / HEAD / branch / blank) with awk so the
 # grep -A2 / grep -B1 separator-line bug on macOS is avoided.
-WT_PATH=$(git -C "$REPO_PATH" worktree list --porcelain 2>/dev/null \
+PORCELAIN=$(git -C "$REPO_PATH" worktree list --porcelain 2>/dev/null || true)
+WT_PATH=$(printf '%s\n' "$PORCELAIN" \
   | awk -v branch="refs/heads/${WT_NAME}" '
       /^worktree /  { cur = $2 }
       $0 == "branch " branch { print cur; exit }
-    ' || true)
+    ')
+PRIMARY_WT=$(printf '%s\n' "$PORCELAIN" | awk '/^worktree /{print $2; exit}')
 
 if [[ -z "$WT_PATH" ]]; then
   # Already removed — treat as success (idempotent per M5).
   if $JSON_MODE; then json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\"}"; else echo "worktree already removed"; fi
   exit 0
+fi
+
+# ---- GUARD (data-loss): never destroy the repo's PRIMARY/main working tree -----
+#
+# The first `worktree ` entry in `--porcelain` is ALWAYS the primary working
+# tree — a structural git guarantee, not prose.  Detect it by PATH comparison
+# (locale-independent) instead of parsing git's translated stderr ("is a main
+# working tree" / "arbre de travail principal" / "Hauptarbeitsverzeichnis"),
+# which changes under non-English locales and would defeat a text match,
+# re-opening the rm -rf data-loss path.
+# Both sides are canonicalized via the existing canonicalize() helper so that
+# macOS /var → /private/var symlink differences do not produce false negatives.
+#
+# Fail-closed: if PRIMARY_WT is empty while WT_PATH is non-empty, we cannot
+# determine which worktree is primary.  Aborting is safer than guessing wrong.
+if [[ -z "$PRIMARY_WT" ]]; then
+  if $JSON_MODE; then
+    json_err "GIT_ERROR" "cannot determine primary worktree from porcelain; aborting to prevent data loss"
+  else
+    echo "ERROR: cannot determine primary worktree from porcelain; aborting to prevent data loss" >&2
+    exit 1
+  fi
+fi
+PRIMARY_WT_REAL=$(canonicalize "$PRIMARY_WT")
+WT_PATH_GUARD_REAL=$(canonicalize "$WT_PATH")
+if [[ "$WT_PATH_GUARD_REAL" == "$PRIMARY_WT_REAL" ]]; then
+  skip_ok "main-working-tree" "Skipped: ${WT_NAME} is the repo main working tree (main-working-tree)"
 fi
 
 # ---- AC-G1: active-session exclusion gate -----------------------------------
@@ -170,46 +208,11 @@ if [[ -n "$ACTIVE_CWD" ]]; then
   ACTIVE_CWD_REAL=$(canonicalize "$ACTIVE_CWD")
   WT_PATH_REAL=$(canonicalize "$WT_PATH")
   if [[ "$WT_PATH_REAL" == "$ACTIVE_CWD_REAL" ]]; then
-    if $JSON_MODE; then
-      json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
-    else
-      echo "Skipped: worktree $WT_NAME hosts the active session (cwd match)"
-    fi
-    exit 0
+    skip_ok "hosts-active-session" "Skipped: worktree $WT_NAME hosts the active session (cwd match)"
   fi
 fi
 if [[ -n "$ACTIVE_SESSION" && -n "$TMUX_SESSION" && "$TMUX_SESSION" == "$ACTIVE_SESSION" ]]; then
-  if $JSON_MODE; then
-    json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"hosts-active-session\"}"
-  else
-    echo "Skipped: worktree $WT_NAME hosts the active session (session name match)"
-  fi
-  exit 0
-fi
-
-# ---- GUARD (data-loss): never destroy the repo's PRIMARY/main working tree -----
-#
-# The first `worktree ` entry in `git worktree list --porcelain` is ALWAYS the
-# repo primary working tree — this is a structural guarantee from git, not prose.
-# Detect it by PATH comparison (locale-independent) instead of parsing git's
-# translated stderr ("is a main working tree" / "arbre de travail principal" /
-# "Hauptarbeitsverzeichnis"), which changes under non-English locales and would
-# defeat a text match, re-opening the rm -rf data-loss path.
-# Both sides are canonicalized via the existing canonicalize() helper so that
-# macOS /var → /private/var symlink differences do not produce false negatives.
-PRIMARY_WT=$(git -C "$REPO_PATH" worktree list --porcelain 2>/dev/null \
-  | awk '/^worktree /{print $2; exit}')
-if [[ -n "$PRIMARY_WT" ]]; then
-  PRIMARY_WT_REAL=$(canonicalize "$PRIMARY_WT")
-  WT_PATH_GUARD_REAL=$(canonicalize "$WT_PATH")
-  if [[ "$WT_PATH_GUARD_REAL" == "$PRIMARY_WT_REAL" ]]; then
-    if $JSON_MODE; then
-      json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"main-working-tree\"}"
-    else
-      echo "Skipped: ${WT_NAME} is the repo main working tree (main-working-tree)"
-    fi
-    exit 0
-  fi
+  skip_ok "hosts-active-session" "Skipped: worktree $WT_NAME hosts the active session (session name match)"
 fi
 
 # ---- Stage 0: tmux session kill (AC-G3) -------------------------------------
@@ -270,25 +273,24 @@ FORCE_FLAG=""
 if $FORCE; then FORCE_FLAG="--force"; fi
 
 if ! ERR=$(git -C "$REPO_PATH" worktree remove $FORCE_FLAG "$WT_PATH" 2>&1); then
-  # GUARD (data-loss): git refuses to remove the PRIMARY/main working tree with
-  # "fatal: '<path>' is a main working tree". That refusal is git's deliberate
-  # protection — NEVER override it with rm -rf. Skip this worktree entirely.
+  # SECONDARY GUARD (belt): catch the English-locale git refusal message as a
+  # belt-and-suspenders backstop.  The PRIMARY guard above (positional porcelain
+  # check) is authoritative and locale-independent; this text-match fires only
+  # if the primary guard somehow failed to exit before reaching here.
+  # NOTE: this pattern is locale-FRAGILE — git translates this message under
+  # non-English locales (fr: "arbre de travail principal", de: "Hauptarbeitsverzeichnis").
+  # Do NOT remove the PRIMARY guard and rely solely on this one.
   if printf '%s' "$ERR" | grep -qi 'is a main working tree'; then
-    if $JSON_MODE; then
-      json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"main-working-tree\"}"
-    else
-      echo "Skipped: ${WT_NAME} is the repo main working tree (main-working-tree)"
-    fi
-    exit 0
+    skip_ok "main-working-tree" "Skipped: ${WT_NAME} is the repo main working tree (main-working-tree)"
   fi
 
   # Fallback: if the directory no longer exists (deleted out-of-band) or if
   # git worktree remove --force itself failed (locked worktree, submodule
   # gitlinks), fall back to rm -rf + git worktree prune.
   #
-  # The main-working-tree case is excluded above, so the rm -rf path only
-  # reaches non-primary registered worktrees (locked, submodule-gitlink, or
-  # directory deleted out-of-band).
+  # Both the primary positional guard and the secondary text-match above have
+  # excluded the main-working-tree case, so rm -rf only reaches non-primary
+  # registered worktrees (locked, submodule-gitlink, or out-of-band deleted).
   if [ -d "$WT_PATH" ]; then
     if ! RM_ERR=$(rm -rf "$WT_PATH" 2>&1); then
       if $JSON_MODE; then json_err "RM_ERROR" "$RM_ERR"; else echo "$RM_ERR" >&2; exit 1; fi

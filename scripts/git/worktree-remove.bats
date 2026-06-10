@@ -15,6 +15,11 @@ _json_field() {
   python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$1','MISSING'))" 2>/dev/null || echo "PARSE_ERROR"
 }
 
+# Extract a field from the .data sub-object of an L2 envelope.
+_json_data_field() {
+  python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('data',{}).get('$1','MISSING'))" 2>/dev/null || echo "PARSE_ERROR"
+}
+
 # ---------------------------------------------------------------------------
 # Helper: create a minimal git repo with one commit and return its path.
 # Sets REPO_DIR in the caller's scope.
@@ -552,16 +557,88 @@ print(d.get('data',{}).get('skipReason','MISSING'))
 }
 
 # ---------------------------------------------------------------------------
-# Locale-independence: positional guard fires under non-English locales
-# The text-match guard ("is a main working tree") would MISS under fr_FR/de_DE
-# because git translates that message. The positional check (first porcelain
-# entry by PATH) is locale-independent and must fire regardless of LC_ALL.
+# Locale-independence: positional guard fires even when git's stderr does NOT
+# contain the English "is a main working tree" string.
+#
+# Approach: stub `git` so that `worktree remove` exits non-zero with a
+# deliberately NON-English error message (simulating fr/de translation), while
+# `worktree list --porcelain` returns a real single-entry snapshot with the
+# primary worktree path.  The positional guard must fire from the porcelain data
+# alone, before rm -rf is reached.
+#
+# This test works on any runner regardless of installed locales — it does not
+# depend on locale -a or LC_ALL; it directly removes the dependency on English
+# message text.
+# @scenario main-working-tree guard fires on path match even when git stderr is non-English
+# ---------------------------------------------------------------------------
+
+@test "main-working-tree guard: positional path match fires even with non-English git stderr" {
+  # Real repo so porcelain and branch resolution work.
+  REPO_DIR="$(mktemp -d)"
+  git -C "$REPO_DIR" init -q -b main
+  git -C "$REPO_DIR" config user.email "test@example.com"
+  git -C "$REPO_DIR" config user.name "Test"
+  touch "$REPO_DIR/README"
+  git -C "$REPO_DIR" add README
+  git -C "$REPO_DIR" commit -q -m "init"
+
+  cfg="$TMPDIR_CFG/config.json"
+  printf '{"repos":[{"slug":"stubtest","path":"%s"}]}' "$REPO_DIR" > "$cfg"
+
+  # Stub git: intercept `worktree remove` only — emit a non-English error and
+  # exit 128 (same exit code git uses for the real refusal).  All other git
+  # subcommands (worktree list, show-ref, etc.) delegate to the real git so
+  # the porcelain snapshot and branch checks still work.
+  FAKE_BIN="$(mktemp -d)"
+  REAL_GIT="$(command -v git)"
+  cat > "$FAKE_BIN/git" <<GITSTUB
+#!/usr/bin/env bash
+# Pass through everything except "worktree remove"
+for arg in "\$@"; do
+  if [ "\$prev" = "worktree" ] && [ "\$arg" = "remove" ]; then
+    echo "fatal: est un arbre de travail principal" >&2
+    exit 128
+  fi
+  prev="\$arg"
+done
+exec "$REAL_GIT" "\$@"
+GITSTUB
+  chmod +x "$FAKE_BIN/git"
+
+  status=0
+  output="$(PATH="$FAKE_BIN:$PATH" ORCHARD_CONFIG="$cfg" "$SCRIPT" \
+    --json \
+    --worktree-id "stubtest:main" \
+    --pr-merged merged \
+    --base main \
+    2>/dev/null)" || status=$?
+
+  rm -rf "$FAKE_BIN"
+
+  # Exit 0: positional guard must have fired before the fallback rm -rf path.
+  [ "$status" -eq 0 ]
+
+  # ok=true.
+  [ "$(echo "$output" | _json_field ok)" = "True" ]
+
+  # skipReason=main-working-tree (positional path match, not text match).
+  [ "$(echo "$output" | _json_data_field skipReason)" = "main-working-tree" ]
+
+  # Repo dir MUST survive.
+  [ -d "$REPO_DIR" ]
+
+  # Branch MUST survive.
+  git -C "$REPO_DIR" show-ref --verify --quiet refs/heads/main
+}
+
+# ---------------------------------------------------------------------------
+# Locale: run under real non-English locales when available on the host.
+# Complements the stub test above; exercises real git translation end-to-end.
 # @scenario main-working-tree guard is locale-independent (C and fr_FR locales)
 # ---------------------------------------------------------------------------
 
 _assert_main_wt_skipped_under_locale() {
   local locale="$1"
-  # Build a fresh repo for this locale sub-test.
   local repo
   repo="$(mktemp -d)"
   git -C "$repo" init -q -b main
@@ -583,45 +660,103 @@ _assert_main_wt_skipped_under_locale() {
     --base main \
     2>/dev/null)" || status=$?
 
-  # Exit 0.
   [ "$status" -eq 0 ] || { echo "FAILED locale=$locale: exit $status, output=$output"; return 1; }
-
-  # ok=true.
-  local ok
-  ok="$(echo "$output" | _json_field ok)"
-  [ "$ok" = "True" ] || { echo "FAILED locale=$locale: ok=$ok, output=$output"; return 1; }
-
-  # skipReason=main-working-tree.
+  [ "$(echo "$output" | _json_field ok)" = "True" ] || { echo "FAILED locale=$locale: ok not True, output=$output"; return 1; }
   local skip_reason
-  skip_reason="$(echo "$output" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-print(d.get('data',{}).get('skipReason','MISSING'))
-" 2>/dev/null || echo "PARSE_ERROR")"
+  skip_reason="$(echo "$output" | _json_data_field skipReason)"
   [ "$skip_reason" = "main-working-tree" ] || { echo "FAILED locale=$locale: skipReason=$skip_reason, output=$output"; return 1; }
-
-  # Repo dir MUST survive.
   [ -d "$repo" ] || { echo "FAILED locale=$locale: repo dir was deleted"; return 1; }
-
-  # Branch MUST survive.
   git -C "$repo" show-ref --verify --quiet refs/heads/main || { echo "FAILED locale=$locale: branch gone"; return 1; }
 }
 
 @test "main-working-tree guard is locale-independent (C and fr_FR locales)" {
-  # LC_ALL=C: baseline — English text, positional guard must fire.
   _assert_main_wt_skipped_under_locale "C"
 
-  # LC_ALL=fr_FR.UTF-8: git emits translated message; text-match would miss;
-  # positional guard must still fire.
-  # If the locale is not installed, skip gracefully so CI never false-fails.
   if locale -a 2>/dev/null | grep -q 'fr_FR.UTF-8'; then
     _assert_main_wt_skipped_under_locale "fr_FR.UTF-8"
   fi
 
-  # LC_ALL=de_DE.UTF-8: same reasoning.
   if locale -a 2>/dev/null | grep -q 'de_DE.UTF-8'; then
     _assert_main_wt_skipped_under_locale "de_DE.UTF-8"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Fail-closed: when porcelain returns empty (corrupt repo / git failure),
+# PRIMARY_WT is empty while WT_PATH is non-empty → script must ABORT (GIT_ERROR)
+# rather than silently skip the guard and fall through to rm -rf.
+# Simulated by stubbing git so `worktree list --porcelain` emits nothing.
+# @scenario empty porcelain output aborts with GIT_ERROR instead of falling through to rm -rf
+# ---------------------------------------------------------------------------
+
+@test "fail-closed: empty porcelain (git failure) aborts with GIT_ERROR, does not rm -rf" {
+  REPO_DIR="$(mktemp -d)"
+  git -C "$REPO_DIR" init -q -b main
+  git -C "$REPO_DIR" config user.email "test@example.com"
+  git -C "$REPO_DIR" config user.name "Test"
+  touch "$REPO_DIR/README"
+  git -C "$REPO_DIR" add README
+  git -C "$REPO_DIR" commit -q -m "init"
+  FC_WT_DIR="$(mktemp -d)"
+  git -C "$REPO_DIR" worktree add -q -b feature-failclosed "$FC_WT_DIR"
+
+  cfg="$TMPDIR_CFG/config.json"
+  printf '{"repos":[{"slug":"fctest","path":"%s"}]}' "$REPO_DIR" > "$cfg"
+
+  REAL_GIT="$(command -v git)"
+  FAKE_BIN="$(mktemp -d)"
+  # Resolve the physical path for the feature worktree (macOS /var → /private/var).
+  FC_WT_REAL="$(cd "$FC_WT_DIR" 2>/dev/null && pwd -P 2>/dev/null || echo "$FC_WT_DIR")"
+
+  # Stub: emit a malformed porcelain where the PRIMARY entry has a corrupted
+  # header (no leading "worktree " line) so PRIMARY_WT is empty, while the
+  # feature-branch entry is well-formed so WT_PATH resolves.
+  # WT_PATH awk: finds "branch refs/heads/feature-failclosed" and prints cur
+  # (the most recent "worktree " line value) — which is FC_WT_REAL.
+  # PRIMARY_WT awk: prints $2 of the FIRST "worktree " line — which is absent
+  # in the primary block → returns empty.
+  cat > "$FAKE_BIN/git" <<GITSTUB
+#!/usr/bin/env bash
+is_list=0; is_porcelain=0
+for arg in "\$@"; do
+  [ "\$arg" = "list" ]       && is_list=1
+  [ "\$arg" = "--porcelain" ] && is_porcelain=1
+done
+if [ "\$is_list" = "1" ] && [ "\$is_porcelain" = "1" ]; then
+  # Primary block: deliberately omit the "worktree /path" line (simulates
+  # corruption / git internal error mid-output).
+  printf 'HEAD aaaaaa\nbranch refs/heads/main\n\n'
+  # Feature branch block: well-formed so WT_PATH awk can match it.
+  printf 'worktree %s\nHEAD bbbbbb\nbranch refs/heads/feature-failclosed\n\n' "$FC_WT_REAL"
+  exit 0
+fi
+exec "$REAL_GIT" "\$@"
+GITSTUB
+  chmod +x "$FAKE_BIN/git"
+
+  status=0
+  output="$(PATH="$FAKE_BIN:$PATH" ORCHARD_CONFIG="$cfg" "$SCRIPT" \
+    --json \
+    --worktree-id "fctest:feature-failclosed" \
+    2>/dev/null)" || status=$?
+
+  rm -rf "$FAKE_BIN"
+
+  # Must abort: exit non-zero (GIT_ERROR).
+  [ "$status" -ne 0 ]
+
+  # Envelope ok=false with code GIT_ERROR.
+  [ "$(echo "$output" | _json_field ok)" = "False" ]
+
+  code="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('error',{}).get('code','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$code" = "GIT_ERROR" ]
+
+  # The worktree dir must NOT have been rm -rf'd.
+  [ -d "$FC_WT_DIR" ]
 }
 
 # ---------------------------------------------------------------------------

@@ -1697,6 +1697,9 @@ impl App {
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
                     if vt.row.is_main_worktree {
+                        // UX-only block: surface a warning and abort the confirm
+                        // flow.  The authoritative data-loss guard lives in
+                        // scripts/git/worktree-remove.sh (positional porcelain check).
                         self.warning = Some((
                             "Cannot delete the main working tree.".to_string(),
                             Instant::now(),
@@ -3964,15 +3967,10 @@ mod tests {
             app.warning.is_some(),
             "Delete on main worktree must set a warning"
         );
-        assert!(
-            app.warning
-                .as_ref()
-                .unwrap()
-                .0
-                .to_lowercase()
-                .contains("main"),
-            "warning must mention 'main', got: {}",
-            app.warning.as_ref().unwrap().0
+        assert_eq!(
+            app.warning.as_ref().unwrap().0,
+            "Cannot delete the main working tree.",
+            "warning must be the exact sentinel string"
         );
     }
 
