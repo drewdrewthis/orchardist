@@ -57,11 +57,87 @@ _write_config() {
   [ "$(echo "$output" | _json_field ok)" = "False" ]
 }
 
-@test "repo not found in config: ok=false" {
+# ---------------------------------------------------------------------------
+# AC (#693 daemon-owned cleanup): a worktree whose <projectId> slug is NOT in
+# the orchard config must NOT hard-fail with REPO_NOT_FOUND. It returns
+# ok:true with skipped:true / skipReason:repo-unregistered and performs ZERO
+# filesystem mutation (the repo is unresolvable, so nothing is safe to remove).
+# This mirrors the hosts-active-session skip envelope.
+# @scenario An unregistered-repo worktree is skipped (repo-unregistered) instead of erroring
+# ---------------------------------------------------------------------------
+
+@test "repo not found in config: ok=true, skipped=true, skipReason=repo-unregistered" {
   config="$TMPDIR_CFG/config.json"
   printf '{"repos":[]}' > "$config"
   output="$(ORCHARD_CONFIG="$config" "$SCRIPT" --json --worktree-id "unknownrepo:mybranch" 2>/dev/null || true)"
-  [ "$(echo "$output" | _json_field ok)" = "False" ]
+
+  # Envelope must be ok=true (skip is non-fatal, NOT a REPO_NOT_FOUND error).
+  [ "$(echo "$output" | _json_field ok)" = "True" ]
+
+  # data.skipped must be true.
+  skipped="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('data',{}).get('skipped','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skipped" = "True" ]
+
+  # data.skipReason must be repo-unregistered.
+  skip_reason="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('data',{}).get('skipReason','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skip_reason" = "repo-unregistered" ]
+
+  # No REPO_NOT_FOUND substring anywhere in the output.
+  [[ "$output" != *"REPO_NOT_FOUND"* ]]
+}
+
+@test "unregistered repo with a real config: ok=true, skipReason=repo-unregistered, zero fs mutation, exit 0" {
+  # Build a config that registers ONE repo (slug myrepo) but the worktree-id
+  # below targets a DIFFERENT, unregistered slug. The registered repo and its
+  # on-disk worktree must be left completely untouched.
+  _make_repo
+  _add_worktree "feature-untouched"
+  UNTOUCHED_WT_DIR="$WT_DIR"
+  cfg="$(_write_config)"
+
+  # Sentinel directory: a path the script must never create or remove.
+  SENTINEL_DIR="$(mktemp -d)"
+  touch "$SENTINEL_DIR/keep"
+
+  # Run against an unregistered slug, capturing BOTH stdout and the exit code.
+  # The `|| status=$?` form (same idiom the other tests use with `|| true`)
+  # keeps bats from aborting the test on the CURRENT exit-1 behavior so the
+  # explicit assertions below run. Under the NEW contract the script exits 0.
+  status=0
+  output="$(ORCHARD_CONFIG="$cfg" bash "$SCRIPT" --json --worktree-id "langwatch/langwatch-saas:issue510" 2>/dev/null)" || status=$?
+
+  # Exit code 0 (skip is success, not failure).
+  [ "$status" -eq 0 ]
+
+  # Envelope ok=true.
+  [ "$(echo "$output" | _json_field ok)" = "True" ]
+
+  # skipReason repo-unregistered.
+  skip_reason="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('data',{}).get('skipReason','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skip_reason" = "repo-unregistered" ]
+
+  # No REPO_NOT_FOUND error.
+  [[ "$output" != *"REPO_NOT_FOUND"* ]]
+
+  # ZERO filesystem mutation: the registered repo's unrelated worktree dir and
+  # the sentinel must both still exist (nothing was removed).
+  [ -d "$UNTOUCHED_WT_DIR" ]
+  [ -d "$SENTINEL_DIR" ]
+  [ -f "$SENTINEL_DIR/keep" ]
+
+  rm -rf "$SENTINEL_DIR"
 }
 
 # ---------------------------------------------------------------------------

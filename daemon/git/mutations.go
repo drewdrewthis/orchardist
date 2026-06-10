@@ -50,9 +50,9 @@ type PRStateLookup interface {
 // for the first to finish, then finds the worktrees already gone (idempotent
 // no-op path). This is the AC-G5 concurrency model: serialize-and-tolerate.
 type MutationResolver struct {
-	scriptRoot string         // abs path to scripts/ directory
-	cleanupMu  sync.Mutex     // serializes WorktreesCleanup (AC-G5)
-	prLookup   PRStateLookup  // optional; nil → PR merged-state always "unknown" (fail-closed)
+	scriptRoot string        // abs path to scripts/ directory
+	cleanupMu  sync.Mutex    // serializes WorktreesCleanup (AC-G5)
+	prLookup   PRStateLookup // optional; nil → PR merged-state always "unknown" (fail-closed)
 }
 
 // NewMutationResolver creates a resolver.
@@ -233,8 +233,8 @@ type scriptError struct {
 // MutationResult is the GraphQL return type for git mutations (S8: returns
 // affected node). When OK is false, Node is nil and ErrCode/ErrMsg are set.
 type MutationResult struct {
-	OK     bool
-	Node   *Worktree
+	OK      bool
+	Node    *Worktree
 	ErrCode string
 	ErrMsg  string
 }

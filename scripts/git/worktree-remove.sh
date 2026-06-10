@@ -120,7 +120,16 @@ fi
 CONFIG_FILE="${ORCHARD_CONFIG:-$HOME/.orchard/config.json}"
 REPO_PATH=$(jq -r --arg id "$PROJECT_ID" '.repos[] | select(.slug == $id) | .path' "$CONFIG_FILE" 2>/dev/null || true)
 if [[ -z "$REPO_PATH" ]]; then
-  if $JSON_MODE; then json_err "REPO_NOT_FOUND" "repo not found: $PROJECT_ID"; else echo "repo not found" >&2; exit 1; fi
+  # Idempotent skip: the repo slug is not registered in the config so the repo
+  # path is unresolvable — nothing is safe to act on.  Mirror the
+  # hosts-active-session skip envelope (ok:true, skipped:true) so the caller
+  # treats this as a non-fatal, batch-safe outcome.
+  if $JSON_MODE; then
+    json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"repo-unregistered\"}"
+  else
+    echo "Skipped: repo $PROJECT_ID not registered (repo-unregistered)"
+  fi
+  exit 0
 fi
 
 # Get the worktree path from git.

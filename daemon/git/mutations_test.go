@@ -66,7 +66,7 @@ func TestGitScriptProducesGitSubdirPath(t *testing.T) {
 // shape: confirms the real file is reachable at the corrected path, not the old buggy one).
 func TestWorktreeRemoveScriptExistsOnDisk(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 	scriptPath := r.worktreeScript("remove")
 
 	// Assert the path ends in git/worktree-remove.sh.
@@ -84,7 +84,7 @@ func TestWorktreeRemoveScriptExistsOnDisk(t *testing.T) {
 // for an empty worktreeId (M4: validate at resolver boundary, AC10).
 func TestWorktreeRemoveInputValidation(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 	result, err := r.WorktreeRemove(context.Background(), WorktreeRemoveInput{
 		WorktreeID: "", // intentionally empty — must be rejected at resolver boundary
 	})
@@ -108,7 +108,7 @@ func TestWorktreeRemoveInputValidation(t *testing.T) {
 // accepted by the script's arg parser.
 func TestWorktreeRemoveActiveSessionFieldsThreaded(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -144,7 +144,7 @@ func TestWorktreeRemoveActiveSessionFieldsThreaded(t *testing.T) {
 // still proves the resolver reached the script at the right path.
 func TestWorktreeRemoveScriptPathInEnvelope(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	// The script must be present; if it is absent the resolver would return
 	// a raw error (not an L2 envelope). The presence check above covers this,
@@ -242,7 +242,7 @@ func TestWorktreesCleanupMalformedID(t *testing.T) {
 // @scenario Expected failures are returned as typed structured results, not opaque GraphQL errors
 func TestWorktreesCleanupStructuredResultNotOpaque(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -285,6 +285,149 @@ func TestWorktreesCleanupStructuredResultNotOpaque(t *testing.T) {
 		entry.OK, entry.Stage, entry.Message, entry.AlreadyRemoved)
 }
 
+// --- #693: unregistered-repo worktree → skipped, not a failing entry ----------
+
+// TestWorktreesCleanupUnregisteredRepoSkipped verifies the #693 daemon-owned
+// cleanup contract: when a worktreeId's <projectId> slug is NOT present in the
+// orchard config, the script returns ok:true with skipped:true /
+// skipReason:"repo-unregistered" (NOT a REPO_NOT_FOUND error). The resolver
+// must map that envelope to a NON-FAILING WorktreeCleanupEntry — entry.OK==true
+// and no failure stage — so a batch containing the orphan still returns and the
+// other worktrees are processed.
+//
+// This is the integration proof through the script boundary (the bats test
+// scripts/git/worktree-remove.bats proves the SCRIPT level; this proves the
+// RESOLVER maps the skip envelope to a non-failing entry).
+//
+// @scenario An unregistered-repo worktree maps to a non-failing skipped entry; the batch still returns
+func TestWorktreesCleanupUnregisteredRepoSkipped(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(root + "/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	// Config registers ONLY "myrepo"; the cleanup targets an unregistered slug.
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{"langwatch/langwatch-saas:issue510"}, // slug NOT in config
+	})
+	// The batch call must not return a Go error.
+	if err != nil {
+		t.Fatalf("WorktreesCleanup returned a Go error: %v — unregistered repo must be a typed entry", err)
+	}
+	// The batch must complete (ok:true) so other worktrees in a larger batch are processed.
+	if !result.OK {
+		t.Errorf("expected batch ok=true, got ok=false errCode=%q errMsg=%q", result.ErrCode, result.ErrMsg)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result.Entries))
+	}
+	entry := result.Entries[0]
+	t.Logf("unregistered-repo entry: ok=%v stage=%q msg=%q warnings=%v alreadyRemoved=%v",
+		entry.OK, entry.Stage, entry.Message, entry.Warnings, entry.AlreadyRemoved)
+
+	// Key assertion 1: the entry must be NON-FAILING (OK true) for an
+	// unregistered repo — it is a skip, not an error.
+	if !entry.OK {
+		t.Errorf("#693 FAIL: unregistered-repo entry should be OK=true (skipped, not failed); got OK=false stage=%q msg=%q",
+			entry.Stage, entry.Message)
+	}
+	// Key assertion 2: no failure stage was set (a failing entry sets Stage="worktree-remove").
+	if entry.Stage != "" {
+		t.Errorf("#693 FAIL: unregistered-repo entry should have empty Stage (non-failing); got Stage=%q", entry.Stage)
+	}
+	// Key assertion 3: the message must NOT carry REPO_NOT_FOUND (the old hard-fail code).
+	if strings.Contains(entry.Message, "REPO_NOT_FOUND") {
+		t.Errorf("#693 FAIL: unregistered-repo entry message still carries REPO_NOT_FOUND: %q", entry.Message)
+	}
+}
+
+// TestWorktreesCleanupUnregisteredRepoBatchContinues verifies the batch-continuation
+// property of #693: when a batch mixes an unregistered-repo orphan with a real
+// stale worktree, the orphan is skipped (non-failing) AND the real worktree is
+// still removed. The unregistered orphan must NOT abort the batch or the sibling.
+//
+// @scenario A batch with an unregistered orphan still removes the registered stale worktree
+func TestWorktreesCleanupUnregisteredRepoBatchContinues(t *testing.T) {
+	root := repoRoot(t)
+	r := NewMutationResolver(root + "/scripts")
+
+	scriptPath := r.worktreeScript("remove")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
+	}
+
+	repoDir := t.TempDir()
+	if err := setupRepo(t, repoDir); err != nil {
+		t.Skipf("git setup failed: %v", err)
+	}
+	goodDir := t.TempDir()
+	if err := addWorktree(t, repoDir, "good-branch", goodDir); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
+	t.Setenv("ORCHARD_CONFIG", cfgPath)
+
+	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
+		WorktreeIDs: []string{
+			"langwatch/langwatch-saas:issue510", // unregistered orphan → skip
+			"myrepo:good-branch",                // registered → removed
+		},
+	})
+	if err != nil {
+		t.Fatalf("WorktreesCleanup returned a Go error: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("expected batch ok=true, got ok=false errCode=%q errMsg=%q", result.ErrCode, result.ErrMsg)
+	}
+	if len(result.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(result.Entries))
+	}
+
+	var orphan, good *WorktreeCleanupEntry
+	for i := range result.Entries {
+		switch result.Entries[i].WorktreeID {
+		case "langwatch/langwatch-saas:issue510":
+			orphan = &result.Entries[i]
+		case "myrepo:good-branch":
+			good = &result.Entries[i]
+		}
+	}
+	if orphan == nil {
+		t.Fatal("missing entry for the unregistered orphan langwatch/langwatch-saas:issue510")
+	}
+	if good == nil {
+		t.Fatal("missing entry for myrepo:good-branch")
+	}
+
+	// The orphan entry must be non-failing (skipped, not errored).
+	if !orphan.OK {
+		t.Errorf("#693 FAIL: orphan entry should be OK=true (skipped); got OK=false stage=%q msg=%q",
+			orphan.Stage, orphan.Message)
+	}
+	if strings.Contains(orphan.Message, "REPO_NOT_FOUND") {
+		t.Errorf("#693 FAIL: orphan entry still carries REPO_NOT_FOUND: %q", orphan.Message)
+	}
+
+	// The registered worktree must still have been removed (batch did not abort).
+	if !good.OK && !good.AlreadyRemoved {
+		t.Errorf("#693 FAIL: good-branch entry not ok despite orphan in batch: stage=%q msg=%q",
+			good.Stage, good.Message)
+	}
+	if _, err := os.Stat(goodDir); err == nil {
+		t.Error("#693 FAIL: good worktree directory still exists — the unregistered orphan aborted the batch")
+	}
+}
+
 // --- AC2 / scenario ~63: Stale-set acted on exactly; non-given worktree untouched ---
 
 // TestWorktreesCleanupActsOnlyOnGivenIDs verifies that the mutation acts on
@@ -294,7 +437,7 @@ func TestWorktreesCleanupStructuredResultNotOpaque(t *testing.T) {
 // @scenario Cleanup operates on exactly the stale set and leaves an open-PR worktree fully intact
 func TestWorktreesCleanupActsOnlyOnGivenIDs(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -353,35 +496,56 @@ func TestWorktreesCleanupActsOnlyOnGivenIDs(t *testing.T) {
 // --- AC8 / scenario ~264: Partial-failure — N-1 succeed when K fails -----------
 
 // TestWorktreesCleanupPartialFailure verifies that when cleanup of one worktree
-// fails (here: an invalid/missing worktree ID), the remaining valid ones are
-// still attempted and succeed.
+// fails (here: a worktree whose directory cannot be removed due to a permission
+// error), the remaining valid ones are still attempted and succeed.
 // @scenario A failure on one worktree does not stop the others and is surfaced per-worktree
 func TestWorktreesCleanupPartialFailure(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
 		t.Skipf("skipping: script not found at %s: %v", scriptPath, err)
 	}
 
-	// Create a real worktree that will be removed successfully.
+	// Create a repo with two worktrees: one that will fail and one that will succeed.
 	repoDir := t.TempDir()
 	if err := setupRepo(t, repoDir); err != nil {
 		t.Skipf("git setup failed: %v", err)
 	}
+
+	// fail-branch lives inside a custom parent dir whose permissions we control.
+	// After adding the worktree, we remove write permission from the parent so
+	// that both git worktree remove and the rm -rf fallback fail → RM_ERROR ok:false.
+	failParent := t.TempDir()
+	failDir := filepath.Join(failParent, "fail-branch-wt")
+	if err := os.MkdirAll(failDir, 0755); err != nil {
+		t.Skipf("mkdir fail: %v", err)
+	}
+	if err := addWorktree(t, repoDir, "fail-branch", failDir); err != nil {
+		t.Skipf("git worktree add failed: %v", err)
+	}
+
 	goodDir := t.TempDir()
 	if err := addWorktree(t, repoDir, "good-branch", goodDir); err != nil {
 		t.Skipf("git worktree add failed: %v", err)
 	}
+
 	cfgPath := writeOrchardConfig(t, "myrepo", repoDir)
 	t.Setenv("ORCHARD_CONFIG", cfgPath)
 
-	// Two IDs: one valid (good-branch) and one that will fail (bad-repo:bad-branch).
+	// Remove write permission from failParent so rm -rf failDir fails.
+	if err := os.Chmod(failParent, 0555); err != nil {
+		t.Skipf("chmod fail: %v", err)
+	}
+	// Restore parent permissions in teardown so t.TempDir() cleanup succeeds.
+	t.Cleanup(func() { os.Chmod(failParent, 0755) }) //nolint:errcheck
+
+	// Two IDs: one that will fail (rm error) and one that will succeed.
 	result, err := r.WorktreesCleanup(context.Background(), WorktreesCleanupInput{
 		WorktreeIDs: []string{
-			"bad-repo:bad-branch", // fails — repo not in config
-			"myrepo:good-branch",  // succeeds
+			"myrepo:fail-branch", // fails — parent dir is read-only, rm -rf errors
+			"myrepo:good-branch", // succeeds
 		},
 	})
 	if err != nil {
@@ -396,28 +560,28 @@ func TestWorktreesCleanupPartialFailure(t *testing.T) {
 	}
 
 	// Find entries by worktreeId.
-	var badEntry, goodEntry *WorktreeCleanupEntry
+	var failEntry, goodEntry *WorktreeCleanupEntry
 	for i := range result.Entries {
 		switch result.Entries[i].WorktreeID {
-		case "bad-repo:bad-branch":
-			badEntry = &result.Entries[i]
+		case "myrepo:fail-branch":
+			failEntry = &result.Entries[i]
 		case "myrepo:good-branch":
 			goodEntry = &result.Entries[i]
 		}
 	}
-	if badEntry == nil {
-		t.Fatal("missing entry for bad-repo:bad-branch")
+	if failEntry == nil {
+		t.Fatal("missing entry for myrepo:fail-branch")
 	}
 	if goodEntry == nil {
 		t.Fatal("missing entry for myrepo:good-branch")
 	}
 
-	// The bad entry must have ok=false with a stage (typed result, not opaque error).
-	if badEntry.OK {
-		t.Error("bad-repo:bad-branch entry should be ok=false")
+	// The fail entry must have ok=false with a stage (typed result, not opaque error).
+	if failEntry.OK {
+		t.Error("myrepo:fail-branch entry should be ok=false (rm error due to unwritable parent)")
 	}
-	if badEntry.Stage == "" {
-		t.Error("bad-repo:bad-branch entry should have a non-empty stage")
+	if failEntry.Stage == "" {
+		t.Error("myrepo:fail-branch entry should have a non-empty stage")
 	}
 
 	// The good entry must succeed and the directory must be gone.
@@ -437,7 +601,7 @@ func TestWorktreesCleanupPartialFailure(t *testing.T) {
 // @scenario A second cleanup run on an already-clean fleet is a clean no-op
 func TestWorktreesCleanupIdempotentRerun(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -502,7 +666,7 @@ func TestWorktreesCleanupIdempotentRerun(t *testing.T) {
 // @scenario Two concurrent cleanups over an overlapping set both succeed without a hard race error
 func TestWorktreesCleanupConcurrentOverlap(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -786,7 +950,7 @@ var _ = json.Marshal
 // stubPRLookup is a minimal PRStateLookup stub for tests.
 // configureFor maps "repoSlug:branch" → state string; otherwise returns stateDefault.
 type stubPRLookup struct {
-	responses   map[string]string // "repoSlug:branch" → state or "ERROR"
+	responses    map[string]string // "repoSlug:branch" → state or "ERROR"
 	stateDefault string
 }
 
@@ -882,7 +1046,7 @@ func gitBranchExists(repoDir, branch string) bool {
 // @scenario merged-PR stale worktree: gh stub returns MERGED → branch deleted after cleanup (AC4)
 func TestWorktreesCleanup_MergedPR_BranchDeleted(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -985,7 +1149,7 @@ func TestWorktreesCleanup_MergedPR_BranchDeleted(t *testing.T) {
 // @scenario gh-error → branch skipped (merged-state-unavailable) + worktree still removed (AC-G2)
 func TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -1068,9 +1232,10 @@ func TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved(t *testing.T) {
 // =============================================================================
 //
 // TestWorktreesCleanup_TmuxSessionAbsent_NonFatal proves the FULL WIRE for AC-G3:
-//   mutation input (SessionNames) → cleanupOne passes --tmux-session →
-//   script runs tmux-kill stage → session absent (tmux has-session returns non-zero) →
-//   script records a non-fatal no-op → worktree is removed.
+//
+//	mutation input (SessionNames) → cleanupOne passes --tmux-session →
+//	script runs tmux-kill stage → session absent (tmux has-session returns non-zero) →
+//	script records a non-fatal no-op → worktree is removed.
 //
 // This is the integration proof; the bats test (scripts/git/worktree-remove.bats:315)
 // proves the SCRIPT level. This test proves the RESOLVER wire.
@@ -1078,7 +1243,7 @@ func TestWorktreesCleanup_GHError_BranchSkipped_WorktreeRemoved(t *testing.T) {
 // @scenario AC-G3: tmux session absent → non-fatal no-op, worktree removed
 func TestWorktreesCleanup_TmuxSessionAbsent_NonFatal(t *testing.T) {
 	root := repoRoot(t)
-	r := NewMutationResolver(root+"/scripts")
+	r := NewMutationResolver(root + "/scripts")
 
 	scriptPath := r.worktreeScript("remove")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -1167,9 +1332,10 @@ func TestWorktreesCleanup_TmuxSessionAbsent_NonFatal(t *testing.T) {
 // NOT add any warning — so the only path that appends a warning is the real failure path.
 //
 // This closes the proof chain for AC-G3:
-//   flag passed (TestWorktreesCleanup_TmuxKill_NonFatal, integration)
-//   + script emits warning on real kill-failure (worktree-remove.bats:315, bats)
-//   + enrich surfaces the warning in entry.Warnings (THIS test, unit)
+//
+//	flag passed (TestWorktreesCleanup_TmuxKill_NonFatal, integration)
+//	+ script emits warning on real kill-failure (worktree-remove.bats:315, bats)
+//	+ enrich surfaces the warning in entry.Warnings (THIS test, unit)
 //
 // @scenario AC-G3: tmux-kill warning surfaces through enrichEntryFromData (Part B — enrich seam)
 func TestEnrichEntryFromData_TmuxKillWarning(t *testing.T) {
