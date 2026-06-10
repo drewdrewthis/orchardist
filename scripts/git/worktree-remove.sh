@@ -187,6 +187,31 @@ if [[ -n "$ACTIVE_SESSION" && -n "$TMUX_SESSION" && "$TMUX_SESSION" == "$ACTIVE_
   exit 0
 fi
 
+# ---- GUARD (data-loss): never destroy the repo's PRIMARY/main working tree -----
+#
+# The first `worktree ` entry in `git worktree list --porcelain` is ALWAYS the
+# repo primary working tree — this is a structural guarantee from git, not prose.
+# Detect it by PATH comparison (locale-independent) instead of parsing git's
+# translated stderr ("is a main working tree" / "arbre de travail principal" /
+# "Hauptarbeitsverzeichnis"), which changes under non-English locales and would
+# defeat a text match, re-opening the rm -rf data-loss path.
+# Both sides are canonicalized via the existing canonicalize() helper so that
+# macOS /var → /private/var symlink differences do not produce false negatives.
+PRIMARY_WT=$(git -C "$REPO_PATH" worktree list --porcelain 2>/dev/null \
+  | awk '/^worktree /{print $2; exit}')
+if [[ -n "$PRIMARY_WT" ]]; then
+  PRIMARY_WT_REAL=$(canonicalize "$PRIMARY_WT")
+  WT_PATH_GUARD_REAL=$(canonicalize "$WT_PATH")
+  if [[ "$WT_PATH_GUARD_REAL" == "$PRIMARY_WT_REAL" ]]; then
+    if $JSON_MODE; then
+      json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"main-working-tree\"}"
+    else
+      echo "Skipped: ${WT_NAME} is the repo main working tree (main-working-tree)"
+    fi
+    exit 0
+  fi
+fi
+
 # ---- Stage 0: tmux session kill (AC-G3) -------------------------------------
 #
 # Kill the tmux session associated with this worktree BEFORE removing the
@@ -245,12 +270,25 @@ FORCE_FLAG=""
 if $FORCE; then FORCE_FLAG="--force"; fi
 
 if ! ERR=$(git -C "$REPO_PATH" worktree remove $FORCE_FLAG "$WT_PATH" 2>&1); then
+  # GUARD (data-loss): git refuses to remove the PRIMARY/main working tree with
+  # "fatal: '<path>' is a main working tree". That refusal is git's deliberate
+  # protection — NEVER override it with rm -rf. Skip this worktree entirely.
+  if printf '%s' "$ERR" | grep -qi 'is a main working tree'; then
+    if $JSON_MODE; then
+      json_ok "{\"worktreeId\":\"${WORKTREE_ID_SAFE}\",\"skipped\":true,\"skipReason\":\"main-working-tree\"}"
+    else
+      echo "Skipped: ${WT_NAME} is the repo main working tree (main-working-tree)"
+    fi
+    exit 0
+  fi
+
   # Fallback: if the directory no longer exists (deleted out-of-band) or if
   # git worktree remove --force itself failed (locked worktree, submodule
   # gitlinks), fall back to rm -rf + git worktree prune.
   #
-  # The path was already confirmed as a registered worktree above, so rm -rf
-  # here is safe (we are not removing an arbitrary path).
+  # The main-working-tree case is excluded above, so the rm -rf path only
+  # reaches non-primary registered worktrees (locked, submodule-gitlink, or
+  # directory deleted out-of-band).
   if [ -d "$WT_PATH" ]; then
     if ! RM_ERR=$(rm -rf "$WT_PATH" 2>&1); then
       if $JSON_MODE; then json_err "RM_ERROR" "$RM_ERR"; else echo "$RM_ERR" >&2; exit 1; fi

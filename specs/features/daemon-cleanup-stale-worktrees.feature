@@ -102,6 +102,14 @@ Feature: Daemon-owned complete LOCAL cleanup of stale worktrees (worktree + dir 
     Then "git worktree prune" reconciles the registration
     And "git worktree list --porcelain" no longer lists it
 
+  @integration @issue-693
+  Scenario: The repo main working tree is skipped and not destroyed
+    Given a stale local worktree whose worktree IS the repo primary main working tree (is_main_worktree: true)
+    When the cleanup mutation runs
+    Then "git worktree list --porcelain" still lists it
+    And "test -d <path>" exits 0
+    And the result carries a skip entry with reason "main-working-tree"
+
   # =======================================================================
   # AC4 — Branch deleted only when SAFE; else skip-and-warn (local)
   # =======================================================================
@@ -332,6 +340,7 @@ Feature: Daemon-owned complete LOCAL cleanup of stale worktrees (worktree + dir 
   #   -> @integration "A dirty stale worktree is removed via the force path"
   #   -> @integration "A locked or submodule-gitlink worktree falls back to rm -rf plus git worktree prune"
   #   -> @integration "A worktree dir deleted out-of-band but still registered is reconciled by prune"
+  #   -> @integration "The repo main working tree is skipped and not destroyed"
   #
   # AC4: "Branch deleted only when SAFE; else skip-and-warn (local)"
   #   -> @integration "A fully-merged unprotected branch is deleted"

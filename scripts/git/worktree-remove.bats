@@ -495,6 +495,136 @@ print(tk.get('warning','MISSING'))
 }
 
 # ---------------------------------------------------------------------------
+# Data-loss guard: main working tree must never be rm-rf'd
+# @scenario main working tree is skipped with main-working-tree reason, dir + branch survive
+# ---------------------------------------------------------------------------
+
+@test "main working tree is never rm-rf'd: skip with main-working-tree reason, dir + branch survive" {
+  # Build a real repo with -b main so the primary worktree is on refs/heads/main.
+  REPO_DIR="$(mktemp -d)"
+  git -C "$REPO_DIR" init -q -b main
+  git -C "$REPO_DIR" config user.email "test@example.com"
+  git -C "$REPO_DIR" config user.name "Test"
+  touch "$REPO_DIR/README"
+  git -C "$REPO_DIR" add README
+  git -C "$REPO_DIR" commit -q -m "init"
+
+  # Register slug "myproj" pointing at this repo.
+  cfg="$TMPDIR_CFG/config.json"
+  printf '{"repos":[{"slug":"myproj","path":"%s"}]}' "$REPO_DIR" > "$cfg"
+
+  # Run: target the primary worktree via myproj:main.
+  status=0
+  output="$(ORCHARD_CONFIG="$cfg" "$SCRIPT" \
+    --json \
+    --worktree-id "myproj:main" \
+    --pr-merged merged \
+    --base main \
+    2>/dev/null)" || status=$?
+
+  # Exit 0 — skip is success, NOT an error.
+  [ "$status" -eq 0 ]
+
+  # Envelope ok=true.
+  [ "$(echo "$output" | _json_field ok)" = "True" ]
+
+  # data.skipped must be true.
+  skipped="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('data',{}).get('skipped','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skipped" = "True" ]
+
+  # data.skipReason must be main-working-tree.
+  skip_reason="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('data',{}).get('skipReason','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skip_reason" = "main-working-tree" ]
+
+  # The repo directory MUST survive (not rm-rf'd).
+  [ -d "$REPO_DIR" ]
+
+  # The main branch ref MUST survive.
+  git -C "$REPO_DIR" show-ref --verify --quiet refs/heads/main
+}
+
+# ---------------------------------------------------------------------------
+# Locale-independence: positional guard fires under non-English locales
+# The text-match guard ("is a main working tree") would MISS under fr_FR/de_DE
+# because git translates that message. The positional check (first porcelain
+# entry by PATH) is locale-independent and must fire regardless of LC_ALL.
+# @scenario main-working-tree guard is locale-independent (C and fr_FR locales)
+# ---------------------------------------------------------------------------
+
+_assert_main_wt_skipped_under_locale() {
+  local locale="$1"
+  # Build a fresh repo for this locale sub-test.
+  local repo
+  repo="$(mktemp -d)"
+  git -C "$repo" init -q -b main
+  git -C "$repo" config user.email "test@example.com"
+  git -C "$repo" config user.name "Test"
+  touch "$repo/README"
+  git -C "$repo" add README
+  git -C "$repo" commit -q -m "init"
+
+  local cfg="$TMPDIR_CFG/config-${locale//\//_}.json"
+  printf '{"repos":[{"slug":"loctest","path":"%s"}]}' "$repo" > "$cfg"
+
+  local status=0
+  local output
+  output="$(LC_ALL="$locale" ORCHARD_CONFIG="$cfg" "$SCRIPT" \
+    --json \
+    --worktree-id "loctest:main" \
+    --pr-merged merged \
+    --base main \
+    2>/dev/null)" || status=$?
+
+  # Exit 0.
+  [ "$status" -eq 0 ] || { echo "FAILED locale=$locale: exit $status, output=$output"; return 1; }
+
+  # ok=true.
+  local ok
+  ok="$(echo "$output" | _json_field ok)"
+  [ "$ok" = "True" ] || { echo "FAILED locale=$locale: ok=$ok, output=$output"; return 1; }
+
+  # skipReason=main-working-tree.
+  local skip_reason
+  skip_reason="$(echo "$output" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('data',{}).get('skipReason','MISSING'))
+" 2>/dev/null || echo "PARSE_ERROR")"
+  [ "$skip_reason" = "main-working-tree" ] || { echo "FAILED locale=$locale: skipReason=$skip_reason, output=$output"; return 1; }
+
+  # Repo dir MUST survive.
+  [ -d "$repo" ] || { echo "FAILED locale=$locale: repo dir was deleted"; return 1; }
+
+  # Branch MUST survive.
+  git -C "$repo" show-ref --verify --quiet refs/heads/main || { echo "FAILED locale=$locale: branch gone"; return 1; }
+}
+
+@test "main-working-tree guard is locale-independent (C and fr_FR locales)" {
+  # LC_ALL=C: baseline — English text, positional guard must fire.
+  _assert_main_wt_skipped_under_locale "C"
+
+  # LC_ALL=fr_FR.UTF-8: git emits translated message; text-match would miss;
+  # positional guard must still fire.
+  # If the locale is not installed, skip gracefully so CI never false-fails.
+  if locale -a 2>/dev/null | grep -q 'fr_FR.UTF-8'; then
+    _assert_main_wt_skipped_under_locale "fr_FR.UTF-8"
+  fi
+
+  # LC_ALL=de_DE.UTF-8: same reasoning.
+  if locale -a 2>/dev/null | grep -q 'de_DE.UTF-8'; then
+    _assert_main_wt_skipped_under_locale "de_DE.UTF-8"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Helper: assert the given worktree path is NOT in git worktree list --porcelain
 #
 # On macOS, mktemp creates paths under /var/... but git worktree list --porcelain

@@ -1467,4 +1467,33 @@ func TestEnrichEntryFromData_SkipReasonSurfaced(t *testing.T) {
 		}
 		t.Logf("#695 PASS hosts-active-session: warnings=%v alreadyRemoved=%v", entry.Warnings, entry.AlreadyRemoved)
 	})
+
+	t.Run("main-working-tree skip surfaces in Warnings", func(t *testing.T) {
+		// Script emits: {ok:true, worktreeId:..., skipped:true, skipReason:"main-working-tree"}
+		// when the targeted worktree IS the repo primary checkout — defense-in-depth guard
+		// added in PR #695 (worktree-remove.sh line ~253).
+		raw := json.RawMessage(`{
+			"worktreeId": "myrepo:main",
+			"skipped": true,
+			"skipReason": "main-working-tree"
+		}`)
+		entry := enrichEntryFromData(WorktreeCleanupEntry{WorktreeID: "myrepo:main"}, raw)
+
+		// The skipReason must appear in Warnings so callers can distinguish the skip.
+		found := false
+		for _, w := range entry.Warnings {
+			if strings.Contains(w, "main-working-tree") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("#695 FAIL: main-working-tree skipReason not surfaced in Warnings; warnings=%v", entry.Warnings)
+		}
+		// A skip is not an idempotent already-removed no-op — AlreadyRemoved must stay false.
+		if entry.AlreadyRemoved {
+			t.Error("#695 FAIL: AlreadyRemoved=true for a main-working-tree skip — must stay false")
+		}
+		t.Logf("#695 PASS main-working-tree: warnings=%v alreadyRemoved=%v", entry.Warnings, entry.AlreadyRemoved)
+	})
 }

@@ -1696,6 +1696,13 @@ impl App {
                     self.active_repo_slug(),
                 );
                 if let Some(vt) = visible.get(worktree_cursor) {
+                    if vt.row.is_main_worktree {
+                        self.warning = Some((
+                            "Cannot delete the main working tree.".to_string(),
+                            Instant::now(),
+                        ));
+                        return ok();
+                    }
                     self.view = ViewState::ConfirmDelete(Box::new(state::DeleteState {
                         target: vt.row.clone(),
                         phase: Phase::Confirm,
@@ -3931,6 +3938,42 @@ mod tests {
         let app = App::new_test(rows);
         let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
         assert_eq!(app.handle_event(key), Some(Message::CursorTo(0)));
+    }
+
+    /// #693 / #695 defense-in-depth: pressing 'd' on the main working tree must
+    /// NOT enter ConfirmDelete — the daemon script already skips it, but the TUI
+    /// should block the action up-front and surface a warning instead.
+    #[test]
+    fn delete_on_main_worktree_does_not_enter_confirm_delete() {
+        let main_row = WorktreeRow {
+            is_main_worktree: true,
+            display_group: DisplayGroup::RepoMain,
+            ..make_worktree_row("main", DisplayGroup::RepoMain)
+        };
+        let mut app = App::new_test(vec![main_row]);
+        // cursor=0 → the main-worktree row
+        app.cursor = 0;
+        let result = app.update(Message::Delete);
+        assert!(!result.quit);
+        assert!(
+            !matches!(app.view, ViewState::ConfirmDelete(_)),
+            "Delete on main worktree must not enter ConfirmDelete; got {:?}",
+            std::mem::discriminant(&app.view)
+        );
+        assert!(
+            app.warning.is_some(),
+            "Delete on main worktree must set a warning"
+        );
+        assert!(
+            app.warning
+                .as_ref()
+                .unwrap()
+                .0
+                .to_lowercase()
+                .contains("main"),
+            "warning must mention 'main', got: {}",
+            app.warning.as_ref().unwrap().0
+        );
     }
 
     #[test]
