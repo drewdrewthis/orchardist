@@ -227,8 +227,15 @@ impl Client {
     ///
     /// `session_names` is a parallel array aligned by index with `worktree_ids`.
     /// An empty string at position `i` means the worktree at `i` has no session to kill.
-    /// When `session_names` is empty or shorter than `worktree_ids`, the remaining
-    /// worktrees have no session name threaded (safe — the script no-ops the kill stage).
+    ///
+    /// # Alignment contract
+    ///
+    /// - `session_names` is **empty** → no sessions for any worktree (safe no-op for the
+    ///   kill stage on every worktree).
+    /// - `session_names` is **non-empty** → it **must** have exactly the same length as
+    ///   `worktree_ids`. A shorter (or longer) slice would silently shift session names
+    ///   left, associating the wrong session with the wrong worktree on this destructive
+    ///   path. [`DaemonError::Parse`] is returned when the lengths differ.
     pub fn worktrees_cleanup_with_sessions(
         &self,
         worktree_ids: &[String],
@@ -236,6 +243,16 @@ impl Client {
         active_session: Option<&str>,
         active_cwd: Option<&str>,
     ) -> Result<WorktreesCleanupResult, DaemonError> {
+        // Guard: reject misaligned session_names on the destructive path.
+        // Empty means "no sessions" (the documented no-op case); anything else
+        // must be a strict 1:1 parallel to worktree_ids.
+        if !session_names.is_empty() && session_names.len() != worktree_ids.len() {
+            return Err(DaemonError::Parse(format!(
+                "session_names length ({}) must equal worktree_ids length ({}) or be empty",
+                session_names.len(),
+                worktree_ids.len(),
+            )));
+        }
         const MUTATION: &str = r#"
             mutation WorktreesCleanup($input: WorktreesCleanupInput!) {
               worktreesCleanup(input: $input) {
@@ -644,5 +661,79 @@ mod tests {
             q.contains("process { command }"),
             "work_view query must use `process {{ command }}` sub-selection, not bare `process`"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // session_names alignment guard
+    //
+    // A non-empty session_names that is shorter (or longer) than worktree_ids
+    // would silently shift session associations left on a destructive path.
+    // The guard must reject this BEFORE any network call so the test can assert
+    // the error synchronously without a live daemon.
+    // -----------------------------------------------------------------------
+
+    /// Build a stub Client that targets a URL no daemon will ever answer on.
+    /// Used only to invoke methods whose early-exit guards fire before the
+    /// first HTTP call.
+    fn stub_client() -> Client {
+        Client::for_url("http://127.0.0.1:19999/graphql")
+            .expect("stub client construction must not fail")
+    }
+
+    #[test]
+    fn misaligned_session_names_returns_err_without_network_call() {
+        let client = stub_client();
+        let worktree_ids = vec![
+            "owner/repo:feat/a".to_string(),
+            "owner/repo:feat/b".to_string(),
+        ];
+        // session_names has 1 entry but worktree_ids has 2 — misaligned.
+        let session_names = vec!["session-a".to_string()];
+
+        let result =
+            client.worktrees_cleanup_with_sessions(&worktree_ids, &session_names, None, None);
+
+        assert!(
+            result.is_err(),
+            "expected Err for misaligned session_names (len=1) vs worktree_ids (len=2), got Ok"
+        );
+        // Confirm it's a Parse error (not Unreachable — the guard fires before any network call).
+        match result.unwrap_err() {
+            DaemonError::Parse(msg) => {
+                assert!(
+                    msg.contains("session_names length"),
+                    "error message should mention session_names length, got: {msg}"
+                );
+            }
+            other => panic!("expected DaemonError::Parse, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_session_names_is_accepted() {
+        // Empty session_names is the documented no-op case — the guard must NOT
+        // reject it. This test exercises the guard-bypass path only (no daemon
+        // is needed for the guard check; the subsequent Unreachable from the
+        // stub is expected and acceptable here — we only care the guard passes).
+        let client = stub_client();
+        let worktree_ids = vec![
+            "owner/repo:feat/a".to_string(),
+            "owner/repo:feat/b".to_string(),
+        ];
+        let session_names: Vec<String> = vec![];
+
+        let result =
+            client.worktrees_cleanup_with_sessions(&worktree_ids, &session_names, None, None);
+
+        // The guard should NOT return Parse; the error will be Unreachable
+        // (stub daemon is not listening) or Transport — anything except Parse.
+        match result {
+            Err(DaemonError::Parse(msg)) if msg.contains("session_names length") => {
+                panic!(
+                    "empty session_names must NOT be rejected by the alignment guard, got: {msg}"
+                );
+            }
+            _ => {} // Unreachable / Transport from the stub are fine
+        }
     }
 }

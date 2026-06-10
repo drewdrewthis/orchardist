@@ -129,6 +129,14 @@ sys.exit(0)
 # ---------------------------------------------------------------------------
 
 @test "AC6(ii) non-compose directory (no compose file): ok=true, action=no-op, reason=no-compose-file" {
+  # The script checks docker availability BEFORE compose-file presence.
+  # On a host without docker compose v2, the script short-circuits with
+  # reason=docker-absent, never reaching the no-compose-file branch.
+  # Skip here to avoid a false failure on such hosts.
+  if ! (command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1); then
+    skip "docker compose v2 unavailable — no-compose-file path unreachable"
+  fi
+
   local wt_dir="${TMPDIR_BASE}/wt-no-compose"
   mkdir -p "$wt_dir"
   # Deliberately no compose file
@@ -466,4 +474,69 @@ COMPOSE_EOF
   # Registry-pulled alpine:latest must still be present.
   pulled_after="$(docker images -q alpine:latest 2>/dev/null || true)"
   [ -n "$pulled_after" ]
+}
+
+# ---------------------------------------------------------------------------
+# json_escape: pure-bash JSON string escaping (NO-DOCKER — unit test)
+# Verifies that newlines, backslashes, and double-quotes are all escaped
+# correctly and that the resulting JSON is valid.
+# ---------------------------------------------------------------------------
+
+@test "json_escape: newline in message produces valid JSON (jq round-trip)" {
+  # Extract the json_escape function from the script into a harness.
+  # We use the same sed-extract pattern as the _path_hash tests above.
+  local harness="${TMPDIR_BASE}/escape-harness.sh"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'set -euo pipefail'
+    # Extract json_escape function block
+    sed -n '/^json_escape()/,/^}/p' "$SCRIPT"
+    printf '\n'
+    # Call it with a multi-line input and print result
+    printf '%s\n' 'input="$(printf '"'"'line1\nline2'"'"')"'
+    printf '%s\n' 'result="$(json_escape "$input")"'
+    # Use printf %s (not echo) to avoid echo interpreting \n as a real newline
+    printf '%s\n' 'printf '"'"'{"msg":"%s"}\n'"'"' "$result"'
+  } > "$harness"
+  chmod +x "$harness"
+
+  output="$(bash "$harness")"
+
+  # The output must be valid JSON (jq exits 0) — use printf to pass to jq safely
+  printf '%s\n' "$output" | jq . >/dev/null
+
+  # The message field must round-trip: jq extracts "line1\nline2" (with literal newline)
+  msg_raw="$(printf '%s\n' "$output" | jq -r '.msg')"
+  [ "$msg_raw" = "$(printf 'line1\nline2')" ]
+}
+
+@test "json_escape: backslash and double-quote produce valid JSON" {
+  local harness="${TMPDIR_BASE}/escape-harness2.sh"
+  # Write input to a file to sidestep quoting: a literal backslash followed by
+  # a double-quote, with no shell interpolation involved.
+  local input_file="${TMPDIR_BASE}/input2.txt"
+  printf 'back\\slash and "quote"' > "$input_file"
+
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'set -euo pipefail'
+    sed -n '/^json_escape()/,/^}/p' "$SCRIPT"
+    printf '\n'
+    printf 'input_file="%s"\n' "$input_file"
+    printf '%s\n' 'input="$(cat "$input_file")"'
+    printf '%s\n' 'result="$(json_escape "$input")"'
+    # Use printf %s to avoid echo interpreting escape sequences in result
+    printf '%s\n' 'printf '"'"'{"msg":"%s"}\n'"'"' "$result"'
+  } > "$harness"
+  chmod +x "$harness"
+
+  output="$(bash "$harness")"
+
+  # Must be valid JSON — use printf to avoid echo mangling backslashes
+  printf '%s\n' "$output" | jq . >/dev/null
+
+  # jq must round-trip the original string
+  msg_raw="$(printf '%s\n' "$output" | jq -r '.msg')"
+  expected="$(cat "$input_file")"
+  [ "$msg_raw" = "$expected" ]
 }

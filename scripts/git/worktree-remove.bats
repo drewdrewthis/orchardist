@@ -496,8 +496,32 @@ print(tk.get('warning','MISSING'))
 
 # ---------------------------------------------------------------------------
 # Helper: assert the given worktree path is NOT in git worktree list --porcelain
+#
+# On macOS, mktemp creates paths under /var/... but git worktree list --porcelain
+# resolves them to /private/var/... (the physical path under the symlink).
+# We normalize both the needle and the porcelain output to their /private/...
+# form so a stale registration is never silently missed.
+#
+# The directory may already be removed (that is the point of calling refute).
+# When the dir is gone `cd` fails, so we do pure-string normalization:
+# if the path starts with /var/ and /private/var exists, prepend /private.
 # ---------------------------------------------------------------------------
+_normalize_path() {
+  local p="$1"
+  # Try physical resolution first (works when dir still exists).
+  local resolved
+  resolved="$(cd "$p" 2>/dev/null && pwd -P 2>/dev/null)" && { printf '%s' "$resolved"; return; }
+  # Dir is gone — fall back to string-level macOS symlink normalization.
+  if [[ "$p" == /var/* ]] && [[ -d /private/var ]]; then
+    printf '%s' "/private${p}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
 refute_in_porcelain() {
   local repo="$1" wt_path="$2"
-  ! git -C "$repo" worktree list --porcelain 2>/dev/null | grep -qF "worktree $wt_path"
+  local wt_real
+  wt_real="$(_normalize_path "$wt_path")"
+  ! git -C "$repo" worktree list --porcelain 2>/dev/null | grep -qF "worktree $wt_real"
 }

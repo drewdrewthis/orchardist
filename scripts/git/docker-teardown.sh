@@ -60,9 +60,23 @@ json_ok() {
   echo "{\"ok\":true,\"data\":${data}}"
 }
 
+# json_escape: pure-bash JSON string escaping.
+# Escapes, IN ORDER: backslash first (to avoid double-escaping), then
+# double-quote, newline, carriage-return, tab.
+# Usage: escaped=$(json_escape "$raw")
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"       # \ → \\  (must be first)
+  s="${s//\"/\\\"}"       # " → \"
+  s="${s//$'\n'/\\n}"     # newline → \n
+  s="${s//$'\r'/\\r}"     # CR → \r
+  s="${s//$'\t'/\\t}"     # tab → \t
+  printf '%s' "$s"
+}
+
 json_err() {
   local code="$1" msg="$2"
-  msg="${msg//\"/\\\"}"
+  msg="$(json_escape "$msg")"
   echo "{\"ok\":false,\"error\":{\"code\":\"${code}\",\"message\":\"${msg}\"}}"
   exit 1
 }
@@ -175,7 +189,6 @@ COMPOSE_FILE_PATH=$(_find_compose_file "$WORKTREE_DIR")
 # Phase 1: bring down containers/networks/volumes (no --rmi).
 if ! DOCKER_ERR=$(cd "$WORKTREE_DIR" && docker compose -p "$PROJECT_KEY" down --volumes 2>&1); then
   if $JSON_MODE; then
-    DOCKER_ERR="${DOCKER_ERR//\"/\\\"}"
     json_err "DOCKER_ERROR" "docker compose down failed for ${WORKTREE_ID}: ${DOCKER_ERR}"
   else
     echo "ERROR: docker compose down failed for ${WORKTREE_ID}: ${DOCKER_ERR}" >&2
