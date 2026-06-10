@@ -349,6 +349,20 @@ func TestWorktreesCleanupUnregisteredRepoSkipped(t *testing.T) {
 	if strings.Contains(entry.Message, "REPO_NOT_FOUND") {
 		t.Errorf("#693 FAIL: unregistered-repo entry message still carries REPO_NOT_FOUND: %q", entry.Message)
 	}
+	// Key assertion 4 (PR #695 bug): the skip must be POSITIVELY identifiable — a bare
+	// {ok:true, warnings:[]} is indistinguishable from a real cleanup at the TUI/caller
+	// layer. The orphan entry MUST surface its skipReason in Warnings so the caller can
+	// distinguish a skip from a genuine removal.
+	skipWarningFound := false
+	for _, w := range entry.Warnings {
+		if strings.Contains(w, "repo-unregistered") {
+			skipWarningFound = true
+			break
+		}
+	}
+	if !skipWarningFound {
+		t.Errorf("#695 FAIL: unregistered-repo skip not surfaced in Warnings — caller cannot distinguish skip from real cleanup; warnings=%v", entry.Warnings)
+	}
 }
 
 // TestWorktreesCleanupUnregisteredRepoBatchContinues verifies the batch-continuation
@@ -1385,5 +1399,72 @@ func TestEnrichEntryFromData_TmuxKillWarning(t *testing.T) {
 			t.Error("AC-G3 FAIL: entry.AlreadyRemoved=true when tmuxKill field is present")
 		}
 		t.Logf("AC-G3 Part B PASS (negative): no warnings for session-not-found, alreadyRemoved=%v", entry.AlreadyRemoved)
+	})
+}
+
+// TestEnrichEntryFromData_SkipReasonSurfaced proves PR #695 fix: when the script emits a
+// top-level skipped:true / skipReason envelope, enrichEntryFromData must surface the
+// skipReason in entry.Warnings so the caller can distinguish a skip from a real cleanup.
+// Without the fix, entry.Warnings is empty and the TUI shows the orphan as "deleted".
+//
+// Covers both top-level skip reasons produced by worktree-remove.sh:
+//   - "repo-unregistered" (orphan whose projectId slug is absent from orchard config)
+//   - "hosts-active-session" (worktree whose session/cwd matches the user's active session)
+//
+// Also asserts the AlreadyRemoved gate is NOT changed by a skip envelope (AlreadyRemoved
+// is for idempotent re-runs, not for active skips — the existing hasSkipped gate handles this).
+//
+// @scenario PR #695: top-level skipReason surfaces in Warnings (unit seam)
+func TestEnrichEntryFromData_SkipReasonSurfaced(t *testing.T) {
+	t.Run("repo-unregistered skip surfaces in Warnings", func(t *testing.T) {
+		// Script emits: {ok:true, worktreeId:..., skipped:true, skipReason:"repo-unregistered"}
+		raw := json.RawMessage(`{
+			"worktreeId": "langwatch/langwatch-saas:issue510",
+			"skipped": true,
+			"skipReason": "repo-unregistered"
+		}`)
+		entry := enrichEntryFromData(WorktreeCleanupEntry{WorktreeID: "langwatch/langwatch-saas:issue510"}, raw)
+
+		// The skipReason must appear in Warnings — caller needs a positive skip marker.
+		found := false
+		for _, w := range entry.Warnings {
+			if strings.Contains(w, "repo-unregistered") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("#695 FAIL: repo-unregistered skipReason not surfaced in Warnings; warnings=%v", entry.Warnings)
+		}
+		// AlreadyRemoved must remain false — a skip is not an idempotent already-removed no-op.
+		if entry.AlreadyRemoved {
+			t.Error("#695 FAIL: AlreadyRemoved=true for a skip envelope — must stay false")
+		}
+		t.Logf("#695 PASS repo-unregistered: warnings=%v alreadyRemoved=%v", entry.Warnings, entry.AlreadyRemoved)
+	})
+
+	t.Run("hosts-active-session skip surfaces in Warnings", func(t *testing.T) {
+		// Script emits: {ok:true, worktreeId:..., skipped:true, skipReason:"hosts-active-session"}
+		raw := json.RawMessage(`{
+			"worktreeId": "myrepo:main",
+			"skipped": true,
+			"skipReason": "hosts-active-session"
+		}`)
+		entry := enrichEntryFromData(WorktreeCleanupEntry{WorktreeID: "myrepo:main"}, raw)
+
+		found := false
+		for _, w := range entry.Warnings {
+			if strings.Contains(w, "hosts-active-session") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("#695 FAIL: hosts-active-session skipReason not surfaced in Warnings; warnings=%v", entry.Warnings)
+		}
+		if entry.AlreadyRemoved {
+			t.Error("#695 FAIL: AlreadyRemoved=true for a hosts-active-session skip — must stay false")
+		}
+		t.Logf("#695 PASS hosts-active-session: warnings=%v alreadyRemoved=%v", entry.Warnings, entry.AlreadyRemoved)
 	})
 }

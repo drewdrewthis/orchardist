@@ -579,6 +579,18 @@ func enrichEntryFromData(entry WorktreeCleanupEntry, raw json.RawMessage) Worktr
 		}
 	}
 
+	// PR #695: surface top-level skipReason so callers can distinguish a skip from a
+	// real cleanup. Without this, an orphan whose repo is unregistered (or whose session
+	// is active) reaches the caller as bare {ok:true, warnings:[]} — identical to a
+	// genuine removal. Both top-level skip reasons emitted by worktree-remove.sh are
+	// covered: "repo-unregistered" and "hosts-active-session".
+	// Note: AlreadyRemoved is intentionally NOT set here — a skip is an active policy
+	// decision, not an idempotent re-run; the existing hasSkipped gate (line above)
+	// already prevents AlreadyRemoved=true for skip envelopes.
+	if skipReason, ok := data["skipReason"].(string); ok && skipReason != "" {
+		entry.Warnings = append(entry.Warnings, "skipped: "+skipReason)
+	}
+
 	return entry
 }
 
