@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# chat-post — post a message to the orchard chat broker as a worker / sister.
+# Usage:   chat-post <room> <text>
+#          chat-post "<room>" "<text>"
+#
+# Reads:
+#   $CHAT_POST_URL    e.g. http://orchard.boxd:8790  (defaults to localhost for local testing)
+#   $AGENT_NAME       sender label (defaults to $USER@$HOSTNAME)
+#
+# Open chat — no token required. Sender names themselves via $AGENT_NAME.
+# Listener-side: workers/sisters do NOT subscribe; they only POST. This keeps
+# their context cheap and prevents inbound chat from polluting their session.
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: $(basename "$0") <room> <text>" >&2
+  exit 2
+fi
+
+room="$1"
+shift
+text="$*"
+
+url="${CHAT_POST_URL:-http://127.0.0.1:8790}"
+sender="${AGENT_NAME:-${USER}@$(hostname -s)}"
+machine="${HOSTNAME:-$(hostname -s)}"
+
+if command -v jq >/dev/null 2>&1; then
+  body=$(jq -n --arg r "$room" --arg t "$text" --arg s "$sender" --arg m "$machine" \
+    '{room: $r, text: $t, sender_agent: $s, sender_machine: $m}')
+else
+  esc() { printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read()))'; }
+  body="{\"room\": $(esc "$room"), \"text\": $(esc "$text"), \"sender_agent\": $(esc "$sender"), \"sender_machine\": $(esc "$machine")}"
+fi
+
+curl -fsS -X POST "${url}/post" \
+  -H "Content-Type: application/json" \
+  -d "$body"
+echo

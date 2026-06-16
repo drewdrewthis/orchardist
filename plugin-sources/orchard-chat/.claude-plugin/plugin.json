@@ -1,0 +1,11 @@
+{
+  "name": "orchard-chat",
+  "version": "0.1.1",
+  "description": "Cross-machine chat channel for orchardists. Connects to the orchard-chat broker on boxd; receives chat as <channel source=\"orchard-chat\" ...> events; exposes a chat:post reply tool. Listener-only or post-only mode controlled by config.",
+  "author": {
+    "name": "drewdrewthis",
+    "url": "https://github.com/drewdrewthis/git-orchard-rs"
+  },
+  "homepage": "https://github.com/drewdrewthis/git-orchard-rs/tree/main/plugin-sources/orchard-chat",
+  "repository": "https://github.com/drewdrewthis/git-orchard-rs"
+}
