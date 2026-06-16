@@ -4,7 +4,7 @@
  *
  * Bridges the orchard-chat broker into a Claude Code session:
  *   - declares the claude/channel capability so Claude registers a listener
- *   - opens a WS to the broker, identifies via Bearer token from local config
+ *   - opens a WS to the broker, identifies via self-asserted agent/machine name (open mode)
  *   - on each broker message, emits notifications/claude/channel so the row lands
  *     in Claude's context as <channel source="orchard-chat" ...>
  *   - exposes a `chat:post` MCP tool: Claude calls it to send a message;
@@ -16,15 +16,14 @@
  *   {
  *     "agent_name": "boxd_orchardist",
  *     "machine":    "boxd",
- *     "chat_token": "<32-byte hex>",
  *     "chat_listen": true,           // false -> post-only (no WS, no events)
  *     "chat_rooms":  ["general", "alerts"]   // optional; default ["general"]
  *   }
  *
  * Env (overridable, set via .mcp.json):
  *   ORCHARD_CHAT_CONFIG         path to config json
- *   ORCHARD_CHAT_BROKER_WS      ws://host:port/ws
- *   ORCHARD_CHAT_BROKER_HTTP    http://host:port
+ *   ORCHARD_CHAT_BROKER_WS      wss://orchard.boxd.sh/ws
+ *   ORCHARD_CHAT_BROKER_HTTP    https://orchard.boxd.sh
  *   ORCHARD_CHAT_LASTSEEN_DIR   per-agent lastseen state
  */
 
@@ -41,9 +40,9 @@ const CONFIG_PATH =
   process.env.ORCHARD_CHAT_CONFIG ??
   join(process.env.HOME ?? "/tmp", ".config", "orchard", "local-orchardist.json");
 const BROKER_WS =
-  process.env.ORCHARD_CHAT_BROKER_WS ?? "ws://orchard.boxd:8790/ws";
+  process.env.ORCHARD_CHAT_BROKER_WS ?? "wss://orchard.boxd.sh/ws";
 const BROKER_HTTP =
-  process.env.ORCHARD_CHAT_BROKER_HTTP ?? "http://orchard.boxd:8790";
+  process.env.ORCHARD_CHAT_BROKER_HTTP ?? "https://orchard.boxd.sh";
 const LASTSEEN_DIR =
   process.env.ORCHARD_CHAT_LASTSEEN_DIR ??
   join(process.env.HOME ?? "/tmp", ".cache", "orchard-chat");
@@ -95,12 +94,26 @@ function writeLastSeen(agent: string, ts: string): void {
   mkdirSync(LASTSEEN_DIR, { recursive: true });
   writeFileSync(lastSeenPath(agent), ts);
 }
+function advanceLastSeen(agent: string, ts: string): void {
+  const current = readLastSeen(agent);
+  if (!current || ts > current) writeLastSeen(agent, ts);
+}
 
 const cfg = loadConfig();
 const canListen = cfg.chat_listen !== false; // default true if absent
 const log = (...a: unknown[]) =>
   // MCP servers must keep stdout clean — log to stderr.
   console.error(`[orchard-chat]`, ...a);
+
+function isAllowedRoom(room: string): boolean {
+  return !cfg.chat_rooms || cfg.chat_rooms.length === 0 || cfg.chat_rooms.includes(room);
+}
+
+function fetchWithTimeout(url: string, options?: RequestInit, ms = 10_000): Promise<Response> {
+  const ac = new AbortController();
+  const id = setTimeout(() => ac.abort(), ms);
+  return fetch(url, { ...options, signal: ac.signal }).finally(() => clearTimeout(id));
+}
 
 const mcp = new Server(
   { name: "orchard-chat", version: "0.1.0" },
@@ -147,12 +160,33 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name !== "chat:post") {
     throw new Error(`unknown tool: ${req.params.name}`);
   }
-  const { text, room } = req.params.arguments as { text: string; room?: string };
-  const res = await fetch(`${BROKER_HTTP}/post`, {
+  const args = req.params.arguments;
+  if (
+    !args ||
+    typeof args !== "object" ||
+    typeof (args as { text?: unknown }).text !== "string" ||
+    (args as { text: string }).text.trim().length === 0 ||
+    ((args as { room?: unknown }).room !== undefined &&
+      typeof (args as { room?: unknown }).room !== "string")
+  ) {
+    return {
+      content: [{ type: "text", text: "invalid arguments: text must be a non-empty string; room must be a string if provided" }],
+      isError: true,
+    };
+  }
+  const { text, room } = args as { text: string; room?: string };
+  const targetRoom = room ?? "general";
+  if (!isAllowedRoom(targetRoom)) {
+    return {
+      content: [{ type: "text", text: `room is not enabled: ${targetRoom}` }],
+      isError: true,
+    };
+  }
+  const res = await fetchWithTimeout(`${BROKER_HTTP}/post`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      room: room ?? "general",
+      room: targetRoom,
       text,
       sender_agent: cfg.agent_name,
       sender_machine: cfg.machine,
@@ -193,7 +227,7 @@ async function deliver(row: ChatRow): Promise<void> {
   // Drop our own posts to avoid echo-spam in the orchardist's context.
   // (The post tool already returned 'posted'; landing it again is noise.)
   if (row.sender_agent === cfg.agent_name && row.sender_machine === cfg.machine) {
-    writeLastSeen(cfg.agent_name, row.ts);
+    advanceLastSeen(cfg.agent_name, row.ts);
     return;
   }
   await mcp.notification({
@@ -208,13 +242,17 @@ async function deliver(row: ChatRow): Promise<void> {
       },
     },
   });
-  writeLastSeen(cfg.agent_name, row.ts);
+  advanceLastSeen(cfg.agent_name, row.ts);
 }
 
 async function replay(since: string): Promise<void> {
   try {
-    const url = `${BROKER_HTTP}/replay?since=${encodeURIComponent(since)}`;
-    const res = await fetch(url);
+    const params = new URLSearchParams({ since });
+    if (cfg.chat_rooms && cfg.chat_rooms.length > 0) {
+      params.set("rooms", cfg.chat_rooms.join(","));
+    }
+    const url = `${BROKER_HTTP}/replay?${params.toString()}`;
+    const res = await fetchWithTimeout(url);
     if (!res.ok) {
       log(`replay failed: ${res.status}`);
       return;
@@ -263,7 +301,7 @@ function connect(): void {
       return;
     }
     const row = msg as ChatRow;
-    if (!row.id || !row.ts || !row.text) return;
+    if (!row.id || !row.ts || !row.text || !row.room || !isAllowedRoom(row.room)) return;
     await deliver(row);
   });
 
