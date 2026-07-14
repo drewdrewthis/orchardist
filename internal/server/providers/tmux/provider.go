@@ -276,6 +276,18 @@ func (p *Provider) PanesByCommand(host, basenameContains string, ps PanePsGetter
 	return out
 }
 
+// PaneRunsCommand reports whether pn is running needle, matched
+// case-insensitively against the command basename. It is the same detection
+// PanesByCommand applies, exported so a resolver holding a single already-known
+// pane can ask the question without re-deriving it — one source of truth for
+// "is this pane running claude".
+func PaneRunsCommand(pn Pane, host string, ps PanePsGetter, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	return paneCommandMatchesClaude(pn, host, ps, strings.ToLower(needle))
+}
+
 // PanesBySession returns every pane whose tmux session name equals
 // sessionName on the given host. Returns [] (never nil).
 func (p *Provider) PanesBySession(host, sessionName string) []Pane {
