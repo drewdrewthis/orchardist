@@ -299,17 +299,29 @@ func (p *Provider) PanesBySession(host, sessionName string) []Pane {
 	return out
 }
 
-// paneCommandMatchesClaude checks whether a pane's foreground command
-// (by ps basename) contains needle (lower-case). Falls back to the raw
-// tmux CurrentCommand when ps cannot resolve the pid.
+// paneCommandMatchesClaude reports whether a pane is running needle
+// (lower-case), consulting two independent signals.
+//
+// CurrentPid is tmux's pane_pid — the pane's ROOT process, NOT its foreground
+// process. A session started as `bash -> claude` has a bash root pid, so asking
+// ps about it answers "bash" even though claude is very much running. tmux's own
+// pane_current_command resolves the foreground through the shell and answers
+// "claude" correctly.
+//
+// So the two signals are complementary, not ranked: ps sees through wrapper
+// processes tmux reports verbatim, and tmux sees through shells ps cannot.
+// Either one matching is a match. Previously a non-empty ps answer returned
+// early and shadowed tmux's, which made every shell-wrapped claude session
+// invisible to Query.claudeInstances — and the concurrency cap that reads it
+// counted 0 workers while workers were running (#706).
 func paneCommandMatchesClaude(pn Pane, host string, ps PanePsGetter, needle string) bool {
 	if ps != nil && pn.CurrentPid > 0 {
 		cmd := ps.CommandForPid(host, pn.CurrentPid)
-		if cmd != "" {
-			return strings.Contains(strings.ToLower(filepath.Base(cmd)), needle)
+		if cmd != "" && strings.Contains(strings.ToLower(filepath.Base(cmd)), needle) {
+			return true
 		}
 	}
-	// Fallback to tmux pane_current_command (may be version string on macOS).
+	// tmux pane_current_command (may be a version string on macOS, hence ps above).
 	return strings.Contains(strings.ToLower(filepath.Base(pn.CurrentCommand)), needle)
 }
 

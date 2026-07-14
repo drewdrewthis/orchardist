@@ -171,6 +171,50 @@ func TestPanesByCommand_FallbackToCurrentCommand(t *testing.T) {
 	}
 }
 
+func TestPanesByCommand_ShellWrappedClaudeIsNotShadowedByPs(t *testing.T) {
+	// Regression for #706. tmux's pane_pid is the pane's ROOT process, not its
+	// foreground process. A session launched as `bash -> claude` reports
+	// pane_pid = the bash pid, while tmux's own pane_current_command still
+	// resolves the foreground correctly to "claude".
+	//
+	// Asking ps about the root pid answers "bash". That answer is non-empty, so
+	// it must not shadow tmux's: the two signals are complementary, not ranked.
+	// Both pids below are copied from the live box (#706): 1648 is an exec'd
+	// claude (found today), 806301 is a shell-wrapped worker (missed today).
+	panes := []Pane{
+		{Key: PaneKey{Host: "local", PaneID: "%1"}, CurrentPid: 1648, CurrentCommand: "claude"},
+		{Key: PaneKey{Host: "local", PaneID: "%2"}, CurrentPid: 806301, CurrentCommand: "claude"},
+	}
+	ps := &stubPsGetter{commands: map[int]string{
+		1648:   "claude",
+		806301: "-bash",
+	}}
+	p := buildTestProvider(panes)
+
+	got := p.PanesByCommand("local", "claude", ps)
+	if len(got) != 2 {
+		t.Fatalf("PanesByCommand: want 2 claude panes (exec'd + shell-wrapped), got %d — "+
+			"a shell-wrapped claude is invisible, so the concurrency cap counts 0 workers "+
+			"while workers are running", len(got))
+	}
+}
+
+func TestPanesByCommand_ShellWithoutClaudeStillExcluded(t *testing.T) {
+	// Guards the fix above from over-matching: a pane running a plain shell with
+	// no claude anywhere must stay excluded. Without this, "trust tmux too"
+	// could degrade into "match everything".
+	panes := []Pane{
+		{Key: PaneKey{Host: "local", PaneID: "%3"}, CurrentPid: 13036, CurrentCommand: "bash"},
+	}
+	ps := &stubPsGetter{commands: map[int]string{13036: "-bash"}}
+	p := buildTestProvider(panes)
+
+	got := p.PanesByCommand("local", "claude", ps)
+	if len(got) != 0 {
+		t.Errorf("PanesByCommand: plain shell must not match claude, got %d", len(got))
+	}
+}
+
 func TestPanesByCommand_CaseInsensitive(t *testing.T) {
 	panes := []Pane{
 		{Key: PaneKey{Host: "local", PaneID: "%7"}, CurrentPid: 700, CurrentCommand: "Claude"},
