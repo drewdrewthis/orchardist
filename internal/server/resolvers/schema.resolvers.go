@@ -1456,13 +1456,25 @@ func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.Tmu
 	if r.Tmux == nil || obj == nil {
 		return nil, nil
 	}
-	// Only project panes running claude.
-	if obj.CurrentCommand != "claude" {
+	// obj is a thin handle: tmuxWindowResolver.Panes projects panes through
+	// projectPane(), which sets {ID, PaneID} and nothing else. Every sibling
+	// field resolver (currentCommand, currentPid, process) therefore looks the
+	// pane up in the provider rather than reading obj. This one used to read
+	// obj.CurrentCommand, which compared "" against "claude" and so returned
+	// nil for EVERY pane, always — attend.js reads this field and treats null
+	// as healthy, leaving the attention feed blind to every worker (#706).
+	p, ok := r.lookupPane(obj.ID)
+	if !ok {
 		return nil, nil
 	}
 	host := string(r.Tmux.Host())
+	// Only project panes running claude — same two-signal detection as
+	// Query.claudeInstances, so both surfaces agree on what "running claude" means.
+	if !tmux.PaneRunsCommand(p, host, newResolverPanePsGetter(r.PS), "claude") {
+		return nil, nil
+	}
 	qr := &queryResolver{r.Resolver}
-	inst := qr.buildClaudeInstanceFromPane(ctx, obj, host, nil, nil, nil)
+	inst := qr.buildClaudeInstanceFromPane(ctx, projectPaneRich(p), host, nil, nil, nil)
 	return inst, nil
 }
 

@@ -25,7 +25,13 @@ type fakeTmuxRunner struct {
 	paneLines []string
 }
 
-const fieldSepTest = "\x01"
+// fieldSepTest must match the tmux adapter's fieldSep. #662 changed the real
+// separator from \x01 to \t (tmux 3.x discovery fix) without updating these
+// fakes, so every seeded pane row silently failed the 18-field parse and the
+// providers came up empty — the tests here have been asserting against an empty
+// provider ever since. CI never caught it: .github/workflows/ci.yml runs only
+// `cargo test -p orchard`, so no Go test in this repo runs in CI.
+const fieldSepTest = "\t"
 
 func (f *fakeTmuxRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	if name != "tmux" {
@@ -73,6 +79,14 @@ func (f *fakeTmuxRunner) Run(_ context.Context, name string, args ...string) ([]
 // listAll consolidated list-sessions + list-panes into one call (#511 follow-up),
 // so every pane row carries its session metadata too.
 func paneRow(sessionName, paneID string, pid int) string {
+	return paneRowWithCommand(sessionName, paneID, pid, "zsh")
+}
+
+// paneRowWithCommand is paneRow with an explicit pane_current_command — the
+// field tmux fills with the pane's FOREGROUND process, which differs from the
+// pane's root process (pane_pid) whenever a session is launched via a shell
+// wrapper (#706).
+func paneRowWithCommand(sessionName, paneID string, pid int, currentCommand string) string {
 	return strings.Join([]string{
 		sessionName,                   // 0  session_name
 		"1700000000",                  // 1  session_created
@@ -87,7 +101,7 @@ func paneRow(sessionName, paneID string, pid int) string {
 		paneID,                        // 10 window_active_pane
 		paneID,                        // 11 pane_id
 		"",                            // 12 pane_title
-		"zsh",                         // 13 pane_current_command
+		currentCommand,                // 13 pane_current_command
 		fmt.Sprintf("%d", pid),        // 14 pane_pid
 		"80",                          // 15 pane_width
 		"24",                          // 16 pane_height
