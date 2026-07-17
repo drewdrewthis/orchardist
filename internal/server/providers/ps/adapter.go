@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -150,19 +151,44 @@ func (a *PsAdapter) FetchArgs(ctx context.Context, pids []int) (map[int][]string
 }
 
 // FetchCwds returns cwd for the given pids. macOS uses lsof per pid;
-// Linux reads /proc/<pid>/cwd. v1 ships macOS only — Linux returns an
-// empty map and no error so resolvers degrade gracefully.
+// Linux reads the /proc/<pid>/cwd symlink. Both paths return a partial map
+// (missing/dead pids simply absent) and no error, so a single unresolvable
+// pid never blanks out the batch.
 func (a *PsAdapter) FetchCwds(ctx context.Context, pids []int) (map[int]string, error) {
 	if len(pids) == 0 {
 		return map[int]string{}, nil
 	}
-	if runtime.GOOS != "darwin" {
-		// Linux fallback lives in a future PR. Surface "not implemented"
-		// as an empty result rather than an error so a worktree on
-		// Linux can still serve everything else.
-		return map[int]string{}, nil
+	if runtime.GOOS == "darwin" {
+		return a.fetchCwdsDarwin(ctx, pids)
 	}
-	return a.fetchCwdsDarwin(ctx, pids)
+	return fetchCwdsLinux(ctx, pids)
+}
+
+// fetchCwdsLinux resolves each pid's cwd by reading the /proc/<pid>/cwd
+// symlink — the Linux counterpart to fetchCwdsDarwin's lsof shellout. It
+// reads procfs directly (no fork), so a batch of N pids costs N cheap
+// readlink syscalls on the request goroutine.
+//
+// Partial-result contract mirrors the Darwin path: a pid that has exited,
+// or whose cwd is unreadable (permission, race), is simply absent from the
+// map rather than failing the whole batch. Never returns a non-nil error so
+// one unreadable pid can't blank out the others. Without this the daemon's
+// pane→ClaudeInstance enrichment gets an empty cwd for every pid on Linux,
+// no conversation matches, and DeriveInstanceState pins every instance at
+// "idle" (orchardist#710).
+func fetchCwdsLinux(ctx context.Context, pids []int) (map[int]string, error) {
+	out := make(map[int]string, len(pids))
+	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return out, nil
+		}
+		target, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+		if err != nil || target == "" {
+			continue
+		}
+		out[pid] = target
+	}
+	return out, nil
 }
 
 // fetchCwdsDarwin issues a single `lsof -a -d cwd -p <pids>` shellout for

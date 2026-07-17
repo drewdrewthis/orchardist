@@ -63,9 +63,6 @@ func TestProvider_ListSnapshotIncludesSelf(t *testing.T) {
 // against the test process, proving the batch loader plumbs through to
 // the adapter and back.
 func TestProvider_LoadCwdResolvesSelf(t *testing.T) {
-	if !isDarwin() {
-		t.Skip("cwd loader test is darwin-only for v1")
-	}
 	p := New(NewAdapter("local").WithPollInterval(time.Hour), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -148,19 +145,3 @@ func TestProvider_SubscribeReceivesInvalidations(t *testing.T) {
 		}
 	}
 }
-
-// isDarwin is a tiny helper rather than importing runtime in every test.
-func isDarwin() bool {
-	return runtimeGOOS() == "darwin"
-}
-
-// runtimeGOOS exists so the compiler doesn't optimise the runtime read
-// into a constant — keeps the cwd test guarded at runtime instead of
-// at build time, which matters when GOOS-cross-compiling for review.
-func runtimeGOOS() string {
-	return goosValue
-}
-
-// goosValue is wired by an init in goos_*.go (or here directly). Using
-// a package-level variable keeps the test file independent of build tags.
-var goosValue = osGOOS()
