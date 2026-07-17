@@ -1474,7 +1474,8 @@ func (r *tmuxPaneResolver) ClaudeInstance(ctx context.Context, obj *graphql1.Tmu
 		return nil, nil
 	}
 	qr := &queryResolver{r.Resolver}
-	inst := qr.buildClaudeInstanceFromPane(ctx, projectPaneRich(p), host, nil, nil, nil)
+	// nil procTree: the single-pane path builds a one-off tree internally (#711).
+	inst := qr.buildClaudeInstanceFromPane(ctx, projectPaneRich(p), host, nil, nil, nil, nil)
 	return inst, nil
 }
 
