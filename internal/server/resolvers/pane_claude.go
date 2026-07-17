@@ -70,12 +70,21 @@ func (r *queryResolver) projectPanesToClaudeInstances(ctx context.Context, panes
 		}
 	}
 
+	// #711: build the process tree ONCE so each pane's shell-wrapper pane_pid
+	// can be resolved to the real foreground claude pid via a descendant walk.
+	// Mirrors the cwdToSession one-shot index above — O(procs) instead of a
+	// full ps snapshot per pane.
+	var procTree *psprovider.ProcTree
+	if r.PS != nil {
+		procTree = psprovider.NewProcTree(r.PS.List())
+	}
+
 	out := make([]*graphql1.ClaudeInstance, 0, len(panes))
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
-		inst := r.buildClaudeInstanceFromPane(ctx, pane, host, account, snapshotReader, cwdToSession)
+		inst := r.buildClaudeInstanceFromPane(ctx, pane, host, account, snapshotReader, cwdToSession, procTree)
 		out = append(out, inst)
 	}
 
@@ -95,10 +104,27 @@ func (r *queryResolver) buildClaudeInstanceFromPane(
 	account *graphql1.ClaudeAccount,
 	snapshotReader claudeinstance.SnapshotReader,
 	cwdToSession map[string]string,
+	procTree *psprovider.ProcTree,
 ) *graphql1.ClaudeInstance {
 	var pid int
 	if pane.CurrentPid != nil {
 		pid = int(*pane.CurrentPid)
+	}
+
+	// #711: pane.CurrentPid is tmux's pane_pid — the pane's ROOT process, which
+	// is the bash wrapper for every `bash -> claude` launch. Resolve the real
+	// foreground claude pid by walking descendants so id / process / cwd key on
+	// claude (schema.graphql's identity contract), not the shell. The hot-path
+	// caller passes a shared procTree; the single-pane caller passes nil and we
+	// build a one-off tree here.
+	if pid > 0 {
+		tree := procTree
+		if tree == nil && r.PS != nil {
+			tree = psprovider.NewProcTree(r.PS.List())
+		}
+		if tree != nil {
+			pid = tree.ResolveClaudePid(pid)
+		}
 	}
 
 	id := buildClaudeIDFromPane(host, pid, pane)
