@@ -1,96 +1,106 @@
 package server
 
 import (
-	"io"
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// buildDashboardTestMux mirrors the route wiring in server.New
-// (server.go, where /health, /graphql, /v1/conversations/ are registered
-// alongside the "/" dashboard catch-all). The sibling handlers are
-// lightweight stubs — these tests assert ServeMux PRECEDENCE (that adding
-// "/" does not shadow the existing routes), not the siblings' internals.
-func buildDashboardTestMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "HEALTH_OK") })
-	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "GRAPHQL_OK") })
-	mux.HandleFunc("/v1/conversations/", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "CONVO_OK") })
-	mux.Handle("/", dashboardHandler())
-	return mux
+// realDashboardHandler builds the daemon's HTTP handler exactly as server.New
+// wires it — the SAME path this PR adds mux.Handle("/", dashboardHandler()) to.
+// The tests below therefore exercise the real route table, so a future change
+// to the registration in server.go (renamed/added/dropped route) that shadowed
+// an endpoint would fail here rather than silently pass against a hand-copied
+// mirror. That matters: there is no Go CI job (#712), so this is the only
+// automated guard against that drift. Mirrors conversations_jsonl_mount_test.go.
+func realDashboardHandler(t *testing.T) http.Handler {
+	t.Helper()
+	lookup := &stubPathLookup{m: map[string]string{}}
+	srv := New("", slog.Default(), WithConversationsJSONL(lookup, t.TempDir()))
+	return srv.HTTPHandler()
 }
 
 func TestDashboard_ServesRootWithMarker(t *testing.T) {
-	srv := httptest.NewServer(buildDashboardTestMux())
-	defer srv.Close()
+	rr := httptest.NewRecorder()
+	realDashboardHandler(t).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	resp, err := http.Get(srv.URL + "/")
-	if err != nil {
-		t.Fatalf("GET /: %v", err)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200", rr.Code)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
-	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("GET / Content-Type = %q, want to contain text/html", ct)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), `id="orchard-dashboard"`) {
+	if !strings.Contains(rr.Body.String(), `id="orchard-dashboard"`) {
 		t.Errorf(`GET / body is missing the marker id="orchard-dashboard"`)
 	}
 }
 
 func TestDashboard_NotFoundForNonRoot(t *testing.T) {
-	// The "/" catch-all must 404 unmatched non-root paths rather than serve
-	// the page (guards against an open file server). Exercises the handler's
-	// own exact-path guard directly.
-	srv := httptest.NewServer(dashboardHandler())
-	defer srv.Close()
+	// The "/" catch-all must 404 unmatched non-root paths rather than serve the
+	// page (guards against an open file server).
+	rr := httptest.NewRecorder()
+	realDashboardHandler(t).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/nope", nil))
 
-	resp, err := http.Get(srv.URL + "/nope")
-	if err != nil {
-		t.Fatalf("GET /nope: %v", err)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET /nope status = %d, want 404", rr.Code)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /nope status = %d, want 404", resp.StatusCode)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(body), `id="orchard-dashboard"`) {
+	if strings.Contains(rr.Body.String(), `id="orchard-dashboard"`) {
 		t.Errorf("GET /nope served the dashboard page; it must 404 (no open file server)")
 	}
 }
 
-func TestDashboard_DoesNotShadowExistingRoutes(t *testing.T) {
-	srv := httptest.NewServer(buildDashboardTestMux())
-	defer srv.Close()
-
-	cases := []struct {
-		method, path, want string
-	}{
-		{http.MethodGet, "/health", "HEALTH_OK"},
-		{http.MethodPost, "/graphql", "GRAPHQL_OK"},
-		{http.MethodGet, "/v1/conversations/abc123/jsonl", "CONVO_OK"},
+func TestDashboard_RejectsNonReadMethods(t *testing.T) {
+	// The dashboard is read-only: only GET/HEAD serve the page. A write method
+	// on "/" must be rejected (405), never fall through to a 200 page — this is
+	// the guard behind the PR's "no write actions from the page" claim.
+	h := realDashboardHandler(t)
+	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(m, "/", nil))
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s / status = %d, want 405", m, rr.Code)
+		}
+		if strings.Contains(rr.Body.String(), `id="orchard-dashboard"`) {
+			t.Errorf("%s / served the dashboard page; a write method must not", m)
+		}
 	}
-	for _, c := range cases {
-		req, _ := http.NewRequest(c.method, srv.URL+c.path, nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("%s %s: %v", c.method, c.path, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("%s %s status = %d, want 200", c.method, c.path, resp.StatusCode)
-		}
-		if got := strings.TrimSpace(string(body)); got != c.want {
-			t.Errorf("%s %s routed to the wrong handler: body = %q, want %q (did the dashboard \"/\" shadow it?)",
-				c.method, c.path, got, c.want)
-		}
+}
+
+func TestDashboard_DoesNotShadowExistingRoutes(t *testing.T) {
+	h := realDashboardHandler(t)
+
+	// /health must still be served by its own handler, not shadowed by "/".
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /health status = %d, want 200 (shadowed by dashboard \"/\"?)", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), `id="orchard-dashboard"`) {
+		t.Errorf("GET /health served the dashboard page — route shadowed")
+	}
+
+	// /graphql (a POST introspection) must still resolve to the GraphQL handler.
+	body, _ := json.Marshal(map[string]string{"query": "{ __typename }"})
+	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("POST /graphql status = %d, want 200 (shadowed?)", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), `id="orchard-dashboard"`) {
+		t.Errorf("POST /graphql served the dashboard page — route shadowed")
+	}
+
+	// /v1/conversations/<uuid>/jsonl must route to the conversations handler
+	// (unknown uuid -> 404 there), NOT to the dashboard page.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/v1/conversations/unknown-uuid/jsonl", nil))
+	if strings.Contains(rr.Body.String(), `id="orchard-dashboard"`) {
+		t.Errorf("GET /v1/conversations/... served the dashboard page — route shadowed")
 	}
 }

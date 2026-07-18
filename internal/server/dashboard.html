@@ -115,10 +115,9 @@
 <script>
 (function () {
   "use strict";
-  var FAST_MS = 3000, SLOW_MS = 25000;
+  var FAST_MS = 3000, SLOW_MS = 25000, FETCH_TIMEOUT_MS = 20000;
   var STATES = ["working", "idle", "input", "stalled", "dead", "no_claude"];
   var lastSlowOk = null;      // Date of last successful slow fetch
-  var slowFailing = false;    // last slow poll errored
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -127,6 +126,10 @@
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
+  // Only http(s) URLs may reach an href; anything else (javascript:, data:, …)
+  // is rendered inert. Defense-in-depth even though pr.url currently comes only
+  // from GitHub's own HTMLURL.
+  function safeHref(u) { return /^https?:\/\//i.test(u || "") ? u : "#"; }
   function el(tag, cls, html) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -134,10 +137,8 @@
     return e;
   }
   function stateClass(s) { return STATES.indexOf(s) >= 0 ? s : "unknown"; }
-  function hhmm(d) {
-    function p(n) { return (n < 10 ? "0" : "") + n; }
-    return p(d.getHours()) + ":" + p(d.getMinutes());
-  }
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function hhmm(d) { return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
   function fmtWhen(iso) {
     if (!iso) return "—";
     var d = new Date(iso);
@@ -148,16 +149,21 @@
     else if (secs < 3600) rel = Math.floor(secs / 60) + "m ago";
     else if (secs < 86400) rel = Math.floor(secs / 3600) + "h ago";
     else rel = Math.floor(secs / 86400) + "d ago";
-    function p(n) { return (n < 10 ? "0" : "") + n; }
-    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + " (" + rel + ")";
+    return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds()) + " (" + rel + ")";
   }
 
-  // POST a GraphQL query same-origin. Rejects on network error OR GraphQL errors.
+  // POST a GraphQL query same-origin, with a hard timeout so a hung request
+  // can't wedge a poll forever. Resolves to `data` (tolerating partial data +
+  // field-level errors); rejects on network error, non-2xx, timeout, or a
+  // response carrying no data at all.
   function gql(query, variables) {
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, FETCH_TIMEOUT_MS);
     return fetch("/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, variables: variables || {} })
+      body: JSON.stringify({ query: query, variables: variables || {} }),
+      signal: ctrl.signal
     }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
@@ -170,7 +176,7 @@
       if (j && j.data) return j.data;
       var msg = (j && j.errors && j.errors[0] && j.errors[0].message) || "graphql error";
       throw new Error(msg);
-    });
+    }).finally(function () { clearTimeout(timer); });
   }
 
   function setConn(live) {
@@ -249,23 +255,26 @@
     });
   }
 
+  var sessionsInFlight = false;
   function pollSessions() {
+    if (sessionsInFlight) return;          // never stack overlapping polls
+    sessionsInFlight = true;
     return gql(SESSIONS_Q).then(function (data) {
       setConn(true);
       renderSessions((data && data.claudeInstances) || []);
-    }).catch(function (e) {
+    }).catch(function () {
       setConn(false); // daemon unreachable / query failed -> banner
-    });
+    }).finally(function () { sessionsInFlight = false; });
   }
 
   // ---- Lanes + PRs (slow) ----
   var WORKVIEW_Q =
-    "{ workView { repos { slug worktrees { id path branch bare repo" +
-    " pr { number state draft url statusCheckRollup reviewDecision title }" +
-    " issue { number title state url } claudeInstances { sessionUuid state } ahead behind } }" +
-    " meta { provider lastSuccessfulFetchAt failureReason } } }";
+    "{ workView { repos { slug worktrees { id branch bare repo" +
+    " pr { number state url statusCheckRollup reviewDecision }" +
+    " issue { number } claudeInstances { sessionUuid state } ahead behind } }" +
+    " meta { lastSuccessfulFetchAt failureReason } } }";
   var PRS_Q =
-    "query($repo:String!){ openPullRequests(repo:$repo){ number title state draft url statusCheckRollup reviewDecision } }";
+    "query($repo:String!){ openPullRequests(repo:$repo){ number title state url statusCheckRollup reviewDecision } }";
 
   function isMainWorktree(wt) {
     if (/:main$/.test(wt.id || "")) return true;
@@ -276,7 +285,7 @@
   function prCell(pr) {
     if (!pr) return "";
     var parts = [];
-    parts.push('<a href="' + esc(pr.url) + '" target="_blank" rel="noopener">#' + esc(pr.number) + "</a>");
+    parts.push('<a href="' + esc(safeHref(pr.url)) + '" target="_blank" rel="noopener">#' + esc(pr.number) + "</a>");
     parts.push('<span class="pill st-' + esc(pr.state) + '">' + esc(pr.state) + "</span>");
     parts.push('<span class="pill ci-' + esc(pr.statusCheckRollup) + '">CI ' + esc(pr.statusCheckRollup) + "</span>");
     if (pr.reviewDecision) parts.push('<span class="pill">' + esc(pr.reviewDecision) + "</span>");
@@ -343,7 +352,10 @@
     });
   }
 
+  var slowInFlight = false;
   function pollSlow() {
+    if (slowInFlight) return;              // never stack overlapping slow polls
+    slowInFlight = true;
     return gql(WORKVIEW_Q).then(function (data) {
       var wv = (data && data.workView) || { repos: [], meta: {} };
       renderLanes(wv.repos);
@@ -361,22 +373,24 @@
       });
       var jobs = Object.keys(repoSet).map(function (rn) {
         return gql(PRS_Q, { repo: rn })
-          .then(function (d) { return { repo: rn, prs: (d && d.openPullRequests) || [] }; })
-          .catch(function () { return { repo: rn, prs: [] }; });
+          .then(function (d) { return { repo: rn, prs: (d && d.openPullRequests) || [], failed: false }; })
+          .catch(function () { return { repo: rn, prs: [], failed: true }; });
       });
       return Promise.all(jobs).then(function (groups) {
-        renderPRs(groups);
+        var anyPrFailed = groups.some(function (g) { return g.failed; });
+        // Only re-render PRs on a fully-successful fan-out: a partial/total
+        // failure must NOT collapse an unavailable dataset into an empty
+        // snapshot — keep the last-good render and just mark it stale.
+        if (!anyPrFailed) renderPRs(groups);
         lastSlowOk = new Date();
-        slowFailing = false;
-        setStale("lanes-stale", !!metaBad, metaBad || "");
-        setStale("prs-stale", false);
+        setStale("lanes-stale", !!metaBad, metaBad ? String(metaBad) : "");
+        setStale("prs-stale", anyPrFailed, anyPrFailed ? "one or more repos failed to load" : "");
       });
     }).catch(function (e) {
       // Slow provider slow/failed: keep last-good data, show stale (do not blank).
-      slowFailing = true;
       setStale("lanes-stale", true, String(e && e.message || e));
       setStale("prs-stale", true, String(e && e.message || e));
-    });
+    }).finally(function () { slowInFlight = false; });
   }
 
   // ---- kick off segmented polling ----

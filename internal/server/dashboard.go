@@ -32,6 +32,15 @@ func dashboardHandler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// The page is fully self-contained (inline <style>/<script>, no external
+		// resources) and only talks back to its own origin's /graphql. Lock it
+		// down: deny everything by default, allow only inline script/style and
+		// same-origin fetch. Belt-and-suspenders around the esc()/safeHref()
+		// output encoding in dashboard.html.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
+				"connect-src 'self'; base-uri 'none'; form-action 'none'")
 		w.WriteHeader(http.StatusOK)
 		if r.Method == http.MethodHead {
 			return
