@@ -162,8 +162,14 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (j) {
-      if (j.errors && j.errors.length) throw new Error(j.errors[0].message || "graphql error");
-      return j.data;
+      // GraphQL returns partial data alongside field-level errors (e.g. a
+      // flaky gh issue/PR resolution: "#718 is a pull request"). Use the
+      // data when present — errored fields come back null and the renderers
+      // tolerate nulls. Only a missing data payload (or the network failure
+      // handled above) is treated as a real, banner-worthy error.
+      if (j && j.data) return j.data;
+      var msg = (j && j.errors && j.errors[0] && j.errors[0].message) || "graphql error";
+      throw new Error(msg);
     });
   }
 
@@ -344,11 +350,19 @@
       // meta.failureReason present => provider degraded; still render last-good.
       var metaBad = wv.meta && wv.meta.failureReason;
       // Fetch open PRs per configured repo (best-effort, in parallel).
-      var slugs = (wv.repos || []).map(function (r) { return r.slug; });
-      var jobs = slugs.map(function (slug) {
-        return gql(PRS_Q, { repo: slug })
-          .then(function (d) { return { repo: slug, prs: (d && d.openPullRequests) || [] }; })
-          .catch(function () { return { repo: slug, prs: [] }; });
+      // openPullRequests requires an owner/name repo; Repo.slug is a short
+      // local name (e.g. "cr-ship"), so derive the owner/name set from
+      // worktree.repo (the origin-remote slug) instead.
+      var repoSet = {};
+      (wv.repos || []).forEach(function (repo) {
+        (repo.worktrees || []).forEach(function (wt) {
+          if (wt.repo) repoSet[wt.repo] = true;
+        });
+      });
+      var jobs = Object.keys(repoSet).map(function (rn) {
+        return gql(PRS_Q, { repo: rn })
+          .then(function (d) { return { repo: rn, prs: (d && d.openPullRequests) || [] }; })
+          .catch(function () { return { repo: rn, prs: [] }; });
       });
       return Promise.all(jobs).then(function (groups) {
         renderPRs(groups);
