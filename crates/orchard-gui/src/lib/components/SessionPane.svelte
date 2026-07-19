@@ -65,31 +65,43 @@
 	// filter narrows the daemon's pane snapshot to this row.
 	const panelStore = createPanelStore();
 
-	// Two-pass fetch: first pass resolves by paneId (if known). When the
-	// conversation resolves but no pane attached, the cwd triggers a
-	// second pass via the daemon's cwd+command filter (ADR-022 Phase 6).
+	const data = $derived(
+		buildPanelData($panelStore.data, { paneId, sessionUuid }),
+	);
+	const loading = $derived($panelStore.fetching);
+	const pane = $derived(data?.pane ?? null);
+	const session = $derived(data?.session ?? null);
+	const conversation = $derived(data?.conversation ?? null);
+	const worktree = $derived(data?.worktree ?? null);
+
+	// Two-pass fetch: resolve by paneId; if the conversation resolves without a
+	// live pane, a second pass adds its cwd so the daemon can find the pane by
+	// cwd+command (ADR-022 Phase 6).
 	//
-	// `pane` and `conversation` are $derived off THIS panel's store, and
-	// `buildPanelData` allocates a fresh `conversation` object on every
-	// projection — so naively reading them here and calling
-	// `panelStore.fetch()` forms a write→read cycle: each fetch churns the
-	// store → re-derives pane/conversation → re-runs this effect → fetches
-	// again, pegging the renderer at 100% CPU the moment a session opens.
-	// Break the loop by (a) tracking the value-stable inputs `paneResolved`
-	// / `convCwd` rather than the churny object refs, (b) latching the cwd
-	// so the second pass widens the query once and never oscillates back to
-	// null, (c) keying each fetch on its actual query variables so an unchanged
-	// fetch is a no-op, and (d) resetting the latch when the row identity
-	// changes so it can't leak across an in-place tab repoint.
+	// The load-bearing rule: `pane`/`conversation` are $derived off THIS panel's
+	// store and `buildPanelData` allocates a fresh `conversation` object every
+	// projection, so reading those object refs while calling `panelStore.fetch()`
+	// is a write→read cycle — each fetch re-derives fresh refs → re-runs this
+	// effect → fetches again, pegging the renderer at 100% CPU. (a) is what
+	// TERMINATES the loop; (b)-(d) are independent concerns:
+	//   (a) track value-stable scalars (paneResolved/convCwd), NOT the churny
+	//       object refs — Svelte re-runs the effect only when a tracked value
+	//       actually changes, so a boolean/string that recomputes equal is a
+	//       no-op (an object ref never is). This alone breaks the loop.
+	//   (b) latch the cwd so the second pass widens the query once and never
+	//       oscillates back to null (two-pass semantics).
+	//   (c) key each fetch on its variables so an unchanged fetch is a no-op
+	//       (saves redundant round-trips on the transition runs).
+	//   (d) reset the latch on row-identity change — the active tab is repointed
+	//       IN PLACE (store.openSession reuses the same tab.id, so this instance,
+	//       keyed by tab.id in PanesArea, is reused across a switch), so a cwd
+	//       latched for the previous session must not leak into the next.
+	const paneResolved = $derived(!!pane);
+	const convCwd = $derived(conversation?.cwd ?? null);
 	let latchedCwd: string | null = null;
 	let lastFetchKey: string | null = null;
 	let lastIdentity: string | null = null;
 	$effect(() => {
-		// The active tab can be repointed IN PLACE (store.openSession reuses the
-		// same tab.id, swapping paneId/sessionUuid), so this component instance —
-		// keyed by tab.id in PanesArea — is reused across a session switch. Reset
-		// the latch on identity change so a cwd latched for the previous session
-		// can't leak into the next one's query.
 		const identity = `${paneId ?? ""}|${sessionUuid ?? ""}`;
 		if (identity !== lastIdentity) {
 			lastIdentity = identity;
@@ -104,23 +116,6 @@
 		lastFetchKey = key;
 		panelStore.fetch({ variables: { paneIds, cwd } });
 	});
-
-	const data = $derived(
-		buildPanelData($panelStore.data, { paneId, sessionUuid }),
-	);
-	const loading = $derived($panelStore.fetching);
-	const pane = $derived(data?.pane ?? null);
-	const session = $derived(data?.session ?? null);
-	const conversation = $derived(data?.conversation ?? null);
-	const worktree = $derived(data?.worktree ?? null);
-
-	// Value-stable inputs for the two-pass fetch effect above. Deriving the
-	// boolean/string (not the churny pane/conversation object refs, which
-	// `buildPanelData` re-allocates every projection) means the fetch effect
-	// only re-runs when the fetch decision genuinely changes — not on every
-	// store update. This is what keeps the effect from spinning.
-	const paneResolved = $derived(!!pane);
-	const convCwd = $derived(conversation?.cwd ?? null);
 
 	/**
 	 * The pane id we trust for chat sends. Prefer the daemon-resolved
