@@ -65,14 +65,6 @@
 	// filter narrows the daemon's pane snapshot to this row.
 	const panelStore = createPanelStore();
 
-	// Two-pass fetch: first pass resolves by paneId (if known). When the
-	// conversation resolves but no pane attached, the cwd triggers a
-	// second pass via the daemon's cwd+command filter (ADR-022 Phase 6).
-	$effect(() => {
-		const cwd = !pane && conversation?.cwd ? conversation.cwd : null;
-		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null, cwd } });
-	});
-
 	const data = $derived(
 		buildPanelData($panelStore.data, { paneId, sessionUuid }),
 	);
@@ -81,6 +73,49 @@
 	const session = $derived(data?.session ?? null);
 	const conversation = $derived(data?.conversation ?? null);
 	const worktree = $derived(data?.worktree ?? null);
+
+	// Two-pass fetch: resolve by paneId; if the conversation resolves without a
+	// live pane, a second pass adds its cwd so the daemon can find the pane by
+	// cwd+command (ADR-022 Phase 6).
+	//
+	// The load-bearing rule: `pane`/`conversation` are $derived off THIS panel's
+	// store and `buildPanelData` allocates a fresh `conversation` object every
+	// projection, so reading those object refs while calling `panelStore.fetch()`
+	// is a write→read cycle — each fetch re-derives fresh refs → re-runs this
+	// effect → fetches again, pegging the renderer at 100% CPU. (a) is what
+	// TERMINATES the loop; (b)-(d) are independent concerns:
+	//   (a) track value-stable scalars (paneResolved/convCwd), NOT the churny
+	//       object refs — Svelte re-runs the effect only when a tracked value
+	//       actually changes, so a boolean/string that recomputes equal is a
+	//       no-op (an object ref never is). This alone breaks the loop.
+	//   (b) latch the cwd so the second pass widens the query once and never
+	//       oscillates back to null (two-pass semantics).
+	//   (c) key each fetch on its variables so an unchanged fetch is a no-op
+	//       (saves redundant round-trips on the transition runs).
+	//   (d) reset the latch on row-identity change — the active tab is repointed
+	//       IN PLACE (store.openSession reuses the same tab.id, so this instance,
+	//       keyed by tab.id in PanesArea, is reused across a switch), so a cwd
+	//       latched for the previous session must not leak into the next.
+	const paneResolved = $derived(!!pane);
+	const convCwd = $derived(conversation?.cwd ?? null);
+	let latchedCwd: string | null = null;
+	let lastFetchKey: string | null = null;
+	let lastIdentity: string | null = null;
+	$effect(() => {
+		const identity = `${paneId ?? ""}|${sessionUuid ?? ""}`;
+		if (identity !== lastIdentity) {
+			lastIdentity = identity;
+			latchedCwd = null;
+			lastFetchKey = null;
+		}
+		if (!paneResolved && convCwd) latchedCwd = convCwd;
+		const paneIds = paneId ? [paneId] : null;
+		const cwd = latchedCwd;
+		const key = `${paneIds?.join(",") ?? ""}|${cwd ?? ""}`;
+		if (key === lastFetchKey) return;
+		lastFetchKey = key;
+		panelStore.fetch({ variables: { paneIds, cwd } });
+	});
 
 	/**
 	 * The pane id we trust for chat sends. Prefer the daemon-resolved
