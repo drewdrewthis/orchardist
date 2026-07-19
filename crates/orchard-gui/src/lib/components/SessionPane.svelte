@@ -68,9 +68,28 @@
 	// Two-pass fetch: first pass resolves by paneId (if known). When the
 	// conversation resolves but no pane attached, the cwd triggers a
 	// second pass via the daemon's cwd+command filter (ADR-022 Phase 6).
+	//
+	// `pane` and `conversation` are $derived off THIS panel's store, and
+	// `buildPanelData` allocates a fresh `conversation` object on every
+	// projection — so naively reading them here and calling
+	// `panelStore.fetch()` forms a write→read cycle: each fetch churns the
+	// store → re-derives pane/conversation → re-runs this effect → fetches
+	// again, pegging the renderer at 100% CPU the moment a session opens.
+	// Break the loop by (a) tracking the value-stable inputs `paneResolved`
+	// / `convCwd` rather than the churny object refs, (b) latching the cwd
+	// so the second pass widens the query once and never oscillates back to
+	// null, and (c) keying each fetch on its actual query variables so an
+	// unchanged fetch is a no-op.
+	let latchedCwd: string | null = null;
+	let lastFetchKey: string | null = null;
 	$effect(() => {
-		const cwd = !pane && conversation?.cwd ? conversation.cwd : null;
-		panelStore.fetch({ variables: { paneIds: paneId ? [paneId] : null, cwd } });
+		if (!paneResolved && convCwd) latchedCwd = convCwd;
+		const paneIds = paneId ? [paneId] : null;
+		const cwd = latchedCwd;
+		const key = `${paneIds?.join(",") ?? ""}|${cwd ?? ""}`;
+		if (key === lastFetchKey) return;
+		lastFetchKey = key;
+		panelStore.fetch({ variables: { paneIds, cwd } });
 	});
 
 	const data = $derived(
@@ -81,6 +100,14 @@
 	const session = $derived(data?.session ?? null);
 	const conversation = $derived(data?.conversation ?? null);
 	const worktree = $derived(data?.worktree ?? null);
+
+	// Value-stable inputs for the two-pass fetch effect above. Deriving the
+	// boolean/string (not the churny pane/conversation object refs, which
+	// `buildPanelData` re-allocates every projection) means the fetch effect
+	// only re-runs when the fetch decision genuinely changes — not on every
+	// store update. This is what keeps the effect from spinning.
+	const paneResolved = $derived(!!pane);
+	const convCwd = $derived(conversation?.cwd ?? null);
 
 	/**
 	 * The pane id we trust for chat sends. Prefer the daemon-resolved
