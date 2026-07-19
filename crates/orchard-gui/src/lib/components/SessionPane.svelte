@@ -78,11 +78,24 @@
 	// Break the loop by (a) tracking the value-stable inputs `paneResolved`
 	// / `convCwd` rather than the churny object refs, (b) latching the cwd
 	// so the second pass widens the query once and never oscillates back to
-	// null, and (c) keying each fetch on its actual query variables so an
-	// unchanged fetch is a no-op.
+	// null, (c) keying each fetch on its actual query variables so an unchanged
+	// fetch is a no-op, and (d) resetting the latch when the row identity
+	// changes so it can't leak across an in-place tab repoint.
 	let latchedCwd: string | null = null;
 	let lastFetchKey: string | null = null;
+	let lastIdentity: string | null = null;
 	$effect(() => {
+		// The active tab can be repointed IN PLACE (store.openSession reuses the
+		// same tab.id, swapping paneId/sessionUuid), so this component instance —
+		// keyed by tab.id in PanesArea — is reused across a session switch. Reset
+		// the latch on identity change so a cwd latched for the previous session
+		// can't leak into the next one's query.
+		const identity = `${paneId ?? ""}|${sessionUuid ?? ""}`;
+		if (identity !== lastIdentity) {
+			lastIdentity = identity;
+			latchedCwd = null;
+			lastFetchKey = null;
+		}
 		if (!paneResolved && convCwd) latchedCwd = convCwd;
 		const paneIds = paneId ? [paneId] : null;
 		const cwd = latchedCwd;
