@@ -109,6 +109,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return tickAfter(animEvery, animTickMsg{})
 	case fastTickMsg:
 		return tea.Batch(fetchFast, fetchHooksWith(m.paneToSess))
+	case fastRefetchMsg:
+		// The supergraph push lane carries discrete events, not a session
+		// snapshot to apply (its tmuxEvents payload is a {type,key} envelope),
+		// so any event means "something changed, re-read the fast lane" (#844).
+		// A live event is also proof the push lane recovered, so clear the
+		// degraded marker the last drop set.
+		m.subErr = nil
+		return fetchFast
 	case slowTickMsg:
 		return fetchSlow
 	case fastDataMsg:
@@ -218,6 +226,16 @@ func main() {
 	// --version before anything else: it must answer without a tmux server,
 	// a daemon, or a terminal (version.go)
 	handleVersionFlag()
+	// Backend selection (#844) is resolved and validated BEFORE any tmux or
+	// network I/O: an unknown backend or a malformed URL override exits here,
+	// not after a dial or a tea.NewProgram. applyBackend wires the chosen
+	// endpoints and, for supergraph, its adapter fetchers/stream.
+	cfg, err := resolveEndpoints(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	applyBackend(cfg)
 	// one binary, two programs: `orchard-sidebar launch` is the modal the +
 	// button opens in a tmux popup (see openLaunchPopup)
 	if len(os.Args) > 1 && os.Args[1] == "launch" {

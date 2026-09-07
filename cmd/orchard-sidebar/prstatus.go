@@ -16,6 +16,13 @@ func prStatus(p prInfo) string {
 	case "CLOSED":
 		return "closed"
 	}
+	// State is known on every backend, but a backend that does not expose the
+	// verdict leaves (supergraph, #844) cannot say more than "open" — rendering
+	// "unresolved" here would fabricate a checks/review verdict from zero
+	// values. "—" instead: honestly unknown, distinct from a real verdict.
+	if p.unknown {
+		return emDash
+	}
 	if p.Draft {
 		return "draft"
 	}

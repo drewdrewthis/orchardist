@@ -90,14 +90,24 @@ type prInfo struct {
 	ReviewDecision   *string `json:"reviewDecision"`
 	ChecksRollup     string  `json:"statusCheckRollup"`
 	MergeStateStatus string  `json:"mergeStateStatus"`
+	// unknown marks a PR whose verdict fields (draft, reviewDecision,
+	// statusCheckRollup, mergeStateStatus) the backend does not expose, so
+	// prStatus renders "—" instead of fabricating a verdict from zero values.
+	// Set only by the supergraph adapter; the daemon leaves it false and its
+	// behavior is unchanged (#844). TODO(supergraph#26): drop once supergraph's
+	// PullRequest carries draft/reviewDecision/statusCheckRollup/mergeStateStatus.
+	unknown bool
 }
 
 type wtInfo struct {
-	Branch      string `json:"branch"`
-	Path        string `json:"path"`
-	Ahead       *int   `json:"ahead"`
-	Behind      *int   `json:"behind"`
-	TmuxSession *struct {
+	Branch string `json:"branch"`
+	Path   string `json:"path"`
+	Ahead  *int   `json:"ahead"`
+	Behind *int   `json:"behind"`
+	// DriftUnknown propagates the supergraph "no ahead/behind source" fact
+	// through the slow-lane join into row.driftUnknown (#844).
+	DriftUnknown bool `json:"-"`
+	TmuxSession  *struct {
 		Name string `json:"name"`
 	} `json:"tmuxSession"`
 	PR    *prInfo `json:"pr"`
@@ -164,7 +174,14 @@ func post(query string, timeout time.Duration, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
-func fetchFast() tea.Msg {
+// fetchFast and fetchSlow are package vars so applyBackend can swap in the
+// supergraph adapter's fetchers at startup (#844). Unset, they are the daemon
+// implementations — the default path is byte-identical to before.
+var fetchFast tea.Cmd = fetchFastDaemon
+
+var fetchSlow tea.Cmd = fetchSlowDaemon
+
+func fetchFastDaemon() tea.Msg {
 	var out fastResp
 	if err := post(fastQuery, 4*time.Second, &out); err != nil {
 		return fastDataMsg{err: err}
@@ -206,7 +223,7 @@ func fetchFast() tea.Msg {
 	return fastDataMsg{rows: rows, paneToSess: p2s}
 }
 
-func fetchSlow() tea.Msg {
+func fetchSlowDaemon() tea.Msg {
 	var out slowResp
 	if err := post(slowQuery, 90*time.Second, &out); err != nil {
 		return slowDataMsg{err: err}

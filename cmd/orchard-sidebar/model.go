@@ -22,14 +22,19 @@ type row struct {
 	lastAttached time.Time
 	created      time.Time
 	// slow-lane join, may be zero-valued until the first slow fetch lands
-	branch     string
-	repo       string
-	ahead      *int
-	behind     *int
-	pr         *prInfo
-	model      string
-	issueNum   int
-	issueTitle string
+	branch string
+	repo   string
+	ahead  *int
+	behind *int
+	// driftUnknown means the backend cannot report ahead/behind at all
+	// (supergraph, #844); branchLine renders "—" rather than omitting them the
+	// way a known-zero drift is omitted. TODO(supergraph#29): drop once
+	// supergraph's TmuxSession/Worktree carries ahead/behind.
+	driftUnknown bool
+	pr           *prInfo
+	model        string
+	issueNum     int
+	issueTitle   string
 	// pinRank is the row's 1-based place in the pinned block, 0 when unpinned.
 	// Stamped from model.pinned in rebuild (applyPins) and read by sortRows so
 	// the pinned block, M-1..9-first counting and "pins never reorder on
