@@ -108,6 +108,8 @@ for tarball in "$@"; do
       echo "  --revision $bin: ${out:-<none>}"
       if [ "$out" != "$rev" ]; then
         echo "  FAIL $bin: --revision $out differs from embedded marker $rev" >&2; fail=1
+      else
+        echo "  OK $bin: static marker == --revision"
       fi
     fi
   done
