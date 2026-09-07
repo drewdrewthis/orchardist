@@ -9,9 +9,13 @@
 package daemon
 
 import (
+	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/drewdrewthis/orchardist/internal/orchpaths"
 )
 
 // daemonLogFileName is the log file's name inside the state dir.
@@ -44,4 +48,25 @@ func daemonLogWriter(stderr io.Writer, stateDir string, warn func(msg string, ar
 		return stderr, func() {}
 	}
 	return io.MultiWriter(stderr, w), closeFn
+}
+
+// setupDaemonLogger opens daemon.log alongside stderr so the daemon's log
+// trail survives regardless of launcher (launchd redirects stderr to a file
+// itself; systemd/manual starts do not) — issue #768, and builds the leveled
+// logger runStart installs as slog's default. The returned close func must be
+// deferred by the caller to flush/close the file sink.
+func setupDaemonLogger(level slog.Level) (*slog.Logger, func(), error) {
+	stateDir, err := orchpaths.StateDir()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve state dir: %w", err)
+	}
+	// warn writes unconditionally to stderr, ignoring level, so the
+	// degraded-sink notice reaches an operator watching stderr even at
+	// --log-level=error and even though the leveled logger it warns about
+	// doesn't exist yet.
+	warn := func(msg string, args ...any) {
+		fmt.Fprintf(os.Stderr, "orchard: %s\n", msg)
+	}
+	w, closeFn := daemonLogWriter(os.Stderr, stateDir, warn)
+	return newDaemonLogger(w, level), closeFn, nil
 }

@@ -214,9 +214,10 @@ func (p *Provider) enterRateLimitCooldownUntil(site string, until time.Time, rea
 // the past (a skewed/stale header must not arm a zero/negative cooldown).
 func (p *Provider) cooldownFromRateLimitErr(site string, err error) {
 	var rl *ErrRateLimitedT
-	until := p.clock().Add(rateLimitCooldown)
+	now := p.clock()
+	until := now.Add(rateLimitCooldown)
 	if errors.As(err, &rl) && rl.ResetAt > 0 {
-		if resetAt := time.Unix(rl.ResetAt, 0); resetAt.After(p.clock()) {
+		if resetAt := time.Unix(rl.ResetAt, 0); resetAt.After(now) {
 			until = resetAt
 		}
 	}
