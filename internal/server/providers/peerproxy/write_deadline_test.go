@@ -50,12 +50,19 @@ type stallableConn struct {
 	freezeRead atomic.Bool
 	readHold   chan struct{}
 	relOnce    sync.Once
+
+	// readParked closes the moment Read actually blocks on readHold, so a
+	// test can wait for the readLoop to be parked instead of guessing with a
+	// fixed sleep.
+	readParked chan struct{}
+	parkedOnce sync.Once
 }
 
 // Read parks on readHold while frozen (released by releaseReads), so the
 // caller's read does not observe the conn closing until the test allows it.
 func (s *stallableConn) Read(b []byte) (int, error) {
 	if s.freezeRead.Load() {
+		s.parkedOnce.Do(func() { close(s.readParked) })
 		<-s.readHold
 		return 0, &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
 	}
@@ -136,6 +143,24 @@ func (g *stallGate) releaseReads() {
 	g.mu.Unlock()
 }
 
+// waitParked blocks until every currently-dialled conn's readLoop has
+// actually reached the frozen read (signalled via readParked), replacing a
+// fixed sleep with an explicit wait. Fails the test if any conn does not
+// park within the guard window.
+func (g *stallGate) waitParked(t *testing.T) {
+	t.Helper()
+	g.mu.Lock()
+	conns := append([]*stallableConn(nil), g.conns...)
+	g.mu.Unlock()
+	for _, c := range conns {
+		select {
+		case <-c.readParked:
+		case <-time.After(2 * time.Second):
+			t.Fatal("readLoop did not park on the frozen read in time")
+		}
+	}
+}
+
 // stallPeer is fakePeerWS's write-side sibling: the Client dials through a
 // stallGate so a test can freeze the established connection's send path, and
 // is built with readWait large (so the #755 read deadline cannot mask the
@@ -167,7 +192,7 @@ func stallPeer(t *testing.T, readWait, writeWait time.Duration, script wsScript)
 		if err != nil {
 			return nil, err
 		}
-		sc := &stallableConn{Conn: conn, closed: make(chan struct{}), readHold: make(chan struct{})}
+		sc := &stallableConn{Conn: conn, closed: make(chan struct{}), readHold: make(chan struct{}), readParked: make(chan struct{})}
 		gate.add(sc)
 		return sc, nil
 	}
@@ -330,7 +355,7 @@ func TestHealthyTrafficNotFalselyTimedOut(t *testing.T) {
 		if !ok {
 			return
 		}
-		drainClient(conn) // read the client's pongs — a healthy peer
+		drainClient(conn)        // read the client's pongs — a healthy peer
 		for i := 0; i < 6; i++ { // 600ms span (> writeWait), each 100ms gap (< writeWait)
 			if err := conn.WriteJSON(map[string]any{"type": "ping"}); err != nil {
 				return
@@ -436,7 +461,7 @@ func TestStaleReadLoopErrorDoesNotTearDownRedialedConn(t *testing.T) {
 	// Park conn1's readLoop inside its read so it cannot error yet, then
 	// freeze its send path so the next subscribe-frame write times out.
 	gate.freezeReads()
-	time.Sleep(60 * time.Millisecond) // let conn1's readLoop reach the frozen read
+	gate.waitParked(t) // wait for conn1's readLoop to reach the frozen read
 	gate.stallAll()
 
 	// This Subscribe's frame write times out -> failAll(conn1) #1 closes conn1.

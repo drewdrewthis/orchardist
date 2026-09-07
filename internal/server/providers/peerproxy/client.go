@@ -215,6 +215,13 @@ func (c *Client) Subscribe(ctx context.Context, query string, variables map[stri
 		c.mu.Unlock()
 		return nil, fmt.Errorf("client closed")
 	}
+	// A write-deadline failAll (#759) can nil c.conn between ensureConn
+	// returning and this lock; without this check writeJSON(nil, ...)
+	// below would deref a nil conn.
+	if c.conn == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("connection lost before subscribe")
+	}
 	c.nextSub++
 	id := fmt.Sprintf("sub-%d", c.nextSub)
 	ch := make(chan QueryResult, 8)
@@ -243,12 +250,13 @@ func (c *Client) Subscribe(ctx context.Context, query string, variables map[stri
 		return nil, werr
 	}
 
-	// Tear the subscription down when ctx fires.
+	// Tear the subscription down when ctx fires. Uses the conn this
+	// subscription was registered on (captured above), not a late re-read
+	// of c.conn — a re-read could pick up a redialed conn, and a failure
+	// on that write would then tear down the replacement instead of being
+	// the no-op failAll's conn check expects.
 	go func() {
 		<-ctx.Done()
-		c.mu.Lock()
-		conn := c.conn
-		c.mu.Unlock()
 		if conn != nil {
 			// Without a write deadline this send parks forever while holding
 			// writeMu on a stalled peer, deadlocking every other send (#759).
