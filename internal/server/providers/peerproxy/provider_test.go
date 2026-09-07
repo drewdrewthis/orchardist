@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,6 +169,13 @@ func (w *nameCounter) get(name string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.count[name]
+}
+
+// getTotal returns the current event total across all names.
+func (w *nameCounter) getTotal() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.total
 }
 
 // waitTotal blocks until the total across all names reaches min or within
@@ -442,13 +448,13 @@ func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
 //  1. Construct an empty Provider and Start it.
 //  2. AddPeer 3 baseline peers ("base-0", "base-1", "base-2") all pointing at
 //     a single fake server. Wait for them to begin probing.
-//  3. Capture goroutine count baseline.
-//  4. Spawn 50 goroutines, each with a unique name ("worker-0"…"worker-49"),
+//  3. Spawn 50 goroutines, each with a unique name ("worker-0"…"worker-49"),
 //     each looping 10×: AddPeer → jitter sleep → RemovePeer.
-//  5. Wait for all 50 goroutines to finish.
-//  6. Assert Peers() returns exactly the 3 baseline peers.
-//  7. Assert baseline peers are still probing (pingCount grows).
-//  8. Assert goroutine count returns to within +5 of the baseline.
+//  4. Wait for all 50 goroutines to finish.
+//  5. Assert Peers() returns exactly the 3 baseline peers.
+//  6. Assert baseline peers are still probing (pingCount grows).
+//  7. Assert every spawned runPeer goroutine exited (exit count ==
+//     spawn count, via the peer-exit hook) — no goroutine leak.
 //
 // Run with -race to surface any torn reads or concurrent map access.
 func TestAddRemove_ConcurrentAccess(t *testing.T) {
@@ -485,10 +491,7 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 		probe.wait(t, name, 1, 5*time.Second, "baseline probe")
 	}
 
-	// 3. Capture goroutine count baseline (after Start + 3 baseline peers up).
-	goroutinesBefore := runtime.NumGoroutine()
-
-	// 4. Spawn 50 goroutines. Each owns a unique peer name and loops 10×:
+	// 3. Spawn 50 goroutines. Each owns a unique peer name and loops 10×:
 	//    AddPeer → jitter sleep → RemovePeer.
 	const numWorkers = 50
 	const iterations = 10
@@ -525,10 +528,10 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 		}(name)
 	}
 
-	// 5. Wait for all workers to finish.
+	// 4. Wait for all workers to finish.
 	wg.Wait()
 
-	// 6. After the storm, Peers() must contain exactly the 3 baseline peers.
+	// 5. After the storm, Peers() must contain exactly the 3 baseline peers.
 	peers := p.Peers()
 	if len(peers) != len(baseNames) {
 		t.Fatalf("Peers() = %v (len %d), want exactly %v (len %d)",
@@ -544,7 +547,7 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 		}
 	}
 
-	// 7. No baseline goroutine was cancelled by the storm — its monotonic
+	// 6. No baseline goroutine was cancelled by the storm — its monotonic
 	// pingCount cannot have decreased. (Baseline peers are never removed, so
 	// there is nothing to wait for; the assertion stands on its own.)
 	countBefore := fake.pingCount.Load()
@@ -554,24 +557,18 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 			countBefore, countAfter)
 	}
 
-	// 8. Block until every worker's runPeer goroutine has actually exited —
-	// exit-hook driven, not a wall-clock drain window — then assert the live
-	// goroutine count returned to within tolerance of the baseline.
+	// 8. Block until every worker's runPeer goroutine has actually exited.
+	// This is exit-hook driven, not a wall-clock drain window: each AddPeer
+	// success spawns exactly one runPeer goroutine, so the deterministic
+	// proof that no goroutine leaked is exit count == spawn count. A leaked
+	// goroutine would leave the total below wantExits and trip the deadline.
+	// (runtime.NumGoroutine() is unusable here: httptest servers, ws clients
+	// and the -race runtime share the process, so the live count is not a
+	// falsifiable signal for this test's goroutines.)
 	wantExits := int(addOK.Load())
 	exit.waitTotal(t, wantExits, 15*time.Second, "worker exit")
-
-	// Every worker goroutine has run its exit defer; yield to the scheduler
-	// (no wall-clock sleep) until the runtime reaps them and the live count
-	// settles back to within tolerance of the baseline.
-	const tolerance = 5
-	goroutinesAfter := runtime.NumGoroutine()
-	for i := 0; i < 1000 && goroutinesAfter > goroutinesBefore+tolerance; i++ {
-		runtime.Gosched()
-		goroutinesAfter = runtime.NumGoroutine()
-	}
-	if goroutinesAfter > goroutinesBefore+tolerance {
-		t.Fatalf("goroutine count did not drain: before=%d after=%d (delta %d > tolerance %d)",
-			goroutinesBefore, goroutinesAfter, goroutinesAfter-goroutinesBefore, tolerance)
+	if got := exit.getTotal(); got != wantExits {
+		t.Fatalf("worker exit total = %d, want %d (spawn count) — goroutine leak", got, wantExits)
 	}
 }
 

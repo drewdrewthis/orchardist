@@ -162,18 +162,25 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	return newLoaders(providers, 0)
 }
 
-// withCap appends a WithBatchCapacity option when capacity > 0, forcing a
-// loader to dispatch its batch the instant `capacity` keys are queued —
-// independent of the wait timer. Production passes capacity 0 (unbounded),
-// so the returned slice is byte-for-byte the production option set; only
-// NewLoadersForTest (export_test.go) passes a positive capacity, letting a
-// batch test dispatch deterministically instead of racing the 1ms window
-// (issue #818).
+// withCap makes capacity the sole batch-dispatch trigger when capacity > 0.
+// It appends WithBatchCapacity (dispatch the instant `capacity` keys are
+// queued) AND WithWait(time.Hour) — a wait window that cannot elapse during
+// a test — so the 1ms timer never fires a partial batch before the Nth key.
+// dataloader/v7 options are applied in order and later wins (each just sets
+// a struct field: see NewBatchedLoader in dataloader.go), so this WithWait
+// overrides the 1ms WithWait already in `opts`. Production passes capacity 0
+// (unbounded), so the returned slice is byte-for-byte the production option
+// set; only NewLoadersForTest (export_test.go) passes a positive capacity,
+// letting a batch test dispatch deterministically on the capacity trigger
+// alone instead of racing the wall-clock window (issue #818).
 func withCap[K comparable, V any](opts []dataloader.Option[K, V], capacity int) []dataloader.Option[K, V] {
 	if capacity <= 0 {
 		return opts
 	}
-	return append(opts, dataloader.WithBatchCapacity[K, V](capacity))
+	return append(opts,
+		dataloader.WithBatchCapacity[K, V](capacity),
+		dataloader.WithWait[K, V](time.Hour),
+	)
 }
 
 // newLoaders builds the loader bundle. batchCapacity is 0 in production
