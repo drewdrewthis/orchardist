@@ -81,6 +81,12 @@ type Client struct {
 	// the read loop.
 	readWait time.Duration
 
+	// writeWait bounds how long a single send may park before it fails —
+	// see defaultWriteWait in keepalive.go. Armed fresh per writeJSON call.
+	// Immutable after construction; tests shrink it before the first
+	// Subscribe, mirroring readWait.
+	writeWait time.Duration
+
 	mu       sync.Mutex
 	conn     *websocket.Conn
 	connOnce *sync.Once
@@ -131,6 +137,7 @@ func newClient(address string, tls bool, httpc *http.Client, dialer *websocket.D
 		dialer:     &d,
 		now:        clock,
 		readWait:   defaultReadWait,
+		writeWait:  defaultWriteWait,
 		connOnce:   &sync.Once{},
 		subs:       map[string]chan QueryResult{},
 	}
@@ -208,6 +215,13 @@ func (c *Client) Subscribe(ctx context.Context, query string, variables map[stri
 		c.mu.Unlock()
 		return nil, fmt.Errorf("client closed")
 	}
+	// A write-deadline failAll (#759) can nil c.conn between ensureConn
+	// returning and this lock; without this check writeJSON(nil, ...)
+	// below would deref a nil conn.
+	if c.conn == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("connection lost before subscribe")
+	}
 	c.nextSub++
 	id := fmt.Sprintf("sub-%d", c.nextSub)
 	ch := make(chan QueryResult, 8)
@@ -224,18 +238,33 @@ func (c *Client) Subscribe(ctx context.Context, query string, variables map[stri
 		},
 	}
 	if err := c.writeJSON(conn, subscribeMsg); err != nil {
+		// A post-handshake write error means the connection is dead (e.g. a
+		// stalled peer tripped the write deadline). failAll errors every open
+		// stream and resets connOnce so the next Subscribe redials instead of
+		// reusing this dead conn — writeJSON has already released writeMu.
+		werr := fmt.Errorf("write subscribe: %w", err)
+		c.failAll(conn, werr)
+		// failAll no-ops when a redial already superseded conn; drop this
+		// call's own entry either way so it cannot be orphaned in c.subs.
 		c.removeSub(id)
-		return nil, fmt.Errorf("write subscribe: %w", err)
+		return nil, werr
 	}
 
-	// Tear the subscription down when ctx fires.
+	// Tear the subscription down when ctx fires. Uses the conn this
+	// subscription was registered on (captured above), not a late re-read
+	// of c.conn — a re-read could pick up a redialed conn, and a failure
+	// on that write would then tear down the replacement instead of being
+	// the no-op failAll's conn check expects.
 	go func() {
 		<-ctx.Done()
-		c.mu.Lock()
-		conn := c.conn
-		c.mu.Unlock()
 		if conn != nil {
-			_ = c.writeJSON(conn, map[string]any{"id": id, "type": "complete"})
+			// Without a write deadline this send parks forever while holding
+			// writeMu on a stalled peer, deadlocking every other send (#759).
+			// The deadline bounds it; a timeout tears the conn down so the
+			// next Subscribe redials.
+			if err := c.writeJSON(conn, map[string]any{"id": id, "type": "complete"}); err != nil {
+				c.failAll(conn, fmt.Errorf("write complete: %w", err))
+			}
 		}
 		c.removeSub(id)
 	}()
@@ -327,7 +356,7 @@ func (c *Client) readLoop(conn *websocket.Conn) {
 		// keepalive — re-arms it; only total silence trips it.
 		rearm(conn, c.readWait)
 		if err := conn.ReadJSON(&msg); err != nil {
-			c.failAll(fmt.Errorf("ws read: %w", err))
+			c.failAll(conn, fmt.Errorf("ws read: %w", err))
 			return
 		}
 		switch msg.Type {
@@ -346,7 +375,13 @@ func (c *Client) readLoop(conn *websocket.Conn) {
 		case "complete":
 			c.removeSub(msg.ID)
 		case "ping":
-			_ = c.writeJSON(conn, map[string]any{"type": "pong"})
+			// A parked pong reply would wedge the read loop (and writeMu) on
+			// a peer that stopped reading; the write deadline fails it
+			// instead, and failAll tears the conn down into the redial path.
+			if err := c.writeJSON(conn, map[string]any{"type": "pong"}); err != nil {
+				c.failAll(conn, fmt.Errorf("write pong: %w", err))
+				return
+			}
 		case "pong":
 			// no-op
 		default:
@@ -402,20 +437,30 @@ func (c *Client) failOpen(conn *websocket.Conn, err error) {
 // failAll closes every subscription channel after pushing one final
 // error frame. Called when the websocket itself dies — every active
 // stream needs to know.
-func (c *Client) failAll(err error) {
+//
+// conn-scoped: the caller passes the connection it wrote or read on, and
+// failAll no-ops unless that is still the client's current connection. A
+// single dead conn produces two failAll calls racing a redial — the write
+// timeout (Subscribe / teardown / pong) closes the conn, then the old
+// readLoop's ReadJSON errors on that closed conn. Without the scope check the
+// second call would close the channels and drop the connection of whatever
+// Subscribe redialed in between, killing a healthy new stream.
+func (c *Client) failAll(conn *websocket.Conn, err error) {
 	c.mu.Lock()
+	if c.conn != conn {
+		// Already torn down, or superseded by a redial — not ours to touch.
+		c.mu.Unlock()
+		return
+	}
 	subs := c.subs
 	c.subs = map[string]chan QueryResult{}
-	conn := c.conn
 	c.conn = nil
 	// Reset the once so the next Subscribe() reopens.
 	c.connOnce = &sync.Once{}
 	c.connErr = nil
 	c.mu.Unlock()
 
-	if conn != nil {
-		_ = conn.Close()
-	}
+	_ = conn.Close()
 	for _, ch := range subs {
 		select {
 		case ch <- QueryResult{Errors: []GraphQLError{{Message: err.Error()}}}:
@@ -446,6 +491,11 @@ func (c *Client) failOne(id string, err error) {
 func (c *Client) writeJSON(conn *websocket.Conn, v any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// Armed fresh per call so a stalled receive window fails the send with
+	// i/o timeout instead of parking writeMu forever (#759). Callers route a
+	// post-handshake write error into failAll. Kept tiny and lock-local: the
+	// deadline is the only thing writeMu needs to guard besides the write.
+	armWrite(conn, c.writeWait)
 	return conn.WriteJSON(v)
 }
 

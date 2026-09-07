@@ -14,10 +14,18 @@
 //	              graphql-transport-ws subprotocol for subscriptions
 //	              and POSTs JSON for one-shot queries. HTTPS/WSS
 //	              enabled per-peer via `tls: true` in config.
-//	keepalive.go — read-deadline policy for the peer websocket: the
-//	              silence budget and the control-frame handlers that
-//	              re-arm it, so a half-open socket errors out into the
-//	              reconnect path instead of parking a read forever.
+//	keepalive.go — read- and write-deadline policy for the peer
+//	              websocket. Reads carry a silence budget (defaultReadWait,
+//	              30s) with control-frame handlers that re-arm it, so a
+//	              half-open socket errors out into the reconnect path
+//	              instead of parking a read forever. Writes carry a send
+//	              budget (defaultWriteWait, 10s) armed fresh per send, so a
+//	              peer whose receive window has filled cannot park a write
+//	              forever; a write timeout feeds failAll — the same
+//	              teardown-and-redial path as a read timeout — so the
+//	              subscription errors and the next Subscribe redials rather
+//	              than hanging (worst case: the ctx-teardown `complete`
+//	              write parking while it holds writeMu).
 //	config.go   — loads peer addresses from
 //	              ~/.orchard/config.json. Read-only.
 //
