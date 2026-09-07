@@ -3,6 +3,8 @@ package gh
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 )
 
 // ErrGHNotInstalled is returned when the `gh` CLI cannot be found on
@@ -34,6 +36,23 @@ func (e *ErrRateLimitedT) Error() string {
 func IsRateLimited(err error) bool {
 	var t *ErrRateLimitedT
 	return errors.As(err, &t)
+}
+
+// parseRateLimitReset reads X-RateLimit-Reset off a response header,
+// returning 0 when it is absent or non-numeric — the shared "0 if unknown"
+// contract ErrRateLimitedT.ResetAt documents. Extracted (#768) out of the
+// duplicated parse in client.go and graphql.go so both header-403 paths
+// agree on one implementation.
+func parseRateLimitReset(h http.Header) int64 {
+	rs := h.Get("X-RateLimit-Reset")
+	if rs == "" {
+		return 0
+	}
+	v, err := strconv.ParseInt(rs, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // httpError is the typed wrapper for non-2xx GitHub API responses we

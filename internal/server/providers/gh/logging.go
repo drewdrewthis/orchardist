@@ -20,6 +20,7 @@
 package gh
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -177,15 +178,25 @@ func (p *Provider) logCacheMiss(kind, repo string) {
 	)
 }
 
-// enterRateLimitCooldown arms the rate-limit cooldown and says so at Warn.
+// enterRateLimitCooldown arms the rate-limit cooldown for the fixed
+// rateLimitCooldown window and says so at Warn. Used by the paths that have
+// no GitHub-supplied reset epoch to aim for (the GraphQL error-body string
+// match, and as cooldownFromRateLimitErr's fallback).
 //
 // The cooldown suppresses every subsequent enrichment call for its duration,
 // so the daemon looks stalled to anyone reading the logs at Info. site names
 // the caller (EnrichPullRequest / BatchEnrichPullRequests) because the two
 // paths back off independently.
 func (p *Provider) enterRateLimitCooldown(site, reason string) {
+	p.enterRateLimitCooldownUntil(site, p.clock().Add(rateLimitCooldown), reason)
+}
+
+// enterRateLimitCooldownUntil arms the rate-limit cooldown until an
+// explicit deadline and says so at Warn (issue #768: lets a header-403's
+// X-RateLimit-Reset epoch drive the cooldown instead of always guessing the
+// fixed rateLimitCooldown window).
+func (p *Provider) enterRateLimitCooldownUntil(site string, until time.Time, reason string) {
 	p.prMu.Lock()
-	until := p.clock().Add(rateLimitCooldown)
 	p.rateLimitedUntil = until
 	p.prMu.Unlock()
 
@@ -194,6 +205,22 @@ func (p *Provider) enterRateLimitCooldown(site, reason string) {
 		slog.String("until", until.Format(time.RFC3339)),
 		slog.String("reason", reason),
 	)
+}
+
+// cooldownFromRateLimitErr arms the cooldown from a GitHub error, preferring
+// the reset epoch carried by a typed *ErrRateLimitedT over the fixed
+// rateLimitCooldown window. Falls back to the fixed window when err isn't a
+// *ErrRateLimitedT, when ResetAt is unset (0), or when ResetAt is already in
+// the past (a skewed/stale header must not arm a zero/negative cooldown).
+func (p *Provider) cooldownFromRateLimitErr(site string, err error) {
+	var rl *ErrRateLimitedT
+	until := p.clock().Add(rateLimitCooldown)
+	if errors.As(err, &rl) && rl.ResetAt > 0 {
+		if resetAt := time.Unix(rl.ResetAt, 0); resetAt.After(p.clock()) {
+			until = resetAt
+		}
+	}
+	p.enterRateLimitCooldownUntil(site, until, err.Error())
 }
 
 // clearRateLimitCooldown drops the cooldown after a clean response.

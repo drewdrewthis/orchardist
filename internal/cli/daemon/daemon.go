@@ -139,10 +139,24 @@ func runStart(parentCtx context.Context, addr string, version string, logLevel s
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Open daemon.log alongside stderr so the daemon's log trail survives
+	// regardless of launcher (launchd redirects stderr to a file itself;
+	// systemd/manual starts do not) — issue #768. A warn func backed by a
+	// stderr-only logger at the resolved level makes the "falling back to
+	// stderr only" line itself reach an operator watching stderr, even
+	// though the leveled logger it will feed doesn't exist yet.
+	stateDir, err := orchpaths.StateDir()
+	if err != nil {
+		return fmt.Errorf("resolve state dir: %w", err)
+	}
+	warnLogger := newDaemonLogger(os.Stderr, level)
+	w, closeLog := daemonLogWriter(os.Stderr, stateDir, warnLogger.Warn)
+	defer closeLog()
+
 	// Install the leveled logger as slog's default too: provider code that
 	// reaches for slog.Default() must see the same level, otherwise
 	// --log-level would only reach the call sites handed this logger.
-	logger := newDaemonLogger(os.Stderr, level)
+	logger := newDaemonLogger(w, level)
 	slog.SetDefault(logger)
 
 	cfgPath, err := orchpaths.ConfigFile()
