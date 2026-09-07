@@ -39,6 +39,7 @@ field() { jq -r ".$1 // \"null\"" "$CLAUDE_SESSION_STATE_DIR/t.json"; }
 
 notify() { jq -nc --arg m "$2" '{session_id: $ARGS.positional[0], hook_event_name: "Notification", message: $m}' --args "$1" | "$REDUCER"; }
 tool() { jq -nc --arg e "$1" --arg n "$2" '{session_id: "t", hook_event_name: $e, tool_name: $n}' | "$REDUCER"; }
+session_start() { jq -nc --arg s "$1" '{session_id: "t", hook_event_name: "SessionStart", source: $s}' | "$REDUCER"; }
 
 @test "permission notification sets state=input with message" {
   notify t "Claude needs your permission to use Bash"
@@ -76,7 +77,7 @@ tool() { jq -nc --arg e "$1" --arg n "$2" '{session_id: "t", hook_event_name: $e
 
 @test "SessionStart clears a stale permission message" {
   notify t "Claude needs your permission to use Bash"
-  jq -nc '{session_id: "t", hook_event_name: "SessionStart", source: "resume"}' | "$REDUCER"
+  session_start resume
   [ "$(field state)" = "idle" ]
   [ "$(field message)" = "null" ]
 }
