@@ -1,6 +1,7 @@
 package claudeinstance
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"testing"
@@ -19,7 +20,7 @@ func TestOSLivenessChecker_IsAlive(t *testing.T) {
 	})
 
 	t.Run("spawned-then-reaped child is dead", func(t *testing.T) {
-		cmd := exec.Command("true")
+		cmd := exec.CommandContext(context.Background(), "true")
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("setup: %v", err)
 		}
