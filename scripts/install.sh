@@ -65,7 +65,12 @@ DEFAULT_API="https://api.github.com"
 SUITE_PACKAGE="orchard-suite"
 SUMS_ASSET="SHA256SUMS"
 # Mirrors internal/release/assets.go's SuiteBinaries -- the Go upgrade
-# client's ground truth for what a release/install directory may hold.
+# client's ground truth for what a release/install directory may hold. Unlike
+# the release scripts (orchardist#820), this list stays LITERAL: install.sh
+# runs via `curl | bash` on machines with no Go toolchain, so it cannot read
+# the suite-bins lister. TestInstallShMirrorsSuiteBinaries pins it to the Go
+# source instead -- editing this array without matching SuiteBinaries fails
+# `go test ./internal/release`.
 SUITE_BINARIES=(orchard-daemon orchard-sidebar orchard-shell orchard-upgrade orchard-tui orchard)
 # Priority order: orchard-daemon.service is the unit this repo actually
 # ships as active today; orchard.service is install_service's own template
@@ -746,6 +751,9 @@ main() {
     CLEANUP_PATHS+=("$stage")
     [ -f "$FROM_SOURCE_DIR/target/release/orchard" ] && cp "$FROM_SOURCE_DIR/target/release/orchard" "$stage/"
     [ -f "$FROM_SOURCE_DIR/target/release/orchard-tui" ] && cp "$FROM_SOURCE_DIR/target/release/orchard-tui" "$stage/"
+    # Literal Go binary list, kept in sync with internal/release.GoBinaries by
+    # TestInstallShMirrorsSuiteBinaries -- install.sh has no Go toolchain to
+    # read the suite-bins lister (orchardist#820).
     local gobin
     for gobin in orchard-daemon orchard-sidebar orchard-shell orchard-upgrade; do
       [ -f "$FROM_SOURCE_DIR/bin/$gobin" ] && cp "$FROM_SOURCE_DIR/bin/$gobin" "$stage/"
