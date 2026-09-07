@@ -237,6 +237,9 @@ func (c *Client) Subscribe(ctx context.Context, query string, variables map[stri
 		// reusing this dead conn — writeJSON has already released writeMu.
 		werr := fmt.Errorf("write subscribe: %w", err)
 		c.failAll(conn, werr)
+		// failAll no-ops when a redial already superseded conn; drop this
+		// call's own entry either way so it cannot be orphaned in c.subs.
+		c.removeSub(id)
 		return nil, werr
 	}
 
