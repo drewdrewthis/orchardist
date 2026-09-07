@@ -1,6 +1,9 @@
 package gh
 
-import "time"
+import (
+	"net/http"
+	"time"
+)
 
 // export_test.go exposes package-private helpers for the external test package
 // (package gh_test). This file is only compiled during testing.
@@ -53,4 +56,13 @@ func (p *Provider) ExportSeedPRState(key PullRequestKey, state PullRequestState)
 	e := p.prs[key]
 	e.value.State = state
 	p.prs[key] = e
+}
+
+// ExportParseRateLimitReset wraps parseRateLimitReset (issue #768, sequencing
+// step 1) so external tests can assert the shared header-parse helper
+// directly, without duplicating it or driving a full HTTP round-trip.
+// parseRateLimitReset returns 0 when X-RateLimit-Reset is absent or
+// non-numeric, matching *ErrRateLimitedT's "0 if unknown" contract.
+func ExportParseRateLimitReset(h http.Header) int64 {
+	return parseRateLimitReset(h)
 }
