@@ -22,6 +22,8 @@ set -euo pipefail
 # cross-validates that the static marker faithfully mirrors runtime.
 # Guards #817: untracked build outputs made buildvcs stamp binaries "+dirty".
 
+[ "$#" -ge 1 ] || { echo "usage: $0 <suite-tarball>..." >&2; exit 2; }
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 go_bins_raw="$(cd "$ROOT" && go run ./internal/release/cmd/suite-bins go)"
 rev_bins_raw="$(cd "$ROOT" && go run ./internal/release/cmd/suite-bins revision)"
@@ -40,8 +42,6 @@ for bin in "${REV_BINS[@]}"; do
   [ "$skip" -eq 0 ] && NONGO_REV_BINS+=("$bin")
 done
 
-[ "$#" -ge 1 ] || { echo "usage: $0 <suite-tarball>..." >&2; exit 2; }
-
 # Host triple (mirrors internal/release triples map): the one triple whose
 # binaries can be executed here, used only for the orchard-tui static==exec
 # cross-check below.
@@ -52,6 +52,25 @@ case "$(go env GOOS)/$(go env GOARCH)" in
   linux/arm64)  HOST_TRIPLE=aarch64-unknown-linux-gnu ;;
   *)            HOST_TRIPLE="" ;;
 esac
+
+# record_rev BIN REV COL2 EMPTY_MSG [EXTRA_MSG] -- the per-binary bookkeeping
+# shared by the Go and non-Go loops below: print the table row, fail on a
+# missing, +dirty, caller-supplied-extra, or cross-binary-mismatched revision,
+# and update seen_rev. EXTRA_MSG (only the Go loop's vcs.modified=true check
+# uses it) is slotted between the dirty and mismatch checks to keep FAIL-line
+# order identical to the pre-refactor loop. One implementation so the two
+# loops' checks cannot drift apart.
+record_rev() {
+  local bin="$1" rev="$2" col2="$3" empty_msg="$4" extra_msg="${5:-}"
+  printf '  %-18s %-14s %s\n' "$bin" "$col2" "${rev:-<none>}"
+  if [ -z "$rev" ]; then echo "  FAIL $bin: $empty_msg" >&2; fail=1; fi
+  case "$rev" in *+dirty*) echo "  FAIL $bin: revision is +dirty" >&2; fail=1 ;; esac
+  if [ -n "$extra_msg" ]; then echo "  FAIL $bin: $extra_msg" >&2; fail=1; fi
+  if [ -n "$rev" ] && [ -n "$seen_rev" ] && [ "$rev" != "$seen_rev" ]; then
+    echo "  FAIL $bin: revision $rev differs from $seen_rev" >&2; fail=1
+  fi
+  [ -n "$rev" ] && seen_rev="$rev"
+}
 
 fail=0
 expected_rev=""
@@ -78,29 +97,21 @@ for tarball in "$@"; do
     meta="$(go version -m "$path")"
     rev="$(printf '%s' "$meta" | grep -oE 'internal/release\.revision=[^ "]+' | head -1 | cut -d= -f2- || true)"
     modified="$(printf '%s' "$meta" | grep -oE 'vcs\.modified=(true|false)' | head -1 | cut -d= -f2- || true)"
-    printf '  %-18s %-14s %s\n' "$bin" "${modified:-<none>}" "${rev:-<none>}"
-    if [ -z "$rev" ]; then echo "  FAIL $bin: no release.revision ldflag" >&2; fail=1; fi
-    case "$rev" in *+dirty*) echo "  FAIL $bin: revision is +dirty" >&2; fail=1 ;; esac
-    if [ "$modified" = "true" ]; then echo "  FAIL $bin: vcs.modified=true" >&2; fail=1; fi
-    if [ -n "$rev" ] && [ -n "$seen_rev" ] && [ "$rev" != "$seen_rev" ]; then
-      echo "  FAIL $bin: revision $rev differs from $seen_rev" >&2; fail=1
-    fi
-    [ -n "$rev" ] && seen_rev="$rev"
+    extra=""
+    [ "$modified" = "true" ] && extra="vcs.modified=true"
+    record_rev "$bin" "$rev" "${modified:-<none>}" "no release.revision ldflag" "$extra"
   done
 
   # --- Non-Go revision binaries (Rust, stamped): static ORCHARD_REVISION
   # marker, extracted for EVERY tarball without executing the binary. ---
-  for bin in "${NONGO_REV_BINS[@]}"; do
+  # ${NONGO_REV_BINS[@]+"${NONGO_REV_BINS[@]}"} guards the empty-array case
+  # under `set -u` on bash 3.2 (macOS's shipped bash), where `arr[@]` on an
+  # empty array is an unset-variable error rather than zero words.
+  for bin in "${NONGO_REV_BINS[@]+"${NONGO_REV_BINS[@]}"}"; do
     path="$work/$bin"
     [ -f "$path" ] || continue
     rev="$(grep -a -oE 'ORCHARD_REVISION=[0-9a-f]{7,40}(\+dirty)?' "$path" | head -1 | cut -d= -f2- || true)"
-    printf '  %-18s %-14s %s\n' "$bin" "<static>" "${rev:-<none>}"
-    if [ -z "$rev" ]; then echo "  FAIL $bin: no ORCHARD_REVISION marker" >&2; fail=1; fi
-    case "$rev" in *+dirty*) echo "  FAIL $bin: revision is +dirty" >&2; fail=1 ;; esac
-    if [ -n "$rev" ] && [ -n "$seen_rev" ] && [ "$rev" != "$seen_rev" ]; then
-      echo "  FAIL $bin: revision $rev differs from $seen_rev" >&2; fail=1
-    fi
-    [ -n "$rev" ] && seen_rev="$rev"
+    record_rev "$bin" "$rev" "<static>" "no ORCHARD_REVISION marker"
 
     # Host triple: cross-validate that the static marker equals runtime.
     if [ "$is_host" -eq 1 ]; then

@@ -2,6 +2,10 @@
 // release scripts and the release workflow read the binary lists from
 // internal/release instead of hand-mirroring them (orchardist#820).
 //
+// It lives under internal/release/cmd/, not top-level cmd/: it is a dev/CI
+// tool that reads the suite roster, not a binary the suite ships, so
+// top-level cmd/* stays exactly the set of shipped binaries.
+//
 // Usage:
 //
 //	go run ./internal/release/cmd/suite-bins <set>
@@ -13,6 +17,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -20,17 +25,24 @@ import (
 )
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run holds all the command's logic so a test can drive it directly with
+// captured stdout/stderr instead of subprocessing the built binary.
+func run(args []string, stdout, stderr io.Writer) int {
 	valid := strings.Join(release.SetNames(), ", ")
-	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "usage: suite-bins <set> (one of: %s)\n", valid)
-		os.Exit(2)
+	if len(args) != 1 {
+		fmt.Fprintf(stderr, "usage: suite-bins <set> (one of: %s)\n", valid)
+		return 2
 	}
-	set, ok := release.SetsByName[os.Args[1]]
+	set, ok := release.SetsByName[args[0]]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown set %q (valid sets: %s)\n", os.Args[1], valid)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "unknown set %q (valid sets: %s)\n", args[0], valid)
+		return 2
 	}
 	for _, name := range set {
-		fmt.Println(name)
+		fmt.Fprintln(stdout, name)
 	}
+	return 0
 }

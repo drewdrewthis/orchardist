@@ -23,17 +23,11 @@ var RustBinaries = []string{"orchard-tui", "orchard"}
 // hand-mirrored copy can drift from the curated SuiteBinaries slice.
 var GoBinaries = goBinaries(SuiteBinaries, RustBinaries)
 
-// goBinaries returns suite minus rust, preserving suite order. It is a function
-// (not an inline literal) so a test can prove that a new Go binary appended to
-// a copy of SuiteBinaries surfaces in the derived set with no other edit.
+// goBinaries returns suite minus rust, preserving suite order. It is a thin
+// wrapper over complement (revision.go) so TestBinarySets can keep calling it
+// directly with an explicit rust slice (e.g. a fake-binary probe).
 func goBinaries(suite, rust []string) []string {
-	out := make([]string, 0, len(suite))
-	for _, name := range suite {
-		if !slices.Contains(rust, name) {
-			out = append(out, name)
-		}
-	}
-	return out
+	return complement(suite, rust)
 }
 
 // SetsByName maps each lister set name to its slice, so cmd/suite-bins and the
