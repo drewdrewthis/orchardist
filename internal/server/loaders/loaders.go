@@ -159,6 +159,27 @@ type CommandKey struct {
 // synchronous, long enough that resolver fan-outs collapse into one
 // batch.
 func NewLoaders(providers *ProvidersBundle) *Loaders {
+	return newLoaders(providers, 0)
+}
+
+// withCap appends a WithBatchCapacity option when capacity > 0, forcing a
+// loader to dispatch its batch the instant `capacity` keys are queued —
+// independent of the wait timer. Production passes capacity 0 (unbounded),
+// so the returned slice is byte-for-byte the production option set; only
+// NewLoadersForTest (export_test.go) passes a positive capacity, letting a
+// batch test dispatch deterministically instead of racing the 1ms window
+// (issue #818).
+func withCap[K comparable, V any](opts []dataloader.Option[K, V], capacity int) []dataloader.Option[K, V] {
+	if capacity <= 0 {
+		return opts
+	}
+	return append(opts, dataloader.WithBatchCapacity[K, V](capacity))
+}
+
+// newLoaders builds the loader bundle. batchCapacity is 0 in production
+// (unbounded, timer-driven dispatch — unchanged behaviour) and positive
+// only under NewLoadersForTest.
+func newLoaders(providers *ProvidersBundle, batchCapacity int) *Loaders {
 	hostBatches := &batchCounter{}
 	worktreeBatches := &batchCounter{}
 	processBatches := &batchCounter{}
@@ -248,15 +269,15 @@ func NewLoaders(providers *ProvidersBundle) *Loaders {
 	}
 
 	return &Loaders{
-		Host:                  dataloader.NewBatchedLoader(hostBatch, hostOpts...),
-		WorktreeForCwd:        dataloader.NewBatchedLoader(worktreeBatch, worktreeOpts...),
-		Process:               dataloader.NewBatchedLoader(processBatch, processOpts...),
-		PullRequestsForRepo:   dataloader.NewBatchedLoader(prBatch, prOpts...),
-		PullRequestEnrichment: dataloader.NewBatchedLoader(prEnrichmentBatch, prEnrichmentOpts...),
-		PaneByID:              dataloader.NewBatchedLoader(paneByIDBatch, paneByIDOpts...),
-		PanesByCwd:            dataloader.NewBatchedLoader(panesByCwdBatch, panesByCwdOpts...),
-		PanesByCommand:        dataloader.NewBatchedLoader(panesByCommandBatch, panesByCommandOpts...),
-		SessionByPid:          dataloader.NewBatchedLoader(sessionByPidBatch, sessionByPidOpts...),
+		Host:                  dataloader.NewBatchedLoader(hostBatch, withCap(hostOpts, batchCapacity)...),
+		WorktreeForCwd:        dataloader.NewBatchedLoader(worktreeBatch, withCap(worktreeOpts, batchCapacity)...),
+		Process:               dataloader.NewBatchedLoader(processBatch, withCap(processOpts, batchCapacity)...),
+		PullRequestsForRepo:   dataloader.NewBatchedLoader(prBatch, withCap(prOpts, batchCapacity)...),
+		PullRequestEnrichment: dataloader.NewBatchedLoader(prEnrichmentBatch, withCap(prEnrichmentOpts, batchCapacity)...),
+		PaneByID:              dataloader.NewBatchedLoader(paneByIDBatch, withCap(paneByIDOpts, batchCapacity)...),
+		PanesByCwd:            dataloader.NewBatchedLoader(panesByCwdBatch, withCap(panesByCwdOpts, batchCapacity)...),
+		PanesByCommand:        dataloader.NewBatchedLoader(panesByCommandBatch, withCap(panesByCommandOpts, batchCapacity)...),
+		SessionByPid:          dataloader.NewBatchedLoader(sessionByPidBatch, withCap(sessionByPidOpts, batchCapacity)...),
 		hostBatches:           hostBatches,
 		worktreeBatches:       worktreeBatches,
 		processBatches:        processBatches,

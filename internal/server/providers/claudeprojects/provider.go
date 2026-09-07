@@ -51,6 +51,11 @@ type Provider struct {
 	subMu sync.Mutex
 	subs  map[chan adapter.InvalidationEvent[ConversationID]]struct{}
 
+	// subscribeHook, when non-nil, fires after a subscriber registers.
+	// Test-only signal (nil in production) so an e2e subscription test can
+	// block on real registration instead of a fixed sleep (issue #818).
+	subscribeHook func()
+
 	startOnce sync.Once
 	stopOnce  sync.Once
 	stopCh    chan struct{}
@@ -226,6 +231,15 @@ func (p *Provider) List(_ context.Context) ([]Conversation, error) {
 	return out, nil
 }
 
+// SetSubscribeHookForTest installs a callback fired after each Subscribe
+// registers its channel. Test-only seam (issue #818): nil in production,
+// so subscription behaviour is unchanged.
+func (p *Provider) SetSubscribeHookForTest(h func()) {
+	p.subMu.Lock()
+	p.subscribeHook = h
+	p.subMu.Unlock()
+}
+
 // Subscribe returns a buffered channel that receives invalidation
 // events for as long as ctx is alive. Closing ctx (or calling Stop)
 // cleans the subscription up.
@@ -233,7 +247,11 @@ func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEve
 	ch := make(chan adapter.InvalidationEvent[ConversationID], 8)
 	p.subMu.Lock()
 	p.subs[ch] = struct{}{}
+	hook := p.subscribeHook
 	p.subMu.Unlock()
+	if hook != nil {
+		hook()
+	}
 
 	go func() {
 		<-ctx.Done()

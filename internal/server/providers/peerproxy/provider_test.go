@@ -56,6 +56,86 @@ func (fp *fakePeer) addr() string {
 	return u
 }
 
+// nameCounter accumulates named lifecycle events (probe completions or
+// goroutine exits) and lets a test block until a peer — or the whole set
+// — has reached a threshold. It replaces the fixed-sleep poll loops that
+// waited on a fake server's ping counter (issue #818): every wait is
+// driven by a real signal (the probe / peer-exit hook) with a deadline,
+// never a bare settle.
+type nameCounter struct {
+	mu    sync.Mutex
+	count map[string]int
+	total int
+	bump  chan struct{}
+}
+
+func newNameCounter() *nameCounter {
+	return &nameCounter{count: map[string]int{}, bump: make(chan struct{}, 1)}
+}
+
+// inc records one event for name and wakes any waiter.
+func (w *nameCounter) inc(name string) {
+	w.mu.Lock()
+	w.count[name]++
+	w.total++
+	w.mu.Unlock()
+	select {
+	case w.bump <- struct{}{}:
+	default:
+	}
+}
+
+// wait blocks until name has reached at least min events or within elapses.
+func (w *nameCounter) wait(t *testing.T, name string, min int, within time.Duration, what string) {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		w.mu.Lock()
+		c := w.count[name]
+		w.mu.Unlock()
+		if c >= min {
+			return
+		}
+		select {
+		case <-w.bump:
+		case <-deadline:
+			t.Fatalf("%s for %q reached %d, want >= %d within %s", what, name, c, min, within)
+		}
+	}
+}
+
+// waitTotal blocks until the total across all names reaches min or within
+// elapses.
+func (w *nameCounter) waitTotal(t *testing.T, min int, within time.Duration, what string) {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		w.mu.Lock()
+		tot := w.total
+		w.mu.Unlock()
+		if tot >= min {
+			return
+		}
+		select {
+		case <-w.bump:
+		case <-deadline:
+			t.Fatalf("total %s reached %d, want >= %d within %s", what, tot, min, within)
+		}
+	}
+}
+
+// probeCounter returns a nameCounter fed by the peer probe-completion hook.
+func probeCounter() (*nameCounter, peerproxy.ProviderOption) {
+	w := newNameCounter()
+	return w, peerproxy.WithProbeHookForTest(w.inc)
+}
+
+// exitCounter returns a nameCounter fed by the peer goroutine-exit hook.
+func exitCounter() (*nameCounter, peerproxy.ProviderOption) {
+	w := newNameCounter()
+	return w, peerproxy.WithPeerExitHookForTest(w.inc)
+}
+
 // TestAddPeer_InsertsAndStartsProbe is the unit coverage for the AC2
 // scenario "AddPeer inserts a new peer and starts its probe goroutine".
 //
@@ -69,7 +149,8 @@ func TestAddPeer_InsertsAndStartsProbe(t *testing.T) {
 	fake := newFakePeer(t)
 
 	// 1. Construct an empty provider (no peers at construction time).
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
 
 	// Start with a test-controlled context.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,15 +185,12 @@ func TestAddPeer_InsertsAndStartsProbe(t *testing.T) {
 		t.Fatalf("Peers() = %v, want entry for %q", peers, "lw-fed-c")
 	}
 
-	// 5. Within 100 ms the probe goroutine must have issued at least one Ping.
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fake.pingCount.Load() >= 1 {
-			return // success
-		}
-		time.Sleep(5 * time.Millisecond)
+	// 5. The probe goroutine must have completed at least one probe — block
+	// on the probe hook, then confirm the Ping actually reached the server.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
+	if fake.pingCount.Load() < 1 {
+		t.Fatalf("probe completed but no Ping reached the server (count=%d)", fake.pingCount.Load())
 	}
-	t.Fatalf("no Ping observed within 100ms (count=%d)", fake.pingCount.Load())
 }
 
 // TestAddPeer_PreStartReturnsError asserts that AddPeer called before
@@ -141,7 +219,8 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 	fake := newFakePeer(t)
 
 	// 1. Construct an empty provider and start it.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -159,17 +238,8 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 		t.Fatalf("first AddPeer: %v", err)
 	}
 
-	// Wait for at least one Ping to confirm the goroutine is live.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fake.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fake.pingCount.Load() < 1 {
-		t.Fatalf("probe goroutine did not issue a Ping within 200ms")
-	}
+	// Block on the probe hook to confirm the goroutine is live.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
 
 	// 3. Snapshot pingCount after confirming the goroutine is live.
 	countBefore := fake.pingCount.Load()
@@ -201,8 +271,9 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 		t.Fatalf("Peers() has %d entries for \"lw-fed-c\", want exactly 1; Peers()=%v", count, peers)
 	}
 
-	// 7. After ~150ms the original goroutine must still be alive and probing.
-	time.Sleep(150 * time.Millisecond)
+	// 7. The original goroutine is untouched: the rejected request returned an
+	// error without cancelling it, so its monotonic pingCount cannot drop. No
+	// settle is needed — nothing on this path can stop the goroutine.
 	countAfter := fake.pingCount.Load()
 	// The probe interval is 30s but the goroutine also sends pings during
 	// subscribe retries. We allow for the possibility that the interval hasn't
@@ -232,7 +303,8 @@ func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
 	fake := newFakePeer(t)
 
 	// 1. Construct an empty provider and start it.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -250,17 +322,8 @@ func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
 		t.Fatalf("AddPeer: %v", err)
 	}
 
-	// Wait for at least one Ping to confirm the goroutine is live.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fake.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fake.pingCount.Load() < 1 {
-		t.Fatalf("probe goroutine did not issue a Ping within 200ms")
-	}
+	// Block on the probe hook to confirm the goroutine is live.
+	probe.wait(t, "real", 1, 5*time.Second, "probe")
 
 	// 3. Snapshot pingCount after confirming the goroutine is live.
 	countBefore := fake.pingCount.Load()
@@ -288,8 +351,9 @@ func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
 		t.Fatal("Peers() no longer contains \"real\" after RemovePeer(\"ghost\")")
 	}
 
-	// 7. After ~150ms the original goroutine must still be alive and probing.
-	time.Sleep(150 * time.Millisecond)
+	// 7. The original goroutine is untouched: the rejected request returned an
+	// error without cancelling it, so its monotonic pingCount cannot drop. No
+	// settle is needed — nothing on this path can stop the goroutine.
 	countAfter := fake.pingCount.Load()
 	if countAfter < countBefore {
 		t.Fatalf("pingCount decreased after RemovePeer(\"ghost\"): before=%d after=%d", countBefore, countAfter)
@@ -321,7 +385,9 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 	fake := newFakePeer(t)
 
 	// 1. Construct an empty provider and start it.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	exit, exitOpt := exitCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt, exitOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -342,22 +408,14 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 		}
 	}
 
-	// Wait for all baseline probes to fire at least once.
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fake.pingCount.Load() >= 3 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fake.pingCount.Load() < 3 {
-		t.Fatalf("baseline probes did not all fire within 300ms (count=%d)", fake.pingCount.Load())
+	// Block until every baseline probe has completed — a real signal, so the
+	// goroutine baseline below is captured against a fully-spawned steady
+	// state, not a fixed settle window.
+	for _, name := range baseNames {
+		probe.wait(t, name, 1, 5*time.Second, "baseline probe")
 	}
 
-	// Let things settle before capturing the goroutine baseline.
-	time.Sleep(20 * time.Millisecond)
-
-	// 3. Capture goroutine count baseline (after Start + 3 baseline peers settled).
+	// 3. Capture goroutine count baseline (after Start + 3 baseline peers up).
 	goroutinesBefore := runtime.NumGoroutine()
 
 	// 4. Spawn 50 goroutines. Each owns a unique peer name and loops 10×:
@@ -367,6 +425,11 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
+
+	// addOK counts every successful AddPeer across all workers. Each success
+	// spawns exactly one runPeer goroutine that RemovePeer then cancels, so
+	// the number of goroutine exits to expect equals addOK.
+	var addOK atomic.Int64
 
 	for i := 0; i < numWorkers; i++ {
 		name := fmt.Sprintf("worker-%d", i)
@@ -384,9 +447,7 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 					// panic — just skip this iteration so we can proceed.
 					continue
 				}
-
-				// Small jitter to interleave with other goroutines.
-				time.Sleep(time.Duration(j%3) * time.Millisecond)
+				addOK.Add(1)
 
 				// RemovePeer — should always succeed; we just added it above.
 				_ = p.RemovePeer(peerName)
@@ -413,30 +474,30 @@ func TestAddRemove_ConcurrentAccess(t *testing.T) {
 		}
 	}
 
-	// 7. Baseline probes are still alive — pingCount must grow over 200ms.
+	// 7. No baseline goroutine was cancelled by the storm — its monotonic
+	// pingCount cannot have decreased. (Baseline peers are never removed, so
+	// there is nothing to wait for; the assertion stands on its own.)
 	countBefore := fake.pingCount.Load()
-	time.Sleep(200 * time.Millisecond)
 	countAfter := fake.pingCount.Load()
-	// The 30s probe interval means we won't see new ticks, but subscription
-	// retry loops (subRetryDelay=5s) will also send pings. We only assert
-	// that no baseline goroutine was accidentally cancelled (count must not
-	// decrease — it is monotonically increasing).
 	if countAfter < countBefore {
 		t.Fatalf("baseline pingCount decreased: before=%d after=%d (goroutine killed)",
 			countBefore, countAfter)
 	}
 
-	// 8. Give cancelled worker goroutines time to drain, then check the
-	//    goroutine count returned to within tolerance of the baseline.
+	// 8. Block until every worker's runPeer goroutine has actually exited —
+	// exit-hook driven, not a wall-clock drain window — then assert the live
+	// goroutine count returned to within tolerance of the baseline.
+	wantExits := int(addOK.Load())
+	exit.waitTotal(t, wantExits, 15*time.Second, "worker exit")
+
+	// Every worker goroutine has run its exit defer; yield to the scheduler
+	// (no wall-clock sleep) until the runtime reaps them and the live count
+	// settles back to within tolerance of the baseline.
 	const tolerance = 5
-	deadline = time.Now().Add(500 * time.Millisecond)
-	var goroutinesAfter int
-	for time.Now().Before(deadline) {
+	goroutinesAfter := runtime.NumGoroutine()
+	for i := 0; i < 1000 && goroutinesAfter > goroutinesBefore+tolerance; i++ {
+		runtime.Gosched()
 		goroutinesAfter = runtime.NumGoroutine()
-		if goroutinesAfter <= goroutinesBefore+tolerance {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	if goroutinesAfter > goroutinesBefore+tolerance {
 		t.Fatalf("goroutine count did not drain: before=%d after=%d (delta %d > tolerance %d)",
@@ -468,7 +529,8 @@ func TestApplyPeers_TLSChangeRemoveAdd(t *testing.T) {
 	fake := newFakePeer(t)
 
 	// 1. Construct an empty provider and start it.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -486,17 +548,8 @@ func TestApplyPeers_TLSChangeRemoveAdd(t *testing.T) {
 		t.Fatalf("AddPeer: %v", err)
 	}
 
-	// Wait for at least one ping to confirm the goroutine is live.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fake.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fake.pingCount.Load() < 1 {
-		t.Fatalf("initial probe goroutine did not issue a Ping within 200ms")
-	}
+	// Block on the probe hook to confirm the goroutine is live.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
 
 	// 3. Snapshot SpawnCount — must be 1 before the TLS change.
 	if got := p.SpawnCount("lw-fed-c"); got != 1 {
@@ -570,7 +623,8 @@ func TestApplyPeers_BasicDiff(t *testing.T) {
 	fakeFedC := newFakePeer(t)
 
 	// 1. Start provider with two initial peers.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -594,20 +648,9 @@ func TestApplyPeers_BasicDiff(t *testing.T) {
 		t.Fatalf("AddPeer lw-fed-d: %v", err)
 	}
 
-	// Wait for both goroutines to fire at least one ping.
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fakeBoxd.pingCount.Load() >= 1 && fakeFedD.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fakeBoxd.pingCount.Load() < 1 {
-		t.Fatalf("orchard.boxd.sh probe did not fire within 300ms")
-	}
-	if fakeFedD.pingCount.Load() < 1 {
-		t.Fatalf("lw-fed-d probe did not fire within 300ms")
-	}
+	// Block until both goroutines have completed their first probe.
+	probe.wait(t, "orchard.boxd.sh", 1, 5*time.Second, "probe")
+	probe.wait(t, "lw-fed-d", 1, 5*time.Second, "probe")
 
 	// Verify spawn counts are 1 for each — we only added them once.
 	if got := p.SpawnCount("orchard.boxd.sh"); got != 1 {
@@ -658,16 +701,10 @@ func TestApplyPeers_BasicDiff(t *testing.T) {
 		t.Fatalf("SpawnCount(lw-fed-c) after ApplyPeers = %d, want 1", got)
 	}
 
-	// 8. Within 200ms, "lw-fed-c" probe must have fired at least once.
-	deadline = time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fakeFedC.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	// 8. "lw-fed-c" (newly added by ApplyPeers) must have completed a probe.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
 	if fakeFedC.pingCount.Load() < 1 {
-		t.Fatalf("lw-fed-c probe did not fire within 200ms after ApplyPeers")
+		t.Fatalf("lw-fed-c probe completed but no Ping reached fakeFedC")
 	}
 }
 
@@ -686,7 +723,9 @@ func TestRemovePeer_CancelsAndDrops(t *testing.T) {
 	fake := newFakePeer(t)
 
 	// 1. Construct an empty provider and start it.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	exit, exitOpt := exitCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt, exitOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -704,17 +743,8 @@ func TestRemovePeer_CancelsAndDrops(t *testing.T) {
 		t.Fatalf("AddPeer: %v", err)
 	}
 
-	// 3. Wait for at least one Ping to confirm the goroutine is live.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fake.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fake.pingCount.Load() < 1 {
-		t.Fatalf("probe goroutine did not issue a Ping within 200ms")
-	}
+	// 3. Block on the probe hook to confirm the goroutine is live.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
 
 	// 4. Snapshot pingCount after confirming at least one Ping.
 	countBefore := fake.pingCount.Load()
@@ -731,9 +761,11 @@ func TestRemovePeer_CancelsAndDrops(t *testing.T) {
 		}
 	}
 
-	// 7. Wait 500ms and assert pingCount did not grow — the probe goroutine
-	// must have stopped after context cancellation.
-	time.Sleep(500 * time.Millisecond)
+	// 7. Block until the peer's runPeer goroutine has actually exited (exit
+	// hook), then assert no further Ping landed — the probe stopped on
+	// cancellation. Synchronising on the real exit proves absence without a
+	// settle sleep.
+	exit.wait(t, "lw-fed-c", 1, 5*time.Second, "peer exit")
 	countAfter := fake.pingCount.Load()
 	if countAfter > countBefore {
 		t.Fatalf("Ping count increased after RemovePeer: before=%d after=%d (goroutine still running)",
@@ -760,7 +792,9 @@ func TestApplyPeers_AddressChangeRemoveAdd(t *testing.T) {
 	fakePeerB := newFakePeer(t)
 
 	// 1. Construct an empty provider and start it.
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default())
+	probe, probeOpt := probeCounter()
+	exit, exitOpt := exitCounter()
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt, exitOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -778,17 +812,8 @@ func TestApplyPeers_AddressChangeRemoveAdd(t *testing.T) {
 		t.Fatalf("AddPeer: %v", err)
 	}
 
-	// Wait for at least one ping to confirm the goroutine is live.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fakePeerA.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if fakePeerA.pingCount.Load() < 1 {
-		t.Fatalf("initial probe goroutine did not issue a Ping within 200ms")
-	}
+	// Block on the probe hook to confirm the goroutine is live.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
 
 	// 3. Snapshot SpawnCount — must be 1 before the address change.
 	if got := p.SpawnCount("lw-fed-c"); got != 1 {
@@ -835,17 +860,11 @@ func TestApplyPeers_AddressChangeRemoveAdd(t *testing.T) {
 		t.Fatalf("live address = %q, want %q (fakePeerB)", liveAddr, fakePeerB.addr())
 	}
 
-	// 9. Wait ~150ms and confirm fakePeerB has received at least one ping —
-	// the new goroutine is probing the new address.
-	deadline = time.Now().Add(150 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fakePeerB.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	// 9. The re-spawned goroutine (2nd probe for this name) must probe the new
+	// address — block on its probe completing, then confirm fakePeerB saw it.
+	probe.wait(t, "lw-fed-c", 2, 5*time.Second, "probe")
 	if fakePeerB.pingCount.Load() < 1 {
-		t.Fatalf("new goroutine did not ping fakePeerB within 150ms")
+		t.Fatalf("new goroutine probed but no Ping reached fakePeerB")
 	}
 
 	// 10. fakePeerA's pingCount must have stopped growing — the old goroutine
@@ -853,7 +872,10 @@ func TestApplyPeers_AddressChangeRemoveAdd(t *testing.T) {
 	// past that point), wait, then recheck. Any increase means the old goroutine
 	// is still running.
 	countA := fakePeerA.pingCount.Load()
-	time.Sleep(200 * time.Millisecond)
+	// Block until the old goroutine for this name has actually exited (exit
+	// hook fires once — the re-spawned goroutine keeps running), proving the
+	// old probe loop stopped without a settle sleep.
+	exit.wait(t, "lw-fed-c", 1, 5*time.Second, "peer exit")
 	countAAfter := fakePeerA.pingCount.Load()
 	if countAAfter > countA {
 		t.Fatalf("fakePeerA still received pings after ApplyPeers: before=%d after=%d (old goroutine not cancelled)",

@@ -109,3 +109,11 @@ func WithFakeClockForTest(c *FakeClock) ConfigWatcherOption {
 func WithReloadHookForTest(h func()) ConfigWatcherOption {
 	return func(cw *ConfigWatcher) { cw.onReload = h }
 }
+
+// WithPeerExitHookForTest registers a callback fired when a peer's
+// runPeer goroutine returns. Tests use it to synchronise on goroutine
+// teardown (e.g. after RemovePeer) before asserting that probing has
+// stopped — proving absence via a real signal, not a settle sleep.
+func WithPeerExitHookForTest(h func(peer string)) ProviderOption {
+	return func(o *providerOptions) { o.peerExitHook = h }
+}

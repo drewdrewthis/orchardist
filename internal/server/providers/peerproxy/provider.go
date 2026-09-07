@@ -61,6 +61,16 @@ type ProviderOption func(*providerOptions)
 
 type providerOptions struct {
 	tlsConfig *tls.Config
+
+	// probeHook, when non-nil, is called after every doProbe attempt —
+	// success or failure — with the peer name. peerExitHook, when non-nil,
+	// is called when a peer's runPeer goroutine returns. Both default to nil
+	// (production is unaffected) and are wired only by test-only options in
+	// export_test.go so probe/liveness tests synchronise on a real signal
+	// instead of a wall-clock wait (issue #818). Mirrors the ConfigWatcher
+	// onReload hook precedent (watcher.go).
+	probeHook    func(peer string)
+	peerExitHook func(peer string)
 }
 
 // WithTLSConfig overrides the *tls.Config the Provider's per-peer
@@ -73,6 +83,19 @@ type providerOptions struct {
 // daemon's only defence against MITM on a TLS peer is cert verification.
 func WithTLSConfig(cfg *tls.Config) ProviderOption {
 	return func(o *providerOptions) { o.tlsConfig = cfg }
+}
+
+// WithProbeHookForTest registers a callback fired after every peer probe
+// attempt (success or failure) with the peer name. Tests block on a
+// channel fed by this hook instead of polling PeerVersion / a fake
+// server's ping counter with a fixed sleep (issue #818).
+//
+// It lives in production (not export_test.go) because cross-package tests
+// — e.g. the resolvers host-version suite — must reach it, which an
+// internal export_test.go symbol cannot serve. The hook is nil by default,
+// so production probing is unchanged (AC5).
+func WithProbeHookForTest(h func(peer string)) ProviderOption {
+	return func(o *providerOptions) { o.probeHook = h }
 }
 
 // NewProvider constructs a provider from a fully-loaded
@@ -495,6 +518,12 @@ func (p *Provider) SubscribePeer(ctx context.Context, host string) (<-chan Inval
 // subscription open. The loop is intentionally simple — peerproxy is
 // a thin transport layer, not a state machine.
 func (p *Provider) runPeer(ctx context.Context, a *PeerAdapter) {
+	// peerExitHook is registered first so it runs LAST (defers are LIFO) —
+	// as close to the goroutine's actual return as possible, giving tests a
+	// tight teardown signal.
+	if p.opts.peerExitHook != nil {
+		defer p.opts.peerExitHook(a.peer.Name)
+	}
 	defer p.wg.Done()
 
 	const probeInterval = 30 * time.Second
@@ -505,6 +534,9 @@ func (p *Provider) runPeer(ctx context.Context, a *PeerAdapter) {
 		defer cancel()
 		if err := a.Probe(probeCtx); err != nil {
 			p.logger.Debug("peer unreachable", "peer", a.peer.Name, "err", err)
+		}
+		if p.opts.probeHook != nil {
+			p.opts.probeHook(a.peer.Name)
 		}
 	}
 

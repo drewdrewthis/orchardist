@@ -26,6 +26,11 @@ type Provider struct {
 	subsMu sync.Mutex
 	subs   []chan provider.InvalidationEvent[ProcessID]
 
+	// subscribeHook, when non-nil, fires after a subscriber registers.
+	// Test-only signal (nil in production) so an e2e subscription test can
+	// block on real registration instead of a fixed sleep (issue #818).
+	subscribeHook func()
+
 	// argsLoader and cwdLoader are per-resolver-call DataLoaders for the
 	// slow-path opt-in fields. Each call to LoadArgs / LoadCwd batches
 	// over a short window. Future Workstream C will swap these for
@@ -178,13 +183,26 @@ func (p *Provider) List() []Process {
 	return out
 }
 
+// SetSubscribeHookForTest installs a callback fired after each Subscribe
+// registers its channel. Test-only seam (issue #818): nil in production,
+// so subscription behaviour is unchanged.
+func (p *Provider) SetSubscribeHookForTest(h func()) {
+	p.subsMu.Lock()
+	p.subscribeHook = h
+	p.subsMu.Unlock()
+}
+
 // Subscribe registers a new fanout channel and returns it. The channel
 // closes when ctx is cancelled.
 func (p *Provider) Subscribe(ctx context.Context) <-chan provider.InvalidationEvent[ProcessID] {
 	ch := make(chan provider.InvalidationEvent[ProcessID], 32)
 	p.subsMu.Lock()
 	p.subs = append(p.subs, ch)
+	hook := p.subscribeHook
 	p.subsMu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	go func() {
 		<-ctx.Done()
 		p.subsMu.Lock()

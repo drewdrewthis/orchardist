@@ -216,7 +216,7 @@ func TestPeers_Reachable(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("peer never marked reachable; envelope=%v", envelope)
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
 	}
 }
 
@@ -259,7 +259,7 @@ func TestQueryPeers_TopLevel(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("top-level peers never surfaced reachable peer; envelope=%v", envelope)
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
 	}
 }
 
@@ -502,7 +502,7 @@ func TestPeers_TLS_ReachableAndProxiedLookup(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("TLS peer never reachable; envelope=%v", envelope)
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
 	}
 
 	// Proxied node lookup over HTTPS.
@@ -621,7 +621,7 @@ func TestPeers_Processes_FederatedPerPeer(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("peer never reachable; envelope=%v", envelope)
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
 	}
 
 	envelope := graphQLPost(t, local,
@@ -710,7 +710,7 @@ func TestPeers_Processes_UnreachablePeer(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("peer reachability never resolved; envelope=%v", envelope)
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
 	}
 
 	envelope := graphQLPost(t, local,
@@ -883,7 +883,7 @@ func TestEndToEnd_AddingPeerSurfacesInGraphQL(t *testing.T) {
 		if foundFedC {
 			break
 		}
-		time.Sleep(pollInterval)
+		<-time.After(pollInterval) // poll gap; deadline-bounded loop (#818)
 	}
 
 	// 9. lw-fed-c must appear within 2 seconds.
@@ -896,7 +896,7 @@ func TestEndToEnd_AddingPeerSurfacesInGraphQL(t *testing.T) {
 	// Retry briefly: the Ping should arrive within a short window.
 	pingDeadline := time.Now().Add(500 * time.Millisecond)
 	for fakeFedC.pingCount.Load() < 1 && time.Now().Before(pingDeadline) {
-		time.Sleep(20 * time.Millisecond)
+		<-time.After(20 * time.Millisecond) // poll gap; deadline-bounded loop (#818)
 	}
 	if fakeFedC.pingCount.Load() < 1 {
 		t.Fatalf("no Ping to lw-fed-c observed within 500ms after it appeared in host.peers (pingCount=%d)", fakeFedC.pingCount.Load())
@@ -949,7 +949,8 @@ func TestEndToEnd_RemovingPeerDisappearsFromGraphQL(t *testing.T) {
 	// 3. Construct provider from the on-disk config.
 	initialCfg := loadConfig(t, cfgPath)
 	logger := slog.Default()
-	peerProvider := peerproxy.NewProvider(initialCfg, logger)
+	exit, exitOpt := exitCounter()
+	peerProvider := peerproxy.NewProvider(initialCfg, logger, exitOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1064,7 +1065,7 @@ func TestEndToEnd_RemovingPeerDisappearsFromGraphQL(t *testing.T) {
 			fedCGone = true
 			break
 		}
-		time.Sleep(pollInterval)
+		<-time.After(pollInterval) // poll gap; deadline-bounded loop (#818)
 	}
 
 	// 10. lw-fed-c must have disappeared within 2 seconds.
@@ -1072,11 +1073,12 @@ func TestEndToEnd_RemovingPeerDisappearsFromGraphQL(t *testing.T) {
 		t.Fatalf("lw-fed-c still present in host.peers after 2s; last response: %v", lastEnvelope)
 	}
 
-	// 11. Wait 200ms then assert fakeFedC.pingCount has not grown.
-	// GraphQL disappearance proves RemovePeer landed; the extra wait rules out
-	// any in-flight ping that raced against the cancel. One extra ping is
-	// allowed (in-flight), but no more growth after that.
-	time.Sleep(200 * time.Millisecond)
+	// 11. Block until lw-fed-c's runPeer goroutine has actually exited (exit
+	// hook) — a real teardown signal, not a settle sleep — then assert its
+	// probe stopped. GraphQL disappearance proves RemovePeer landed; the exit
+	// hook proves the goroutine is gone. One in-flight ping already dispatched
+	// when the cancel fired is tolerated.
+	exit.wait(t, "lw-fed-c", 1, 5*time.Second, "peer exit")
 	fedCCountAfter := fakeFedC.pingCount.Load()
 	// Allow at most one in-flight ping that was already dispatched when cancel fired.
 	if fedCCountAfter > fedCCountBefore+1 {
@@ -1133,7 +1135,7 @@ func waitForCondition(timeout time.Duration, fn func() bool) bool {
 		if fn() {
 			return true
 		}
-		time.Sleep(50 * time.Millisecond)
+		<-time.After(50 * time.Millisecond) // poll gap; deadline-bounded loop (#818)
 	}
 	return false
 }

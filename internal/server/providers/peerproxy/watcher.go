@@ -62,7 +62,9 @@ type ConfigWatcher struct {
 	// afterFunc arms the debounce timer (default time.AfterFunc); tests inject
 	// a controllable clock so a burst coalesces by construction, not by racing
 	// a wall-clock window (issue #773). onReload, when set, fires after each
-	// completed reload so a test can sync on the batch boundary, not sleep.
+	// reload cycle — success OR parse error — so a test can sync on the cycle
+	// boundary (including the "malformed config must not apply" path), not
+	// sleep. It is nil in production, so production behaviour is unaffected.
 	afterFunc func(time.Duration, func()) debounceTimer
 	onReload  func()
 
@@ -210,20 +212,11 @@ func (cw *ConfigWatcher) run(ctx context.Context) {
 			pendingTimer = nil // timer already fired; nothing to stop
 			cw.logger.Debug("peerproxy: debounce window elapsed; reloading config")
 
-			cfg, err := LoadFederationConfig(cw.path)
-			if err != nil {
-				// Log at Warn — this is operator-actionable. Include the path
-				// and, when available, the exact line:column from a JSON syntax
-				// error so the operator can pinpoint the mistake.
-				logParseError(cw.logger, cw.path, err)
-				continue // ApplyPeers is intentionally NOT called on parse failure
-			}
-			cw.applyPeersCount.Add(1)
-			if err := cw.provider.ApplyPeers(cfg); err != nil {
-				cw.logger.Warn("peerproxy: ApplyPeers error after config reload",
-					"err", err)
-			}
-			cw.reloadCount.Add(1)
+			cw.reloadOnce()
+			// onReload fires after every reload cycle (success or parse
+			// error) so a test's FakeClock.FireAll can synchronise on the
+			// cycle boundary even when a malformed config is rejected. It is
+			// nil in production.
 			if cw.onReload != nil {
 				cw.onReload()
 			}
@@ -236,6 +229,27 @@ func (cw *ConfigWatcher) run(ctx context.Context) {
 			cw.logger.Warn("peerproxy: fsnotify error", "err", err)
 		}
 	}
+}
+
+// reloadOnce performs one config reload cycle: load the federation
+// config and, on success, apply it to the provider. A parse error is
+// logged and the existing peers are kept — ApplyPeers is intentionally
+// NOT called, so applyPeersCount stays put on a broken write. The
+// success counters advance only on a clean load+apply.
+func (cw *ConfigWatcher) reloadOnce() {
+	cfg, err := LoadFederationConfig(cw.path)
+	if err != nil {
+		// Log at Warn — this is operator-actionable. Include the path
+		// and, when available, the exact line:column from a JSON syntax
+		// error so the operator can pinpoint the mistake.
+		logParseError(cw.logger, cw.path, err)
+		return
+	}
+	cw.applyPeersCount.Add(1)
+	if err := cw.provider.ApplyPeers(cfg); err != nil {
+		cw.logger.Warn("peerproxy: ApplyPeers error after config reload", "err", err)
+	}
+	cw.reloadCount.Add(1)
 }
 
 // logParseError logs a config parse failure at Warn level. When the

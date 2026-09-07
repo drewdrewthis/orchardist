@@ -56,6 +56,22 @@ type Provider struct {
 	paneSubs     []chan provider.InvalidationEvent[PaneKey]
 	clientSubs   []chan provider.InvalidationEvent[ClientKey]
 	tickerSignal chan struct{} // tests pulse this to force a refresh
+
+	// sessionSubscribeHook, when non-nil, fires after a session-facet
+	// subscriber is registered. It is a test-only signal (nil in
+	// production) so an e2e subscription test can block on real
+	// registration instead of a fixed sleep (issue #818). Guarded by
+	// subsMu alongside the subscriber slices.
+	sessionSubscribeHook func()
+}
+
+// SetSessionSubscribeHookForTest installs a callback fired after each
+// session-facet Subscribe registers its channel. Test-only seam (issue
+// #818): nil in production, so subscription behaviour is unchanged.
+func (p *Provider) SetSessionSubscribeHookForTest(h func()) {
+	p.subsMu.Lock()
+	p.sessionSubscribeHook = h
+	p.subsMu.Unlock()
 }
 
 // New constructs a Provider for the given adapter. The watcher does not
@@ -275,7 +291,11 @@ func (f sessionsFacet) Subscribe(ctx context.Context) <-chan provider.Invalidati
 	ch := make(chan provider.InvalidationEvent[SessionKey], 8)
 	f.p.subsMu.Lock()
 	f.p.sessionSubs = append(f.p.sessionSubs, ch)
+	hook := f.p.sessionSubscribeHook
 	f.p.subsMu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	go func() {
 		<-ctx.Done()
 		f.p.subsMu.Lock()
