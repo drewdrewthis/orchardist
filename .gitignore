@@ -24,3 +24,4 @@ node_modules/
 .prove-it-context/
 /cmd/orchard-sidebar/orchard-sidebar
 /orchard-sidebar
+__pycache__/
