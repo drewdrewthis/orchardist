@@ -75,7 +75,10 @@ STATE_DIR="${CLAUDE_SESSION_STATE_DIR:-$HOME/.local/state/claude-sessions/state}
       tool_calls: ($prev.tool_calls // 0)
     }) |
 
-    if   $event == "SessionStart" then .state = "idle"
+    if   $event == "SessionStart" then
+      # resume/clear/compact re-fire SessionStart over a surviving state file —
+      # clear a stale permission message from before the restart
+      .state = "idle" | .message = null
     elif $event == "UserPromptSubmit" then
       # harness-injected turns (task notifications, slash-command echoes,
       # system reminders) arrive through this hook too — real work, not a
