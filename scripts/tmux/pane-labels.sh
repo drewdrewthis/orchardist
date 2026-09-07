@@ -113,9 +113,9 @@ run_once() {
     tmux list-panes -aF "#{pane_id}${TAB}#{session_name}${TAB}#{window_index}${TAB}#{pane_index}${TAB}#{pane_current_path}${TAB}#{pane_current_command}" > "$panes" 2>/dev/null || return 1
   fi
 
+  # -B: never write __pycache__ into the checkout; the labeler runs from the repo tree.
   ORCHARD_PRINT_MODE=$PRINT_MODE \
   ORCHARD_HEARTBEAT_DIR_ARG="$HEARTBEAT_DIR" \
-  # -B: never write __pycache__ into the checkout; the labeler runs from the repo tree.
   python3 -B "$SCRIPT_DIR/pane_labels.py" "$qfile" "$panes"
 }
 
