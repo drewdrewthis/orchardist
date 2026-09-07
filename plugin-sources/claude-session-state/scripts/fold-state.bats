@@ -74,6 +74,13 @@ tool() { jq -nc --arg e "$1" --arg n "$2" '{session_id: "t", hook_event_name: $e
   [ "$(field message)" = "null" ]
 }
 
+@test "SessionStart clears a stale permission message" {
+  notify t "Claude needs your permission to use Bash"
+  jq -nc '{session_id: "t", hook_event_name: "SessionStart", source: "resume"}' | "$REDUCER"
+  [ "$(field state)" = "idle" ]
+  [ "$(field message)" = "null" ]
+}
+
 @test "idle-nag does not downgrade a pending permission request" {
   notify t "Claude needs your permission to use Bash"
   notify t "Claude is waiting for your input"
