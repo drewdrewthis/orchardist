@@ -71,6 +71,13 @@ type providerOptions struct {
 	// onReload hook precedent (watcher.go).
 	probeHook    func(peer string)
 	peerExitHook func(peer string)
+
+	// probeInterval overrides the 30s re-probe ticker. Zero means the
+	// production default. Tests set a short interval so a liveness check
+	// can observe a *second* probe within its deadline — proving a
+	// goroutine kept probing after a rejected op (issue #818). Wired only
+	// by a test-only option in export_test.go; production is unaffected.
+	probeInterval time.Duration
 }
 
 // WithTLSConfig overrides the *tls.Config the Provider's per-peer
@@ -526,7 +533,10 @@ func (p *Provider) runPeer(ctx context.Context, a *PeerAdapter) {
 	}
 	defer p.wg.Done()
 
-	const probeInterval = 30 * time.Second
+	probeInterval := 30 * time.Second
+	if p.opts.probeInterval > 0 {
+		probeInterval = p.opts.probeInterval
+	}
 	const subRetryDelay = 5 * time.Second
 
 	doProbe := func() {

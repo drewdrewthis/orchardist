@@ -190,33 +190,28 @@ func TestPeers_Reachable(t *testing.T) {
 		},
 	})
 
-	// The local peerproxy supervisor probes on Start and every 30s.
-	// We poll `host.peers.reachable` for a few seconds — once the
-	// supervisor's first probe lands the answer flips to true.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		envelope := graphQLPost(t, local,
-			`{ host { peers { id reachable } } }`)
-		errs, _ := envelope["errors"].([]any)
-		if len(errs) > 0 {
+	// The local peerproxy supervisor probes on Start; reachable flips true
+	// once the first probe lands. Poll the real GraphQL precondition through
+	// the shared deadline-bounded helper.
+	var lastEnvelope map[string]any
+	if !waitForCondition(5*time.Second, func() bool {
+		lastEnvelope = graphQLPost(t, local, `{ host { peers { id reachable } } }`)
+		if errs, _ := lastEnvelope["errors"].([]any); len(errs) > 0 {
 			t.Fatalf("graphql errors: %v", errs)
 		}
-		data, _ := envelope["data"].(map[string]any)
+		data, _ := lastEnvelope["data"].(map[string]any)
 		host, _ := data["host"].(map[string]any)
 		peers, _ := host["peers"].([]any)
-		if len(peers) == 1 {
-			peer := peers[0].(map[string]any)
-			if peer["reachable"] == true {
-				if peer["id"] != "Host:"+remoteName {
-					t.Fatalf("unexpected peer id %v", peer["id"])
-				}
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("peer never marked reachable; envelope=%v", envelope)
-		}
-		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
+		return len(peers) == 1 && peers[0].(map[string]any)["reachable"] == true
+	}) {
+		t.Fatalf("peer never marked reachable; envelope=%v", lastEnvelope)
+	}
+	// The reachable peer must carry the expected id.
+	data, _ := lastEnvelope["data"].(map[string]any)
+	host, _ := data["host"].(map[string]any)
+	peers, _ := host["peers"].([]any)
+	if id := peers[0].(map[string]any)["id"]; id != "Host:"+remoteName {
+		t.Fatalf("unexpected peer id %v", id)
 	}
 }
 
@@ -232,34 +227,31 @@ func TestQueryPeers_TopLevel(t *testing.T) {
 		},
 	})
 
-	// Poll the top-level `peers` field — same flat shape as
-	// `tmuxSessions` and `claudeInstances`. Local has one peer, so the
-	// flat aggregate must surface exactly that peer.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		envelope := graphQLPost(t, local,
-			`{ peers { id hostname address reachable } }`)
-		if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
+	// Poll the top-level `peers` field — same flat shape as `tmuxSessions`
+	// and `claudeInstances`. Local has one peer, so the flat aggregate must
+	// surface exactly that peer once its probe lands. Poll the real GraphQL
+	// precondition through the shared helper.
+	var lastEnvelope map[string]any
+	if !waitForCondition(5*time.Second, func() bool {
+		lastEnvelope = graphQLPost(t, local, `{ peers { id hostname address reachable } }`)
+		if errs, ok := lastEnvelope["errors"].([]any); ok && len(errs) > 0 {
 			t.Fatalf("graphql errors: %v", errs)
 		}
-		data, _ := envelope["data"].(map[string]any)
+		data, _ := lastEnvelope["data"].(map[string]any)
 		peers, _ := data["peers"].([]any)
-		if len(peers) == 1 {
-			peer := peers[0].(map[string]any)
-			if peer["id"] != "Host:"+remoteName {
-				t.Fatalf("unexpected peer id %v", peer["id"])
-			}
-			if peer["hostname"] != remoteName {
-				t.Fatalf("unexpected hostname %v", peer["hostname"])
-			}
-			if peer["reachable"] == true {
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("top-level peers never surfaced reachable peer; envelope=%v", envelope)
-		}
-		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
+		return len(peers) == 1 && peers[0].(map[string]any)["reachable"] == true
+	}) {
+		t.Fatalf("top-level peers never surfaced reachable peer; envelope=%v", lastEnvelope)
+	}
+	// The surfaced peer must carry the expected id and hostname.
+	data, _ := lastEnvelope["data"].(map[string]any)
+	peers, _ := data["peers"].([]any)
+	peer := peers[0].(map[string]any)
+	if peer["id"] != "Host:"+remoteName {
+		t.Fatalf("unexpected peer id %v", peer["id"])
+	}
+	if peer["hostname"] != remoteName {
+		t.Fatalf("unexpected hostname %v", peer["hostname"])
 	}
 }
 
@@ -482,27 +474,20 @@ func TestPeers_TLS_ReachableAndProxiedLookup(t *testing.T) {
 		fixtureOpts{tlsConfig: clientTLS},
 	)
 
-	// Wait until the local supervisor's HTTPS probe of the remote lands.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		envelope := graphQLPost(t, local,
-			`{ host { peers { id reachable } } }`)
-		if errs, _ := envelope["errors"].([]any); len(errs) > 0 {
+	// Wait until the local supervisor's HTTPS probe of the remote lands —
+	// poll the real GraphQL precondition through the shared helper.
+	var lastEnvelope map[string]any
+	if !waitForCondition(5*time.Second, func() bool {
+		lastEnvelope = graphQLPost(t, local, `{ host { peers { id reachable } } }`)
+		if errs, _ := lastEnvelope["errors"].([]any); len(errs) > 0 {
 			t.Fatalf("graphql errors: %v", errs)
 		}
-		data, _ := envelope["data"].(map[string]any)
+		data, _ := lastEnvelope["data"].(map[string]any)
 		host, _ := data["host"].(map[string]any)
 		peers, _ := host["peers"].([]any)
-		if len(peers) == 1 {
-			peer := peers[0].(map[string]any)
-			if peer["reachable"] == true {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("TLS peer never reachable; envelope=%v", envelope)
-		}
-		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
+		return len(peers) == 1 && peers[0].(map[string]any)["reachable"] == true
+	}) {
+		t.Fatalf("TLS peer never reachable; envelope=%v", lastEnvelope)
 	}
 
 	// Proxied node lookup over HTTPS.
@@ -604,24 +589,17 @@ func TestPeers_Processes_FederatedPerPeer(t *testing.T) {
 
 	// Wait for the local supervisor to mark the remote reachable, then
 	// query peers[].processes. Without reachability the federate path
-	// short-circuits with an error.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		envelope := graphQLPost(t, local,
-			`{ host { peers { id reachable } } }`)
-		data, _ := envelope["data"].(map[string]any)
+	// short-circuits with an error. Poll the real GraphQL precondition
+	// through the shared helper.
+	var lastEnvelope map[string]any
+	if !waitForCondition(5*time.Second, func() bool {
+		lastEnvelope = graphQLPost(t, local, `{ host { peers { id reachable } } }`)
+		data, _ := lastEnvelope["data"].(map[string]any)
 		host, _ := data["host"].(map[string]any)
 		peers, _ := host["peers"].([]any)
-		if len(peers) == 1 {
-			peer := peers[0].(map[string]any)
-			if peer["reachable"] == true {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("peer never reachable; envelope=%v", envelope)
-		}
-		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
+		return len(peers) == 1 && peers[0].(map[string]any)["reachable"] == true
+	}) {
+		t.Fatalf("peer never reachable; envelope=%v", lastEnvelope)
 	}
 
 	envelope := graphQLPost(t, local,
@@ -690,27 +668,23 @@ func TestPeers_Processes_UnreachablePeer(t *testing.T) {
 		},
 	)
 
-	// Wait until the supervisor's first probe fails — reachable=false.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		envelope := graphQLPost(t, local,
-			`{ host { peers { reachable } } }`)
-		data, _ := envelope["data"].(map[string]any)
+	// Wait until the supervisor's first probe fails — reachable=false
+	// (probe completed) or nil (probe pending) are both fine; we just need
+	// it not-true. Poll the real GraphQL precondition through the shared
+	// helper.
+	var lastEnvelope map[string]any
+	if !waitForCondition(5*time.Second, func() bool {
+		lastEnvelope = graphQLPost(t, local, `{ host { peers { reachable } } }`)
+		data, _ := lastEnvelope["data"].(map[string]any)
 		host, _ := data["host"].(map[string]any)
 		peers, _ := host["peers"].([]any)
-		if len(peers) == 1 {
-			peer := peers[0].(map[string]any)
-			// reachable can be reported as false (probe completed) or
-			// nil (probe pending). Either is fine — we just need it
-			// not-true.
-			if r, ok := peer["reachable"].(bool); ok && !r {
-				break
-			}
+		if len(peers) != 1 {
+			return false
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("peer reachability never resolved; envelope=%v", envelope)
-		}
-		<-time.After(100 * time.Millisecond) // poll gap; loop re-checks a real GraphQL precondition under a deadline (#818)
+		r, ok := peers[0].(map[string]any)["reachable"].(bool)
+		return ok && !r
+	}) {
+		t.Fatalf("peer reachability never resolved; envelope=%v", lastEnvelope)
 	}
 
 	envelope := graphQLPost(t, local,
@@ -778,7 +752,8 @@ func TestEndToEnd_AddingPeerSurfacesInGraphQL(t *testing.T) {
 	// 3. Construct provider from the on-disk config.
 	initialCfg := loadConfig(t, cfgPath)
 	logger := slog.Default()
-	peerProvider := peerproxy.NewProvider(initialCfg, logger)
+	probe, probeOpt := probeCounter()
+	peerProvider := peerproxy.NewProvider(initialCfg, logger, probeOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -855,56 +830,28 @@ func TestEndToEnd_AddingPeerSurfacesInGraphQL(t *testing.T) {
 		t.Fatalf("rename config: %v", err)
 	}
 
-	// 8–9. Poll host.peers every 100ms for up to 2 seconds. Record the last
-	// envelope for a meaningful failure message at deadline.
-	const pollInterval = 100 * time.Millisecond
-	deadline := time.Now().Add(2 * time.Second)
+	// 8–9. lw-fed-c must surface in host.peers within 2s (the AC's timing
+	// bound). Poll the real GraphQL precondition through the shared helper.
 	var lastEnvelope map[string]any
-	var foundFedC, foundBoxd bool
-	for time.Now().Before(deadline) {
-		envelope := graphQLPost(t, localFix,
-			`{ host { peers { id machineId reachable } } }`)
-		lastEnvelope = envelope
-		data, _ := envelope["data"].(map[string]any)
-		host, _ := data["host"].(map[string]any)
-		peers, _ := host["peers"].([]any)
-		foundFedC = false
-		foundBoxd = false
-		for _, p := range peers {
-			row, _ := p.(map[string]any)
-			mid, _ := row["machineId"].(string)
-			switch mid {
-			case "lw-fed-c":
-				foundFedC = true
-			case "orchard.boxd.sh":
-				foundBoxd = true
-			}
-		}
-		if foundFedC {
-			break
-		}
-		<-time.After(pollInterval) // poll gap; deadline-bounded loop (#818)
-	}
-
-	// 9. lw-fed-c must appear within 2 seconds.
-	if !foundFedC {
+	if !waitForCondition(2*time.Second, func() bool {
+		lastEnvelope = graphQLPost(t, localFix, `{ host { peers { id machineId reachable } } }`)
+		return peerNamePresent(lastEnvelope, "lw-fed-c")
+	}) {
 		t.Fatalf("lw-fed-c never appeared in host.peers within 2s; last response: %v", lastEnvelope)
 	}
 
-	// 10. AddPeer registers the adapter in the map (making it visible in
-	// host.peers) BEFORE the spawned runPeer goroutine's first Probe lands.
-	// Retry briefly: the Ping should arrive within a short window.
-	pingDeadline := time.Now().Add(500 * time.Millisecond)
-	for fakeFedC.pingCount.Load() < 1 && time.Now().Before(pingDeadline) {
-		<-time.After(20 * time.Millisecond) // poll gap; deadline-bounded loop (#818)
-	}
+	// 10. Block on the probe hook until lw-fed-c's newly-spawned goroutine
+	// completes a probe — a real in-process signal, not a poll on the fake
+	// server's counter. Probe issues the Ping synchronously before the hook
+	// fires, so pingCount is guaranteed >= 1 once wait returns.
+	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "lw-fed-c probe")
 	if fakeFedC.pingCount.Load() < 1 {
-		t.Fatalf("no Ping to lw-fed-c observed within 500ms after it appeared in host.peers (pingCount=%d)", fakeFedC.pingCount.Load())
+		t.Fatalf("probe completed but no Ping reached lw-fed-c (pingCount=%d)", fakeFedC.pingCount.Load())
 	}
 
 	// 11. orchard.boxd.sh must still be present — adding a peer must not evict
 	// an existing peer.
-	if !foundBoxd {
+	if !peerNamePresent(lastEnvelope, "orchard.boxd.sh") {
 		t.Fatalf("orchard.boxd.sh disappeared from host.peers after adding lw-fed-c; last response: %v", lastEnvelope)
 	}
 }
@@ -1037,63 +984,33 @@ func TestEndToEnd_RemovingPeerDisappearsFromGraphQL(t *testing.T) {
 		t.Fatalf("rename config: %v", err)
 	}
 
-	// 9. Poll host.peers every 100ms for up to 2 seconds until lw-fed-c disappears.
-	const pollInterval = 100 * time.Millisecond
-	deadline := time.Now().Add(2 * time.Second)
-	var lastEnvelope map[string]any
-	var fedCGone, foundBoxd bool
-	for time.Now().Before(deadline) {
-		envelope := graphQLPost(t, localFix,
-			`{ host { peers { id machineId reachable } } }`)
-		lastEnvelope = envelope
-		data, _ := envelope["data"].(map[string]any)
-		host, _ := data["host"].(map[string]any)
-		peers, _ := host["peers"].([]any)
-		var seenFedC bool
-		foundBoxd = false
-		for _, p := range peers {
-			row, _ := p.(map[string]any)
-			mid, _ := row["machineId"].(string)
-			switch mid {
-			case "lw-fed-c":
-				seenFedC = true
-			case "orchard.boxd.sh":
-				foundBoxd = true
-			}
-		}
-		if !seenFedC {
-			fedCGone = true
-			break
-		}
-		<-time.After(pollInterval) // poll gap; deadline-bounded loop (#818)
-	}
-
-	// 10. lw-fed-c must have disappeared within 2 seconds.
-	if !fedCGone {
-		t.Fatalf("lw-fed-c still present in host.peers after 2s; last response: %v", lastEnvelope)
-	}
-
-	// 11. Block until lw-fed-c's runPeer goroutine has actually exited (exit
-	// hook) — a real teardown signal, not a settle sleep — then assert its
-	// probe stopped. GraphQL disappearance proves RemovePeer landed; the exit
-	// hook proves the goroutine is gone. One in-flight ping already dispatched
-	// when the cancel fired is tolerated.
+	// 9. Block until lw-fed-c's runPeer goroutine has actually exited — the
+	// exit hook is a real teardown signal. RemovePeer deletes the adapter
+	// from the map (happens-before the cancel that stops the goroutine), so
+	// once the goroutine exits a single GraphQL query is guaranteed to show
+	// lw-fed-c gone.
 	exit.wait(t, "lw-fed-c", 1, 5*time.Second, "peer exit")
+
+	// 10. Query host.peers once: lw-fed-c must be gone, boxd must remain.
+	envelope := graphQLPost(t, localFix, `{ host { peers { id machineId reachable } } }`)
+	if peerNamePresent(envelope, "lw-fed-c") {
+		t.Fatalf("lw-fed-c still present in host.peers after its goroutine exited; envelope=%v", envelope)
+	}
+
+	// 11. The exited goroutine's probe must have stopped. Allow at most one
+	// in-flight ping already dispatched when the cancel fired.
 	fedCCountAfter := fakeFedC.pingCount.Load()
-	// Allow at most one in-flight ping that was already dispatched when cancel fired.
 	if fedCCountAfter > fedCCountBefore+1 {
 		t.Fatalf("lw-fed-c probe goroutine still running after RemovePeer: pingCount before=%d after=%d (expected <= %d)",
 			fedCCountBefore, fedCCountAfter, fedCCountBefore+1)
 	}
 
-	// 12. orchard.boxd.sh must still be present in the response (unaffected
-	// by the diff). pingCount monotonicity is the goroutine-alive signal —
-	// the production probe ticker is 30s, so we can't assert growth in a
-	// 200ms test window. The GraphQL presence + non-decreasing count is
-	// sufficient: a cancelled goroutine would have prevented the resolver
-	// from listing orchard.boxd.sh at all (Peers() iterates the live map).
-	if !foundBoxd {
-		t.Fatalf("orchard.boxd.sh disappeared from host.peers after removing lw-fed-c; last response: %v", lastEnvelope)
+	// 12. orchard.boxd.sh must still be present (unaffected by the diff). Its
+	// pingCount is the goroutine-alive signal; the production probe ticker is
+	// 30s so we assert non-decreasing, not growth. A cancelled goroutine
+	// would have dropped it from the live map that Peers() iterates.
+	if !peerNamePresent(envelope, "orchard.boxd.sh") {
+		t.Fatalf("orchard.boxd.sh disappeared from host.peers after removing lw-fed-c; envelope=%v", envelope)
 	}
 	boxdCountAfter := fakeBoxd.pingCount.Load()
 	if boxdCountAfter < boxdCountBefore {
@@ -1128,14 +1045,32 @@ func tlsConfigFromTestServer(ts *httptest.Server) *tls.Config {
 	return tr.TLSClientConfig.Clone()
 }
 
-// waitForCondition polls fn until it returns true or the timeout fires.
+// peerNamePresent reports whether a host.peers GraphQL envelope lists a
+// peer with the given machineId.
+func peerNamePresent(envelope map[string]any, machineID string) bool {
+	data, _ := envelope["data"].(map[string]any)
+	host, _ := data["host"].(map[string]any)
+	peers, _ := host["peers"].([]any)
+	for _, p := range peers {
+		row, _ := p.(map[string]any)
+		if mid, _ := row["machineId"].(string); mid == machineID {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForCondition is the single deadline-bounded poller for preconditions
+// only observable through the live GraphQL/HTTP surface (no in-process
+// hook). It calls fn until it returns true or the timeout fires; the
+// interval between polls is a genuine poll gap, not a settle.
 func waitForCondition(timeout time.Duration, fn func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if fn() {
 			return true
 		}
-		<-time.After(50 * time.Millisecond) // poll gap; deadline-bounded loop (#818)
+		<-time.After(50 * time.Millisecond) // poll interval
 	}
 	return false
 }

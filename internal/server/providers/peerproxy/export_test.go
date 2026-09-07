@@ -117,3 +117,12 @@ func WithReloadHookForTest(h func()) ConfigWatcherOption {
 func WithPeerExitHookForTest(h func(peer string)) ProviderOption {
 	return func(o *providerOptions) { o.peerExitHook = h }
 }
+
+// WithProbeIntervalForTest overrides the 30s inter-probe ticker so a
+// liveness test can observe a second probe within its deadline —
+// positive proof that a goroutine keeps probing after a rejected op.
+// Only peerproxy_test needs it, so it lives here rather than in
+// production. Zero (the default) keeps the 30s production cadence.
+func WithProbeIntervalForTest(d time.Duration) ProviderOption {
+	return func(o *providerOptions) { o.probeInterval = d }
+}

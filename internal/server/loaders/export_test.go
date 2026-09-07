@@ -9,6 +9,10 @@ package loaders
 //
 // Production uses NewLoaders (batchCapacity 0, timer-driven) — its option
 // sets are unchanged by this seam.
+//
+// capacity == N yields a single batch only because every loader is
+// configured with NoCache: duplicate keys are not deduped, so each Load
+// enqueues a distinct slot and the capacity threshold is actually reached.
 func NewLoadersForTest(providers *ProvidersBundle, batchCapacity int) *Loaders {
 	return newLoaders(providers, batchCapacity)
 }

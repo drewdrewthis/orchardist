@@ -234,6 +234,10 @@ func (p *Provider) List(_ context.Context) ([]Conversation, error) {
 // SetSubscribeHookForTest installs a callback fired after each Subscribe
 // registers its channel. Test-only seam (issue #818): nil in production,
 // so subscription behaviour is unchanged.
+//
+// Lives in production (not export_test.go) for the same reason as
+// peerproxy.WithProbeHookForTest: cross-package tests must reach it, which
+// an internal export_test.go symbol cannot serve, and it is nil by default.
 func (p *Provider) SetSubscribeHookForTest(h func()) {
 	p.subMu.Lock()
 	p.subscribeHook = h
@@ -409,8 +413,11 @@ func (p *Provider) reload(ctx context.Context, reason string, source adapter.Fre
 		p.fresh[k] = adapter.Freshness{LastFetchedAt: now, Source: source}
 	}
 	p.loaded = true
-	p.mu.Unlock()
 
+	// Compute the changed set while still holding p.mu. `all` is now the
+	// live p.cache, so once we unlock the run-loop goroutine's cachePut may
+	// write into it — an unlocked range over `all` would race that write.
+	// `old` is the detached previous map and has no concurrent writer.
 	changed := make([]ConversationID, 0)
 	for k, v := range all {
 		ov, had := old[k]
@@ -423,6 +430,8 @@ func (p *Provider) reload(ctx context.Context, reason string, source adapter.Fre
 			changed = append(changed, k)
 		}
 	}
+	p.mu.Unlock()
+
 	if len(changed) == 0 && reason == "boot" {
 		return nil
 	}

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/drewdrewthis/orchardist/internal/server/providers/peerproxy"
 )
 
@@ -54,6 +56,64 @@ func newFakePeer(t *testing.T) *fakePeer {
 func (fp *fakePeer) addr() string {
 	u, _ := stripScheme(fp.srv.URL)
 	return u
+}
+
+// newFakePeerWS is a fakePeer whose /graphql endpoint ALSO accepts the
+// graphql-transport-ws websocket upgrade (connection_init → connection_ack,
+// then holds the connection open, draining frames until the client closes).
+//
+// A live subscription lets runPeer enter its streamLoop, where the probe
+// ticker actually drains — plain newFakePeer rejects the upgrade, so runPeer
+// stays stuck in subscribe-retry and the ticker never fires. The liveness
+// tests need repeated probes (with WithProbeIntervalForTest) to prove a
+// goroutine keeps probing after a rejected op, so they use this variant.
+func newFakePeerWS(t *testing.T) *fakePeer {
+	t.Helper()
+	fp := &fakePeer{}
+	upgrader := websocket.Upgrader{
+		Subprotocols: []string{"graphql-transport-ws"},
+		CheckOrigin:  func(*http.Request) bool { return true },
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			// connection_init → connection_ack.
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			_ = conn.WriteJSON(map[string]any{"type": "connection_ack"})
+			// Hold the connection open — drain frames until the client
+			// closes (RemovePeer/Stop cancels the peer ctx, which sends a
+			// close). No events are pushed; the test only needs the probe
+			// loop alive.
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		fp.pingCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"health":{"status":"ok"}}}`))
+	})
+	fp.srv = httptest.NewServer(mux)
+	t.Cleanup(fp.srv.Close)
+	return fp
 }
 
 // nameCounter accumulates named lifecycle events (probe completions or
@@ -102,6 +162,14 @@ func (w *nameCounter) wait(t *testing.T, name string, min int, within time.Durat
 			t.Fatalf("%s for %q reached %d, want >= %d within %s", what, name, c, min, within)
 		}
 	}
+}
+
+// get returns the current event count for name — used to snapshot a
+// baseline before waiting for the next event.
+func (w *nameCounter) get(name string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.count[name]
 }
 
 // waitTotal blocks until the total across all names reaches min or within
@@ -214,13 +282,18 @@ func TestAddPeer_PreStartReturnsError(t *testing.T) {
 //  4. Call AddPeer again with the SAME name "lw-fed-c" (different address).
 //  5. Assert err != nil and err.Error() contains "lw-fed-c".
 //  6. Peers() still contains exactly one "lw-fed-c" entry.
-//  7. After ~150ms, fake.pingCount has grown (original goroutine still alive).
+//  7. The original goroutine keeps probing after the rejected op — a
+//     positive liveness check: snapshot the probe count, then block until
+//     the NEXT probe fires. If the rejected path had cancelled the peer,
+//     no further probe would land and the wait would time out.
 func TestAddPeer_DuplicateNameRejected(t *testing.T) {
-	fake := newFakePeer(t)
+	fake := newFakePeerWS(t)
 
-	// 1. Construct an empty provider and start it.
+	// 1. Construct an empty provider and start it. A short probe interval
+	// lets step 7 observe the next probe within its deadline.
 	probe, probeOpt := probeCounter()
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(),
+		probeOpt, peerproxy.WithProbeIntervalForTest(50*time.Millisecond))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -241,8 +314,8 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 	// Block on the probe hook to confirm the goroutine is live.
 	probe.wait(t, "lw-fed-c", 1, 5*time.Second, "probe")
 
-	// 3. Snapshot pingCount after confirming the goroutine is live.
-	countBefore := fake.pingCount.Load()
+	// 3. Snapshot the probe count after confirming the goroutine is live.
+	probesBefore := probe.get("lw-fed-c")
 
 	// 4. Attempt a duplicate AddPeer — same name, different address.
 	err := p.AddPeer(peerproxy.PeerConfig{
@@ -271,19 +344,12 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 		t.Fatalf("Peers() has %d entries for \"lw-fed-c\", want exactly 1; Peers()=%v", count, peers)
 	}
 
-	// 7. The original goroutine is untouched: the rejected request returned an
-	// error without cancelling it, so its monotonic pingCount cannot drop. No
-	// settle is needed — nothing on this path can stop the goroutine.
-	countAfter := fake.pingCount.Load()
-	// The probe interval is 30s but the goroutine also sends pings during
-	// subscribe retries. We allow for the possibility that the interval hasn't
-	// fired again yet — the key assertion is that the goroutine was NOT killed.
-	// We verify liveness by checking pingCount did not drop (cancel would stop
-	// the goroutine; it cannot decrease the counter, but it would stop growth).
-	// For a stronger check we accept countAfter >= countBefore.
-	if countAfter < countBefore {
-		t.Fatalf("pingCount decreased after duplicate AddPeer: before=%d after=%d", countBefore, countAfter)
-	}
+	// 7. Positive liveness: the original goroutine must keep probing after
+	// the rejected duplicate. Block until the NEXT probe fires. A rejected
+	// AddPeer that (incorrectly) cancelled the existing peer would stop the
+	// probe loop and this wait would time out — the falsifiable check the
+	// old monotonic-pingCount assertion could never make.
+	probe.wait(t, "lw-fed-c", probesBefore+1, 5*time.Second, "probe after rejected duplicate")
 }
 
 // TestRemovePeer_UnknownNameReturnsError covers the scenario
@@ -297,14 +363,19 @@ func TestAddPeer_DuplicateNameRejected(t *testing.T) {
 //  4. Call RemovePeer("ghost") — a name that does NOT exist.
 //  5. Assert err != nil and err.Error() contains "ghost".
 //  6. Peers() still contains "real".
-//  7. After ~150ms, fake.pingCount has continued to grow (original goroutine alive).
+//  7. The "real" goroutine keeps probing after the rejected op — a
+//     positive liveness check: snapshot the probe count, then block until
+//     the NEXT probe fires. A rejected RemovePeer that stopped the peer
+//     would time out this wait.
 //  8. (Optional) RemovePeer("real") returns nil — maps are not corrupted.
 func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
-	fake := newFakePeer(t)
+	fake := newFakePeerWS(t)
 
-	// 1. Construct an empty provider and start it.
+	// 1. Construct an empty provider and start it. A short probe interval
+	// lets step 7 observe the next probe within its deadline.
 	probe, probeOpt := probeCounter()
-	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(), probeOpt)
+	p := peerproxy.NewProvider(peerproxy.FederationConfig{}, slog.Default(),
+		probeOpt, peerproxy.WithProbeIntervalForTest(50*time.Millisecond))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -325,8 +396,8 @@ func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
 	// Block on the probe hook to confirm the goroutine is live.
 	probe.wait(t, "real", 1, 5*time.Second, "probe")
 
-	// 3. Snapshot pingCount after confirming the goroutine is live.
-	countBefore := fake.pingCount.Load()
+	// 3. Snapshot the probe count after confirming the goroutine is live.
+	probesBefore := probe.get("real")
 
 	// 4. RemovePeer on a name that does not exist.
 	err := p.RemovePeer("ghost")
@@ -351,13 +422,12 @@ func TestRemovePeer_UnknownNameReturnsError(t *testing.T) {
 		t.Fatal("Peers() no longer contains \"real\" after RemovePeer(\"ghost\")")
 	}
 
-	// 7. The original goroutine is untouched: the rejected request returned an
-	// error without cancelling it, so its monotonic pingCount cannot drop. No
-	// settle is needed — nothing on this path can stop the goroutine.
-	countAfter := fake.pingCount.Load()
-	if countAfter < countBefore {
-		t.Fatalf("pingCount decreased after RemovePeer(\"ghost\"): before=%d after=%d", countBefore, countAfter)
-	}
+	// 7. Positive liveness: the "real" goroutine must keep probing after the
+	// rejected RemovePeer("ghost"). Block until the NEXT probe fires. A
+	// rejected removal that (incorrectly) cancelled "real" would stop its
+	// probe loop and this wait would time out — the falsifiable check the
+	// old monotonic-pingCount assertion could never make.
+	probe.wait(t, "real", probesBefore+1, 5*time.Second, "probe after rejected removal")
 
 	// 8. (Optional) RemovePeer("real") must succeed — maps were not corrupted.
 	if err := p.RemovePeer("real"); err != nil {

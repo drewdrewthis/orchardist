@@ -186,6 +186,10 @@ func (p *Provider) List() []Process {
 // SetSubscribeHookForTest installs a callback fired after each Subscribe
 // registers its channel. Test-only seam (issue #818): nil in production,
 // so subscription behaviour is unchanged.
+//
+// Lives in production (not export_test.go) for the same reason as
+// peerproxy.WithProbeHookForTest: cross-package tests must reach it, which
+// an internal export_test.go symbol cannot serve, and it is nil by default.
 func (p *Provider) SetSubscribeHookForTest(h func()) {
 	p.subsMu.Lock()
 	p.subscribeHook = h

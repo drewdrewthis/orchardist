@@ -68,6 +68,10 @@ type Provider struct {
 // SetSessionSubscribeHookForTest installs a callback fired after each
 // session-facet Subscribe registers its channel. Test-only seam (issue
 // #818): nil in production, so subscription behaviour is unchanged.
+//
+// Lives in production (not export_test.go) for the same reason as
+// peerproxy.WithProbeHookForTest: cross-package tests must reach it, which
+// an internal export_test.go symbol cannot serve, and it is nil by default.
 func (p *Provider) SetSessionSubscribeHookForTest(h func()) {
 	p.subsMu.Lock()
 	p.sessionSubscribeHook = h
