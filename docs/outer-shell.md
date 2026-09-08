@@ -642,11 +642,11 @@ restore the inner attach in pane 0.1, not to re-aim the variable.
 
 The inner server does not have to exist before `orchard shell` runs. When
 `resolveSession` finds no inner server, or one with zero sessions, it does not
-fail — it creates a single detached default session (`main`, or the
-`--session` name if one was given) on the inner socket with `-c $HOME`, then
-boots the wrapper attached to it. This mirrors the pane-recovery self-heal
-below: a first run with nothing running is just the recovery case seen at boot
-instead of after a death.
+fail — it honors `--session` (or falls back to `main`) and creates it with
+`new-session -d -s <name> -c $HOME`, then boots the wrapper attached to it.
+Pane recovery below creates its own default session the same way but through
+a different command: `new-session -A -s main -c $HOME`, run inside the pane
+itself rather than by the wrapper up front.
 
 The create happens **before** anything touches the outer socket, so a genuine
 tmux fault (no binary on `$PATH`, an unwritable socket) fails `new-session`

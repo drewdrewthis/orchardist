@@ -145,6 +145,20 @@ func TestInnerAttachCommand_ClearsTMUXAndExecs(t *testing.T) {
 	}
 }
 
+func TestInnerNewSessionCommand_SetsHomeCwd(t *testing.T) {
+	got := innerNewSessionCommand("inner", "main", "/home/carol")
+	if got != "TMUX= exec tmux -L inner new-session -A -s main -c /home/carol" {
+		t.Errorf("innerNewSessionCommand = %q", got)
+	}
+}
+
+func TestInnerNewSessionCommand_OmitsDashCWhenHomeIsUnresolved(t *testing.T) {
+	got := innerNewSessionCommand("inner", "main", "")
+	if got != "TMUX= exec tmux -L inner new-session -A -s main" {
+		t.Errorf("innerNewSessionCommand = %q", got)
+	}
+}
+
 func TestSidebarCommand_CarriesTheWholeEnvContract(t *testing.T) {
 	got := sidebarCommand("/opt/bin/orchard-sidebar", "inner", "/dev/ttys004", "%3")
 	want := "ORCHARD_TMUX_SOCKET=inner ORCHARD_TMUX_CLIENT=/dev/ttys004 ORCHARD_OUTER_PANE=%3 /opt/bin/orchard-sidebar"

@@ -114,9 +114,15 @@ func innerAttachCommand(socket, session string) string {
 // session instead of a dead pane. `TMUX=` is cleared for the same nesting
 // reason as innerAttachCommand, and `exec` for the same self-heal reason: the
 // pane must die with its inner tmux so a later server death re-triggers
-// recovery instead of dropping to a surviving shell.
-func innerNewSessionCommand(socket, session string) string {
-	return fmt.Sprintf("TMUX= exec tmux -L %s new-session -A -s %s", shellQuote(socket), shellQuote(session))
+// recovery instead of dropping to a surviving shell. home sets its cwd to
+// $HOME, matching createDefaultInnerSession's boot-time default; an empty
+// home omits -c rather than passing tmux a blank argument.
+func innerNewSessionCommand(socket, session, home string) string {
+	if home == "" {
+		return fmt.Sprintf("TMUX= exec tmux -L %s new-session -A -s %s", shellQuote(socket), shellQuote(session))
+	}
+	return fmt.Sprintf("TMUX= exec tmux -L %s new-session -A -s %s -c %s",
+		shellQuote(socket), shellQuote(session), shellQuote(home))
 }
 
 // sidebarCommand is pane 0.0's command line.

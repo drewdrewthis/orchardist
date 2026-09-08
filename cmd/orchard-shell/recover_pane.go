@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -172,8 +173,9 @@ func (w *wrapper) applyRecovery(action recoverAction, target, msg string, stderr
 	case actReattachInner:
 		return w.reattachInner()
 	case actNewInnerSession:
+		home, _ := os.UserHomeDir()
 		_, err := w.outer("respawn-pane", "-k", "-t", paneInner,
-			innerNewSessionCommand(w.opts.InnerSocket, defaultNewSessionName))
+			innerNewSessionCommand(w.opts.InnerSocket, defaultNewSessionName, home))
 		return err
 	case actRespawnSidebar:
 		appendSidebarLog(msg)
@@ -225,8 +227,9 @@ func (w *wrapper) paneExists(target string) bool {
 func (w *wrapper) reattachInner() error {
 	sessions, err := w.innerSessions()
 	if err != nil || len(sessions) == 0 {
+		home, _ := os.UserHomeDir()
 		_, err := w.outer("respawn-pane", "-k", "-t", paneInner,
-			innerNewSessionCommand(w.opts.InnerSocket, defaultNewSessionName))
+			innerNewSessionCommand(w.opts.InnerSocket, defaultNewSessionName, home))
 		return err
 	}
 	_, err = w.outer("respawn-pane", "-k", "-t", paneInner,

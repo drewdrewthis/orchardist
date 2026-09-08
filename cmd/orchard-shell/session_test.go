@@ -41,6 +41,8 @@ func TestSortSessionsByRecency_ToleratesANameOnlyLine(t *testing.T) {
 	}
 }
 
+// AC3: with existing inner sessions, resolveSession attaches the most
+// recently attached one and creates nothing new on the inner server.
 func TestResolveSession_DefaultsToMostRecentlyAttached(t *testing.T) {
 	f := newFakeTmux().reply(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"),
 		"100 a\n900 b\n")
@@ -52,6 +54,9 @@ func TestResolveSession_DefaultsToMostRecentlyAttached(t *testing.T) {
 	}
 	if got != "b" {
 		t.Errorf("resolveSession() = %q; want the most recently attached session b", got)
+	}
+	if f.called("new-session") {
+		t.Errorf("a session was created despite existing sessions; calls: %v", f.calls)
 	}
 }
 
@@ -135,25 +140,6 @@ func TestEnsureReady_EmptyInnerServerCreatesDefaultThenBoots(t *testing.T) {
 	}
 }
 
-// AC3: with existing inner sessions, resolveSession attaches one and creates
-// nothing new on the inner server.
-func TestResolveSession_ExistingSessionsCreateNothing(t *testing.T) {
-	f := newFakeTmux().reply(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"),
-		"100 a\n900 b\n")
-	w := testWrapper(f)
-
-	got, err := w.resolveSession()
-	if err != nil {
-		t.Fatalf("resolveSession: %v", err)
-	}
-	if got != "b" {
-		t.Errorf("resolveSession() = %q; want the most recent session b", got)
-	}
-	if f.called("new-session") {
-		t.Errorf("a session was created despite existing sessions; calls: %v", f.calls)
-	}
-}
-
 // AC4: a genuine tmux error when creating the default session fails fast with
 // exit 1 and mutates nothing on the outer server — the create runs before boot
 // touches the outer socket.
@@ -169,6 +155,9 @@ func TestEnsureReady_InnerCreateFailureFailsFastLeavesOuterUntouched(t *testing.
 	err := w.ensureReady()
 	if err == nil {
 		t.Fatal("ensureReady succeeded despite a failing inner new-session")
+	}
+	if !f.called(strings.Join(innerArgs("inner-test", "new-session", "-d", "-s", defaultNewSessionName, "-c", home), " ")) {
+		t.Errorf("ensureReady did not attempt the inner new-session create; calls: %v", f.calls)
 	}
 	if got := exitCodeFor(err); got != 1 {
 		t.Errorf("exit code = %d; want 1 (2 is reserved for a missing session)", got)

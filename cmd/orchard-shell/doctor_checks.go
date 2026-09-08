@@ -67,17 +67,24 @@ func checkTmuxNesting() checkResult {
 
 // --- inner socket --------------------------------------------------------
 
+// checkInnerSocket never fails: an absent inner server or one with zero
+// sessions is exactly the case orchard shell self-heals by creating
+// defaultNewSessionName (see resolveSession/createDefaultInnerSession),
+// not a defect to remedy.
 func checkInnerSocket(env doctorEnv) checkResult {
 	socket := cmp.Or(env.innerSocket, defaultInnerSocket)
 	out, err := env.tmux(innerArgs(socket, "list-sessions")...)
 	if err != nil {
-		return checkResult{ID: "inner-socket", Status: statusFail,
-			Detail: fmt.Sprintf("no tmux server with sessions on socket %q", socket),
-			Remedy: "orchard new   (or: tmux -L " + socket + " new -s work)"}
+		return checkResult{ID: "inner-socket", Status: statusPass,
+			Detail: fmt.Sprintf("no inner sessions on socket %q — orchard shell will create %q", socket, defaultNewSessionName)}
 	}
 	n := 0
 	if out != "" {
 		n = len(strings.Split(out, "\n"))
+	}
+	if n == 0 {
+		return checkResult{ID: "inner-socket", Status: statusPass,
+			Detail: fmt.Sprintf("no inner sessions on socket %q — orchard shell will create %q", socket, defaultNewSessionName)}
 	}
 	return checkResult{ID: "inner-socket", Status: statusPass,
 		Detail: fmt.Sprintf("socket %q has %d session(s)", socket, n)}
