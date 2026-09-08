@@ -104,6 +104,20 @@ func TestCheckInnerSocket(t *testing.T) {
 			t.Errorf("Detail = %q; want it to name %q", got.Detail, defaultNewSessionName)
 		}
 	})
+	t.Run("permission denied fails — not self-healable", func(t *testing.T) {
+		f := newFakeTmux().fail(innerCallStr("list-sessions"), "error connecting to /tmp/tmux-501/default (Permission denied)")
+		env := doctorEnv{tmux: f.exec}
+		got := checkInnerSocket(env)
+		if got.Status != statusFail {
+			t.Errorf("Status = %v; want fail", got.Status)
+		}
+		if !strings.Contains(got.Detail, "Permission denied") {
+			t.Errorf("Detail = %q; want it to contain the tmux error", got.Detail)
+		}
+		if got.Remedy == "" {
+			t.Error("fail status carries no remedy")
+		}
+	})
 }
 
 // innerCallStr renders the argv checkInnerSocket uses, for registering fake
