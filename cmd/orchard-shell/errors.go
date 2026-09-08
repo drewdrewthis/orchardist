@@ -10,23 +10,6 @@ import (
 // other failure without parsing stderr.
 const exitSessionMissing = 2
 
-// noInnerServerError means there is no tmux server on the inner socket at
-// all: there is nothing to wrap yet.
-type noInnerServerError struct {
-	socket string
-	cause  error
-}
-
-func (e *noInnerServerError) Error() string {
-	msg := fmt.Sprintf("no tmux server with sessions on socket %q", e.socket)
-	if e.cause != nil {
-		msg += fmt.Sprintf(" (%v)", e.cause)
-	}
-	return msg + "\nStart one first:  orchard new   (or: tmux -L " + e.socket + " new -s work)"
-}
-
-func (e *noInnerServerError) Unwrap() error { return e.cause }
-
 // sessionMissingError means the inner server is up but does not have the
 // requested session. It carries the sessions that DO exist: a bare "not
 // found" makes the user go and run list-sessions themselves, and the answer

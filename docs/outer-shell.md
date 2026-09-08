@@ -638,6 +638,22 @@ inner socket is the one thing that must not happen; that is #747 defect 2, and
 it hijacks a terminal the user never pointed at this sidebar. The fix is to
 restore the inner attach in pane 0.1, not to re-aim the variable.
 
+## Boot with no inner sessions
+
+The inner server does not have to exist before `orchard shell` runs. When
+`resolveSession` finds no inner server, or one with zero sessions, it does not
+fail — it creates a single detached default session (`main`, or the
+`--session` name if one was given) on the inner socket with `-c $HOME`, then
+boots the wrapper attached to it. This mirrors the pane-recovery self-heal
+below: a first run with nothing running is just the recovery case seen at boot
+instead of after a death.
+
+The create happens **before** anything touches the outer socket, so a genuine
+tmux fault (no binary on `$PATH`, an unwritable socket) fails `new-session`
+first and leaves the outer server untouched — the wrapper exits 1 with nothing
+half-built. Fail-fast is kept only for that class of error, not for "no
+sessions yet" (issue #851; retires #747's fail-fast-on-empty).
+
 ## Pane recovery
 
 A pane that dies used to sit there dead: killing the inner session pane 0.1

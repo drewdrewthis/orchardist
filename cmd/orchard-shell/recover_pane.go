@@ -18,9 +18,10 @@ import (
 // records the outcome in the recovery log for doctor to surface. Everything
 // policy lives in decideRecovery; this file only reads state and drives tmux.
 
-// defaultNewSessionName is the session `new-session -A` creates when the
-// inner server has none left — a plain, predictable name the user can rename.
-const defaultNewSessionName = "work"
+// defaultNewSessionName is the session name orchard-shell creates when the
+// inner server has none to attach — on first boot (resolveSession) and on
+// pane-recovery self-heal alike. A plain, predictable name the user can rename.
+const defaultNewSessionName = "main"
 
 // runRecoverPane is the `recover-pane` subcommand. It never fails the caller
 // (a tmux hook): a recovery that cannot proceed logs to stderr, which the
