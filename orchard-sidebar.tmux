@@ -20,4 +20,12 @@ tmux bind-key "$key" run-shell "$CURRENT_DIR/scripts/sidebar-toggle.sh"
 auto="$(get_opt @orchard_sidebar_auto)"
 if [ "${auto:-on}" != "off" ]; then
   tmux set-hook -g session-created "run-shell '$CURRENT_DIR/scripts/sidebar-open.sh #{q:hook_session_name}'"
+  # The hook only fires for sessions created AFTER it is registered. When the
+  # config is sourced on a fresh server (TPM sources plugins via `run-shell -b`,
+  # so this runs once the first session already exists) session 1 would never
+  # get a sidebar. Open one in every session already present; sidebar-open.sh is
+  # idempotent per window, so re-sourcing the config creates no duplicates (#848).
+  tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r s; do
+    [ -n "$s" ] && "$CURRENT_DIR/scripts/sidebar-open.sh" "$s"
+  done
 fi
