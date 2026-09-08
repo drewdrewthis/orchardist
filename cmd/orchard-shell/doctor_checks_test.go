@@ -79,15 +79,43 @@ func TestCheckInnerSocket(t *testing.T) {
 			t.Errorf("Status = %v; want pass", got.Status)
 		}
 	})
-	t.Run("no server fails with a remedy", func(t *testing.T) {
+	t.Run("no server passes — orchard shell self-heals it", func(t *testing.T) {
 		f := newFakeTmux().fail(innerCallStr("list-sessions"), "no server running on default")
+		env := doctorEnv{tmux: f.exec}
+		got := checkInnerSocket(env)
+		if got.Status != statusPass {
+			t.Errorf("Status = %v; want pass", got.Status)
+		}
+		if !strings.Contains(got.Detail, defaultNewSessionName) {
+			t.Errorf("Detail = %q; want it to name %q", got.Detail, defaultNewSessionName)
+		}
+		if got.Remedy != "" {
+			t.Errorf("Remedy = %q; want none", got.Remedy)
+		}
+	})
+	t.Run("zero sessions passes — orchard shell self-heals it", func(t *testing.T) {
+		f := newFakeTmux().reply(innerCallStr("list-sessions"), "")
+		env := doctorEnv{tmux: f.exec}
+		got := checkInnerSocket(env)
+		if got.Status != statusPass {
+			t.Errorf("Status = %v; want pass", got.Status)
+		}
+		if !strings.Contains(got.Detail, defaultNewSessionName) {
+			t.Errorf("Detail = %q; want it to name %q", got.Detail, defaultNewSessionName)
+		}
+	})
+	t.Run("permission denied fails — not self-healable", func(t *testing.T) {
+		f := newFakeTmux().fail(innerCallStr("list-sessions"), "error connecting to /tmp/tmux-501/default (Permission denied)")
 		env := doctorEnv{tmux: f.exec}
 		got := checkInnerSocket(env)
 		if got.Status != statusFail {
 			t.Errorf("Status = %v; want fail", got.Status)
 		}
-		if !strings.Contains(got.Remedy, "orchard new") {
-			t.Errorf("Remedy = %q; want it to mention orchard new", got.Remedy)
+		if !strings.Contains(got.Detail, "Permission denied") {
+			t.Errorf("Detail = %q; want it to contain the tmux error", got.Detail)
+		}
+		if got.Remedy == "" {
+			t.Error("fail status carries no remedy")
 		}
 	})
 }

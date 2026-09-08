@@ -67,17 +67,46 @@ func checkTmuxNesting() checkResult {
 
 // --- inner socket --------------------------------------------------------
 
+// isAbsentInnerServer reports whether err is tmux's "there is no server at
+// all" error — the one case resolveSession/createDefaultInnerSession
+// self-heal by creating defaultNewSessionName. Any other error (permission
+// denied, socket path unwritable, ...) is a real defect and must not be
+// swallowed the same way. tmux's own wording varies by version/platform, so
+// this checks the two forms actually seen from `tmux -L <socket>
+// list-sessions`: "no server running on <path>" (server never started) and
+// "error connecting to <path> (No such file or directory)" (parent dir
+// missing/socket cleaned up).
+func isAbsentInnerServer(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no server running on") ||
+		strings.Contains(msg, "error connecting to") && strings.Contains(msg, "No such file or directory")
+}
+
+// checkInnerSocket passes when the inner server is absent or has zero
+// sessions — exactly the case orchard shell self-heals by creating
+// defaultNewSessionName (see resolveSession/createDefaultInnerSession), not
+// a defect to remedy. Any other tmux error (permission denied, unwritable
+// socket directory, ...) fails: that is not something orchard shell can
+// self-heal.
 func checkInnerSocket(env doctorEnv) checkResult {
 	socket := cmp.Or(env.innerSocket, defaultInnerSocket)
 	out, err := env.tmux(innerArgs(socket, "list-sessions")...)
 	if err != nil {
+		if isAbsentInnerServer(err) {
+			return checkResult{ID: "inner-socket", Status: statusPass,
+				Detail: fmt.Sprintf("no inner sessions on socket %q — orchard shell will create %q", socket, defaultNewSessionName)}
+		}
 		return checkResult{ID: "inner-socket", Status: statusFail,
-			Detail: fmt.Sprintf("no tmux server with sessions on socket %q", socket),
-			Remedy: "orchard new   (or: tmux -L " + socket + " new -s work)"}
+			Detail: fmt.Sprintf("tmux -L %s list-sessions failed: %v", socket, err),
+			Remedy: fmt.Sprintf("check the socket directory permissions: tmux -L %s list-sessions", socket)}
 	}
 	n := 0
 	if out != "" {
 		n = len(strings.Split(out, "\n"))
+	}
+	if n == 0 {
+		return checkResult{ID: "inner-socket", Status: statusPass,
+			Detail: fmt.Sprintf("no inner sessions on socket %q — orchard shell will create %q", socket, defaultNewSessionName)}
 	}
 	return checkResult{ID: "inner-socket", Status: statusPass,
 		Detail: fmt.Sprintf("socket %q has %d session(s)", socket, n)}

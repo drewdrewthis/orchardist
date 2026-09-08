@@ -117,10 +117,11 @@ func (w *wrapper) ensureReady() error {
 			return err
 		}
 	}
-	// After the inner server is confirmed present (every path above that
-	// reaches here has either resolved a session on it or found a live inner
-	// client via probe) — never before, so a missing inner server still fails
-	// fast and mutates nothing (AC3).
+	// After the inner server is confirmed present: every path above either
+	// resolved a session on it, created a default one (resolveSession), or
+	// found a live inner client via probe. A genuine tmux error surfaces from
+	// resolveSession/boot before this point, so nothing here runs against a
+	// broken inner server.
 	w.disarmDetachOnDestroy()
 	return w.focusInner()
 }

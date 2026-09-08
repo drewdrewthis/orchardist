@@ -97,13 +97,16 @@ Feature: orchard shell boot and reattach
     And the output lists "myrepo_main" and "myrepo_feature-x" as the available sessions
     And no outer session is created
 
+  # Superseded by orchardist#851: no inner server now auto-creates a default
+  # session and boots, instead of printing the "orchard new" hint. Full
+  # coverage lives in outer-shell-default-inner-session.feature.
   @integration
-  Scenario: No inner server prints the orchard new hint
+  Scenario: No inner server auto-creates a default session and boots
     Given no inner tmux server exists on socket "default"
     When I run "orchard shell"
-    Then the command explains that no inner server was found
-    And it suggests running "orchard new"
-    And no outer session is created
+    Then a default inner session named "main" is created on socket "default"
+    And the outer session boots attached to it
+    And the command does not print the "orchard new" hint
 
   @integration
   Scenario: --detach boots the outer session without attaching

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,8 @@ func TestSortSessionsByRecency_ToleratesANameOnlyLine(t *testing.T) {
 	}
 }
 
+// AC3: with existing inner sessions, resolveSession attaches the most
+// recently attached one and creates nothing new on the inner server.
 func TestResolveSession_DefaultsToMostRecentlyAttached(t *testing.T) {
 	f := newFakeTmux().reply(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"),
 		"100 a\n900 b\n")
@@ -51,6 +54,9 @@ func TestResolveSession_DefaultsToMostRecentlyAttached(t *testing.T) {
 	}
 	if got != "b" {
 		t.Errorf("resolveSession() = %q; want the most recently attached session b", got)
+	}
+	if f.called("new-session") {
+		t.Errorf("a session was created despite existing sessions; calls: %v", f.calls)
 	}
 }
 
@@ -95,45 +101,106 @@ func TestResolveSession_MissingSessionNamesWhatExists(t *testing.T) {
 	}
 }
 
-// @scenario No inner server prints the orchard new hint
+// @scenario No inner server creates a default session and boots
 //
-// AC3: an inner socket with no server exits non-zero, names the socket, and
-// creates no outer session.
-func TestEnsureReady_NoInnerServerNamesTheSocketAndCreatesNothing(t *testing.T) {
+// AC1: with no inner server, ensureReady creates exactly one default session
+// named "main" on the inner socket, then boots the outer wrapper — instead of
+// the old fail-fast (issue #747 AC3, retired by #851).
+func TestEnsureReady_NoInnerServerCreatesDefaultThenBoots(t *testing.T) {
 	f := newFakeTmux().
 		fail(outerCall("has-session", "-t", outerSessionName), "no server running").
-		fail(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "no server running on /tmp/tmux-501/nosuchsocket")
-	w := testWrapper(f, func(o *Options) { o.InnerSocket = "nosuchsocket" })
+		fail(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "no server running")
+	w := testWrapper(f)
+
+	if err := w.ensureReady(); err != nil {
+		t.Fatalf("ensureReady failed with no inner server: %v", err)
+	}
+	home, _ := os.UserHomeDir()
+	if !f.called(strings.Join(innerArgs("inner-test", "new-session", "-d", "-s", defaultNewSessionName, "-c", home), " ")) {
+		t.Errorf("did not create the default inner session %q; calls: %v", defaultNewSessionName, f.calls)
+	}
+	if !f.called("-s " + outerSessionName) {
+		t.Errorf("outer wrapper was not booted; mutations: %v", f.mutations())
+	}
+}
+
+// AC2: an inner server that is up but has zero sessions is treated exactly
+// like an absent one — create the default session, then boot.
+func TestEnsureReady_EmptyInnerServerCreatesDefaultThenBoots(t *testing.T) {
+	f := newFakeTmux().
+		fail(outerCall("has-session", "-t", outerSessionName), "no server running").
+		reply(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "")
+	w := testWrapper(f)
+
+	if err := w.ensureReady(); err != nil {
+		t.Fatalf("ensureReady failed on an empty inner server: %v", err)
+	}
+	if !f.called("new-session -d -s " + defaultNewSessionName) {
+		t.Errorf("did not create the default inner session; calls: %v", f.calls)
+	}
+}
+
+// AC4: a genuine tmux error when creating the default session fails fast with
+// exit 1 and mutates nothing on the outer server — the create runs before boot
+// touches the outer socket.
+func TestEnsureReady_InnerCreateFailureFailsFastLeavesOuterUntouched(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	f := newFakeTmux().
+		fail(outerCall("has-session", "-t", outerSessionName), "no server running").
+		fail(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "no server running").
+		fail(strings.Join(innerArgs("inner-test", "new-session", "-d", "-s", defaultNewSessionName, "-c", home), " "),
+			"error connecting to /tmp/nosuchsocket (Permission denied)")
+	w := testWrapper(f)
 
 	err := w.ensureReady()
 	if err == nil {
-		t.Fatal("ensureReady succeeded with no inner server")
+		t.Fatal("ensureReady succeeded despite a failing inner new-session")
 	}
-	var noServer *noInnerServerError
-	if !errors.As(err, &noServer) {
-		t.Fatalf("error is %T; want *noInnerServerError", err)
-	}
-	if !strings.Contains(err.Error(), "nosuchsocket") {
-		t.Errorf("error %q does not name the socket", err)
-	}
-	if !strings.Contains(err.Error(), "orchard new") {
-		t.Errorf("error %q does not offer the orchard new hint", err)
-	}
-	if got := f.mutations(); len(got) != 0 {
-		t.Errorf("an outer session was built despite the failure: %v", got)
+	if !f.called(strings.Join(innerArgs("inner-test", "new-session", "-d", "-s", defaultNewSessionName, "-c", home), " ")) {
+		t.Errorf("ensureReady did not attempt the inner new-session create; calls: %v", f.calls)
 	}
 	if got := exitCodeFor(err); got != 1 {
 		t.Errorf("exit code = %d; want 1 (2 is reserved for a missing session)", got)
 	}
+	for _, m := range f.mutations() {
+		if strings.Contains(m, "outer-test") {
+			t.Errorf("outer server was mutated despite the create failure: %q", m)
+		}
+	}
 }
 
-func TestResolveSession_EmptyInnerServerIsNoInnerServer(t *testing.T) {
-	f := newFakeTmux().reply(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "")
+// AC7: the default-session create sets cwd to $HOME, so a fresh session starts
+// where a login shell would.
+func TestResolveSession_CreatesInHomeDir(t *testing.T) {
+	f := newFakeTmux().fail(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "no server running")
 	w := testWrapper(f)
 
-	_, err := w.resolveSession()
-	var noServer *noInnerServerError
-	if !errors.As(err, &noServer) {
-		t.Fatalf("error is %v (%T); want *noInnerServerError", err, err)
+	if _, err := w.resolveSession(); err != nil {
+		t.Fatalf("resolveSession: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir available: %v", err)
+	}
+	if !f.called("new-session -d -s " + defaultNewSessionName + " -c " + home) {
+		t.Errorf("create did not set -c %q; calls: %v", home, f.calls)
+	}
+}
+
+// AC8: --session foo on an absent/empty inner server creates a session named
+// foo (the name the user asked for), not the default.
+func TestResolveSession_FlagNamesTheCreatedSession(t *testing.T) {
+	f := newFakeTmux().fail(innerCall("list-sessions", "-F", "#{session_last_attached} #{session_name}"), "no server running")
+	w := testWrapper(f, func(o *Options) { o.Session = "foo" })
+
+	got, err := w.resolveSession()
+	if err != nil {
+		t.Fatalf("resolveSession: %v", err)
+	}
+	if got != "foo" {
+		t.Errorf("resolveSession() = %q; want foo", got)
+	}
+	if !f.called("new-session -d -s foo") {
+		t.Errorf("did not create a session named foo; calls: %v", f.calls)
 	}
 }
