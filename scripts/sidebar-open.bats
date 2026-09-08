@@ -135,7 +135,9 @@ teardown() {
 
 # End-to-end: the REAL hook -> run-shell -> /bin/sh expansion path where #734
 # lived. A '$'-bearing session name must reach sidebar-open.sh intact and get
-# exactly one sidebar pane; a pre-existing session must not (#734).
+# exactly one sidebar pane. The pre-existing "seed" session must ALSO get exactly
+# one: sourcing the plugin now opens a sidebar in every already-existing session
+# (#848), and "exactly one" proves that open did not double-hit seed.
 @test "live session-created hook auto-opens a sidebar for a \$-named session (#734)" {
   [ -n "$REAL_TMUX" ] || skip "tmux not installed"
   unset TMUX  # never let a real client's socket leak in
@@ -176,7 +178,78 @@ teardown() {
   count="$(printf '%s\n' "$panes" | grep -c orchard-sidebar)"
   [ "$count" -eq 1 ]
 
-  # the pre-existing seed session must NOT have gained a sidebar pane
+  # the pre-existing seed session gets exactly one sidebar too (opened for
+  # already-existing sessions when the plugin is sourced; not doubled) (#848)
   seed_panes="$("$REAL_TMUX" -L "$SOCK" list-panes -t 'seed:' -F '#{pane_start_command}' 2>/dev/null || true)"
-  ! printf '%s\n' "$seed_panes" | grep -q orchard-sidebar
+  seed_count="$(printf '%s\n' "$seed_panes" | grep -c orchard-sidebar)"
+  [ "$seed_count" -eq 1 ]
+}
+
+# Fresh server: the FIRST session (the one that exists before the hook is
+# registered) must still get a sidebar when the plugin is sourced from the
+# config, because the plugin opens one in every already-existing session (#848).
+@test "fresh server: first session gets a sidebar when the plugin is sourced from the config (#848)" {
+  [ -n "$REAL_TMUX" ] || skip "tmux not installed"
+  unset TMUX
+
+  SOCK="t848a-$$-$BATS_TEST_NUMBER"
+  REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+
+  LIVE_TMPDIR="$(mktemp -d)"
+  printf '#!/bin/sh\nsleep 60\n' > "$LIVE_TMPDIR/orchard-sidebar"
+  chmod +x "$LIVE_TMPDIR/orchard-sidebar"
+
+  # a config that (1) puts the stub orchard-sidebar + real tmux on PATH, then
+  # (2) sources the plugin — exactly the .tmux.conf shape from #848
+  CONF="$LIVE_TMPDIR/first.conf"
+  {
+    printf 'set-environment -g PATH "%s"\n' "$LIVE_TMPDIR:$(dirname "$REAL_TMUX"):$PATH"
+    printf 'run-shell "%s"\n' "$REPO_ROOT/orchard-sidebar.tmux"
+  } > "$CONF"
+
+  "$REAL_TMUX" -L "$SOCK" -f "$CONF" new-session -d -s first
+
+  panes=""
+  i=0
+  while [ "$i" -lt 30 ]; do
+    panes="$("$REAL_TMUX" -L "$SOCK" list-panes -t 'first:' -F '#{pane_start_command}' 2>/dev/null || true)"
+    printf '%s\n' "$panes" | grep -q orchard-sidebar && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+
+  count="$(printf '%s\n' "$panes" | grep -c orchard-sidebar)"
+  [ "$count" -eq 1 ]
+}
+
+# Sourcing the plugin twice on a one-session server must not stack sidebars:
+# the per-window idempotence in sidebar-open.sh holds across re-sources (#848).
+@test "sourcing the plugin twice does not duplicate the sidebar (#848)" {
+  [ -n "$REAL_TMUX" ] || skip "tmux not installed"
+  unset TMUX
+
+  SOCK="t848b-$$-$BATS_TEST_NUMBER"
+  REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+
+  LIVE_TMPDIR="$(mktemp -d)"
+  printf '#!/bin/sh\nsleep 60\n' > "$LIVE_TMPDIR/orchard-sidebar"
+  chmod +x "$LIVE_TMPDIR/orchard-sidebar"
+
+  "$REAL_TMUX" -L "$SOCK" -f /dev/null new-session -d -s only
+  "$REAL_TMUX" -L "$SOCK" set-environment -g PATH "$LIVE_TMPDIR:$(dirname "$REAL_TMUX"):$PATH"
+
+  "$REAL_TMUX" -L "$SOCK" run-shell "$REPO_ROOT/orchard-sidebar.tmux"
+  "$REAL_TMUX" -L "$SOCK" run-shell "$REPO_ROOT/orchard-sidebar.tmux"
+
+  panes=""
+  i=0
+  while [ "$i" -lt 30 ]; do
+    panes="$("$REAL_TMUX" -L "$SOCK" list-panes -t 'only:' -F '#{pane_start_command}' 2>/dev/null || true)"
+    printf '%s\n' "$panes" | grep -q orchard-sidebar && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+
+  count="$(printf '%s\n' "$panes" | grep -c orchard-sidebar)"
+  [ "$count" -eq 1 ]
 }

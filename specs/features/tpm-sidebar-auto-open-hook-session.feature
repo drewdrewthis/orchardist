@@ -81,6 +81,30 @@ Feature: auto-open the orchard sidebar in a newly created tmux session
     When a new session auto-opens the sidebar
     Then "tmux show-option -gqv @orchard_sidebar_width" returns "42"
 
+  # Root cause (#848): the session-created hook only fires for sessions created
+  # AFTER it is registered. TPM sources plugins with "run-shell -b", so the plugin
+  # runs once the first session already exists — session 1 never gets the hook. Fix:
+  # when the plugin loads it also opens a sidebar in every session already present.
+
+  @integration
+  Scenario: Fresh tmux server auto-opens a sidebar in the first session (#848)
+    Given a throwaway tmux server started from a config that sources the orchard-sidebar plugin
+    And the server's first session "first" already exists when the plugin loads
+    Then "tmux list-panes -t first:" shows exactly one pane whose start command is "orchard-sidebar"
+
+  @integration
+  Scenario: Subsequent sessions still auto-open a sidebar (#848)
+    Given the orchard-sidebar plugin is loaded on a running server
+    When I create a new session "later"
+    Then "tmux list-panes -t later:" shows exactly one "orchard-sidebar" pane
+
+  @integration
+  Scenario: Sourcing the plugin twice does not duplicate the sidebar (#848)
+    Given a running server with one session "only"
+    When the orchard-sidebar plugin is sourced a first time
+    And the orchard-sidebar plugin is sourced a second time
+    Then "tmux list-panes -t only:" still shows exactly one "orchard-sidebar" pane
+
 # --- AC Coverage Map ---
 # AC1 "New session opens exactly one orchard-sidebar pane in that session" → Scenario: A newly created session gets exactly one sidebar pane
 # AC2 "Hook passes the session NAME (byte-equal), never the empty/$N id form" → Scenario: The hook passes the session name, not the unresolvable id form
