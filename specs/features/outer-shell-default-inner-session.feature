@@ -16,7 +16,10 @@ Feature: orchard shell creates a default inner session when none exists
     And "tmux -L X list-sessions" shows exactly one session named "main"
     And "tmux -L Y list-panes" on the outer session shows exactly two panes: the sidebar pane and the inner-attach pane
 
-  @integration
+  # The session-less-but-present inner server is a fake-tmux construct: a real
+  # tmux >=3.x exits the server when its last session dies, so this branch is
+  # provable only against the fake (go test), not a live transcript.
+  @unit
   Scenario: Inner server present but empty boots with a fresh default session
     Given an inner tmux server on socket X is present and "list-sessions" returns empty without erroring
     When I run "orchard-shell --inner-socket X --outer-socket Y --detach"
@@ -68,7 +71,9 @@ Feature: orchard shell creates a default inner session when none exists
     Then the command exits with status 0
     And "tmux -L X list-sessions" shows exactly one session named "foo"
 
-  @integration
+  # Fake-tmux construct, same as the AC2 empty-server scenario: provable only
+  # against the fake (go test), not a live tmux transcript.
+  @unit
   Scenario: --session names the created session when the inner server is empty
     Given an inner tmux server on socket X is present and "list-sessions" returns empty without erroring
     When I run "orchard-shell --session foo --inner-socket X --outer-socket Y --detach"
@@ -76,8 +81,9 @@ Feature: orchard shell creates a default inner session when none exists
     And "tmux -L X list-sessions" shows exactly one session named "foo"
 
   @integration
-  Scenario: A missing tmux binary fails fast and mutates nothing
-    Given the tmux binary is not on PATH
+  Scenario: An unresolvable tmux binary fails fast and mutates nothing
+    Given tmux is not on PATH
+    And tmux is absent from every orchard-shell fallback path "/opt/homebrew/bin", "/usr/local/bin" and "/usr/bin"
     When I run "orchard-shell --inner-socket X --outer-socket Y --detach"
     Then the command exits with status 1
     And the failure reports that tmux was not found
@@ -104,5 +110,5 @@ Feature: orchard shell creates a default inner session when none exists
   # AC8: "--session foo with no inner server AND with empty inner server → one session named foo"
   #      → Scenario: --session names the created session when no inner server exists
   #      → Scenario: --session names the created session when the inner server is empty
-  # AC9: "tmux binary not on PATH → exit 1, tmux-not-found, no session on X, Y untouched"
-  #      → Scenario: A missing tmux binary fails fast and mutates nothing
+  # AC9: "tmux unresolvable (not on PATH and not at any fallback path) → exit 1, tmux-not-found, no session on X, Y untouched"
+  #      → Scenario: An unresolvable tmux binary fails fast and mutates nothing
