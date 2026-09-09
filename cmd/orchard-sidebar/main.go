@@ -74,6 +74,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		if msg.gen != m.clientGen {
 			return tickAfter(m.clientTick.interval(), clientTickMsg{})
 		}
+		// The client lane also carries the OUTER window width, so the baseline
+		// tracks a resize that reached the sidebar with no WindowSizeMsg (the Linux
+		// attach path, #854). Never mid-gesture: a settle in flight owns the
+		// baseline until it lands, else a window moving under the drag flips its
+		// verdict.
+		if msg.windowWidth != 0 && !m.widthPending {
+			m.setWindowBaseline(msg.windowWidth)
+		}
 		next := tickAfter(
 			m.clientTick.observe(clientRead{session: msg.name}),
 			clientTickMsg{})

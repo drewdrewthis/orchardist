@@ -43,12 +43,20 @@ setup() {
   tmux -L "$W" new-session -d -x 266 -y 78 "tmux -L $O attach -t shell"
 
   # Boot is complete only once the client has ATTACHED (window is the full 266,
-  # not the detached default) AND the sidebar has been re-pinned back to 40. Both
-  # matter: pane_width hits 40 during the detached phase too, before the attach
-  # reflow the sidebar must observe to learn its window baseline (#854). Gating on
-  # pane_width alone lets a drag run before that baseline is set and misfire.
+  # not the detached default) AND the sidebar has been re-pinned back to 40.
+  # pane_width hits 40 during the detached phase too, so gating on it alone lets
+  # a drag run before the sidebar knows its window (#854).
   wait_for 5 "echo \$(wwin):\$(pwin)" "266:40" \
     || skip "sidebar never reached its attached 266x/40-pane boot state"
+
+  # Then wait for the window-width baseline itself to reach 266. On Linux the
+  # attach fires NO reflow size at the sidebar (the hook re-pins the pane before
+  # it sees one), so the grown window reaches the sidebar only through the client
+  # lane's off-thread read — landing within one ladder step (<=2s). Drag before
+  # that and the first size is judged against the stale detached baseline and
+  # misread as mechanical (the exact CI failure this fixed).
+  wait_for 5 "grep -qs 'window baseline .*-> 266' '$XDG_STATE_HOME/orchard/sidebar.log' && echo ok" ok \
+    || skip "window-width baseline never refreshed to 266 in the sidebar log"
 }
 
 # dump_debug prints the outer server's geometry and the sidebar's own log to
@@ -134,7 +142,9 @@ snapshot_state() { cat "$STATE" 2>/dev/null || true; }
 # AC4: after a drag, a TERMINAL resize must not corrupt the dragged width — the
 # changed window marks the intermediate size mechanical, so it is never
 # published and the window-resized hook re-pins the pane to 60.
-# Red on main today: 34/34/34.
+# Racy on main — observed 34/34/34 on 2026-09-09 (macOS, tmux 3.6a) in some runs,
+# passes in others: the intermediate size wins or loses the race with the hook
+# re-pin. This fix removes the race by never publishing the mechanical size.
 @test "AC4: a terminal resize preserves the dragged width" {
   tmux -L "$O" resize-pane -t shell:0.0 -x 60
   wait_for 5 "wwidth" 60

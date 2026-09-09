@@ -130,3 +130,46 @@ func TestWindowReadOncePerGesture(t *testing.T) {
 		t.Fatalf("gesture published %v, want [60]", spy.published)
 	}
 }
+
+// The Linux attach path (#854): the outer window grows with no WindowSizeMsg
+// reaching the sidebar, so the client lane carries the new width. A clientSessMsg
+// refreshes the baseline, and the next drag — judged in the grown window — is
+// published instead of being misread as mechanical against the detached width.
+func TestClientLaneRefreshesWindowBaseline(t *testing.T) {
+	spy := newWidthSpy(t)
+	spy.winWidth = 80
+	m := &model{desiredWidth: 40}
+
+	m.applyWidth(40) // boot at the detached split width: baseline 80
+	if m.windowWidth != 80 {
+		t.Fatalf("boot baseline = %d, want 80", m.windowWidth)
+	}
+	spy.winWidth = 266                                          // the attach grew the window; only the lane sees it
+	m.Update(clientSessMsg{gen: m.clientGen, windowWidth: 266}) // lane read
+	if m.windowWidth != 266 {
+		t.Fatalf("client lane did not refresh baseline: %d", m.windowWidth)
+	}
+	m.applyWidth(60) // drag in the now-known 266 window
+	m.Update(widthSettledMsg{seq: m.widthSeq})
+	if len(spy.published) != 1 || spy.published[0] != 60 {
+		t.Fatalf("drag after baseline refresh published %v, want [60]", spy.published)
+	}
+}
+
+// A settle in flight owns the baseline: a client-lane read landing mid-drag must
+// not overwrite it, or the drag's verdict would be judged against a window that
+// moved under it.
+func TestClientLaneDoesNotOverwriteBaselineMidGesture(t *testing.T) {
+	spy := newWidthSpy(t)
+	spy.winWidth = 266
+	m := &model{desiredWidth: 40, width: 40, sized: true, windowWidth: 266}
+
+	m.applyWidth(60) // arms the settle: widthPending now true
+	if !m.widthPending {
+		t.Fatal("drag did not arm a pending settle")
+	}
+	m.Update(clientSessMsg{gen: m.clientGen, windowWidth: 999}) // must be ignored mid-gesture
+	if m.windowWidth != 266 {
+		t.Errorf("client lane overwrote baseline mid-gesture: %d", m.windowWidth)
+	}
+}

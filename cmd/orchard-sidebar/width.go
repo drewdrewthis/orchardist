@@ -62,7 +62,7 @@ func (m *model) applyWidth(w int) tea.Cmd {
 		// for good, and enforcing the readable floor back over it would fight
 		// the collapse open again on the next tick.
 		m.width, m.collapsed, m.sized = w, true, true
-		m.windowWidth = readWindowWidth() // keep a live baseline for the first drag after expand
+		m.setWindowBaseline(readWindowWidth()) // keep a live baseline for the first drag after expand
 		return nil
 	}
 	m.collapsed = false
@@ -75,7 +75,7 @@ func (m *model) applyWidth(w int) tea.Cmd {
 			m.desiredWidth = w
 		}
 		m.width = w
-		m.windowWidth = readWindowWidth() // the baseline every later size is judged against
+		m.setWindowBaseline(readWindowWidth()) // the baseline every later size is judged against
 		return nil
 	}
 	m.width = w
@@ -84,7 +84,7 @@ func (m *model) applyWidth(w int) tea.Cmd {
 		// new size and the gesture is over, so adopt it as the baseline the next
 		// size is judged against (this consumes a mechanical resize even if
 		// bubbletea coalesced away the intermediate size that armed the timer).
-		m.windowWidth = readWindowWidth()
+		m.setWindowBaseline(readWindowWidth())
 		m.widthPending = false
 		return nil
 	}
@@ -113,7 +113,7 @@ func (m *model) applyWidth(w int) tea.Cmd {
 		m.widthMechanical = false
 	} else {
 		m.widthMechanical = cw != m.windowWidth
-		m.windowWidth = cw
+		m.setWindowBaseline(cw)
 	}
 	m.widthPending = true
 	m.widthSeq++
@@ -123,6 +123,19 @@ func (m *model) applyWidth(w int) tea.Cmd {
 
 // windowReadWarned keeps the "window width unknown" note to once per process.
 var windowReadWarned bool
+
+// setWindowBaseline updates the window-width baseline every place the window is
+// re-observed — the applyWidth reads and the client lane's off-thread read —
+// logging each real change once. That log is the trace of the Linux attach path
+// (#854), where the grown window reaches the sidebar only via the client lane,
+// never a WindowSizeMsg. A zero (unknown read) keeps the current baseline.
+func (m *model) setWindowBaseline(w int) {
+	if w == 0 || w == m.windowWidth {
+		return
+	}
+	logf("window baseline %d -> %d", m.windowWidth, w)
+	m.windowWidth = w
+}
 
 // settleWidth is the arming size's timer landing, after the burst it belongs to
 // has coalesced. A stale timer (a newer size re-armed) is dropped. The verdict
