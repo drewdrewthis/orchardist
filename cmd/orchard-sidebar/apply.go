@@ -141,7 +141,17 @@ func (m *model) rebuild() {
 	sortRows(m.rows)
 	m.join()
 	m.reanchorCursor()
+	m.markCurrent()
 	m.bellCheck()
+}
+
+// markCurrent stamps row.current from m.cursorSess, the client-tty lane's
+// answer for which session this sidebar is on — read at render time instead
+// of trusting the coarser, sometimes stale-false push-lane attached (#856).
+func (m *model) markCurrent() {
+	for i := range m.rows {
+		m.rows[i].current = m.rows[i].session == m.cursorSess
+	}
 }
 
 // applyOrder stamps each row with its tmux ordering keys from the sessMeta

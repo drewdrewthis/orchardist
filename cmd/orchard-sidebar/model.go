@@ -11,11 +11,16 @@ type row struct {
 	session  string
 	state    string // input | stalled | working | idle | shell
 	attached bool
-	hooked   bool // state came from the state dir; false = daemon inference
-	fake     bool // synthetic scroll-test row (ORCHARD_SIDEBAR_FAKE); never attachable
-	mission  string
-	lastAct  time.Time
-	cwd      string
+	// current is the session the client-tty lane reports this sidebar is on
+	// (m.cursorSess), stamped in rebuild (markCurrent). It outranks the
+	// coarse push-lane attached for the done-glyph decision because
+	// attachedBySess is stale-false right after boot or a switch (#856).
+	current bool
+	hooked  bool // state came from the state dir; false = daemon inference
+	fake    bool // synthetic scroll-test row (ORCHARD_SIDEBAR_FAKE); never attachable
+	mission string
+	lastAct time.Time
+	cwd     string
 	// ordering keys, read from tmux (session_last_attached / session_created).
 	// The list is ordered by these, not by activity: a session moves only when
 	// you attach it, never because Claude ticked from working to idle.
@@ -47,8 +52,9 @@ type row struct {
 //	                 session stopped mid-turn and needs a nudge ("stalled").
 //	bucketDone       a turn finished and nobody has read the result: state
 //	                 "idle", the state file said so (hooked), and you are not
-//	                 attached to it. Attached-and-idle is not "done" — you are
-//	                 looking at it right now.
+//	                 attached to it and it is not the session you are on.
+//	                 Attached-and-idle is not "done" — you are looking at it
+//	                 right now.
 //	bucketRunning    everything else: working sessions, attached idle ones,
 //	                 plain shells, and any session whose state we only inferred.
 type bucket int
@@ -64,7 +70,7 @@ func rowBucket(r row) bucket {
 	case "input", "stalled":
 		return bucketAttention
 	case "idle":
-		if r.hooked && !r.attached {
+		if r.hooked && !r.attached && !r.current {
 			return bucketDone
 		}
 	}
