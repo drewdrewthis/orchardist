@@ -18,6 +18,9 @@ Feature: sidebar width survives mechanical resizes
   # moment a divergent size arrives; a changed window means mechanical (publish
   # nothing, let the hooks re-pin the pane), an unchanged one means a real drag.
 
+  # There is no respawn hook (after-respawn-pane is not a real tmux hook); this
+  # rests on the sidebar rule alone — a respawned sidebar's first size is a boot
+  # size and is never published.
   @integration
   Scenario: AC1+AC2 A pane respawn does not republish the width
     Given the sidebar has booted at its 40-column split width

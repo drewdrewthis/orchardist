@@ -11,8 +11,8 @@ import (
 // The OUTER server owns the sidebar's width. It holds main-pane-width (tmux's
 // own option, widthOption in tmux.go — not a custom @orchard one, see the
 // comment above that const), its M-s binding reads it, and its
-// client-resized / window-resized / after-respawn-pane hooks re-pin the pane to
-// it (scripts/outer-shell/outer.conf). The sidebar's job is to notice the ONE
+// client-resized / window-resized hooks re-pin the pane to it
+// (scripts/outer-shell/outer.conf). The sidebar's job is to notice the ONE
 // event the outer server cannot see — the user dragging the pane border — and
 // publish it.
 //
@@ -141,7 +141,7 @@ func (m *model) settleWidth(seq int) {
 	}
 	if m.widthMechanical {
 		// A reflow, not a drag: publish nothing. The pane itself is corrected by
-		// the outer server's own resize hooks (window-resized, after-respawn-pane),
+		// the outer server's own resize hooks (client-resized, window-resized),
 		// whose re-pin arrives as a later WindowSizeMsg that resets m.width — the
 		// sidebar must NOT re-pin here, an async select-layout can land after a
 		// following drag and yank the pane back off it (#854).

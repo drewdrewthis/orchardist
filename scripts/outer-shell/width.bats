@@ -11,6 +11,8 @@
 setup_file() {
   command -v tmux >/dev/null || return 0
   command -v go >/dev/null || return 0
+  # the CI vs Mac split (#854) is version-sensitive; record the toolchain once
+  echo "# tmux: $(tmux -V), go: $(go version)" >&3
   # build both binaries ONCE for the whole file, not per test
   REPO="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
   ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-sidebar" ./cmd/orchard-sidebar ) || return 0
@@ -49,7 +51,27 @@ setup() {
     || skip "sidebar never reached its attached 266x/40-pane boot state"
 }
 
+# dump_debug prints the outer server's geometry and the sidebar's own log to
+# fd 3 so a CI failure (which we cannot attach to) explains itself: what width
+# tmux thinks the pane is, what the option holds, and whether the sidebar even
+# saw the drag's WindowSizeMsg and how it classified it.
+dump_debug() {
+  echo "# --- debug (test failed) ---" >&3
+  echo "# geom: $(tmux -L "$O" display -p -t shell:0.0 '#{window_width}x#{window_height} pane=#{pane_width} id=#{pane_id}' 2>&1)" >&3
+  echo "# global main-pane-width: $(tmux -L "$O" show-options -g main-pane-width 2>&1)" >&3
+  echo "# window main-pane-width: $(tmux -L "$O" show-options -w -t shell:0 main-pane-width 2>&1)" >&3
+  echo "# panes: $(tmux -L "$O" list-panes -t shell:0 -F '#{pane_index} #{pane_width} #{pane_current_command}' 2>&1 | tr '\n' '|')" >&3
+  echo "# state: $(snapshot_state)" >&3
+  echo "# sidebar.log tail:" >&3
+  tail -40 "$XDG_STATE_HOME/orchard/sidebar.log" 2>/dev/null | sed 's/^/#   /' >&3 || true
+}
+
 teardown() {
+  # bats-core 1.x sets BATS_TEST_COMPLETED=1 only when the body passed; dump on
+  # a real failure, not on a skip (BATS_TEST_SKIPPED) or a clean pass.
+  if [ "${BATS_TEST_COMPLETED:-0}" != 1 ] && [ -z "${BATS_TEST_SKIPPED:-}" ]; then
+    dump_debug
+  fi
   # $W first: it drives the only live client, so killing it stops anything
   # from re-attaching $O and respawning a server after we kill it.
   for s in "$W" "$O" "$I"; do
@@ -59,7 +81,7 @@ teardown() {
   # only OUR OWN named sockets, never one we did not create.
   local dir="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
   for s in "$W" "$O" "$I"; do
-    [ -n "$s" ] && rm -f "$dir/$s"
+    [ -n "$s" ] && rm -f "$dir/$s" || true # unset on a skip path; never fail teardown
   done
 }
 
@@ -83,9 +105,11 @@ pwin() { tmux -L "$O" display -p -t shell:0.0 '#{pane_width}' 2>/dev/null; }
 wwin() { tmux -L "$O" display -p -t shell:0.0 '#{window_width}' 2>/dev/null; }
 snapshot_state() { cat "$STATE" 2>/dev/null || true; }
 
-# AC1 + AC2: a respawn fires neither resize hook, so without after-respawn-pane
-# tmux's redistribution reaches the sidebar as a plain size and gets published.
-# The after-respawn-pane hook re-pins instead; nothing must change.
+# AC1 + AC2: a respawn fires no resize hook, but there is no hook to re-pin it
+# either (after-respawn-pane is not a real tmux hook). Coverage rests on the Go
+# rule alone: a respawned sidebar's FIRST size is a boot size, never published,
+# and in every probe respawn-pane -k did not redistribute the pane. Nothing must
+# change — global stays 40, the pane stays 40, and the state file is untouched.
 @test "AC1+AC2: respawn does not republish the width" {
   before="$(snapshot_state)"
   tmux -L "$O" respawn-pane -k -t shell:0.0 "$T/orchard-sidebar"
