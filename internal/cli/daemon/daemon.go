@@ -139,10 +139,15 @@ func runStart(parentCtx context.Context, addr string, version string, logLevel s
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	logger, closeLog, err := setupDaemonLogger(level)
+	if err != nil {
+		return err
+	}
+	defer closeLog()
+
 	// Install the leveled logger as slog's default too: provider code that
 	// reaches for slog.Default() must see the same level, otherwise
 	// --log-level would only reach the call sites handed this logger.
-	logger := newDaemonLogger(os.Stderr, level)
 	slog.SetDefault(logger)
 
 	cfgPath, err := orchpaths.ConfigFile()
