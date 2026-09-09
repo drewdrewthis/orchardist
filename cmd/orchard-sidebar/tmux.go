@@ -131,7 +131,12 @@ var readWindowWidth = func() int {
 	if env.self == "" {
 		return 0
 	}
-	out, err := env.outerCmd("display", "-p", "-t", string(env.self), "#{window_width}").Output()
+	// Bounded like paneToSession (R9): a wedged outer server must not freeze the
+	// UI loop. On timeout or error return 0 = UNKNOWN, and the caller keeps its
+	// baseline rather than guessing mechanical over a failed read.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out, err := env.outerCmdContext(ctx, "display", "-p", "-t", string(env.self), "#{window_width}").Output()
 	if err != nil {
 		return 0
 	}

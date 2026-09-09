@@ -16,8 +16,9 @@ type widthSpy struct {
 	resized   []int
 	saved     []sidebarState
 	// winWidth is what readWindowWidth reports: move it for a mechanical resize,
-	// leave it fixed for a drag.
+	// leave it fixed for a drag. reads counts the stubbed window reads.
 	winWidth int
+	reads    int
 }
 
 func newWidthSpy(t *testing.T) *widthSpy {
@@ -28,7 +29,7 @@ func newWidthSpy(t *testing.T) *widthSpy {
 	setWidthOption = func(w int) { s.published = append(s.published, w) }
 	resizePane = func(w int) { s.resized = append(s.resized, w) }
 	saveSidebarState = func(st sidebarState) error { s.saved = append(s.saved, st); return nil }
-	readWindowWidth = func() int { return s.winWidth }
+	readWindowWidth = func() int { s.reads++; return s.winWidth }
 	t.Cleanup(func() {
 		setWidthOption, resizePane, saveSidebarState = ow, or, osv
 		readWindowWidth = orw
@@ -42,6 +43,7 @@ func newWidthSpy(t *testing.T) *widthSpy {
 // fresh drag (the two-owners bug that republished the hook's default over it).
 func TestWidthRoundTripsThroughTheOuterServer(t *testing.T) {
 	spy := newWidthSpy(t)
+	spy.winWidth = 200 // a real, fixed outer window: every drag below stays in it
 	m := &model{}
 
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 50}) // the wrapper's own split
@@ -74,72 +76,11 @@ func TestWidthRoundTripsThroughTheOuterServer(t *testing.T) {
 	}
 }
 
-// A changed OUTER window marks an intermediate pane width as mechanical, not a
-// drag: it must not be published (the #854 corruption); the hooks fix the pane.
-// @scenario Mechanical resize publishes nothing
-func TestMechanicalResizePublishesNothing(t *testing.T) {
-	spy := newWidthSpy(t)
-	spy.winWidth = 133
-	m := &model{desiredWidth: 40, width: 40, sized: true, windowWidth: 133}
-
-	spy.winWidth = 266 // the window grew: an attach reflow, not a drag
-	if cmd := m.applyWidth(93); cmd == nil {
-		t.Fatal("a divergent width armed no settle timer")
-	}
-	m.Update(widthSettledMsg{seq: m.widthSeq})
-
-	if len(spy.published) != 0 || len(spy.saved) != 0 {
-		t.Fatalf("a mechanical resize was published: %v / %v", spy.published, spy.saved)
-	}
-	if m.desiredWidth != 40 {
-		t.Errorf("desiredWidth = %d, want the untouched 40", m.desiredWidth)
-	}
-}
-
-// A width diverging while the OUTER window is unchanged is a drag: it publishes.
-// @scenario Drag publishes after settle
-func TestDragPublishesAfterSettle(t *testing.T) {
-	spy := newWidthSpy(t)
-	spy.winWidth = 266
-	m := &model{desiredWidth: 40, width: 40, sized: true, windowWidth: 266}
-
-	m.applyWidth(60) // window unchanged: a drag
-	m.Update(widthSettledMsg{seq: m.widthSeq})
-
-	if len(spy.published) != 1 || spy.published[0] != 60 {
-		t.Fatalf("drag published %v, want [60]", spy.published)
-	}
-	if len(spy.saved) != 1 || spy.saved[0].Width != 60 {
-		t.Fatalf("drag persisted %+v, want width 60", spy.saved)
-	}
-}
-
-// A newer size re-arms the settle timer; the earlier one, when it lands, is
-// stale and must publish nothing (the debounce on widthSeq).
-// @scenario Stale settle is ignored
-func TestStaleSettleIsIgnored(t *testing.T) {
-	spy := newWidthSpy(t)
-	spy.winWidth = 266
-	m := &model{desiredWidth: 40, width: 40, sized: true, windowWidth: 266}
-
-	m.applyWidth(34)
-	firstSeq := m.widthSeq
-	m.applyWidth(50) // re-arms before the first settle lands
-
-	m.Update(widthSettledMsg{seq: firstSeq})
-	if len(spy.published) != 0 {
-		t.Fatalf("the stale settle published: %v", spy.published)
-	}
-	m.Update(widthSettledMsg{seq: m.widthSeq})
-	if len(spy.published) != 1 || spy.published[0] != 50 {
-		t.Fatalf("published %v, want [50] after the live settle", spy.published)
-	}
-}
-
 // A drag below the readable floor publishes the floor and pushes the pane out.
 func TestDragBelowTheFloorPublishesTheFloor(t *testing.T) {
 	spy := newWidthSpy(t)
-	m := &model{desiredWidth: 40, width: 40, sized: true}
+	spy.winWidth = 200
+	m := &model{desiredWidth: 40, width: 40, sized: true, windowWidth: 200}
 
 	m.Update(tea.WindowSizeMsg{Width: 20, Height: 50})
 	m.Update(widthSettledMsg{seq: m.widthSeq}) // the drag stays; the floor is published

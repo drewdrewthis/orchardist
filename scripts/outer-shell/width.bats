@@ -5,17 +5,26 @@
 # outer server's re-pin hooks — a thing no unit test with a fake tmux can show.
 #
 # The whole battery skips when tmux or go is missing (CI without either); when
-# present it builds both binaries fresh, boots the wrapper detached, and drives
-# a real client so pane 0.0 gets a real width.
+# present it builds both binaries once for the file, boots the wrapper detached
+# per test, and drives a real client so pane 0.0 gets a real width.
+
+setup_file() {
+  command -v tmux >/dev/null || return 0
+  command -v go >/dev/null || return 0
+  # build both binaries ONCE for the whole file, not per test
+  REPO="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+  ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-sidebar" ./cmd/orchard-sidebar ) || return 0
+  ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-shell" ./cmd/orchard-shell ) || return 0
+}
 
 setup() {
   command -v tmux >/dev/null || skip "tmux not installed"
   command -v go >/dev/null || skip "go not installed"
+  [ -x "$BATS_FILE_TMPDIR/orchard-sidebar" ] || skip "orchard-sidebar build failed"
+  [ -x "$BATS_FILE_TMPDIR/orchard-shell" ] || skip "orchard-shell build failed"
 
   T="$BATS_TEST_TMPDIR"
-  REPO="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
-  ( cd "$REPO" && go build -o "$T/orchard-sidebar" ./cmd/orchard-sidebar ) || skip "orchard-sidebar build failed"
-  ( cd "$REPO" && go build -o "$T/orchard-shell" ./cmd/orchard-shell ) || skip "orchard-shell build failed"
+  cp "$BATS_FILE_TMPDIR/orchard-sidebar" "$BATS_FILE_TMPDIR/orchard-shell" "$T/"
 
   export XDG_STATE_HOME="$T/xdg"
   export PATH="$T:$PATH"

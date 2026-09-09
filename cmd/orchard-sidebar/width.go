@@ -34,6 +34,13 @@ import (
 // because by settle time the window change is old news and a drag arriving mid
 // transient would inherit a stale baseline. A short settle timer only coalesces
 // the burst before acting; a newer size re-arms and the stale timer is dropped.
+// The window read is bounded and happens ONCE per gesture: a drag delivers a
+// size per pixel, and that is one tmux fork per gesture, never one per pixel.
+//
+// Known limit: when the outer window is too narrow to seat desiredWidth, the
+// hook's re-pin is itself clamped, and since that clamp arrives in an unchanged
+// window it reads as a drag — desiredWidth then follows the clamp. Acceptable:
+// the width could not be honoured in that window anyway.
 
 // widthSettle only coalesces the burst of sizes a single gesture produces; it
 // is not load-bearing for correctness (the window-width check is). A var so a
@@ -55,6 +62,7 @@ func (m *model) applyWidth(w int) tea.Cmd {
 		// for good, and enforcing the readable floor back over it would fight
 		// the collapse open again on the next tick.
 		m.width, m.collapsed, m.sized = w, true, true
+		m.windowWidth = readWindowWidth() // keep a live baseline for the first drag after expand
 		return nil
 	}
 	m.collapsed = false
@@ -72,24 +80,49 @@ func (m *model) applyWidth(w int) tea.Cmd {
 	}
 	m.width = w
 	if w == m.desiredWidth {
-		// a re-pin landing on the published width: the window has settled at
-		// its new size, so adopt it as the baseline the next size is judged
-		// against (this consumes a mechanical resize even if bubbletea coalesced
-		// away the intermediate size that armed the timer).
+		// a re-pin landing on the published width: the window has settled at its
+		// new size and the gesture is over, so adopt it as the baseline the next
+		// size is judged against (this consumes a mechanical resize even if
+		// bubbletea coalesced away the intermediate size that armed the timer).
 		m.windowWidth = readWindowWidth()
+		m.widthPending = false
 		return nil
+	}
+	if m.widthPending {
+		// mid-gesture: keep the verdict already taken for this drag and just
+		// re-arm, so the window is read once per gesture, not once per pixel.
+		m.widthSeq++
+		return tickAfter(widthSettle, widthSettledMsg{seq: m.widthSeq})
 	}
 	// The verdict is taken HERE, not at settle: by settle time a mechanical
 	// resize's window change is old news, and a drag arriving mid-transient
 	// would inherit a stale baseline. A changed window means this divergence is
 	// tmux's proportional redistribution; an unchanged one means a border drag.
 	cw := readWindowWidth()
-	m.widthMechanical = cw != m.windowWidth
-	m.windowWidth = cw
+	if cw == 0 {
+		// unknown read (timeout/error): do not guess mechanical and swallow a
+		// drag. With a valid baseline, take the drag path; with none, we truly
+		// know nothing about the window — arm nothing and warn once.
+		if m.windowWidth == 0 {
+			if !windowReadWarned {
+				windowReadWarned = true
+				logf("applyWidth w=%d: window width unknown and no baseline; not arming", w)
+			}
+			return nil
+		}
+		m.widthMechanical = false
+	} else {
+		m.widthMechanical = cw != m.windowWidth
+		m.windowWidth = cw
+	}
+	m.widthPending = true
 	m.widthSeq++
 	logf("applyWidth w=%d != desired=%d: armed seq=%d mechanical=%v", w, m.desiredWidth, m.widthSeq, m.widthMechanical)
 	return tickAfter(widthSettle, widthSettledMsg{seq: m.widthSeq})
 }
+
+// windowReadWarned keeps the "window width unknown" note to once per process.
+var windowReadWarned bool
 
 // settleWidth is the arming size's timer landing, after the burst it belongs to
 // has coalesced. A stale timer (a newer size re-armed) is dropped. The verdict
@@ -100,6 +133,7 @@ func (m *model) settleWidth(seq int) {
 		logf("settleWidth seq=%d stale (live=%d): drop", seq, m.widthSeq)
 		return
 	}
+	m.widthPending = false // this gesture's timer has landed; the next read is a new gesture
 	if m.collapsed || !m.sized || m.width == m.desiredWidth {
 		logf("settleWidth seq=%d nothing to do: collapsed=%v sized=%v width=%d desired=%d",
 			seq, m.collapsed, m.sized, m.width, m.desiredWidth)
