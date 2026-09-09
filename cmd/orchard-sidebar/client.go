@@ -22,9 +22,10 @@ import (
 // slow to use. The daemon still owns everything else: session inventory,
 // claude state, model, PR/issue join. Tracked with switchClient under #726.
 type clientSessMsg struct {
-	name string
-	tty  clientTTY // the work client that session belongs to (split focus, #777)
-	gen  int       // m.clientGen when the read started; mismatched reads are stale
+	name        string
+	tty         clientTTY // the work client that session belongs to (split focus, #777)
+	gen         int       // m.clientGen when the read started; mismatched reads are stale
+	windowWidth int       // OUTER window width read on the same tick; 0 = unknown (#854)
 }
 
 const clientEvery = 150 * time.Millisecond
@@ -48,18 +49,41 @@ func fetchClientSession(gen int, work []clientTTY) tea.Cmd {
 		if err != nil {
 			return clientSessMsg{gen: gen}
 		}
+		// Second read on the same off-thread ctx: the OUTER window width, the
+		// baseline the drag-vs-mechanical verdict is judged against. On Linux the
+		// attach reflow re-pins the pane BEFORE the sidebar sees any size, so the
+		// grown window never arrives as a WindowSizeMsg — this lane is the only
+		// path that carries it, keeping the baseline off a stale detached value
+		// that would misread the first drag as mechanical (#854).
+		ww := outerWindowWidth(ctx)
 		// In split mode the sidebar follows whichever of ITS OWN work clients is
 		// most recently active (pickWork), so the bar tracks the last-focused
 		// pane; otherwise it is the single scoped client, exactly as before.
 		if len(work) > 0 {
 			name, tty := pickWork(string(out), work)
-			return clientSessMsg{name: name, tty: tty, gen: gen}
+			return clientSessMsg{name: name, tty: tty, gen: gen, windowWidth: ww}
 		}
 		// activeClientTTY() is atomic, so this closure (on tea's Cmd goroutine) can
 		// read the current target directly — no UI-goroutine snapshot — and it
 		// tracks resolveClientTTY's memoized fallback (#787).
-		return clientSessMsg{name: pickClient(string(out), activeClientTTY()), gen: gen}
+		return clientSessMsg{name: pickClient(string(out), activeClientTTY()), gen: gen, windowWidth: ww}
 	}
+}
+
+// outerWindowWidth reads the OUTER window's total width on the caller's ctx, so
+// the client lane can refresh the baseline off-thread. A sibling of tmux.go's
+// readWindowWidth (which stays the synchronous verdict taken at divergence
+// time); 0 = unknown on an empty self or a failed/timed-out read.
+func outerWindowWidth(ctx context.Context) int {
+	if env.self == "" {
+		return 0
+	}
+	out, err := env.outerCmdContext(ctx, "display", "-p", "-t", string(env.self), "#{window_width}").Output()
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n
 }
 
 // pickWork chooses the work client the sidebar follows in split mode: the

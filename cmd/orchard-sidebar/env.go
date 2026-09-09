@@ -143,7 +143,11 @@ func (e tmuxEnv) innerCmdContext(ctx context.Context, args ...string) *exec.Cmd 
 // when not. A plain, unmodified exec: no -L, no TMUX stripped, because
 // $TMUX already names exactly the server every outerPane id belongs to.
 func (e tmuxEnv) outerCmd(args ...string) *exec.Cmd {
-	return exec.Command("tmux", args...)
+	return e.outerCmdContext(context.Background(), args...)
+}
+
+func (e tmuxEnv) outerCmdContext(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "tmux", args...)
 }
 
 // resizePaneArgs, setPaneOptionArgs and selectPaneArgs take an outerPane and

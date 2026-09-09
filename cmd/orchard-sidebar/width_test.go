@@ -8,36 +8,42 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// widthSpy captures every effect the width contract has on the world: what was
-// published to the OUTER server, what the pane was resized to, and what was
-// written to disk. All three are stubbed together because a width change that
-// does only two of them is exactly the bug (a published width nothing
-// remembered, or a remembered width nothing published).
+// widthSpy captures every effect the width contract has on the world — what was
+// published to the OUTER server, resized, and written to disk — stubbed together
+// because a change that does only some of them is exactly the bug.
 type widthSpy struct {
 	published []int
 	resized   []int
 	saved     []sidebarState
+	// winWidth is what readWindowWidth reports: move it for a mechanical resize,
+	// leave it fixed for a drag. reads counts the stubbed window reads.
+	winWidth int
+	reads    int
 }
 
 func newWidthSpy(t *testing.T) *widthSpy {
 	t.Helper()
 	s := &widthSpy{}
-	ow, or, os := setWidthOption, resizePane, saveSidebarState
+	ow, or, osv := setWidthOption, resizePane, saveSidebarState
+	orw := readWindowWidth
 	setWidthOption = func(w int) { s.published = append(s.published, w) }
 	resizePane = func(w int) { s.resized = append(s.resized, w) }
 	saveSidebarState = func(st sidebarState) error { s.saved = append(s.saved, st); return nil }
-	t.Cleanup(func() { setWidthOption, resizePane, saveSidebarState = ow, or, os })
+	readWindowWidth = func() int { s.reads++; return s.winWidth }
+	t.Cleanup(func() {
+		setWidthOption, resizePane, saveSidebarState = ow, or, osv
+		readWindowWidth = orw
+	})
 	return s
 }
 
 // The OUTER server owns the width: the sidebar publishes what the user dragged
-// to, and outer.conf's hooks re-pin the pane to that on every terminal resize.
-// The round trip is what this pins — drag, publish, get re-pinned to the same
-// width, and DON'T read the re-pin as a fresh drag (the two-owners bug: the
-// hook pinned its own default, the sidebar read it back as a gesture and
-// republished it over the width the user had asked for).
+// to, and outer.conf's hooks re-pin the pane to that. This pins the round trip —
+// drag, publish, get re-pinned to the same width, and DON'T read the re-pin as a
+// fresh drag (the two-owners bug that republished the hook's default over it).
 func TestWidthRoundTripsThroughTheOuterServer(t *testing.T) {
 	spy := newWidthSpy(t)
+	spy.winWidth = 200 // a real, fixed outer window: every drag below stays in it
 	m := &model{}
 
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 50}) // the wrapper's own split
@@ -49,6 +55,7 @@ func TestWidthRoundTripsThroughTheOuterServer(t *testing.T) {
 	}
 
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 50}) // the user drags the border
+	m.Update(widthSettledMsg{seq: m.widthSeq})         // the drag stays; the settle fires
 	if len(spy.published) != 1 || spy.published[0] != 60 {
 		t.Fatalf("drag published %v, want [60]", spy.published)
 	}
@@ -56,8 +63,7 @@ func TestWidthRoundTripsThroughTheOuterServer(t *testing.T) {
 		t.Fatalf("drag persisted %+v, want width 60", spy.saved)
 	}
 
-	// the terminal is resized: outer.conf's hook re-pins the pane to the
-	// published width, and tmux reports it back
+	// the terminal is resized: the hook re-pins the pane, tmux reports it back
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
 	if len(spy.published) != 1 {
 		t.Errorf("the hook's re-pin was read as a drag: %v", spy.published)
@@ -70,13 +76,14 @@ func TestWidthRoundTripsThroughTheOuterServer(t *testing.T) {
 	}
 }
 
-// A drag below the readable floor publishes the floor and pushes the pane back
-// out to it: the card layout below minWidth is shredded slivers, not a sidebar.
+// A drag below the readable floor publishes the floor and pushes the pane out.
 func TestDragBelowTheFloorPublishesTheFloor(t *testing.T) {
 	spy := newWidthSpy(t)
-	m := &model{desiredWidth: 40, width: 40, sized: true}
+	spy.winWidth = 200
+	m := &model{desiredWidth: 40, width: 40, sized: true, windowWidth: 200}
 
 	m.Update(tea.WindowSizeMsg{Width: 20, Height: 50})
+	m.Update(widthSettledMsg{seq: m.widthSeq}) // the drag stays; the floor is published
 
 	if last := spy.published[len(spy.published)-1]; last != minWidth {
 		t.Errorf("published %d, want the floor %d", last, minWidth)
@@ -175,10 +182,8 @@ func TestRestorePane(t *testing.T) {
 	}
 }
 
-// A restored width must not be read back as a drag. The restore is applied
-// before the program starts, so the first size the sidebar sees is already the
-// restored one — and a stale pre-restore size arriving first must not
-// overwrite what was restored.
+// A restored width must not be read back as a drag, nor overwritten by a stale
+// pre-restore size that arrives first.
 func TestRestoredWidthIsNotADrag(t *testing.T) {
 	spy := newWidthSpy(t)
 	m := &model{desiredWidth: 52, collapsed: false} // seeded from the state file

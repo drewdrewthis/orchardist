@@ -114,7 +114,20 @@ type model struct {
 	anchorSess   string // session of the card the viewport is anchored to
 	anchorDelta  int    // lines from that card's first line to the top of the view
 	desiredWidth int    // the width this sidebar last published; 0 until sized
-	clientGen    int    // bumped on switch; older in-flight reads are stale
+	// widthSeq counts arming sizes so a settle timer can tell it is stale: a
+	// newer WindowSizeMsg bumps it and re-arms, invalidating the earlier timer
+	// (debounce, width.go/#854).
+	widthSeq int
+	// windowWidth is the OUTER window's total width as last observed, and
+	// widthMechanical the verdict taken when the armed size arrived: a drag
+	// leaves the window unchanged, a mechanical resize (attach reflow, terminal
+	// resize) always moves it — the deterministic drag test (width.go).
+	// widthPending guards the once-per-gesture window read: while a settle is
+	// armed, later sizes of the same drag re-arm without re-reading.
+	windowWidth     int
+	widthMechanical bool
+	widthPending    bool
+	clientGen       int // bumped on switch; older in-flight reads are stale
 	// client-lane cadence: decays while the lane's answer (which session this
 	// client is on) stops changing, so an idle desktop stops paying 150ms of
 	// tmux forks forever (#727).

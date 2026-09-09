@@ -104,14 +104,24 @@ jobs:
     # scripts under scripts/gh, scripts/git, scripts/host-services,
     # scripts/tmux). The conversation-contracts plugin (and its bats suite)
     # was retired 2026-05-29 — see .claude-plugin/marketplace.json.
+    #
+    # The outer-shell battery (scripts/outer-shell/width.bats, #854) builds the
+    # Go binaries and drives a real tmux client, so this job needs go and tmux
+    # on the runner or that battery self-skips.
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Single source of truth for the toolchain version.
+          go-version-file: go.mod
+          # Caches the module cache and build cache, keyed on go.sum.
+          cache: true
       - name: Install bats
-        run: sudo apt-get update && sudo apt-get install -y bats
+        run: sudo apt-get update && sudo apt-get install -y bats tmux
       - name: Run scripts bats
         run: bats -r scripts plugin-sources
 

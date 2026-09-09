@@ -59,7 +59,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		// whether or not the width itself ends up changing (#727).
 		m.clientTick.reset()
 		m.height = msg.Height
-		m.applyWidth(msg.Width)
+		return m.applyWidth(msg.Width)
+	case widthSettledMsg:
+		// A post-boot width diverged and its settle window elapsed; publish it
+		// only if it is still a drag and not a mechanical resize the outer hook
+		// re-pinned in the meantime (#854, width.go).
+		m.settleWidth(msg.seq)
 		return nil
 	case clientSessMsg:
 		// A read that started before the last switch carries the old world;
@@ -68,6 +73,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		// just re-ticks at its current cadence (#727).
 		if msg.gen != m.clientGen {
 			return tickAfter(m.clientTick.interval(), clientTickMsg{})
+		}
+		// The client lane also carries the OUTER window width, so the baseline
+		// tracks a resize that reached the sidebar with no WindowSizeMsg (the Linux
+		// attach path, #854). Never mid-gesture: a settle in flight owns the
+		// baseline until it lands, else a window moving under the drag flips its
+		// verdict.
+		if msg.windowWidth != 0 && !m.widthPending {
+			m.setWindowBaseline(msg.windowWidth)
 		}
 		next := tickAfter(
 			m.clientTick.observe(clientRead{session: msg.name}),

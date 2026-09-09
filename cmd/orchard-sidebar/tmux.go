@@ -122,6 +122,28 @@ var resizePane = func(w int) {
 	go runOuter(resizePaneArgs(env.self, w)...)
 }
 
+// readWindowWidth reads the OUTER window's total width. A mechanical resize —
+// an attach reflow or a terminal resize — always changes it; a border drag
+// never does, since the drag only moves the split inside a fixed window. That
+// difference is how settleWidth tells a drag from tmux's proportional
+// redistribution without racing the re-pin hooks (#854). A var so tests fake it.
+var readWindowWidth = func() int {
+	if env.self == "" {
+		return 0
+	}
+	// Bounded like paneToSession (R9): a wedged outer server must not freeze the
+	// UI loop. On timeout or error return 0 = UNKNOWN, and the caller keeps its
+	// baseline rather than guessing mechanical over a failed read.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out, err := env.outerCmdContext(ctx, "display", "-p", "-t", string(env.self), "#{window_width}").Output()
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n
+}
+
 // setWidthOption publishes the width the user dragged to, on the OUTER
 // server, as the single source of truth for the sidebar's width: outer.conf's
 // M-s binding and its client-resized / window-resized hooks re-pin the pane to
