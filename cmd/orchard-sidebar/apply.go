@@ -15,7 +15,14 @@ import (
 // push lane is live (see below).
 func (m *model) applyFast(msg fastDataMsg) {
 	m.err = msg.err
-	if msg.err != nil {
+	// An error WITH rows is an advisory, not a hard failure: the supergraph
+	// backend serves rows while a plugin (e.g. a stale github mirror) is
+	// degraded, and names that plugin in m.err — the same failure-reason
+	// surface the daemon fills from workView.meta (#844). Rows still apply and
+	// fastAt stays fresh, so daemonDown() never fires and the offline banner
+	// never shows. The daemon fast lane never sends err with rows, so its
+	// behavior is unchanged. Only a hard failure (err AND no rows) degrades.
+	if msg.err != nil && msg.rows == nil {
 		// A slow answer is not the daemon going away. fastQuery is normally
 		// well under 1.5s but spikes past the 4s client timeout while tmux
 		// churns -- which is exactly when the user switches sessions. Wiping
@@ -114,6 +121,7 @@ func (m *model) join() {
 		m.rows[i].branch = w.Branch
 		m.rows[i].ahead = w.Ahead
 		m.rows[i].behind = w.Behind
+		m.rows[i].driftUnknown = w.DriftUnknown
 		m.rows[i].pr = w.PR
 		m.rows[i].repo = repo
 		if w.Issue != nil {

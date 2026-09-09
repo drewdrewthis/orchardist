@@ -80,10 +80,16 @@ func subscribeTmux(ctx context.Context, send func(tea.Msg)) {
 	}
 }
 
-// streamTmux holds one connection open, returning on the first error so the
-// caller can redial. acked reports whether the server completed the handshake
-// — the caller's signal to reset its backoff.
-func streamTmux(ctx context.Context, send func(tea.Msg)) (acked bool, idle time.Duration, _ error) {
+// streamTmux is the push-lane stream, a package var so applyBackend can swap
+// in the supergraph implementation at startup (#844). Unset it is the daemon
+// stream; subscribeTmux calls it through this var so its backoff/redial loop
+// is reused unchanged for both backends.
+var streamTmux = streamTmuxDaemon
+
+// streamTmuxDaemon holds one connection open, returning on the first error so
+// the caller can redial. acked reports whether the server completed the
+// handshake — the caller's signal to reset its backoff.
+func streamTmuxDaemon(ctx context.Context, send func(tea.Msg)) (acked bool, idle time.Duration, _ error) {
 	dialer := websocket.Dialer{
 		Subprotocols:     []string{"graphql-transport-ws"},
 		HandshakeTimeout: 5 * time.Second,
