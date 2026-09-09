@@ -386,6 +386,26 @@ func TestNodeChanged_DispatchesByPrefix(t *testing.T) {
 	ts, tmuxProv, psProv, cpProv, projectsRoot, tmuxStub, psStub := startNodeChangedDaemon(t)
 	addr := stripScheme(t, ts.URL)
 
+	// Register subscriber-registration signals on each owning provider. The
+	// websocket transport dispatches each subscription resolver in a gqlgen
+	// goroutine only after reading its subscribe frame; these hooks fire the
+	// instant a provider actually registers its channel, so we block on real
+	// registration below instead of sleeping a fixed 150ms (issue #818).
+	tmuxReg := make(chan struct{}, 1)
+	psReg := make(chan struct{}, 1)
+	cpReg := make(chan struct{}, 1)
+	signal := func(c chan struct{}) func() {
+		return func() {
+			select {
+			case c <- struct{}{}:
+			default:
+			}
+		}
+	}
+	tmuxProv.SetSessionSubscribeHookForTest(signal(tmuxReg))
+	psProv.SetSubscribeHookForTest(signal(psReg))
+	cpProv.SetSubscribeHookForTest(signal(cpReg))
+
 	conn := dialSubscription(t, addr)
 	defer func() { _ = conn.Close() }()
 	frames := startReader(t, conn)
@@ -412,9 +432,19 @@ func TestNodeChanged_DispatchesByPrefix(t *testing.T) {
 		procID,
 	))
 
-	// Give the websocket transport a beat to register all three
-	// subscribers before we fire invalidations.
-	time.Sleep(150 * time.Millisecond)
+	// Block until all three subscribers have actually registered before we
+	// fire invalidations — otherwise an invalidation could race ahead of a
+	// not-yet-registered subscriber and be missed.
+	for _, reg := range []struct {
+		name string
+		ch   <-chan struct{}
+	}{{"tmux", tmuxReg}, {"ps", psReg}, {"claudeprojects", cpReg}} {
+		select {
+		case <-reg.ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s subscriber did not register within 5s", reg.name)
+		}
+	}
 
 	// Trigger fan-outs.
 	tmuxStub.advanceState()

@@ -134,18 +134,29 @@ func newFakePeerServer(t *testing.T, version string) (*httptest.Server, string) 
 	return ts, u.Host
 }
 
-// waitForPeerProbe polls until PeerVersion returns a non-nil value or the
-// timeout elapses. It returns true on success so tests can skip assertion
-// if the probe never fired (a rare but possible CI flake guard).
-func waitForPeerProbe(p *peerproxy.Provider, peerName string, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if p.PeerVersion(peerName) != nil {
-			return true
+// probeSignal returns a probe-completion channel and the ProviderOption
+// that feeds it. The hook fires after every probe attempt (success or
+// failure) with the peer name, so a test blocks on a real signal instead
+// of polling PeerVersion with a fixed sleep (issue #818).
+func probeSignal() (<-chan string, peerproxy.ProviderOption) {
+	ch := make(chan string, 8)
+	opt := peerproxy.WithProbeHookForTest(func(peer string) {
+		select {
+		case ch <- peer:
+		default:
 		}
-		time.Sleep(5 * time.Millisecond)
+	})
+	return ch, opt
+}
+
+// awaitProbe blocks until a probe completes or the deadline fires.
+func awaitProbe(t *testing.T, probed <-chan string) {
+	t.Helper()
+	select {
+	case <-probed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("peerproxy probe did not fire within 2s")
 	}
-	return false
 }
 
 // TestHostVersion_LocalReturnsVersion asserts that { host { version } }
@@ -187,13 +198,13 @@ func TestHostVersion_PeerVersionFerried(t *testing.T) {
 			{Name: peerName, Address: peerAddr, TLS: false},
 		},
 	}
-	peerProv := peerproxy.NewProvider(cfg, slog.Default())
+	probed, probeOpt := probeSignal()
+	peerProv := peerproxy.NewProvider(cfg, slog.Default(), probeOpt)
 	ts := newLocalDaemon(t, "1.2.3", peerProv)
 
-	// Wait for the probe goroutine to fire and cache the version.
-	if !waitForPeerProbe(peerProv, peerName, 2*time.Second) {
-		t.Fatal("peerproxy probe did not fire within 2s — version never cached")
-	}
+	// Block until the probe goroutine's first probe completes and caches the
+	// version — a real signal, not a wall-clock poll.
+	awaitProbe(t, probed)
 
 	resp := hostVersionPost(t, ts.URL+"/graphql", `{ host { peers { version } } }`)
 
@@ -231,12 +242,14 @@ func TestHostVersion_PeerNullWhenUnreachable(t *testing.T) {
 			{Name: peerName, Address: "127.0.0.1:1", TLS: false},
 		},
 	}
-	peerProv := peerproxy.NewProvider(cfg, slog.Default())
+	probed, probeOpt := probeSignal()
+	peerProv := peerproxy.NewProvider(cfg, slog.Default(), probeOpt)
 	ts := newLocalDaemon(t, "1.2.3", peerProv)
 
-	// Give the probe goroutine a moment to attempt (and fail) the probe.
-	// We do not use waitForPeerProbe here — we expect nil to remain nil.
-	time.Sleep(150 * time.Millisecond)
+	// Block until the probe goroutine has attempted (and failed) the probe —
+	// the hook fires on failure too. Synchronising on the completed attempt
+	// (rather than sleeping blind) is what lets us then assert version is nil.
+	awaitProbe(t, probed)
 
 	resp := hostVersionPost(t, ts.URL+"/graphql", `{ host { peers { version } } }`)
 

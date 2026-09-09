@@ -151,7 +151,8 @@ func TestConfigWatcher_ParseErrorKeepsLastGood(t *testing.T) {
 
 	// Build and start the Provider.
 	initialCfg := loadConfig(t, cfgPath)
-	p := peerproxy.NewProvider(initialCfg, slog.Default())
+	probe, probeOpt := probeCounter()
+	p := peerproxy.NewProvider(initialCfg, slog.Default(), probeOpt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -160,25 +161,25 @@ func TestConfigWatcher_ParseErrorKeepsLastGood(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = p.Stop() })
 
-	// 3. ConfigWatcher with a short debounce so the test doesn't take 1 second.
+	// 3. ConfigWatcher driven by a FakeClock + reload hook so the debounce and
+	// the (non-)reload fire deterministically — no racing a wall-clock window.
+	// onReload fires on parse errors too, so FireAll can synchronise on the
+	// rejected-reload cycle boundary (issue #818).
 	const debounce = 100 * time.Millisecond
-	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(), peerproxy.WithDebounce(debounce))
+	clk := peerproxy.NewFakeClock()
+	reloaded := make(chan struct{}, 8)
+	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(),
+		peerproxy.WithDebounce(debounce),
+		peerproxy.WithFakeClockForTest(clk),
+		peerproxy.WithReloadHookForTest(func() { reloaded <- struct{}{} }),
+	)
 	if err := cw.Start(ctx); err != nil {
 		t.Fatalf("ConfigWatcher.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = cw.Close() })
 
-	// 4. Wait for orchard.boxd.sh to begin probing — confirms the goroutine is live.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if fakeBoxd.pingCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if fakeBoxd.pingCount.Load() < 1 {
-		t.Fatalf("orchard.boxd.sh probe goroutine did not issue a Ping within 500ms")
-	}
+	// 4. Block until orchard.boxd.sh has probed — confirms the goroutine is live.
+	probe.wait(t, "orchard.boxd.sh", 1, 5*time.Second, "probe")
 
 	// 5. Snapshot the live state before writing the bad config.
 	spawnCountBefore := p.SpawnCount("orchard.boxd.sh")
@@ -193,8 +194,11 @@ func TestConfigWatcher_ParseErrorKeepsLastGood(t *testing.T) {
 		t.Fatalf("write malformed config: %v", err)
 	}
 
-	// 7. Wait debounce + generous slack for the (non-)reload to settle.
-	time.Sleep(debounce + 200*time.Millisecond)
+	// 7. Fire the debounce timer the malformed write armed, blocking on the
+	// reload hook so the rejected-reload cycle has fully completed before we
+	// assert. FireAll waits for the fsnotify event to arm the timer first, so
+	// there is no wall-clock settle anywhere.
+	clk.FireAll(reloaded)
 
 	// 8. ApplyPeers must NOT have been invoked — bad config never reaches the provider.
 	if got := cw.ApplyPeersInvocationCount(); got != applyCountBefore {
@@ -420,16 +424,20 @@ func TestConfigWatcher_MissingFileAtStartup(t *testing.T) {
 	// The watcher watches the PARENT DIRECTORY, which already exists (t.TempDir
 	// creates it), so Start must succeed even though config.json is absent.
 	const debounce = 50 * time.Millisecond
-	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(), peerproxy.WithDebounce(debounce))
+	clk := peerproxy.NewFakeClock()
+	reloaded := make(chan struct{}, 8)
+	cw := peerproxy.NewConfigWatcher(cfgPath, p, slog.Default(),
+		peerproxy.WithDebounce(debounce),
+		peerproxy.WithFakeClockForTest(clk),
+		peerproxy.WithReloadHookForTest(func() { reloaded <- struct{}{} }),
+	)
 	if err := cw.Start(ctx); err != nil {
 		t.Fatalf("ConfigWatcher.Start with missing file: %v", err)
 	}
 	t.Cleanup(func() { _ = cw.Close() })
 
-	// 4. Wait briefly and confirm no peers and no reload have occurred.
-	// The file does not exist → no fsnotify events → watcher is idle.
-	time.Sleep(100 * time.Millisecond)
-
+	// 4. With no config file there are no fsnotify events and thus no armed
+	// debounce timer — nothing can have reloaded. Assert directly, no settle.
 	if got := len(p.Peers()); got != 0 {
 		t.Fatalf("Peers() len = %d before file creation, want 0", got)
 	}
@@ -444,14 +452,10 @@ func TestConfigWatcher_MissingFileAtStartup(t *testing.T) {
 		{Name: "lw-fed-c", Address: fakeFedC.addr(), TLS: false},
 	})
 
-	// 6. Poll up to (debounce + 2s) for Peers() length to reach 1.
-	deadline := time.Now().Add(debounce + 2*time.Second)
-	for time.Now().Before(deadline) {
-		if len(p.Peers()) == 1 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// 6. Fire the debounce timer the create event armed, blocking on the reload
+	// hook. FireAll first waits for the fsnotify Create to arm the timer, so
+	// this is fully deterministic — no poll, no settle.
+	clk.FireAll(reloaded)
 
 	// 7. Assertions.
 
