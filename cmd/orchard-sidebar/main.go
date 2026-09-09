@@ -59,7 +59,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		// whether or not the width itself ends up changing (#727).
 		m.clientTick.reset()
 		m.height = msg.Height
-		m.applyWidth(msg.Width)
+		return m.applyWidth(msg.Width)
+	case widthSettledMsg:
+		// A post-boot width diverged and its settle window elapsed; publish it
+		// only if it is still a drag and not a mechanical resize the outer hook
+		// re-pinned in the meantime (#854, width.go).
+		m.settleWidth(msg.seq)
 		return nil
 	case clientSessMsg:
 		// A read that started before the last switch carries the old world;

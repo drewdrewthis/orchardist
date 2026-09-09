@@ -1,24 +1,53 @@
 package main
 
+import (
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
 // The width contract, in one place.
 //
 // The OUTER server owns the sidebar's width. It holds main-pane-width (tmux's
 // own option, widthOption in tmux.go — not a custom @orchard one, see the
 // comment above that const), its M-s binding reads it, and its
-// client-resized / window-resized hooks re-pin the pane to it after every
-// terminal resize (scripts/outer-shell/outer.conf). The sidebar's job is to
-// notice the ONE event the outer server cannot see — the user dragging the
-// pane border — and publish it.
+// client-resized / window-resized / after-respawn-pane hooks re-pin the pane to
+// it (scripts/outer-shell/outer.conf). The sidebar's job is to notice the ONE
+// event the outer server cannot see — the user dragging the pane border — and
+// publish it.
 //
-// Two owners is what this replaces: the sidebar published a width inwards
-// while the outer hooks re-pinned to a hard-coded 40, so a drag to 60 survived
-// exactly until the next terminal resize, at which point the hook pinned 40,
-// the sidebar read that back as a fresh drag, and republished 40 over the 60
-// the user had asked for.
+// The trap is that a drag and a mechanical resize both reach the sidebar as the
+// same tea.WindowSizeMsg. On a terminal resize tmux redistributes the panes
+// proportionally BEFORE the outer hook runs select-layout main-vertical, so the
+// sidebar first sees an intermediate width and only a beat later the re-pinned
+// one. Publishing the intermediate width immediately (what this used to do)
+// pinned that corrupted value as main-pane-width and to disk, and the hook then
+// re-pinned to it — a terminal resize could shrink a 60-column sidebar to 34
+// for good (#854).
+//
+// So a divergent width is not published on sight. The drag-vs-mechanical
+// question is answered DETERMINISTICALLY rather than by racing the re-pin: a
+// mechanical resize (an attach reflow, a terminal resize) always changes the
+// OUTER window's total width, while a border drag only moves the split inside a
+// fixed window. applyWidth reads the window width the moment the divergent size
+// arrives and compares it to the last-observed one — the verdict is taken THEN,
+// because by settle time the window change is old news and a drag arriving mid
+// transient would inherit a stale baseline. A short settle timer only coalesces
+// the burst before acting; a newer size re-arms and the stale timer is dropped.
 
-// applyWidth records the width tmux just handed this pane and decides whether
-// the user caused it.
-func (m *model) applyWidth(w int) {
+// widthSettle only coalesces the burst of sizes a single gesture produces; it
+// is not load-bearing for correctness (the window-width check is). A var so a
+// test can shorten it.
+var widthSettle = 150 * time.Millisecond
+
+// widthSettledMsg fires widthSettle after a post-boot width diverged. seq ties
+// it to the arming size so a later size that re-armed can invalidate it.
+type widthSettledMsg struct{ seq int }
+
+// applyWidth records the width tmux just handed this pane and, when it diverges
+// from the published one, arms the settle timer rather than publishing now. It
+// returns the timer command (nil when there is nothing to arm).
+func (m *model) applyWidth(w int) tea.Cmd {
 	if isCollapsedWidth(w) {
 		// A collapsed pane is not a drag, whoever collapsed it (this sidebar's
 		// own button, outer.conf's M-s, or its resize hooks re-pinning after a
@@ -26,7 +55,7 @@ func (m *model) applyWidth(w int) {
 		// for good, and enforcing the readable floor back over it would fight
 		// the collapse open again on the next tick.
 		m.width, m.collapsed, m.sized = w, true, true
-		return
+		return nil
 	}
 	m.collapsed = false
 	if !m.sized {
@@ -38,12 +67,55 @@ func (m *model) applyWidth(w int) {
 			m.desiredWidth = w
 		}
 		m.width = w
-		return
-	}
-	if w != m.desiredWidth {
-		m.publishWidth(w)
+		m.windowWidth = readWindowWidth() // the baseline every later size is judged against
+		return nil
 	}
 	m.width = w
+	if w == m.desiredWidth {
+		// a re-pin landing on the published width: the window has settled at
+		// its new size, so adopt it as the baseline the next size is judged
+		// against (this consumes a mechanical resize even if bubbletea coalesced
+		// away the intermediate size that armed the timer).
+		m.windowWidth = readWindowWidth()
+		return nil
+	}
+	// The verdict is taken HERE, not at settle: by settle time a mechanical
+	// resize's window change is old news, and a drag arriving mid-transient
+	// would inherit a stale baseline. A changed window means this divergence is
+	// tmux's proportional redistribution; an unchanged one means a border drag.
+	cw := readWindowWidth()
+	m.widthMechanical = cw != m.windowWidth
+	m.windowWidth = cw
+	m.widthSeq++
+	logf("applyWidth w=%d != desired=%d: armed seq=%d mechanical=%v", w, m.desiredWidth, m.widthSeq, m.widthMechanical)
+	return tickAfter(widthSettle, widthSettledMsg{seq: m.widthSeq})
+}
+
+// settleWidth is the arming size's timer landing, after the burst it belongs to
+// has coalesced. A stale timer (a newer size re-armed) is dropped. The verdict
+// was already taken at arm time: a mechanical resize re-pins and publishes
+// nothing; a drag publishes.
+func (m *model) settleWidth(seq int) {
+	if seq != m.widthSeq {
+		logf("settleWidth seq=%d stale (live=%d): drop", seq, m.widthSeq)
+		return
+	}
+	if m.collapsed || !m.sized || m.width == m.desiredWidth {
+		logf("settleWidth seq=%d nothing to do: collapsed=%v sized=%v width=%d desired=%d",
+			seq, m.collapsed, m.sized, m.width, m.desiredWidth)
+		return
+	}
+	if m.widthMechanical {
+		// A reflow, not a drag: publish nothing. The pane itself is corrected by
+		// the outer server's own resize hooks (window-resized, after-respawn-pane),
+		// whose re-pin arrives as a later WindowSizeMsg that resets m.width — the
+		// sidebar must NOT re-pin here, an async select-layout can land after a
+		// following drag and yank the pane back off it (#854).
+		logf("settleWidth seq=%d mechanical: no publish", seq)
+		return
+	}
+	logf("settleWidth seq=%d drag: publish width=%d (desired=%d)", seq, m.width, m.desiredWidth)
+	m.publishWidth(m.width)
 }
 
 // publishWidth makes a dragged width the shared one: the outer server's
