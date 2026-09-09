@@ -13,10 +13,12 @@ setup_file() {
   command -v go >/dev/null || return 0
   # the CI vs Mac split (#854) is version-sensitive; record the toolchain once
   echo "# tmux: $(tmux -V), go: $(go version)" >&3
-  # build both binaries ONCE for the whole file, not per test
+  # build both binaries ONCE for the whole file, not per test. return 1 (not 0)
+  # so a broken build fails the file loudly instead of silently skipping AC1-AC4;
+  # missing tmux/go above is the only thing that legitimately skips.
   REPO="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
-  ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-sidebar" ./cmd/orchard-sidebar ) || return 0
-  ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-shell" ./cmd/orchard-shell ) || return 0
+  ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-sidebar" ./cmd/orchard-sidebar ) || return 1
+  ( cd "$REPO" && go build -o "$BATS_FILE_TMPDIR/orchard-shell" ./cmd/orchard-shell ) || return 1
 }
 
 setup() {

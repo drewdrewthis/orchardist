@@ -62,7 +62,9 @@ func (m *model) applyWidth(w int) tea.Cmd {
 		// for good, and enforcing the readable floor back over it would fight
 		// the collapse open again on the next tick.
 		m.width, m.collapsed, m.sized = w, true, true
-		m.setWindowBaseline(readWindowWidth()) // keep a live baseline for the first drag after expand
+		// No synchronous read here: the client lane refreshes the baseline off-
+		// thread (<=2s), so the first drag after expand is judged correctly without
+		// forking tmux on every collapse.
 		return nil
 	}
 	m.collapsed = false
@@ -80,11 +82,10 @@ func (m *model) applyWidth(w int) tea.Cmd {
 	}
 	m.width = w
 	if w == m.desiredWidth {
-		// a re-pin landing on the published width: the window has settled at its
-		// new size and the gesture is over, so adopt it as the baseline the next
-		// size is judged against (this consumes a mechanical resize even if
-		// bubbletea coalesced away the intermediate size that armed the timer).
-		m.setWindowBaseline(readWindowWidth())
+		// a re-pin landing on the published width: the gesture is over. No
+		// synchronous read — this branch fires on EVERY equal-width message,
+		// height-only resizes included, and a per-message tmux fork (up to 1s each)
+		// would stall the UI loop. The client lane keeps the baseline fresh (<=2s).
 		m.widthPending = false
 		return nil
 	}

@@ -94,14 +94,16 @@ func TestUnknownWindowReadDoesNotSwallowDrag(t *testing.T) {
 	}
 }
 
-// A sidebar that boots collapsed still records a window baseline, so the first
-// drag after it expands is judged in a fixed window and published.
+// A sidebar that boots collapsed gets its window baseline from the client lane
+// (not a synchronous read on the collapse), so the first drag after it expands
+// is judged in a fixed window and published.
 func TestCollapsedStartThenExpandThenDragPublishes(t *testing.T) {
 	spy := newWidthSpy(t)
 	spy.winWidth = 266
 	m := &model{desiredWidth: 40}
 
-	m.applyWidth(collapsedWidth) // boots collapsed; must still seed the baseline
+	m.applyWidth(collapsedWidth)                                // boots collapsed; forks no read
+	m.Update(clientSessMsg{gen: m.clientGen, windowWidth: 266}) // lane seeds the baseline
 	if m.windowWidth != 266 {
 		t.Fatalf("collapsed start left no window baseline: %d", m.windowWidth)
 	}
@@ -128,6 +130,11 @@ func TestWindowReadOncePerGesture(t *testing.T) {
 	m.Update(widthSettledMsg{seq: m.widthSeq})
 	if len(spy.published) != 1 || spy.published[0] != 60 {
 		t.Fatalf("gesture published %v, want [60]", spy.published)
+	}
+	// an equal-width re-pin (or a height-only resize) must fork no read
+	m.applyWidth(60)
+	if spy.reads != 1 {
+		t.Errorf("an equal-width message forked a window read: reads=%d", spy.reads)
 	}
 }
 
