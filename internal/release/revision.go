@@ -29,9 +29,17 @@ var UnstampedBinaries = []string{"orchard"}
 var RevisionBinaries = revisionBinaries()
 
 func revisionBinaries() []string {
-	out := make([]string, 0, len(SuiteBinaries))
-	for _, name := range SuiteBinaries {
-		if !slices.Contains(UnstampedBinaries, name) {
+	return complement(SuiteBinaries, UnstampedBinaries)
+}
+
+// complement returns base minus exclude, preserving base's order. It is the
+// one shared implementation behind both GoBinaries (binaries.go: suite minus
+// rust) and RevisionBinaries (suite minus unstamped) so the two derivations
+// cannot drift apart.
+func complement(base, exclude []string) []string {
+	out := make([]string, 0, len(base))
+	for _, name := range base {
+		if !slices.Contains(exclude, name) {
 			out = append(out, name)
 		}
 	}

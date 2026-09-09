@@ -46,6 +46,24 @@ use orchard::setup_remote;
 use orchard::shell;
 use orchard::tui;
 
+/// Statically-greppable revision marker. `concat!` bakes one contiguous
+/// `ORCHARD_REVISION=<sha>` string literal into `.rodata`, so a cross-built,
+/// release-stripped orchard-tui can be checked with
+/// `grep -a -oE 'ORCHARD_REVISION=[0-9a-f]{7,40}(\+dirty)?'` without executing
+/// it — the path scripts/check-suite-revisions.sh uses for foreign-arch
+/// tarballs (orchardist#820). The `--revision` flag prints the value portion of
+/// this same string, so the marker is referenced (never dead-stripped) and the
+/// static marker equals the runtime output by construction. When
+/// ORCHARD_REVISION is empty at build time the value portion is empty, which
+/// the revision check treats as a failure (no revision).
+static REVISION_MARKER: &str = concat!("ORCHARD_REVISION=", env!("ORCHARD_REVISION"));
+
+/// The value portion of [`REVISION_MARKER`] — the bare revision `--revision`
+/// prints, sliced past the `ORCHARD_REVISION=` prefix.
+fn revision() -> &'static str {
+    &REVISION_MARKER["ORCHARD_REVISION=".len()..]
+}
+
 fn main() {
     // color_eyre's HookBuilder probes the terminal (opens /dev/tty) during
     // install. That fails with ENXIO in non-interactive contexts — cron,
@@ -126,7 +144,7 @@ fn main() {
                 return;
             }
             "--revision" => {
-                println!("{}", env!("ORCHARD_REVISION"));
+                println!("{}", revision());
                 return;
             }
             "--help" | "-h" => {

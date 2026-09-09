@@ -165,7 +165,13 @@ jobs:
           # REVISION is also passed explicitly (matches Makefile GO_LDFLAGS /
           # scripts/dist.sh) so the revision is pinned even absent a VCS stamp.
           mkdir -p dist
-          for bin in orchard-daemon orchard-sidebar orchard-shell orchard-upgrade; do
+          # Go binary roster read from internal/release via the suite-bins
+          # lister (orchardist#820) -- no hand-mirrored copy to drift. GOOS and
+          # GOARCH are exported at step level to the matrix target, so the
+          # lister MUST strip them (`env -u`) or `go run` cross-compiles it for
+          # a foreign arch and dies with "exec format error" on the runner.
+          go_bins="$(env -u GOOS -u GOARCH go run ./internal/release/cmd/suite-bins go)"
+          for bin in $go_bins; do
             if [ ! -d "cmd/$bin" ]; then
               echo "skip $bin: cmd/$bin does not exist yet"
               continue
@@ -236,9 +242,11 @@ jobs:
         run: |
           set -euo pipefail
           triples="x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu"
-          # Mirrors internal/release/assets.go's SuiteBinaries -- the Go
-          # upgrade client's ground truth for what a release must contain.
-          suite_bins="orchard-daemon orchard-sidebar orchard-shell orchard-upgrade orchard-tui orchard"
+          # Suite roster read from internal/release via the suite-bins lister
+          # (orchardist#820) -- no hand-mirrored copy to drift. GOOS/GOARCH are
+          # NOT exported in this job, so no `env -u` guard is needed here.
+          suite_bins="$(go run ./internal/release/cmd/suite-bins suite)"
+          suite_count="$(printf '%s\n' $suite_bins | grep -c .)"
           mkdir -p dist
           missing_dispatcher=""
           for triple in $triples; do
@@ -263,7 +271,7 @@ jobs:
             done
             if [ "$got" -gt 0 ]; then
               tar czf "dist/orchard-suite-${triple}.tar.gz" -C "$work" .
-              echo "wrote orchard-suite-${triple}.tar.gz ($got/6 binaries)"
+              echo "wrote orchard-suite-${triple}.tar.gz ($got/$suite_count binaries)"
             else
               echo "note: no suite binaries found for $triple, skipping orchard-suite-${triple}.tar.gz"
             fi
