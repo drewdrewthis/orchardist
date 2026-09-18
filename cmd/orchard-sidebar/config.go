@@ -123,7 +123,17 @@ func applyBackend(cfg endpoints) {
 	graphqlURL = cfg.httpURL
 	wsURL = cfg.wsURL
 	if cfg.backend == backendSupergraph {
-		healthURL = strings.TrimSuffix(cfg.httpURL, "/graphql") + "/health"
+		// Trim only the path's trailing /graphql, not the raw URL string: a
+		// query-bearing override (e.g. ...?token=x) has no literal "/graphql"
+		// suffix, so a string TrimSuffix left it untouched and the "/health"
+		// landed after the query, producing a URL that still resolves to the
+		// /graphql path.
+		if u, err := url.Parse(cfg.httpURL); err == nil { // already validated by resolveEndpoints
+			u.Path = strings.TrimSuffix(u.Path, "/graphql") + "/health"
+			healthURL = u.String()
+		} else {
+			healthURL = strings.TrimSuffix(cfg.httpURL, "/graphql") + "/health"
+		}
 		fetchFast = fetchFastSupergraph
 		fetchSlow = fetchSlowSupergraph
 		streamTmux = streamTmuxSupergraph

@@ -121,7 +121,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.frame++
 		return tickAfter(animEvery, animTickMsg{})
 	case fastTickMsg:
-		return tea.Batch(fetchFast, fetchHooksWith(m.paneToSess))
+		m.fastGen++
+		return tea.Batch(fetchFastGen(m.fastGen), fetchHooksWith(m.paneToSess))
 	case fastRefetchMsg:
 		// The supergraph push lane carries discrete events, not a session
 		// snapshot to apply (its tmuxEvents payload is a {type,key} envelope),
@@ -134,10 +135,24 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.subErr = nil
 		m.subAt = time.Now()
 		m.clientTick.observePushHealth(true)
-		return fetchFast
+		// This fetch runs alongside whatever the tick cycle already has in
+		// flight, so it needs its own generation: without it, an older
+		// tick-driven answer landing after this one could briefly overwrite
+		// fresher rows (#847).
+		m.fastGen++
+		return fetchFastGen(m.fastGen)
 	case slowTickMsg:
 		return fetchSlow
 	case fastDataMsg:
+		// A push-triggered refetch (fastRefetchMsg) can overlap the tick
+		// cycle's own in-flight fetch; whichever request was issued LAST wins
+		// — an older one landing after it must not overwrite fresher rows
+		// (#847). msg.gen is 0 for the two direct Init()/test call sites that
+		// never went through fetchFastGen, matching the zero-value m.fastGen
+		// they start with.
+		if msg.gen != m.fastGen {
+			return nil
+		}
 		m.applyFast(msg)
 		// Sampled every fast tick regardless of whether this read succeeded: it
 		// is the only thing that notices the push lane going quietly stale

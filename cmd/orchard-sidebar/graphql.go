@@ -181,6 +181,21 @@ var fetchFast tea.Cmd = fetchFastDaemon
 
 var fetchSlow tea.Cmd = fetchSlowDaemon
 
+// fetchFastGen wraps the current fetchFast (daemon or supergraph, whichever
+// applyBackend installed) and stamps its answer with gen, so an out-of-cycle
+// fastRefetchMsg racing the poll's own fastTickMsg cycle can be told apart at
+// landing (same gen-stamping pattern as fetchClientSession/clientGen).
+func fetchFastGen(gen int) tea.Cmd {
+	return func() tea.Msg {
+		msg := fetchFast()
+		if fd, ok := msg.(fastDataMsg); ok {
+			fd.gen = gen
+			return fd
+		}
+		return msg
+	}
+}
+
 func fetchFastDaemon() tea.Msg {
 	var out fastResp
 	if err := post(fastQuery, 4*time.Second, &out); err != nil {

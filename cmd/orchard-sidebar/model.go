@@ -139,6 +139,11 @@ type model struct {
 	widthMechanical bool
 	widthPending    bool
 	clientGen       int // bumped on switch; older in-flight reads are stale
+	// fastGen is bumped on every fast-lane dispatch (both the fastTickMsg poll
+	// and a push-triggered fastRefetchMsg), so an out-of-cycle refetch can race
+	// the poll already in flight without a stale answer landing last and
+	// briefly overwriting newer rows (same pattern as clientGen).
+	fastGen int
 	// client-lane cadence: decays while the lane's answer (which session this
 	// client is on) stops changing, so an idle desktop stops paying 150ms of
 	// tmux forks forever (#727).
@@ -204,6 +209,9 @@ type fastDataMsg struct {
 	// used to get by exec'ing tmux.
 	paneToSess map[string]string
 	err        error
+	// gen is m.fastGen when this fetch was dispatched; a mismatch at landing
+	// means a newer fetch has since been issued and this answer is stale.
+	gen int
 }
 
 type slowDataMsg struct {

@@ -206,6 +206,20 @@ func resolveSupergraphEnrichment(enrich map[string]*sgEnrich) sgSlowResult {
 				}
 			}
 		}
+		// A number the session reported directly outranks a missing lookup:
+		// the i%d/p%d aliases above only run when prUrl parsed to an
+		// owner+repo, so a null or malformed prUrl left w.Issue/w.PR nil even
+		// though claudeInstances gave a real number. Fall back to it here so
+		// the sidebar shows "#123" (title/state unknown) instead of nothing.
+		if w.Issue == nil && e.issueNo > 0 {
+			w.Issue = &struct {
+				Number int    `json:"number"`
+				Title  string `json:"title"`
+			}{Number: e.issueNo}
+		}
+		if w.PR == nil && e.prNo > 0 {
+			w.PR = &prInfo{Number: e.prNo, unknown: true}
+		}
 
 		res.bySession[name] = w
 		if w.Path != "" {
