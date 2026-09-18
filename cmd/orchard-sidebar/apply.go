@@ -15,7 +15,14 @@ import (
 // push lane is live (see below).
 func (m *model) applyFast(msg fastDataMsg) {
 	m.err = msg.err
-	if msg.err != nil {
+	// An error WITH rows is an advisory, not a hard failure: the supergraph
+	// backend serves rows while a plugin (e.g. a stale github mirror) is
+	// degraded, and names that plugin in m.err — the same failure-reason
+	// surface the daemon fills from workView.meta (#844). Rows still apply and
+	// fastAt stays fresh, so daemonDown() never fires and the offline banner
+	// never shows. The daemon fast lane never sends err with rows, so its
+	// behavior is unchanged. Only a hard failure (err AND no rows) degrades.
+	if msg.err != nil && msg.rows == nil {
 		// A slow answer is not the daemon going away. fastQuery is normally
 		// well under 1.5s but spikes past the 4s client timeout while tmux
 		// churns -- which is exactly when the user switches sessions. Wiping
@@ -36,8 +43,10 @@ func (m *model) applyFast(msg fastDataMsg) {
 	// The pane->session map is the push lane's while it's live (subscribe.go)
 	// — a poll in flight across a switch carries a pre-switch map, and letting
 	// it through would revert fetchHooks' pane lookups to stale sessions for
-	// as long as the poll straggled.
-	if !m.subLive() {
+	// as long as the poll straggled. This only holds when the push lane carries
+	// a snapshot (daemon); the supergraph push lane has no map, so the fast
+	// lane is the only source and always wins (#844).
+	if !m.subLive() || !pushLaneCarriesSnapshot {
 		m.paneToSess = msg.paneToSess
 	}
 	// The poll's attach flags were true up to a daemon poll ago and the
@@ -45,8 +54,10 @@ func (m *model) applyFast(msg fastDataMsg) {
 	// *after* the pushed snapshot carrying pre-switch attachment. Letting it
 	// through reverted the selection and made a switch look like it took a
 	// full poll cycle to land. The push lane is strictly fresher, so it wins
-	// for as long as it is live.
-	if m.subLive() {
+	// for as long as it is live — but only when it actually carries attach
+	// flags (daemon snapshot); the supergraph push lane does not, so the fast
+	// lane's flags stand (#844).
+	if m.subLive() && pushLaneCarriesSnapshot {
 		for i := range m.rows {
 			m.rows[i].attached = m.attachedBySess[m.rows[i].session]
 		}
@@ -114,6 +125,7 @@ func (m *model) join() {
 		m.rows[i].branch = w.Branch
 		m.rows[i].ahead = w.Ahead
 		m.rows[i].behind = w.Behind
+		m.rows[i].driftUnknown = w.DriftUnknown
 		m.rows[i].pr = w.PR
 		m.rows[i].repo = repo
 		if w.Issue != nil {

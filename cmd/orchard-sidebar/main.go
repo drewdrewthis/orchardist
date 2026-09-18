@@ -121,10 +121,38 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.frame++
 		return tickAfter(animEvery, animTickMsg{})
 	case fastTickMsg:
-		return tea.Batch(fetchFast, fetchHooksWith(m.paneToSess))
+		m.fastGen++
+		return tea.Batch(fetchFastGen(m.fastGen), fetchHooksWith(m.paneToSess))
+	case fastRefetchMsg:
+		// The supergraph push lane carries discrete events, not a session
+		// snapshot to apply (its tmuxEvents payload is a {type,key} envelope),
+		// so any event means "something changed, re-read the fast lane" (#844).
+		// A live event is also proof the push lane recovered, so clear the
+		// degraded marker the last drop set and stamp subAt — this is the
+		// supergraph analogue of applySessions' stamp on the daemon lane, and
+		// without it subLive() stays false forever (subAt never set), so the
+		// push-lane freshness branches in applyFast never fire for supergraph.
+		m.subErr = nil
+		m.subAt = time.Now()
+		m.clientTick.observePushHealth(true)
+		// This fetch runs alongside whatever the tick cycle already has in
+		// flight, so it needs its own generation: without it, an older
+		// tick-driven answer landing after this one could briefly overwrite
+		// fresher rows (#847).
+		m.fastGen++
+		return fetchFastGen(m.fastGen)
 	case slowTickMsg:
 		return fetchSlow
 	case fastDataMsg:
+		// A push-triggered refetch (fastRefetchMsg) can overlap the tick
+		// cycle's own in-flight fetch; whichever request was issued LAST wins
+		// — an older one landing after it must not overwrite fresher rows
+		// (#847). msg.gen is 0 for the two direct Init()/test call sites that
+		// never went through fetchFastGen, matching the zero-value m.fastGen
+		// they start with.
+		if msg.gen != m.fastGen {
+			return nil
+		}
 		m.applyFast(msg)
 		// Sampled every fast tick regardless of whether this read succeeded: it
 		// is the only thing that notices the push lane going quietly stale
@@ -231,6 +259,16 @@ func main() {
 	// --version before anything else: it must answer without a tmux server,
 	// a daemon, or a terminal (version.go)
 	handleVersionFlag()
+	// Backend selection (#844) is resolved and validated BEFORE any tmux or
+	// network I/O: an unknown backend or a malformed URL override exits here,
+	// not after a dial or a tea.NewProgram. applyBackend wires the chosen
+	// endpoints and, for supergraph, its adapter fetchers/stream.
+	cfg, err := resolveEndpoints(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	applyBackend(cfg)
 	// one binary, two programs: `orchard-sidebar launch` is the modal the +
 	// button opens in a tmux popup (see openLaunchPopup)
 	if len(os.Args) > 1 && os.Args[1] == "launch" {

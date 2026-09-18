@@ -20,12 +20,22 @@ func shortModel(id string) string {
 	return id
 }
 
-// branchLine renders "🌿 branch ↑a ↓b" for the card.
+// emDash is what every field renders when the backend cannot supply it —
+// visibly "unknown", never a fabricated 0/false/"" that reads as a real value
+// (#844). A backend that DOES know a field renders the real value instead.
+const emDash = "—"
+
+// branchLine renders "🌿 branch ↑a ↓b" for the card. On a backend that does
+// not expose worktree drift (supergraph, driftUnknown), ahead/behind render as
+// "↑— ↓—" rather than being silently omitted like a known-zero drift.
 func branchLine(r row) string {
 	if r.branch == "" {
 		return ""
 	}
 	s := "🌿 " + r.branch
+	if r.driftUnknown {
+		return s + " ↑" + emDash + " ↓" + emDash
+	}
 	if r.ahead != nil && *r.ahead > 0 {
 		s += fmt.Sprintf(" ↑%d", *r.ahead)
 	}

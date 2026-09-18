@@ -27,14 +27,19 @@ type row struct {
 	lastAttached time.Time
 	created      time.Time
 	// slow-lane join, may be zero-valued until the first slow fetch lands
-	branch     string
-	repo       string
-	ahead      *int
-	behind     *int
-	pr         *prInfo
-	model      string
-	issueNum   int
-	issueTitle string
+	branch string
+	repo   string
+	ahead  *int
+	behind *int
+	// driftUnknown means the backend cannot report ahead/behind at all
+	// (supergraph, #844); branchLine renders "—" rather than omitting them the
+	// way a known-zero drift is omitted. TODO(supergraph#29): drop once
+	// supergraph's TmuxSession/Worktree carries ahead/behind.
+	driftUnknown bool
+	pr           *prInfo
+	model        string
+	issueNum     int
+	issueTitle   string
 	// pinRank is the row's 1-based place in the pinned block, 0 when unpinned.
 	// Stamped from model.pinned in rebuild (applyPins) and read by sortRows so
 	// the pinned block, M-1..9-first counting and "pins never reorder on
@@ -134,6 +139,11 @@ type model struct {
 	widthMechanical bool
 	widthPending    bool
 	clientGen       int // bumped on switch; older in-flight reads are stale
+	// fastGen is bumped on every fast-lane dispatch (both the fastTickMsg poll
+	// and a push-triggered fastRefetchMsg), so an out-of-cycle refetch can race
+	// the poll already in flight without a stale answer landing last and
+	// briefly overwriting newer rows (same pattern as clientGen).
+	fastGen int
 	// client-lane cadence: decays while the lane's answer (which session this
 	// client is on) stops changing, so an idle desktop stops paying 150ms of
 	// tmux forks forever (#727).
@@ -199,6 +209,9 @@ type fastDataMsg struct {
 	// used to get by exec'ing tmux.
 	paneToSess map[string]string
 	err        error
+	// gen is m.fastGen when this fetch was dispatched; a mismatch at landing
+	// means a newer fetch has since been issued and this answer is stale.
+	gen int
 }
 
 type slowDataMsg struct {

@@ -80,10 +80,44 @@ func subscribeTmux(ctx context.Context, send func(tea.Msg)) {
 	}
 }
 
-// streamTmux holds one connection open, returning on the first error so the
-// caller can redial. acked reports whether the server completed the handshake
-// — the caller's signal to reset its backoff.
-func streamTmux(ctx context.Context, send func(tea.Msg)) (acked bool, idle time.Duration, _ error) {
+// streamTmux is the push-lane stream, a package var so applyBackend can swap
+// in the supergraph implementation at startup (#844). Unset it is the daemon
+// stream; subscribeTmux calls it through this var so its backoff/redial loop
+// is reused unchanged for both backends.
+var streamTmux = streamTmuxDaemon
+
+// streamTmuxDaemon subscribes to the daemon's tmuxSessionsChanged snapshot and
+// folds each pushed frame into a tmuxSubMsg.
+func streamTmuxDaemon(ctx context.Context, send func(tea.Msg)) (bool, time.Duration, error) {
+	frames := []map[string]any{{
+		"id":      "tmux",
+		"type":    "subscribe",
+		"payload": map[string]any{"query": tmuxSubQuery},
+	}}
+	return streamGraphqlWS(ctx, frames, func(payload json.RawMessage) {
+		var data struct {
+			Data struct {
+				TmuxSessionsChanged []tmuxSession `json:"tmuxSessionsChanged"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(payload, &data) != nil {
+			return
+		}
+		send(tmuxSubMsg{sessions: data.Data.TmuxSessionsChanged})
+	})
+}
+
+// streamGraphqlWS runs the graphql-transport-ws handshake and read loop shared
+// by both push backends (daemon and supergraph, #844): dial, connection_init,
+// the readWait-bounded read loop with lastFrame idle accounting, ping/pong, and
+// the error/complete redial signal. It is parameterized only by what differs —
+// subscribeFrames sent once on connection_ack, and onNext invoked with each
+// "next" frame's raw payload. It holds one connection open, returning on the
+// first error so subscribeTmux can redial. acked reports whether the server
+// completed the handshake — the caller's signal to reset its backoff. idle is
+// the time since the last frame, surfaced in the log so an i/o timeout shows
+// how long the socket was silent (#788).
+func streamGraphqlWS(ctx context.Context, subscribeFrames []map[string]any, onNext func(json.RawMessage)) (acked bool, idle time.Duration, _ error) {
 	dialer := websocket.Dialer{
 		Subprotocols:     []string{"graphql-transport-ws"},
 		HandshakeTimeout: 5 * time.Second,
@@ -125,23 +159,13 @@ func streamTmux(ctx context.Context, send func(tea.Msg)) (acked bool, idle time.
 				continue
 			}
 			acked = true
-			if err := conn.WriteJSON(map[string]any{
-				"id":      "tmux",
-				"type":    "subscribe",
-				"payload": map[string]any{"query": tmuxSubQuery},
-			}); err != nil {
-				return acked, time.Since(lastFrame), err
+			for _, f := range subscribeFrames {
+				if err := conn.WriteJSON(f); err != nil {
+					return acked, time.Since(lastFrame), err
+				}
 			}
 		case "next":
-			var data struct {
-				Data struct {
-					TmuxSessionsChanged []tmuxSession `json:"tmuxSessionsChanged"`
-				} `json:"data"`
-			}
-			if json.Unmarshal(env.Payload, &data) != nil {
-				continue
-			}
-			send(tmuxSubMsg{sessions: data.Data.TmuxSessionsChanged})
+			onNext(env.Payload)
 		case "error", "complete":
 			// server-side end of this operation: drop the socket and redial
 			// rather than sitting on a connection with no live subscription
