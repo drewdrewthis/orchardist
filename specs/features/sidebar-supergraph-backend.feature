@@ -106,6 +106,14 @@ Feature: sidebar supergraph backend switch
     When the stub sends one tmuxEvents "next" frame
     Then the sidebar issues a new fast-lane fetch within the test's timeout
 
+  @unit
+  Scenario: The supergraph push lane never overrides the poll's pane map or attach flags
+    Given the push lane is live
+    And ORCHARD_SIDEBAR_BACKEND is "supergraph"
+    When the fast lane polls with a pane map and attach flags that disagree with the push lane's
+    Then the fast lane's pane map and attach flags win
+    And a parallel daemon-backend case with the same disagreement has the push lane's pane map and attach flags win instead
+
   @integration
   Scenario: New supergraph tests are race-clean alongside the existing suite
     Given the full cmd/orchard-sidebar test suite, excluding the ORCHARD_LIVE-gated live test
@@ -142,3 +150,4 @@ Feature: sidebar supergraph backend switch
   # AC 10: "Regression: all tests including new ones are race-clean" → Scenario: New supergraph tests are race-clean alongside the existing suite
   # AC 11: "Use-proof against the real, running supergraph, verifiable beyond the screenshot" → Scenario: Use-proof against the real, running supergraph
   # AC 12: "No client-side git/gh/tmux exec added for supergraph reads" → Scenario: No new client-side git/gh/tmux exec is introduced for supergraph reads
+  # AC 13: "The supergraph push lane (bare events, no snapshot) never overrides the fast lane's pane map / attach flags, while the daemon push lane still does" → Scenario: The supergraph push lane never overrides the poll's pane map or attach flags
