@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -235,11 +236,11 @@ func gqlStr(s string) string {
 // owner/name fields). Returns empty strings when the URL is not a recognizable
 // github.com/<owner>/<repo>/... path.
 func ownerRepoFromURL(raw string) (string, string) {
-	i := strings.Index(raw, "github.com/")
-	if i < 0 {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host != "github.com" {
 		return "", ""
 	}
-	parts := strings.Split(strings.Trim(raw[i+len("github.com/"):], "/"), "/")
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		return "", ""
 	}

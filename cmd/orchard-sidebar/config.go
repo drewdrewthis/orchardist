@@ -103,6 +103,17 @@ func wsFromHTTP(raw string) (string, error) {
 // failure reason inline via workView.meta instead).
 var healthURL string
 
+// pushLaneCarriesSnapshot is whether the push lane delivers a full tmux
+// snapshot (the daemon's tmuxSessionsChanged, folded by applySessions into a
+// fresh pane map + attach flags) or only bare "something changed" events (the
+// supergraph lane's fastRefetchMsg, which carries no map). applyFast reads it
+// to decide who owns the pane map / attach flags when the push lane is live:
+// on the daemon the push snapshot is fresher than the poll, so it wins; on
+// supergraph the contemporaneous fast refetch is the only map source, so the
+// poll must always win. True by default (daemon); applyBackend clears it for
+// supergraph.
+var pushLaneCarriesSnapshot = true
+
 // applyBackend wires the resolved configuration into the package-level read
 // sites. For the daemon backend this only sets the two URLs (the default
 // behavior). For supergraph it additionally swaps the fast/slow fetchers and
@@ -116,5 +127,8 @@ func applyBackend(cfg endpoints) {
 		fetchFast = fetchFastSupergraph
 		fetchSlow = fetchSlowSupergraph
 		streamTmux = streamTmuxSupergraph
+		// The supergraph push lane emits bare events, not a snapshot, so the
+		// fast lane stays the pane-map/attach authority even while push is live.
+		pushLaneCarriesSnapshot = false
 	}
 }

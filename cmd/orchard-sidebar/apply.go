@@ -43,8 +43,10 @@ func (m *model) applyFast(msg fastDataMsg) {
 	// The pane->session map is the push lane's while it's live (subscribe.go)
 	// — a poll in flight across a switch carries a pre-switch map, and letting
 	// it through would revert fetchHooks' pane lookups to stale sessions for
-	// as long as the poll straggled.
-	if !m.subLive() {
+	// as long as the poll straggled. This only holds when the push lane carries
+	// a snapshot (daemon); the supergraph push lane has no map, so the fast
+	// lane is the only source and always wins (#844).
+	if !m.subLive() || !pushLaneCarriesSnapshot {
 		m.paneToSess = msg.paneToSess
 	}
 	// The poll's attach flags were true up to a daemon poll ago and the
@@ -52,8 +54,10 @@ func (m *model) applyFast(msg fastDataMsg) {
 	// *after* the pushed snapshot carrying pre-switch attachment. Letting it
 	// through reverted the selection and made a switch look like it took a
 	// full poll cycle to land. The push lane is strictly fresher, so it wins
-	// for as long as it is live.
-	if m.subLive() {
+	// for as long as it is live — but only when it actually carries attach
+	// flags (daemon snapshot); the supergraph push lane does not, so the fast
+	// lane's flags stand (#844).
+	if m.subLive() && pushLaneCarriesSnapshot {
 		for i := range m.rows {
 			m.rows[i].attached = m.attachedBySess[m.rows[i].session]
 		}

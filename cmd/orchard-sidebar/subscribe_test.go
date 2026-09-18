@@ -23,17 +23,21 @@ type streamResult struct {
 	err   error
 }
 
-// runStream starts streamTmux in a goroutine and returns its result struct
-// plus a done channel closed on exit. A cleanup cancels the context and
-// waits for that exit BEFORE fakeGqlws restores the package globals — the
-// goroutine can never outlive the test or race the restore.
-func runStream(t *testing.T, send func(tea.Msg)) (*streamResult, <-chan struct{}) {
+// streamFunc is the shape both push-lane streams share (daemon and supergraph),
+// so one runner drives either. streamTmux is a var of this type.
+type streamFunc func(context.Context, func(tea.Msg)) (bool, time.Duration, error)
+
+// runStreamFn starts fn in a goroutine and returns its result struct plus a
+// done channel closed on exit. A cleanup cancels the context and waits for that
+// exit BEFORE fakeGqlws restores the package globals — the goroutine can never
+// outlive the test or race the restore.
+func runStreamFn(t *testing.T, fn streamFunc, send func(tea.Msg)) (*streamResult, <-chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &streamResult{}
 	done := make(chan struct{})
 	go func() {
-		r.acked, _, r.err = streamTmux(ctx, send)
+		r.acked, _, r.err = fn(ctx, send)
 		close(done)
 	}()
 	t.Cleanup(func() {
@@ -43,9 +47,16 @@ func runStream(t *testing.T, send func(tea.Msg)) (*streamResult, <-chan struct{}
 	return r, done
 }
 
-// ackAndSubscribe consumes connection_init and the subscribe frame, replying
-// with connection_ack in between — the minimum handshake streamTmux expects.
-func ackAndSubscribe(t *testing.T, conn *websocket.Conn) bool {
+// runStream drives the currently-selected streamTmux (the daemon stream in
+// these tests).
+func runStream(t *testing.T, send func(tea.Msg)) (*streamResult, <-chan struct{}) {
+	return runStreamFn(t, streamTmux, send)
+}
+
+// ackAndSubscribe completes the handshake for a stream that opens n
+// subscriptions on one socket: read connection_init, send connection_ack, then
+// read n subscribe frames. Returns false if any frame is not what was expected.
+func ackAndSubscribe(t *testing.T, conn *websocket.Conn, n int) bool {
 	t.Helper()
 	var env map[string]any
 	if err := conn.ReadJSON(&env); err != nil || env["type"] != "connection_init" {
@@ -54,8 +65,10 @@ func ackAndSubscribe(t *testing.T, conn *websocket.Conn) bool {
 	if err := conn.WriteJSON(map[string]any{"type": "connection_ack"}); err != nil {
 		return false
 	}
-	if err := conn.ReadJSON(&env); err != nil || env["type"] != "subscribe" {
-		return false
+	for i := 0; i < n; i++ {
+		if err := conn.ReadJSON(&env); err != nil || env["type"] != "subscribe" {
+			return false
+		}
 	}
 	return true
 }
@@ -66,7 +79,7 @@ func ackAndSubscribe(t *testing.T, conn *websocket.Conn) bool {
 // redial.
 func TestStreamTmuxTimesOutOnSilentSocket(t *testing.T) {
 	fakeGqlws(t, 200*time.Millisecond, func(t *testing.T, conn *websocket.Conn) {
-		if !ackAndSubscribe(t, conn) {
+		if !ackAndSubscribe(t, conn, 1) {
 			return
 		}
 		time.Sleep(2 * time.Second) // outlive the shrunk readWait, sending nothing
@@ -91,7 +104,7 @@ func TestStreamTmuxTimesOutOnSilentSocket(t *testing.T) {
 // arriving later must still deliver.
 func TestStreamTmuxSurvivesPingsThenDelivers(t *testing.T) {
 	fakeGqlws(t, 300*time.Millisecond, func(t *testing.T, conn *websocket.Conn) {
-		if !ackAndSubscribe(t, conn) {
+		if !ackAndSubscribe(t, conn, 1) {
 			return
 		}
 		go func() { // swallow the client's pong replies

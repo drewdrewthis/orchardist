@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -133,14 +135,42 @@ func buildSidebar(t *testing.T) string {
 // process non-zero with a stderr message naming the bad value — before any
 // tmux or network I/O (the binary exits well inside the timeout, having never
 // reached tea.NewProgram or a dial).
+//
+// The "unknown backend" case additionally carries a VALID GraphQL URL pointed
+// at a canary listener this test owns: if startup ever reached applyBackend /
+// subscribeTmux it would dial that URL, so zero accepted connections is the
+// proof the config error aborts ahead of any dial. (The malformed-URL case
+// cannot reach a listener by construction — it has no host — so it only asserts
+// the loud exit; the canary makes "fails before dial" a controlled, positive
+// check via the unknown-backend case.)
 func TestStartupFailsLoudly(t *testing.T) {
 	bin := buildSidebar(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("canary listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	var dials int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			atomic.AddInt32(&dials, 1)
+			_ = conn.Close()
+		}
+	}()
+	canaryURL := "http://" + ln.Addr().String() + "/graphql"
+
 	cases := []struct {
 		name    string
 		env     []string
 		wantOut string
 	}{
-		{"unknown backend", []string{"ORCHARD_SIDEBAR_BACKEND=bogus"}, "bogus"},
+		// bogus backend rejected before the (valid) URL is ever dialed
+		{"unknown backend", []string{"ORCHARD_SIDEBAR_BACKEND=bogus", "ORCHARD_SIDEBAR_GRAPHQL_URL=" + canaryURL}, "bogus"},
 		{"malformed URL override", []string{"ORCHARD_SIDEBAR_GRAPHQL_URL=not-a-url"}, "not-a-url"},
 	}
 	for _, c := range cases {
@@ -167,5 +197,12 @@ func TestStartupFailsLoudly(t *testing.T) {
 				t.Fatal("binary did not exit — it should fail before any I/O")
 			}
 		})
+	}
+
+	// A short grace so any errant dial the failed startup might have issued has
+	// time to land on the canary before we read the counter.
+	time.Sleep(200 * time.Millisecond)
+	if n := atomic.LoadInt32(&dials); n != 0 {
+		t.Errorf("startup dialed the canary %d time(s) — a config error must abort before any outbound I/O", n)
 	}
 }

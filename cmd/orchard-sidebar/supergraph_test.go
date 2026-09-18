@@ -162,44 +162,50 @@ func TestSupergraphUnreachableDegrades(t *testing.T) {
 // real value a daemon fixture sets. prStatus and branchLine are the composed-
 // string sources for the PR verdict and worktree drift.
 func TestSupergraphMissingFieldsRenderEmDash(t *testing.T) {
-	// supergraph PR: verdict unknown -> "—"
-	if got := prStatus(prInfo{Number: 7, State: "OPEN", unknown: true}); got != emDash {
-		t.Errorf("unknown PR verdict = %q, want %q", got, emDash)
-	}
-	// a known MERGED/CLOSED state still resolves even when the verdict is unknown
-	if got := prStatus(prInfo{Number: 7, State: "MERGED", unknown: true}); got != "merged" {
-		t.Errorf("merged PR = %q, want merged", got)
-	}
-	// daemon PR with real verdict fields -> a real word, never "—"
-	real := prInfo{Number: 7, State: "OPEN", ChecksRollup: "SUCCESS",
-		MergeStateStatus: "CLEAN", ReviewDecision: strptr("APPROVED")}
-	if got := prStatus(real); got != "green" || strings.Contains(got, emDash) {
-		t.Errorf("daemon PR = %q, want green with no dash", got)
-	}
+	t.Run("prStatus", func(t *testing.T) {
+		// supergraph PR: verdict unknown -> "—"
+		if got := prStatus(prInfo{Number: 7, State: "OPEN", unknown: true}); got != emDash {
+			t.Errorf("unknown PR verdict = %q, want %q", got, emDash)
+		}
+		// a known MERGED/CLOSED state still resolves even when the verdict is unknown
+		if got := prStatus(prInfo{Number: 7, State: "MERGED", unknown: true}); got != "merged" {
+			t.Errorf("merged PR = %q, want merged", got)
+		}
+		// daemon PR with real verdict fields -> a real word, never "—"
+		real := prInfo{Number: 7, State: "OPEN", ChecksRollup: "SUCCESS",
+			MergeStateStatus: "CLEAN", ReviewDecision: strptr("APPROVED")}
+		if got := prStatus(real); got != "green" || strings.Contains(got, emDash) {
+			t.Errorf("daemon PR = %q, want green with no dash", got)
+		}
+	})
 
-	// worktree drift unknown -> "↑— ↓—" on the branch line
-	sg := branchLine(row{branch: "feat/a", driftUnknown: true})
-	if !strings.Contains(sg, "↑"+emDash) || !strings.Contains(sg, "↓"+emDash) {
-		t.Errorf("supergraph branch line = %q, want ↑— ↓—", sg)
-	}
-	// daemon drift with real counts -> arrows with numbers, no dash
-	two, one := 2, 1
-	dm := branchLine(row{branch: "feat/a", ahead: &two, behind: &one})
-	if strings.Contains(dm, emDash) {
-		t.Errorf("daemon branch line %q must not contain a dash", dm)
-	}
-	if !strings.Contains(dm, "↑2") || !strings.Contains(dm, "↓1") {
-		t.Errorf("daemon branch line = %q, want ↑2 ↓1", dm)
-	}
+	t.Run("branchLine", func(t *testing.T) {
+		// worktree drift unknown -> "↑— ↓—" on the branch line
+		sg := branchLine(row{branch: "feat/a", driftUnknown: true})
+		if !strings.Contains(sg, "↑"+emDash) || !strings.Contains(sg, "↓"+emDash) {
+			t.Errorf("supergraph branch line = %q, want ↑— ↓—", sg)
+		}
+		// daemon drift with real counts -> arrows with numbers, no dash
+		two, one := 2, 1
+		dm := branchLine(row{branch: "feat/a", ahead: &two, behind: &one})
+		if strings.Contains(dm, emDash) {
+			t.Errorf("daemon branch line %q must not contain a dash", dm)
+		}
+		if !strings.Contains(dm, "↑2") || !strings.Contains(dm, "↓1") {
+			t.Errorf("daemon branch line = %q, want ↑2 ↓1", dm)
+		}
+	})
 
-	// the composed git box line for a supergraph PR carries the em dash
-	items := gitBoxItems(row{branch: "feat/a", driftUnknown: true,
-		pr: &prInfo{Number: 9, State: "OPEN", unknown: true}})
-	var boxText string
-	for _, it := range items {
-		boxText += it.text + "\n"
-	}
-	if !strings.Contains(boxText, emDash) {
-		t.Errorf("git box %q should render the PR verdict as —", boxText)
-	}
+	t.Run("gitBoxItems", func(t *testing.T) {
+		// the composed git box line for a supergraph PR carries the em dash
+		items := gitBoxItems(row{branch: "feat/a", driftUnknown: true,
+			pr: &prInfo{Number: 9, State: "OPEN", unknown: true}})
+		var boxText string
+		for _, it := range items {
+			boxText += it.text + "\n"
+		}
+		if !strings.Contains(boxText, emDash) {
+			t.Errorf("git box %q should render the PR verdict as —", boxText)
+		}
+	})
 }

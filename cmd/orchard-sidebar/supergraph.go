@@ -47,7 +47,6 @@ type sgClaudeSession struct {
 	GitBranch   *string `json:"gitBranch"`
 	IssueNumber *int    `json:"issueNumber"`
 	PrNumber    *int    `json:"prNumber"`
-	PrURL       *string `json:"prUrl"`
 }
 
 type sgTmuxSession struct {
@@ -75,11 +74,11 @@ func fetchFastSupergraph() tea.Msg {
 	if err := post(sgFastQuery, 4*time.Second, &out); err != nil {
 		return fastDataMsg{err: err}
 	}
-	rows, p2s := supergraphRows(out.Data.ClaudeInstances, out.Data.TmuxSessions, out.Data.TmuxPanes)
+	rows, paneToSess := supergraphRows(out.Data.ClaudeInstances, out.Data.TmuxSessions, out.Data.TmuxPanes)
 	// AC11 use-proof: the resolved row count is logged every fast tick so "real
 	// rows rendered" is checkable from the log, not only the screenshot.
 	logf("supergraph fast lane: resolved %d rows", len(rows))
-	msg := fastDataMsg{rows: rows, paneToSess: p2s}
+	msg := fastDataMsg{rows: rows, paneToSess: paneToSess}
 	if reason := supergraphHealthReason(); reason != "" {
 		msg.err = fmt.Errorf("supergraph: %s", reason)
 	}
@@ -96,10 +95,8 @@ func fetchFastSupergraph() tea.Msg {
 // the honest value is "not known attached", never a fabricated true.
 func supergraphRows(cis []sgClaudeInstance, sessions []sgTmuxSession, panes []sgTmuxPane) ([]row, map[string]string) {
 	paneToSession := make(map[string]string, len(panes))
-	p2s := make(map[string]string, len(panes))
 	for _, p := range panes {
 		paneToSession[p.Key] = p.Session
-		p2s[p.Key] = p.Session
 	}
 
 	byName := make(map[string]*row, len(sessions))
@@ -126,11 +123,15 @@ func supergraphRows(cis []sgClaudeInstance, sessions []sgTmuxSession, panes []sg
 		}
 		r, ok := byName[name]
 		if !ok {
-			r = &row{session: name}
+			r = &row{session: name, state: "shell"}
 			byName[name] = r
 			order = append(order, name)
 		}
-		r.state = ci.Session.State
+		// Keep the "shell" default when supergraph reports no state, rather
+		// than blanking the row to an empty string.
+		if ci.Session.State != "" {
+			r.state = ci.Session.State
+		}
 		if ci.Session.Model != nil {
 			r.model = shortModel(*ci.Session.Model)
 		}
@@ -145,7 +146,7 @@ func supergraphRows(cis []sgClaudeInstance, sessions []sgTmuxSession, panes []sg
 		rows = append(rows, *byName[name])
 	}
 	sortRows(rows)
-	return rows, p2s
+	return rows, paneToSession
 }
 
 // sgHealthPlugin is one row of GET /health's per-plugin array.

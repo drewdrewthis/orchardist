@@ -127,8 +127,13 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		// snapshot to apply (its tmuxEvents payload is a {type,key} envelope),
 		// so any event means "something changed, re-read the fast lane" (#844).
 		// A live event is also proof the push lane recovered, so clear the
-		// degraded marker the last drop set.
+		// degraded marker the last drop set and stamp subAt — this is the
+		// supergraph analogue of applySessions' stamp on the daemon lane, and
+		// without it subLive() stays false forever (subAt never set), so the
+		// push-lane freshness branches in applyFast never fire for supergraph.
 		m.subErr = nil
+		m.subAt = time.Now()
+		m.clientTick.observePushHealth(true)
 		return fetchFast
 	case slowTickMsg:
 		return fetchSlow
