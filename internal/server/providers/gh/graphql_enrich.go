@@ -102,6 +102,12 @@ func (p *Provider) EnrichPullRequest(ctx context.Context, key PullRequestKey) (P
 	}
 	raw, err := c.GraphQL(ctx, enrichPRQuery, variables)
 	if err != nil {
+		// A header-403 (*ErrRateLimitedT) must arm the cooldown before
+		// serving stale — previously this funneled straight into
+		// serveStale with no IsRateLimited check at all (#768 AC6).
+		if IsRateLimited(err) {
+			p.cooldownFromRateLimitErr("EnrichPullRequest", err)
+		}
 		return serveStale(fmt.Errorf("EnrichPullRequest graphql: %w", err))
 	}
 

@@ -128,9 +128,10 @@ func (p *Provider) BatchEnrichPullRequests(ctx context.Context, keys []PullReque
 
 	raw, err := c.GraphQL(ctx, query, nil)
 	if err != nil {
-		// Rate-limit HTTP error: set cooldown, serve stale.
+		// Rate-limit HTTP error: set cooldown (until the header's reset
+		// epoch when present — #768 AC7), serve stale.
 		if IsRateLimited(err) {
-			p.enterRateLimitCooldown("BatchEnrichPullRequests", err.Error())
+			p.cooldownFromRateLimitErr("BatchEnrichPullRequests", err)
 		}
 		return staleAll(err)
 	}

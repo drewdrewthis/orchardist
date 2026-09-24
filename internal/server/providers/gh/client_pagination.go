@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -136,13 +135,7 @@ func applyRESTHeaders(c *Client, req *http.Request) {
 // `Client.do`. Body is left open for the caller to decode on success.
 func checkRESTStatus(resp *http.Response, path string) error {
 	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "0" && resp.StatusCode == http.StatusForbidden {
-		var resetAt int64
-		if rs := resp.Header.Get("X-RateLimit-Reset"); rs != "" {
-			if v, perr := strconv.ParseInt(rs, 10, 64); perr == nil {
-				resetAt = v
-			}
-		}
-		return &ErrRateLimitedT{ResetAt: resetAt}
+		return &ErrRateLimitedT{ResetAt: parseRateLimitReset(resp.Header)}
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		return ErrNotAuthenticated

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -100,13 +99,7 @@ func (c *Client) GraphQLWithHeaders(ctx context.Context, query string, variables
 	// sees the same typed errors regardless of which GitHub surface the
 	// query hit.
 	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "0" && resp.StatusCode == http.StatusForbidden {
-		var resetAt int64
-		if rs := resp.Header.Get("X-RateLimit-Reset"); rs != "" {
-			if v, perr := strconv.ParseInt(rs, 10, 64); perr == nil {
-				resetAt = v
-			}
-		}
-		return nil, &ErrRateLimitedT{ResetAt: resetAt}
+		return nil, &ErrRateLimitedT{ResetAt: parseRateLimitReset(resp.Header)}
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, ErrNotAuthenticated

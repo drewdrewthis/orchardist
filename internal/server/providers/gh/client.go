@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -125,13 +124,7 @@ func (c *Client) do(ctx context.Context, path string, q url.Values, out any) err
 	// the current window, surface ErrRateLimitedT so the resolver can
 	// reflect that as a per-field error rather than a stack trace.
 	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "0" && resp.StatusCode == http.StatusForbidden {
-		var resetAt int64
-		if rs := resp.Header.Get("X-RateLimit-Reset"); rs != "" {
-			if v, perr := strconv.ParseInt(rs, 10, 64); perr == nil {
-				resetAt = v
-			}
-		}
-		return &ErrRateLimitedT{ResetAt: resetAt}
+		return &ErrRateLimitedT{ResetAt: parseRateLimitReset(resp.Header)}
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
