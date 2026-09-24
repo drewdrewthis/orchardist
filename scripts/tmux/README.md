@@ -5,12 +5,15 @@ labelled with what is actually happening in it: the worktree's branch, its
 PR/issue chrome, the orchard repo it belongs to, the Claude session state,
 and the running process.
 
-Two files:
+Five files:
 
 | File | Role |
 |------|------|
 | `orchard.tmux` | Plugin entry script. tmux runs it once at config load; it installs the key binding. |
-| `pane-labels.sh` | The labeler. Queries the daemon, folds in Claude hook state, writes `@orchard_pane_label` per pane. |
+| `pane-labels.sh` | The labeler's shell wrapper. Queries the daemon, gathers the pane table, invokes `pane_labels.py`. |
+| `pane_labels.py` | Main entry: joins daemon worktree data against panes and assembles/emits each label. |
+| `pane_labels_hookstate.py` | Claude hook-state sidecars (ADR-007): provenance checks, loading, and the Claude-state label cell. |
+| `pane_labels_fmt.py` | Leaf utilities shared by the two above: tmux format-string escaping, path containment, cell construction. |
 
 `orchard.tmux` owns its own wiring — you do not paste a `bind-key` into
 `tmux.conf`, and no copy of the helper needs to live on `PATH`.
@@ -32,7 +35,8 @@ set -g @plugin 'drewdrewthis/orchard.tmux'
 Then `prefix + I` to install, `prefix + r` to reload.
 
 Either way `orchard.tmux` resolves `pane-labels.sh` relative to its own
-location, so the two files just have to stay siblings.
+location, and `pane-labels.sh` resolves the Python modules the same way — so
+all five files just have to stay siblings.
 
 ### Superseded: `~/.local/bin/orchard-tmux-labels`
 

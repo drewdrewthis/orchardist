@@ -160,7 +160,9 @@ _set_opt() {
   # Copy the whole plugin into a path containing an apostrophe so the script
   # resolves a labeler it cannot quote, rather than one that is merely absent.
   mkdir -p "$TMPD/O'Brien"
-  cp "$SCRIPT" "$BATS_TEST_DIRNAME/pane-labels.sh" "$TMPD/O'Brien/"
+  cp "$SCRIPT" "$BATS_TEST_DIRNAME/pane-labels.sh" \
+     "$BATS_TEST_DIRNAME/pane_labels.py" "$BATS_TEST_DIRNAME/pane_labels_hookstate.py" \
+     "$BATS_TEST_DIRNAME/pane_labels_fmt.py" "$TMPD/O'Brien/"
   chmod +x "$TMPD/O'Brien/orchard.tmux" "$TMPD/O'Brien/pane-labels.sh"
 
   PATH="$TMPD/bin:$PATH" run bash "$TMPD/O'Brien/orchard.tmux"
